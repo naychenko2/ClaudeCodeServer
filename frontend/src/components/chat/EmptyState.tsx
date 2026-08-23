@@ -108,7 +108,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
 
                 {/* Подзаголовок */}
                 <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 260 }}>
-                  Запустите /init, чтобы {asstName} изучил проект и создал CLAUDE.md
+                  Запустите /init — так {asstName} изучит проект и создаст CLAUDE.md
                 </div>
 
                 {/* Кнопка CTA */}

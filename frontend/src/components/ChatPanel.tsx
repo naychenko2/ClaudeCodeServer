@@ -395,8 +395,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
   // Возможности провайдера модели (UI скрывает недоступное)
   const caps = useModelCaps(session.model);
-  // Имя ассистента сессии для строк UI (провайдится в контекст ниже)
-  const asstName = assistantName(session.model);
   // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
   const canCompact = useMemo(
     () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,
@@ -411,6 +409,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — версия внешнего стора: бамп заставляет перечитать getPersonaById (стор нереактивен сам по себе)
     [session.personaId, personasVersion]
   );
+  // Имя ассистента чата для строк UI (провайдится в контекст ниже): у чата с персоной —
+  // её имя, иначе — имя провайдера модели.
+  const asstName = persona?.name || assistantName(session.model);
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   // Участники группового чата (резолв из стора персон); < 2 — обычный чат
   const participantPersonas = useMemo(
@@ -702,7 +703,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   useEffect(() => {
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
     if (resultCountRef.current !== null && rc > resultCountRef.current && !muted)
-      notify(`${asstName} закончил`, `${session.name ?? 'Чат'}: ход завершён`);
+      notify(`${asstName}: ход завершён`, `${session.name ?? 'Чат'}`);
     resultCountRef.current = rc;
   }, [items, session.name, asstName, muted]);
   // Озвучка ответа в голосовом режиме — ОТДЕЛЬНЫЙ эффект, не расширение соседнего:

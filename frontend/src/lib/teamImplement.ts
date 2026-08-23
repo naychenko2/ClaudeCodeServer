@@ -447,3 +447,37 @@ export function teamPlanningElapsedLabel(startedAt: number, now: number): string
 // Подписи поля ответа. У блокера — ответ исполнителю, у развилки — свой вариант
 export const TEAM_ESCALATION_REPLY_PLACEHOLDER = 'Что делать? Ответ уйдёт координатору обычным сообщением';
 export const TEAM_ESCALATION_REPLY_HINT_DECISION = 'Ни один вариант не подходит? Напишите свой — решение уйдёт координатору';
+
+// === КР-наблюдаемость, этап 3: перезапуск задачи/волны/хода штаба ===
+// Кнопки живут в поповере бейджа; ошибку сервера человек видит текстом — пустых
+// кнопок и молчаливых отказов не бывает (гейты бэка возвращают человеческие тексты)
+
+// Кнопка в строке задачи (не у done): перевыдать эту задачу исполнителю
+export const TEAM_WAVE_TASK_RESTART_TITLE = 'Перезапустить задачу';
+export const TEAM_WAVE_TASK_RESTART_HINT =
+  'Перевыдать задачу исполнителю — зависшую или провалившуюся. Работающая задача перезапуска не получит';
+
+// Строка поповера при liveness stalled/dead: пере-раздача незакрытого
+export const TEAM_WAVE_RESTART_TITLE = 'Перезапустить волну';
+export const TEAM_WAVE_RESTART_HINT =
+  'Незакрытые задачи будут выданы заново. Закрытые не пострадают';
+
+// Подтверждение перезапуска волны с живыми исполнениями: предупреждаем, ЧТО живо
+export const TEAM_WAVE_RESTART_CONFIRM_TITLE = 'Перезапустить волну?';
+export function teamWaveRestartConfirmText(liveTasks: string[]): string {
+  return liveTasks.length > 0
+    ? `Ещё работают: ${liveTasks.map(t => `«${t}»`).join(', ')}. ` +
+        'Перезапуск остановит их и выдаст незакрытые задачи заново. Закрытые задачи не пострадают.'
+    : 'Волна выглядит живой — возможно, работа идёт. ' +
+        'Перезапуск остановит исполнения и выдаст незакрытые задачи заново. Закрытые задачи не пострадают.';
+}
+
+// Главный сценарий: чат занят, процесс молчит, написать нельзя
+export const TEAM_TURN_RESTART_TITLE = 'Перезапустить ход штаба';
+export const TEAM_TURN_RESTART_HINT =
+  'Остановить зависший ход и продолжить разговор с сохранённым контекстом — сделанное не теряется';
+
+// Повреждённый транскрипт (409 code=transcript_damaged): предложить начать заново
+export const TEAM_TURN_RESTART_DAMAGED_TITLE = 'Файл разговора повреждён';
+export const TEAM_TURN_RESTART_DAMAGED_CONFIRM = 'Начать ход заново';
+export const TEAM_TURN_RESTART_DAMAGED_CANCEL = 'Отмена';

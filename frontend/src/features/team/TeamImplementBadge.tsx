@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Gauge, ListChecks, Pause, Power, Users, Zap } from 'lucide-react';
-import type { Persona, SessionTeamImplement, TeamWavePulse, TeamWaveSnapshot } from '../../types';
+import { useCallback, useEffect, useState } from 'react';
+import { Gauge, ListChecks, Pause, Power, RotateCw, Users, Zap } from 'lucide-react';
+import type { Persona, SessionTeamImplement, TeamWaveLiveness, TeamWavePulse, TeamWaveSnapshot } from '../../types';
 import { C, FS, FONT, R, MODAL_W } from '../../lib/design';
 import { Button, ConfirmDialog, Menu, Modal } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -14,6 +14,11 @@ import {
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
   teamPulseTone, teamPulseBadgeText, teamPulseBadgeShort,
   teamPulseMeaning, teamPulseStage, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
+  TEAM_WAVE_TASK_RESTART_TITLE, TEAM_WAVE_TASK_RESTART_HINT,
+  TEAM_WAVE_RESTART_TITLE,
+  TEAM_WAVE_RESTART_CONFIRM_TITLE, teamWaveRestartConfirmText,
+  TEAM_TURN_RESTART_TITLE,
+  TEAM_TURN_RESTART_DAMAGED_TITLE, TEAM_TURN_RESTART_DAMAGED_CONFIRM, TEAM_TURN_RESTART_DAMAGED_CANCEL,
 } from '../../lib/teamImplement';
 import { teamMechanic } from './teamMechanics';
 import type { Mode } from '../../lib/modes';
@@ -60,6 +65,14 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   const [infoAnchor, setInfoAnchor] = useState<DOMRect | null>(null);
   const [disableConfirm, setDisableConfirm] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+  // Перезапуск (этап 3): ключ идущего действия (task:<id> | wave | turn) и строка
+  // результата для человека — ошибку сервера человек видит текстом, не пустой кнопкой
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionNote, setActionNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // Подтверждения: перезапуск волны с живыми исполнениями и «начать ход заново»
+  // при повреждённом транскрипте
+  const [waveConfirm, setWaveConfirm] = useState<{ liveTasks: string[] } | null>(null);
+  const [freshConfirm, setFreshConfirm] = useState<string | null>(null);
   // Полный снимок волны для поповера: refetch на КАЖДОМ открытии (после реконнекта
   // кэш протухнет, а человек должен видеть свежее состояние). null — нет данных или
   // запрос не успел; undefined — открытия ещё не было
@@ -67,21 +80,70 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   const infoOpen = infoAnchor !== null;
   const closeInfo = () => setInfoAnchor(null);
 
+  const refetchSnapshot = useCallback(() => {
+    if (!sessionId) return;
+    api.chats.getTeamWaveSnapshot(sessionId)
+      .then(s => setSnapshot(s))
+      .catch(() => setSnapshot(null));
+  }, [sessionId]);
+
   // Refetch списка задач при КАЖДОМ открытии поповера. Гонку с закрытием (юзер успел
   // нажать «Остановить» до прихода ответа) переживаем молча: закроется бейдж —
   // закроется и поповер, и обновление уйдёт в никуда. Не критично: новый открытие
   // подтянет свежее
   useEffect(() => {
     if (!infoOpen || !sessionId || !teamPulseStage(state.stage)) return;
-    let cancelled = false;
-    api.chats.getTeamWaveSnapshot(sessionId)
-      .then(s => { if (!cancelled) setSnapshot(s); })
-      .catch(() => { if (!cancelled) setSnapshot(null); });
-    return () => { cancelled = true; };
-  }, [infoOpen, sessionId, state.stage]);
+    setActionNote(null);
+    refetchSnapshot();
+  }, [infoOpen, sessionId, state.stage, refetchSnapshot]);
+
+  // --- Действия перезапуска (этап 3). Гейт двойного клика — на сервере, здесь лишь
+  // блокируем остальные кнопки поповера на время идущего запроса ---
+
+  const anyBusy = actionBusy !== null;
+
+  const restartTask = (taskId: string) => {
+    if (!sessionId || anyBusy) return;
+    setActionBusy(`task:${taskId}`);
+    setActionNote(null);
+    api.chats.restartTeamWaveTask(sessionId, taskId)
+      .then(r => setActionNote({ ok: r.outcome !== 'failed', text: r.message }))
+      .catch(e => setActionNote({ ok: false, text: e.message }))
+      .finally(() => { setActionBusy(null); refetchSnapshot(); });
+  };
+
+  const restartWave = (confirm: boolean) => {
+    if (!sessionId || anyBusy) return;
+    setActionBusy('wave');
+    setActionNote(null);
+    api.chats.restartTeamWave(sessionId, confirm)
+      .then(r => {
+        if (r.requiresConfirm) setWaveConfirm({ liveTasks: r.liveTasks ?? [] });
+        else setActionNote({ ok: r.failed === 0, text: r.message });
+      })
+      .catch(e => setActionNote({ ok: false, text: e.message }))
+      .finally(() => { setActionBusy(null); refetchSnapshot(); });
+  };
+
+  const restartTurn = (startFresh: boolean) => {
+    if (!sessionId || anyBusy) return;
+    setActionBusy('turn');
+    setActionNote(null);
+    api.chats.restartTeamWaveTurn(sessionId, startFresh)
+      .then(r => setActionNote({ ok: true, text: r.message }))
+      .catch(e => {
+        // Повреждённый транскрипт — не ошибка, а развилка: предлагаем «начать заново»
+        const code = (e as Error & { body?: { code?: string } }).body?.code;
+        if (code === 'transcript_damaged') setFreshConfirm(e.message);
+        else setActionNote({ ok: false, text: e.message });
+      })
+      .finally(() => { setActionBusy(null); refetchSnapshot(); });
+  };
 
   // Эффективный тон на стадии волны/проверки: пульс живого бэка перебивает дефолтный
   // тон стадии. Вне этих стадий или без пульса — как раньше, по стадии
+  // liveness — снапшот свежее пульса (refetch при каждом открытии поповера)
+  const liveness: TeamWaveLiveness | undefined = snapshot?.liveness ?? pulse?.liveness;
   const stageTone = teamImplementTone(state.stage);
   const effectiveTone: 'work' | 'wait' | 'idle' | 'warning' | 'danger' =
     teamPulseStage(state.stage) && pulse ? teamPulseTone(pulse.liveness) : stageTone;
@@ -148,9 +210,36 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
       {/* Список задач волны: refetch снапшота при КАЖДОМ открытии (живёт в родителе —
           useTeamWaveSnapshot в ChatPanel). Здесь только рендер: задачи, исполнители,
           статусы, сколько минут в работе. Без снапшота (бэк старый) — пропускаем.
-          На проверке список тоже показывается — задачи проверки идут тем же путём */}
+          На проверке список тоже показывается — задачи проверки идут тем же путём.
+          Кнопка перезапуска — у каждой незакрытой задачи (этап 3) */}
       {teamPulseStage(state.stage) && snapshot && (
-        <WaveTaskList snapshot={snapshot} personas={personas ?? {}} />
+        <WaveTaskList snapshot={snapshot} personas={personas ?? {}}
+          busyKey={actionBusy} onRestart={sessionId ? restartTask : undefined} />
+      )}
+      {/* Результат действия перезапуска: текстом, ошибку — так же (инвариант этапа 3) */}
+      {actionNote && (
+        <div style={{
+          marginTop: 8, padding: '5px 8px', borderRadius: R.md,
+          background: actionNote.ok ? C.bgSelected : C.dangerBg,
+          color: actionNote.ok ? C.textSecondary : C.dangerText,
+          fontSize: FS.xs, lineHeight: 1.4,
+        }}>
+          {actionNote.text}
+        </div>
+      )}
+      {/* Перезапуск при зависании (этап 3): строки появляются только при stalled/dead —
+          живой волне перезапуск не нужен, а тихая в пределах нормы — не авария */}
+      {teamPulseStage(state.stage) && (liveness === 'stalled' || liveness === 'dead') && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.divider}` }}>
+          <RestartRows
+            isMobile={isMobile}
+            waveBusy={actionBusy === 'wave'}
+            turnBusy={actionBusy === 'turn'}
+            anyBusy={anyBusy}
+            onWave={() => restartWave(false)}
+            onTurn={() => restartTurn(false)}
+          />
+        </div>
       )}
       {/* Правило «любая работа — через задачу»: настройка режима, менять её на ходу нельзя —
           показываем как строку состояния, чтобы поведение штаба не выглядело сюрпризом */}
@@ -298,6 +387,30 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
           onCancel={() => setStopConfirm(false)}
         />
       )}
+
+      {/* Живые исполнения в волне: не молча раздать поверх — подтверждение списком (этап 3) */}
+      {waveConfirm && (
+        <ConfirmDialog
+          title={TEAM_WAVE_RESTART_CONFIRM_TITLE}
+          subtitle={teamWaveRestartConfirmText(waveConfirm.liveTasks)}
+          confirmLabel="Перезапустить"
+          cancelLabel="Не сейчас"
+          onConfirm={() => { setWaveConfirm(null); restartWave(true); }}
+          onCancel={() => setWaveConfirm(null)}
+        />
+      )}
+
+      {/* Повреждённый транскрипт: продолжить нельзя — предлагаем начать ход заново */}
+      {freshConfirm && (
+        <ConfirmDialog
+          title={TEAM_TURN_RESTART_DAMAGED_TITLE}
+          subtitle={freshConfirm}
+          confirmLabel={TEAM_TURN_RESTART_DAMAGED_CONFIRM}
+          cancelLabel={TEAM_TURN_RESTART_DAMAGED_CANCEL}
+          onConfirm={() => { setFreshConfirm(null); restartTurn(true); }}
+          onCancel={() => setFreshConfirm(null)}
+        />
+      )}
     </span>
   );
 }
@@ -329,10 +442,13 @@ function PulseBlock({ pulse, tone }: {
 }
 
 // Список задач волны. Только для стадии волны/проверки и при наличии снапшота: бэк
-// старый (без пульса) сюда не доходит — обратная совместимость
-function WaveTaskList({ snapshot, personas }: {
+// старый (без пульса) сюда не доходит — обратная совместимость. onRestart — кнопка
+// перезапуска в строке незакрытой задачи (этап 3); undefined — действия недоступны
+function WaveTaskList({ snapshot, personas, busyKey, onRestart }: {
   snapshot: TeamWaveSnapshot;
   personas: Record<string, Persona>;
+  busyKey?: string | null;
+  onRestart?: (taskId: string) => void;
 }) {
   const tasks = teamWaveTasksSorted(snapshot.tasks);
   if (tasks.length === 0) return null;
@@ -346,16 +462,24 @@ function WaveTaskList({ snapshot, personas }: {
         Задачи волны · {snapshot.tasks.length}
       </div>
       {tasks.map(t => (
-        <WaveTaskRow key={t.id} task={t} persona={t.executorPersonaId ? personas[t.executorPersonaId] : undefined} />
+        <WaveTaskRow key={t.id} task={t} persona={t.executorPersonaId ? personas[t.executorPersonaId] : undefined}
+          busy={busyKey === `task:${t.id}`} anyBusy={busyKey != null} onRestart={onRestart} />
       ))}
     </div>
   );
 }
 
-// Строка задачи: исполнитель (аватар/инициалы + имя) — статус — «N мин в работе».
-// Время обновляется раз в минуту (useEffect с setInterval) — дешевле секундных тиков,
-// и точность до минуты соответствует «4 мин назад» в самом бейдже
-function WaveTaskRow({ task, persona }: { task: import('../../types').TeamWaveTask; persona?: Persona }) {
+// Строка задачи: исполнитель (аватар/инициалы + имя) — статус — «N мин в работе» —
+// кнопка перезапуска у незакрытой. Время обновляется раз в минуту (useEffect с
+// setInterval) — дешевле секундных тиков, и точность до минуты соответствует
+// «4 мин назад» в самом бейдже
+function WaveTaskRow({ task, persona, busy, anyBusy, onRestart }: {
+  task: import('../../types').TeamWaveTask;
+  persona?: Persona;
+  busy?: boolean;
+  anyBusy?: boolean;
+  onRestart?: (taskId: string) => void;
+}) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!task.startedAt || task.status !== 'inProgress') return;
@@ -410,6 +534,69 @@ function WaveTaskRow({ task, persona }: { task: import('../../types').TeamWaveTa
           {running}
         </span>
       )}
+      {/* Перезапуск задачи (этап 3): только незакрытая и только без идущего действия —
+          гейт двойного клика держит сервер, здесь снимаем лишь лишние соблазны */}
+      {task.status !== 'done' && onRestart && (
+        <button
+          type="button"
+          title={`${TEAM_WAVE_TASK_RESTART_TITLE} — ${TEAM_WAVE_TASK_RESTART_HINT}`}
+          disabled={anyBusy}
+          onClick={() => onRestart(task.id)}
+          style={{
+            border: 'none', padding: 2, flexShrink: 0, display: 'inline-flex',
+            background: 'none', cursor: anyBusy ? 'default' : 'pointer',
+            color: busy ? C.accent : C.textMuted,
+          }}
+        >
+          <RotateCw size={12} strokeWidth={ICON_STROKE}
+            style={busy ? { animation: 'spin 0.9s linear infinite' } : undefined} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Строки перезапуска при зависании (этап 3): волна и ход штаба. Показываются только
+// при liveness stalled/dead. Как «Остановить»: десктоп — строки с hover, мобила —
+// полноразмерные кнопки (тач-цель)
+function RestartRows({ isMobile, waveBusy, turnBusy, anyBusy, onWave, onTurn }: {
+  isMobile?: boolean;
+  waveBusy: boolean;
+  turnBusy: boolean;
+  anyBusy: boolean;
+  onWave: () => void;
+  onTurn: () => void;
+}) {
+  const waveIcon = <RotateCw size={13} strokeWidth={ICON_STROKE}
+    style={{ flexShrink: 0, ...(waveBusy ? { animation: 'spin 0.9s linear infinite' } : {}) }} />;
+  if (isMobile) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Button variant="ghostFilled" size="md" fullWidth disabled={anyBusy} onClick={onWave}>
+          {waveIcon}
+          {TEAM_WAVE_RESTART_TITLE}
+        </Button>
+        <Button variant="ghostFilled" size="md" fullWidth disabled={anyBusy} onClick={onTurn}>
+          <RotateCw size={13} strokeWidth={ICON_STROKE}
+            style={turnBusy ? { animation: 'spin 0.9s linear infinite' } : undefined} />
+          {TEAM_TURN_RESTART_TITLE}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <PopoverRow
+        icon={waveIcon}
+        label={TEAM_WAVE_RESTART_TITLE}
+        onClick={onWave}
+      />
+      <PopoverRow
+        icon={<RotateCw size={13} strokeWidth={ICON_STROKE}
+          style={{ flexShrink: 0, ...(turnBusy ? { animation: 'spin 0.9s linear infinite' } : {}) }} />}
+        label={TEAM_TURN_RESTART_TITLE}
+        onClick={onTurn}
+      />
     </div>
   );
 }

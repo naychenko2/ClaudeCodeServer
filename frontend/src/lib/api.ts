@@ -1297,6 +1297,30 @@ export const api = {
         `/chats/${id}/team-wave-snapshot`,
         { cache: 'no-store', live: true },
       ),
+    // Перезапуск одной под-задачи волны (КР-наблюдаемость, этап 3): та же перевыдача,
+    // что у провала хода — потолок попыток общий. 409 несёт человеческий текст
+    // (живая задача, завершена, повторный клик) — показываем его, а не пустую кнопку
+    restartTeamWaveTask: (id: string, taskId: string) =>
+      request<import('../types').TeamTaskRestartResponse>(
+        `/chats/${id}/team-wave/tasks/${taskId}/restart`,
+        { method: 'POST', live: true },
+      ),
+    // Перезапуск волны: без confirm — предупреждение о живых исполнениях (liveTasks),
+    // повтор с confirm=true останавливает их и перевыдаёт незакрытое. Done не трогается
+    restartTeamWave: (id: string, confirm: boolean) =>
+      request<import('../types').TeamWaveRestartResponse>(
+        `/chats/${id}/team-wave/restart`,
+        { method: 'POST', body: JSON.stringify({ confirm }), live: true },
+      ),
+    // Перезапуск зависшего хода штаба: kill → валидация транскрипта → новый ход с
+    // --resume, отложенные сообщения уходят. startFresh=true — «начать ход заново» при
+    // повреждённом транскрипте (409 code=transcript_damaged). Долгий: kill и ожидание
+    // смерти процесса могут занять десятки секунд
+    restartTeamWaveTurn: (id: string, startFresh = false) =>
+      request<import('../types').TeamTurnRestartResponse>(
+        `/chats/${id}/team-wave/restart-turn`,
+        { method: 'POST', body: JSON.stringify({ startFresh }), live: true, timeoutMs: 90_000 },
+      ),
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // force подтверждает потерю несохранённых правок дерева. Только проектные чаты.

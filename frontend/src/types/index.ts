@@ -1450,6 +1450,43 @@ export interface TeamWaveSnapshot extends TeamWavePulse {
   thresholds: { quietMinutes: number; stalledMinutes: number };
 }
 
+// === КР-наблюдаемость, этап 3: перезапуск без потери работы ===
+
+// Ответ POST /api/chats/{id}/team-wave/tasks/{taskId}/restart.
+// reissued — перевыдана тем же путём, что провал хода (потолок попыток общий);
+// escalated — перевыдача не разрешена, карточка с решением легла в ленту штаба;
+// failed — исполнитель не стартовал (причина — в message)
+export type TeamTaskRestartOutcome = 'reissued' | 'escalated' | 'failed';
+
+export interface TeamTaskRestartResponse {
+  outcome: TeamTaskRestartOutcome;
+  message: string;
+}
+
+// Ответ POST /api/chats/{id}/team-wave/restart. requiresConfirm=true — есть живые
+// исполнения (liveTasks) либо волна выглядит живой: повторный вызов с confirm=true
+// останавливает их и перевыдаёт незакрытое. Под-задачи в Done не трогаются
+export interface TeamWaveRestartResponse {
+  requiresConfirm: boolean;
+  liveTasks?: string[];
+  reissued: number;
+  escalated: number;
+  failed: number;
+  message: string;
+}
+
+// Ответ POST /api/chats/{id}/team-wave/restart-turn. outcome=restarted — ход продолжится
+// с сохранённым контекстом (--resume), fresh — контекст сброшен (startFresh при
+// повреждённом транскрипте). Отказ 409 с code=transcript_damaged предлагает «начать заново»
+export interface TeamTurnRestartResponse {
+  outcome: 'restarted' | 'fresh';
+  resumed: boolean;
+  message: string;
+}
+
+// Код ошибки 409 restart-turn: файл разговора повреждён, resume запрещён
+export type TeamTurnRestartErrorCode = 'transcript_damaged';
+
 // Под-задача плана командной реализации: единица раздачи (в Э3 из неё создаётся задача).
 // executorRationale — одна строка «почему именно он» от планировщика; в ней же приходят
 // пометки бэка «проверьте выбор» / «не обосновал», когда подбор ненадёжен.

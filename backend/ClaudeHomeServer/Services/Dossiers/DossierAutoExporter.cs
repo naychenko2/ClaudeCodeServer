@@ -97,6 +97,9 @@ public sealed class DossierAutoExporter : IHostedService
             var result = await exporter.ExportAsync(ownerId, project, ensureDigests: false);
             // Tip нашей выгрузки — «наш»: автоимпорт его пропустит. CommitSha не-null и при
             // Committed=false (дерево совпало с уже существующим tip — содержимое тоже наше).
+            // Узкое окно «update-ref уже виден, пометки ещё нет» закрывают два механизма
+            // на стороне автоимпортёра (разбор 23.08): перепроверка tip перед фиксацией
+            // партии и compare-and-set курсора — пометку уже не затереть слепой записью.
             _state.MarkOwnTip(ownerId, project.Id, result.CommitSha);
             if (result.Committed)
                 _log?.LogInformation(

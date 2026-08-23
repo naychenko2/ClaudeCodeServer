@@ -51,6 +51,24 @@ public sealed class DossierCaptureState
         lock (_lock) return _map.GetValueOrDefault(key);
     }
 
+    // Compare-and-set для курсора импорта: обновить ключ, только если его значение не
+    // менялось с момента чтения (expected — что видел вызывающий ДО долгой операции).
+    // Гонка курсора (разбор консилиума 23.08): импорт ветки идёт десятки секунд, и
+    // безусловная запись по его завершении затёрла бы MarkOwnTip параллельной выгрузки —
+    // следующий тик посчитал бы собственную ветку чужой и завёз её второй копией
+    // Imported-записей. Возвращает false, если значение успело измениться.
+    public bool SetIfUnchanged(string key, string? expected, string value)
+    {
+        lock (_lock)
+        {
+            if (!string.Equals(_map.GetValueOrDefault(key), expected, StringComparison.Ordinal))
+                return false;
+            _map[key] = value;
+            JsonFileStore.Save(_path, _map);
+            return true;
+        }
+    }
+
     public void Set(string key, string headSha)
     {
         lock (_lock)

@@ -18,7 +18,9 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //     повторный тик ничего не меняет;
 //   • фиксация tip после импорта при любом составе результата (даже 0 добавленных):
 //     битый index.json или полностью знакомые sha не должны перезапускать импорт каждый
-//     тик. Исключение внутри импортёра — state НЕ трогаем, следующий тик переиграет.
+//     тик. Исключения: сбой внутри импортёра — state НЕ трогаем, следующий тик
+//     переиграет; и гонка с автовыгрузкой — курсор пишется compare-and-set и не
+//     затирает MarkOwnTip, успевший приземлиться за долгий импорт (разбор 23.08).
 //
 // Отдельный hosted-сервис, а не метод DossierCaptureService: захват и импорт — разные
 // дела с разными гейтами, и тяжёлый конструктор захватчика не должен расти ради этого.
@@ -37,7 +39,8 @@ public sealed class DossierAutoImporter : BackgroundService
 
     public DossierAutoImporter(ProjectManager projects, DossierStore store, DossierCaptureState state,
         GitService git, InstanceSecretsProvider secrets, FeatureFlagService flags,
-        ILoggerFactory? logFactory = null, ILogger<DossierAutoImporter>? log = null)
+        ILoggerFactory? logFactory = null, ILogger<DossierAutoImporter>? log = null,
+        DossierImporter? importer = null)
     {
         _projects = projects;
         _store = store;
@@ -45,7 +48,7 @@ public sealed class DossierAutoImporter : BackgroundService
         _git = git;
         _secrets = secrets;
         _flags = flags;
-        _importer = new DossierImporter(store, git, secrets, logFactory?.CreateLogger<DossierImporter>());
+        _importer = importer ?? new DossierImporter(store, git, secrets, logFactory?.CreateLogger<DossierImporter>());
         _log = log;
     }
 
@@ -94,10 +97,22 @@ public sealed class DossierAutoImporter : BackgroundService
         if (tip is null) return;
 
         var key = DossierCaptureState.ImportKey(ownerId, project.Id);
-        if (_state.Get(key) == tip.CommitSha) return;
+        var seen = _state.Get(key);
+        if (seen == tip.CommitSha) return;
 
-        var result = await _importer.ImportAsync(ownerId, project);
-        _state.Set(key, tip.CommitSha);
+        var result = await _importer.ImportAsync(ownerId, project,
+            // Перепроверка перед фиксацией партии: чтение файлов ветки долгое (десятки
+            // секунд на сотни записей), и tip мог стать НАШИМ — параллельная выгрузка
+            // успела закоммитить и пометить его (окно update-ref → MarkOwnTip). Такое
+            // содержимое уже живёт в сторе own-записями, Imported-копии — дубли.
+            stillForeign: t => _state.Get(key) != t.CommitSha);
+
+        // Курсор — compare-and-set: за долгий импорт автовыгрузка могла пометить свой
+        // tip в том же ключе (MarkOwnTip). Слепая запись затёрла бы пометку — следующий
+        // тик посчитал бы собственную ветку чужой и завёз её второй копией Imported-
+        // записей. Отказ CAS не ошибка: пометка новее и точнее, тик по ней молча
+        // пропустит ветку (а «опоздавший» чужой контент переиграет следующий tip).
+        _state.SetIfUnchanged(key, seen, tip.CommitSha);
         if (result.Added > 0)
             _log?.LogInformation(
                 "dossiers: автоимпорт проекта {Project} из {Ref} @{Sha}: добавлено {Added}, пропущено {Skipped}",

@@ -434,15 +434,34 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     private void Save(string ownerId, string projectId) =>
         JsonFileStore.Save(StorePath(ownerId, projectId), Get(ownerId, projectId), JsonOpts);
 
-    // Потолок Dossiers:MaxEntries — вытесняем самые старые (по CommittedAt) в архивный JSONL.
-    // Вызывается под _saveLock.
+    // Потолок Dossiers:MaxEntries — вытесняем лишнее в архивный JSONL (в поиске и recall
+    // архив не участвует). Порядок жертв (разбор консилиума 23.08): первыми уходят
+    // импортированные (старейшие вперёд) — чужие записи, даже с более старой датой, не
+    // вправе выдавливать собственную историю владельца из активного стора; когда
+    // импортированных сверх потолка не осталось, ротация own-записей идёт как прежде —
+    // старейшие по CommittedAt. Вызывается под _saveLock.
     private void EvictIfNeeded(string ownerId, string projectId, List<ChangeDossier> list)
     {
         if (list.Count <= _maxEntries) return;
-        list.Sort((a, b) => a.CommittedAt.CompareTo(b.CommittedAt));
-        var toEvict = list.Count - _maxEntries;
-        var evicted = list.GetRange(0, toEvict);
-        list.RemoveRange(0, toEvict);
+        var evicted = new List<ChangeDossier>();
+
+        foreach (var d in list.Where(d => d.Origin == DossierOrigin.Imported)
+                     .OrderBy(d => d.CommittedAt)
+                     .Take(list.Count - _maxEntries)
+                     .ToList())
+        {
+            list.Remove(d);
+            evicted.Add(d);
+        }
+
+        if (list.Count > _maxEntries)
+        {
+            var rest = list.Count - _maxEntries;
+            list.Sort((a, b) => a.CommittedAt.CompareTo(b.CommittedAt));
+            evicted.AddRange(list.GetRange(0, rest));
+            list.RemoveRange(0, rest);
+        }
+
         AppendArchive(ownerId, projectId, evicted);
     }
 

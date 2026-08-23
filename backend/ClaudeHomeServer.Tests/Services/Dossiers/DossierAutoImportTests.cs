@@ -218,4 +218,81 @@ public class DossierAutoImportTests : IDisposable
 
         _store.List(owner, p.Id).Should().ContainSingle().Which.CommitSha.Should().Be("99aa99aa");
     }
+
+    // --- (ж) гонка курсора (разбор консилиума 23.08): импорт долгий (десятки секунд на
+    // сотни записей), за это время автовыгрузка успела закоммитить СВОЙ снапшот и
+    // пометить tip — курсор не должен затираться прочитанным ДО импорта чужим tip, а
+    // собственный снапшот не должен заводиться Imported-копией. Гонка симулируется
+    // детерминированно: импортёр переопределён, «параллельная выгрузка» успевает в
+    // начале его вызова ---
+
+    // Импортёр-имитатор: до чтения ветки (что в проде растягивается на десятки секунд)
+    // успевает произойти наша автовыгрузка — ветка перезаписана собственным снапшотом,
+    // tip помечен в state (MarkOwnTip)
+    private sealed class RacingImporter : DossierImporter
+    {
+        private readonly GitService _gitSvc;
+        private readonly DossierCaptureState _st;
+
+        public RacingImporter(DossierStore store, GitService git, InstanceSecretsProvider secrets,
+            DossierCaptureState state) : base(store, git, secrets)
+        {
+            _gitSvc = git;
+            _st = state;
+        }
+
+        public override async Task<DossiersImportResult> ImportAsync(string ownerId, Project project,
+            CancellationToken ct = default, Func<GitDossiersTip, bool>? stillForeign = null)
+        {
+            var own = new ChangeDossier
+            {
+                OwnerId = ownerId,
+                ProjectId = project.Id,
+                CommitSha = "0add0001",
+                CommitSubject = "feat: наш свежий паспорт",
+                CommittedAt = new DateTimeOffset(2026, 8, 20, 10, 0, 0, TimeSpan.Zero),
+                Why = "почему изменение сделано",
+            };
+            var path = DossierGitExporter.DossierPath(own.CommittedAt, own.CommitSha, own.CommitSubject);
+            var files = new List<GitDossierFile>
+            {
+                new(path, DossierGitExporter.FormatDossier(own, [])),
+                new("index.json", JsonSerializer.Serialize(new DossierBranchIndex(1,
+                [
+                    new DossierIndexEntry(own.CommitSha, path, own.CommitSubject, own.CommittedAt,
+                        Discussion: null, TaskId: null, SupersededSha: []),
+                ]), IndexOpts)),
+            };
+            await _gitSvc.WriteDossiersBranchAsync(ownerId, project.RootPath, files, "test: наша автовыгрузка");
+            var newTip = await _gitSvc.GetDossiersTipAsync(ownerId, project.RootPath);
+            _st.MarkOwnTip(ownerId, project.Id, newTip!.CommitSha);
+            return await base.ImportAsync(ownerId, project, ct, stillForeign);
+        }
+    }
+
+    [Fact]
+    public async Task ДолгийИмпорт_ВыгрузкаУспелаПометитьСвойTip_КурсорНеЗатёрт()
+    {
+        var (p, owner) = await MkRepoProjectAsync("repo_race", flagOn: true);
+        _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
+        await WriteBranchAsync(p, Dossier(p.Id, "ace00001", "feat: чужой паспорт"));
+        var foreignTip = await _git.GetDossiersTipAsync(owner, p.RootPath);
+
+        var auto = new DossierAutoImporter(_projects, _store, _state, _git,
+            new InstanceSecretsProvider(_config), _flags,
+            importer: new RacingImporter(_store, _git, new InstanceSecretsProvider(_config), _state));
+        await auto.TickAsync();
+
+        var ownTip = await _git.GetDossiersTipAsync(owner, p.RootPath);
+        ownTip!.CommitSha.Should().NotBe(foreignTip!.CommitSha,
+            "симуляция сработала: автовыгрузка успела перезаписать ветку за время импорта");
+        _state.Get(DossierCaptureState.ImportKey(owner, p.Id)).Should().Be(ownTip.CommitSha,
+            "курсор держит tip нашей выгрузки: прочитанный ДО импорта чужой tip его не затёр (CAS)");
+        _store.List(owner, p.Id).Should().BeEmpty(
+            "ставший своим tip не завезён Imported-копией — партия отброшена предикатом stillForeign");
+
+        // Повторный тик по тому же state молча пропускает ветку — гонка не повторяется
+        await auto.TickAsync();
+        _store.List(owner, p.Id).Should().BeEmpty("state совпадает с tip — ранний выход без импорта");
+    }
 }

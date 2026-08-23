@@ -114,13 +114,14 @@ public class DossierImporterTests : IDisposable
         await _git.WriteDossiersBranchAsync(owner, p.RootPath, files, "test: ветка паспортов");
     }
 
-    private DossierImporter MkImporter() =>
+    private DossierImporter MkImporter(int maxImportBatchEntries = 1000) =>
         new(_store, _git, new InstanceSecretsProvider(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_temp, "projects.json"),
                 ["LlmProviders:ccs-dummy:ApiKey"] = Secret,
-            }).Build()));
+            }).Build()),
+            maxImportBatchEntries: maxImportBatchEntries);
 
     private string StoreFile(Project p, string owner) =>
         Path.Combine(_temp, "dossiers", owner, p.Id + ".json");
@@ -281,6 +282,104 @@ public class DossierImporterTests : IDisposable
         result.Added.Should().Be(1, "годная запись импортируется, невзирая на соседний мусор");
         result.Skipped.Should().Be(2, "кривой sha + нечитаемый файл");
         _store.List(Owner2, p2.Id).Single().CommitSha.Should().Be("66ff66aa");
+    }
+
+    // --- (е1) чужой index.json без доверия датам (разбор консилиума 23.08): даты
+    // управляют вытеснением EvictIfNeeded, неправдоподобные (будущее дальше суток,
+    // до 2000 года) отсекаются наравне с кривыми sha — по образцу IsValidSha ---
+
+    [Fact]
+    public async Task ДатаИзБудущегоИДревняя_Отсекаются()
+    {
+        var p1 = await MkRepoProjectAsync("repo_dates1", Owner);
+        var p2 = _projects.Create("repo_dates2", p1.RootPath, Owner2, "owner2-user");
+        var future = Dossier(p1.Id, "2100aa01", "feat: паспорт из 2099 года");
+        future.CommittedAt = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var ancient = Dossier(p1.Id, "1999bb02", "feat: паспорт из 1999 года");
+        ancient.CommittedAt = new DateTimeOffset(1999, 12, 31, 0, 0, 0, TimeSpan.Zero);
+        var ok = Dossier(p1.Id, "2026cc03", "feat: паспорт с нормальной датой");
+        await WriteBranchAsync(p1, Owner, secretsEmpty: false, future, ancient, ok);
+
+        var result = await MkImporter().ImportAsync(Owner2, p2);
+
+        result.Added.Should().Be(1, "прошла только запись с правдоподобной датой");
+        result.Skipped.Should().Be(2, "дата 2099 и дата 1999 — пропущенные записи");
+        _store.List(Owner2, p2.Id).Single().CommitSha.Should().Be("2026cc03");
+    }
+
+    // Граница «ровно сутки в будущее» — ещё правдоподобна (дрейф часов машин общей
+    // папки): запись проходит.
+    [Fact]
+    public async Task ДатаВБудущемВПределахСуток_Проходит()
+    {
+        var p1 = await MkRepoProjectAsync("repo_dates3", Owner);
+        var p2 = _projects.Create("repo_dates4", p1.RootPath, Owner2, "owner2-user");
+        var skew = Dossier(p1.Id, "2359dd04", "feat: часы соседа спешат");
+        skew.CommittedAt = DateTimeOffset.UtcNow.AddHours(2);
+        await WriteBranchAsync(p1, Owner, secretsEmpty: false, skew);
+
+        var result = await MkImporter().ImportAsync(Owner2, p2);
+
+        result.Added.Should().Be(1, "сутки вперёд — допустимый дрейф часов, запись жива");
+    }
+
+    // --- (е2) потолок партии импорта (разбор консилиума 23.08): чужая ветка с тысячами
+    // записей не должна заваливать стор и Dify за один вызов — берём свежие по дате ---
+
+    [Fact]
+    public async Task ПартияСверхПотолка_ОбрезаетсяДоСвежих()
+    {
+        var p1 = await MkRepoProjectAsync("repo_cap1", Owner);
+        var p2 = _projects.Create("repo_cap2", p1.RootPath, Owner2, "owner2-user");
+        var d1 = Dossier(p1.Id, "0a000001", "feat: старейший");
+        d1.CommittedAt = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero);
+        var d2 = Dossier(p1.Id, "0a000002", "feat: второй");
+        d2.CommittedAt = new DateTimeOffset(2026, 7, 2, 0, 0, 0, TimeSpan.Zero);
+        var d3 = Dossier(p1.Id, "0a000003", "feat: третий");
+        d3.CommittedAt = new DateTimeOffset(2026, 7, 3, 0, 0, 0, TimeSpan.Zero);
+        var d4 = Dossier(p1.Id, "0a000004", "feat: свежейший");
+        d4.CommittedAt = new DateTimeOffset(2026, 7, 4, 0, 0, 0, TimeSpan.Zero);
+        await WriteBranchAsync(p1, Owner, secretsEmpty: false, d1, d2, d3, d4);
+
+        var result = await MkImporter(maxImportBatchEntries: 2).ImportAsync(Owner2, p2);
+
+        result.Added.Should().Be(2, "за потолком остались только две свежие записи");
+        result.Skipped.Should().Be(2, "хвост партии честно посчитан пропущенным");
+        var shas = _store.List(Owner2, p2.Id).Select(d => d.CommitSha).ToList();
+        shas.Should().BeEquivalentTo(["0a000003", "0a000004"],
+            "партия обрезана по CommittedAt: свежие записи, хвост не заведён");
+    }
+
+    // --- (е3) предикат stillForeign (окно гонки «update-ref → MarkOwnTip»): если за
+    // долгое чтение ветки tip стал НАШИМ — Imported-копии собственного снапшота не заводим ---
+
+    [Fact]
+    public async Task StillForeignFalse_ПартияОтброшена()
+    {
+        var p1 = await MkRepoProjectAsync("repo_guard1", Owner);
+        var p2 = _projects.Create("repo_guard2", p1.RootPath, Owner2, "owner2-user");
+        await WriteBranchAsync(p1, Owner, secretsEmpty: false,
+            Dossier(p1.Id, "90aa0001", "feat: паспорт уже-нашей ветки"));
+
+        var result = await MkImporter().ImportAsync(Owner2, p2, stillForeign: _ => false);
+
+        result.Added.Should().Be(0, "tip стал своим за время чтения — партия выброшена");
+        result.BranchFound.Should().BeTrue();
+        _store.List(Owner2, p2.Id).Should().BeEmpty("Imported-дубли собственного снапшота не заведены");
+    }
+
+    [Fact]
+    public async Task StillForeignTrue_ОбычныйИмпорт()
+    {
+        var p1 = await MkRepoProjectAsync("repo_guard3", Owner);
+        var p2 = _projects.Create("repo_guard4", p1.RootPath, Owner2, "owner2-user");
+        await WriteBranchAsync(p1, Owner, secretsEmpty: false,
+            Dossier(p1.Id, "90aa0002", "feat: паспорт чужой ветки"));
+
+        var result = await MkImporter().ImportAsync(Owner2, p2, stillForeign: _ => true);
+
+        result.Added.Should().Be(1, "предикат подтвердил чужой tip — импорт штатный");
+        _store.List(Owner2, p2.Id).Should().ContainSingle();
     }
 
     // --- (е) ветки нет (свежая машина без ветки) — нули с явным признаком ---

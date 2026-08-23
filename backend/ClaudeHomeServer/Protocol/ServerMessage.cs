@@ -390,6 +390,25 @@ public record TeamImplementMessage(
         int PlanVersion = 0)
     : ServerMessage("team_implement");
 
+// Пульс волны «Командной реализации» (КР-наблюдаемость, этап 1): лёгкий ежеминутный сигнал
+// о состоянии идущей волны — бейдж «КР · волна N» живой данных не имел и пульсировал
+// одинаково при работе и при обвале исполнителей. Stage — wire-токен стадии (wave/checking),
+// Liveness — alive | quiet | dead | stalled (пороги TeamImplement:QuietMinutes/StalledMinutes).
+// Эфемерное событие: в history.json НЕ пишется, Session.UpdatedAt не двигает (по нему
+// сортировка и непрочитанность), бюджет пробуждений штаба не тратится — рассылка идёт
+// напрямую в session-группу хаба из тика TeamWaveWatchdog, минуя историю. После рестарта
+// сервера «висящего» пульса нет — первый тик сторожа ставит новый (не чаще раза в минуту).
+public record TeamWavePulseMessage(
+    string Stage,
+    int WaveNumber,
+    int PlannedWaves,
+    int TasksActive,
+    int TasksTotal,
+    DateTime LastActivityAt,
+    long QuietSeconds,
+    string Liveness)
+    : ServerMessage("team_wave_pulse");
+
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
 // на стороннего провайдера, Label — подпись разделителя «Продолжено на …».

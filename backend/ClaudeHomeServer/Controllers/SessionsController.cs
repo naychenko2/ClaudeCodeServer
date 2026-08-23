@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
-public class SessionsController(SessionManager sessions, ProjectManager projects,
+public class SessionsController(SessionManager sessions, ProjectManager projects, FeatureFlagService flags,
     DefaultAssistantProvisioner provisioner, PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;

@@ -1389,14 +1389,26 @@ public class SessionManager : IDisposable
                 // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
                 if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
             }
-            // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
-            // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
-            // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
-            // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
-            else if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+            else
             {
-                entry.SubagentNudges = 0;
-                entry.NudgeAgentId = null;
+                // Опровержение обрыва: сигнал bg_agent_done обгоняет дозапись финального отчёта
+                // в транскрипт, и пометка могла взвестись по хвосту tool_use агента, который
+                // на деле дописал end_turn. Штатный отчёт гасит ТОЛЬКО СВОЮ пометку — иначе
+                // в чат уходит ложная директива добивания давно завершившегося агента, а чужая
+                // пометка (другой AgentId) ждёт отчёта своего агента.
+                if (RefutesTruncation(entry.TruncatedSubagent?.AgentId, passport.AgentId))
+                    entry.TruncatedSubagent = null;
+                if (RefutesTruncation(entry.TruncatedBgNote?.AgentId, passport.AgentId))
+                    entry.TruncatedBgNote = null;
+                // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
+                // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
+                // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
+                // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
+                if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+                {
+                    entry.SubagentNudges = 0;
+                    entry.NudgeAgentId = null;
+                }
             }
         };
 
@@ -7490,6 +7502,14 @@ public class SessionManager : IDisposable
     /// </summary>
     internal static bool StartsNudgeSeries(string? nudgeAgentId, string truncatedAgentId) =>
         nudgeAgentId != truncatedAgentId;
+
+    /// <summary>
+    /// Гасит ли штатный отчёт агента пометку обрыва. Пометка бывает ложной: bg_agent_done
+    /// обгоняет дозапись финала в транскрипт, и по хвосту tool_use агент числится оборванным,
+    /// хотя дописал end_turn. Опровергает пометку только отчёт ТОГО ЖЕ агента.
+    /// </summary>
+    internal static bool RefutesTruncation(string? markedAgentId, string reportedAgentId) =>
+        markedAgentId == reportedAgentId;
 
     // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
     // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же

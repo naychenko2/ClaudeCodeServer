@@ -18,6 +18,15 @@ internal sealed class SubagentStreamWatcher : IDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(1500);
 
+    // Дебаунс детектора обрыва на bg_done: событие bg_agent_done приходит РАНЬШЕ, чем финальный
+    // отчёт агента доезжает до транскрипта agent-*.jsonl (по журналу subagent-runs за 19–23.08:
+    // медиана дозаписи финала 2.6 с, хвост до ~50 с) — без паузы хвост tool_use читался как
+    // обрыв у штатно завершившихся агентов. Ждём и перечитываем хвост: доехал end_turn —
+    // паспорт уходит штатным. 10 с покрывают медиану с запасом; редкий хвост в десятки секунд
+    // доберёт финальный Emit при Dispose (там транскрипт дочитывается ещё раз).
+    // internal-поле, а не константа: тесты сокращают ожидание.
+    internal TimeSpan BgDoneRecheckDelay = TimeSpan.FromSeconds(10);
+
     private readonly string _cwd;
     private readonly string _claudeSessionId;
     private readonly Func<ServerMessage, Task> _onMessage;
@@ -38,6 +47,9 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly Dictionary<string, DateTime> _reported = [];
     // Скан зовётся из цикла поллинга и из DrainAsync (перед tool_result) — не параллелим
     private readonly SemaphoreSlim _scanLock = new(1, 1);
+    // Файлы с назначенной перепроверкой обрыва (защита от второй эмиссии тем же bg_done);
+    // читается/пишется только под _scanLock
+    private readonly HashSet<string> _bgRechecks = [];
     // Снимок ProfilesRoot на создание ватчера (см. конструктор)
     private readonly string? _profilesRoot;
     private string? _dir;               // папка subagents появляется при первом сабагенте
@@ -142,9 +154,49 @@ internal sealed class SubagentStreamWatcher : IDisposable
         try
         {
             foreach (var (file, toolId) in _toolIdByFile)
-                if (toolId is not null && toolUseIds.Contains(toolId)) Emit(file, finishedBy);
+            {
+                if (toolId is null || !toolUseIds.Contains(toolId)) continue;
+                // bg_done с хвостом tool_use — ещё не обрыв: финал агента часто дозаписывается
+                // в транскрипт ПОСЛЕ сигнала завершения. Эмиссию откладываем до перепроверки
+                // (см. BgDoneRecheckDelay) — паспорт по этому bg_done уходит один раз, оттуда.
+                if (finishedBy == "bg_done" && _tallies.TryGetValue(file, out var tally) && tally.Truncated)
+                {
+                    if (_bgRechecks.Add(file)) ScheduleBgDoneRecheck(file);
+                    continue;
+                }
+                Emit(file, finishedBy);
+            }
         }
         finally { _scanLock.Release(); }
+    }
+
+    // Отложенная перепроверка обрыва по bg_done: выждать, перечитать хвост транскрипта и только
+    // тогда эмитить паспорт (штатный, если доехал end_turn). Фоновая задача не блокирует ни цикл
+    // поллинга, ни Dispose; остановка ватчера отменяет её через _cts — паспорт тогда уходит
+    // финальным Emit из Dispose (run_end) после его собственного дренажа, без дубля.
+    private void ScheduleBgDoneRecheck(string file)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(BgDoneRecheckDelay, _cts.Token);
+                await _scanLock.WaitAsync(_cts.Token);
+                try
+                {
+                    if (IsDisposed) return; // паспорт уже эмитнул Dispose
+                    await ScanFileAsync(file);
+                    _bgRechecks.Remove(file);
+                    Emit(file, "bg_done");
+                }
+                finally { _scanLock.Release(); }
+            }
+            catch (OperationCanceledException) { /* ватчер остановлен — паспорт отдал Dispose */ }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SubagentWatcher] Перепроверка обрыва не удалась: {ex.Message}");
+            }
+        });
     }
 
     // Паспорт наружу. Повторный вызов без новой активности агента ничего не шлёт: у фонового

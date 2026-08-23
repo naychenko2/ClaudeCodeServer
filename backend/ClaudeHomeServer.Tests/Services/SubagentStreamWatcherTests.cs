@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
@@ -202,6 +203,115 @@ public class SubagentStreamWatcherTests : IDisposable
         {
             WorkflowAgentParser.ProfilesRoot = null;
         }
+    }
+
+    // ─── Дебаунс детектора обрыва на bg_done ─────────────────────────────────
+    // Событие bg_agent_done приходит РАНЬШЕ, чем финальный отчёт агента доезжает до
+    // agent-*.jsonl (медиана дозаписи 2.6 с): хвост на момент сигнала кончается tool_use,
+    // и без паузы паспорт ложно помечался оборванным. Ватчер обязан выждать, перечитать
+    // хвост и эмитить паспорт один раз — штатный, если end_turn доехал.
+
+    private static string ToolUseIdOf(string agentFile)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(agentFile, ".meta.json")));
+        return doc.RootElement.GetProperty("toolUseId").GetString()!;
+    }
+
+    [Fact]
+    public async Task BgDone_ФиналДоезжаетПозжеСигнала_ПаспортШтатныйИОдинРаз()
+    {
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+            {
+                BgDoneRecheckDelay = TimeSpan.FromSeconds(1.5),
+            };
+            // Start не зовём: FinalizeAsync дренирует сам, без цикла поллинга тест детерминирован
+            var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-late", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+
+            await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
+            // Хвост — tool_use, но паспорт НЕ эмитится сразу: эмиссия отложена до перепроверки
+            _passports.Should().BeEmpty("обрыв на bg_done объявляется только после перепроверки");
+
+            // Финальный отчёт доезжает до транскрипта после сигнала — как в проде
+            File.AppendAllText(agentFile, Report("2026-08-22T10:00:20.000Z") + "\n");
+
+            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15))))
+                .Should().Be(got.Task, "перепроверка обязана эмитить паспорт");
+            _passports.Should().HaveCount(1);
+            _passports[0].Truncated.Should().BeFalse("end_turn доехал — обрыв опровергнут");
+            _passports[0].LastStopReason.Should().Be("end_turn");
+            _passports[0].FinishedBy.Should().Be("bg_done");
+
+            // Dispose не задваивает паспорт: новой активности после перепроверки не было
+            watcher.Dispose();
+            _passports.Should().HaveCount(1);
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
+    public async Task BgDone_ФиналТакИНеДоехал_ПаспортОборванныйПослеПерепроверки()
+    {
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+            {
+                BgDoneRecheckDelay = TimeSpan.FromMilliseconds(100),
+            };
+            var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-cut", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+
+            await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
+            _passports.Should().BeEmpty();
+
+            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15))))
+                .Should().Be(got.Task, "перепроверка обязана эмитить паспорт и при реальном обрыве");
+            _passports.Should().HaveCount(1, "паспорт с bg_done и обрывом эмитится один раз");
+            _passports[0].Truncated.Should().BeTrue("end_turn не появился — обрыв настоящий");
+            _passports[0].FinishedBy.Should().Be("bg_done");
+
+            watcher.Dispose();
+            _passports.Should().HaveCount(1);
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
+    public async Task BgDone_ВатчерУмерРаньшеПерепроверки_ПаспортОтдаётDisposeОдинРаз()
+    {
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+            // BgDoneRecheckDelay остаётся дефолтным (10 с) — перепроверка заведомо не успевает
+            var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-dispose", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+
+            await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
+            _passports.Should().BeEmpty();
+
+            // Ход закончился, ватчер умирает до перепроверки: паспорт обязан уйти финальной
+            // эмиссией Dispose (run_end), а отменённая перепроверка — не эмитить второй
+            watcher.Dispose();
+            _passports.Should().HaveCount(1);
+            _passports[0].FinishedBy.Should().Be("run_end");
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
     }
 
     [Fact]

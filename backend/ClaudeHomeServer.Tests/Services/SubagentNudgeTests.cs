@@ -75,6 +75,19 @@ public class SubagentNudgeTests : IDisposable
         SessionManager.StartsNudgeSeries("agent-A", "agent-A").Should().BeFalse();
     }
 
+    // Пометка обрыва бывает ложной: bg_agent_done обгоняет дозапись финального отчёта агента
+    // в транскрипт, и продукт слал директивы добивания давно завершившимся агентам. Штатный
+    // отчёт обязан гасить пометку — но только свою: чужая ждёт отчёта своего агента.
+    [Fact]
+    public void ШтатныйОтчёт_ГаситТолькоСвоюПометкуОбрыва()
+    {
+        SessionManager.RefutesTruncation("agent-A", "agent-A").Should().BeTrue();
+        // Чужая пометка (другой AgentId) не трогается
+        SessionManager.RefutesTruncation("agent-A", "agent-B").Should().BeFalse();
+        // Пометки нет — гасить нечего
+        SessionManager.RefutesTruncation(null, "agent-B").Should().BeFalse();
+    }
+
     // Дефект был не в политике, а в том, чем её кормили: счётчик и отметка общие на сессию,
     // а агентов в ходе двое. Оборвался A, штатно доложился B — счётчик обнулялся, отметка от A
     // жила, и добивание уходило с attempt=1 бесконечно (чат крутил системные директивы сам).

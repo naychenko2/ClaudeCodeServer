@@ -5,6 +5,7 @@ import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '..
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
+import { FLAGS, useFeature } from '../../../lib/featureFlags';
 import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useIsMobile } from '../../../lib/breakpoints';

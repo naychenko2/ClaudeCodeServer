@@ -897,6 +897,37 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return null;
     }
 
+    // Локальный tip ветки паспортов (null — локальной ветки нет; remote-tracking мог
+    // остаться). Для гейта автовыгрузки «ветка заведомо наша» (разбор консилиума 23.08):
+    // фон обязан отличать собственный tip от чужого. Тот же вызов, что у
+    // HasDossiersBranchAsync, но возвращает sha, а не признак.
+    public async Task<string?> ResolveDossiersLocalTipAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var sha = r.Stdout.Trim();
+            return r.Ok && IsValidSha(sha) ? sha : null;
+        }
+        catch (GitCommandException) { return null; }
+    }
+
+    // Есть ли remote-tracking реф ветки паспортов (origin/ccs/dossiers/v1): ветку в
+    // репозиторий привёз fetch/pull, локальной копии нет. Признак «сироты» для гейта
+    // автовыгрузки: корневой коммит без родителя поверх origin-версии не запушить
+    // (non-fast-forward, блокер консилиума 23.08) — фон в таком случае обязан молчать.
+    public async Task<bool> HasDossiersRemoteAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return false;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRemoteRef], ct: ct);
+            return r.Ok && IsValidSha(r.Stdout.Trim());
+        }
+        catch (GitCommandException) { return false; }
+    }
+
     // Список blob-файлов дерева ветки паспортов (рекурсивно, пути от корня ветки).
     // Ветка отсутствует либо дерево пустое — пустой список, без ошибки.
     public async Task<IReadOnlyList<string>> ListDossiersFilesAsync(

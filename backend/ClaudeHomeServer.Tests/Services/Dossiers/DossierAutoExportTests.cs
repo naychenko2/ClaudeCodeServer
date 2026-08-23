@@ -195,13 +195,12 @@ public class DossierAutoExportTests : IDisposable
     // Автовыгрузчик на живом графе зависимостей; StartAsync подключает подписку на стор —
     // как это делает хост в проде. Конспекты: сервис на моке LLM со счётчиком вызовов
     // (автовыгрузка модель звать не обязана вовсе)
-    private DossierAutoExporter MkAutoExporter(SessionManager sessions)
-    {
-        var discussions = new DossierDiscussionService(_digests, _store, sessions,
-            _cheap.Object, new InstanceSecretsProvider(_config));
-        return new DossierAutoExporter(_store, _projects, sessions, _git,
-            new InstanceSecretsProvider(_config), discussions, _flags, _state, _config);
-    }
+    private DossierDiscussionService MkDiscussions(SessionManager sessions) =>
+        new(_digests, _store, sessions, _cheap.Object, new InstanceSecretsProvider(_config));
+
+    private DossierAutoExporter MkAutoExporter(SessionManager sessions) =>
+        new(_store, _projects, sessions, _git,
+            new InstanceSecretsProvider(_config), MkDiscussions(sessions), _flags, _state, _config);
 
     // Автоимпортёр на тех же сторах, что и автовыгрузка, — для тестов петли
     // «автовыгрузка двигает tip → тик автоимпорта» (разбор 23.08)
@@ -419,6 +418,132 @@ public class DossierAutoExportTests : IDisposable
         tree.Stdout.Should().Contain("ab12cd3").And.Contain("ef56ab7", "паспорта в ветке");
         tree.Stdout.Should().Contain("discussions/",
             "уже снятый конспект из стора едет в ветку и на авто-пути");
+    }
+
+    // --- Гейт «ветка заведомо наша» (блокеры консилиума 23.08, вариант «б»: сузить
+    // автовыгрузку, а не делать merge-режим). Снапшот собирается только из своих
+    // паспортов — фон обязан молчать, когда ветка может содержать чужое. ---
+
+    private async Task<string> BranchTipAsync(string root) =>
+        (await GitAsync(root, "rev-parse", GitService.DossiersRef)).Stdout.Trim();
+
+    // (а) чужой tip (git pull соседа/второй машины): автовыгрузка не пишет ничего,
+    // ветка не изменилась — полный снапшот стёр бы записи соседа
+    [Fact]
+    public async Task ЧужойTip_АвтовыгрузкаНеТрогаетВетку()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_gate_foreign", flagOn: true);
+        var s = Sess("sess-gate-foreign", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+
+        var foreign = Dossier("neighbor-owner", p.Id, "77aa77aa", "feat: паспорт соседа", "sess-neighbor");
+        await WriteForeignBranchAsync(p, foreign);
+        var tipBefore = await BranchTipAsync(p.RootPath);
+
+        _store.Add(Dossier(user.Id, p.Id, "88bb88bb", "feat: свой паспорт", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);
+
+        (await BranchTipAsync(p.RootPath)).Should().Be(tipBefore,
+            "чужой tip — фон не пишет в ветку ничего, судьбу ветки решает ручная кнопка «Выгрузить»");
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        tree.Stdout.Should().NotContain("88bb88",
+            "свой паспорт не доехал до чужой ветки: записи соседа не затираются снапшотом");
+    }
+
+    // (б) наш tip: после собственной выгрузки следующая автовыгрузка работает как раньше
+    [Fact]
+    public async Task НашTip_СледующаяАвтовыгрузкаРаботаетКакРаньше()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_gate_ours", flagOn: true);
+        var s = Sess("sess-gate-ours", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+
+        _store.Add(Dossier(user.Id, p.Id, "99cc99cc", "feat: первый паспорт", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);
+        (await HasBranchAsync(p.RootPath)).Should()
+            .BeTrue("первая выгрузка: ветки не было нигде — фон её создаёт");
+
+        _store.Add(Dossier(user.Id, p.Id, "a0d0a0d0", "feat: второй паспорт", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);
+
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        tree.Stdout.Should().Contain("99cc99c").And.Contain("a0d0a0d",
+            "tip помечен MarkOwnTip после первой выгрузки — вторая пишет поверх как раньше");
+        (await GitAsync(p.RootPath, "rev-list", "--count", GitService.DossiersRef)).Stdout.Trim()
+            .Should().Be("2", "каждая выгрузка с изменившимся деревом — отдельный коммит");
+    }
+
+    // (в) есть только origin-ветка (репо стянули fetch'ем): фон не создаёт локальную —
+    // корневой коммит без родителя сделал бы ветку непрошиваемой сиротой
+    [Fact]
+    public async Task ТолькоОriginВетка_ФонНеСоздаётЛокальную()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_gate_orphan", flagOn: true);
+        var s = Sess("sess-gate-orphan", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+
+        await InitBareRemoteAsync(p.RootPath, "remote_gate_orphan.git");
+        await WriteForeignBranchAsync(p,
+            Dossier("neighbor-owner", p.Id, "11bb22cc", "feat: паспорт соседа", "sess-neighbor"));
+        var push = await GitAsync(p.RootPath, "push", "origin", GitService.DossiersRef);
+        push.Ok.Should().BeTrue("фикстура: ветка запушена в origin: {0}", push.Stderr);
+        // Сносим локальную копию — репо, куда ветку привёз fetch: remote-tracking остаётся
+        (await GitAsync(p.RootPath, "update-ref", "-d", GitService.DossiersRef)).Ok.Should().BeTrue();
+
+        _store.Add(Dossier(user.Id, p.Id, "33dd44ee", "feat: свой паспорт", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);
+
+        (await HasBranchAsync(p.RootPath)).Should().BeFalse(
+            "только origin-ветка — фон не создаёт локальную сироту поверх origin-версии");
+        (await GitAsync(p.RootPath, "rev-parse", "--verify", "--quiet",
+                "refs/remotes/origin/ccs/dossiers/v1")).Ok.Should()
+            .BeTrue("origin-версия ветки не тронута фоном");
+    }
+
+    // (г) общая папка двух владельцев: фон не выгружает вовсе (переток паспортов к
+    // соседу без единого клика недопустим), ручной экспорт с предупреждением работает
+    [Fact]
+    public async Task ОбщаяПапкаДвухВладельцев_ФонМолчит_РучнойЭкспортРаботает()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_gate_shared", flagOn: true);
+        var neighbor = _users.Add("auto-shared-nb", "password-123456", "user");
+        // Сосед подключил ту же папку своим проектом — признак фазы confirmShared
+        _projects.Create("gate-shared-neighbor", p.RootPath, neighbor.Id, neighbor.Username);
+
+        var s = Sess("sess-gate-shared", p.Id);
+        var sessions = MkSessions(s);
+        var auto = MkAutoExporter(sessions);
+        _store.Add(Dossier(user.Id, p.Id, "55ee66ff", "feat: паспорт общей папки", s.Id));
+
+        await auto.ExportSafeAsync(user.Id, p.Id);
+        (await HasBranchAsync(p.RootPath)).Should().BeFalse(
+            "папку делят два владельца — фон не выгружает без ведома человека");
+
+        // Ручной путь (тот же DossierGitExporter, что за POST /dossiers/export): человек
+        // видел диалог и предупреждение об общей папке — выгрузка работает
+        var manual = new DossierGitExporter(sessions, _store, _git,
+            new InstanceSecretsProvider(_config), MkDiscussions(sessions));
+        var result = await manual.ExportAsync(user.Id, p, ensureDigests: false);
+        result.Committed.Should().BeTrue("ручная выгрузка общей папкой не ограничена");
+        (await HasBranchAsync(p.RootPath)).Should().BeTrue("ручной экспорт создал ветку");
+    }
+
+    // (д) чистый случай «ветки нет вовсе» (ни локальной, ни origin): фон создаёт ветку
+    // и возит паспорта, как раньше
+    [Fact]
+    public async Task ВеткиНетВовсе_ФонСоздаётВетку()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_gate_clean", flagOn: true);
+        var s = Sess("sess-gate-clean", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+
+        _store.Add(Dossier(user.Id, p.Id, "77ff88aa", "feat: первая выгрузка", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);
+
+        (await HasBranchAsync(p.RootPath)).Should()
+            .BeTrue("ветки не было нигде — первая выгрузка на этой машине, фон создаёт её");
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        tree.Stdout.Should().Contain("77ff88a", "паспорт доехал до ветки");
     }
 
     // --- Сторож: «push никогда не автоматический» (инвариант ADR-004 §6). Bare-репозиторий

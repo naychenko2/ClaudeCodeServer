@@ -57,6 +57,16 @@ const RECENT_DAYS = 30;
 // card-top (8). Не из шкалы SP — это расчётное выравнивание, как marginTop аватара.
 const AVATAR_INDENT = 34;
 
+// Тексты панели — в одном месте файла. Подсказка автовыгрузки появляется только
+// при активной автовыгрузке (тот же признак, что у кнопок выгрузки): флаг
+// change-dossiers-recall включён и проект — git-репозиторий. Содержательно
+// объясняет, почему конспекты обсуждений не приезжают сами — после правки
+// «Автовыгрузка не должна молча тратить модель на конспекты» фон везёт только
+// записи, а конспекты снимаются явной командой человека.
+const T = {
+  autoExportHint: 'Решения выгружаются в ветку сами; конспекты обсуждений снимаются по кнопке «Выгрузить»',
+} as const;
+
 function monthKey(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -550,6 +560,16 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       {coverage && coverage.commits > 0 && (
         <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
           Охвачено {coverage.dossiers} из {coverage.commits} коммитов за неделю
+        </p>
+      )}
+      {/* Подсказка автовыгрузки: тот же гейт, что у кнопок «Выгрузить»/«Загрузить»
+          (showExportButton) — фича включена и проект — git-репозиторий. Без подсказки
+          человек ждал бы конспектов, которых автовыгрузка принципиально не везёт
+          (после правки «Автовыгрузка не должна молча тратить модель на конспекты»).
+          Текст — единая константа T.autoExportHint в начале файла. */}
+      {showExportButton && (
+        <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          {T.autoExportHint}
         </p>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>

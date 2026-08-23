@@ -142,7 +142,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        string? color = null, List<string>? mcpServersOn = null)
+        string? color = null, List<string>? mcpServersOn = null, bool? autoImportDossiers = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -176,6 +176,7 @@ public class ProjectManager
                 ? null
                 : [.. mcpServersOn.Select(k => k.Trim().ToLowerInvariant())
                     .Where(k => k.Length > 0).Distinct(StringComparer.Ordinal)];
+        if (autoImportDossiers is not null) project.AutoImportDossiers = autoImportDossiers.Value;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

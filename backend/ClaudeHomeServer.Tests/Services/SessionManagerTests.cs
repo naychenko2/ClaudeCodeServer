@@ -37,6 +37,8 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly UsageService _usage;
     private readonly SubscriptionActivityTracker _activity;
+    // Стор паспортов сабагентов (только память): без него сток паспортов SessionManager = null
+    private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
@@ -157,7 +159,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns);
     }
 
     public void Dispose()
@@ -304,7 +306,7 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Имя", model: "opus", effort: "high");
 
         // Частичный апдейт (как togglePin/chats_update): все поля null — ничего не затирается
-        var updated = _sut.Update(session.Id, name: null, model: null, effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: null, effort: null);
 
         updated!.Name.Should().Be("Имя");
         updated.Model.Should().Be("opus");
@@ -318,7 +320,7 @@ public class SessionManagerTests : IDisposable
         var project = _projectManager.Create("UPD2", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое", model: "opus", effort: "high");
 
-        var updated = _sut.Update(session.Id, name: "Новое", model: null, effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: "Новое", model: null, effort: null);
 
         updated!.Name.Should().Be("Новое");
         updated.Model.Should().Be("opus", "модель не передавалась — не трогаем");
@@ -601,7 +603,7 @@ public class SessionManagerTests : IDisposable
         var project = _projectManager.Create("UPD3", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "opus", effort: "high");
 
-        var updated = _sut.Update(session.Id, name: "N2", model: "sonnet", effort: "low");
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: "N2", model: "sonnet", effort: "low");
 
         updated!.Name.Should().Be("N2");
         updated.Model.Should().Be("sonnet");
@@ -620,7 +622,7 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "glm-5.2", effort: "high");
         session.Provider.Should().Be("glm", "сторонняя модель на создании → ключ её провайдера");
 
-        var updated = _sut.Update(session.Id, name: null, model: "opus[1m]", effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: "opus[1m]", effort: null);
 
         updated!.Model.Should().Be("opus[1m]");
         updated.Provider.Should().Be("claude",
@@ -637,10 +639,254 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "opus", effort: "high");
         session.Provider.Should().Be("claude", "Claude-модель при пустом пуле → PrimaryKey");
 
-        var updated = _sut.Update(session.Id, name: null, model: "glm-5.2", effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: "glm-5.2", effort: null);
 
         updated!.Model.Should().Be("glm-5.2");
         updated.Provider.Should().Be("glm");
+    }
+
+    // --- Смена провайдера в настройках чата: правило «есть ли что переносить» ---
+
+    // Корень профиля CLI родного Claude в тестах: пул подписок пуст, оверрайда провайдера
+    // нет — ходы идут в пользовательском профиле (ключ ClaudeUserProfileDir)
+    private string ClaudeProfileRoot => Path.Combine(_tempDir, "claude-profile");
+    private string GlmProfileRoot => Path.Combine(_tempDir, "claude-profiles", "glm");
+
+    // Разложить транскрипт CLI в профиле по соглашению об уплощении cwd
+    private static void PutTranscript(string configRoot, string cwd, string csid, string content)
+    {
+        var dir = Directory.CreateDirectory(
+            Path.Combine(configRoot, "projects", TranscriptMigrator.FlattenCwd(cwd))).FullName;
+        File.WriteAllText(Path.Combine(dir, csid + ".jsonl"), content);
+    }
+
+    [Fact]
+    public async Task Update_СменаПровайдераБезТранскрипта_Проходит()
+    {
+        // ClaudeSessionId выставлен (был служебный ход — kickoff онбординга, авто-приветствие),
+        // но файла транскрипта нет: переносить нечего, смена модели обязана пройти
+        var dir = MkProjectDir("prov1");
+        var project = _projectManager.Create("PROV1", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        session.ClaudeSessionId = "fake-session-id";
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        updated!.Model.Should().Be("glm-5.2");
+        updated.Provider.Should().Be("glm");
+        Sent<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().BeNull("переносить было нечего — разделитель «Продолжено на …» соврал бы");
+    }
+
+    [Fact]
+    public async Task Update_СменаПровайдераБезХодов_Проходит()
+    {
+        // Совсем свежий чат: ClaudeSessionId ещё null — переносить нечего по определению
+        var dir = MkProjectDir("prov0");
+        var project = _projectManager.Create("PROV0", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        updated!.Model.Should().Be("glm-5.2");
+        updated.Provider.Should().Be("glm");
+    }
+
+    [Fact]
+    public async Task Update_СменаПровайдераСТранскриптом_ФайлПереезжаетВПрофильЦели()
+    {
+        // Разговор реальный: транскрипт лежит в профиле исходного провайдера и обязан
+        // доехать в профиль целевого — иначе --resume начал бы с нуля
+        var dir = MkProjectDir("prov4");
+        var project = _projectManager.Create("PROV4", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        const string csid = "live-session-id";
+        session.ClaudeSessionId = csid;
+        PutTranscript(ClaudeProfileRoot, dir, csid, "{\"type\":\"user\"}\n");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        updated!.Provider.Should().Be("glm");
+        var moved = Path.Combine(GlmProfileRoot, "projects",
+            TranscriptMigrator.FlattenCwd(dir), csid + ".jsonl");
+        File.Exists(moved).Should().BeTrue("транскрипт переносится в профиль целевого провайдера");
+        File.ReadAllText(moved).Should().Be("{\"type\":\"user\"}\n");
+        Sent<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().NotBeNull("контекст переехал — разделитель «Продолжено на …» уместен");
+    }
+
+    [Fact]
+    public async Task Update_СбойПереносаТранскрипта_Отказ()
+    {
+        // Транскрипт найден, но скопировать его не удалось — молча терять контекст нельзя
+        // (тот же false отдаёт таймаут копирования живого файла). Ломаем приёмник: на месте
+        // целевого файла — папка, FileStream(FileMode.Create) её не перезапишет.
+        var dir = MkProjectDir("prov5");
+        var project = _projectManager.Create("PROV5", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        const string csid = "broken-session-id";
+        session.ClaudeSessionId = csid;
+        PutTranscript(ClaudeProfileRoot, dir, csid, "{}\n");
+        Directory.CreateDirectory(Path.Combine(GlmProfileRoot, "projects",
+            TranscriptMigrator.FlattenCwd(dir), csid + ".jsonl"));
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Не удалось перенести транскрипт*");
+        session.Provider.Should().Be("claude", "отказ переноса не меняет провайдера");
+    }
+
+    [Fact]
+    public async Task Update_ХодВПолёте_ОтказПоЖивомуПрогону()
+    {
+        // Признак занятости — живой прогон адаптера, а не Status: у свежего чата он ещё
+        // Starting, и окно между стартом хода и сменой статуса реально существует
+        var dir = MkProjectDir("prov6");
+        var project = _projectManager.Create("PROV6", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // HasLiveTurn = true
+        session.Status.Should().NotBe(SessionStatus.Working, "статус тут ни при чём — смотрим на прогон");
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Идёт ответ ассистента — дождитесь его завершения, затем смените модель");
+    }
+
+    [Fact]
+    public async Task Update_СбросНаПоУмолчанию_НеЗакрепляетМодель()
+    {
+        // «По умолчанию» при назначении места на чужого провайдера: переезд состоялся, но
+        // модель НЕ закрепляется — иначе чат перестал бы следовать назначению места
+        var dir = MkProjectDir("prov7");
+        var project = _projectManager.Create("PROV7", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.ChatNew, "glm-5.2");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "", null);
+
+        updated!.Model.Should().BeNull("выбран сброс — модель следует назначению места");
+        updated.Provider.Should().Be("glm", "назначение места ведёт на glm — там же и профиль хода");
+    }
+
+    [Fact]
+    public async Task Update_МигрирующийВызов_ПрименяетОстальныеПоля()
+    {
+        // Метод заявлен как PATCH: смена провайдера не должна съедать name/effort/tags
+        var dir = MkProjectDir("prov8");
+        var project = _projectManager.Create("PROV8", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое", model: "opus");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, "Новое", "glm-5.2", "low", ["t1"]);
+
+        updated!.Provider.Should().Be("glm");
+        updated.Name.Should().Be("Новое");
+        updated.Effort.Should().Be("low");
+        updated.Tags.Should().Equal("t1");
+    }
+
+    [Fact]
+    public async Task Update_ЧужойВладелец_НеНаходитЧат()
+    {
+        // ownerId вызывающего доезжает до MigrateProviderAsync: чужая правка — 404, а не смена
+        var dir = MkProjectDir("prov9");
+        var project = _projectManager.Create("PROV9", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+
+        var act = () => _sut.UpdateAsync(session.Id, "alien-user", null, "glm-5.2", null);
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+        session.Provider.Should().Be("claude");
+    }
+
+    [Fact]
+    public async Task Update_ХодВПолёте_ОтказПоФолбэкОркестрации()
+    {
+        // Пауза между попытками цепочки фолбэка: прогона CLI прямо сейчас нет (HasLiveTurn=false),
+        // но ход идёт — оркестратор в этот момент сам копирует транскрипт и по finally сверяет
+        // Info.Model с применённой. Смена провайдера под ним разошлась бы с его restore, поэтому
+        // занятость адаптера спрашиваем каноническим Busy, а не одним HasLiveTurn.
+        var dir = MkProjectDir("prov10");
+        var project = _projectManager.Create("PROV10", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(true);
+        SetProcess(entry, adapter.Object);
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Идёт ответ ассистента*");
+        session.Provider.Should().Be("claude", "отказ не двигает провайдера");
+    }
+
+    [Fact]
+    public async Task Update_ДесктопныйЧатНаСтороннего_Отказ()
+    {
+        // ADR-008: кадры рабочего стола из транскрипта стороннему вендору не отдаём. Гейт
+        // живёт в MigrateProviderAsync — единственной точке смены провайдера, — поэтому
+        // закрывает и настройки чата, и кнопку «Продолжить на …».
+        var dir = MkProjectDir("prov11");
+        var project = _projectManager.Create("PROV11", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        session.DesktopChat = true;
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Десктопный чат нельзя перевести на стороннего провайдера*");
+        session.Provider.Should().Be("claude");
+    }
+
+    [Fact]
+    public async Task Update_ПереноситьНечегоПоСырымПолям_ОстальныеПоляПрименяются()
+    {
+        // Провайдеров UpdateAsync считает по эффективным моделям, а миграция — по сырым
+        // (Info.Model ?? Info.Provider). Чат на «По умолчанию», админ переставил назначение
+        // места на glm после последнего хода: смена на opus выглядит как glm → claude, а для
+        // миграции это claude → claude. Переносить нечего, и PATCH обязан примениться целиком,
+        // а не упасть в 400 вместе с именем и усилием.
+        var dir = MkProjectDir("prov12");
+        var project = _projectManager.Create("PROV12", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое");
+        session.Model.Should().BeNull("чат следует назначению места");
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.ChatNew, "glm-5.2");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, "Новое", "opus", "low");
+
+        updated!.Model.Should().Be("opus");
+        updated.Provider.Should().Be("claude");
+        updated.Name.Should().Be("Новое");
+        updated.Effort.Should().Be("low");
+    }
+
+    [Fact]
+    public async Task Update_НеизвестнаяМодельБезПулаПодписок_Отказ()
+    {
+        // Тот же расклад, что выше, но модель — мусорная (устаревший каталог /api/models во
+        // фронте, провайдера убрали из конфига). Отказ обязан быть честным и на коробке БЕЗ
+        // ClaudeSubscriptions: предикат IsNativeClaudeModel судит по ФОРМЕ id, а форма от
+        // наличия пула не зависит. Пока проверка была под конъюнктом «текущий ключ — аккаунт
+        // пула», на пустом пуле она выключалась целиком: Pick отдавал PrimaryKey = текущий
+        // ключ, миграция отменялась как «переезжать некуда», и мусорный id молча ложился в
+        // Info.Model — каждый следующий ход падал в CLI на несуществующей модели.
+        var dir = MkProjectDir("prov13");
+        var project = _projectManager.Create("PROV13", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое");
+        session.Provider.Should().Be("claude", "пул подписок не настроен — родной Claude");
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.ChatNew, "glm-5.2");
+
+        // Префикс чужого ключа брать нельзя: "glm-…" резолвится в провайдера glm по префиксу
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, "Новое", "kimi-k3-нет-такой", null);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Модель*не найдена среди настроенных провайдеров*");
+        session.Model.Should().BeNull("отказ не закрепляет мусорную модель");
+        session.Name.Should().Be("Старое", "PATCH не применился целиком — модель проверяется первой");
     }
 
     [Fact]
@@ -1168,8 +1414,8 @@ public class SessionManagerTests : IDisposable
         session.UpdatedAt = DateTime.UtcNow.AddDays(-3);
         var before = session.UpdatedAt;
 
-        _sut.Update(session.Id, null, null, null)!.UpdatedAt.Should().Be(before);
-        _sut.Update(session.Id, "Имя", null, null)!.UpdatedAt.Should()
+        (await _sut.UpdateAsync(session.Id, TestUserId, null, null, null))!.UpdatedAt.Should().Be(before);
+        (await _sut.UpdateAsync(session.Id, TestUserId, "Имя", null, null))!.UpdatedAt.Should()
             .BeAfter(before, "правка имени — обычное изменение чата");
     }
 
@@ -2253,6 +2499,103 @@ public class SessionManagerTests : IDisposable
         adapter.Verify(a => a.SendMessageAsync(
             It.Is<string>(t => t.Contains("ВЕРИФИКАЦИЯ")), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    // ─── Обрыв фонового сабагента: сквозной путь «паспорт → добивание» ────────────────
+
+    private static ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport CutBgPassport(
+        string sessionId, string agentId = "a-cut", string finishedBy = "bg_done", bool truncated = true) =>
+        new(agentId, "mark", "Волна 1", sessionId, "toolu_1",
+            DateTime.UtcNow.AddMinutes(-5), DateTime.UtcNow, 300, 20, 40, 1, 120_000, 3000,
+            truncated ? "tool_use" : "end_turn", truncated, "Bash", "claude-opus-5", 1024, 0, false,
+            finishedBy, DateTime.UtcNow);
+
+    // Сток паспортов — ровно тот делегат, что SessionManager отдаёт ватчеру сабагентов
+    private Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport> SubagentSink(string sessionId) =>
+        (Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport>)typeof(SessionManager)
+            .GetMethod("SubagentRunSinkFor", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(_sut, [sessionId])!;
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ПаспортBgDoneПослеВыходаПроцесса_УходитДобивание()
+    {
+        // Сценарий ревью: bg_done → паспорт отложен на перепроверку → координатор дописал ход →
+        // result (статус Active) → процесс CLI вышел → Dispose ватчера отдаёт паспорт с bg_done.
+        // В этот момент entry.Process — живой адаптер (он переживает выход CLI), ход не в полёте,
+        // и NoteTruncatedBgAgent обязан дойти до директивы, а не ограничиться пометкой
+        var session = await MkBusySessionAsync("bg-cut-after-exit", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id));
+
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(5));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("обрывок") && t.Contains("1/2")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ХодВПолёте_ТолькоПометка_БезВторогоХода()
+    {
+        var session = await MkBusySessionAsync("bg-cut-in-flight", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id));
+
+        // Ветка «ход идёт» выходит до планирования отправки — проверка без ожидания честная
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        entry.GetType().GetField("TruncatedBgNote")!.GetValue(entry).Should().NotBeNull();
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ДобиваниеСабагента_ОбрывОпровергнутПокаПланировалось_ДирективаНеУходит()
+    {
+        var session = await MkBusySessionAsync("bg-cut-late-final", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        var cut = CutBgPassport(session.Id);
+        // Пока добивание планировалось, ватчер прислал опровержение: последний паспорт штатный
+        _subagentRuns.Record(cut with { Truncated = false, LastStopReason = "end_turn" });
+
+        var nudge = (Task)typeof(SessionManager).GetMethod("NudgeTruncatedSubagentAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(_sut, [session.Id, cut, 1])!;
+        await nudge;
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ОпровергнутШтатнымОтчётом_ПометкиСняты()
+    {
+        var session = await MkBusySessionAsync("bg-cut-refuted", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        var sink = SubagentSink(session.Id);
+
+        sink(CutBgPassport(session.Id, agentId: "a-other"));
+        sink(CutBgPassport(session.Id, agentId: "a-cut"));
+        // Штатный отчёт ЧУЖОГО агента пометку a-cut не трогает
+        sink(CutBgPassport(session.Id, agentId: "a-other", truncated: false));
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedSubagent")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+
+        // Финал a-cut доехал до транскрипта позже сигнала — ватчер прислал опровержение:
+        // обе пометки сняты, ложная директива по result и префикс координатору не уйдут
+        sink(CutBgPassport(session.Id, agentId: "a-cut", truncated: false));
+        entry.GetType().GetField("TruncatedBgNote")!.GetValue(entry).Should().BeNull();
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().BeNull();
     }
 
     [Fact]

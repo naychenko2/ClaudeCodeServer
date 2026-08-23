@@ -75,7 +75,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 
     [HttpPut("{sessionId}")]
-    public IActionResult Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
+    public async Task<IActionResult> Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
     {
         if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
@@ -91,9 +91,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             sessions.SetExcludeFromDossiers(sessionId, optOut);
         try
         {
-            var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort, req.Tags);
+            var updated = await sessions.UpdateAsync(sessionId, UserId, req.Name, req.Model, req.Effort, req.Tags);
             return updated == null ? NotFound() : Ok(updated);
         }
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

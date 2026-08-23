@@ -106,13 +106,18 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
         try
         {
+            // Читатели стартуют ДО записи stdin: hash-object --stdin-paths читает пути и
+            // печатает блобы интерливингом — если сначала залить большой stdin, не читая
+            // stdout, обе трубы забиваются и процессы встают в дедлок (коммит-сообщения
+            // этому не подвержены: git там сначала вычитывает stdin целиком и лишь потом
+            // отвечает). Конкурентное чтение снимает ограничение на объём в обе стороны.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
             if (stdin is not null)
             {
                 await proc.StandardInput.WriteAsync(stdin);
                 proc.StandardInput.Close();
             }
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(timeoutMs);
@@ -722,17 +727,70 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             try { File.Delete(hostIdx); } catch { /* файла нет — норма */ }
             var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = idxPath };
 
+            // Батчинг экспорта: прежде запускалось по ~2 git-процесса на файл
+            // (hash-object --stdin + update-index), на 217 паспортах ~38 с. Теперь файлы
+            // раскладываются во временную папку ВНУТРИ git-dir (git её не видит в status,
+            // а маппинг container/local — тот же, что у индекса), блобы пишет один
+            // hash-object -w --stdin-paths (пути из stdin, без лимита argv), индекс
+            // собирается порциями update-index с несколькими --cacheinfo. Порции, а не
+            // один вызов: строка аргументов процесса на Windows ограничена ~32К символов,
+            // 5000 паспортов в один вызов не влезут (217 → ~4-5 вызовов вместо ~434).
+            // --no-filters обязателен: пофайловый hash-object по умолчанию применяет
+            // атрибуты (core.autocrlf, .gitattributes) — блобы разъехались бы с прежним
+            // «сырым» содержимым из stdin, и то же дерево перестало бы совпадать с tip.
+            var tmpPath = (await RunOkAsync(ownerId, root,
+                ["rev-parse", "--git-path", "dossiers-export-tmp"], ct: ct)).Stdout.Trim();
+            var hostTmp = HostGitPath(ownerId, root, tmpPath);
+            try { Directory.Delete(hostTmp, recursive: true); } catch { /* папки нет — норма */ }
+            Directory.CreateDirectory(hostTmp);
+            var tmpPosix = tmpPath.Replace('\\', '/');
+
             try
             {
-                foreach (var f in files)
+                // Раскладка: имена по порядковому индексу (чистый ASCII — безопасно для
+                // stdin); исходные пути в git не участвуют, они уходят только в update-index.
+                var utf8 = new UTF8Encoding(false);   // как прежний stdin: UTF-8 без BOM
+                var stdinPaths = new StringBuilder();
+                var rels = new List<string>(files.Count);
+                for (var i = 0; i < files.Count; i++)
                 {
-                    var rel = ValidateRel(root, f.Path);
-                    var blob = await RunOkAsync(ownerId, root, ["hash-object", "-w", "--stdin"],
-                        stdin: f.Content, ct: ct);
-                    await RunOkAsync(ownerId, root,
-                        ["update-index", "--add", "--cacheinfo", "100644", blob.Stdout.Trim(), rel],
-                        env: idxEnv, ct: ct);
+                    rels.Add(ValidateRel(root, files[i].Path));
+                    var tmpName = i.ToString("00000000", CultureInfo.InvariantCulture);
+                    await File.WriteAllTextAsync(Path.Combine(hostTmp, tmpName), files[i].Content, utf8, ct);
+                    stdinPaths.Append(tmpPosix).Append('/').Append(tmpName).AppendLine();
                 }
+
+                string[] shas = [];
+                if (files.Count > 0)
+                {
+                    var blobs = await RunOkAsync(ownerId, root,
+                        ["hash-object", "-w", "--no-filters", "--stdin-paths"],
+                        stdin: stdinPaths.ToString(), timeoutMs: 60_000, ct: ct);
+                    shas = blobs.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    if (shas.Length != files.Count)
+                        throw new GitCommandException(
+                            $"hash-object вернул {shas.Length} блобов вместо {files.Count}");
+                }
+
+                // update-index чанками по бюджету символов аргументов
+                const int argvBudget = 12_000;
+                var chunk = new List<string>();
+                var chunkLen = 0;
+                for (var i = 0; i < shas.Length; i++)
+                {
+                    var entry = $"100644,{shas[i]},{rels[i]}";
+                    if (chunk.Count > 0 && chunkLen + entry.Length > argvBudget)
+                    {
+                        await RunOkAsync(ownerId, root, BuildUpdateIndexArgs(chunk), env: idxEnv, ct: ct);
+                        chunk.Clear();
+                        chunkLen = 0;
+                    }
+                    chunk.Add(entry);
+                    chunkLen += entry.Length;
+                }
+                if (chunk.Count > 0)
+                    await RunOkAsync(ownerId, root, BuildUpdateIndexArgs(chunk), env: idxEnv, ct: ct);
+
                 var tree = (await RunOkAsync(ownerId, root, ["write-tree"], env: idxEnv, ct: ct))
                     .Stdout.Trim();
 
@@ -755,12 +813,22 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             }
             finally
             {
-                // Чистим за собой; неудача удаления не критична: файл в git-dir (не мусорит
-                // статус рабочего дерева), следующий запуск сносит его перед собой
+                // Чистим за собой; неудача удаления не критична: оба пути в git-dir (не
+                // мусорят статус рабочего дерева), следующий запуск сносит их перед собой
                 try { File.Delete(hostIdx); } catch { }
+                try { Directory.Delete(hostTmp, recursive: true); } catch { }
             }
         }
         finally { sem.Release(); }
+    }
+
+    // Одна порция update-index временного индекса: несколько --cacheinfo за вызов.
+    // Запись — форма «mode,sha,path» одним аргументом (документированная, неустаревшая).
+    private static List<string> BuildUpdateIndexArgs(IReadOnlyList<string> entries)
+    {
+        var args = new List<string>(entries.Count * 2 + 2) { "update-index", "--add" };
+        foreach (var e in entries) { args.Add("--cacheinfo"); args.Add(e); }
+        return args;
     }
 
     // Путь из вывода git (--git-path) в хостовый: относительный резолвим от корня репо,
@@ -827,6 +895,37 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             if (r.Ok && IsValidSha(r.Stdout.Trim())) return refName;
         }
         return null;
+    }
+
+    // Локальный tip ветки паспортов (null — локальной ветки нет; remote-tracking мог
+    // остаться). Для гейта автовыгрузки «ветка заведомо наша» (разбор консилиума 23.08):
+    // фон обязан отличать собственный tip от чужого. Тот же вызов, что у
+    // HasDossiersBranchAsync, но возвращает sha, а не признак.
+    public async Task<string?> ResolveDossiersLocalTipAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var sha = r.Stdout.Trim();
+            return r.Ok && IsValidSha(sha) ? sha : null;
+        }
+        catch (GitCommandException) { return null; }
+    }
+
+    // Есть ли remote-tracking реф ветки паспортов (origin/ccs/dossiers/v1): ветку в
+    // репозиторий привёз fetch/pull, локальной копии нет. Признак «сироты» для гейта
+    // автовыгрузки: корневой коммит без родителя поверх origin-версии не запушить
+    // (non-fast-forward, блокер консилиума 23.08) — фон в таком случае обязан молчать.
+    public async Task<bool> HasDossiersRemoteAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return false;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRemoteRef], ct: ct);
+            return r.Ok && IsValidSha(r.Stdout.Trim());
+        }
+        catch (GitCommandException) { return false; }
     }
 
     // Список blob-файлов дерева ветки паспортов (рекурсивно, пути от корня ветки).

@@ -13,6 +13,7 @@ import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionC
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
 import { rankContext } from '../../lib/ai/suggest';
 import { aiOllamaAvailable } from '../../lib/ai/ollama';
@@ -239,9 +240,12 @@ export function AiLauncher() {
     if (!open) return;
     listRef.current?.querySelector<HTMLElement>(`[data-idx="${idx}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [idx, open]);
-  // На мобиле НЕ автофокусим поле — иначе сразу выскакивает клавиатура и перекрывает
-  // список действий. Фокус (и клавиатура) — только по явному тапу пользователя.
-  useEffect(() => { if (open && !isMobile) setTimeout(() => inputRef.current?.focus(), 40); }, [open, isMobile]);
+  // На touch-устройстве НЕ автофокусим поле — иначе сразу выскакивает экранная
+  // клавиатура и перекрывает список действий. Гейт именно по типу указателя
+  // (useListAutoFocus = !useIsTouch), а не по ширине окна: планшет шире 600px
+  // страдает ровно так же. Фокус (и клавиатура) — только по явному тапу пользователя.
+  const listAutoFocus = useListAutoFocus();
+  useEffect(() => { if (open && listAutoFocus) setTimeout(() => inputRef.current?.focus(), 40); }, [open, listAutoFocus]);
 
   // Глобальный хоткей ⌘/Ctrl+K и внешнее открытие
   useEffect(() => {

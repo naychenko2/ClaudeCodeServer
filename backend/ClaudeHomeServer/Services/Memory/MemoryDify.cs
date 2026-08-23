@@ -89,12 +89,28 @@ public static class MemoryDify
 
 // Дебаунс-планировщик синхронизации: на ключ (personaId / «owner:project») держит один одноразовый
 // таймер, сбрасываемый при новой активности — синк идёт только после паузы SyncDebounce.
-public sealed class MemoryDifyDebouncer(TimeSpan debounce)
+// IDisposable обязателен: таймер, переживший остановку сервиса, сработал бы после неё и
+// запустил фоновую работу (git/Dify) по уже остановленному приложению (находка QA 23.08).
+public sealed class MemoryDifyDebouncer(TimeSpan debounce) : IDisposable
 {
     private readonly ConcurrentDictionary<string, Timer> _timers = new();
+    private volatile bool _disposed;
 
-    public void Schedule(string key, Action action) =>
+    public void Schedule(string key, Action action)
+    {
+        if (_disposed) return;
         _timers.AddOrUpdate(key,
             _ => new Timer(_ => action(), null, debounce, Timeout.InfiniteTimeSpan),
             (_, timer) => { timer.Change(debounce, Timeout.InfiniteTimeSpan); return timer; });
+        // Dispose мог пройти между проверкой выше и AddOrUpdate — вынимаем опоздавший
+        // таймер, которому уже нельзя срабатывать
+        if (_disposed && _timers.TryRemove(key, out var late)) late.Dispose();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        foreach (var (_, timer) in _timers) timer.Dispose();
+        _timers.Clear();
+    }
 }

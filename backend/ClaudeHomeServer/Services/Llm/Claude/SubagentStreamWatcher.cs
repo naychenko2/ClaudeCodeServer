@@ -18,6 +18,15 @@ internal sealed class SubagentStreamWatcher : IDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(1500);
 
+    // Дебаунс детектора обрыва на bg_done: событие bg_agent_done приходит РАНЬШЕ, чем финальный
+    // отчёт агента доезжает до транскрипта agent-*.jsonl (по журналу subagent-runs за 19–23.08:
+    // медиана дозаписи финала 2.6 с, хвост до ~50 с) — без паузы хвост tool_use читался как
+    // обрыв у штатно завершившихся агентов. Ждём и перечитываем хвост: доехал end_turn —
+    // паспорт уходит штатным. 10 с покрывают медиану с запасом; редкий хвост в десятки секунд
+    // доберёт финальный Emit при Dispose (там транскрипт дочитывается ещё раз).
+    // internal-поле, а не константа: тесты сокращают ожидание.
+    internal TimeSpan BgDoneRecheckDelay = TimeSpan.FromSeconds(10);
+
     private readonly string _cwd;
     private readonly string _claudeSessionId;
     private readonly Func<ServerMessage, Task> _onMessage;
@@ -33,26 +42,36 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly Dictionary<string, string?> _toolIdByFile = [];
     // Паспорт прогона по файлу транскрипта (копится по мере чтения)
     private readonly Dictionary<string, SubagentRunTally> _tallies = [];
-    // Момент последней активности, с которым паспорт уже отдан наружу: агент, которого добили,
-    // дописывает ТОТ ЖЕ транскрипт и завершается повторно — второй одинаковый паспорт не нужен
-    private readonly Dictionary<string, DateTime> _reported = [];
+    // Что уже отдано наружу по файлу: момент последней активности (агент, которого добили,
+    // дописывает ТОТ ЖЕ транскрипт и завершается повторно — второй одинаковый паспорт не нужен),
+    // был ли паспорт оборванным и чем закрыт — чтобы опровергнуть обрыв, когда финал доехал позже
+    private readonly Dictionary<string, (DateTime At, bool Truncated, string FinishedBy)> _reported = [];
     // Скан зовётся из цикла поллинга и из DrainAsync (перед tool_result) — не параллелим
     private readonly SemaphoreSlim _scanLock = new(1, 1);
+    // Файлы с назначенной перепроверкой обрыва (защита от второй эмиссии тем же bg_done);
+    // читается/пишется только под _scanLock
+    private readonly HashSet<string> _bgRechecks = [];
     // Снимок ProfilesRoot на создание ватчера (см. конструктор)
     private readonly string? _profilesRoot;
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR) текущего прогона — папку сессии ищем СНАЧАЛА в нём.
+    // null — профиль не известен: «свой» корень тогда ~/.claude/projects (DefaultRoot)
+    private readonly string? _preferredConfigRoot;
     private string? _dir;               // папка subagents появляется при первом сабагенте
     private Task? _loop;
 
     public bool IsDisposed { get; private set; }
 
     // Тот же контекст наблюдения? Same-process ход (init повторяется в том же процессе)
-    // переиспользует живой ватчер — пересоздание без дренажа теряло бы хвост транскриптов
-    public bool Matches(string cwd, string claudeSessionId) =>
-        !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId;
+    // переиспользует живой ватчер — пересоздание без дренажа теряло бы хвост транскриптов.
+    // Профиль входит в контекст: прогон под другим CLAUDE_CONFIG_DIR пишет в другую папку,
+    // а _dir у живого ватчера закеширован
+    public bool Matches(string cwd, string claudeSessionId, string? preferredConfigRoot = null) =>
+        !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId
+        && string.Equals(_preferredConfigRoot, preferredConfigRoot, StringComparison.OrdinalIgnoreCase);
 
     public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage,
         string? sessionId = null, Action<SubagentRunPassport>? runSink = null, int cliContextWindow = 0,
-        string? profilesRoot = null)
+        string? profilesRoot = null, string? preferredConfigRoot = null)
     {
         _cwd = cwd;
         _claudeSessionId = claudeSessionId;
@@ -60,6 +79,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
         _sessionId = sessionId;
         _runSink = runSink;
         _cliContextWindow = cliContextWindow;
+        _preferredConfigRoot = string.IsNullOrWhiteSpace(preferredConfigRoot) ? null : preferredConfigRoot;
         // Снимок на момент создания ватчера: статик WorkflowAgentParser.ProfilesRoot —
         // глобальный, и в тестах его перезаписывает Program.cs параллельных
         // WebApplicationFactory-хостов; живой ватчер не должен менять корень посреди работы
@@ -142,9 +162,57 @@ internal sealed class SubagentStreamWatcher : IDisposable
         try
         {
             foreach (var (file, toolId) in _toolIdByFile)
-                if (toolId is not null && toolUseIds.Contains(toolId)) Emit(file, finishedBy);
+            {
+                if (toolId is null || !toolUseIds.Contains(toolId)) continue;
+                // bg_done с хвостом tool_use — ещё не обрыв: финал агента часто дозаписывается
+                // в транскрипт ПОСЛЕ сигнала завершения. Эмиссию откладываем до перепроверки
+                // (см. BgDoneRecheckDelay) — паспорт по этому bg_done уходит один раз, оттуда.
+                if (finishedBy == "bg_done" && _tallies.TryGetValue(file, out var tally) && tally.Truncated)
+                {
+                    if (_bgRechecks.Add(file)) ScheduleBgDoneRecheck(file);
+                    continue;
+                }
+                Emit(file, finishedBy);
+            }
         }
         finally { _scanLock.Release(); }
+    }
+
+    // Отложенная перепроверка обрыва по bg_done: выждать, перечитать хвост транскрипта и только
+    // тогда эмитить паспорт (штатный, если доехал end_turn). Фоновая задача не блокирует ни цикл
+    // поллинга, ни Dispose; остановка ватчера отменяет её через _cts — паспорт тогда уходит
+    // финальным Emit из Dispose (с тем же bg_done) после его собственного дренажа, без дубля.
+    private void ScheduleBgDoneRecheck(string file)
+    {
+        // Токен — до запуска задачи: Dispose освобождает _cts, и обращение к _cts.Token из
+        // фоновой задачи бросало бы ObjectDisposedException вместо штатной отмены
+        var ct = _cts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(BgDoneRecheckDelay, ct);
+                await _scanLock.WaitAsync(ct);
+                try
+                {
+                    if (IsDisposed) return; // паспорт уже эмитнул Dispose
+                    await ScanFileAsync(file);
+                    Emit(file, "bg_done");
+                }
+                finally
+                {
+                    // Снимаем отметку и при сбое чтения — иначе файл навсегда остался бы
+                    // «на перепроверке», и следующий bg_done того же агента глотался бы
+                    _bgRechecks.Remove(file);
+                    _scanLock.Release();
+                }
+            }
+            catch (OperationCanceledException) { /* ватчер остановлен — паспорт отдал Dispose */ }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SubagentWatcher] Перепроверка обрыва не удалась: {ex.Message}");
+            }
+        });
     }
 
     // Паспорт наружу. Повторный вызов без новой активности агента ничего не шлёт: у фонового
@@ -153,8 +221,8 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private void Emit(string file, string finishedBy)
     {
         if (_runSink is null || !_tallies.TryGetValue(file, out var tally)) return;
-        if (_reported.TryGetValue(file, out var at) && at == tally.LastActivityAt) return;
-        _reported[file] = tally.LastActivityAt;
+        if (_reported.TryGetValue(file, out var last) && last.At == tally.LastActivityAt) return;
+        _reported[file] = (tally.LastActivityAt, tally.Truncated, finishedBy);
 
         long size = 0;
         try { size = new FileInfo(file).Length; } catch (Exception) { /* файл мог исчезнуть */ }
@@ -231,6 +299,12 @@ internal sealed class SubagentStreamWatcher : IDisposable
             }
             catch (JsonException) { /* битая строка — норма для дописываемого файла */ }
         }
+
+        // Финал доехал позже перепроверки (хвост дозаписи бывает и в десятки секунд): паспорт
+        // уже ушёл оборванным — отдаём опровержение тем же finishedBy, иначе пометка обрыва в
+        // чате так и останется (Emit зовётся только из Finalize/перепроверки/Dispose)
+        if (_reported.TryGetValue(file, out var last) && last.Truncated && !tally.Truncated)
+            Emit(file, last.FinishedBy);
     }
 
     // Блоки assistant-строки транскрипта: text/thinking эмитим, tool_use пропускаем —
@@ -288,6 +362,16 @@ internal sealed class SubagentStreamWatcher : IDisposable
     {
         var flat = string.Concat(_cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
 
+        // «Свой» корень — первым. Папка сессии живёт сразу в нескольких профилях, когда у чата
+        // были фолбэк-ходы через другие провайдеры (glm, kimi…): перебор ниже идёт в порядке ФС
+        // и возвращал первую попавшуюся — старую копию без новых строк. Ватчер весь день
+        // молчал: ни паспортов, ни добивания (чат 95926c09, 23.08: 9 сабагентов, 6 обрывов,
+        // 0 паспортов). Общий перебор остаётся фолбэком.
+        var ownRoot = _preferredConfigRoot is { } preferred
+            ? Path.Combine(preferred, "projects")
+            : WorkflowAgentParser.DefaultRoot;
+        if (Directory.Exists(ownRoot) && FindSubagentsDir(ownRoot, flat) is { } own) return own;
+
         // Профили подписок (sub-*) и созданные после старта сервера не входят в AllowedRoots
         // (там только явно зарегистрированные провайдеры) — проходим их ключи сами:
         // {ProfilesRoot}/{key}/projects/{flat}/{sessionId}/subagents
@@ -302,7 +386,8 @@ internal sealed class SubagentStreamWatcher : IDisposable
 
         foreach (var root in WorkflowAgentParser.AllowedRoots)
         {
-            if (!Directory.Exists(root)) continue;
+            // Свой корень уже просмотрен выше (DefaultRoot при неизвестном профиле)
+            if (!Directory.Exists(root) || string.Equals(root, ownRoot, StringComparison.OrdinalIgnoreCase)) continue;
             var found = FindSubagentsDir(root, flat);
             if (found is not null) return found;
         }
@@ -353,9 +438,16 @@ internal sealed class SubagentStreamWatcher : IDisposable
             try
             {
                 foreach (var file in _tallies.Keys.ToList())
+                {
                     // Только агенты с новыми строками при этом ватчере: старые файлы без новой
                     // активности молчат — их содержимое уже в истории прошлого хода
-                    if (_tallies[file].FeedCalled) Emit(file, "run_end");
+                    if (!_tallies[file].FeedCalled) continue;
+                    // Агент, чью перепроверку оборвала остановка ватчера (ход кончился раньше
+                    // BgDoneRecheckDelay), закрыт продуктом как bg_done — так и отдаём: run_end
+                    // для SessionManager не фоновый, и реальный обрыв остался бы без добивания,
+                    // а конец хода его уже не разберёт
+                    Emit(file, _bgRechecks.Remove(file) ? "bg_done" : "run_end");
+                }
             }
             finally { _scanLock.Release(); }
         _cts.Dispose();

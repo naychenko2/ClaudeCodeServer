@@ -535,4 +535,98 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         using var p = Process.Start(psi)!;
         await p.WaitForExitAsync();
     }
+
+    // ---------- Ветка паспортов ccs/dossiers/v1: батчинг plumbing ----------
+
+    // Прежняя пофайловая цепочка записи ветки (до батчинга): на каждый файл свой
+    // hash-object -w --stdin + update-index --cacheinfo. Здесь — эталон для проверки
+    // эквивалентности: пишет то же множество файлов во временный индекс и возвращает
+    // дерево write-tree. Форма --cacheinfo — через пробел, как в старом коде.
+    private async Task<string> LegacyWriteTreeAsync(string root, IReadOnlyList<GitDossierFile> files)
+    {
+        var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = ".git/index.dossiers-legacy" };
+        var hostIdx = Path.Combine(root, ".git", "index.dossiers-legacy");
+        try { File.Delete(hostIdx); } catch { }
+        try
+        {
+            foreach (var f in files)
+            {
+                var blob = await _git.RunAsync(null, root, ["hash-object", "-w", "--stdin"], stdin: f.Content);
+                blob.Ok.Should().BeTrue("эталонный hash-object не должен падать: {0}", blob.Stderr);
+                var upd = await _git.RunAsync(null, root,
+                    ["update-index", "--add", "--cacheinfo", "100644", blob.Stdout.Trim(), f.Path],
+                    env: idxEnv);
+                upd.Ok.Should().BeTrue("эталонный update-index не должен падать: {0}", upd.Stderr);
+            }
+            var tree = await _git.RunAsync(null, root, ["write-tree"], env: idxEnv);
+            tree.Ok.Should().BeTrue("эталонный write-tree не должен падать: {0}", tree.Stderr);
+            return tree.Stdout.Trim();
+        }
+        finally { try { File.Delete(hostIdx); } catch { } }
+    }
+
+    private static List<GitDossierFile> MkDossierFiles(int count)
+    {
+        var files = new List<GitDossierFile>(count);
+        for (var i = 0; i < count; i++)
+        {
+            // Разнобой содержимого: кириллица, CRLF, кавычки и длинные строки — всё это
+            // обязано хешироваться побайтово одинаково в обеих цепочках
+            var body = i % 3 == 0
+                ? $"# паспорт {i}\r\n\r\nзапись с CRLF и «кавычками»\r\n"
+                : i % 3 == 1
+                    ? $"# dossier {i}\n\ntext with \"quotes\" and 'apostrophes'\n"
+                    : $"# запись {i}\n\n" + new string('д', 500) + "\n";
+            files.Add(new GitDossierFile($"dossiers/2026/08/{i:0000}-dossier-zapis-{i}.md", body));
+        }
+        return files;
+    }
+
+    // 200 файлов > бюджета чанка argv (~12К символов) → update-index уходит несколькими
+    // вызовами: проверяем, что батчинг (hash-object --stdin-paths одним процессом +
+    // чанки update-index) даёт побайтово то же дерево, что пофайловая цепочка, и не
+    // оставляет следов в рабочем дереве
+    [Fact]
+    public async Task WriteDossiersBranch_Батчинг_Даёт_То_Же_Дерево_Что_ПофайловыйПлюминг()
+    {
+        var files = MkDossierFiles(200);
+        var legacyTree = await LegacyWriteTreeAsync(_repo, files);
+
+        var result = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 200 паспортов");
+
+        result.Created.Should().BeTrue("первая запись ветки обязана создать коммит");
+        var newTree = (await _git.RunAsync(null, _repo,
+            ["rev-parse", $"{GitService.DossiersRef}^{{tree}}"])).Stdout.Trim();
+        newTree.Should().Be(legacyTree,
+            "батчинг обязан давать побайтово то же дерево, что прежняя пофайловая цепочка");
+
+        var names = (await _git.RunAsync(null, _repo,
+            ["ls-tree", "-r", "--name-only", GitService.DossiersRef])).Stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        names.Should().HaveCount(200);
+        Directory.Exists(Path.Combine(_repo, ".git", "dossiers-export-tmp")).Should()
+            .BeFalse("временная папка батчинга удаляется после экспорта");
+        (await _git.StatusAsync(null, _repo)).Untracked.Should().BeEmpty(
+            "временная папка внутри git-dir не мусорит в рабочем дереве");
+    }
+
+    // Повторный экспорт того же набора новой цепочкой — коммита нет (дерево совпало с tip);
+    // а изменение одного файла порождает ровно один новый коммит
+    [Fact]
+    public async Task WriteDossiersBranch_Батчинг_ИдемпотентенИИнкрементален()
+    {
+        var files = MkDossierFiles(60);
+        var first = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 60");
+
+        first.Created.Should().BeTrue();
+        var second = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 60 повторно");
+        second.Created.Should().BeFalse("дерево не изменилось — нового коммита быть не должно");
+        second.CommitSha.Should().Be(first.CommitSha);
+
+        files.Add(new GitDossierFile("dossiers/2026/08/0060-dossier-novyy.md", "# новый паспорт\n"));
+        var third = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 61");
+        third.Created.Should().BeTrue();
+        (await _git.RunAsync(null, _repo, ["rev-list", "--count", GitService.DossiersRef])).Stdout.Trim()
+            .Should().Be("2", "в ветке коммит первого экспорта и один добавочный");
+    }
 }

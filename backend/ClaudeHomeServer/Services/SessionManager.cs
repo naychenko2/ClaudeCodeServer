@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -413,6 +413,10 @@ public class SessionManager : IDisposable
     private readonly Mcp.McpOAuthService? _mcpOAuth;
     // Recall паспортов изменений (этап 2, ADR-004 §5); null — в тестах, секции паспортов нет
     private readonly Dossiers.DossierRecallService? _dossierRecall;
+    // Резолвер секций промпта специальности (план «Секции промптов», флаг
+    // specialty-prompt-sections); null — в тестах, секция prompt-sections в промпт не попадает
+    // (перестановка блока досье в dossier-recall от него не зависит — только от флага).
+    private readonly SpecialtySettingsStore? _specialtySettings;
     // Кеш якорей «файлы предыдущего хода» для recall паспортов: sessionId → (отпечаток истории,
     // файлы). Пересбор — только когда файл истории сменился (LastWriteUtc), не на каждый ход.
     private readonly Dictionary<string, (DateTime? Stamp, List<string> Files)> _dossierAnchorCache = new();
@@ -485,11 +489,15 @@ public class SessionManager : IDisposable
         // модели — ветка локального голосового хода (chat-voice). Без них разговор
         // идёт через claude CLI как раньше.
         Llm.LocalActionRouter? router = null,
-        Llm.OllamaClient? ollama = null)
+        Llm.OllamaClient? ollama = null,
+        // Опционально (в тестах не передаётся): резолвер секций промпта специальности
+        // (план «Секции промптов») — без него секция prompt-sections не собирается
+        SpecialtySettingsStore? specialtySettings = null)
     {
         _subagentRuns = subagentRuns;
         _router = router;
         _ollama = ollama;
+        _specialtySettings = specialtySettings;
 
         _skills = skills;
         _mcpRegistry = mcpRegistry;
@@ -771,11 +779,16 @@ public class SessionManager : IDisposable
                         text);
                 }
 
-                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore, dossier);
+                // Перестановка блока досье в свою секцию (план «Секции промптов» этап 3) —
+                // за тем же флагом, что и вклейка prompt-sections (dark launch единым флагом):
+                // выключен — досье остаётся ВНУТРИ recall-memory, как до фичи.
+                var splitDossier = _flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections);
+                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore,
+                    dossier, splitDossier);
                 var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
                 if (completed != recallTask) return null;   // таймаут — ход без recall
                 var recall = await recallTask;
-                if (recall?.Text is null) return null;
+                if (recall?.Text is null && recall?.DossierText is null) return null;
                 // Манифест: hits личной памяти + команды проекта + паспорта → айтемы (F3).
                 // Паспорта — видимость для человека: видно, какие записи истории решений
                 // реально учтены персоной в этом ходу.
@@ -784,7 +797,7 @@ public class SessionManager : IDisposable
                     .Concat(recall.DossierHits.Select(d => new RecallItem("dossier", d.Id,
                         $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                     .ToList();
-                return new RecallBlock(recall.Text, items);
+                return new RecallBlock(recall.Text, items, recall.DossierText);
             }
             catch (Exception ex)
             {
@@ -1397,14 +1410,26 @@ public class SessionManager : IDisposable
                 // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
                 if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
             }
-            // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
-            // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
-            // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
-            // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
-            else if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+            else
             {
-                entry.SubagentNudges = 0;
-                entry.NudgeAgentId = null;
+                // Опровержение обрыва: сигнал bg_agent_done обгоняет дозапись финального отчёта
+                // в транскрипт, и пометка могла взвестись по хвосту tool_use агента, который
+                // на деле дописал end_turn. Штатный отчёт гасит ТОЛЬКО СВОЮ пометку — иначе
+                // в чат уходит ложная директива добивания давно завершившегося агента, а чужая
+                // пометка (другой AgentId) ждёт отчёта своего агента.
+                if (RefutesTruncation(entry.TruncatedSubagent?.AgentId, passport.AgentId))
+                    entry.TruncatedSubagent = null;
+                if (RefutesTruncation(entry.TruncatedBgNote?.AgentId, passport.AgentId))
+                    entry.TruncatedBgNote = null;
+                // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
+                // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
+                // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
+                // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
+                if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+                {
+                    entry.SubagentNudges = 0;
+                    entry.NudgeAgentId = null;
+                }
             }
         };
 
@@ -1531,23 +1556,45 @@ public class SessionManager : IDisposable
             await BroadcastAsync(sessionId, new ProviderLimitMessage(resetsAt, options));
     }
 
-    // Явная миграция начатого чата на другого провайдера (кнопка «Продолжить на …» при
-    // исчерпании лимитов). Guard «смена провайдера у начатой сессии — 400» в Update
-    // остаётся: здесь обход осознанный — транскрипт CLI локальный, переносим его в
-    // профиль целевого провайдера и продолжаем разговор через --resume без потери контекста.
+    // «Переезжать некуда»: по СЫРЫМ полям чата (Info.Model → Info.Provider) цель совпала с
+    // текущим провайдером. Для эндпоинта migrate-provider это отказ (просили перенести — не
+    // перенесли, 400), для UpdateAsync — штатный случай: он сравнивает провайдеров по
+    // ЭФФЕКТИВНЫМ моделям, и после переставленного назначения места две картины расходятся.
+    // Отдельный ТИП, а не сравнение текста исключения: текст пишется человеку и меняется, а
+    // ловля по нему молча пропускала бы наружу любую другую форму «переезжать не нужно»
+    // ложным 400 на весь PATCH.
+    private sealed class ProviderUnchangedException()
+        : InvalidOperationException("Чат уже на этом провайдере");
+
+    // Единственная точка смены провайдера у чата: и кнопка «Продолжить на …» (исчерпан
+    // лимит), и обычная смена модели в настройках (UpdateAsync). Транскрипт CLI локальный —
+    // переносим его в профиль целевого провайдера и продолжаем разговор через --resume без
+    // потери контекста.
     // subscriptionKey — явный выбор аккаунта ТОГО ЖЕ пула подписок (кнопка карточки с
     // Kind="subscription"): вместо автовыбора Pick пользователь указывает конкретный ключ.
-    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string model,
+    // model = null — «По умолчанию» из настроек чата, когда назначение места модель не даёт:
+    // переезжаем на родной Claude, ничего не закрепляя. Эндпоинт migrate-provider пустую
+    // модель по-прежнему не принимает — проверка живёт у него.
+    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string? model,
         string? subscriptionKey = null)
     {
         if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
             throw new KeyNotFoundException("Чат не найден");
 
-        var newModel = model?.Trim();
-        if (string.IsNullOrEmpty(newModel))
-            throw new InvalidOperationException("Не указана модель");
+        var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
 
         var target = _llmProviders.ResolveByModel(newModel);
+        // Десктопный чат стороннему вендору не отдаём (ADR-008): в его транскрипте оседают
+        // кадры рабочего стола (desktop_screen пишет base64 в .jsonl), а миграция — это копия
+        // файла в чужой профиль плюс --resume с чужим ANTHROPIC_BASE_URL. Автоматический
+        // фолбэк то же правило держит обрезкой цепочки (TrimChainForDesktop); здесь — второй
+        // шлюз, на единственной точке РУЧНОЙ смены провайдера: и настройки чата (UpdateAsync),
+        // и кнопка «Продолжить на …» карточки provider_limit. Ротация внутри пула подписок
+        // Claude (target is null) правилом не затронута — эндпоинт и владелец данных те же.
+        if (entry.Info.DesktopChat && target is not null)
+            throw new InvalidOperationException(
+                "Десктопный чат нельзя перевести на стороннего провайдера: в его истории есть "
+                + "кадры рабочего стола. Останьтесь на Claude или заведите обычный чат");
         if (target is { Enabled: false })
             throw new InvalidOperationException(
                 $"Провайдер «{target.DisplayName}» не настроен: задай LlmProviders:{target.Key}:ApiKey");
@@ -1579,12 +1626,18 @@ public class SessionManager : IDisposable
                 // префиксу ни одного провайдера — фронт и реестр рассинхронизированы (каталог
                 // /api/models отдал id, которого текущий LlmProviderRegistry не знает). Молчаливый
                 // фолбэк на Pick давал ложное «Чат уже на этом провайдере» (Pick выбирал тот же
-                // аккаунт пула, что текущий). Если чат сейчас на подписке и модель РЕАЛЬНО другая —
-                // это не смена аккаунта, а неизвестная модель, говорим правду. Совпадает с текущей
-                // моделью — значит и правда та же подписка, корректное «уже на провайдере» ниже.
-                var currentIsSubscription = _subscriptionPool.All.Any(s => s.Key == currentKey);
-                if (currentIsSubscription
-                    && !string.Equals(newModel, entry.Info.Model, StringComparison.OrdinalIgnoreCase))
+                // аккаунт пула, что текущий), поэтому неизвестную модель называем вслух.
+                // Два случая различает ФОРМА id (IsNativeClaudeModel), а не сравнение с
+                // Info.Model: у чата на «По умолчанию» она null, и по ней opus при живом пуле
+                // выглядел как неизвестная модель — PATCH настроек падал с ложным «модель не
+                // найдена» (дефект 3-й итерации). Проверка безусловная: форма id от наличия
+                // пула подписок не зависит, а на коробке БЕЗ ClaudeSubscriptions мусорный id
+                // иначе доезжал бы до Pick → PrimaryKey → «уже на этом провайдере», молча
+                // ложился в Info.Model и валил каждый следующий ход.
+                // Родная модель идёт дальше в Pick: тот вернёт либо текущий аккаунт (переезд
+                // вырождается в «просто закрепить модель» — ProviderUnchangedException ниже),
+                // либо здоровый другой — это штатная ротация пула кнопкой «Продолжить на …».
+                if (!LlmProviderRegistry.IsNativeClaudeModel(newModel))
                     throw new InvalidOperationException(
                         $"Модель «{newModel}» не найдена среди настроенных провайдеров");
                 targetKey = _subscriptionPool.Pick(newModel);
@@ -1596,8 +1649,11 @@ public class SessionManager : IDisposable
         }
 
         if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Чат уже на этом провайдере");
+            throw new ProviderUnchangedException();
 
+        // Разделитель «Продолжено на …» ставим только по факту переноса: в чате, где
+        // переносить было нечего, продолжать тоже нечего — карточка врала бы.
+        var transcriptMoved = false;
         if (entry.Info.ClaudeSessionId is not null)
         {
             var hostCwd = TryResolveCwd(entry.Info)
@@ -1606,9 +1662,24 @@ public class SessionManager : IDisposable
             // другие. Исключение ToRuntime (путь вне монтирований) намеренно не глушим:
             // операция явная, пользователь должен увидеть причину отказа (400)
             var cwd = CwdForOwner(ownerId, hostCwd);
-            if (!TranscriptMigrator.TryMigrate(ConfigRootFor(ownerId, currentKey),
-                    ConfigRootFor(ownerId, targetKey), cwd, entry.Info.ClaudeSessionId, out var error))
+            var srcRoot = ConfigRootFor(ownerId, currentKey);
+            // Различаем «переносить нечего» и «перенос сорвался» — TryMigrate отдаёт false в
+            // обоих случаях, а последствия разные. Транскрипта может не быть вовсе:
+            // ClaudeSessionId выставляется на ЛЮБОМ первом ходе (включая служебный kickoff
+            // онбординга), а файл к этому моменту мог не появиться, чат мог быть создан из
+            // чужого resumeSessionId, либо его убрала плановая уборка CLI. Терять нечего —
+            // меняем провайдера и пишем строку в лог. Сорвавшийся же перенос НАЙДЕННОГО файла
+            // остаётся жёстким отказом: TryMigrate возвращает false и по таймауту копирования
+            // живого файла (CopyFileShared, дедлайн 8 с), а это молчаливая потеря контекста.
+            if (TranscriptMigrator.FindTranscript(srcRoot, cwd, entry.Info.ClaudeSessionId) is null)
+                Console.Error.WriteLine(
+                    $"[SessionManager] Чат {sessionId}: транскрипт {entry.Info.ClaudeSessionId} "
+                    + $"не найден в {srcRoot} — переносить нечего, меняем провайдера");
+            else if (!TranscriptMigrator.TryMigrate(srcRoot, ConfigRootFor(ownerId, targetKey),
+                         cwd, entry.Info.ClaudeSessionId, out var error))
                 throw new InvalidOperationException($"Не удалось перенести транскрипт: {error}");
+            else
+                transcriptMoved = true;
         }
 
         entry.Info.Model = newModel;
@@ -1628,12 +1699,29 @@ public class SessionManager : IDisposable
             RestoreUserMode(sessionId, entry);
         SaveSessions();
 
-        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI»
-        var switchLabel = pickedSub is not null
-            ? $"Продолжено на подписке «{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»"
-            : $"Продолжено на {(target is null ? "AI" : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName)}";
+        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI».
+        // Label = null — сообщение уходит без разделителя: висящую карточку «Продолжить на …»
+        // оно всё равно гасит (chatReducer), а ленту не засоряет. Разделителя нет в двух
+        // случаях: переносить было нечего (продолжать нечего — карточка врала бы) и автовыбор
+        // ДРУГОГО аккаунта того же пула Claude (ротация подписок по договорённости тихая: тип
+        // поставщика не менялся, а «Продолжено на AI» читается как уход к другому вендору).
+        // Явный тык в карточку подписки (pickedSub) подпись сохраняет — это выбор человека.
+        string? switchLabel = null;
+        if (transcriptMoved)
+        {
+            if (pickedSub is not null)
+                switchLabel = "Продолжено на подписке "
+                    + $"«{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»";
+            else if (target is not null)
+                switchLabel = "Продолжено на "
+                    + (string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName);
+            // Возврат СО стороннего провайдера на родной Claude — смена типа поставщика, подпись нужна
+            else if (_llmProviders.GetByKey(currentKey) is not null)
+                switchLabel = "Продолжено на AI";
+        }
         await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, switchLabel));
-        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} ({newModel})");
+        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} "
+            + $"({newModel ?? "по умолчанию"}, транскрипт: {(transcriptMoved ? "перенесён" : "нечего переносить")})");
         return entry.Info;
     }
 
@@ -2118,6 +2206,29 @@ public class SessionManager : IDisposable
         // Off-привязка tool:codegraph убирает и выжимку графа из промпта — заодно с сервером
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         return _ => _codeGraphPrompt.GetSliceAsync(rootPath, fallbackRoot);
+    }
+
+    // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+    // specialty-prompt-sections): сценарные инструкции «когда и как» по роли (история, граф
+    // кода, процессы, правила роли) — резолвер EffectivePromptSections (SpecialtySettingsStore,
+    // этап 2). Текст хода игнорируется (секции статичны для owner+специальности). null —
+    // провайдер не injecting (тесты), нет владельца/персоны, специальность none или групповой
+    // чат (несколько собеседников — контракт плана: секции только у персонных сессий).
+    // Гейт по флагу — ВНУТРИ, на каждый ход (переключение действует сразу, как у dossier).
+    private Func<string?, Task<string?>>? BuildPromptSectionsProvider(
+        string? ownerId, Session session, Persona? persona)
+    {
+        if (ownerId is null || _specialtySettings is null || persona is null) return null;
+        if (persona.Specialty == PersonaSpecialty.None) return null;
+        if (session.Participants is { Count: > 1 }) return null;
+        return _ =>
+        {
+            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections))
+                return Task.FromResult<string?>(null);
+            var sections = _specialtySettings.EffectivePromptSections(ownerId, persona.Specialty);
+            var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
+            return Task.FromResult(text);
+        };
     }
 
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
@@ -2636,8 +2747,9 @@ public class SessionManager : IDisposable
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
     // Разрешено и ПО ХОДУ разговора: персона-слой строится на каждый ход, транскрипт
     // продолжается через --resume с новым системным слоем. Модель/усилие подтягиваются
-    // из персоны; у начатой сессии — только при том же провайдере (guard «смена
-    // провайдера у начатой сессии — 400» нерушим: транскрипт живёт у эндпоинта).
+    // из персоны; у начатой сессии — только при том же провайдере: смена собеседника
+    // транскрипт не перевозит (в отличие от явной смены модели), а уводить ход в чужой
+    // профиль CLI молча нельзя — модель персоны просто не применяется.
     public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
@@ -2816,6 +2928,7 @@ public class SessionManager : IDisposable
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             CodeGraphProvider: BuildCodeGraphProvider(ownerId, persona.Persona, rootPath, projectRoot),
+            PromptSectionsProvider: BuildPromptSectionsProvider(ownerId, session, persona.Persona),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
@@ -4142,6 +4255,7 @@ public class SessionManager : IDisposable
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(entry.Info.OwnerId, persona.Persona, rootPath),
+                PromptSectionsProvider: BuildPromptSectionsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
@@ -4182,6 +4296,7 @@ public class SessionManager : IDisposable
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(project.OwnerId, persona.Persona, rootPath, project.RootPath),
+                PromptSectionsProvider: BuildPromptSectionsProvider(project.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
@@ -4434,13 +4549,33 @@ public class SessionManager : IDisposable
         await Task.WhenAll(tasks);
     }
 
+    // Занят ли чат ходом ПРЯМО СЕЙЧАС. Status для этого не годится: у свежего чата он ещё
+    // Starting, а между стартом хода и сменой статуса есть реальное окно. Занятость адаптера
+    // спрашиваем каноническим Busy (живой прогон ИЛИ фолбэк-оркестрация): в паузе между
+    // попытками цепочки прогона CLI нет, но ход идёт — и оркестратор в этот момент сам
+    // копирует транскрипт, так что смена провайдера под ним разошлась бы с его restore.
+    // Плюс признаки, которых Busy не знает: ход, принятый адаптером но ещё не поднявший
+    // процесс, awaited-ход агента (TurnWaiter) и непустая серверная очередь — её сообщения
+    // уедут в тот же чат, и провайдера менять под ними нельзя.
+    private static bool HasTurnInFlight(SessionEntry entry)
+    {
+        if (Busy(entry.Process) || entry.Process is { HasQueuedTurn: true }) return true;
+        if (entry.TurnWaiter is not null) return true;
+        lock (entry.PendingLock) return entry.Pending.Count > 0;
+    }
+
     // Редактирование названия и модели. Модель применяется со следующего хода
     // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с адаптером.
     //
     // PATCH-семантика: null = «поле не передано, не трогать». Иначе частичные апдейты
-    // (MCP chats_update только с name; PUT {pinned} из togglePin) затирали бы модель/имя,
-    // а для начатой сессии стороннего провайдера ещё и падали с «нельзя сменить провайдера».
-    public Session? Update(string sessionId, string? name, string? model, string? effort, List<string>? tags = null)
+    // (MCP chats_update только с name; PUT {pinned} из togglePin) затирали бы модель/имя.
+    //
+    // ownerId — владелец, от чьего имени идёт правка (UserId контроллера). Единственная
+    // мутирующая точка, где его раньше не было: смена провайдера уходит в
+    // MigrateProviderAsync, а тот проверяет владение — брать владельца из самой сессии
+    // означало бы сверять её саму с собой.
+    public async Task<Session?> UpdateAsync(string sessionId, string ownerId, string? name, string? model,
+        string? effort, List<string>? tags = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
 
@@ -4457,41 +4592,81 @@ public class SessionManager : IDisposable
             var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
 
             // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
-            // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
-            // В рамках одного провайдера/пула модель менять можно.
+            // и «переехавшая» сессия молча потеряла бы его. Прежний запрет «нельзя у начатой
+            // сессии» держался ровно на этом, но с тех пор в продукте завелась миграция
+            // транскрипта — та же, что кнопка «Продолжить на …» даёт живому разговору.
+            // Значит вопрос не в том, начат ли чат, а в том, есть ли что переносить: этим
+            // занимается MigrateProviderAsync.
             var newProvKey = _llmProviders.ResolveByModel(effectiveNew)?.Key;
             var curProvKey = _llmProviders.ResolveByModel(effectiveCur)?.Key;
+            var migrated = false;
             if (newProvKey != curProvKey)
             {
-                if (entry.Info.ClaudeSessionId is not null)
+                // Единственная причина отказа — ход прямо сейчас в полёте: смена провайдера
+                // на лету увела бы ход в другой профиль CLI посреди прогона. Проверка стоит
+                // ЗДЕСЬ, а не внутри MigrateProviderAsync: кнопка «Продолжить на …» аварийная
+                // (приходит при исчерпании лимита, когда ход ещё формально жив), и такая
+                // проверка сломала бы её.
+                if (HasTurnInFlight(entry))
                     throw new InvalidOperationException(
-                        "Нельзя сменить провайдера у начатой сессии — создайте новый чат");
-                // Ходов ещё не было — пересоздаём адаптер нужного типа при следующем сообщении
-                if (entry.Process is { } old)
+                        "Идёт ответ ассистента — дождитесь его завершения, затем смените модель");
+
+                try
                 {
-                    entry.Process = null;
-                    FireAndForget(old.DisposeAsync().AsTask(),
-                        $"остановка адаптера при смене провайдера ({sessionId})");
+                    // effectiveNew = null — выбрали «По умолчанию», а назначение места модель не
+                    // даёт: это переезд на родной Claude без закреплённой модели, а не «модель не
+                    // указана». MigrateProviderAsync такой вызов понимает.
+                    await MigrateProviderAsync(sessionId, ownerId, effectiveNew);
+                    // Сброс на «По умолчанию» не должен закреплять модель: MigrateProviderAsync
+                    // кладёт в Info.Model то, что ему передали (эффективную), и чат переставал бы
+                    // следовать назначению места. Provider внутри уже выставлен.
+                    if (newModel is null) entry.Info.Model = null;
+                    migrated = true;
+                }
+                catch (ProviderUnchangedException)
+                {
+                    // Здесь провайдеров сравнивали по ЭФФЕКТИВНЫМ моделям, а миграция — по сырым
+                    // (Info.Model ?? Info.Provider), и после переставленного назначения места эти
+                    // две картины расходятся: чат с Model = null числится на claude (или на своём
+                    // аккаунте пула), а по назначению эффективно уезжает на glm; выбор opus
+                    // миграция видит как claude → claude. По сырым полям переносить нечего, так
+                    // что это не повод валить 400 весь PATCH (вместе с name/effort/tags) —
+                    // просто закрепляем модель обычной веткой ниже. Настоящая неизвестная
+                    // модель сюда не попадает: у неё свой тип (InvalidOperationException) и
+                    // честный 400 наружу.
                 }
             }
-
-            // В Info.Model кладём именно то, что выбрали: null = «следовать настройке»
-            // (резолвится на каждом ходу, смена настройки подхватывается сама)
-            entry.Info.Model = newModel;
-            // Провайдер ВСЕГДА выводится из модели (комментарий LlmProviderRegistry: модель —
-            // единственный источник правды, Provider не персистится как самостоятельное значение).
-            // Инцидент 14.08.2026: пересчёт был только «в стороннего», и смена glm→opus[1m]
-            // (пилюля модели в NewChatSetup до первого хода) оставляла пару (Claude-модель, ключ
-            // glm) — CLI стартовал в профиле glm с моделью Anthropic → мгновенный 401.
-            if (effectiveNew is not null && _llmProviders.ResolveByModel(effectiveNew) is { } newProv)
-                entry.Info.Provider = newProv.Key;
-            // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): ключ — из пула
-            // (Pick сам отфильтрует исчерпанные/auth-dead, при пустом пуле — PrimaryKey),
-            // модель меняем на лету у живого хода — применится к его последующим round-trip'ам.
-            else if (effectiveNew is not null)
+            if (!migrated)
             {
-                entry.Info.Provider = _subscriptionPool.Pick(effectiveNew);
-                entry.Process?.TrySetModelLive(effectiveNew);
+                // В Info.Model кладём именно то, что выбрали: null = «следовать настройке»
+                // (резолвится на каждом ходу, смена настройки подхватывается сама)
+                entry.Info.Model = newModel;
+                // Провайдер ВСЕГДА выводится из модели (комментарий LlmProviderRegistry: модель —
+                // единственный источник правды, Provider не персистится как самостоятельное значение).
+                // Инцидент 14.08.2026: пересчёт был только «в стороннего», и смена glm→opus[1m]
+                // (пилюля модели в NewChatSetup до первого хода) оставляла пару (Claude-модель, ключ
+                // glm) — CLI стартовал в профиле glm с моделью Anthropic → мгновенный 401.
+                if (effectiveNew is not null && _llmProviders.ResolveByModel(effectiveNew) is { } newProv)
+                    entry.Info.Provider = newProv.Key;
+                // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): ключ — из пула
+                // (Pick сам отфильтрует исчерпанные/auth-dead, при пустом пуле — PrimaryKey),
+                // модель меняем на лету у живого хода — применится к его последующим round-trip'ам.
+                else if (effectiveNew is not null)
+                {
+                    // Чат уже сидит на аккаунте пула, который эту модель тянет — Provider НЕ
+                    // трогаем: транскрипт лежит в профиле именно этого аккаунта, а Pick при
+                    // равных тарифах тай-брейкает случайно (LeastLoaded, deterministic: false).
+                    // Переезд без переноса .jsonl и без AdapterStale не виден сразу (живой
+                    // адаптер держит старый корень), но после рестарта --resume идёт в чужой
+                    // профиль — «No conversation found» и разговор с нуля. Pick нужен ровно
+                    // там, где текущий ключ модель не тянет (пин Opus на плане без Opus) либо
+                    // это возврат со стороннего провайдера/чат вообще без аккаунта пула.
+                    var cur = entry.Info.Provider;
+                    if (cur is null || !_subscriptionPool.All.Any(s => s.Key == cur)
+                        || !_subscriptionPool.SupportsModel(cur, effectiveNew))
+                        entry.Info.Provider = _subscriptionPool.Pick(effectiveNew);
+                    entry.Process?.TrySetModelLive(effectiveNew);
+                }
             }
         }
 
@@ -7499,6 +7674,14 @@ public class SessionManager : IDisposable
     internal static bool StartsNudgeSeries(string? nudgeAgentId, string truncatedAgentId) =>
         nudgeAgentId != truncatedAgentId;
 
+    /// <summary>
+    /// Гасит ли штатный отчёт агента пометку обрыва. Пометка бывает ложной: bg_agent_done
+    /// обгоняет дозапись финала в транскрипт, и по хвосту tool_use агент числится оборванным,
+    /// хотя дописал end_turn. Опровергает пометку только отчёт ТОГО ЖЕ агента.
+    /// </summary>
+    internal static bool RefutesTruncation(string? markedAgentId, string reportedAgentId) =>
+        markedAgentId == reportedAgentId;
+
     // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
     // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же
     // потолком попыток — см. SubagentPrompts.ResumeTruncated.
@@ -7506,6 +7689,10 @@ public class SessionManager : IDisposable
         Llm.Claude.SubagentRunPassport run, int attempt)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
+        // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта
+        // после перепроверки): последний паспорт агента уже штатный — директиву не шлём.
+        // Источник истины — стор паспортов, а не пометки на сессии: их разобрали до планирования
+        if (_subagentRuns?.Latest(run.AgentId) is { Truncated: false }) return;
         // Директива добивания уже несёт все факты обрыва — дублировать их пометкой
         // в том же ходе незачем (пометка чужого агента остаётся ждать своего хода)
         if (entry.TruncatedBgNote?.AgentId == run.AgentId) entry.TruncatedBgNote = null;

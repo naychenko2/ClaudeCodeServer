@@ -169,6 +169,40 @@ public class SubagentRunLogTests
     }
 
     [Fact]
+    public void NoteNudge_ДописываетОбновлённыйПаспортВJsonl()
+    {
+        var dir = TempDir();
+        try
+        {
+            var log = new SubagentRunLog(dir, retainDays: 14);
+            log.Record(Passport("a1", truncated: true));
+            // Раньше инкремент жил только в памяти: если агент больше не завершался,
+            // nudgeAttempts в файле оставался занижен — журнал врал при разборе обрывов
+            log.NoteNudge("a1");
+
+            var lines = File.ReadAllLines(
+                Path.Combine(dir, $"subagent-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl"));
+            lines.Should().HaveCount(2, "добивание дописывает строку истории, а не правит старую");
+            JsonDocument.Parse(lines[^1]).RootElement
+                .GetProperty("nudgeAttempts").GetInt32().Should().Be(1);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void NoteNudge_НеизвестныйАгент_НичегоНеПишет()
+    {
+        var dir = TempDir();
+        try
+        {
+            var log = new SubagentRunLog(dir, retainDays: 14);
+            log.NoteNudge("ghost");
+            Directory.GetFiles(dir).Should().BeEmpty();
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public void Record_Удержание_СтарыеДневныеФайлыУходят()
     {
         var dir = TempDir();

@@ -176,6 +176,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // 0 — не объявляли. Уходит в паспорта сабагентов: без него «контекст 198k при обрыве»
     // читается по-разному в окне 200k и в окне 1M. Считается при сборке env хода.
     private int _turnContextWindow;
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR), с которым реально запущен прогон: env хода
+    // (сторонний провайдер / подписка пула — BuildCliEnv/BuildOAuthCliEnv), иначе корень
+    // сессии. Именно ЭТОТ, а не _cliConfigRoot: FallbackLlmSessionAdapter меняет провайдера
+    // у того же инстанса, и корень сессии после фолбэка устаревает. Ватчер сабагентов ищет
+    // папку сессии сначала здесь — в других профилях лежат её копии от фолбэк-ходов.
+    private string? _turnConfigRoot;
 
     // Максимальная тишина stdout активного хода: при живой работе (генерация, инструмент,
     // субагент, компакция, ожидание пользователя) CLI шлёт события регулярно; полное молчание
@@ -2425,6 +2431,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _turnContextWindow = envOverrides.TryGetValue("CLAUDE_CODE_MAX_CONTEXT_TOKENS", out var declaredWindow)
             && int.TryParse(declaredWindow, NumberStyles.Integer, CultureInfo.InvariantCulture, out var windowValue)
             ? windowValue : 0;
+        _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
+            && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
 
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
@@ -3286,8 +3294,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Same-process ход (init повторяется в том же процессе, контекст тот же) —
                     // ватчер переиспользуем: пересоздание помечало бы файлы «прочитанными
                     // целиком» и теряло хвост текста доживающих агентов. Иной контекст —
-                    // дочитываем хвост (Drain) и только потом пересоздаём.
-                    if (_subagentWatcher is null || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!))
+                    // дочитываем хвост (Drain) и только потом пересоздаём. Профиль прогона —
+                    // часть контекста: новый процесс под другим CLAUDE_CONFIG_DIR (фолбэк сменил
+                    // провайдера) пишет транскрипты в другую папку, старый ватчер с закешированной
+                    // папкой их не увидит.
+                    if (_subagentWatcher is null
+                        || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot))
                     {
                         if (_subagentWatcher is not null)
                         {
@@ -3295,7 +3307,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             _subagentWatcher.Dispose();
                         }
                         _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage,
-                            Info.Id, _subagentRunSink, _turnContextWindow);
+                            Info.Id, _subagentRunSink, _turnContextWindow, preferredConfigRoot: _turnConfigRoot);
                         _subagentWatcher.Start();
                     }
 

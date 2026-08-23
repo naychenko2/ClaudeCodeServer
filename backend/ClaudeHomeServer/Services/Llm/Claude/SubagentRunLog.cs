@@ -231,11 +231,23 @@ public sealed class SubagentRunLog
     /// <summary>Отметить отправленное добивание агента (растёт до потолка попыток).</summary>
     public void NoteNudge(string agentId)
     {
+        SubagentRunPassport? updated = null;
         lock (_lock)
         {
             var i = _runs.FindIndex(r => r.AgentId == agentId);
-            if (i >= 0) _runs[i] = _runs[i] with { NudgeAttempts = _runs[i].NudgeAttempts + 1 };
+            if (i >= 0) updated = _runs[i] = _runs[i] with { NudgeAttempts = _runs[i].NudgeAttempts + 1 };
         }
+        // Инкремент только в памяти систематически занижал nudgeAttempts в дневном jsonl
+        // (паспорт с новым счётчиком туда не доезжал, если агент больше не завершался) —
+        // дописываем обновлённую строку; история строк по AgentId в файле by design
+        if (updated is not null) AppendToFile(updated);
+    }
+
+    /// <summary>Последний известный паспорт агента (в памяти — один на AgentId).</summary>
+    public SubagentRunPassport? Latest(string agentId)
+    {
+        lock (_lock)
+            return _runs.Find(r => r.AgentId == agentId);
     }
 
     /// <summary>Последние паспорта, свежие — первыми.</summary>

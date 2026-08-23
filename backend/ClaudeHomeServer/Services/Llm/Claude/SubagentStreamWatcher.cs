@@ -52,19 +52,25 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly HashSet<string> _bgRechecks = [];
     // Снимок ProfilesRoot на создание ватчера (см. конструктор)
     private readonly string? _profilesRoot;
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR) текущего прогона — папку сессии ищем СНАЧАЛА в нём.
+    // null — профиль не известен: «свой» корень тогда ~/.claude/projects (DefaultRoot)
+    private readonly string? _preferredConfigRoot;
     private string? _dir;               // папка subagents появляется при первом сабагенте
     private Task? _loop;
 
     public bool IsDisposed { get; private set; }
 
     // Тот же контекст наблюдения? Same-process ход (init повторяется в том же процессе)
-    // переиспользует живой ватчер — пересоздание без дренажа теряло бы хвост транскриптов
-    public bool Matches(string cwd, string claudeSessionId) =>
-        !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId;
+    // переиспользует живой ватчер — пересоздание без дренажа теряло бы хвост транскриптов.
+    // Профиль входит в контекст: прогон под другим CLAUDE_CONFIG_DIR пишет в другую папку,
+    // а _dir у живого ватчера закеширован
+    public bool Matches(string cwd, string claudeSessionId, string? preferredConfigRoot = null) =>
+        !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId
+        && string.Equals(_preferredConfigRoot, preferredConfigRoot, StringComparison.OrdinalIgnoreCase);
 
     public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage,
         string? sessionId = null, Action<SubagentRunPassport>? runSink = null, int cliContextWindow = 0,
-        string? profilesRoot = null)
+        string? profilesRoot = null, string? preferredConfigRoot = null)
     {
         _cwd = cwd;
         _claudeSessionId = claudeSessionId;
@@ -72,6 +78,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
         _sessionId = sessionId;
         _runSink = runSink;
         _cliContextWindow = cliContextWindow;
+        _preferredConfigRoot = string.IsNullOrWhiteSpace(preferredConfigRoot) ? null : preferredConfigRoot;
         // Снимок на момент создания ватчера: статик WorkflowAgentParser.ProfilesRoot —
         // глобальный, и в тестах его перезаписывает Program.cs параллельных
         // WebApplicationFactory-хостов; живой ватчер не должен менять корень посреди работы
@@ -340,6 +347,16 @@ internal sealed class SubagentStreamWatcher : IDisposable
     {
         var flat = string.Concat(_cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
 
+        // «Свой» корень — первым. Папка сессии живёт сразу в нескольких профилях, когда у чата
+        // были фолбэк-ходы через другие провайдеры (glm, kimi…): перебор ниже идёт в порядке ФС
+        // и возвращал первую попавшуюся — старую копию без новых строк. Ватчер весь день
+        // молчал: ни паспортов, ни добивания (чат 95926c09, 23.08: 9 сабагентов, 6 обрывов,
+        // 0 паспортов). Общий перебор остаётся фолбэком.
+        var ownRoot = _preferredConfigRoot is { } preferred
+            ? Path.Combine(preferred, "projects")
+            : WorkflowAgentParser.DefaultRoot;
+        if (Directory.Exists(ownRoot) && FindSubagentsDir(ownRoot, flat) is { } own) return own;
+
         // Профили подписок (sub-*) и созданные после старта сервера не входят в AllowedRoots
         // (там только явно зарегистрированные провайдеры) — проходим их ключи сами:
         // {ProfilesRoot}/{key}/projects/{flat}/{sessionId}/subagents
@@ -354,7 +371,8 @@ internal sealed class SubagentStreamWatcher : IDisposable
 
         foreach (var root in WorkflowAgentParser.AllowedRoots)
         {
-            if (!Directory.Exists(root)) continue;
+            // Свой корень уже просмотрен выше (DefaultRoot при неизвестном профиле)
+            if (!Directory.Exists(root) || string.Equals(root, ownRoot, StringComparison.OrdinalIgnoreCase)) continue;
             var found = FindSubagentsDir(root, flat);
             if (found is not null) return found;
         }

@@ -314,6 +314,93 @@ public class SubagentStreamWatcherTests : IDisposable
         finally { WorkflowAgentParser.ProfilesRoot = null; }
     }
 
+    // ─── «Свой» профиль первым ───────────────────────────────────────────────
+    // Папка сессии живёт сразу в нескольких профилях, когда у чата были фолбэк-ходы через
+    // другие провайдеры; перебор в порядке ФС находил первую попавшуюся — старую копию без
+    // новых строк, и ватчер молчал весь день (чат 95926c09: 6 обрывов, 0 паспортов).
+
+    [Fact]
+    public async Task PreferredConfigRoot_ПапкаСессииВДвухПрофилях_ЧитаетСвой()
+    {
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            // «Чужой» профиль — первым в порядке ФС (имя «a-…»), со старым транскриптом
+            SetupProfileSubagent("a-alien", _sessionId, "agent-alien", cwd,
+                Prompt("2026-08-22T09:00:00.000Z", "Старая задача"),
+                Report("2026-08-22T09:00:20.000Z"));
+            // «Свой» профиль — последним по ФС; папка сессии есть, транскриптов пока нет
+            var ownRoot = Path.Combine(_profilesRoot, "z-own");
+            var flat = string.Concat(cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
+            var ownDir = Path.Combine(ownRoot, "projects", flat, _sessionId, "subagents");
+            Directory.CreateDirectory(ownDir);
+
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot, preferredConfigRoot: ownRoot);
+            watcher.Start();
+
+            // Агент текущего прогона пишет в свой профиль
+            File.WriteAllLines(Path.Combine(ownDir, "agent-own.jsonl"),
+            [
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                Report("2026-08-22T10:00:20.000Z"),
+            ]);
+            File.WriteAllText(Path.Combine(ownDir, "agent-own.meta.json"),
+                "{\"toolUseId\":\"toolu_own\",\"agentType\":\"mark\",\"description\":\"Свой агент\"}");
+
+            // Finalize дренирует сам — без ожидания тика поллинга
+            await watcher.FinalizeAsync(["toolu_own"], "tool_result");
+            watcher.Dispose();
+
+            _passports.Select(p => p.AgentId).Should().Equal("own");
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
+    public async Task PreferredConfigRoot_ПапкиВНёмНет_ПереборПрофилейКакРаньше()
+    {
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            // Подсказка указывает на профиль без папки сессии — это подсказка, а не запрет:
+            // общий перебор обязан найти агента там, где он есть
+            var emptyProfile = Path.Combine(_profilesRoot, "empty-profile");
+            Directory.CreateDirectory(Path.Combine(emptyProfile, "projects"));
+
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot, preferredConfigRoot: emptyProfile);
+            watcher.Start();
+
+            var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-swept", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                Report("2026-08-22T10:00:20.000Z"));
+
+            await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "tool_result");
+            watcher.Dispose();
+
+            _passports.Select(p => p.AgentId).Should().Equal("agent-swept");
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
+    public void Matches_ДругойПрофильПрогона_ВатчерНеПереиспользуется()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(_profilesRoot, "glm");
+        using var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+            profilesRoot: _profilesRoot, preferredConfigRoot: root);
+
+        watcher.Matches(cwd, _sessionId, root).Should().BeTrue();
+        // Фолбэк сменил провайдера → новый процесс под другим CLAUDE_CONFIG_DIR: папка
+        // транскриптов другая, закешированный _dir старого ватчера её не увидит
+        watcher.Matches(cwd, _sessionId, Path.Combine(_profilesRoot, "sub-claude-2")).Should().BeFalse();
+        watcher.Matches(cwd, _sessionId, null).Should().BeFalse();
+    }
+
     [Fact]
     public void МножествоАгентов_ПрофильИДопКорень_НаходятсяВсе()
     {
@@ -328,10 +415,13 @@ public class SubagentStreamWatcherTests : IDisposable
         {
             // У каждой сессии свой ватчер со своим cwd — как в продукте. Один ватчер
             // следит ровно за одной папкой (_dir кэшируется), поэтому корни проверяем
-            // двумя независимыми ватчерами
+            // двумя независимыми ватчерами. Id сессий РАЗНЫЕ: в продукте сессия живёт
+            // ровно в одном проекте, а фолбэк-поиск папки идёт по id сессии без учёта
+            // cwd — с общим id второй ватчер нашёл бы папку первого
             var extraPassports = new List<SubagentRunPassport>();
             var seen1 = 0;
             var seen2 = 0;
+            var sessionId2 = "sess-" + Guid.NewGuid().ToString("N");
 
             var cwd1 = Path.Combine(Path.GetTempPath(), "Ccs W test1 " + Guid.NewGuid().ToString("N"));
             using var watcher1 = new SubagentStreamWatcher(cwd1, _sessionId,
@@ -339,7 +429,7 @@ public class SubagentStreamWatcherTests : IDisposable
                 runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
 
             var cwd2 = Path.Combine(Path.GetTempPath(), "Ccs W test2 " + Guid.NewGuid().ToString("N"));
-            using var watcher2 = new SubagentStreamWatcher(cwd2, _sessionId,
+            using var watcher2 = new SubagentStreamWatcher(cwd2, sessionId2,
                 _ => { seen2++; return Task.CompletedTask; },
                 runSink: p => extraPassports.Add(p), profilesRoot: _profilesRoot);
 
@@ -353,7 +443,7 @@ public class SubagentStreamWatcherTests : IDisposable
 
             // Агент под дополнительным корнем (зарегистрированный профиль провайдера)
             var flat2 = string.Concat(cwd2.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
-            var sessionDir = Path.Combine(extraRoot, flat2, _sessionId, "subagents");
+            var sessionDir = Path.Combine(extraRoot, flat2, sessionId2, "subagents");
             Directory.CreateDirectory(sessionDir);
             File.WriteAllLines(Path.Combine(sessionDir, "agent-extra.jsonl"), new[]
             {

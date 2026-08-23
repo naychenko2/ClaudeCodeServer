@@ -9,6 +9,7 @@ import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../c
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { useMe } from '../../../lib/defaultPersona';
+import { FLAGS, useFeature } from '../../../lib/featureFlags';
 import { getNav } from '../../../lib/nav';
 import { OPEN_INTRO_EVENT } from '../../onboarding/OnboardingPage';
 import { GroupSelect } from '../GroupSelect';
@@ -243,6 +244,11 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [autoImportDossiers, setAutoImportDossiers] = useState(project.autoImportDossiers ?? false);
+  // Автоимпорт на бэкенде гейтится флагом change-dossiers-recall (DossierAutoImporter):
+  // без флага включённый тумблер ничего не делает, и обещание «загружать автоматически»
+  // оборачивается тишиной. Прячем строку тем же хуком и флагом, что DossierHistoryPanel —
+  // тогда PUT уносит серверное значение (стейт не менялся).
+  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   // Строка «Руководитель проекта» (п.5.3) — у проекта с назначенным руководителем
   // секции нет вовсе
@@ -505,13 +511,15 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
             поведения проекта, а не фич-флаг. Пояснение под заголовком: «решения» в пользовательских
             текстах (см. ADR-004 §3.2), с указанием имени ветки, чтобы человек понимал, откуда
             приедут новые записи. */}
-        <SettingsRow title="Загружать историю решений из репозитория автоматически">
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>Загружать историю решений из репозитория автоматически</div>
-            <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.4 }}>Новые записи из ветки ccs/dossiers/v1 появятся сами после git pull</div>
-          </div>
-          <Toggle checked={autoImportDossiers} onChange={setAutoImportDossiers} ariaLabel="Загружать историю решений из репозитория автоматически" />
-        </SettingsRow>
+        {recallEnabled && (
+          <SettingsRow title="Загружать историю решений из репозитория автоматически">
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>Загружать историю решений из репозитория автоматически</div>
+              <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.4 }}>Новые записи из ветки ccs/dossiers/v1 появятся сами после git pull</div>
+            </div>
+            <Toggle checked={autoImportDossiers} onChange={setAutoImportDossiers} ariaLabel="Загружать историю решений из репозитория автоматически" />
+          </SettingsRow>
+        )}
         <SettingsRow last>
           <span style={{ fontSize: 13, color: C.textPrimary }}>
             Правила разрешений

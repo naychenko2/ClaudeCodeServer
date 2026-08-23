@@ -179,6 +179,17 @@ public class TeamWaveServiceTests : IDisposable
     private static void SetTeamTurnFromHuman(object entry, bool value) =>
         entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
 
+    // Живой прогон CLI у чата (белый ящик, приём StubAdapter из SessionManagerTests): в entry
+    // реестра ставим адаптер с HasLiveTurn=true — реальный claude.exe в юнит-тестах не
+    // поднимается, а пульс обязан считать идущий ход активностью волны.
+    private void MarkLiveTurn(string sessionId)
+    {
+        var entry = GetEntry(sessionId);
+        var adapter = new Mock<ClaudeHomeServer.Services.Llm.ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
+    }
+
     // Штаб «после рестарта сервера» с УТВЕРЖДЁННЫМ планом на две под-задачи ОДНОЙ волны:
     // карточка плана лежит в истории на диске, аккумулятора у чата нет (оживает лениво,
     // с первым ходом). Волна ещё НЕ роздана — это делает сам тест, чтобы воспроизвести гонку
@@ -1405,6 +1416,73 @@ public class TeamWaveServiceTests : IDisposable
         FreeStab(session.Id);
         _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!.Liveness
             .Should().Be(WaveLiveness.Alive);
+    }
+
+    // Сценарий A (major, ревью этапа 1): последняя задача волны, исполнитель честно
+    // собирает проект 45 минут. Все UpdatedAt-якоря статичны (двигаются только на границах
+    // ходов), но прогон CLI ребёнка жив — это активность «сейчас», а не «зависло».
+    // Родительство чата-исполнителя закрепляем через SetParent, а не вычисляемым по задаче
+    // путём: Session.TaskSourceSessionResolver статический, и параллельный тестовый класс
+    // (WebApplicationFactory со своей TaskManager) переприсваивает его себе — вычисляемый
+    // ParentSessionId флакует в null. Для пульса оба пути — один и тот же ребёнок
+    // (ParentSessionId), авто-резолв отдельно покрыт тестом активности выше.
+    [Fact]
+    public async Task Пульс_ЖивойХодИсполнителяСпасаетОтЛожногоЗависания()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-live-executor");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = _tasks.GetById(created[0].Id)!;
+        // Волна молчит 45 минут — за пределами обоих порогов
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        task.UpdatedAt = aged;
+        FreeStab(session.Id);
+        // Чат-исполнитель создан давно и молчит (UpdatedAt — с начала хода), но ход идёт
+        var child = await _sessions.CreateAsync(session.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        _sessions.SetParent(child.Id, session.Id, UserId);
+        _sessions.GetById(child.Id)!.UpdatedAt = aged;
+        MarkLiveTurn(child.Id);
+
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "живой прогон исполнителя — активность волны, даже когда все якоря UpdatedAt статичны");
+        snap.QuietSeconds.Should().BeLessThan(60);
+    }
+
+    // Сценарий B (major, ревью этапа 1): стадия Checking после закрытия волны
+    // (WaveStartedAt обнулён), ход финальной проверки идёт 45 минут. Прогон штаба жив —
+    // не dead (прогон есть) и не stalled (проверка — тоже работа команды). Заодно фикс:
+    // пульс в Checking штатен, стадия уходит в снапшот как есть.
+    [Fact]
+    public async Task Пульс_ЖивойХодФинальнойПроверкиСпасаетОтЛожногоЗависания()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-live-checking");
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var second = _tasks.GetByProject(session.ProjectId!).First(t => t.Labels.Contains("волна 2"));
+        _tasks.Update(second.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(second.Id)!);
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.Checking,
+            "предпосылка: обе волны закрыты, координатор проверяет результат");
+
+        // Всё молчит 45 минут, детей нет — единственная активность: идущий ход проверки
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        foreach (var t in _tasks.GetByProject(session.ProjectId!)) t.UpdatedAt = aged;
+        _sessions.WithTeamState(session.Id, t => { t.WaveActivityAt = aged; return true; });
+        var info = _sessions.GetById(session.Id)!;
+        info.UpdatedAt = aged;
+        info.Status = SessionStatus.Working; // ход финальной проверки идёт
+        MarkLiveTurn(session.Id);
+
+        var snap = _sut.BuildWaveSnapshot(info)!;
+
+        snap.Stage.Should().Be(TeamImplementStage.Checking, "пульс в стадии проверки штатен");
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "живой ход проверки — активность: ни dead (прогон есть), ни stalled (проверка идёт)");
+        snap.QuietSeconds.Should().BeLessThan(60);
     }
 
     // Инвариант эфемерности: пульс не пишется в history.json, не двигает MessageCount

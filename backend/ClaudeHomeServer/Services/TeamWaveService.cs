@@ -734,6 +734,7 @@ public class TeamWaveService
         if (session.TeamImplement is not { } team) return null;
         if (team.Stage is not (TeamImplementStage.Wave or TeamImplementStage.Checking)) return null;
 
+        var children = _sessions.GetAll().Where(s => s.ParentSessionId == session.Id).ToList();
         var waveTasks = WaveTasks(session, team.WaveNumber);
         var now = DateTime.UtcNow;
         // Последняя активность волны: старт/закрытие/перевыдача её задач (их UpdatedAt —
@@ -741,11 +742,16 @@ public class TeamWaveService
         // вычисляется из Task.SourceSessionId). Max по всем точкам: двигалась ЛЮБАЯ часть
         // волны — волна жива. Старт волны — нижняя граница: сразу после раздачи это самая
         // свежая точка (задачи создаются тем же моментом, но и без них якорь нужен).
+        // Живой прогон CLI — активность «сейчас»: все UpdatedAt-якоря двигаются только на
+        // границах ходов (ApplyStatusAsync), и пока ход идёт, они статичны — честная
+        // 35-минутная сборка исполнителя или длинный ход финальной проверки (Checking,
+        // WaveStartedAt уже обнулён) считались бы «зависло». Прогон может идти и в самом
+        // штабе, и у ребёнка-исполнителя — смотрим обоих.
         var anchors = waveTasks.Select(t => t.UpdatedAt)
-            .Concat(_sessions.GetAll()
-                .Where(s => s.ParentSessionId == session.Id)
-                .Select(s => s.UpdatedAt))
+            .Concat(children.Select(s => s.UpdatedAt))
             .Append(team.WaveStartedAt ?? session.UpdatedAt);
+        if (_sessions.HasLiveTurnProcess(session.Id) || children.Any(c => _sessions.HasLiveTurnProcess(c.Id)))
+            anchors = anchors.Append(now);
         var lastActivityAt = anchors.Max();
         var quiet = now - lastActivityAt;
 

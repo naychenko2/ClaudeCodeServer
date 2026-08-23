@@ -144,7 +144,7 @@ public class DossiersController(ProjectManager projects, DossierStore store,
 
         try
         {
-            var result = await Exporter.ExportAsync(UserId, p, ct);
+            var result = await Exporter.ExportAsync(UserId, p, ct: ct);
             // Tip ручной выгрузки — тоже «наш»: тик автоимпорта не должен завозить
             // содержимое только что выгруженной ветки обратно как «чужое» (та же
             // петля, что у автовыгрузки — разбор 23.08)

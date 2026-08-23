@@ -16,7 +16,11 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   • дебаунс накопления по образцу Dify-синка: серия коммитов подряд сливается в один
 //     экспорт по паузе (Dossiers:AutoExportDebounceSeconds, дефолт 90 с), а не по
 //     процессу git на каждый коммит;
-//   • push — никогда и никак: публикация остаётся только ручной (POST /export/push).
+//   • push — никогда и никак: публикация остаётся только ручной (POST /export/push);
+//   • конспекты НЕ снимаются: снятие — вызов модели на каждый чат, дорогое действие
+//     бывает только по решению человека (ручная выгрузка/отправка). Автовыгрузка везёт
+//     паспорта и уже снятые конспекты из стора, недостающие догонит ручная выгрузка
+//     (разбор 23.08).
 // Конфликт с ручной кнопкой «Выгрузить» не разрешается отдельно — их сериализует
 // лок per-root в GitService.WriteDossiersBranchAsync.
 //
@@ -86,9 +90,11 @@ public sealed class DossierAutoExporter : IHostedService
             if (project is null || project.OwnerId != ownerId) return;
             if (!GitService.IsGitRepo(project.RootPath)) return;
 
-            // Тонкий объект над синглтонами — тот же состав, что у DossiersController
+            // Тонкий объект над синглтонами — тот же состав, что у DossiersController.
+            // ensureDigests=false: снятие конспектов — платное действие модели, фон его
+            // не запускает (ручная выгрузка снимет недостающие по кнопке).
             var exporter = new DossierGitExporter(_sessions, _store, _git, _secrets, _discussions);
-            var result = await exporter.ExportAsync(ownerId, project);
+            var result = await exporter.ExportAsync(ownerId, project, ensureDigests: false);
             // Tip нашей выгрузки — «наш»: автоимпорт его пропустит. CommitSha не-null и при
             // Committed=false (дерево совпало с уже существующим tip — содержимое тоже наше).
             _state.MarkOwnTip(ownerId, project.Id, result.CommitSha);

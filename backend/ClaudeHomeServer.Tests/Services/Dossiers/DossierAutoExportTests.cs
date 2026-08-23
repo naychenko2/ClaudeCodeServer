@@ -1,9 +1,11 @@
 using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -29,9 +31,15 @@ public class DossierAutoExportTests : IDisposable
     private readonly ChatHistoryService _history;
     private readonly Mock<IHubContext<SessionHub>> _hub;
     private readonly DossierStore _store;
+    private readonly DossierDiscussionStore _digests;
     private readonly DossierCaptureState _state;
     private readonly GitService _git = new(TestLauncherFactory.Instance);
     private readonly List<IDisposable> _disposables = [];
+
+    // Вызовы LLM по ключу места: автовыгрузка обязана не звать модель вовсе (снятие
+    // конспектов — только по явной команде человека), счётчик ловит и один вызов
+    private readonly List<string> _llmCalls = [];
+    private readonly Mock<ICheapTextRunner> _cheap = new();
 
     public DossierAutoExportTests()
     {
@@ -52,7 +60,15 @@ public class DossierAutoExportTests : IDisposable
         _flags = new FeatureFlagService(_users);
         _history = new ChatHistoryService(_config);
         _store = new DossierStore(_config);
+        _digests = new DossierDiscussionStore(_config);
         _state = new DossierCaptureState(_config);
+
+        _cheap
+            .Setup(c => c.RunAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(),
+                It.IsAny<string?>(), It.IsAny<object?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, string?, object?, CancellationToken>(
+                (key, _, _, _, _, _) => _llmCalls.Add(key))
+            .ReturnsAsync("конспект");
 
         var clients = new Mock<IHubClients>();
         var clientProxy = new Mock<IClientProxy>();
@@ -90,12 +106,14 @@ public class DossierAutoExportTests : IDisposable
         return (_projects.Create(name, dir, user.Id, user.Username), user);
     }
 
-    private static Session Sess(string id, string projectId, bool excludeFromDossiers = false) => new()
+    private static Session Sess(string id, string projectId, string? csid = null,
+        bool excludeFromDossiers = false) => new()
     {
         Id = id,
         // Владелец заполняется только у чата вне проекта: у проектной сессии он живёт у проекта
         OwnerId = null,
         ProjectId = projectId,
+        ClaudeSessionId = csid,
         ExcludeFromDossiers = excludeFromDossiers,
         Status = SessionStatus.Finished,
         CreatedAt = DateTime.UtcNow,
@@ -160,14 +178,27 @@ public class DossierAutoExportTests : IDisposable
             promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
     }
 
+    // Лента чата — файл пишется ДО конструирования SessionManager (тот же паттерн, что
+    // sessions.json). Нужна тестам конспектов: без ленты снятие молча пропустило бы чат,
+    // и счётчик вызовов LLM не поймал бы регрессию
+    private void WriteHistory(string csid, params StoredMessage[] messages)
+    {
+        var dir = Path.Combine(_temp, "sessions", csid);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "history.json"),
+            JsonSerializer.Serialize(messages, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            }));
+    }
+
     // Автовыгрузчик на живом графе зависимостей; StartAsync подключает подписку на стор —
-    // как это делает хост в проде. Конспекты: сервис на моке LLM — лент чатов в фикстурах
-    // нет, модель не зовётся (пустая лента → конспект не снимается)
+    // как это делает хост в проде. Конспекты: сервис на моке LLM со счётчиком вызовов
+    // (автовыгрузка модель звать не обязана вовсе)
     private DossierAutoExporter MkAutoExporter(SessionManager sessions)
     {
-        var discussions = new DossierDiscussionService(new DossierDiscussionStore(_config),
-            _store, sessions, new Mock<ClaudeHomeServer.Services.Llm.ICheapTextRunner>().Object,
-            new InstanceSecretsProvider(_config));
+        var discussions = new DossierDiscussionService(_digests, _store, sessions,
+            _cheap.Object, new InstanceSecretsProvider(_config));
         return new DossierAutoExporter(_store, _projects, sessions, _git,
             new InstanceSecretsProvider(_config), discussions, _flags, _state, _config);
     }
@@ -354,5 +385,36 @@ public class DossierAutoExportTests : IDisposable
         list.Should().HaveCount(2, "чужой tip отличается от помеченного своего — записи соседа импортированы");
         list.Should().Contain(d => d.Origin == DossierOrigin.Own && d.CommitSha == "b2c3d4e5");
         list.Should().Contain(d => d.Origin == DossierOrigin.Imported && d.CommitSha == "c3d4e5f6");
+    }
+
+    // --- (ж) конспекты — только по решению человека (разбор 23.08): автовыгрузка модель
+    // не зовёт вовсе, паспорта везёт в ветку; уже снятый конспект из стора едет как обычно ---
+
+    [Fact]
+    public async Task Автовыгрузка_КонспектыНеСнимает_СнятыйРаньшеВезётВВетку()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_auto_digest", flagOn: true);
+        var withDigest = Sess("sess-auto-dig", p.Id, "csid-auto-dig");
+        var fresh = Sess("sess-auto-fresh", p.Id, "csid-auto-fresh");
+        // Ленты у обоих чатов непустые: если бы автовыгрузка звала EnsureAsync, модель
+        // была бызвана на каждый чат без конспекта — счётчик поймает и один вызов
+        WriteHistory("csid-auto-dig", new StoredUserMessage("обсуждение, конспект уже снят"));
+        WriteHistory("csid-auto-fresh", new StoredUserMessage("обсуждение без конспекта"));
+        var auto = MkAutoExporter(MkSessions(withDigest, fresh));
+        await auto.StartAsync(default);
+
+        // Конспект первого чата снят раньше (ручной выгрузкой) и лежит в сторе
+        _digests.Set(user.Id, p.Id, new DossierDiscussionRecord(
+            withDigest.Id, "Тема снятого конспекта", "конспект из стора", DateTimeOffset.UtcNow));
+        _store.Add(Dossier(user.Id, p.Id, "ab12cd34", "feat: паспорт с конспектом", withDigest.Id));
+        _store.Add(Dossier(user.Id, p.Id, "ef56ab78", "feat: паспорт без конспекта", fresh.Id));
+
+        await auto.ExportSafeAsync(user.Id, p.Id);
+
+        _llmCalls.Should().BeEmpty("автовыгрузка не снимает конспекты — модель не зовётся ни разу");
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        tree.Stdout.Should().Contain("ab12cd3").And.Contain("ef56ab7", "паспорта в ветке");
+        tree.Stdout.Should().Contain("discussions/",
+            "уже снятый конспект из стора едет в ветку и на авто-пути");
     }
 }

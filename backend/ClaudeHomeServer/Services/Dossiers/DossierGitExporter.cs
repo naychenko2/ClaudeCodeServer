@@ -63,13 +63,16 @@ public sealed class DossierGitExporter
 
     // Выгрузка: полный снапшот паспорта проекта в ветку ccs/dossiers/v1. Первый запуск
     // увозит всё накопленное, дальше git-дедуп по дереву — без новых паспортов коммита нет.
-    // Перед сборкой дерева снимаются недостающие конспекты обсуждений (LLM): экспорт —
-    // единственный потребитель конспектов, ошибки снятия глотаются внутри и выгрузку
-    // паспортов не задерживают.
+    // ensureDigests — снятие недостающих конспектов обсуждений (вызов модели на каждый
+    // чат): только по явной команде человека — ручная выгрузка (POST /dossiers/export)
+    // и отправка. Автовыгрузка (DossierAutoExporter) зовёт с false: фон не вправе молча
+    // тратить модель (разбор 23.08). Уже снятые конспекты из стора едут в дерево в обоих
+    // режимах — BuildFiles читает стор, а не генерирует.
     public async Task<DossiersExportResult> ExportAsync(string ownerId, Project project,
-        CancellationToken ct = default)
+        bool ensureDigests = true, CancellationToken ct = default)
     {
-        await _discussions.EnsureAsync(ownerId, project, ct);
+        if (ensureDigests)
+            await _discussions.EnsureAsync(ownerId, project, ct);
         var files = BuildFiles(ownerId, project);
 
         // Паспорты — файлы dossiers/**; index.json, README.md и конспекты discussions/**

@@ -57,6 +57,23 @@ const RECENT_DAYS = 30;
 // card-top (8). Не из шкалы SP — это расчётное выравнивание, как marginTop аватара.
 const AVATAR_INDENT = 34;
 
+// Тексты панели — в одном месте файла. Подсказка автовыгрузки появляется по тому же
+// гейту, что у кнопок выгрузки (флаг change-dossiers-recall включён и проект —
+// git-репозиторий), но текст выбирается по причине гейта фона (autoExport из
+// /dossiers/export/status): после сужения автовыгрузки «ветка заведомо наша» фон
+// молчит при чужом tip, одной origin-ветке и общей папке — общая фраза «выгружается
+// само» там врала бы. active дополнительно объясняет, почему конспекты обсуждений не
+// приезжают сами: после правки «Автовыгрузка не должна молча тратить модель на
+// конспекты» фон везёт только записи, конспекты снимаются явной командой человека.
+const T = {
+  autoExportHint: {
+    active: 'Решения выгружаются в ветку сами; конспекты обсуждений снимаются по кнопке «Выгрузить»',
+    foreignTip: 'Выгрузка только по кнопке: историю этого проекта ведёт не только эта машина',
+    originOnly: 'Выгрузка только по кнопке: ветка истории пока есть только в репозитории',
+    sharedFolder: 'Выгрузка только по кнопке: папку проекта использует ещё один пользователь',
+  },
+} as const;
+
 function monthKey(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -423,7 +440,12 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   // импорт из неё бессмыслен, и «Загрузить» гейтим отдельно от «Выгрузить» —
   // выгрузить можно и когда ветки ещё нет, именно так она и создаётся.
   const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
-  const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean; hasDossierBranch: boolean } | null>(null);
+  const [exportStatus, setExportStatus] = useState<{
+    isGitRepo: boolean;
+    sharedFolder: boolean;
+    hasDossierBranch: boolean;
+    autoExport: keyof typeof T.autoExportHint | null;
+  } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -437,7 +459,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     let cancelled = false;
     api.dossiers.exportStatus(project.id)
       .then(s => { if (!cancelled) setExportStatus(s); })
-      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false, hasDossierBranch: false }); });
+      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false, hasDossierBranch: false, autoExport: null }); });
     return () => { cancelled = true; };
   }, [project.id, recallEnabled]);
 
@@ -550,6 +572,18 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       {coverage && coverage.commits > 0 && (
         <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
           Охвачено {coverage.dossiers} из {coverage.commits} коммитов за неделю
+        </p>
+      )}
+      {/* Подсказка автовыгрузки: тот же гейт видимости, что у кнопок «Выгрузить»/
+          «Загрузить» (showExportButton) — фича включена и проект — git-репозиторий.
+          Текст — по причине гейта фона (autoExport): общая фраза «выгружается само»
+          врала бы, когда фон молчит (чужой tip, одна origin-ветка, общая папка) —
+          человек ждал бы выгрузки, которой не будет. Тексты — T.autoExportHint
+          в начале файла; при неизвестной/отсутствующей причине — active (старое
+          поведение подсказки). */}
+      {showExportButton && (
+        <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          {T.autoExportHint[exportStatus?.autoExport ?? 'active']}
         </p>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>

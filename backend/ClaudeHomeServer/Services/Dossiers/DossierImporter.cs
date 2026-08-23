@@ -16,10 +16,27 @@ public sealed record DossiersImportResult(int Added, int Skipped, bool BranchFou
 // superseded) берётся из index.json — это машиночитаемый источник; markdown-файл даёт
 // содержимое (выжимка, якоря, чат-источник). Коллизии и идемпотентность — в DossierStore
 // .AddImportedRange: свой паспорт не перезаписывается никогда, повторный импорт — no-op.
-public sealed class DossierImporter
+//
+// Границы доверия чужому index.json (разбор консилиума 23.08): партия одной выгрузки
+// ограничена потолком (свежие по CommittedAt), неправдоподобные даты отсекаются наравне
+// с кривыми sha — иначе ветка с тысячами записей и датой 2099 выдавливала бы собственные
+// паспорта владельца из активного стора через EvictIfNeeded.
+// Не sealed (паттерн DossierRecallService): ImportAsync переопределяется тестами для
+// симуляции «выгрузка успела за время долгого импорта».
+public class DossierImporter
 {
     private const string IndexPath = "index.json";
     private const int IndexVersion = 1;
+
+    // Дефолт потолка партии: легитимный обмен между машинами — десятки-сотни записей;
+    // тысячи за один тик — уже атака на стор и Dify. Порядок потолка стора (5000) —
+    // вытеснение остаётся запасным контуром, а не штатным путём.
+    private const int DefaultMaxImportBatchEntries = 1000;
+
+    // Дата коммита управляет вытеснением (DossierStore.EvictIfNeeded сортирует по
+    // CommittedAt): всё до 2000 года и дальше суток в будущем — мусор во внешнем входе
+    // (сутки — запас дрейфа часов между машинами общей папки).
+    private static readonly DateTimeOffset MinPlausibleCommittedAt = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     // index.json пишет экспортёр camelCase; Web-дефолты читают и camelCase, и PascalCase
     private static readonly JsonSerializerOptions IndexJsonOpts = new(JsonSerializerDefaults.Web);
@@ -28,18 +45,25 @@ public sealed class DossierImporter
     private readonly GitService _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly ILogger<DossierImporter>? _log;
+    private readonly int _maxImportBatchEntries;
 
     public DossierImporter(DossierStore store, GitService git, InstanceSecretsProvider secrets,
-        ILogger<DossierImporter>? log = null)
+        ILogger<DossierImporter>? log = null, int maxImportBatchEntries = DefaultMaxImportBatchEntries)
     {
         _store = store;
         _git = git;
         _secrets = secrets;
         _log = log;
+        _maxImportBatchEntries = Math.Max(1, maxImportBatchEntries);
     }
 
-    public async Task<DossiersImportResult> ImportAsync(string ownerId, Project project,
-        CancellationToken ct = default)
+    // stillForeign — предикат «tip всё ещё чужой», проверяется непосредственно перед
+    // фиксацией партии в стор (после долгого чтения файлов ветки): так закрывается окно
+    // гонки «update-ref → MarkOwnTip» параллельной выгрузки — автоимпорт сверяет tip с
+    // DossierCaptureState. Ручной импорт идёт без предиката: его границы определяет
+    // человек кнопкой. virtual для тестовой симуляции «выгрузка успела за время импорта».
+    public virtual async Task<DossiersImportResult> ImportAsync(string ownerId, Project project,
+        CancellationToken ct = default, Func<GitDossiersTip, bool>? stillForeign = null)
     {
         // Tip — автор и ветка-источник для пометки происхождения каждой записи
         var tip = await _git.GetDossiersTipAsync(ownerId, project.RootPath, ct);
@@ -67,15 +91,71 @@ public sealed class DossierImporter
                 project.Id, index.Version, IndexVersion);
 
         var secrets = _secrets.GetExactSecrets();
-        var candidates = new List<ChangeDossier>();
+
+        // Формальная валидация записей (sha и дата) — ДО чтения файлов: мусорные записи
+        // не должны стоить git-вызовов.
+        var valid = new List<DossierIndexEntry>();
         foreach (var e in index.Entries)
         {
+            // Пустые sha/файл — тоже мусор во внешнем входе: десериализатор кривого JSON
+            // молча даёт null конструкторным параметрам записи. Такая запись пропускается,
+            // а не роняет импорт всей ветки.
+            if (string.IsNullOrWhiteSpace(e.Sha) || string.IsNullOrWhiteSpace(e.File))
+            {
+                _log?.LogWarning("dossiers: импорт проекта {Project}: запись без sha или файла пропущена", project.Id);
+                continue;
+            }
             if (!IsValidSha(e.Sha))
             {
                 _log?.LogWarning("dossiers: импорт проекта {Project}: запись с некорректным sha пропущена", project.Id);
                 continue;
             }
-            var md = await _git.ReadDossiersFileAsync(ownerId, project.RootPath, e.File, ct);
+            if (!IsPlausibleCommittedAt(e.CommittedAt))
+            {
+                _log?.LogWarning("dossiers: импорт проекта {Project}: запись {Sha} с неправдоподобной датой {At} пропущена",
+                    project.Id, e.Sha[..7], e.CommittedAt);
+                continue;
+            }
+            valid.Add(e);
+        }
+
+        // Потолок партии: чужой index.json без ограничения заваливал бы стор и Dify за
+        // один тик. Берём свежие по CommittedAt — ценность для recall сконцентрирована в
+        // недавних; хвост считается пропущенным и следующим тиком не догоняется (полный
+        // снапшот ветки после дедупа упирается в тот же потолок).
+        if (valid.Count > _maxImportBatchEntries)
+        {
+            _log?.LogWarning(
+                "dossiers: импорт проекта {Project}: партия {Count} записей обрезана до {Cap} свежих по дате коммита",
+                project.Id, valid.Count, _maxImportBatchEntries);
+            valid = valid
+                .OrderByDescending(e => e.CommittedAt)
+                .Take(_maxImportBatchEntries)
+                .ToList();
+        }
+
+        var candidates = new List<ChangeDossier>();
+        foreach (var e in valid)
+        {
+            string? md;
+            try
+            {
+                md = await _git.ReadDossiersFileAsync(ownerId, project.RootPath, e.File, ct);
+            }
+            // Путь записи — внешний вход: SafeJoin откажет на выходе за корень репо
+            // (traversal), и этот отказ стоит пропустить одной записью, а не партии.
+            catch (UnauthorizedAccessException ex)
+            {
+                _log?.LogWarning(ex, "dossiers: импорт проекта {Project}: путь {File} вне репозитория, запись пропущена",
+                    project.Id, e.File);
+                continue;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _log?.LogWarning(ex, "dossiers: импорт проекта {Project}: путь {File} не читается, запись пропущена",
+                    project.Id, e.File);
+                continue;
+            }
             if (md is null)
             {
                 _log?.LogWarning("dossiers: импорт проекта {Project}: файл {File} ветки не читается, запись пропущена",
@@ -83,6 +163,17 @@ public sealed class DossierImporter
                 continue;
             }
             candidates.Add(BuildDossier(ownerId, project.Id, e, md, tip, secrets));
+        }
+
+        // Окно гонки «update-ref → MarkOwnTip» параллельной выгрузки: чтение файлов ветки
+        // идёт десятки секунд, и resolved tip мог стать НАШИМ. Это содержимое уже живёт в
+        // сторе own-записями — Imported-копии завезли бы дубли, партию выбрасываем.
+        if (stillForeign is not null && !stillForeign(tip))
+        {
+            _log?.LogInformation(
+                "dossiers: импорт проекта {Project}: tip {Ref} стал своим за время чтения ветки — партия отброшена",
+                project.Id, tip.Ref);
+            return new DossiersImportResult(0, index.Entries.Count, BranchFound: true);
         }
 
         var added = _store.AddImportedRange(ownerId, project.Id, candidates);
@@ -95,10 +186,14 @@ public sealed class DossierImporter
 
     // sha из index.json — внешний вход: валидируем формально (hex 6-40), как это делает
     // GitService для своих аргументов, — мусорный sha ломал бы пути при реэкспорте
-    // (dossiers/{yyyy}/{mm}/{sha7}-…) и спуфил бы поиск по коммиту.
-    private static bool IsValidSha(string sha) =>
-        sha.Length is >= 6 and <= 40
+    // (dossiers/{yyyy}/{mm}/{sha7}-…) и спуфил бы поиск по коммиту. Null-толерантна:
+    // валидацию проходят и элементы SupersededSha, где null возможен из кривого JSON.
+    private static bool IsValidSha(string? sha) =>
+        sha is { Length: >= 6 and <= 40 }
         && sha.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'));
+
+    private static bool IsPlausibleCommittedAt(DateTimeOffset at) =>
+        at >= MinPlausibleCommittedAt && at <= DateTimeOffset.UtcNow.AddDays(1);
 
     private static ChangeDossier BuildDossier(string ownerId, string projectId, DossierIndexEntry e,
         string md, GitDossiersTip tip, IReadOnlyList<string> secrets)
@@ -116,7 +211,7 @@ public sealed class DossierImporter
             CommitSha = e.Sha,
             CommitSubject = R(e.Subject),
             CommittedAt = e.CommittedAt,
-            SupersededSha = e.SupersededSha.Where(IsValidSha).ToList(),
+            SupersededSha = (e.SupersededSha ?? []).Where(IsValidSha).ToList(),
             SessionId = parsed.SessionId,
             TaskId = e.TaskId,
             Files = parsed.Files.Select(R).ToList(),
@@ -127,7 +222,10 @@ public sealed class DossierImporter
             Pitfalls = parsed.Pitfalls.Select(R).ToList(),
             Invariants = parsed.Invariants.Select(R).ToList(),
             Origin = DossierOrigin.Imported,
-            ImportedAuthor = tip.Author,
+            // Автор tip-коммита — внешний вход той же природы, что subject: user.name —
+            // свободная строка с чужой машины, редакция обязана покрывать её симметрично
+            // экспорту (README ветки обещает «секреты вычищаются» и на входе)
+            ImportedAuthor = R(tip.Author),
             ImportedFromBranch = NormalizeBranch(tip.Ref),
         };
     }

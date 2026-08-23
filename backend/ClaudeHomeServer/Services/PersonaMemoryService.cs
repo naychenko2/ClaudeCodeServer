@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services;
 // семантический слой дублируется в Dify-датасет per-persona для векторного retrieve.
 // Скоринг recall — relevance × recency × typeWeight (подход 2026). Без Dify —
 // graceful degradation к полнотекстовому поиску по стору.
-public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
+public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposable
 {
     // personaId → { datasetId, записи, рабочий фокус, entryId → { difyDocId, hash } }
     private sealed class MemState
@@ -829,6 +829,10 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
             catch (Exception ex) { _logger?.LogWarning(ex, "Не удалось удалить Dify-датасет памяти персоны {PersonaId}", personaId); }
         }
     }
+
+    // Уборка при остановке хоста (DI dispose'ит синглтон): таймеры дебаунса Dify-синка
+    // не должны переживать остановку и запускать синк по мёртвому приложению
+    public void Dispose() => _debounce.Dispose();
 }
 
 // Результат поиска по памяти персоны

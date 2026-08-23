@@ -246,6 +246,12 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [iconColor, setIconColor] = useState<string | null>(project.icon?.color ?? null);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
+  const [autoImportDossiers, setAutoImportDossiers] = useState(project.autoImportDossiers ?? false);
+  // Автоимпорт на бэкенде гейтится флагом change-dossiers-recall (DossierAutoImporter):
+  // без флага включённый тумблер ничего не делает, и обещание «загружать автоматически»
+  // оборачивается тишиной. Прячем строку тем же хуком и флагом, что DossierHistoryPanel —
+  // тогда PUT уносит серверное значение (стейт не менялся).
+  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   // Строка «Руководитель проекта» (п.5.3) — у проекта с назначенным руководителем
   // секции нет вовсе
@@ -275,6 +281,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         showHiddenFiles,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
         color: iconColor ?? '',
+        autoImportDossiers,
       });
       invalidateProjectsCache(); // полка/палитра проектов подхватывают новое имя/иконку
       onSuccess(updated);
@@ -502,6 +509,20 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
           <span style={{ fontSize: 13, color: C.textPrimary }}>Скрытые файлы и папки</span>
           <Toggle checked={showHiddenFiles} onChange={setShowHiddenFiles} />
         </SettingsRow>
+        {/* Автоимпорт «Историй решений»: фоновый наблюдатель ветки ccs/dossiers/v1 (задача
+            «Авто-история 4»). Тумблер рядом с прочими тумблерами проекта — это настройка
+            поведения проекта, а не фич-флаг. Пояснение под заголовком: «решения» в пользовательских
+            текстах (см. ADR-004 §3.2), с указанием имени ветки, чтобы человек понимал, откуда
+            приедут новые записи. */}
+        {recallEnabled && (
+          <SettingsRow title="Загружать историю решений из репозитория автоматически">
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>Загружать историю решений из репозитория автоматически</div>
+              <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.4 }}>Новые записи из ветки ccs/dossiers/v1 появятся сами после git pull</div>
+            </div>
+            <Toggle checked={autoImportDossiers} onChange={setAutoImportDossiers} ariaLabel="Загружать историю решений из репозитория автоматически" />
+          </SettingsRow>
+        )}
         <SettingsRow last>
           <span style={{ fontSize: 13, color: C.textPrimary }}>
             Правила разрешений

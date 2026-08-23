@@ -158,6 +158,59 @@ public class DossierStoreTests : IDisposable
         File.Exists(archivePath).Should().BeFalse("превышения нет — архив не создаётся");
     }
 
+    private static ChangeDossier Imported(string sha, DateTimeOffset committedAt) => new()
+    {
+        OwnerId = Owner,
+        ProjectId = Project,
+        CommitSha = sha,
+        CommitSubject = "импортированный",
+        CommittedAt = committedAt,
+        Origin = DossierOrigin.Imported,
+        ImportedAuthor = "сосед",
+        ImportedFromBranch = "ccs/dossiers/v1",
+    };
+
+    // Запрет вытеснять own-записи импортированными (разбор консилиума 23.08): чужая ветка
+    // с неправдоподобно свежими датами не должна выдавливать собственные паспорта владельца
+    // из активного стора — лишние за потолком импортированные уходят в архив первыми.
+    [Fact]
+    public void Потолок_ИмпортированныеНеВытесняютOwn()
+    {
+        _store.Add(New("own1", "свой старый", committedAt: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        _store.Add(New("own2", "свой чуть свежее", committedAt: new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero)));
+
+        // Дата 2099: до фикса сортировка по CommittedAt выпихивала бы own-записи вперёд очереди
+        var farFuture = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        _store.AddImportedRange(Owner, Project,
+            [Imported("imp1", farFuture), Imported("imp2", farFuture.AddDays(1))]);
+
+        var live = _store.List(Owner, Project);
+        live.Should().OnlyContain(d => d.Origin == DossierOrigin.Own,
+            "собственные паспорта не вытесняются импортированными, даже «более свежими» по дате");
+        live.Should().HaveCount(2, "потолок соблюдён — лишние импортированные ушли");
+
+        var archiveText = File.ReadAllText(Path.Combine(_temp, "dossiers", Owner, Project + ".archive.jsonl"));
+        archiveText.Should().Contain("imp1").And.Contain("imp2",
+            "вытесненные импортированные записи не потеряны — в архивном JSONL");
+    }
+
+    // Промежуточный случай: потолок заполнен own+imported вперемешку — при превышении
+    // уходят импортированные, own остаётся даже при более старой дате.
+    [Fact]
+    public void Потолок_СмешанныйСтор_СначалаУходятИмпортированные()
+    {
+        _store.Add(New("own1", "свой старый", committedAt: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        var farFuture = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        _store.AddImportedRange(Owner, Project,
+            [Imported("imp1", farFuture), Imported("imp2", farFuture.AddDays(1))]);
+
+        var live = _store.List(Owner, Project);
+        live.Should().HaveCount(2, "потолок 2 соблюдён");
+        live.Should().Contain(d => d.CommitSha == "own1", "своя запись осталась в активном сторе");
+        live.Should().Contain(d => d.CommitSha == "imp2", "одна импортированная живёт — излишек ушёл, не вся партия");
+        live.Should().NotContain(d => d.CommitSha == "imp1", "старейшая из импортированных вытеснена");
+    }
+
     [Fact]
     public async Task DeleteProjectDossiersAsync_ЧиститСтор()
     {

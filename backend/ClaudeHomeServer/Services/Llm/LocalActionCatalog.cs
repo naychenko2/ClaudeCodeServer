@@ -108,6 +108,9 @@ public static class LocalActionCatalog
     public const string IncidentExplain = "incident-explain";
     // Паспорта изменений (ADR-004, этап 1): выжимка «зачем/решения/отказы/грабли» на коммит
     public const string DossierSummary = "dossier-summary";
+    // Конспект обсуждения (ADR-004 §6): структурированный протокол чата для discussions/
+    // в ветке решений — НЕ дословный транскрипт
+    public const string DiscussionDigest = "discussion-digest";
     // Фон проекта (ADR-008): JSON со списком фигур дудла и ключом цвета палитры
     public const string ProjectBackground = "project-background";
     // Значок проекта (ADR-009): имя иконки из белого списка lucide — разметки от модели
@@ -222,6 +225,15 @@ public static class LocalActionCatalog
         // обязателен, Text/Small молча обрежут хвост промпта (num_ctx Ollama) и дадут
         // выдуманную выжимку, ради борьбы с которой заведён отдельный флаг recall.
         new(DossierSummary, "Выжимка паспорта изменения", "Паспорта изменений", CheapProfile.Large, DefaultLocal: true),
+        // Конспект обсуждения для ветки решений (ADR-004 §6): сырьё — лента чата ЦЕЛИКОМ
+        // (до 40 000 символов) — больше, чем у выжимки паспорта (дельта одного коммита),
+        // поэтому Large обязателен и острее: меньший профиль молча обрежет хвост промпта
+        // (num_ctx Ollama) и конспект потеряет развязку обсуждения. DefaultLocal: false —
+        // в отличие от паспорта конспект уезжает в git и уходит push'ом наружу/соседям по
+        // общей папке, переписать опубликованное нельзя: «лицо продукта», как Changelog
+        // и DailyBriefing. Явный Tier не нужен: Large → средний слот (EffectiveDefaultTier).
+        new(DiscussionDigest, "Конспект обсуждения", "Паспорта изменений", CheapProfile.Large,
+            DefaultLocal: false),
         // Фон проекта: 8–14 фигур дудла — это 2–4 КБ JSON, на Small/Text потолок вывода
         // обрежет ответ на полуслове и даст неотличимый от таймаута «bad-json». Локаль
         // выключена намеренно (решение владельца): рисование SVG не текстовая задача, а

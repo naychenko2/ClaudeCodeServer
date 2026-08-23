@@ -491,7 +491,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[] }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
     // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
@@ -1457,8 +1457,16 @@ export const api = {
     // sharedFolder — предупреждение о втором владельце той же папки. hasDossierBranch —
     // наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет, импорт из неё
     // бессмыслен, кнопку «Загрузить» в UI гейтим этим признаком.
+    // autoExport — причина гейта АВТОвыгрузки: панель выбирает по ней текст подсказки
+    // (после сужения фона «ветка заведомо наша» общая фраза «выгружается само» врала
+    // бы при чужом tip / одной origin-ветке / общей папке). null у не-git проекта.
     exportStatus: (projectId: string) =>
-      request<{ isGitRepo: boolean; sharedFolder: boolean; hasDossierBranch: boolean }>(
+      request<{
+        isGitRepo: boolean;
+        sharedFolder: boolean;
+        hasDossierBranch: boolean;
+        autoExport: 'active' | 'foreignTip' | 'originOnly' | 'sharedFolder' | null;
+      }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
     // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
     // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:

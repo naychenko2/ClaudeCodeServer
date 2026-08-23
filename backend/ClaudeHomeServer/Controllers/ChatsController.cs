@@ -105,7 +105,7 @@ public class ChatsController(SessionManager sessions, FileService files,
     }
 
     [HttpPut("{id}")]
-    public IActionResult Update(string id, [FromBody] UpdateChatRequest req)
+    public async Task<IActionResult> Update(string id, [FromBody] UpdateChatRequest req)
     {
         if (OwnedChat(id) is null) return NotFound();
         if (req.Pinned is bool pinned) sessions.SetPinned(id, pinned);
@@ -118,9 +118,10 @@ public class ChatsController(SessionManager sessions, FileService files,
         }
         try
         {
-            var updated = sessions.Update(id, req.Name, req.Model, req.Effort);
+            var updated = await sessions.UpdateAsync(id, UserId, req.Name, req.Model, req.Effort);
             return updated is null ? NotFound() : Ok(updated);
         }
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -281,6 +282,11 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpPost("{id}/migrate-provider")]
     public async Task<IActionResult> MigrateProvider(string id, [FromBody] MigrateProviderRequest req)
     {
+        // Модель обязательна: у кнопки «Продолжить на …» она всегда есть, а пустая означала бы
+        // для MigrateProviderAsync «переехать на родной Claude без закреплённой модели» — не то,
+        // о чём просит эндпоинт.
+        if (string.IsNullOrWhiteSpace(req.Model))
+            return BadRequest(new { error = "Не указана модель" });
         try
         {
             return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model, req.SubscriptionKey));
@@ -394,6 +400,8 @@ public record SetTeamImplementAutoRequest(bool AutoWaves);
 
 public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force = false);
 
-public record MigrateProviderRequest(string Model, string? SubscriptionKey = null);
+// Model допускает null: пустую модель отбивает сам эндпоинт своим сообщением, а не
+// неявная валидация [ApiController] по non-nullable свойству
+public record MigrateProviderRequest(string? Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);

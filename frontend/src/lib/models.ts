@@ -202,11 +202,11 @@ export function planModelChange(
 }
 
 // Отображаемое имя ассистента по модели сессии — для строк в UI («… закончил», «Спросите …»).
-// У Claude ассистент брендируется нейтральным «AI» (имя провайдера «Claude» остаётся для
-// баланса/usage и групп моделей); у сторонних провайдеров — их собственное имя.
+// Каждого провайдера называем его именем: Claude — «Claude», сторонние — их собственным.
+// Неопознанная модель остаётся нейтральным «AI»: провайдер неизвестен, честнее не гадать.
 export function assistantName(value?: string | null): string {
   const caps = modelCaps(value);
-  return caps.provider === 'claude' ? 'AI' : (caps.displayName || 'AI');
+  return caps.provider === 'claude' ? 'Claude' : (caps.displayName || 'AI');
 }
 
 // Метки виртуальных «провайдеров» — групп, которых нет в реестре LlmProviders, но которые

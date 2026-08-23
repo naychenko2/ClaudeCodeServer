@@ -1743,7 +1743,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
           background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: C.dangerText,
         }}>
-          <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0 }} /><span>Сессия прервана — {asstName} завершился неожиданно</span>
+          <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0 }} /><span>{asstName}: сессия прервана неожиданно</span>
           {online && (
             <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.dangerBorder}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, whiteSpace: 'nowrap' }}>Повторить</button>
           )}

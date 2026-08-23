@@ -440,7 +440,7 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
         <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
           {estimate.fresh
             ? 'Контекст сжат — точная оценка появится после следующего хода.'
-            : `Оценка появится после первого ответа ${assistantName}.`}
+            : `${assistantName}: оценка появится после первого ответа.`}
         </div>
       )}
       {estimate.lastCompact?.post !== undefined && (

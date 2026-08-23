@@ -87,6 +87,33 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         claude3.GetProperty("supports1M").GetBoolean().Should().BeFalse();
     }
 
+    // Дефолтный сценарий: флаги в конфиге не заданы, бэкенд подставляет true (Opus/1M
+    // доступны). Карточка тогда пилюлю не рисует — она срабатывает только на false.
+    // Важно зафиксировать дефолт тестом, иначе можно случайно сменить его на «выкл по
+    // умолчанию» и получить ложные «Без Opus» у всех подписок.
+    [Fact]
+    public async Task GetUsage_ФлагиВКонфигеНеЗаданы_ДефолтTrueПилюлиНет()
+    {
+        using var withPool = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-one",
+                    // SupportsOpus/Supports1M намеренно не заданы
+                });
+            });
+        });
+        var client = await AuthenticateAsync(withPool);
+
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+
+        var claude = usage.GetProperty("subscriptions").GetProperty("claude");
+        claude.GetProperty("supportsOpus").GetBoolean().Should().BeTrue();
+        claude.GetProperty("supports1M").GetBoolean().Should().BeTrue();
+    }
+
     [Fact]
     public async Task GetUsage_АккаунтПула_ОтдаётLoginCommandСПутёмПрофиля()
     {

@@ -267,7 +267,7 @@ interface SubCtx {
 // с бейджем «в ротации»: false → «Без Opus» / «Без 1M», null/undefined — поле не пришло
 // со старого бэка (обратная совместимость снимков), дефолт true неинформативен и пилюлю
 // не рисует. Сами пилюли warn-цвета — это «ограничение», а не норма.
-function subscriptionPills(sub: SubscriptionUsage): PillSpec[] {
+export function subscriptionPills(sub: SubscriptionUsage): PillSpec[] {
   const pills: PillSpec[] = [];
   if (sub.tier) pills.push({ label: `Тариф: ${sub.tier}`, tone: 'plain' });
   if (sub.supportsOpus === false) pills.push({ label: 'Без Opus', tone: 'warn' });
@@ -279,7 +279,7 @@ function subscriptionPills(sub: SubscriptionUsage): PillSpec[] {
 // шапка тесна (точка, имя, бейдж ротации, свежесть) и пилюли там скрыты, поэтому без
 // дубля в раскрытии warn-пилюли вообще не видны. Тариф НЕ включаем: он уже отдельной
 // строкой `<Pill>Тариф: …</Pill>` рядом.
-function subscriptionExpandedPills(sub: SubscriptionUsage): PillSpec[] {
+export function subscriptionExpandedPills(sub: SubscriptionUsage): PillSpec[] {
   const pills: PillSpec[] = [];
   if (sub.supportsOpus === false) pills.push({ label: 'Без Opus', tone: 'warn' });
   if (sub.supports1M === false) pills.push({ label: 'Без 1M', tone: 'warn' });
@@ -288,7 +288,7 @@ function subscriptionExpandedPills(sub: SubscriptionUsage): PillSpec[] {
 
 // Подписка Claude → общая вью-модель. Окна — напрямую из latestPerWindow: при !hasUtil
 // не выдумываем «0%», а пишем «в пределах нормы» (как UsageWidget.WindowRow).
-function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx): ProviderCardData {
+export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx): ProviderCardData {
   const name = sub.name ?? key;
   const color = sourceColor('claude');   // оба аккаунта пула — один цвет, различаются именем
   const pollStatus = ctx.pollStatuses[key];

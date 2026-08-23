@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services;
 // него — семантический слой в Dify-датасете «{username}:team:{projectName}» (векторный retrieve со
 // скорингом, дифф по хешам, дебаунс). Без настроенного Dify — graceful degradation к полнотекстовому
 // recall по стору (Волна 1). Эталон — PersonaMemoryService/NotesKnowledgeService.
-public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant
+public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposable
 {
     // Состояние семантического слоя проекта: id датасета + entryId → { difyDocId, hash }
     private sealed class KnowledgeState
@@ -807,6 +807,10 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant
 
     // Вызывается под _kLock
     private void SaveKnowledge() => JsonFileStore.Save(_knowledgeStorePath, _kStore, JsonOpts);
+
+    // Уборка при остановке хоста (DI dispose'ит синглтон): таймеры дебаунса Dify-синка
+    // не должны переживать остановку и запускать синк по мёртвому приложению
+    public void Dispose() => _debounce.Dispose();
 }
 
 // Операция консолидации памяти команды (P4): merge — схлопнуть несколько записей одного типа

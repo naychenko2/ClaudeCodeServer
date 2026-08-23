@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // «{username}:dossiers:{projectName}» (дифф по хешам, дебаунс) для будущего семантического
 // recall (этап 2); без Dify — REST-фильтры (Find) работают полнотекстово прямо по стору,
 // graceful degradation не требуется отдельно. Эталон структуры — TeamMemoryService.
-public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
+public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposable
 {
     private sealed class KnowledgeState
     {
@@ -485,4 +485,8 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     }
 
     private void SaveKnowledge() => JsonFileStore.Save(_knowledgeStorePath, _kStore, JsonOpts);
+
+    // Уборка при остановке хоста (DI dispose'ит синглтон): таймеры дебаунса Dify-синка
+    // не должны переживать остановку и запускать синк по мёртвому приложению
+    public void Dispose() => _debounce.Dispose();
 }

@@ -594,4 +594,26 @@ public class DossierAutoExportTests : IDisposable
         lsAll.Stdout.Trim().Should().BeEmpty(
             "bare-репозиторий полностью пуст — автовыгрузка не отправляла ничего, ни под каким предлогом");
     }
+
+    // --- Остановка сервиса (находка QA 23.08): таймер дебаунса, переживший StopAsync,
+    // сработал бы после остановки хоста и запустил git-процесс по папке остановленного
+    // приложения. После StopAsync запланированная выгрузка выполняться не обязана. ---
+
+    [Fact]
+    public async Task ОстановкаСервисаДоСрабатыванияДебаунса_ВыгрузкиНеБывает()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_auto_stop", flagOn: true);
+        var s = Sess("sess-auto-stop", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+        await auto.StartAsync(default);
+
+        // Захват планирует выгрузку (тестовый дебаунс 1 с), сервис останавливается раньше
+        _store.Add(Dossier(user.Id, p.Id, "1234fedc", "feat: паспорт под остановку", s.Id));
+        await auto.StopAsync(default);
+
+        // Пауза заведомо больше дебаунса: живой таймер успел бы выгрузить ветку
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        (await HasBranchAsync(p.RootPath)).Should()
+            .BeFalse("StopAsync гасит таймеры дебаунса — запланированная выгрузка не выполняется");
+    }
 }

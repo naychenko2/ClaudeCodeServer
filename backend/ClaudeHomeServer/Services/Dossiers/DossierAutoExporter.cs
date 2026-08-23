@@ -76,6 +76,10 @@ public sealed class DossierAutoExporter : IHostedService
     public Task StopAsync(CancellationToken ct)
     {
         _store.OnOwnDossierChanged -= Schedule;
+        // Гасим и запланированные таймеры, и будущие Schedule: таймер, переживший остановку
+        // хоста, сработал бы после неё и запустил git-процесс по папке остановленного
+        // приложения (находка QA 23.08). Отдельный Dispose не нужен — сервис гасится здесь.
+        _debounce.Dispose();
         return Task.CompletedTask;
     }
 

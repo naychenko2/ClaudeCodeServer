@@ -19,13 +19,14 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects")]
 public class DossiersController(ProjectManager projects, DossierStore store,
     CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
-    GitService git, SessionManager sessions, UserStore users, InstanceSecretsProvider secrets) : ControllerBase
+    GitService git, SessionManager sessions, UserStore users, InstanceSecretsProvider secrets,
+    DossierDiscussionService discussions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     // Экспортёр паспортов не в DI (Program.cs — вне файлов этой волны): собираем сами
     // из инжектируемых синглтонов. Объект тонкий, состояния не держит — ок per-request.
-    private DossierGitExporter Exporter => new(sessions, store, git, secrets);
+    private DossierGitExporter Exporter => new(sessions, store, git, secrets, discussions);
 
     // Импортёр — тот же паттерн: тонкий объект над синглтонами, per-request
     private DossierImporter Importer => new(store, git, secrets);

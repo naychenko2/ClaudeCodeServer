@@ -11,8 +11,8 @@ namespace ClaudeHomeServer.Services.Dossiers;
 public sealed record DossiersExportResult(int Exported, bool Committed, string? CommitSha);
 
 // Запись index.json — связь SHA ↔ паспорт (файл в ветке) ↔ обсуждение ↔ задача (ADR-004 §6).
-// Discussion — путь конспекта discussions/…: заводится СРАЗУ nullable, этап конспектов
-// заполнит его позже (пока всегда null). TaskId nullable по природе паспорта.
+// Discussion — путь конспекта discussions/… чата-источника: null, когда конспект ещё не
+// снят либо чат не едет в этой выгрузке. TaskId nullable по природе паспорта.
 public sealed record DossierIndexEntry(
     string Sha,
     string File,
@@ -46,55 +46,92 @@ public sealed class DossierGitExporter
     private readonly DossierStore _store;
     private readonly GitService _git;
     private readonly InstanceSecretsProvider _secrets;
+    private readonly DossierDiscussionService _discussions;
     private readonly ILogger<DossierGitExporter>? _log;
 
     public DossierGitExporter(SessionManager sessions, DossierStore store, GitService git,
-        InstanceSecretsProvider secrets, ILogger<DossierGitExporter>? log = null)
+        InstanceSecretsProvider secrets, DossierDiscussionService discussions,
+        ILogger<DossierGitExporter>? log = null)
     {
         _sessions = sessions;
         _store = store;
         _git = git;
         _secrets = secrets;
+        _discussions = discussions;
         _log = log;
     }
 
     // Выгрузка: полный снапшот паспорта проекта в ветку ccs/dossiers/v1. Первый запуск
     // увозит всё накопленное, дальше git-дедуп по дереву — без новых паспортов коммита нет.
+    // Перед сборкой дерева снимаются недостающие конспекты обсуждений (LLM): экспорт —
+    // единственный потребитель конспектов, ошибки снятия глотаются внутри и выгрузку
+    // паспортов не задерживают.
     public async Task<DossiersExportResult> ExportAsync(string ownerId, Project project,
         CancellationToken ct = default)
     {
+        await _discussions.EnsureAsync(ownerId, project, ct);
         var files = BuildFiles(ownerId, project);
-        // index.json и README.md — служебные файлы дерева, не паспорта
-        var dossiers = files.Count - 2;
 
-        // Паспортов нет и ветка ещё не создавалась — пустой корневой коммит не нужен,
-        // сразу «нечего выгружать». Если ветка есть, а подходящих паспортов не осталось
+        // Паспорты — файлы dossiers/**; index.json, README.md и конспекты discussions/**
+        // в это число не входят (в сообщении коммита — число записей истории)
+        var dossiers = files.Count(f => f.Path.StartsWith("dossiers/", StringComparison.Ordinal));
+        var digests = files.Count(f => f.Path.StartsWith("discussions/", StringComparison.Ordinal));
+
+        // Паспортов и конспектов нет и ветка ещё не создавалась — пустой корневой коммит
+        // не нужен, сразу «нечего выгружать». Если ветка есть, а выгружаемого не осталось
         // (чаты ушли в opt-out или удалены) — наоборот, пишем опустевший снапшот: полный
         // снапшот обязан вычистить из ветки то, что больше не должно там жить.
-        if (dossiers == 0 && !await HasBranchAsync(ownerId, project.RootPath, ct))
+        if (files.Count == 2 && !await HasBranchAsync(ownerId, project.RootPath, ct))
             return new DossiersExportResult(0, Committed: false, CommitSha: null);
 
         var message = dossiers > 0
             ? $"docs(dossiers): выгрузить историю решений ({dossiers} шт.)"
-            : "docs(dossiers): очистить историю решений";
+            : digests > 0
+                ? "docs(dossiers): выгрузить конспекты обсуждений"
+                : "docs(dossiers): очистить историю решений";
         var result = await _git.WriteDossiersBranchAsync(ownerId, project.RootPath, files, message, ct);
         if (result.Created)
             _log?.LogInformation(
-                "dossiers: экспорт проекта {Project} в {Ref}: {Count} паспортов, коммит {Sha}",
-                project.Id, GitService.DossiersRef, dossiers, result.CommitSha);
+                "dossiers: экспорт проекта {Project} в {Ref}: {Count} паспортов, {Digests} конспектов, коммит {Sha}",
+                project.Id, GitService.DossiersRef, dossiers, digests, result.CommitSha);
         return new DossiersExportResult(dossiers, result.Created, result.CommitSha);
     }
 
-    // Полное дерево ветки из паспортов проекта: файлы dossiers/{yyyy}/{mm}/{sha7}-{slug}.md
-    // плюс index.json и README.md в корне. Порядок детерминирован (CommittedAt, Sha) —
-    // одинаковый стор обязан
-    // давать побайтово одинаковое дерево, иначе каждый повторный экспорт плодил бы коммит.
+    // Полное дерево ветки из паспорта проекта: файлы dossiers/{yyyy}/{mm}/{sha7}-{slug}.md,
+    // конспекты discussions/{yyyy}/{sess7}-{slug}.md, плюс index.json и README.md в корне.
+    // Порядок детерминирован (CommittedAt/GeneratedAt, идентификаторы) — одинаковый стор
+    // обязан давать побайтово одинаковое дерево, иначе каждый повторный экспорт плодил бы
+    // коммит.
     public IReadOnlyList<GitDossierFile> BuildFiles(string ownerId, Project project)
     {
         var secrets = _secrets.GetExactSecrets();
         var files = new List<GitDossierFile>();
         var entries = new List<DossierIndexEntry>();
         var usedPaths = new HashSet<string>(StringComparer.Ordinal);
+
+        // Конспекты обсуждений (ADR-004 §6): файл на чат со снятым конспектом; те же
+        // предохранители, что у паспортов (живой чат этого владельца, opt-out), slug —
+        // транслитерация темы, зафиксированной при снятии (не живого имени чата). Контент
+        // и slug проходят SecretRedactor повторно — конспект мог родиться до появления
+        // секрета. sessionId → путь: его получат записи index.json этого чата.
+        var discussionPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var digest in _discussions.List(ownerId, project.Id).OrderBy(d => d.GeneratedAt))
+        {
+            var session = _sessions.GetById(digest.SessionId);
+            if (session is null
+                || !ShouldExportDossier(session, _sessions.ResolveOwnerId(session), ownerId, project.Id))
+                continue;
+
+            var topic = SecretRedactor.Redact(
+                string.IsNullOrWhiteSpace(digest.Topic) ? "Обсуждение" : digest.Topic, secrets);
+            var sessChars = 7;
+            var dpath = DiscussionPath(session.CreatedAt.Year, digest.SessionId, topic, sessChars);
+            while (!usedPaths.Add(dpath) && sessChars < digest.SessionId.Length)
+                dpath = DiscussionPath(session.CreatedAt.Year, digest.SessionId, topic, ++sessChars);
+
+            files.Add(new GitDossierFile(dpath, FormatDigest(digest, secrets)));
+            discussionPaths[digest.SessionId] = dpath;
+        }
 
         foreach (var d in _store.List(ownerId, project.Id)
                      .OrderBy(d => d.CommittedAt)
@@ -116,8 +153,11 @@ public sealed class DossierGitExporter
                 path = DossierPath(d.CommittedAt, d.CommitSha, subject, ++shaChars);
 
             files.Add(new GitDossierFile(path, FormatDossier(d, secrets)));
+            // Конспект чата-источника, если снят и едет в этой же выгрузке
+            var discussion = d.SessionId is not null
+                && discussionPaths.TryGetValue(d.SessionId, out var dp) ? dp : null;
             entries.Add(new DossierIndexEntry(d.CommitSha, path, subject, d.CommittedAt,
-                Discussion: null, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
+                Discussion: discussion, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
         }
 
         files.Add(new GitDossierFile(IndexPath, SerializeIndex(entries)));
@@ -145,6 +185,15 @@ public sealed class DossierGitExporter
     {
         var prefix = sha.Length <= shaChars ? sha : sha[..shaChars];
         return $"dossiers/{committedAt.Year}/{committedAt.Month:00}/{prefix}-{Slugify(subject)}.md";
+    }
+
+    // Путь конспекта в ветке: discussions/{yyyy}/{sess7}-{slug}.md. Год — год СОЗДАНИЯ
+    // чата (обсуждение относится к нему, а не к моменту снятия конспекта), sess-префикс
+    // расширяется вызывающим при коллизии, slug — транслитерация темы со снятия конспекта.
+    internal static string DiscussionPath(int year, string sessionId, string topic, int sessChars = 7)
+    {
+        var prefix = sessionId.Length <= sessChars ? sessionId : sessionId[..sessChars];
+        return $"discussions/{year}/{prefix}-{Slugify(topic)}.md";
     }
 
     // Транслитерация кириллицы для slug: однозначная, без контекстных правил (й→y, х→kh,
@@ -219,6 +268,23 @@ public sealed class DossierGitExporter
         return sb.ToString();
     }
 
+    // Markdown конспекта обсуждения: якорь (тема, чат, дата снятия) + тело конспекта от
+    // модели. Всё, кроме sessionId, — свободный текст и проходит редакцию повторно:
+    // конспект мог родиться раньше появления нового секрета инстанса.
+    internal static string FormatDigest(DossierDiscussionRecord d, IReadOnlyList<string> secrets)
+    {
+        var topic = SecretRedactor.Redact(
+            string.IsNullOrWhiteSpace(d.Topic) ? "Обсуждение" : d.Topic, secrets);
+        var sb = new StringBuilder();
+        sb.AppendLine("# " + topic);
+        sb.AppendLine();
+        sb.AppendLine($"- Чат: {d.SessionId}");
+        sb.AppendLine($"- Конспект снят: {d.GeneratedAt:yyyy-MM-dd}");
+        sb.AppendLine();
+        sb.AppendLine(SecretRedactor.Redact(d.Content, secrets).Trim());
+        return sb.ToString();
+    }
+
     private static void AppendSection(StringBuilder sb, string title, string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return;
@@ -266,6 +332,7 @@ public sealed class DossierGitExporter
 
         ```
         dossiers/{yyyy}/{mm}/{sha7}-{slug}.md   одна запись — один коммит
+        discussions/{yyyy}/{sess7}-{slug}.md    конспект обсуждения — не переписка
         index.json                              оглавление: коммит → файл записи
         README.md                               этот файл
         ```
@@ -275,6 +342,10 @@ public sealed class DossierGitExporter
         один и тот же префикс, он удлиняется до различимого. Внутри — заголовок коммита, якоря
         (SHA, дата, изменённые файлы и затронутые типы), а дальше разделы «Зачем», «Решения», «Отвергнуто»,
         «Грабли», «Инварианты». Пустых разделов не бывает: чего не было — того и нет.
+
+        Рядом с записями лежат конспекты обсуждений — `discussions/{yyyy}/{sess7}-{slug}.md`,
+        один файл на чат: решения и их аргументы, отвергнутые варианты, прозвучавшие требования.
+        Это протокол сути разговора, снятый по его ленте, — а не сама переписка.
 
         `index.json` — оглавление ветки, по нему ищут запись, не перебирая папки:
 
@@ -287,7 +358,7 @@ public sealed class DossierGitExporter
               "file": "путь к файлу записи в этой ветке",
               "subject": "заголовок коммита",
               "committedAt": "дата коммита",
-              "discussion": "конспект обсуждения — зарезервировано, появится позже",
+              "discussion": "путь к конспекту обсуждения, если чат его имеет",
               "taskId": "идентификатор задачи, если изменение делалось по задаче",
               "supersededSha": ["SHA, которые этот коммит заменил при squash или rebase"]
             }
@@ -327,9 +398,10 @@ public sealed class DossierGitExporter
 
         ## Чего здесь нет
 
-        Переписки. В запись попадает выжимка — цель, решения, отказы, грабли, — а не текст
-        обсуждения. Разговоры, помеченные в приложении как «не сохранять решения», не выгружаются
-        вовсе. Секреты вычищаются перед записью в ветку.
+        Дословной переписки. В запись попадает выжимка — цель, решения, отказы, грабли, —
+        а обсуждение едет конспектом: решения, аргументы, отвергнутое. Разговоры, помеченные
+        в приложении как «не сохранять решения», не выгружаются вовсе — ни записью, ни
+        конспектом. Секреты вычищаются перед записью в ветку.
         """;
 
     // Существует ли уже ветка паспортов в этом репозитории (тем же ключом, что и

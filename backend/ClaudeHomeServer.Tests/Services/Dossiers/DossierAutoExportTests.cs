@@ -159,10 +159,16 @@ public class DossierAutoExportTests : IDisposable
     }
 
     // Автовыгрузчик на живом графе зависимостей; StartAsync подключает подписку на стор —
-    // как это делает хост в проде
-    private DossierAutoExporter MkAutoExporter(SessionManager sessions) =>
-        new(_store, _projects, sessions, _git,
-            new InstanceSecretsProvider(_config), _flags, _config);
+    // как это делает хост в проде. Конспекты: сервис на моке LLM — лент чатов в фикстурах
+    // нет, модель не зовётся (пустая лента → конспект не снимается)
+    private DossierAutoExporter MkAutoExporter(SessionManager sessions)
+    {
+        var discussions = new DossierDiscussionService(new DossierDiscussionStore(_config),
+            _store, sessions, new Mock<ClaudeHomeServer.Services.Llm.ICheapTextRunner>().Object,
+            new InstanceSecretsProvider(_config));
+        return new DossierAutoExporter(_store, _projects, sessions, _git,
+            new InstanceSecretsProvider(_config), discussions, _flags, _config);
+    }
 
     // --- Хелперы git-проверок ---
 

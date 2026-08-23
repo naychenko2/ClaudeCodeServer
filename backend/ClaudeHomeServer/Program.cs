@@ -171,6 +171,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecrets
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallService>();
+// Конспекты обсуждений (ADR-004 §6): стор снятых конспектов + генерация через
+// CheapTextRunner (ключ discussion-digest); снимаются на экспорте, живут до ветки
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionService>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 // Автовыгрузка паспортов в локальную ветку ccs/dossiers/v1 после захвата — singleton +
 // hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI

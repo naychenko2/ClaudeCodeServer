@@ -26,19 +26,21 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly SessionManager _sessions;
     private readonly GitService _git;
     private readonly InstanceSecretsProvider _secrets;
+    private readonly DossierDiscussionService _discussions;
     private readonly FeatureFlagService _flags;
     private readonly ILogger<DossierAutoExporter>? _log;
     private readonly MemoryDifyDebouncer _debounce;
 
     public DossierAutoExporter(DossierStore store, ProjectManager projects, SessionManager sessions,
-        GitService git, InstanceSecretsProvider secrets, FeatureFlagService flags,
-        IConfiguration config, ILogger<DossierAutoExporter>? log = null)
+        GitService git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
+        FeatureFlagService flags, IConfiguration config, ILogger<DossierAutoExporter>? log = null)
     {
         _store = store;
         _projects = projects;
         _sessions = sessions;
         _git = git;
         _secrets = secrets;
+        _discussions = discussions;
         _flags = flags;
         _log = log;
         // Окно батча: всплеск коммитов одного рабочего дня не должен крутить git-процессы
@@ -78,7 +80,7 @@ public sealed class DossierAutoExporter : IHostedService
             if (!GitService.IsGitRepo(project.RootPath)) return;
 
             // Тонкий объект над синглтонами — тот же состав, что у DossiersController
-            var exporter = new DossierGitExporter(_sessions, _store, _git, _secrets);
+            var exporter = new DossierGitExporter(_sessions, _store, _git, _secrets, _discussions);
             var result = await exporter.ExportAsync(ownerId, project);
             if (result.Committed)
                 _log?.LogInformation(

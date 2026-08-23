@@ -41,14 +41,33 @@ public static class WorkflowMetaResolver
             var path = Path.Combine(dir, name + ".js");
             var mtime = TryGetMtime(path);
             if (mtime is not null && _cache.TryGetValue(path, out var cached) && cached.Mtime == mtime)
-                return cached.Block;
-            var block = ExtractMeta(path);
-            if (block is not null)
             {
-                if (mtime is not null) _cache[path] = (mtime.Value, block);
-                return block;
+                Log.LogInformation("Workflow meta-блок взят из кэша: {Path} (workflow={Name})", path, name);
+                return cached.Block;
             }
+            var block = ExtractMeta(path);
+            if (block is null) continue;
+
+            // Сторож от двойной перекодировки (UTF-8 прочитали как CP1251 и сохранили обратно
+            // в UTF-8 — кириллица вырождается в чередование U+0420 «Р» и латиницы). CLI такой
+            // скрипт НЕ исполняет (он в профиле сессии), но в карточку мог уехать испорченный
+            // meta-блок — пропускаем и идём к следующему каталогу, фолбэк на claude-defaults
+            // отработает сам. Отбракованный файл НЕ кэшируем — свойство «только успехи».
+            if (IsMojibake(block))
+            {
+                Log.LogWarning(
+                    "Workflow meta-блок отбракован как перекодированный: {Path} (workflow={Name}). " +
+                    "Возможно профиль испорчен двойной перекодировкой UTF-8/CP1251.",
+                    path, name);
+                continue;
+            }
+
+            Log.LogInformation("Workflow meta-блок взят из {Path} (workflow={Name})", path, name);
+            if (mtime is not null) _cache[path] = (mtime.Value, block);
+            return block;
         }
+        Log.LogWarning("Workflow meta-блок не найден: workflow={Name}, dirs=[{Dirs}]",
+            name, string.Join(", ", all));
         return null;
     }
 
@@ -107,5 +126,17 @@ public static class WorkflowMetaResolver
         }
         const string container = "/app/claude-defaults/workflows";
         return Directory.Exists(container) ? container : null;
+    }
+
+    // Маркеры двойной перекодировки UTF-8 → CP1251 → UTF-8 в кириллическом тексте:
+    //   • U+0098 / U+009A — управляющие C1 из Latin-1, в честном UTF-8 не встречаются;
+    //   • «Р » (U+0420 + U+00A0) — кириллическая «Р» рядом с NBSP, артефакт склейки байтов.
+    // Одиночные «Р», «—», «→» в честном русском тексте допустимы — оставляем.
+    internal static bool IsMojibake(string text)
+    {
+        if (text.IndexOf('') >= 0) return true;
+        if (text.IndexOf('') >= 0) return true;
+        const string CyrillicRPlusNbsp = "Р ";
+        return text.IndexOf(CyrillicRPlusNbsp, StringComparison.Ordinal) >= 0;
     }
 }

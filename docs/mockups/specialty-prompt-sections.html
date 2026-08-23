@@ -1,0 +1,1278 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Home · Панель роли — дизайн-пакет (пресеты и типовые умения)</title>
+<style>
+  /* ====== ТОКЕНЫ ТЕМЫ (фактические значения из frontend/src/lib/theme.css) ====== */
+  :root {
+    --c-bg-main:     #F4F0E8;  /* = C.bgMain */
+    --c-bg-panel:    #EDE7DC;  /* = C.bgPanel */
+    --c-bg-card:     #FBF8F2;  /* = C.bgCard */
+    --c-bg-white:    #FFFFFF;  /* = C.bgWhite */
+    --c-bg-selected: #E8E1D4;  /* = C.bgSelected */
+    --c-bg-inset:    #E7E0D2;  /* = C.bgInset */
+    --c-text-heading:   #2A251F;  /* = C.textHeading */
+    --c-text-primary:   #39332B;  /* = C.textPrimary */
+    --c-text-secondary: #756B5E;  /* = C.textSecondary */
+    --c-text-muted:     #9A8F7E;  /* = C.textMuted */
+    --c-on-accent:      #FBF8F2;  /* = C.onAccent */
+    --c-accent:       #D97757;  /* = C.accent */
+    --c-accent-light: #F4ECE1;  /* = C.accentLight */
+    --c-accent-muted: #EAD3C5;  /* = C.accentMuted */
+    --c-border:       #E0D7C8;  /* = C.border */
+    --c-border-light: #E8E1D4;  /* = C.borderLight */
+    --c-divider:      #DDD4C4;  /* = C.divider */
+    --c-dashed:       #D0C6B4;  /* = C.dashed */
+    --c-track:        #D8CFBE;  /* = C.track */
+    --c-success:      #5E8B4E;  /* = C.success */
+    --c-success-bg:   #E9F1E8;  /* = C.successBg */
+    --c-success-text: #3F7A4F;  /* = C.successText */
+    --c-warning:      #C9923E;  /* = C.warning */
+    --c-warning-bg:   #FBEFE0;  /* = C.warningBg */
+    --c-warning-text: #8A6A28;  /* = C.warningText */
+    --c-danger:        #B4452F;  /* = C.danger */
+    --c-danger-bg:     #FBF1EC;  /* = C.dangerBg */
+    --c-danger-text:   #B4452F;  /* = C.dangerText */
+    --c-info:    #3E7CA6;  /* = C.info */
+    --c-info-bg: #E7EFF5;  /* = C.infoBg */
+    --c-plan:        #6C5CB0;  /* = C.plan */
+    --c-plan-light:  #EEEBF8;  /* = C.planLight */
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);  /* = SHADOW.focus */
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);  /* = SHADOW.card */
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);  /* = SHADOW.island */
+    --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);  /* = SHADOW.modal */
+    --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);  /* = SHADOW.thumb */
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-dashed:       #4A443B;
+    --c-track:        #453F37;
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --c-plan:        #9385D8;
+    --c-plan-light:  #2A2540;
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+    --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+  }
+
+  /* ====== База ====== */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;  /* = FONT.sans */
+    font-size: 13px;
+  }
+  .mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }  /* = FONT.mono */
+  .serif { font-family: 'PT Serif', Georgia, serif; }  /* = FONT.serif */
+
+  /* ====== Панель прототипа (НЕ часть дизайна продукта) ====== */
+  #protoBar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
+    background: #2A251F; color: #EDE6DB;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 14px; font-size: 12px;
+  }
+  #protoBar .pb-title { font-weight: 700; margin-right: 6px; white-space: nowrap; }
+  #protoBar .pb-group { display: flex; gap: 4px; align-items: center; background: rgba(255,255,255,.08); border-radius: 9px; padding: 2px; }
+  #protoBar button {
+    border: none; background: transparent; color: #B3A897; font: inherit;
+    padding: 4px 10px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  }
+  #protoBar button.on { background: #EDE6DB; color: #2A251F; font-weight: 600; }
+  #protoBar .pb-note { color: #8A8072; font-size: 11px; }
+  #stageWrap { padding: 64px 16px 60px; }
+  #stage { margin: 0 auto; max-width: 780px; transition: max-width .2s ease; }
+  #stage.w768 { max-width: 700px; }
+  #stage.w375 { max-width: 375px; }
+
+  /* ====== «Модалка» диалога «Модели и расход» ====== */
+  .modal {
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light);
+    border-radius: 20px; box-shadow: var(--shadow-modal); overflow: hidden;
+  }
+  .modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+  }
+  .modal-title { font-size: 18px; font-weight: 700; color: var(--c-text-heading); }  /* FS.xl/700 */
+  .x-btn {
+    width: 28px; height: 28px; border: none; background: transparent; border-radius: 8px;
+    color: var(--c-text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .x-btn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .tabs { display: flex; gap: 2px; padding: 8px 14px 0; border-bottom: 1px solid var(--c-border-light); flex-wrap: wrap; }
+  .tab {
+    border: none; background: transparent; font: inherit; font-size: 13px; color: var(--c-text-secondary);
+    padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab.on { color: var(--c-text-heading); font-weight: 600; border-bottom-color: var(--c-accent); }
+  .modal-body { padding: 16px 18px 22px; }
+
+  /* ====== Pill-переключатель (слоёв, режимов) ====== */
+  .pill { display: inline-flex; background: var(--c-bg-selected); border-radius: 9px; padding: 2px; gap: 2px; }
+  .pill button {
+    border: none; background: transparent; font: inherit; font-size: 12px; color: var(--c-text-secondary);
+    padding: 5px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  }
+  .pill button.on { background: var(--c-bg-white); color: var(--c-text-heading); font-weight: 600; box-shadow: var(--shadow-thumb); }
+  .pill.fill { display: flex; }
+  .pill.fill button { flex: 1; }
+
+  /* ====== Заголовки ====== */
+  .sec-title { font-size: 14px; font-weight: 700; color: var(--c-text-heading); padding-bottom: 6px; border-bottom: 1px solid var(--c-divider); }  /* FS.md/700 + divider */
+  .sec-sub { font-size: 11px; color: var(--c-text-secondary); margin-top: 6px; line-height: 1.5; }  /* FS.xs */
+  .block-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--c-text-secondary); margin-bottom: 6px;
+  }
+
+  /* ====== Тумблер ====== */
+  .tg {
+    width: 34px; height: 20px; border-radius: 999px; background: var(--c-track);
+    border: none; position: relative; cursor: pointer; transition: background .15s; flex-shrink: 0; padding: 0;
+  }
+  .tg::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--c-bg-white); box-shadow: var(--shadow-thumb); transition: left .15s;
+  }
+  .tg.on { background: var(--c-accent); }
+  .tg.on::after { left: 16px; }
+
+  /* ====== Бейдж источника ====== */
+  .src-badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: var(--c-bg-selected); flex-shrink: 0; white-space: nowrap;
+  }
+  .src-global { color: var(--c-text-muted); }
+  .src-user   { color: var(--c-text-secondary); }
+  .src-owner  { color: var(--c-accent); }
+  .src-code   { color: var(--c-text-muted); font-style: italic; font-weight: 400; }
+
+  /* ====== Карточка роли ====== */
+  .role-card {
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+    margin-bottom: 8px; box-shadow: var(--shadow-card); overflow: hidden; transition: border-color .15s;
+  }
+  .role-card:hover { border-color: var(--c-accent-muted); }
+  .role-card.open { border-color: var(--c-accent); }
+  .role-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; min-height: 40px; }
+  .role-ico {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--c-accent-light); color: var(--c-accent);
+  }
+  .role-name { font-size: 13px; font-weight: 700; color: var(--c-text-heading); }
+  .role-desc { font-size: 12px; color: var(--c-text-secondary); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .role-meta { font-size: 11px; color: var(--c-text-muted); flex-shrink: 0; }
+  .chev { color: var(--c-text-muted); transition: transform .15s; flex-shrink: 0; display: flex; }
+  .role-card.open .chev { transform: rotate(180deg); }
+
+  /* Раскрытая панель роли */
+  .role-panel { background: var(--c-bg-card); border-top: 1px solid var(--c-border); padding: 12px 14px 16px; }
+  .layer-note {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--c-text-secondary); background: var(--c-bg-selected);
+    border-radius: 999px; padding: 3px 10px;
+  }
+
+  /* ====== Карточка пресета (секции) ====== */
+  .preset-card {
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+    margin-bottom: 8px; box-shadow: var(--shadow-card);
+  }
+  .preset-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; flex-wrap: wrap; min-height: 40px; }
+  .preset-name { font-size: 13px; font-weight: 700; color: var(--c-text-heading); flex: 1; min-width: 120px; }
+  .preset-desc { font-size: 12px; color: var(--c-text-secondary); padding: 0 14px 10px 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preset-body { background: var(--c-bg-card); border-top: 1px dashed var(--c-border); padding: 10px 14px 12px; }
+  .preset-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .preset-bar select {
+    font: inherit; font-size: 12px; border-radius: 8px; border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-heading); padding: 6px 8px; max-width: 100%;
+  }
+  .cnt { margin-left: auto; font-size: 11px; }  /* FONT.mono через класс */
+  .cnt.ok   { color: var(--c-text-muted); }
+  .cnt.warn { color: var(--c-warning); font-weight: 700; }
+  .cnt.over { color: var(--c-danger); font-weight: 700; }
+  .preset-ta {
+    width: 100%; margin-top: 8px; font: inherit; font-size: 12px; color: var(--c-text-heading);
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+    padding: 8px 10px; resize: vertical; min-height: 80px; max-height: 220px; line-height: 1.5; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .preset-ta:focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .preset-ta.ro { background: var(--c-bg-selected); color: var(--c-text-secondary); cursor: not-allowed; }
+  .eff-note { font-size: 11px; color: var(--c-text-muted); margin-top: 6px; }
+
+  /* ====== Кнопки ====== */
+  .btn {
+    font: inherit; font-size: 12px; font-weight: 600; border-radius: 10px; cursor: pointer;
+    padding: 7px 14px; border: none; transition: background .12s, border-color .12s, color .12s;
+  }
+  .btn-primary { background: var(--c-accent); color: var(--c-on-accent); }
+  .btn-primary:hover { filter: brightness(1.06); }
+  .btn-ghost { background: transparent; border: 1px solid var(--c-border); color: var(--c-text-secondary); }
+  .btn-ghost:hover { border-color: var(--c-accent); color: var(--c-accent); }
+  .btn-link {
+    background: none; border: none; font: inherit; font-size: 11px; font-weight: 600;
+    color: var(--c-accent); text-decoration: underline; cursor: pointer; padding: 4px 0;
+  }
+  .btn-danger-link { background: none; border: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--c-danger-text); cursor: pointer; padding: 4px 0; }
+  .btn-dashed {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1.5px dashed var(--c-dashed); background: transparent; color: var(--c-text-secondary);
+    border-radius: 10px; padding: 7px 14px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .btn-dashed:hover { border-color: var(--c-accent); color: var(--c-accent); }
+
+  /* ====== Карточки типовых умений (язык вкладки «Умения») ====== */
+  .skill-card {
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+    padding: 10px 14px; transition: border-color .15s, background .6s;
+  }
+  .skill-card:hover { border-color: var(--c-accent-muted); }
+  .skill-card.open { border-color: var(--c-accent); }
+  .skill-card.flash { background: var(--c-accent-light); }
+  .skill-card.dim .skill-main { opacity: .55; }
+  .skill-row { display: flex; align-items: center; gap: 12px; cursor: pointer; min-height: 40px; }
+  .type-ico {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .skill-name { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+  .skill-cond { font-size: 12px; color: var(--c-text-secondary); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .skill-cond.empty { color: var(--c-text-muted); font-style: italic; }
+  .mode-badge {
+    border-radius: 9px; padding: 2px 8px; font-size: 10.5px; font-weight: 600;
+    letter-spacing: .02em; flex-shrink: 0; white-space: nowrap;
+  }
+  .mode-auto   { background: var(--c-accent-light); color: var(--c-accent); }
+  .mode-always { background: var(--c-info-bg); color: var(--c-info); }
+  .mode-off    { background: var(--c-bg-selected); color: var(--c-text-muted); }
+  .skill-body { border-top: 1px solid var(--c-border-light); margin-top: 10px; padding-top: 12px; }
+  .ai-target { font-size: 12px; color: var(--c-text-muted); font-style: italic; }
+
+  /* ====== Степпер ====== */
+  .stepper { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .step { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--c-text-muted); }
+  .step .n {
+    width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--c-dashed);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;
+  }
+  .step.cur { color: var(--c-text-heading); font-weight: 600; }
+  .step.cur .n { border-color: var(--c-accent); background: var(--c-accent); color: var(--c-on-accent); }
+  .step.done { color: var(--c-accent); cursor: pointer; }
+  .step.done .n { border-color: var(--c-accent); color: var(--c-accent); background: transparent; }
+  .step-line { flex: 1; height: 1px; background: var(--c-border-light); min-width: 12px; }
+  .type-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+  .type-cell {
+    text-align: left; background: var(--c-bg-white); border: 1px solid var(--c-border);
+    border-radius: 12px; padding: 12px; cursor: pointer; font: inherit; transition: border-color .15s, background .15s;
+  }
+  .type-cell:hover { border-color: var(--c-accent); background: var(--c-bg-card); }
+  .type-cell .t-name { font-size: 13px; font-weight: 600; color: var(--c-text-heading); margin-top: 8px; }
+  .type-cell .t-hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.4; margin-top: 3px; }
+  .crumb {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--c-accent);
+    background: var(--c-accent-light); border-radius: 999px; padding: 4px 10px; cursor: pointer;
+    border: none; font-family: inherit; font-weight: 600;
+  }
+  .pick-list { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px; margin-top: 10px; overflow: hidden; }
+  .pick-row {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    border: none; background: transparent; padding: 10px 14px; min-height: 44px;
+    border-bottom: 1px solid var(--c-border-light); cursor: pointer; font: inherit;
+  }
+  .pick-row:last-child { border-bottom: none; }
+  .pick-row:hover { background: var(--c-bg-selected); }
+  .pick-row .p-label { display: block; font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+  .pick-row .p-hint { display: block; font-size: 12px; color: var(--c-text-muted); margin-top: 1px; }
+  .search-field {
+    display: flex; align-items: center; gap: 8px; background: var(--c-bg-white);
+    border: 1px solid var(--c-border); border-radius: 10px; padding: 0 12px; height: 38px; margin-top: 12px;
+    color: var(--c-text-muted);
+  }
+  .search-field input { border: none; background: transparent; outline: none; font: inherit; font-size: 13px; color: var(--c-text-heading); flex: 1; }
+
+  /* ====== Чипы-примеры ====== */
+  .chip {
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 9px;
+    padding: 4px 11px; font: inherit; font-size: 12px; color: var(--c-text-secondary); cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .chip:hover { background: var(--c-accent-light); border-color: var(--c-accent); color: var(--c-text-primary); }
+
+  /* ====== Empty-state ====== */
+  .empty-box {
+    border: 1px dashed var(--c-dashed); border-radius: 12px; padding: 22px 18px; text-align: center;
+  }
+  .empty-title { font-size: 14px; font-weight: 700; color: var(--c-text-heading); }
+  .empty-sub { font-size: 12px; color: var(--c-text-secondary); margin-top: 6px; line-height: 1.5; }
+
+  /* ====== Плашки (баннеры) ====== */
+  .banner { border-radius: 12px; padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start; }
+  .banner-info { background: var(--c-info-bg); }
+  .banner-success { background: var(--c-success-bg); }
+  .banner .b-title { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+  .banner .b-sub { font-size: 12px; color: var(--c-text-secondary); margin-top: 2px; line-height: 1.45; }
+
+  /* ====== Тост ====== */
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px);
+    background: var(--c-text-heading); color: var(--c-bg-main); font-size: 12px;
+    padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow-modal);
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 3000;
+    max-width: 90vw; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ====== Витрина состояний ====== */
+  .showcase-block { margin-bottom: 26px; }
+  .showcase-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--c-text-muted); margin-bottom: 8px; }
+
+  /* ====== Узкая ширина (<768px и 375px) ====== */
+  #stage.w375 .type-grid, #stage.w768 .type-grid { grid-template-columns: 1fr 1fr; }
+  #stage.w375 .preset-desc { padding-left: 14px; white-space: normal; }
+  #stage.w375 .preset-bar select { flex: 1; min-width: 140px; }
+  #stage.w375 .role-desc { white-space: normal; }
+  #stage.w375 .modal-body { padding: 12px 12px 18px; }
+  #stage.w375 .preset-ta { min-height: 60px; }
+  #stage.w375 .cnt { margin-left: 0; }
+</style>
+</head>
+<body>
+
+<div id="protoBar">
+  <span class="pb-title">Дизайн-пакет · Панель роли</span>
+  <span class="pb-group" id="pbScenes"></span>
+  <span class="pb-group" id="pbTheme"></span>
+  <span class="pb-group" id="pbWidth"></span>
+  <span class="pb-note">панель прототипа — не часть продукта</span>
+</div>
+
+<div id="stageWrap"><div id="stage"><div id="app"></div></div></div>
+<div id="toast"></div>
+
+<script>
+/* =================================================================
+   Дизайн-пакет «Инструкции для роли» + «Типовые умения» (спека v4–v6 ред.2)
+   Один файл, без внешних ресурсов. Все значения — токены theme.css/design.ts.
+   ================================================================= */
+
+// ---------- Иконки (контуры lucide, stroke 1.8) ----------
+const IC = {
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  checksq: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 12 2 2 4-4"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  sparkle: '<path d="M9.9 2.5 11.7 7a2 2 0 0 0 1.2 1.2l4.5 1.8-4.5 1.8a2 2 0 0 0-1.2 1.2l-1.8 4.5-1.8-4.5a2 2 0 0 0-1.2-1.2L2.4 10l4.5-1.8a2 2 0 0 0 1.2-1.2Z"/><path d="M19 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z"/>',
+};
+function ic(name, size) {
+  return '<svg width="' + (size||16) + '" height="' + (size||16) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + IC[name] + '</svg>';
+}
+
+// ---------- Словарь типов умений (BINDING_TYPE_META) ----------
+const TYPE_META = {
+  project:        { name: 'Проект',          hint: 'Персона видит все файлы проекта',       bg: 'var(--c-accent-light)', fg: 'var(--c-accent)',        ico: 'folder' },
+  projectPath:    { name: 'Папка или файл',  hint: 'Конкретный путь внутри проекта',        bg: 'var(--c-bg-selected)',  fg: 'var(--c-text-secondary)', ico: 'file' },
+  knowledge:      { name: 'Знания проекта',  hint: 'База знаний с документами',             bg: 'var(--c-info-bg)',      fg: 'var(--c-info)',          ico: 'layers' },
+  notes:          { name: 'Заметки',         hint: 'Vault заметок или его папка',           bg: 'var(--c-success-bg)',   fg: 'var(--c-success-text)',  ico: 'pencil' },
+  tool:           { name: 'Инструмент',      hint: 'Задачи, веб, чаты, проекты…',           bg: 'var(--c-plan-light)',   fg: 'var(--c-plan)',          ico: 'wrench' },
+  skill:          { name: 'Навык',           hint: 'Готовый приём работы',                  bg: 'var(--c-warning-bg)',   fg: 'var(--c-warning)',       ico: 'zap' },
+  projectPersonas:{ name: 'Команда проекта', hint: 'Персоны другого вашего проекта',        bg: 'var(--c-danger-bg)',    fg: 'var(--c-danger-text)',   ico: 'users' },
+  projectTasks:   { name: 'Задачи проекта',  hint: 'Ставить и вести задачи в другом проекте', bg: 'var(--c-danger-bg)',  fg: 'var(--c-danger-text)',   ico: 'checksq' },
+};
+const TYPE_ORDER = ['project','projectPath','knowledge','notes','tool','skill','projectPersonas','projectTasks'];
+const MODE_LABEL = { auto: 'авто', always: 'всегда', off: 'выкл' };
+const MODE_HINT = {
+  auto:   'Модель сама решает по условию, когда заглянуть в источник',
+  always: 'Краткая выжимка подкладывается персоне в каждый ход — дороже, но надёжнее',
+  off:    'Привязка сохранена, но не используется',
+};
+const COND_EXAMPLES = ['когда спрашивают про релизы', 'когда просят статус задач', 'в каждом ответе про архитектуру'];
+
+// Каталог скиллов (список-заглушка для макета)
+const SKILL_CATALOG = [
+  { id: 'frontend-design',       desc: 'Макеты и визуальные решения в дизайн-системе' },
+  { id: 'theme-factory',         desc: 'Темы оформления для артефактов и витрин' },
+  { id: 'web-artifacts-builder', desc: 'Сложные HTML-артефакты с состоянием и роутингом' },
+  { id: 'html',                  desc: 'Одностраничные self-contained HTML-витрины' },
+  { id: 'web-design-guidelines', desc: 'Ревью UI-кода по гайдлайнам интерфейсов' },
+  { id: 'dataviz',               desc: 'Графики, дашборды и визуализация данных' },
+];
+
+// ---------- Секции-пресеты (v5: 4 секции) ----------
+const SECTIONS = [
+  {
+    id: 'dossiers', name: 'История решений',
+    desc: 'Сценарные правила: когда и как использовать историю решений (досье).',
+    codeText: 'Перед тем как предлагать архитектурное решение по файлу или символу, вызови dossier_lookup — возможно, это уже обсуждали и отвергли. Совпадение нашёл — прочитай досье целиком через dossier_get и ссылайся на него в ответе. Решение, противоречащее прошлому, называй явно и объясняй, что изменилось.',
+    presets: [
+      { id: 'full',  label: 'Полный регламент досье', text: 'Перед тем как предлагать архитектурное решение по файлу или символу, вызови dossier_lookup — возможно, это уже обсуждали и отвергли. Совпадение нашёл — прочитай досье целиком через dossier_get и ссылайся на него в ответе. Решение, противоречащее прошлому, называй явно и объясняй, что изменилось.' },
+      { id: 'short', label: 'Краткая памятка', text: 'По архитектурным вопросам сначала dossier_lookup по файлу или символу, подробности — dossier_get. На найденное прошлое решение ссылайся в ответе.' },
+    ],
+  },
+  {
+    id: 'codegraph', name: 'Граф кода',
+    desc: 'Сценарии codegraph: find — «где объявлен X», neighbors — «что сломается», hubs — «с чего начать».',
+    codeText: 'В незнакомом коде начинай с codegraph_hubs — топ типов по связности. «Где объявлен X» — codegraph_find. «Что сломается, если правлю X» — codegraph_neighbors (кто зависит от типа). Граф отвечает точнее текстового поиска, когда нужен именно тип, а не любое вхождение имени.',
+    presets: [
+      { id: 'std',   label: 'Стандартный сценарий', text: 'В незнакомом коде начинай с codegraph_hubs — топ типов по связности. «Где объявлен X» — codegraph_find. «Что сломается, если правлю X» — codegraph_neighbors (кто зависит от типа). Граф отвечает точнее текстового поиска, когда нужен именно тип, а не любое вхождение имени.' },
+      { id: 'short', label: 'Краткая памятка', text: 'Тип ищи через codegraph_find, связи — codegraph_neighbors, вход в незнакомый код — codegraph_hubs.' },
+    ],
+  },
+  {
+    id: 'dod', name: 'Процессы роли',
+    desc: 'Что сделать перед сдачей результата (сборка, тесты, lint) и куда сложить итог.',
+    codeText: 'Перед сдачей результата прогони проверку своего стека: сборку (dotnet build / npm run build) и тесты, для UI — зелёный lint:design. Нет проверки — не готово. Итог фиксируй в задаче (resultMarkdown, linkedFiles), долгоживущее — в заметках и docs/.',
+    presets: [
+      { id: 'std',   label: 'Полный DoD', text: 'Перед сдачей результата прогони проверку своего стека: сборку (dotnet build / npm run build) и тесты, для UI — зелёный lint:design. Нет проверки — не готово. Итог фиксируй в задаче (resultMarkdown, linkedFiles), долгоживущее — в заметках и docs/.' },
+      { id: 'short', label: 'Краткий DoD', text: 'Не готово без проверки: сборка и тесты зелёные, итог записан в задачу.' },
+    ],
+  },
+  {
+    id: 'rules', name: 'Правила роли',
+    desc: 'Профессиональные рамки роли — специализированные инструкции, не привязанные к инструментам.',
+    codeText: '',
+    presets: [],
+  },
+];
+
+// Пресеты «Правила роли» — персональные под каждую роль
+const ROLE_RULE_PRESETS = {
+  designer: [
+    { id: 'std', label: 'Рамки дизайнера', text: 'Только токены дизайн-системы: новое значение сначала попадает в шкалу, потом в макет. Каждое решение проверяй в обеих темах и на мобильной ширине. Проектируй все состояния экрана: пустое, загрузку, ошибку, переполнение.' },
+    { id: 'review', label: 'Рамки + ревью', text: 'Только токены дизайн-системы: новое значение сначала в шкалу, потом в макет. Проверяй обе темы и мобильную ширину. Перед сдачей UI предлагай прогон ревьюером и дожидайся ответа.' },
+  ],
+  planner: [
+    { id: 'std', label: 'Рамки планировщика', text: 'План — по шагам: что делаем, в каком порядке, кто делает и как поймём, что готово. Каждый шаг проверяем. Шага без критерия готовности не существует.' },
+  ],
+  reviewer: [
+    { id: 'std', label: 'Рамки ревьюера', text: 'Спорь с решением, а не с оформлением. Находка без сценария отказа — не находка. Severity — честно: не раздувай мелочь в блокер и не роняй блокер до примечания.' },
+  ],
+  librarian: [
+    { id: 'std', label: 'Рамки библиотекаря', text: 'Отвечай доказательствами: документ и пермалинк, а не память. Нет источника — скажи прямо, не додумывай. Атрибуция обязательна у каждого факта.' },
+  ],
+  secretary: [
+    { id: 'std', label: 'Рамки секретаря', text: 'Коротко и по делу: задача, заметка, напоминание. Даты — в формате проекта. Не решай за пользователя содержание — фиксируй и напоминай.' },
+  ],
+};
+
+// ---------- Роли (5 показательных из каталога 14) ----------
+// code: дефолт «из кода» (вкл/выкл по v5). layers: переопределения global/user/owner.
+const ROLES = [
+  {
+    id: 'designer', name: 'Дизайнер', desc: 'Макеты в docs/mockups, дизайн-система, обе темы и мобильная раскладка',
+    code: { dossiers: 0, codegraph: 0, dod: 0, rules: 1 },
+    layers: {
+      rules: { global: { on: 1, text: 'Только токены дизайн-системы: новое значение сначала попадает в шкалу, потом в макет. Каждое решение проверяй в обеих темах и на мобильной ширине. Проектируй все состояния экрана: пустое, загрузку, ошибку, переполнение. Сырой hex в коде — дефект.' } },
+    },
+    skills: [
+      { id: 's1', type: 'project', cond: 'когда спрашивают про файлы или структуру проекта', mode: 'auto', on: 1 },
+      { id: 's2', type: 'notes',   cond: 'когда обсуждаем дизайн-решения и идеи', mode: 'auto', on: 1 },
+    ],
+  },
+  {
+    id: 'planner', name: 'Планировщик', desc: 'Превращает задачу в план по шагам: что, в каком порядке, кто и как проверим',
+    code: { dossiers: 1, codegraph: 1, dod: 1, rules: 1 },
+    layers: {
+      dod: { owner: { on: 1, text: 'Перед сдачей плана: каждый шаг имеет исполнителя и критерий готовности, порядок учитывает зависимости. План без проверяемых шагов не сдавать — вернуться и дописать критерии.' } },
+    },
+    skills: [
+      { id: 's3', type: 'projectTasks', cond: 'когда просят статус задач проекта', mode: 'auto', on: 1 },
+      { id: 's4', type: 'project',      cond: 'когда нужно понять контекст проекта', mode: 'auto', on: 1 },
+    ],
+  },
+  {
+    id: 'reviewer', name: 'Ревьюер', desc: 'Находки по severity, соглашения проекта, сценарии отказа',
+    code: { dossiers: 1, codegraph: 1, dod: 1, rules: 1 },
+    layers: {
+      dossiers: { user: { on: 1, text: 'Перед находкой «так уже пробовали» вызови dossier_lookup — если решение отвергли раньше, укажи досье и что изменилось с тех пор. Без проверки истории категоричных запретов не пиши.' } },
+    },
+    skills: [
+      { id: 's5', type: 'project',     cond: 'когда ревью затрагивает файлы проекта', mode: 'auto', on: 1 },
+      { id: 's6', type: 'projectPath', cond: 'в каждом ревью архитектурных решений', mode: 'always', on: 1, skillLabel: 'docs/adr/' },
+    ],
+  },
+  {
+    id: 'librarian', name: 'Библиотекарь', desc: 'Отвечает про библиотеки и чужой код доказательствами: доки и пермалинки',
+    code: { dossiers: 0, codegraph: 0, dod: 1, rules: 1 },
+    layers: {},
+    skills: [
+      { id: 's7', type: 'knowledge', cond: 'когда спрашивают про внешние библиотеки', mode: 'auto', on: 1 },
+      { id: 's8', type: 'notes',     cond: 'когда нужны сохранённые ссылки и выжимки', mode: 'auto', on: 1 },
+    ],
+  },
+  {
+    id: 'secretary', name: 'Секретарь', desc: 'Задачи и заметки, коротко: зафиксировать, напомнить, найти',
+    code: { dossiers: 0, codegraph: 0, dod: 1, rules: 1 },
+    layers: {},
+    skills: [
+      { id: 's9',  type: 'notes',        cond: 'когда просят что-то записать или найти', mode: 'auto', on: 1 },
+      { id: 's10', type: 'projectTasks', cond: 'когда просят напомнить или поставить задачу', mode: 'auto', on: 1 },
+    ],
+  },
+];
+
+const LAYERS = [
+  { id: 'global', label: 'Для всех' },
+  { id: 'user',   label: 'Пользователю Андрею' },
+  { id: 'owner',  label: 'Только для меня' },
+];
+const SRC_BADGE = {
+  global: { label: 'Общее',        cls: 'src-global' },
+  user:   { label: 'Пользователя', cls: 'src-user' },
+  owner:  { label: 'Ваше',         cls: 'src-owner' },
+  code:   { label: 'Из кода',      cls: 'src-code' },
+};
+const EFF_NOTE = {
+  global: 'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
+  user:   'Сейчас пойдёт: текст из слоя пользователя (выбранного администратором)',
+  owner:  'Сейчас пойдёт: ваш текст',
+  code:   'Сейчас пойдёт: текст из кода (дефолт)',
+};
+const LIMIT = 1024;
+
+// ---------- Состояние пакета ----------
+const state = {
+  scene: 'rules',          // rules | persona | states
+  theme: 'light',
+  width: 'auto',           // auto | 768 | 375
+  layer: 'global',
+  openRole: 'designer',
+  roles: {},               // roleId -> { layers: {...}, skills: [...] }
+  ui: {                    // мелкое UI-состояние
+    expandedSec: {},       // "roleId:secId" -> true
+    showDisabled: {},      // roleId -> true (показать выключенные пресеты из empty-state)
+    skillOpen: null,       // id развёрнутого типового умения
+    skillConfirmDel: null,
+    flashSkills: new Set(),
+    add: null,             // степпер добавления: { step, type, skillName, cond, mode, query }
+  },
+  persona: { tab: 'existing', applied: false, flashSkills: new Set() },
+};
+// Глубокая копия исходных данных ролей в состояние
+ROLES.forEach(r => {
+  state.roles[r.id] = { layers: JSON.parse(JSON.stringify(r.layers)), skills: r.skills.map(s => ({ ...s })) };
+});
+
+// ---------- Хелперы ----------
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function roleById(id) { return ROLES.find(r => r.id === id); }
+function secById(id) { return SECTIONS.find(s => s.id === id); }
+function presetsFor(roleId, secId) {
+  if (secId === 'rules') return ROLE_RULE_PRESETS[roleId] || [];
+  return secById(secId).presets;
+}
+// Эффективное значение секции для роли: owner → user → global → code
+function effective(roleId, secId) {
+  const l = state.roles[roleId].layers[secId] || {};
+  if (l.owner)  return { src: 'owner',  on: !!l.owner.on,  text: l.owner.text };
+  if (l.user)   return { src: 'user',   on: !!l.user.on,   text: l.user.text };
+  if (l.global) return { src: 'global', on: !!l.global.on, text: l.global.text };
+  const codeOn = !!roleById(roleId).code[secId];
+  const def = secId === 'rules'
+    ? ((ROLE_RULE_PRESETS[roleId] || [{ text: '' }])[0].text)
+    : secById(secId).codeText;
+  return { src: 'code', on: codeOn, text: def };
+}
+// Запись текущего редактируемого слоя
+function layerRec(roleId, secId) {
+  const l = state.roles[roleId].layers[secId];
+  return l ? l[state.layer] : undefined;
+}
+function setLayerRec(roleId, secId, rec) {
+  const layers = state.roles[roleId].layers;
+  if (!layers[secId]) layers[secId] = {};
+  if (rec === null) delete layers[secId][state.layer];
+  else layers[secId][state.layer] = rec;
+}
+function cntClass(len) {
+  if (len > LIMIT * 0.95) return 'over';
+  if (len >= LIMIT * 0.8) return 'warn';
+  return 'ok';
+}
+let toastTimer = null;
+function toast(text) {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2100);
+}
+let uid = 100;
+function nextId() { return 'n' + (++uid); }
+
+// ---------- Действия (вызываются из разметки) ----------
+const A = {
+  scene(s) { state.scene = s; render(); },
+  theme(t) { state.theme = t; document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : ''); renderBar(); },
+  width(w) {
+    state.width = w;
+    const st = document.getElementById('stage');
+    st.className = w === '375' ? 'w375' : w === '768' ? 'w768' : '';
+    renderBar();
+  },
+  layer(l) { state.layer = l; state.ui.add = null; state.ui.skillOpen = null; render(); },
+  toggleRole(id) {
+    state.openRole = state.openRole === id ? null : id;
+    state.ui.add = null; state.ui.skillOpen = null;
+    render();
+  },
+  // Секции-пресеты
+  toggleSection(roleId, secId, ev) {
+    ev.stopPropagation();
+    const rec = layerRec(roleId, secId);
+    const eff = effective(roleId, secId);
+    if (!rec) setLayerRec(roleId, secId, { on: eff.on ? 0 : 1, text: eff.text });
+    else rec.on = rec.on ? 0 : 1;
+    render();
+  },
+  expandSection(roleId, secId) {
+    const k = roleId + ':' + secId;
+    state.ui.expandedSec[k] = !state.ui.expandedSec[k];
+    render();
+  },
+  presetChange(roleId, secId, sel) {
+    const rec = layerRec(roleId, secId);
+    if (!rec) return;
+    const p = presetsFor(roleId, secId).find(x => x.id === sel.value);
+    if (p) {
+      rec.text = p.text;
+      rec.presetId = p.id;
+      render();
+      toast('Текст заменён типовым: «' + p.label + '»');
+    }
+  },
+  textInput(roleId, secId, ta) {
+    const rec = layerRec(roleId, secId);
+    if (!rec) return;
+    rec.text = ta.value;
+    rec.presetId = undefined;
+    const c = document.getElementById('cnt-' + roleId + '-' + secId);
+    if (c) { c.textContent = ta.value.length + ' / ' + LIMIT; c.className = 'cnt mono ' + cntClass(ta.value.length); }
+  },
+  roClick() {
+    toast('Чтобы задать свой текст, включите пресет');
+  },
+  override(roleId, secId) {
+    const eff = effective(roleId, secId);
+    setLayerRec(roleId, secId, { on: eff.on ? 1 : 1, text: eff.text });
+    const k = roleId + ':' + secId;
+    state.ui.expandedSec[k] = true;
+    render();
+    toast('Создано переопределение — текст можно править');
+  },
+  resetDefault(roleId, secId) {
+    setLayerRec(roleId, secId, null);
+    render();
+    toast('Возвращён типовой текст');
+  },
+  showDisabled(roleId) {
+    state.ui.showDisabled[roleId] = true;
+    render();
+  },
+  // Типовые умения
+  skillToggle(roleId, skillId, ev) {
+    ev.stopPropagation();
+    const s = state.roles[roleId].skills.find(x => x.id === skillId);
+    s.on = s.on ? 0 : 1;
+    if (!s.on) s.mode = 'off'; else if (s.mode === 'off') s.mode = 'auto';
+    render();
+  },
+  skillOpen(roleId, skillId) {
+    state.ui.skillOpen = state.ui.skillOpen === skillId ? null : skillId;
+    state.ui.skillConfirmDel = null;
+    render();
+  },
+  skillMode(roleId, skillId, mode) {
+    const s = state.roles[roleId].skills.find(x => x.id === skillId);
+    s.mode = mode;
+    s.on = mode !== 'off' ? 1 : s.on;
+    render();
+  },
+  skillCond(roleId, skillId, ta) {
+    const s = state.roles[roleId].skills.find(x => x.id === skillId);
+    s.cond = ta.value;
+  },
+  skillCondExample(roleId, skillId, text) {
+    const s = state.roles[roleId].skills.find(x => x.id === skillId);
+    s.cond = text;
+    render();
+  },
+  skillDeleteAsk(roleId, skillId) {
+    if (state.ui.skillConfirmDel === skillId) {
+      const arr = state.roles[roleId].skills;
+      const i = arr.findIndex(x => x.id === skillId);
+      arr.splice(i, 1);
+      state.ui.skillOpen = null;
+      state.ui.skillConfirmDel = null;
+      render();
+      toast('Типовое умение удалено');
+      return;
+    }
+    state.ui.skillConfirmDel = skillId;
+    render();
+    setTimeout(() => { if (state.ui.skillConfirmDel === skillId) { state.ui.skillConfirmDel = null; render(); } }, 3000);
+  },
+  // Степпер добавления
+  addOpen() { state.ui.add = { step: 1, type: null, skillName: null, cond: '', mode: 'auto', query: '' }; render(); },
+  addClose() { state.ui.add = null; render(); },
+  addType(t) { state.ui.add.type = t; state.ui.add.step = 2; state.ui.add.skillName = null; state.ui.add.query = ''; render(); },
+  addBack(step) {
+    const a = state.ui.add;
+    if (step === 1) { a.step = 1; a.type = null; a.skillName = null; }
+    else { a.step = 2; a.skillName = null; }
+    render();
+  },
+  addSkillPick(name) { state.ui.add.skillName = name; state.ui.add.step = 3; render(); },
+  addAiNext() { state.ui.add.step = 3; render(); },
+  addQuery(inp) { state.ui.add.query = inp.value; renderAddList(); },
+  addCond(ta) { state.ui.add.cond = ta.value; },
+  addCondExample(text) { state.ui.add.cond = text; render(); },
+  addMode(m) { state.ui.add.mode = m; render(); },
+  addCommit(roleId) {
+    const a = state.ui.add;
+    const s = {
+      id: nextId(), type: a.type, cond: a.cond.trim(), mode: a.mode, on: a.mode !== 'off' ? 1 : 0,
+      skillName: a.type === 'skill' ? a.skillName : undefined,
+    };
+    state.roles[roleId].skills.push(s);
+    state.ui.add = null;
+    state.ui.flashSkills = new Set([s.id]);
+    render();
+    toast(a.type === 'skill' ? 'Навык «' + a.skillName + '» добавлен в типовые' : 'Типовое умение добавлено');
+    setTimeout(() => { state.ui.flashSkills = new Set(); render(); }, 1200);
+  },
+  // Сцена «Умения персоны»
+  personaTab(t) { state.persona.tab = t; render(); },
+  personaApply() {
+    state.persona.applied = true;
+    state.persona.flashSkills = new Set(['p1', 'p2']);
+    render();
+    toast('Типовые умения применены: 2');
+    setTimeout(() => { state.persona.flashSkills = new Set(); render(); }, 1300);
+  },
+  // Витрина состояний
+  demoText(secKey, ta) {
+    const c = document.getElementById('cnt-' + secKey);
+    if (c) { c.textContent = ta.value.length + ' / ' + LIMIT; c.className = 'cnt mono ' + cntClass(ta.value.length); }
+  },
+  demoToast(kind) {
+    if (kind === 'ro') toast('Чтобы задать свой текст, включите пресет');
+    else if (kind === 'ok') toast('Сохранено');
+    else toast('Типовые умения применены: 2');
+  },
+};
+window.A = A;
+
+// ---------- Рендер: панель прототипа ----------
+function renderBar() {
+  const scenes = [ ['rules', '1 · Правила (панель роли)'], ['persona', '2 · Умения персоны'], ['states', '3 · Состояния'] ];
+  document.getElementById('pbScenes').innerHTML = scenes.map(([id, label]) =>
+    '<button class="' + (state.scene === id ? 'on' : '') + '" onclick="A.scene(\'' + id + '\')">' + label + '</button>').join('');
+  document.getElementById('pbTheme').innerHTML =
+    '<button class="' + (state.theme === 'light' ? 'on' : '') + '" onclick="A.theme(\'light\')">☀ Светлая</button>' +
+    '<button class="' + (state.theme === 'dark' ? 'on' : '') + '" onclick="A.theme(\'dark\')">🌙 Тёмная</button>';
+  document.getElementById('pbWidth').innerHTML =
+    [['auto', 'Десктоп'], ['768', 'Планшет'], ['375', '375px']].map(([id, label]) =>
+      '<button class="' + (state.width === id ? 'on' : '') + '" onclick="A.width(\'' + id + '\')">' + label + '</button>').join('');
+}
+
+// ---------- Рендер: бейдж источника ----------
+function srcBadge(src) {
+  const m = SRC_BADGE[src];
+  return '<span class="src-badge ' + m.cls + '">' + m.label + '</span>';
+}
+
+// ---------- Сцена 1: «Правила» — карточки ролей и панель ----------
+function renderRules() {
+  const roleCards = ROLES.map(r => renderRole(r)).join('');
+  return `
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title serif">Модели и расход</span>
+      <button class="x-btn" title="Закрыть (в макете не работает)">${ic('x', 15)}</button>
+    </div>
+    <div class="tabs">
+      <button class="tab">Модели</button>
+      <button class="tab">Применение</button>
+      <button class="tab on">Правила</button>
+      <button class="tab">Расход</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <span class="block-label" style="margin:0;">Слой настроек</span>
+        <span class="pill">
+          ${LAYERS.map(l => '<button class="' + (state.layer === l.id ? 'on' : '') + '" onclick="A.layer(\'' + l.id + '\')">' + l.label + '</button>').join('')}
+        </span>
+      </div>
+      <div class="sec-sub" style="margin-bottom:14px;">
+        Значения наследуются сверху вниз: «Для всех» → «Пользователю…» → «Только для меня».
+        Переключите слой — редактируемость карточек изменится.
+      </div>
+
+      <div class="sec-title">Инструкции для роли</div>
+      <div class="sec-sub" style="margin-bottom:12px;">
+        Текст инструкций добавляется в системный промпт всех персон этой специальности.
+        Владельцы видят и могут переопределить настройки администратора. Клик по роли раскрывает её панель.
+      </div>
+      ${roleCards}
+    </div>
+  </div>`;
+}
+
+function renderRole(r) {
+  const open = state.openRole === r.id;
+  const st = state.roles[r.id];
+  const onCount = SECTIONS.filter(s => effective(r.id, s.id).on).length;
+  const skillsOn = st.skills.filter(s => s.on).length;
+  return `
+  <div class="role-card ${open ? 'open' : ''}">
+    <div class="role-head" onclick="A.toggleRole('${r.id}')">
+      <span class="role-ico">${ic('folder', 16)}</span>
+      <span style="flex:1;min-width:0;">
+        <span class="role-name">${esc(r.name)}</span>
+        <div class="role-desc">${esc(r.desc)}</div>
+      </span>
+      <span class="role-meta">${onCount} из ${SECTIONS.length} пресетов · ${skillsOn} умений</span>
+      <span class="chev">${ic('chevron', 16)}</span>
+    </div>
+    ${open ? renderRolePanel(r) : ''}
+  </div>`;
+}
+
+function renderRolePanel(r) {
+  const layerLabel = LAYERS.find(l => l.id === state.layer).label;
+  const st = state.roles[r.id];
+  const allOff = SECTIONS.every(s => !effective(r.id, s.id).on);
+  const showDisabled = state.ui.showDisabled[r.id];
+  return `
+  <div class="role-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <span class="layer-note">${ic('pencil', 12)} Редактируется слой: ${layerLabel}</span>
+    </div>
+
+    <div class="block-label">Пресеты для роли</div>
+    ${allOff && !showDisabled ? `
+      <div class="empty-box" style="margin-bottom:14px;">
+        <div class="empty-title">Пресеты пока не настроены</div>
+        <div class="empty-sub">Включите пресеты и задайте текст — инструкции добавятся в промпт персон этой специальности.</div>
+        <div style="margin-top:12px;"><button class="btn btn-ghost" onclick="A.showDisabled('${r.id}')">Показать выключенные пресеты</button></div>
+      </div>` : SECTIONS.map(s => renderPresetCard(r, s)).join('')}
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--c-border-light);">
+      <div class="block-label">Типовые умения</div>
+      <div class="sec-sub" style="margin-bottom:10px;">
+        При создании персоны этой роли умения добавляются автоматически.
+        Существующим персонам — по кнопке «Применить типовые» на вкладке «Умения».
+      </div>
+      ${st.skills.length === 0 ? `
+        <div class="empty-box" style="margin-bottom:12px;">
+          <div class="empty-title" style="font-size:13px;">Типовых умений нет</div>
+          <div class="empty-sub">Персона этой роли создаётся с пустыми умениями.</div>
+        </div>` :
+        '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">' +
+          st.skills.map(s => renderSkillCard(r.id, s)).join('') + '</div>'}
+      ${state.ui.add ? renderAddPanel(r.id) :
+        '<button class="btn-dashed" onclick="A.addOpen()">' + ic('plus', 14) + ' Добавить типовое умение</button>'}
+    </div>
+  </div>`;
+}
+
+function renderPresetCard(r, s) {
+  const eff = effective(r.id, s.id);
+  const rec = layerRec(r.id, s.id);
+  const k = r.id + ':' + s.id;
+  const open = state.ui.expandedSec[k] || eff.on;
+  const editable = !!rec;
+  const text = rec ? rec.text : eff.text;
+  const presets = presetsFor(r.id, s.id);
+  return `
+  <div class="preset-card">
+    <div class="preset-head" onclick="A.expandSection('${r.id}','${s.id}')">
+      <button class="tg ${eff.on ? 'on' : ''}" title="${eff.on ? 'Выключить' : 'Включить'}" onclick="A.toggleSection('${r.id}','${s.id}',event)"></button>
+      <span class="preset-name">${esc(s.name)}</span>
+      ${srcBadge(rec ? state.layer : eff.src)}
+      <span class="chev" style="${open ? 'transform:rotate(180deg)' : ''}">${ic('chevron', 15)}</span>
+    </div>
+    <div class="preset-desc">${esc(s.desc)}</div>
+    ${open ? `
+    <div class="preset-body">
+      <div class="preset-bar">
+        <select ${editable ? '' : 'disabled'} onchange="A.presetChange('${r.id}','${s.id}',this)" title="Типовой текст…">
+          <option value="">Типовой текст…</option>
+          ${presets.map(p => '<option value="' + p.id + '"' + (rec && rec.presetId === p.id ? ' selected' : '') + '>' + esc(p.label) + '</option>').join('')}
+        </select>
+        ${editable
+          ? '<button class="btn-link" onclick="A.resetDefault(\'' + r.id + '\',\'' + s.id + '\')">Вернуть типовой</button>'
+          : '<button class="btn-link" onclick="A.override(\'' + r.id + '\',\'' + s.id + '\')">Задать свой текст</button>'}
+        <span class="cnt mono ${cntClass(text.length)}" id="cnt-${r.id}-${s.id}">${text.length} / ${LIMIT}</span>
+      </div>
+      ${editable
+        ? '<textarea class="preset-ta" maxlength="' + LIMIT + '" oninput="A.textInput(\'' + r.id + '\',\'' + s.id + '\',this)">' + esc(text) + '</textarea>'
+        : '<textarea class="preset-ta ro" readonly maxlength="' + LIMIT + '" onclick="A.roClick()" onfocus="this.blur()">' + esc(text) + '</textarea>'}
+      <div class="eff-note">${EFF_NOTE[rec ? state.layer : eff.src]}</div>
+    </div>` : ''}
+  </div>`;
+}
+
+function typeIcon(type, size) {
+  const m = TYPE_META[type];
+  return '<span class="type-ico" style="width:' + (size||32) + 'px;height:' + (size||32) + 'px;background:' + m.bg + ';color:' + m.fg + ';">' + ic(m.ico, (size||32) >= 32 ? 16 : 13) + '</span>';
+}
+
+function skillTargetLabel(s) {
+  if (s.type === 'skill') return '«' + esc(s.skillName || '—') + '»';
+  if (s.skillLabel) return esc(s.skillLabel);
+  return '<span class="ai-target">AI подберёт при создании</span>';
+}
+
+function renderSkillCard(roleId, s) {
+  const open = state.ui.skillOpen === s.id;
+  const dim = s.mode === 'off' && !open;
+  const flash = state.ui.flashSkills.has(s.id);
+  return `
+  <div class="skill-card ${open ? 'open' : ''} ${dim ? 'dim' : ''} ${flash ? 'flash' : ''}">
+    <div class="skill-row" onclick="A.skillOpen('${roleId}','${s.id}')">
+      ${typeIcon(s.type)}
+      <span class="skill-main" style="flex:1;min-width:0;">
+        <span class="skill-name">${TYPE_META[s.type].name}${s.type === 'skill' || s.skillLabel ? ' · ' + skillTargetLabel(s) : ''}</span>
+        <div class="skill-cond ${s.cond ? '' : 'empty'}">${s.cond ? esc(s.cond) : 'Всегда под рукой — условие не задано'}</div>
+        ${s.type !== 'skill' && !s.skillLabel ? '<div style="font-size:11px;margin-top:1px;">' + skillTargetLabel(s) + '</div>' : ''}
+      </span>
+      <span class="mode-badge mode-${s.mode}">${MODE_LABEL[s.mode]}</span>
+      <button class="tg ${s.on && s.mode !== 'off' ? 'on' : ''}" onclick="A.skillToggle('${roleId}','${s.id}',event)" title="Вкл/выкл запись"></button>
+    </div>
+    ${open ? `
+    <div class="skill-body">
+      <div class="block-label">Когда пользоваться</div>
+      <textarea class="preset-ta" style="min-height:40px;margin-top:0;" placeholder="Например: когда спрашивают про релизы — читай CHANGELOG.md"
+        oninput="A.skillCond('${roleId}','${s.id}',this)">${esc(s.cond)}</textarea>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+        <span style="font-size:11.5px;color:var(--c-text-muted);">Примеры:</span>
+        ${COND_EXAMPLES.map(e => '<button class="chip" onclick="A.skillCondExample(\'' + roleId + '\',\'' + s.id + '\',\'' + e + '\')">' + e + '</button>').join('')}
+      </div>
+      <div class="block-label" style="margin-top:14px;">Режим</div>
+      <span class="pill fill">
+        ${['auto','always','off'].map(m =>
+          '<button class="' + (s.mode === m ? 'on' : '') + '" onclick="A.skillMode(\'' + roleId + '\',\'' + s.id + '\',\'' + m + '\')">' +
+          (m === 'auto' ? 'Авто' : m === 'always' ? 'Всегда' : 'Выкл') + '</button>').join('')}
+      </span>
+      <div style="font-size:11.5px;color:var(--c-text-muted);margin-top:6px;">${MODE_HINT[s.mode]}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
+        <button class="btn-danger-link" onclick="A.skillDeleteAsk('${roleId}','${s.id}')">
+          ${state.ui.skillConfirmDel === s.id ? 'Точно удалить?' : 'Удалить умение'}
+        </button>
+        <button class="btn btn-ghost" onclick="A.skillOpen('${roleId}','${s.id}')">Готово</button>
+      </div>
+    </div>` : ''}
+  </div>`;
+}
+
+// ---------- Степпер добавления типового умения ----------
+function renderAddPanel(roleId) {
+  const a = state.ui.add;
+  return `
+  <div style="border-top:1px solid var(--c-border-light);margin-top:4px;padding-top:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:13.5px;font-weight:600;color:var(--c-text-heading);">Добавить типовое умение</span>
+      <button class="x-btn" onclick="A.addClose()">${ic('x', 14)}</button>
+    </div>
+    <div class="stepper">
+      ${[['1','Тип'],['2','Цель'],['3','Правило']].map(([n, label]) => {
+        const num = +n;
+        const cls = a.step === num ? 'cur' : a.step > num ? 'done' : '';
+        const click = a.step > num ? ' onclick="A.addBack(' + num + ')"' : '';
+        return '<span class="step ' + cls + '"' + click + '><span class="n">' + n + '</span>' + label + '</span>';
+      }).join('<span class="step-line"></span>')}
+    </div>
+
+    ${a.step === 1 ? `
+    <div class="type-grid">
+      ${TYPE_ORDER.map(t => {
+        const m = TYPE_META[t];
+        return '<button class="type-cell" onclick="A.addType(\'' + t + '\')">' + typeIcon(t) +
+          '<div class="t-name">' + m.name + '</div><div class="t-hint">' + m.hint + '</div></button>';
+      }).join('')}
+    </div>` : ''}
+
+    ${a.step === 2 ? `
+      <button class="crumb" onclick="A.addBack(1)">${ic(TYPE_META[a.type].ico, 13)} ${TYPE_META[a.type].name}</button>
+      ${a.type === 'skill' ? `
+        <div class="search-field">${ic('search', 15)}<input placeholder="Найти навык…" value="${esc(a.query)}" oninput="A.addQuery(this)"></div>
+        <div class="pick-list" id="addPickList"></div>
+        <div style="font-size:11.5px;color:var(--c-text-muted);margin-top:8px;">
+          Навык привяжется к новой персоне при создании; отсутствующий в её каталоге будет пропущен молча.
+        </div>` : `
+        <div class="banner banner-info" style="margin-top:12px;">
+          <span style="color:var(--c-info);flex-shrink:0;margin-top:1px;">${ic('sparkle', 16)}</span>
+          <span>
+            <span class="b-title">Цель подберёт AI при создании персоны</span>
+            <div class="b-sub">Типовое умение задаёт только тип и правило. Конкретный проект, базу знаний или папку
+            AI выберет под момент создания персоны — под свежий список её проектов и источников.</div>
+          </span>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+          <button class="btn btn-primary" onclick="A.addAiNext()">Далее</button>
+        </div>`}
+    ` : ''}
+
+    ${a.step === 3 ? `
+      <button class="crumb" onclick="A.addBack(2)">${ic(TYPE_META[a.type].ico, 13)} ${TYPE_META[a.type].name}${a.type === 'skill' ? ' · «' + esc(a.skillName) + '»' : ' · AI подберёт'}</button>
+      <div class="block-label" style="margin-top:16px;">Когда пользоваться</div>
+      <textarea class="preset-ta" style="min-height:40px;margin-top:0;" placeholder="Например: когда спрашивают про релизы — читай CHANGELOG.md"
+        oninput="A.addCond(this)">${esc(a.cond)}</textarea>
+      <div style="font-size:11.5px;color:var(--c-text-muted);margin-top:6px;">Пусто — персона решит сама по ситуации</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+        <span style="font-size:11.5px;color:var(--c-text-muted);">Примеры:</span>
+        ${COND_EXAMPLES.map(e => '<button class="chip" onclick="A.addCondExample(\'' + e + '\')">' + e + '</button>').join('')}
+      </div>
+      <div class="block-label" style="margin-top:16px;">Режим</div>
+      <span class="pill fill">
+        ${['auto','always','off'].map(m =>
+          '<button class="' + (a.mode === m ? 'on' : '') + '" onclick="A.addMode(\'' + m + '\')">' +
+          (m === 'auto' ? 'Авто' : m === 'always' ? 'Всегда' : 'Выкл') + '</button>').join('')}
+      </span>
+      <div style="font-size:11.5px;color:var(--c-text-muted);margin-top:6px;">${MODE_HINT[a.mode]}</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+        <button class="btn btn-ghost" onclick="A.addClose()">Отмена</button>
+        <button class="btn btn-primary" onclick="A.addCommit('${roleId}')">Добавить умение</button>
+      </div>
+    ` : ''}
+  </div>`;
+}
+
+// Список скиллов шага ② — рендерится отдельно, чтобы не терять фокус поля поиска
+function renderAddList() {
+  const host = document.getElementById('addPickList');
+  if (!host || !state.ui.add) return;
+  const q = (state.ui.add.query || '').trim().toLowerCase();
+  const items = SKILL_CATALOG.filter(s => !q || s.id.toLowerCase().includes(q) || s.desc.toLowerCase().includes(q));
+  host.innerHTML = items.length === 0
+    ? '<div style="padding:14px;font-size:12.5px;color:var(--c-text-muted);">Ничего не найдено</div>'
+    : items.map(s =>
+        '<button class="pick-row" onclick="A.addSkillPick(\'' + s.id + '\')">' +
+        '<span style="flex:1;min-width:0;"><span class="p-label mono">' + s.id + '</span>' +
+        '<span class="p-hint">' + esc(s.desc) + '</span></span></button>').join('');
+}
+
+// ---------- Сцена 2: «Умения» персоны ----------
+function renderPersona() {
+  const tab = state.persona.tab;
+  return `
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title serif">Майя · Дизайнер</span>
+      <button class="x-btn">${ic('x', 15)}</button>
+    </div>
+    <div class="tabs">
+      <button class="tab">Профиль</button>
+      <button class="tab on">Умения</button>
+      <button class="tab">Память</button>
+    </div>
+    <div class="modal-body">
+      <span class="pill" style="margin-bottom:14px;">
+        <button class="${tab === 'new' ? 'on' : ''}" onclick="A.personaTab('new')">Новая персона роли</button>
+        <button class="${tab === 'existing' ? 'on' : ''}" onclick="A.personaTab('existing')">Существующая персона</button>
+      </span>
+      ${tab === 'new' ? renderPersonaNew() : renderPersonaExisting()}
+    </div>
+  </div>`;
+}
+
+function personaSkillCard(id, type, name, cond, mode, flash) {
+  return `
+  <div class="skill-card ${flash ? 'flash' : ''}">
+    <div class="skill-row" style="cursor:default;">
+      ${typeIcon(type)}
+      <span style="flex:1;min-width:0;">
+        <span class="skill-name">${name}</span>
+        <div class="skill-cond">${esc(cond)}</div>
+      </span>
+      <span class="mode-badge mode-${mode}">${MODE_LABEL[mode]}</span>
+    </div>
+  </div>`;
+}
+
+function renderPersonaNew() {
+  return `
+    <div class="banner banner-success" style="margin-bottom:14px;">
+      <span style="color:var(--c-success-text);flex-shrink:0;margin-top:1px;">${ic('checksq', 16)}</span>
+      <span>
+        <span class="b-title">Персона создана — типовые умения роли добавлены автоматически</span>
+        <div class="b-sub">AI уже подобрал цели: из типового «Проект» выбран «AI Home», из типового «Заметки» — личный vault.
+        Дальше умения живут своей жизнью: смена дефолта роли эту персону не трогает.</div>
+      </span>
+    </div>
+    <div class="block-label">Умения и правила</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${personaSkillCard('pn1', 'project', 'Проект «AI Home» · файлы', 'когда спрашивают про файлы или структуру проекта', 'auto', false)}
+      ${personaSkillCard('pn2', 'notes', 'Заметки · личный vault', 'когда обсуждаем дизайн-решения и идеи', 'auto', false)}
+    </div>
+    <div class="eff-note" style="margin-top:10px;">Обе записи материализованы из типовых умений роли «Дизайнер» в момент создания персоны.</div>`;
+}
+
+function renderPersonaExisting() {
+  const applied = state.persona.applied;
+  return `
+    ${!applied ? `
+    <div class="banner banner-info" style="margin-bottom:14px;">
+      <span style="color:var(--c-info);flex-shrink:0;margin-top:1px;">${ic('sparkle', 16)}</span>
+      <span style="flex:1;">
+        <span class="b-title">Есть типовые умения роли «Дизайнер»</span>
+        <div class="b-sub">Эта персона создана до появления типовых умений — их можно добавить одним нажатием. Уже существующие записи не трогаем.</div>
+        <div style="margin-top:10px;"><button class="btn btn-primary" onclick="A.personaApply()">Применить типовые</button></div>
+      </span>
+    </div>` : ''}
+    <div class="block-label">Умения и правила</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${personaSkillCard('p0', 'skill', 'Навык «frontend-design»', 'когда нужен новый макет или редизайн экрана', 'auto', false)}
+      ${applied
+        ? personaSkillCard('p1', 'project', 'Проект «AI Home» · файлы', 'когда спрашивают про файлы или структуру проекта', 'auto', state.persona.flashSkills.has('p1'))
+          + personaSkillCard('p2', 'notes', 'Заметки · личный vault', 'когда обсуждаем дизайн-решения и идеи', 'auto', state.persona.flashSkills.has('p2'))
+        : ''}
+    </div>
+    <div class="eff-note" style="margin-top:10px;">
+      ${applied
+        ? 'Типовые умения добавлены в конец списка — своя запись «frontend-design» осталась на месте.'
+        : 'У персоны пока одно своё умение. Нажмите «Применить типовые» — добавятся две записи из профиля роли.'}
+    </div>`;
+}
+
+// ---------- Сцена 3: витрина состояний ----------
+const DEMO_TEXT_BASE = 'Перед тем как предлагать архитектурное решение по файлу или символу, вызови dossier_lookup — возможно, это уже обсуждали и отвергли. Совпадение нашёл — прочитай досье целиком через dossier_get и ссылайся на него в ответе. Решение, противоречащее прошлому, называй явно и объясняй, что изменилось. ';
+function demoText(len) {
+  let t = DEMO_TEXT_BASE;
+  while (t.length < len) t += DEMO_TEXT_BASE;
+  return t.slice(0, len);
+}
+function renderStates() {
+  const lens = [142, 840, 995];
+  const labels = ['норма (<80%)', 'предупреждение (82%)', 'почти лимит (97%)'];
+  return `
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title serif">Состояния и краевые случаи</span>
+      <button class="x-btn">${ic('x', 15)}</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="showcase-block">
+        <div class="showcase-label">Empty-state · все пресеты роли выключены</div>
+        <div class="empty-box">
+          <div class="empty-title">Пресеты пока не настроены</div>
+          <div class="empty-sub">Включите пресеты и задайте текст — инструкции добавятся в промпт персон этой специальности.</div>
+        </div>
+        <div class="eff-note" style="margin-top:6px;">Живой путь: сцена 1 → роль «Секретарь» → выключите все тумблеры пресетов.</div>
+      </div>
+
+      <div class="showcase-block">
+        <div class="showcase-label">Empty-state · типовых умений нет</div>
+        <div class="empty-box">
+          <div class="empty-title" style="font-size:13px;">Типовых умений нет</div>
+          <div class="empty-sub">Персона этой роли создаётся с пустыми умениями.</div>
+        </div>
+        <div class="eff-note" style="margin-top:6px;">Живой путь: сцена 1 → удалите оба умения роли (карточка → «Удалить умение»).</div>
+      </div>
+
+      <div class="showcase-block">
+        <div class="showcase-label">Ошибка загрузки</div>
+        <div class="empty-box" style="border-style:solid;border-color:var(--c-danger-border);">
+          <div class="empty-title" style="color:var(--c-danger-text);">Не удалось загрузить секции</div>
+          <div class="empty-sub">Проверьте соединение и попробуйте обновить страницу.</div>
+          <div style="margin-top:10px;"><button class="btn btn-ghost" onclick="A.demoToast('ok')">Повторить</button></div>
+        </div>
+      </div>
+
+      <div class="showcase-block">
+        <div class="showcase-label">Счётчик лимита 1024 — три зоны (textarea живые, maxLength работает)</div>
+        ${lens.map((n, i) => `
+        <div class="preset-card" style="margin-bottom:8px;">
+          <div class="preset-body" style="border-top:none;">
+            <div class="preset-bar">
+              <span style="font-size:12px;font-weight:600;color:var(--c-text-heading);">${labels[i]}</span>
+              <span class="cnt mono ${cntClass(n)}" id="cnt-demo-${i}">${n} / ${LIMIT}</span>
+            </div>
+            <textarea class="preset-ta" maxlength="${LIMIT}" oninput="A.demoText('demo-${i}',this)">${esc(demoText(n))}</textarea>
+          </div>
+        </div>`).join('')}
+      </div>
+
+      <div class="showcase-block">
+        <div class="showcase-label">Тосты (авто-скрытие ~2 с)</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-ghost" onclick="A.demoToast('ro')">«Чтобы задать свой текст, включите пресет»</button>
+          <button class="btn btn-ghost" onclick="A.demoToast('ok')">«Сохранено»</button>
+          <button class="btn btn-ghost" onclick="A.demoToast('apply')">«Типовые умения применены: 2»</button>
+        </div>
+      </div>
+
+      <div class="showcase-block">
+        <div class="showcase-label">Ширины и темы</div>
+        <div class="empty-sub" style="margin-top:0;">
+          Переключатели — в панели прототипа сверху: ☀/🌙 темы и Десктоп / Планшет / 375px.
+          На 375px панель роли идёт одной колонкой: описание и бейдж переносятся, пресет растягивается,
+          счётчик уходит на новую строку, тач-цели ≥40px.
+          <div style="margin-top:10px;"><button class="btn btn-ghost" onclick="A.width('375');A.scene('rules')">Открыть сцену 1 на 375px</button></div>
+        </div>
+      </div>
+
+    </div>
+  </div>`;
+}
+
+// ---------- Корневой рендер ----------
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML =
+    state.scene === 'rules' ? renderRules() :
+    state.scene === 'persona' ? renderPersona() :
+    renderStates();
+  renderBar();
+  renderAddList();
+}
+
+render();
+</script>
+</body>
+</html>

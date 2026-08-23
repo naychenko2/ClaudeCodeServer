@@ -38,6 +38,7 @@ public class PersonasController : ControllerBase
     private readonly PersonaAskService _ask;
     private readonly PersonaAutomationService _automation;
     private readonly SpecialtyTemplatesService _specialtyTemplates;
+    private readonly SpecialtySettingsStore _specialtySettings;
     private readonly PersonaDraftService _drafts;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
@@ -50,7 +51,8 @@ public class PersonasController : ControllerBase
         Services.Images.ImageBackfillService imageBackfill,
         Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
         PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation,
-        SpecialtyTemplatesService specialtyTemplates, PersonaDraftService drafts,
+        SpecialtyTemplatesService specialtyTemplates, SpecialtySettingsStore specialtySettings,
+        PersonaDraftService drafts,
         IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
@@ -72,6 +74,7 @@ public class PersonasController : ControllerBase
         _ask = ask;
         _automation = automation;
         _specialtyTemplates = specialtyTemplates;
+        _specialtySettings = specialtySettings;
         _config = config;
         _log = log;
         _hub = hub;
@@ -289,9 +292,15 @@ public class PersonasController : ControllerBase
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Проектной персоне — сразу дефолтные привязки к данным её проекта (файлы/заметки/знания)
         persona = _bindings.SeedProjectDefaults(UserId, persona);
+        // Типовые умения специальности: профиль роли (EffectiveDefaultBindings, дефолт —
+        // SpecialtyPromptPresets) материализуется в личные привязки персоны. Модель «копия
+        // при создании»: смена дефолта роли существующих персон не трогает. Профиль — более
+        // конкретная форма авто-подбора: когда он есть, общий autoBindings не нужен.
+        var (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(persona);
+        persona = withDefaults;
         // Авто-подбор привязок (autoBindings) — best-effort:
         // сбой подбора не роняет создание, персона остаётся без привязок
-        if (req.AutoBindings == true)
+        if (defaultsApplied == 0 && req.AutoBindings == true)
             persona = await TryAutoBindAsync(persona);
         // Фото-аватар (autoAvatar) — явный опт-ин для путей, где человек не выбирает
         // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
@@ -1782,6 +1791,20 @@ public class PersonasController : ControllerBase
         }
     }
 
+    // Применить типовые умения специальности к существующей персоне (кнопка «Применить
+    // типовые»): материализует профиль роли в личные привязки поверх текущих — вручную
+    // настроенное не трогается, дубликаты и недоступные цели пропускаются.
+    [HttpPost("{id}/bindings/apply-defaults")]
+    public async Task<ActionResult> ApplyDefaultBindings(string id)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (persona.Specialty == PersonaSpecialty.None)
+            return BadRequest(new { error = "У персоны не задана специальность — типовых умений роли нет" });
+        var (updated, applied) = await MaterializeDefaultBindingsAsync(persona);
+        return Ok(new { persona = updated, applied });
+    }
+
     // Разбор DTO привязки: строковые type/mode → enum'ы, path нормализуется в валидации
     private static (PersonaBinding? Binding, string? Error) ParseBinding(PersonaBindingRequest req)
     {
@@ -1800,14 +1823,17 @@ public class PersonasController : ControllerBase
         }, null);
     }
 
-    // Авто-подбор и сохранение привязок для свежесозданной персоны (best-effort)
+    // Авто-подбор и сохранение привязок для свежесозданной персоны (best-effort).
+    // Подобранное ДОПОЛНЯЕТ существующие (явные из запроса и посевные): UpdateBindings
+    // заменяет список целиком, отдавать ему только новых кандидатов — молчаливая потеря.
     private async Task<Persona> TryAutoBindAsync(Persona persona)
     {
         try
         {
             var candidates = await SuggestBindingsAsync(persona);
             if (candidates.Count > 0)
-                return _personas.UpdateBindings(persona.Id, UserId, candidates);
+                return _personas.UpdateBindings(persona.Id, UserId,
+                    (persona.Bindings ?? []).Concat(candidates).ToList());
         }
         catch (Exception ex)
         {
@@ -1816,15 +1842,69 @@ public class PersonasController : ControllerBase
         return persona;
     }
 
+    // Типовые умения специальности → личные привязки персоны («копия при создании» и
+    // кнопка «Применить типовые» для существующих). Скиллы материализуются напрямую из
+    // каталога владельца (отсутствующие пропускаются молча — каталог у каждого свой),
+    // остальные типы — one-shot AI-подбор конкретных целей (best-effort: сбой не роняет
+    // создание персоны). Дубликаты и недоступные цели отбрасывает валидация. Возвращает
+    // персону и число ДОБАВЛЕННЫХ привязок (0 — профиль пуст или ничего не подошло).
+    private async Task<(Persona Persona, int Applied)> MaterializeDefaultBindingsAsync(Persona persona)
+    {
+        if (persona.Specialty == PersonaSpecialty.None) return (persona, 0);
+        var profile = _specialtySettings.EffectiveDefaultBindings(UserId, persona.Specialty);
+        if (profile.Count == 0) return (persona, 0);
+        try
+        {
+            var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
+            var added = new List<PersonaBinding>();
+
+            // Скиллы — явная цель профиля, AI не нужен
+            foreach (var entry in profile.Where(e => e.Type == PersonaBindingType.Skill))
+            {
+                var binding = new PersonaBinding
+                {
+                    Type = PersonaBindingType.Skill,
+                    Target = entry.SkillName?.Trim() ?? "",
+                    Condition = entry.Condition,
+                    Mode = entry.Mode,
+                };
+                if (await _bindings.ValidateAsync(UserId, binding, accepted, persona) is not null) continue;
+                accepted.Add(binding);
+                added.Add(binding);
+            }
+
+            var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
+            if (aiEntries.Count > 0)
+                added.AddRange(await SuggestBindingsAsync(persona, profile: aiEntries, acceptedSeed: accepted));
+
+            if (added.Count > 0)
+                persona = _personas.UpdateBindings(persona.Id, UserId,
+                    (persona.Bindings ?? []).Concat(added).ToList());
+            return (persona, added.Count);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "типовые умения: материализация для {Persona} не удалась", persona.Id);
+            return (persona, 0);
+        }
+    }
+
     // Подбор кандидатов-привязок: каталог целей владельца + профиль персоны → one-shot LLM
     // (строгий JSON-массив, ретрай как в quick-create), невалидные кандидаты отбрасываются.
     // userPrompt задан — генерация под свободный запрос пользователя, иначе подбор под роль.
-    private async Task<List<PersonaBinding>> SuggestBindingsAsync(Persona persona, string? userPrompt = null)
+    // profile задан — материализация типовых умений роли: AI подбирает только ЦЕЛИ типов
+    // профиля (по одному на запись), условие и режим подставляются из профиля сервером.
+    // acceptedSeed — уже подготовленные к добавлению привязки (например, скиллы профиля):
+    // валидация дубликатов должна видеть их рядом с текущими привязками персоны.
+    private async Task<List<PersonaBinding>> SuggestBindingsAsync(Persona persona, string? userPrompt = null,
+        IReadOnlyList<SpecialtyDefaultBinding>? profile = null, List<PersonaBinding>? acceptedSeed = null)
     {
         // Полный каталог знаний (датасеты проектов/заметок + прочие доступные Dify-датасеты) —
         // валидация всё равно принимает любой из KnowledgeTargetsAsync, каталог промпта не должен быть уже
         var datasets = await _bindings.KnowledgeTargetsAsync(UserId);
-        var prompt = BuildSuggestPrompt(persona, datasets, userPrompt);
+        var prompt = profile is not null
+            ? BuildProfilePrompt(persona, datasets, profile)
+            : BuildSuggestPrompt(persona, datasets, userPrompt);
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
 
         List<SuggestRaw>? raws = null;
@@ -1839,8 +1919,35 @@ public class PersonasController : ControllerBase
         }
         if (raws is null) return [];
 
-        var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
+        var accepted = new List<PersonaBinding>(acceptedSeed ?? persona.Bindings ?? []);
         var result = new List<PersonaBinding>();
+
+        if (profile is not null)
+        {
+            // Слоты профиля: на каждую запись — максимум одна привязка её типа; чужие
+            // типы AI (сверх профиля) отбрасываются. Условие и режим — из профиля роли,
+            // их формулирует админ, а не модель.
+            var slots = profile.Select(e => (Entry: e, Used: false)).ToList();
+            foreach (var r in raws.Take(profile.Count))
+            {
+                var (binding, _) = ParseBinding(new PersonaBindingRequest(
+                    r.Type ?? "", r.Target ?? "", r.Path, "", "auto"));
+                if (binding is null) continue;
+                var index = -1;
+                for (var i = 0; i < slots.Count; i++)
+                    if (!slots[i].Used && slots[i].Entry.Type == binding.Type) { index = i; break; }
+                if (index < 0) continue;
+                slots[index] = (slots[index].Entry, true);
+                binding.Condition = slots[index].Entry.Condition;
+                binding.Mode = slots[index].Entry.Mode;
+                var err = await _bindings.ValidateAsync(UserId, binding, accepted, persona);
+                if (err is not null) continue;
+                accepted.Add(binding);
+                result.Add(binding);
+            }
+            return result;
+        }
+
         foreach (var r in raws.Take(5))
         {
             var (binding, _) = ParseBinding(new PersonaBindingRequest(
@@ -1880,6 +1987,23 @@ public class PersonasController : ControllerBase
         if (hasUserPrompt)
             sb.AppendLine($"\nЗапрос пользователя (главный ориентир — построй привязку(и) под него): {userPrompt!.Trim()}");
 
+        AppendBindingCatalog(sb, datasets);
+
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 5 объектов:");
+        sb.AppendLine("[{\"type\":\"project|projectPath|knowledge|notes|tool|skill\",\"target\":\"id из каталога\"," +
+                      "\"path\":\"папка (опционально; для projectPath обязательна)\"," +
+                      "\"condition\":\"когда применять, 1-2 предложения по-русски\",\"mode\":\"auto\"}]");
+        sb.AppendLine(hasUserPrompt
+            ? "Построй привязку(и) под запрос пользователя, опираясь на каталог; " +
+              "если запрос не покрывается ни одной целью каталога — верни []."
+            : "Бери только цели, реально полезные роли персоны; если подходящих нет — верни [].");
+        return sb.ToString();
+    }
+
+    // Каталог целей владельца — общий блок промптов подбора привязок (роль/запрос/профиль роли)
+    private void AppendBindingCatalog(System.Text.StringBuilder sb,
+        IReadOnlyList<(string Id, string Label, string? ProjectId)> datasets)
+    {
         sb.AppendLine("\nКаталог целей:");
         var projects = _projects.GetByOwner(UserId);
         if (projects.Count > 0)
@@ -1912,17 +2036,46 @@ public class PersonasController : ControllerBase
         sb.AppendLine("Инструменты (type \"tool\", target = ключ):");
         foreach (var kv in _bindings.ToolCatalogFor(UserId))
             sb.AppendLine($"- {kv.Key} — {kv.Value.Label}: {kv.Value.Hint}");
+    }
 
-        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 5 объектов:");
-        sb.AppendLine("[{\"type\":\"project|projectPath|knowledge|notes|tool|skill\",\"target\":\"id из каталога\"," +
-                      "\"path\":\"папка (опционально; для projectPath обязательна)\"," +
-                      "\"condition\":\"когда применять, 1-2 предложения по-русски\",\"mode\":\"auto\"}]");
-        sb.AppendLine(hasUserPrompt
-            ? "Построй привязку(и) под запрос пользователя, опираясь на каталог; " +
-              "если запрос не покрывается ни одной целью каталога — верни []."
-            : "Бери только цели, реально полезные роли персоны; если подходящих нет — верни [].");
+    // Промпт материализации типовых умений роли: AI подбирает КОНКРЕТНУЮ цель каждого
+    // типа из профиля; условие и режим модель не формулирует — их подставит сервер из
+    // профиля. Сверх профиля брать нечего: список типов закрыт.
+    private string BuildProfilePrompt(Persona persona,
+        IReadOnlyList<(string Id, string Label, string? ProjectId)> datasets,
+        IReadOnlyList<SpecialtyDefaultBinding> profile)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Материализуй типовые привязки AI-персоны: для каждого типа из профиля подбери " +
+                      "ОДНУ конкретную цель из каталога ниже (target — точный id из каталога).");
+        sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
+        if (!string.IsNullOrWhiteSpace(persona.Description))
+            sb.AppendLine($"Кто это: {persona.Description.Trim()}");
+        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+            sb.AppendLine($"Персона проектная (её проект: {persona.ProjectId}) — Project/ProjectPath к другим проектам не подбирай.");
+
+        sb.AppendLine("\nПрофиль роли (по одной цели на строку):");
+        foreach (var entry in profile)
+        {
+            var line = $"- {WireBindingType(entry.Type)}";
+            if (!string.IsNullOrWhiteSpace(entry.Condition))
+                line += $" — когда: {entry.Condition.Trim()}";
+            sb.AppendLine(line);
+        }
+
+        AppendBindingCatalog(sb, datasets);
+
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown):");
+        sb.AppendLine("[{\"type\":\"project|projectPath|knowledge|notes|tool|skill|projectPersonas|projectTasks\"," +
+                      "\"target\":\"id из каталога\",\"path\":\"папка (для projectPath обязательна)\"}]");
+        sb.AppendLine("Если для какого-то типа в каталоге нет подходящей цели — пропусти его. " +
+                      "Ничего сверх профиля не добавляй.");
         return sb.ToString();
     }
+
+    // Wire-имя типа привязки (camelCase, как в конвертере персон) — для промптов подбора
+    private static string WireBindingType(ClaudeHomeServer.Models.PersonaBindingType type) =>
+        System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(type.ToString());
 
     // Парс JSON-массива из ответа модели (устойчиво к преамбуле/markdown-fence)
     private static List<SuggestRaw>? ParseSuggestArray(string raw)

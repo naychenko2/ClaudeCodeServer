@@ -577,6 +577,11 @@ export function Composer({
   const [teamSettings, setTeamSettings] = useState<TeamMechanicSettings>(DEFAULT_TEAM_SETTINGS);
   const canDiscuss = !!sessionId && !onboarding;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Флаг «последнее изменение text пришло из голосовой диктовки». В useEffect по text
+  // проверяется: если стоит — докручиваем textarea до конца. Флаг, а не ветка в эффекте
+  // изменения text: ручная правка середины поле вниз дёргать не должна, а режим разговора
+  // поле вовсе не пишет (там ветка handsFreeRef.onRecognized)
+  const voiceScrollPendingRef = useRef(false);
   const modeRef = useRef<HTMLDivElement>(null);
   // Замеры полосы контролов: по ним решается, сколько кнопок влезает в одну строку
   const stripRef = useRef<HTMLDivElement>(null);
@@ -628,14 +633,11 @@ export function Composer({
         setText(prev => (prev ? prev + ' ' + chunk : chunk));
         // Диктовка идёт без фокуса в поле, поэтому браузер не подтягивает вид к каретке —
         // сами уводим textarea в конец, чтобы человек видел хвост распознанного.
-        // На следующем кадре: к этому моменту React уже дорисовал новый текст, а autoResize
-        // зовём тут же — иначе прокрутка сработала бы по старой высоте.
-        // Только для голоса: на ручной правке середины дёргать поле вниз нельзя
-        requestAnimationFrame(() => {
-          autoResize();
-          const el = textareaRef.current;
-          if (el) el.scrollTop = el.scrollHeight;
-        });
+        // Прокрутку делает отдельный эффект по text (см. voiceScrollPendingRef ниже):
+        // он срабатывает ПОСЛЕ коммита нового текста в DOM, поэтому scrollHeight считается
+        // уже по свежему содержимому. requestAnimationFrame здесь гонку проигрывал:
+        // его колбэл мог выполниться раньше коммита, и scrollHeight брался по старому тексту.
+        voiceScrollPendingRef.current = true;
       }
     },
     onKeyboardFallback: () => textareaRef.current?.focus(),
@@ -784,6 +786,20 @@ export function Composer({
 
   useEffect(() => {
     autoResize();
+  }, [text, autoResize]);
+
+  // Голосовая диктовка: после коммита нового текста уводим textarea в конец.
+  // Эффект стоит ПОСЛЕ useEffect [text, autoResize] выше — React выполняет эффекты
+  // одного рендера в порядке объявления, поэтому к моменту срабатывания этого autoResize
+  // уже обновил высоту и scrollHeight соответствует новому содержимому. Сбрасываем флаг
+  // сразу, чтобы повторный запуск эффекта (напр. при быстром апдейте text из иной ветки)
+  // поле не дёргал вниз
+  useEffect(() => {
+    if (!voiceScrollPendingRef.current) return;
+    voiceScrollPendingRef.current = false;
+    autoResize();
+    const el = textareaRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [text, autoResize]);
 
   const resetInput = () => {

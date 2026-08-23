@@ -2,7 +2,7 @@
 // бейджа/маркера. Тексты — дословно из docs/architecture/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { ChatItem, SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan } from '../types';
+import type { ChatItem, SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan, TeamWaveLiveness, TeamWavePulse, TeamWaveSnapshot, TeamWaveTask, TeamWaveTaskStatus } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -20,6 +20,161 @@ export function teamImplementTone(stage: TeamImplementStage): TeamImplementTone 
     default:
       return 'work';
   }
+}
+
+// === Пульс волны (Э2 КР-наблюдаемости) ===
+// alive   — живая работа (accent)
+// quiet   — тишина дольше порога, долгая задача (сборка/тесты) — это нормально (warning)
+// stalled — тишина дольше второго порога, похоже на зависшее (danger)
+// dead    — процесс штаба остановлен при активной волне (danger)
+export type TeamPulseTone = 'work' | 'warning' | 'danger';
+
+export function teamPulseTone(liveness: TeamWaveLiveness): TeamPulseTone {
+  switch (liveness) {
+    case 'alive': return 'work';
+    case 'quiet': return 'warning';
+    case 'stalled':
+    case 'dead': return 'danger';
+    // Незнакомый wire-токен с бэка — в danger: тихий default сломал бы инвариант
+    // безопасности, лучше лишний раз предупредить о проблемном состоянии
+    default: return 'danger';
+  }
+}
+
+// Сколько минут прошло с момента активности штаба (по серверным секундам тишины).
+// Сервер даёт секунды — на фронте считать не надо: пересчёт часов клиента даёт
+// расхождение в минуты при долгом простое, и бейдж перестаёт совпадать с сервером
+function minutesFromSeconds(s: number): number {
+  return Math.max(0, Math.floor(s / 60));
+}
+
+// Короткая подпись активности штаба для бейджа: «активность N мин назад» при alive,
+// «тихо N мин» при quiet, «похоже, зависло» при stalled, «процесс остановлен» при dead.
+// Считает по server-given quietSeconds — иначе клиентские часы расходились бы с бэком
+export function teamPulseActivityLabel(pulse: TeamWavePulse): string {
+  const mins = minutesFromSeconds(pulse.quietSeconds);
+  switch (pulse.liveness) {
+    case 'alive': return `активность ${pluralMinutesShort(mins)} назад`;
+    case 'quiet': return `тихо ${pluralMinutesShort(mins)}`;
+    case 'stalled': return `похоже, зависло · ${pluralMinutesShort(mins)} тишины`;
+    case 'dead': return 'процесс остановлен';
+  }
+}
+
+// Короткий текст с числом минут в именительном: «4 мин», «1 мин», «25 мин».
+// У «active N min ago» это «N мин назад» — та же форма, что в остальных метриках
+// («уже 2 мин» у плашки планирования). Своя копия из pluralRu, чтобы не таскать тяжёлую
+// функцию наружу и не плодить кейсы в одном общем склонении
+function pluralMinutesShort(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  const word = (m10 === 1 && m100 !== 11) ? 'минуту'
+    : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? 'минуты'
+      : 'минут';
+  return `${n} ${word}`;
+}
+
+// «Что это значит» в поповере: одна-две строки на состояние. Тон продукта — не «stalled»,
+// а «похоже, зависло». Объясняем, что долгая тишина — не всегда авария (сборка/тесты)
+export function teamPulseMeaning(liveness: TeamWaveLiveness): string {
+  switch (liveness) {
+    case 'alive': return 'Штаб работает: исполнители отвечают в обычном ритме';
+    case 'quiet': return 'Тихо, но в пределах нормы: долгая задача — это нормально (сборка, тесты)';
+    case 'stalled': return 'Похоже, зависло: тишина дольше обычного. Перезапуск будет этапом 3';
+    case 'dead': return 'Процесс штаба остановлен. Исполнители не получат следующих задач, пока штаб не вернётся';
+  }
+}
+
+// Полная подпись бейджа при живом пульсе на стадии волны.
+// «КР · волна 1 · 2/5 · активность 4 мин назад» — plannedWaves=0 даёт просто «волна 1»
+// (план ещё не запускался, как в teamImplementStageLabel). state не используется
+// напрямую — оставлен в сигнатуре как единая точка для будущих полей (например,
+// отдельный таймстамп активности по стадии), чтобы вызов не ломался при появлении
+// дополнительных данных
+export function teamPulseBadgeText(_state: SessionTeamImplement, pulse: TeamWavePulse): string {
+  const stage = teamImplementStageLabel('wave', pulse.waveNumber, pulse.plannedWaves);
+  return `${teamMechanicShort} · ${stage} · ${pulse.tasksActive}/${pulse.tasksTotal} · ${teamPulseActivityLabel(pulse)}`;
+}
+
+// Короткая форма для узкой ширины/мобилы: «КР · 2/5 · 4 мин».
+// Сохраняем главное — сколько задач идёт и тон активности, без номера волны и
+// приставки «волна» — на 320px строка должна умещаться целиком
+export function teamPulseBadgeShort(pulse: TeamWavePulse): string {
+  const mins = minutesFromSeconds(pulse.quietSeconds);
+  switch (pulse.liveness) {
+    case 'alive': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · ${pluralMinutesShort(mins)} назад`;
+    case 'quiet': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · тихо ${pluralMinutesShort(mins)}`;
+    case 'stalled': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · похоже, зависло`;
+    case 'dead': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · процесс остановлен`;
+  }
+}
+
+// Имя механики «КР» — единая точка, чтобы не дублировать teamMechanic('implementMode').shortName
+// и не зависеть от модуля team/TeamMechanicBadge внутри lib/. Должно совпадать с маркером
+// композера и маркером списка чатов
+export const TEAM_IMPLEMENT_SHORT_NAME = 'КР';
+const teamMechanicShort = TEAM_IMPLEMENT_SHORT_NAME;
+
+// === Список задач в поповере бейджа ===
+// Текст статуса задачи волны — для строки поповера. Не путать со стадиямией режима
+// (teamImplementTone) и общим тоном задачи (TaskStatus) — здесь конкретный «в работе»
+// / «готово» / «провалилась» / «отменена», как их видит владелец штаба
+export function teamWaveTaskStatusLabel(status: TeamWaveTaskStatus): string {
+  switch (status) {
+    case 'todo': return 'в очереди';
+    case 'inProgress': return 'в работе';
+    case 'done': return 'готово';
+    case 'failed': return 'провалилась';
+    case 'cancelled': return 'отменена';
+  }
+}
+
+// Сколько минут задача в работе — от startedAt до now (мс). Нет startedAt — «ещё не стартовала».
+// Серверных секунд тут нет, считаем по Date.now(): время старта задачи стабильнее, чем
+// пульс штаба, и дрейф часов на ±секунду не искажает «N мин в работе»
+export function teamWaveTaskRunningLabel(task: TeamWaveTask, now: number): string {
+  if (!task.startedAt) return 'ещё не стартовала';
+  const start = Date.parse(task.startedAt);
+  if (!Number.isFinite(start)) return '';
+  const mins = Math.max(0, Math.floor((now - start) / 60000));
+  return mins < 1 ? 'меньше минуты в работе' : `${pluralMinutesShort(mins)} в работе`;
+}
+
+// Признак «задача прямо сейчас работает» — для сортировки и подсветки. Отдельная
+// функция, чтобы не дублировать switch по статусам в двух местах поповера
+export function teamWaveTaskActive(task: TeamWaveTask): boolean {
+  return task.status === 'inProgress';
+}
+
+// Безопасный счёт: сколько задач реально в работе (на случай, если бэк пришлёт
+// статусы, которых мы ещё не знаем). Используется и в подсчёте «2/5» строки бейджа,
+// и в сортировке списка
+export function countTeamWaveActive(tasks: TeamWaveTask[]): number {
+  return tasks.reduce((n, t) => n + (t.status === 'inProgress' ? 1 : 0), 0);
+}
+
+// Полный снимок с подсчётом активных: пульс несёт tasksActive с сервера, REST-снапшот
+// возвращает полный список — на рендере используем подсчёт из списка, чтобы строка
+// бейджа и список задач гарантированно сошлись (даже если бэк где-то занизил счётчик)
+export function teamWaveSnapshotActiveCount(snap: TeamWaveSnapshot): number {
+  return countTeamWaveActive(snap.tasks);
+}
+
+// Сортировка задач для поповера: сначала в работе, потом в очереди, потом завершённые
+// (готовые/провалившиеся/отменённые). Внутри группы — по updatedAt DESC
+export function teamWaveTasksSorted(tasks: TeamWaveTask[]): TeamWaveTask[] {
+  const rank = (s: TeamWaveTaskStatus): number => {
+    switch (s) {
+      case 'inProgress': return 0;
+      case 'todo': return 1;
+      default: return 2;
+    }
+  };
+  const ts = (s: string) => Date.parse(s) || 0;
+  return [...tasks].sort((a, b) => {
+    const r = rank(a.status) - rank(b.status);
+    if (r !== 0) return r;
+    return ts(b.updatedAt) - ts(a.updatedAt);
+  });
 }
 
 // «Волна N из M»: M — плановое число волн итерации (plannedWaves из карточки плана),

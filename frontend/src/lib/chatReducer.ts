@@ -3,7 +3,7 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, SessionTeamImplement } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
 import { isBgLaunchResult } from './agentTail';
 
 // Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
@@ -61,6 +61,11 @@ export interface ChatState {
   // закончил (событие приходит раньше, чем стадия team_implement — та ждёт запись файла
   // плана на диск, и без этого поля плашка «работает» ещё висела бы после готового результата)
   teamPlanning?: { startedAt: number } | null;
+  // Пульс волны командной реализации (Э2). Эфемерный — в ленту и историю не попадает;
+  // бейдж показывает активность, поповер — список задач. undefined — пульсов ещё не было
+  // (бэкенд старый или чат открыт до первой минуты волны); бейдж в этом случае выводит
+  // прежний вид, без ложных тревог
+  teamWavePulse?: TeamWavePulse;
   // Подсказка следующего сообщения — чип в композере.
   // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
   promptSuggestion: string | null;
@@ -830,6 +835,25 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           waveCount: msg.waveCount,
           elapsedMs: msg.elapsedMs,
         }],
+      };
+
+    case 'team_wave_pulse':
+      // Пульс волны — эфемерное состояние бейджа/поповера. В ленту и историю НЕ
+      // пишем: это оперативный «дышит ли штаб», а не содержательный элемент чата.
+      // Просто заменяем последний пульс на свежий — задачи подтягиваются отдельным
+      // REST-запросом при открытии поповера
+      return {
+        ...prev,
+        teamWavePulse: {
+          stage: 'wave',
+          waveNumber: msg.waveNumber,
+          plannedWaves: msg.plannedWaves,
+          tasksActive: msg.tasksActive,
+          tasksTotal: msg.tasksTotal,
+          lastActivityAt: msg.lastActivityAt,
+          quietSeconds: msg.quietSeconds,
+          liveness: msg.liveness,
+        },
       };
 
     case 'prompt_suggestion':

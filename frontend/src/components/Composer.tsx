@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -90,6 +90,9 @@ export interface ComposerProps {
   // Режим «Командная реализация»: состояние (live с фолбэком
   // на Session.teamImplement); null — режим выключен. Бейдж виден при заданных обработчиках
   teamImplement?: SessionTeamImplement | null;
+  // Пульс волны (Э2): эфемерный, бейдж сам подтянет список задач при открытии поповера.
+  // Без pulse бейдж работает как раньше — обратная совместимость со старым бэком
+  teamWavePulse?: import('../types').TeamWavePulse | null;
   onToggleTeamImplementAuto?: () => void | Promise<void>;
   onDisableTeamImplement?: () => void | Promise<void>;
   // «Остановить» прогон: режим остаётся включённым, новые волны не стартуют
@@ -449,6 +452,7 @@ export function Composer({
   workLoop = null,
   onToggleWorkLoop,
   teamImplement = null,
+  teamWavePulse = null,
   onToggleTeamImplementAuto,
   onDisableTeamImplement,
   onStopTeamImplement,
@@ -561,6 +565,14 @@ export function Composer({
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const mentionWordStartRef = useRef(0);
+  // Словарь персон по id для поповера бейджа (Э2): исполнители задач волны резолвятся
+  // через lookup. Строим через useMemo — массив personas меняется нечасто (при смене
+  // чата), дешевле пересчёта на каждый ререндер поповера
+  const personasById = useMemo(() => {
+    const m: Record<string, Persona> = {};
+    for (const p of personas) m[p.id] = p;
+    return m;
+  }, [personas]);
   // Кого можно упомянуть: персоны контекста, кроме персоны самого чата;
   // в групповом чате участники группы идут первыми
   const mentionable = (() => {
@@ -1261,6 +1273,9 @@ export function Composer({
       state={teamImplement}
       chatMode={mode}
       isMobile={isMobile}
+      pulse={teamWavePulse}
+      sessionId={sessionId}
+      personas={personasById}
       onToggleAuto={onToggleTeamImplementAuto}
       onDisable={onDisableTeamImplement}
       onStop={onStopTeamImplement}

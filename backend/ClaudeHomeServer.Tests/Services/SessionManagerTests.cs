@@ -8346,4 +8346,224 @@ public class SessionManagerTests : IDisposable
 
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
     }
+
+    // --- КР-наблюдаемость, этап 3: перезапуск зависшего хода (RestartStuckTurnAsync) ---
+
+    // Адаптер с переключаемым «живым ходом»: Interrupt в моке процесс не убивает, поэтому
+    // умирание изображаем флагом — так тест управляет моментом смерти процесса после kill.
+    private sealed class SwitchableLiveAdapter
+    {
+        public bool Alive = true;
+        public readonly Mock<ILlmSessionAdapter> Mock = new();
+
+        public SwitchableLiveAdapter(Session info)
+        {
+            Mock.SetupGet(a => a.Info).Returns(info);
+            Mock.SetupGet(a => a.HasLiveTurn).Returns(() => Alive);
+            Mock.SetupGet(a => a.HasQueuedTurn).Returns(false);
+            Mock.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>())).Returns(Task.CompletedTask);
+        }
+
+        public ILlmSessionAdapter Object => Mock.Object;
+    }
+
+    // Транскрипт сессии в регистрируемом корне проб: TranscriptProbe ищет файл по
+    // {root}/{flat-cwd}/{csid}.jsonl, а при промахе сканирует подпапки корня
+    private string WriteTranscript(string csid, string content)
+    {
+        var projDir = Path.Combine(_tempDir, "transcripts-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(projDir);
+        var path = Path.Combine(projDir, csid + ".jsonl");
+        File.WriteAllText(path, content);
+        ClaudeHomeServer.Services.WorkflowAgentParser.AddAllowedRoot(_tempDir);
+        return path;
+    }
+
+    // Штаб-сессия в форме главного сценария: режим включён, стадия «волна» с расходом
+    // бюджета и версией плана, чат «занят» (Working) без живого прогона — зависший ход
+    private async Task<Session> MkStuckTeamSessionAsync(string suffix, string? claudeSessionId = null)
+    {
+        var (session, _, _) = await MakeTeamStabAsync(suffix);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Wave;
+            t.WaveNumber = 1;
+            t.PlannedWaves = 2;
+            t.Budget.TasksUsed = 2;
+            t.Budget.RunsUsed = 2;
+            t.Budget.WavesUsed = 1;
+            t.PlanVersion = 2;
+            t.ApprovedPlanVersion = 2;
+            return true;
+        });
+        var info = _sut.GetById(session.Id)!;
+        info.Status = SessionStatus.Working;
+        info.ClaudeSessionId = claudeSessionId;
+        return info;
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЗависшийБезПрогона_ВозвращаетЧатВРаботуСТемЖеРежимом()
+    {
+        const string csid = "keep0123456789abcdef";
+        var session = await MkStuckTeamSessionAsync("turn-stuck", claudeSessionId: csid);
+
+        var result = await _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        result.Resumed.Should().BeTrue();
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active,
+            "главное: в чат снова можно писать");
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage.Should().Be(TeamImplementStage.Wave, "стадия пережила перезапуск");
+        team.WaveNumber.Should().Be(1);
+        team.PlanVersion.Should().Be(2, "версия плана не сброшена");
+        team.Budget.RunsUsed.Should().Be(2, "расход бюджета не изменился");
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().Be(csid,
+            "resume-якорь цел — следующий ход продолжит разговор");
+        Sent<WorkLoopStoppedMessage>().Should().ContainSingle()
+            .Which.Reason.Should().Be("team_restart", "человек видит в ленте, что ход перезапущен вручную");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_СвободныйЧат_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-free");
+        _sut.GetById(session.Id)!.Status = SessionStatus.Active;
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Чат не занят*");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЖивойПрогонНачалсяНедавно_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-fresh");
+        var entry = GetEntry(session.Id);
+        var live = new SwitchableLiveAdapter((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);
+        SetProcess(entry, live.Object);
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Штаб работает*",
+                "живой ход с недавней активностью — честная работа, а не зависание");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_KillНеСработал_ОтказАНеМолчаливыйОбрыв()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-undying");
+        var entry = GetEntry(session.Id);
+        var live = new SwitchableLiveAdapter((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);
+        SetProcess(entry, live.Object);
+        // Ход давно молчит (гейт свежести пропускает), но процесс не умирает после kill
+        _sut.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-40);
+        var prevTimeout = _sut.KillWaitTimeout;
+        _sut.KillWaitTimeout = TimeSpan.FromMilliseconds(300);
+        try
+        {
+            var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*Не удалось остановить зависший процесс*");
+            _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
+                "недоубитый процесс не объявляется мёртвым по факту вызова kill");
+        }
+        finally { _sut.KillWaitTimeout = prevTimeout; }
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ПовторныйКликПокаИдёт_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-twice");
+        var entry = GetEntry(session.Id);
+        var live = new SwitchableLiveAdapter((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);
+        SetProcess(entry, live.Object);
+        _sut.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-40);
+        var prevTimeout = _sut.KillWaitTimeout;
+        _sut.KillWaitTimeout = TimeSpan.FromSeconds(30);
+        try
+        {
+            var first = Task.Run(() => _sut.RestartStuckTurnAsync(session.Id, startFresh: false));
+            // Первый вызов паркуется в ожидании смерти процесса: детерминированный маркер —
+            // Interrupt уже ушёл в адаптер, значит гейт повторного вызова захвачен
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!live.Mock.Invocations.Any(i => i.Method.Name == nameof(ILlmSessionAdapter.Interrupt))
+                   && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            live.Mock.Invocations.Should().Contain(i => i.Method.Name == nameof(ILlmSessionAdapter.Interrupt),
+                "первый вызов уже в фазе kill — проверка детерминирована");
+
+            Func<Task> secondCall = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+            (await secondCall.Should().ThrowAsync<InvalidOperationException>())
+                .WithMessage("*уже перезапускается*");
+
+            live.Alive = false; // процесс «умер» — первый вызов завершается штатно
+            (await first).Resumed.Should().BeTrue();
+        }
+        finally
+        {
+            live.Alive = false;
+            _sut.KillWaitTimeout = prevTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ТранскриптПовреждён_РезюмеЗапрещеноПредложеноНачатьЗаново()
+    {
+        const string csid = "dmg0123456789abcdef";
+        var session = await MkStuckTeamSessionAsync("turn-damaged", claudeSessionId: csid);
+        // Последняя строка оборвана посреди записи — как при kill в момент записи файла
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"mess");
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<SessionManager.TurnTranscriptDamagedException>()
+            .WithMessage("*повреждён*");
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
+            "повреждённый транскрипт — не повод реанимировать чат молча: человек решает");
+
+        // Человек подтвердил «начать заново»: якорь сброшен, чат вернулся в работу
+        var fresh = await _sut.RestartStuckTurnAsync(session.Id, startFresh: true);
+        fresh.Resumed.Should().BeFalse();
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().BeNull(
+            "ход начнётся заново — без --resume по повреждённому файлу");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЦелыйТранскрипт_РезюмеРазрешено()
+    {
+        const string csid = "ok0123456789abcdef";
+        var session = await MkStuckTeamSessionAsync("turn-intact", claudeSessionId: csid);
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n");
+
+        var result = await _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        result.Resumed.Should().BeTrue("файл цел — продолжаем с сохранённым контекстом");
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().Be(csid);
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЧатЖдётОтветаНаКарточку_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-waiting-card");
+        var entry = GetEntry(session.Id);
+        entry.GetType().GetField("PendingInteraction")!.SetValue(entry,
+            new PermissionRequestMessage("req-1", "Bash", new { command = "dotnet build" }));
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ждёт вашего ответа*",
+                "ожидающая карточка — не зависание: ответ лежит в ленте чата");
+    }
+
+    // «В чат снова можно писать» (доставка отложенной очереди и приём новых сообщений
+    // после рестарта) проверяет TeamWaveRestartApiTests на фейк-фабрике адаптеров —
+    // юнит-фикстура здесь настоящая LlmSessionAdapterFactory, и реальная отправка в ней
+    // не гоняется (см. MakeRunningStabAsync в TeamWaveServiceTests).
 }

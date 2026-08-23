@@ -525,6 +525,22 @@ public class TeamWaveService
     {
         var (session, team, plan) = await ResolveContextAsync(task);
         if (session is null || team is null || plan is null) return;
+        var decision = await DecideReissueAsync(session, task);
+        if (decision is not { Allowed: true, Subtask: { } subtask }) return;
+        await LaunchReissueAsync(task, subtask);
+    }
+
+    // Решение «перевыдача или человек» с расходом бюджета — ОДНА точка для провала хода
+    // (OnTaskFailedAsync) и кнопки человека (RestartWaveTaskAsync/RestartWaveAsync, этап 3):
+    // потолок Attempts под-задачи и RetriesUsed/RunsUsed бюджета общие, отдельных счётчиков
+    // для человека не заводим. Отказ поднимает карточку эскалации — как при провале хода:
+    // для человека это один и тот же случай «работа по под-задаче не идёт», и кнопки те же.
+    internal sealed record ReissueDecision(bool Allowed, string? Refusal, TeamImplementSubtask? Subtask);
+
+    private async Task<ReissueDecision> DecideReissueAsync(Session session, TaskItem task)
+    {
+        if (session.TeamImplement is not { PlanCardId: { } planId } team)
+            return new ReissueDecision(false, "под-задача не принадлежит плану практики", null);
 
         // m2 (второй проход Глеба): без лока и перечитывания два параллельных провала волны
         // брали каждый свой (возможно устаревший) снимок плана и потом целиком перезаписывали
@@ -537,8 +553,10 @@ public class TeamWaveService
         bool retry;
         try
         {
-            plan = await _sessions.GetTeamPlanAsync(session.Id, plan.Id) ?? plan;
-            subtask = plan.Subtasks.First(s => s.TaskId == task.Id);
+            var plan = await _sessions.GetTeamPlanAsync(session.Id, planId)
+                       ?? throw new InvalidOperationException("План практики не найден");
+            subtask = plan.Subtasks.FirstOrDefault(s => s.TaskId == task.Id)
+                      ?? throw new InvalidOperationException("Под-задача не найдена в плане практики");
 
             // Решение «перевыдать или звать человека» и расход перевыдачи — одной транзакцией:
             // иначе два параллельных провала волны прошли бы проверку потолка вдвоём и оба
@@ -569,43 +587,248 @@ public class TeamWaveService
         }
         finally { gate.Release(); }
 
-        if (!retry)
-        {
-            await RaiseEscalationAsync(session, new TeamEscalation
-            {
-                Kind = TeamEscalationKind.TaskFailed,
-                Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.TaskFailed, task.Title),
-                Details = subtask.Attempts >= 2
-                    ? $"Под-задача «{task.Title}» провалилась дважды — перевыдача не помогла.\n\n"
-                      + TeamImplementPrompts.BudgetLine(team.Budget)
-                    : $"Под-задача «{task.Title}» провалилась, а перевыдать её нельзя: "
-                      + (team.Stopped ? "практика остановлена человеком." : team.Budget.ExceededReason() ?? "исчерпан потолок перевыдач."),
-                TaskId = task.Id,
-                Wave = subtask.Wave,
-                Actions = TeamEscalationActions.For(TeamEscalationKind.TaskFailed),
-            });
-            return;
-        }
+        if (retry) return new ReissueDecision(true, null, subtask);
 
-        var reason = string.IsNullOrWhiteSpace(task.ClaudeResult) ? "ход завершился ошибкой" : task.ClaudeResult;
+        var refusal = subtask.Attempts >= 2
+            ? "под-задача провалилась дважды — перевыдача не помогла"
+            : team.Stopped ? "практика остановлена человеком" : team.Budget.ExceededReason() ?? "исчерпан потолок перевыдач";
+        await RaiseEscalationAsync(session, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.TaskFailed,
+            Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.TaskFailed, task.Title),
+            Details = subtask.Attempts >= 2
+                ? $"Под-задача «{task.Title}» провалилась дважды — перевыдача не помогла.\n\n"
+                  + TeamImplementPrompts.BudgetLine(team.Budget)
+                : $"Под-задача «{task.Title}» провалилась, а перевыдать её нельзя: "
+                  + (team.Stopped ? "практика остановлена человеком." : team.Budget.ExceededReason() ?? "исчерпан потолок перевыдач."),
+            TaskId = task.Id,
+            Wave = subtask.Wave,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.TaskFailed),
+        });
+        return new ReissueDecision(false, refusal, subtask);
+    }
+
+    // Запуск перевыдачи: причина прошлого запуска дописывается в описание, исполнитель
+    // стартует заново. humanNote — пояснение вместо причины провала, когда человек
+    // перезапускает ЗАВИСШУЮ задачу (провала хода у неё не было). Ошибка запуска
+    // возвращается текстом: фоновый хук её только логирует, а человеку она нужна видимой.
+    private async Task<(bool Ok, string? Error)> LaunchReissueAsync(
+        TaskItem task, TeamImplementSubtask subtask, string? humanNote = null)
+    {
+        var reason = humanNote ?? (string.IsNullOrWhiteSpace(task.ClaudeResult)
+            ? "ход завершился ошибкой" : task.ClaudeResult);
         var updated = _tasks.Update(task.Id, new UpdateTaskRequest(
             Description: task.Description + "\n\n## Повторная попытка\n" +
                 $"Прошлый запуск не довёл задачу до конца ({reason}). Разберись, что пошло не так, " +
                 "и доведи работу до фактической проверки — «почти готово» не считается."));
-        if (updated is null) return;
+        if (updated is null) return (false, "задача удалена");
         await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
 
-        if (_exec is null) return;
+        if (_exec is null) return (true, null);
         try
         {
             await _exec.ExecuteAsync(updated, auto: true);
             _log.LogInformation("Под-задача {TaskId} «{Title}» перевыдана (попытка {Attempt})",
                 updated.Id, updated.Title, subtask.Attempts);
+            return (true, null);
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "Перевыдача под-задачи {TaskId} не удалась", updated.Id);
+            return (false, ex.Message);
         }
+    }
+
+    // --- КР-наблюдаемость, этап 3: перезапуск задачи/волны человеком ---
+
+    // Гейт повторных вызовов: перезапуск многошаговый (стоп исполнения → решение о
+    // перевыдаче → запуск), второй параллельный вызов плодил бы дубли. Ключи —
+    // "task:{taskId}" и "wave:{sessionId}".
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _restarts = new();
+
+    // Тестовый стоп-кран: если установлен, перезапуск паркуется сразу после захвата гейта —
+    // детерминированная проверка отказа повторного клика. В проде всегда null.
+    internal TaskCompletionSource? TestHoldRestart;
+
+    private async Task<bool> BeginRestartAsync(string key)
+    {
+        if (!_restarts.TryAdd(key, 0)) return false;
+        if (TestHoldRestart is { } hold) await hold.Task;
+        return true;
+    }
+
+    // Виден ли идущий перезапуск с этим ключом (тесты ждут true перед вторым вызовом)
+    internal bool RestartInFlight(string key) => _restarts.ContainsKey(key);
+
+    private void EndRestart(string key) => _restarts.TryRemove(key, out _);
+
+    // Тишина задачи: время с последней активности — обновления задачи либо хода её чата
+    // (живой прогон сюда не попадает: пока он идёт, гейт перезапуска отказывает раньше).
+    private TimeSpan TaskQuiet(TaskItem task)
+    {
+        var last = task.UpdatedAt;
+        if (task.LinkedSessionId is { } sid && _sessions.GetById(sid) is { } s && s.UpdatedAt > last)
+            last = s.UpdatedAt;
+        return DateTime.UtcNow - last;
+    }
+
+    // Занят ли чат-исполнитель задачи (статус хода/карточки; «занят» шире «живого прогона»:
+    // зависший Working без процесса тоже занят — и его надо реанимировать перед перевыдачей)
+    private bool IsExecutorBusy(TaskItem task) =>
+        task.LinkedSessionId is { } sid
+        && _sessions.GetById(sid) is { Status: SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting };
+
+    // Дождаться, пока чат-исполнитель перестанет числиться занятым после Interrupt:
+    // статус убирается асинхронно (реанимация зависшего / финализация убитого прогона),
+    // а перевыдача сразу после стопа упиралась бы в гейт «по задаче уже работает сессия».
+    // Не дождались — не страшно: ExecuteAsync честно откажет своим текстом, он уйдёт человеку.
+    private static async Task WaitExecutorIdleAsync(Func<bool> busy, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (busy())
+        {
+            if (DateTime.UtcNow >= deadline) return;
+            await Task.Delay(TimeSpan.FromMilliseconds(200));
+        }
+    }
+
+    // Перезапуск одной под-задачи — строка задачи в поповере (этап 3). Тот же путь перевыдачи,
+    // что у провала хода. Гейт: задача завершена → отказ; живое исполнение с недавней
+    // активностью → отказ с объяснением; провалена, не стартовала или молчит дольше
+    // StalledMinutes → перевыдача (зависшее исполнение перед этим останавливаем).
+    public sealed record TaskRestartResult(string Outcome, string Message);
+
+    public async Task<TaskRestartResult> RestartWaveTaskAsync(Session session, string taskId)
+    {
+        if (session.TeamImplement is null)
+            throw new InvalidOperationException("Режим «Командная реализация» выключен");
+        var task = _tasks.GetById(taskId)
+                   ?? throw new InvalidOperationException("Задача не найдена");
+        if (task.SourceSessionId != session.Id)
+            throw new InvalidOperationException("Задача не относится к этой практике");
+        if (task.Status == TaskItemStatus.Done)
+            throw new InvalidOperationException("Задача уже завершена — перезапуск не нужен");
+        if (!await BeginRestartAsync("task:" + taskId))
+            throw new InvalidOperationException("Задача уже перезапускается — дождитесь результата");
+        try
+        {
+            // Живой прогон CLI (или ход, вот-вот стартующий) с недавней активностью — это
+            // работа, а не зависание: тот же порог тишины, что у пульса волны
+            if (task.LinkedSessionId is { } sid && _sessions.HasLiveTurnProcess(sid))
+            {
+                var quiet = TaskQuiet(task);
+                if (quiet < _stalledThreshold)
+                    throw new InvalidOperationException(
+                        $"Задачу выполняет исполнитель — {(int)quiet.TotalMinutes} мин назад была активность. " +
+                        "Дождитесь результата или остановите его чат кнопкой «Стоп»");
+            }
+
+            // Исполнение, числящееся занятым, прибираем: зависший статус реанимируется,
+            // живой зависший прогон убивается — иначе перевыдача упрётся в гейт задачи
+            if (IsExecutorBusy(task) && task.LinkedSessionId is { } linkedId)
+            {
+                _sessions.Interrupt(linkedId);
+                await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
+            }
+
+            var decision = await DecideReissueAsync(session, task);
+            if (decision is not { Allowed: true, Subtask: { } subtask })
+                return new TaskRestartResult("escalated",
+                    $"Перевыдача не разрешена: {decision.Refusal}. Карточка с решением — в ленте штаба");
+            var launch = await LaunchReissueAsync(task, subtask,
+                humanNote: task.ClaudeResult == "error"
+                    ? null : "исполнение не подавало признаков жизни и было остановлено");
+            return launch.Ok
+                ? new TaskRestartResult("reissued",
+                    $"Задача перевыдана (попытка {subtask.Attempts}) — исполнитель стартует заново")
+                : new TaskRestartResult("failed", $"Перевыдача не запустилась: {launch.Error}");
+        }
+        finally { EndRestart("task:" + taskId); }
+    }
+
+    // Перезапуск волны при зависании (этап 3): пере-раздача НЕсделанного — под-задачи в Done
+    // не трогаем ни при каких условиях. Живые исполнения не перезаписываем молча: предупреждаем
+    // списком и ждём подтверждения (confirm). Решение и расход — тем же путём, что перевыдача
+    // после провала: потолок Attempts и бюджета общий.
+    public sealed record WaveRestartResult(
+        bool RequiresConfirm, IReadOnlyList<string> LiveTasks,
+        int Reissued, int Escalated, int Failed, string Message);
+
+    public async Task<WaveRestartResult> RestartWaveAsync(Session session, bool confirm)
+    {
+        if (session.TeamImplement is not { WaveNumber: > 0, PlanCardId: { } planId } team)
+            throw new InvalidOperationException("Волна не идёт — перезапускать нечего");
+        // Снапшот-гейт как у поповера: стадия обязана быть Wave/Checking, иначе кнопки нет
+        if (BuildWaveSnapshot(session) is not { } snap)
+            throw new InvalidOperationException("Волна не идёт — перезапускать нечего");
+        if (!await BeginRestartAsync("wave:" + session.Id))
+            throw new InvalidOperationException("Волна уже перезапускается — дождитесь результата");
+        try
+        {
+            var plan = await _sessions.GetTeamPlanAsync(session.Id, planId)
+                       ?? throw new InvalidOperationException("План практики не найден");
+
+            // Несделанное текущей волны: розданные под-задачи не в Done
+            var undone = plan.Subtasks
+                .Where(s => s.Wave == team.WaveNumber && s.TaskId is not null && !IsDone(s.TaskId!))
+                .ToList();
+            if (undone.Count == 0)
+                return new WaveRestartResult(false, [], 0, 0, 0,
+                    "Незакрытых задач в волне нет — перезапускать нечего");
+
+            // Живые исполнения: чат-исполнитель числится занятым. Перезапуск остановит их —
+            // предупреждаем и ждём подтверждения. Живая на вид волна (пульс alive/quiet)
+            // без подтверждения тоже не перезапускается: состояние могло измениться после
+            // открытия поповера
+            var live = undone
+                .Where(s => _tasks.GetById(s.TaskId!) is { } t && IsExecutorBusy(t))
+                .Select(s => s.Title).ToList();
+            if (!confirm && (live.Count > 0 || snap.Liveness is WaveLiveness.Alive or WaveLiveness.Quiet))
+            {
+                var who = live.Count > 0
+                    ? "Ещё работают исполнения: " + string.Join(", ", live.Select(t => $"«{t}»")) + ". "
+                    : "Волна выглядит живой — возможно, работа идёт. ";
+                return new WaveRestartResult(true, live, 0, 0, 0,
+                    who + "Перезапуск остановит их и выдаст незакрытые задачи заново. Закрытые задачи не пострадают");
+            }
+
+            // Подтверждено (или зависло без живых): занятые исполнения прибираем, затем
+            // перевыдаём каждую незакрытую под-задачу
+            foreach (var s in undone)
+            {
+                if (_tasks.GetById(s.TaskId!) is not { } t || !IsExecutorBusy(t)) continue;
+                _sessions.Interrupt(t.LinkedSessionId!);
+                await WaitExecutorIdleAsync(() => IsExecutorBusy(_tasks.GetById(t.Id)!), TimeSpan.FromSeconds(10));
+            }
+
+            var reissued = 0;
+            var escalated = 0;
+            var failed = 0;
+            foreach (var s in undone)
+            {
+                if (_tasks.GetById(s.TaskId!) is not { } task) continue;
+                var decision = await DecideReissueAsync(session, task);
+                if (decision is not { Allowed: true, Subtask: { } subtask }) { escalated++; continue; }
+                var launch = await LaunchReissueAsync(task, subtask,
+                    humanNote: task.ClaudeResult == "error"
+                        ? null : "исполнение не подавало признаков жизни и было остановлено");
+                if (launch.Ok) reissued++; else failed++;
+            }
+
+            // Перезапуск — движение волны: сторож зависаний отсчитывает срок заново
+            _sessions.WithTeamState(session.Id, t =>
+            {
+                if (t.WaveStartedAt is not null) t.WaveActivityAt = DateTime.UtcNow;
+                return true;
+            });
+
+            var parts = new List<string> { $"перевыдано задач: {reissued}" };
+            if (escalated > 0) parts.Add($"перевыдача не разрешена: {escalated} (карточки — в ленте штаба)");
+            if (failed > 0) parts.Add($"не запустилось: {failed}");
+            return new WaveRestartResult(false, [], reissued, escalated, failed,
+                "Волна перезапущена — " + string.Join(", ", parts) + ". Закрытые задачи не тронуты");
+        }
+        finally { EndRestart("wave:" + session.Id); }
     }
 
     // Сторож зависших волн (TeamWaveWatchdog, тик раз в минуту): волна молчит дольше

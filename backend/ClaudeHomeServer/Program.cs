@@ -172,6 +172,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>()
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallService>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
+// Автовыгрузка паспортов в локальную ветку ccs/dossiers/v1 после захвата — singleton +
+// hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>();
+AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.

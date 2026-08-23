@@ -78,6 +78,13 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     public bool Available => _knowledge?.IsConfigured == true;
     public int MaxEntries => _maxEntries;
 
+    // Изменился состав СОБСТВЕННЫХ паспортов: новый захват (Add) или переякорение при
+    // squash (Reanchor). Подписана автовыгрузка ветки (DossierAutoExporter). Импорт
+    // (AddImportedRange) событие НЕ поднимает: привнесённые записи пришли из ветки и
+    // состава выгрузки захватов не меняют. Обработчики обязаны быть быстрыми — событие
+    // синхронное, планирование у подписчика своё.
+    public event Action<string, string>? OnOwnDossierChanged;
+
     public IReadOnlyList<ChangeDossier> List(string ownerId, string projectId) => Snapshot(ownerId, projectId);
 
     // Полнотекстовый фильтр по якорям — используется REST-эндпоинтом; независим от Dify.
@@ -128,6 +135,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
             WarnIfApproachingMigration(dossier.OwnerId, dossier.ProjectId, list);
         }
         QueueSync(dossier.OwnerId, dossier.ProjectId);
+        OnOwnDossierChanged?.Invoke(dossier.OwnerId, dossier.ProjectId);
         return dossier;
     }
 
@@ -203,6 +211,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     {
         lock (_saveLock) Save(dossier.OwnerId, dossier.ProjectId);
         QueueSync(dossier.OwnerId, dossier.ProjectId);
+        OnOwnDossierChanged?.Invoke(dossier.OwnerId, dossier.ProjectId);
     }
 
     public async Task DeleteProjectDossiersAsync(string ownerId, string projectId)

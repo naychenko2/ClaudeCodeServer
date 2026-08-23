@@ -12,7 +12,7 @@ import {
   TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT,
   teamPulseTone, teamPulseActivityLabel, teamPulseMeaning, teamPulseBadgeText,
   teamPulseBadgeShort, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel,
-  teamWaveTasksSorted, teamWaveSnapshotActiveCount, TEAM_IMPLEMENT_SHORT_NAME,
+  teamWaveTasksSorted, TEAM_IMPLEMENT_SHORT_NAME,
 } from '../teamImplement';
 import { applyServerMessage, initialChatState, type ChatState } from '../chatReducer';
 
@@ -539,23 +539,6 @@ describe('пульс волны: список задач в поповере', (
     const queued: TeamWaveTask = { id: 't4', title: 'queue', executorPersonaId: null, status: 'todo', updatedAt: '2026-08-23T12:00:00Z', startedAt: null };
     const sorted = teamWaveTasksSorted([older, queued, working, newer]);
     expect(sorted.map(t => t.id)).toEqual(['t3', 't4', 't2', 't1']);
-  });
-
-  // Подсчёт «2/5» в строке бейджа должен сходиться со списком: счётчик с сервера
-  // иногда занижен/завышен из-за гонки обновления статусов
-  it('teamWaveSnapshotActiveCount считает inProgress в списке', () => {
-    const snap = {
-      stage: 'wave' as const, waveNumber: 1, plannedWaves: 1,
-      tasksActive: 2, tasksTotal: 3,    // сервер прислал «2/3»
-      lastActivityAt: '', quietSeconds: 0, liveness: 'alive' as TeamWaveLiveness,
-      thresholds: { quietMinutes: 15, stalledMinutes: 30 },
-      tasks: [
-        { id: 'a', title: '', executorPersonaId: null, status: 'inProgress' as const, updatedAt: '', startedAt: null },
-        { id: 'b', title: '', executorPersonaId: null, status: 'inProgress' as const, updatedAt: '', startedAt: null },
-        { id: 'c', title: '', executorPersonaId: null, status: 'todo' as const, updatedAt: '', startedAt: null },
-      ],
-    };
-    expect(teamWaveSnapshotActiveCount(snap)).toBe(2); // совпало с сервером
   });
 });
 

@@ -14,7 +14,6 @@ import {
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
   teamPulseTone, teamPulseBadgeText, teamPulseBadgeShort,
   teamPulseMeaning, teamPulseStage, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
-  TEAM_IMPLEMENT_SHORT_NAME,
 } from '../../lib/teamImplement';
 import { teamMechanic } from './teamMechanics';
 import type { Mode } from '../../lib/modes';
@@ -472,7 +471,3 @@ function DisableRow({ isMobile, onClick }: { isMobile?: boolean; onClick: () => 
     />
   );
 }
-
-// Реэкспорт для родителя (если захочет дотянуть константу). Не экспортируем из
-// lib/teamImplement.ts через barrel — там она нужна только самой lib
-export const TEAM_IMPLEMENT_PILL = TEAM_IMPLEMENT_SHORT_NAME;

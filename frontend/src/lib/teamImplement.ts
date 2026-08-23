@@ -2,7 +2,7 @@
 // бейджа/маркера. Тексты — дословно из docs/architecture/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { ChatItem, SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan, TeamWaveLiveness, TeamWavePulse, TeamWaveSnapshot, TeamWaveTask, TeamWaveTaskStatus } from '../types';
+import type { ChatItem, SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan, TeamWaveLiveness, TeamWavePulse, TeamWaveTask, TeamWaveTaskStatus } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -158,13 +158,6 @@ export function teamWaveTaskActive(task: TeamWaveTask): boolean {
 // и в сортировке списка
 export function countTeamWaveActive(tasks: TeamWaveTask[]): number {
   return tasks.reduce((n, t) => n + (t.status === 'inProgress' ? 1 : 0), 0);
-}
-
-// Полный снимок с подсчётом активных: пульс несёт tasksActive с сервера, REST-снапшот
-// возвращает полный список — на рендере используем подсчёт из списка, чтобы строка
-// бейджа и список задач гарантированно сошлись (даже если бэк где-то занизил счётчик)
-export function teamWaveSnapshotActiveCount(snap: TeamWaveSnapshot): number {
-  return countTeamWaveActive(snap.tasks);
 }
 
 // Сортировка задач для поповера: сначала в работе, потом в очереди, потом завершённые

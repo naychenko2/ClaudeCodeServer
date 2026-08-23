@@ -539,6 +539,10 @@ public class SessionManager : IDisposable
         // Active→Finished. <=0 — выключить sweep (только для тестов/отладки).
         _stuckActiveGraceSeconds = int.TryParse(config["Session:StuckActiveGraceSeconds"], out var grace)
             && grace >= 0 ? grace : DefaultStuckActiveGraceSeconds;
+        // Порог свежести хода для гейта перезапуска (этап 3): тот же ключ/дефолт, что у
+        // пульса волны — TeamWaveService._quietThreshold
+        _freshTurnThreshold = TimeSpan.FromMinutes(
+            int.TryParse(config["TeamImplement:QuietMinutes"], out var quietMin) && quietMin > 0 ? quietMin : 15);
         _notesKb = notesKb;
         _flags = flags;
         _personas = personas;
@@ -4866,6 +4870,189 @@ public class SessionManager : IDisposable
         await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "stuck_reset",
             "Зависший ход сброшен — чат снова доступен.");
     }
+
+    // === КР-наблюдаемость, этап 3: перезапуск хода штаба без потери работы ===
+
+    // Повреждённый транскрипт: resume запрещён, человеку предлагаем начать ход заново.
+    // Отдельный тип, а не текст в InvalidOperationException: контроллер различает отказ
+    // гейта (просто текст) и этот случай (code=transcript_damaged + кнопка «начать заново»).
+    public sealed class TurnTranscriptDamagedException(string message) : InvalidOperationException(message);
+
+    // Результат перезапуска хода. Resumed=true — следующий ход продолжит разговор по
+    // транскрипту (--resume); false — ход начнётся заново без старого контекста (startFresh).
+    public sealed record StuckTurnRestartResult(bool Resumed, string Message);
+
+    // Ожидание смерти процесса после kill: Kill асинхронен, и «вызвали kill» ≠ «процесс
+    // мёртв». internal — тесты сужают до сотен миллисекунд; прод живёт 20 с (Kill плюс
+    // WaitForExitAsync внутри финализации адаптера занимает до ~10 с).
+    internal TimeSpan KillWaitTimeout { get; set; } = TimeSpan.FromSeconds(20);
+
+    // Порог «живой ход начался недавно — убивать рано» (защита честной долгой работы от
+    // случайного перезапуска). Тот же ключ конфига и дефолт, что у пульса волны
+    // (TeamWaveService._quietThreshold): гейт и индикация обязаны соглашаться по порогу.
+    private readonly TimeSpan _freshTurnThreshold;
+
+    // Гейт повторного вызова: перезапуск — это kill → уборка адаптера → revive, второй
+    // параллельный вызов того же чата (двойной клик) плодил бы процессы и карточки.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _turnRestarts = new();
+
+    // Перезапуск зависшего хода (главный сценарий этапа 3): чат занят, процесс молчит,
+    // написать в него нельзя. Строго по шагам: проверка живости → kill → дождаться смерти →
+    // валидация транскрипта → revive → новый ход с --resume (разбор отложенной очереди:
+    // EnsureProcessAsync поднимёт процесс с --resume по ClaudeSessionId). Рецепт уборки —
+    // тот же, что ReviveStuckSession (карточка → адаптер → статус), но отдельной сборкой:
+    // та шлёт СВОЮ карточку «зависший ход сброшен» fire-and-forget, а здесь статус обязан
+    // встать в Active до разбора очереди и с карточкой перезапуска. Стадия, бюджет и версия
+    // плана живут на Session.TeamImplement и этим путём не трогаются — режим переживает.
+    // Ходов модели сам путь не запускает и квоту пробуждений не тратит: до модели доехают
+    // только сообщения, уже стоявшие в очереди до зависания.
+    public async Task<StuckTurnRestartResult> RestartStuckTurnAsync(string sessionId, bool startFresh)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            throw new InvalidOperationException("Сессия не найдена");
+        // Гейт режима: кнопка и тексты — про штаб «Командной реализации», семантика
+        // перезапуска (kill → resume хода штаба) работает только там. Обобщение на
+        // все чаты — отдельное решение, не побочный эффект.
+        if (entry.Info.TeamImplement is null)
+            throw new InvalidOperationException(
+                "Перезапуск хода доступен только в чате штаба «Командной реализации»");
+        if (!_turnRestarts.TryAdd(sessionId, 0))
+            throw new InvalidOperationException("Ход уже перезапускается — дождитесь результата");
+        try
+        {
+            // 1. Живость: чат обязан быть занят — свободному чату перезапуск не нужен.
+            // Спасательная ветка (major ревью): первый вызов успел убить процесс и
+            // вернуть 409 transcript_damaged, финализация убитого прогона перевела
+            // чат в Active, а отложенная очередь умерла на --resume по тому же битому
+            // файлу. Чат свободен, но resume-якорь отравлен — без пропуска здесь
+            // повторный startFresh вечно упирался бы в «Чат не занят», и у чата не
+            // было бы штатного выхода из повреждённого транскрипта.
+            if (entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting))
+            {
+                var rescue = startFresh
+                    && FindResumeTranscript(entry) is { } damaged
+                    && !Llm.Claude.TranscriptProbe.IsTailIntact(damaged);
+                if (!rescue)
+                    throw new InvalidOperationException(
+                        "Чат не занят: ход не идёт. Просто напишите сообщение — оно продолжит разговор");
+            }
+            // Штаб ждёт ответа человека на карточку (разрешение/вопрос/план) — это не
+            // зависание: ответ лежит в ленте чата, прерывать ожидание рестартом нельзя
+            if (entry.PendingInteraction is not null)
+                throw new InvalidOperationException(
+                    "Штаб ждёт вашего ответа на карточку в чате — перезапуск не нужен, ответьте на неё");
+            // Живой прогон, начавшийся недавно, — честная работа, а не зависание (тот же
+            // порог тишины, что у пульса волны). Долгий немой ход прервать можно — с
+            // сохранением контекста через resume.
+            var quiet = DateTime.UtcNow - entry.Info.UpdatedAt;
+            if (HasLiveTurnProcess(sessionId) && quiet < _freshTurnThreshold)
+                throw new InvalidOperationException(
+                    $"Штаб работает — {(int)Math.Max(0, quiet.TotalMinutes)} мин назад была активность. " +
+                    "Дождитесь результата или остановите ход кнопкой «Стоп»");
+
+            // 2-3. Kill и ОЖИДАНИЕ смерти: HasLiveTurn гаснет в финализации прогона — уже
+            // после WaitForExit самого процесса, поэтому поллинг по нему и есть ожидание
+            // настоящей смерти, а не факта вызова kill.
+            if (entry.Process is { HasLiveTurn: true })
+            {
+                entry.Process.Interrupt();
+                var deadline = DateTime.UtcNow + KillWaitTimeout;
+                while (entry.Process is { HasLiveTurn: true })
+                {
+                    if (DateTime.UtcNow >= deadline)
+                        throw new InvalidOperationException(
+                            "Не удалось остановить зависший процесс — попробуйте ещё раз через минуту");
+                    await Task.Delay(TimeSpan.FromMilliseconds(250));
+                }
+            }
+
+            // 4. Валидация транскрипта: повреждённый (оборванная последняя строка) через
+            // --resume не продолжится. Файл не нашёлся — проверку пропускаем: профиль
+            // подписки пула может не входить в AllowedRoots, и ложный «повреждён» на
+            // здоровом разговоре хуже пропущенной проверки (CLI сам скажет при resume).
+            // startFresh идёт мимо — транскрипт всё равно выбрасываем.
+            if (!startFresh && FindResumeTranscript(entry) is { } transcript
+                && !Llm.Claude.TranscriptProbe.IsTailIntact(transcript))
+                throw new TurnTranscriptDamagedException(
+                    "Файл разговора повреждён — продолжить с прежним контекстом нельзя. " +
+                    "Можно начать ход заново: старый контекст будет потерян, чат снова заработает");
+
+            // 5. Revive: убираем ожидающую карточку и отравленный адаптер (у него мог
+            // остаться захваченным _turnLock зависшей финализацией — DisposeAsync с
+            // _cts.Cancel разблокирует ожидателей), статус в Active.
+            entry.PendingInteraction = null;
+            if (entry.Process is { } dead)
+            {
+                entry.Process = null;
+                FireAndForget(dead.DisposeAsync().AsTask(),
+                    $"уборка адаптера перезапущенного хода ({sessionId})");
+            }
+            // M5 — тот же сброс буфера маркеров, что у Interrupt: убитый ход result не
+            // пришлёт, буфер не потребляется, и маркер мёртвого хода (<escalate:*>,
+            // <team:work>) доклеился бы к следующему и применился задним числом.
+            lock (entry.TeamTurnLock)
+            {
+                entry.TeamTurnText.Clear();
+                entry.TeamTurnShownLength = 0;
+                entry.TurnSawAngleBracket = false;
+                entry.TeamTurnAsked = false;
+            }
+            entry.SkipNextTeamTurnEnd = false;
+            // «Начать заново»: снимаем resume-якорь — следующий адаптер стартует без
+            // --resume, CLI заведёт новую сессию и пришлёт новый id (init ниже допишет)
+            if (startFresh && entry.Info.ClaudeSessionId is not null)
+            {
+                entry.Info.ClaudeSessionId = null;
+                SaveSessions();
+            }
+            await ApplyStatusAsync(sessionId, entry, SessionStatus.Active);
+            // Честный текст (minor ревью): продолжение разговора обещаем, только если
+            // в очереди правда что-то стоит или активный цикл продолжит себя сам —
+            // при пустой очереди нового хода не будет, и «разговор продолжится
+            // с того же места» обещало бы его напрасно.
+            bool willContinue;
+            lock (entry.PendingLock) willContinue = !entry.QueueFrozen && entry.Pending.Count > 0;
+            willContinue |= entry.Info.WorkLoop is not null;
+            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "team_restart",
+                startFresh
+                    ? "Ход перезапущен вручную с чистого листа: прежний контекст утерян — напишите, что делать дальше"
+                    : willContinue
+                        ? "Ход перезапущен вручную — разговор продолжится с сохранённым контекстом"
+                        : "Ход перезапущен вручную — чат снова доступен, контекст сохранён");
+
+            // Новый ход с --resume: сообщения, отложенные зависшим ходом, уходят обычной
+            // доставкой (DrainInFlight гасит параллельные разборы). Замороженная «Стоп»
+            // очередь не разбирается — её держал человек, не мы.
+            await DrainNextPendingAsync(sessionId);
+
+            return new StuckTurnRestartResult(
+                Resumed: !startFresh,
+                Message: startFresh
+                    ? willContinue
+                        ? "Ход начнётся заново — контекст сброшен, чат снова доступен"
+                        : "Контекст сброшен, чат снова доступен — напишите сообщение, чтобы начать новый ход"
+                    : willContinue
+                        ? "Ход перезапущен: чат снова доступен, разговор продолжится с того же места"
+                        : "Ход перезапущен: чат снова доступен — напишите сообщение, чтобы продолжить разговор");
+        }
+        finally { _turnRestarts.TryRemove(sessionId, out _); }
+    }
+
+    // Рабочая папка хода для поиска транскрипта: дерево чата, иначе корень проекта.
+    // Точность тут не критична — TranscriptProbe при промахе по конвенции сканирует
+    // все проекты зарегистрированных корней, cwd лишь сужает первый поиск.
+    private string ResolveTurnCwd(Session info) =>
+        info.WorktreePath
+        ?? (info.ProjectId is { } pid ? _projects.GetById(pid)?.RootPath : null)
+        ?? "";
+
+    // Транскрипт resume-якоря чата: null — якоря нет или файл не найден (проверку
+    // целостности тогда пропускаем). Обе точки RestartStuckTurnAsync — гейт
+    // спасательной ветки и валидация перед resume — ищут файл одним путём.
+    private string? FindResumeTranscript(SessionEntry entry) =>
+        entry.Info.ClaudeSessionId is { } csid
+            ? Llm.Claude.TranscriptProbe.FindMainTranscript(ResolveTurnCwd(entry.Info), csid)
+            : null;
 
     // Дефолт лимитов цикла «до готово». Невалидное значение конфига (не число или ≤ 0)
     // сваливается в дефолт, а не молча отрубает цикл: MaxTaskExecutions=0 иначе даёт

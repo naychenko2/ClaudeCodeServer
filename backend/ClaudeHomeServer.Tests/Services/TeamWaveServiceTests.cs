@@ -2213,6 +2213,329 @@ public class TeamWaveServiceTests : IDisposable
         Team(session.Id).Stage.Should().Be(TeamImplementStage.Checking);
     }
 
+    // --- КР-наблюдаемость, этап 3: перезапуск задачи/волны человеком ---
+
+    // Штаб с опубликованным планом из ДВУХ под-задач одной волны (обе розданы) и заглушенной
+    // тишиной: всё молчит дольше StalledMinutes (45 мин при пороге 30), штаб свободен —
+    // форма зависшей волны, ради которой в поповере есть кнопка перезапуска.
+    private async Task<(Session Session, TaskItem A, TaskItem B)> MakeStalledWaveAsync(string name)
+    {
+        var (session, backend, frontend) = await MakeStabAsync(name);
+        await _sessions.SetTeamImplementAutoAsync(session.Id, true, UserId);
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт","subtasks":[
+              {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
+               "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
+               "files":["backend/Controllers/TasksController.cs"],"wave":1,"doneCriteria":"отдаёт CSV"},
+              {"title":"Кнопка «Экспорт»","goal":"Кнопка в тулбаре",
+               "executorPersonaId":"{{frontend.Id}}","executorRationale":"UI — её зона",
+               "files":["frontend/src/components/Toolbar.tsx"],"wave":1,"doneCriteria":"файл скачивается"}]}
+            """;
+        var (plan, reason) = await _sessions.CreateTeamPlanAsync(session.Id, "Экспорт", UserId);
+        reason.Should().BeNull();
+        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan!,
+            TeamWaveTrigger.UserCommand);
+        created.Should().HaveCount(2, "обе под-задачи одной волны розданы разом");
+
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        foreach (var t in created) _tasks.GetById(t.Id)!.UpdatedAt = aged;
+        FreeStab(session.Id);
+        return (session, created[0], created[1]);
+    }
+
+    // Чат-исполнитель для задачи волны: linked-сессия с отметкой запуска. liveTurn=true —
+    // ещё и живой прогон (приём MarkLiveTurn): HasLiveTurnProcess — тот же предикат, которым
+    // пульс волны считает идущий ход активностью. busyStatus — статус Starting/Working/
+    // Waiting (занятое исполнение, как его видит перевыдача).
+    private async Task<Session> AttachExecutorAsync(TaskItem task, Session stab,
+        bool liveTurn = false, bool busyStatus = false)
+    {
+        var child = await _sessions.CreateAsync(stab.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        _tasks.MarkClaudeStarted(task.Id, child.Id, DateTime.UtcNow);
+        if (liveTurn) MarkLiveTurn(child.Id);
+        if (busyStatus) _sessions.GetById(child.Id)!.Status = SessionStatus.Working;
+        return _sessions.GetById(child.Id)!;
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_Проваленная_ПеревыдачаТемЖеПутём()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-failed");
+        var failed = _tasks.MarkClaudeResult(a.Id, "error")!;
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        result.Outcome.Should().Be("reissued");
+        var team = Team(session.Id);
+        team.Budget.RetriesUsed.Should().Be(1, "кнопка человека считает тот же потолок перевыдач");
+        team.Budget.RunsUsed.Should().Be(3, "старт волны (2) плюс перевыдача (1)");
+        _tasks.GetById(a.Id)!.Description.Should().Contain("Повторная попытка",
+            "исполнителю уходит та же дописка причины, что при провале хода");
+        failed.ClaudeResult.Should().Be("error");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ЖивойИсполнительСНедавнейАктивностью_ОтказСОбъяснением()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-live");
+        await AttachExecutorAsync(a, session, liveTurn: true);
+        // Прогон жив, задача обновилась только что — это работа, а не зависание
+        _tasks.GetById(a.Id)!.UpdatedAt = DateTime.UtcNow;
+
+        var act = () => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*мин назад была активность*");
+        Team(session.Id).Budget.RetriesUsed.Should().Be(0, "отказ ничего не расходует");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ЖивойНоЗависшийПрогон_ТишинаДольшеПорога_Перевыдаёт()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-hung");
+        // Прогон формально жив, но вся активность задачи — 45 минут назад (гейт пускает)
+        var child = await AttachExecutorAsync(a, session, liveTurn: true);
+        _tasks.GetById(a.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
+        child.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        result.Outcome.Should().Be("reissued");
+        result.Message.Should().Contain("попытка 2", "повторная попытка той же под-задачи");
+        _tasks.GetById(a.Id)!.Description.Should().Contain("не подавало признаков жизни",
+            "зависшему исполнителю объясняем причину перезапуска, а не провала");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_Завершённая_Отказ()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-done");
+        _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var act = () => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*уже завершена*");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ПопыткиИсчерпаны_КарточкаВЛентуеСообщениеЧеловеку()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-cap");
+        var failed = _tasks.MarkClaudeResult(a.Id, "error")!;
+        await _sut.OnTaskFailedAsync(failed); // первая перевыдача — попытка 2, дальше потолок
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        result.Outcome.Should().Be("escalated", "вторая перевыдача той же под-задачи не даётся");
+        result.Message.Should().Contain("перевыдача не помогла");
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.Kind == TeamEscalationKind.TaskFailed);
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ПовторныйКликПокаИдёт_Отказ()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-twice");
+        _tasks.MarkClaudeResult(a.Id, "error");
+        var key = "task:" + a.Id;
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id));
+            // Детерминированно ждём, что первый вызов захватил гейт (не «маленький sleep»)
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight(key) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight(key).Should().BeTrue("первый вызов держит гейт перезапуска");
+
+            Func<Task> secondCall = () => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+            (await secondCall.Should().ThrowAsync<InvalidOperationException>())
+                .WithMessage("*уже перезапускается*");
+
+            _sut.TestHoldRestart.TrySetResult();
+            (await first).Outcome.Should().Be("reissued");
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
+    }
+
+    // Гонка ревью этапа 3: задача закрылась, пока вызов держал гейт перезапуска — окно
+    // между входной проверкой статуса и перевыдачей (остановка исполнителя ждёт до 10 с).
+    // Готовую задачу не трогаем: ни «Повторная попытка» в описании, ни расход бюджета
+    [Fact]
+    public async Task ПерезапускЗадачи_ЗакрыласьПокаИдётВызов_ОтказБезРасходаИДописки()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-race");
+        _tasks.MarkClaudeResult(a.Id, "error");
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id));
+            // Гейт перезапуска захвачен — входная проверка статуса уже пройдена
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight("task:" + a.Id) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight("task:" + a.Id).Should().BeTrue("вызов внутри окна гонки");
+
+            // Задача закрывается ровно между проверкой и перевыдачей
+            _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+            _sut.TestHoldRestart.TrySetResult();
+
+            var act = async () => await first;
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*уже завершена*");
+            Team(session.Id).Budget.RetriesUsed.Should().Be(0,
+                "перевыдача закрытой задачи бюджет не списывает");
+            _tasks.GetById(a.Id)!.Description.Should().NotContain("Повторная попытка",
+                "описание готовой задачи не трогаем");
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
+    }
+
+    // NRE ревью этапа 3: задачу удалили за 10-секундное окно ожидания останова —
+    // предикат занятости обязан отвечать «не занят», а не ронять перезапуск волны
+    [Fact]
+    public async Task ЗанятостьИсполнителя_ЗадачуУдалили_ЛожьВместоNRE()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("busy-deleted");
+        await AttachExecutorAsync(a, session, busyStatus: true);
+
+        _sut.ExecutorBusyById(a.Id).Should().BeTrue("занятый исполнитель виден");
+
+        _tasks.Delete(a.Id);
+        _sut.ExecutorBusyById(a.Id).Should().BeFalse(
+            "удалённая задача занятым исполнителем не считается");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЖиваяВолна_ТребуетПодтверждения()
+    {
+        var (session, _, _) = await MakeStalledWaveAsync("restart-wave-confirm");
+        // Оживим волну: задача только что обновилась, штаб работает — liveness alive
+        foreach (var t in _tasks.GetByProject(session.ProjectId!))
+            _tasks.GetById(t.Id)!.UpdatedAt = DateTime.UtcNow;
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false);
+
+        result.RequiresConfirm.Should().BeTrue("перезапуск живой волны — только с подтверждения");
+        result.Message.Should().Contain("выглядит живой");
+        Team(session.Id).Budget.RetriesUsed.Should().Be(0, "предупреждение ничего не расходует");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЖивыеИсполнения_ПредупреждаетСписком()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-live-tasks");
+        await AttachExecutorAsync(a, session, busyStatus: true);
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false);
+
+        result.RequiresConfirm.Should().BeTrue("раздавать поверх живого исполнения молча нельзя");
+        result.LiveTasks.Should().ContainSingle().Which.Should().Be(a.Title,
+            "человек видит, ЧТО именно живо");
+        _tasks.GetById(b.Id)!.Description.Should().NotContain("Повторная попытка",
+            "без подтверждения ничего не перевыдаётся");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_Подтверждён_ОстанавливаетЗанятоеИПеревыдаётНесделанное()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-go");
+        // Занятое исполнение без живого прогона (зависший статус): Interrupt реанимирует
+        // его в Active — мок-адаптер настоящего прогона в юнит-тестах не изображает
+        var child = await AttachExecutorAsync(a, session, busyStatus: true);
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+        result.RequiresConfirm.Should().BeFalse();
+        result.Reissued.Should().Be(2, "обе незакрытые под-задачи перевыданы");
+        _sessions.GetById(child.Id)!.Status.Should().NotBe(SessionStatus.Working,
+            "занятое исполнение остановлено — иначе два агента правили бы одни файлы");
+        Team(session.Id).Budget.RetriesUsed.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЗависшаяБезЖивых_ИдётБезПодтверждения()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-stalled");
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false);
+
+        result.RequiresConfirm.Should().BeFalse("тишина дольше порога — подтверждение не нужно");
+        result.Reissued.Should().Be(2, "обе незакрытые под-задачи перевыдаются");
+        _tasks.GetById(a.Id)!.Description.Should().Contain("Повторная попытка");
+        _tasks.GetById(b.Id)!.Description.Should().Contain("Повторная попытка");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЗакрытыеНеТрогаем()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-done");
+        _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+        result.Reissued.Should().Be(1, "перевыдаётся только незакрытое");
+        var done = _tasks.GetById(a.Id)!;
+        done.Status.Should().Be(TaskItemStatus.Done);
+        done.Description.Should().NotContain("Повторная попытка",
+            "принятая работа неприкосновенна — ни при каких условиях");
+        _tasks.GetById(b.Id)!.Description.Should().Contain("Повторная попытка");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ВсёЗакрыто_ПерезапускатьНечего()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-empty");
+        _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _tasks.Update(b.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+        result.RequiresConfirm.Should().BeFalse();
+        result.Reissued.Should().Be(0);
+        result.Message.Should().Contain("Незакрытых задач в волне нет");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ПовторныйВызовПокаИдёт_Отказ()
+    {
+        var (session, _, _) = await MakeStalledWaveAsync("restart-wave-twice");
+        var key = "wave:" + session.Id;
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight(key) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight(key).Should().BeTrue();
+
+            var act = () => _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*уже перезапускается*");
+
+            _sut.TestHoldRestart.TrySetResult();
+            (await first).Reissued.Should().Be(2);
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
+    }
+
     // Планировщик-заглушка: отдаёт заранее заданный JSON-план вместо вызова модели
     private sealed class StubPlanner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {

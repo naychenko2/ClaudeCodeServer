@@ -292,6 +292,79 @@ public class ChatsController(SessionManager sessions, FileService files,
         });
     }
 
+    // === КР-наблюдаемость, этап 3: перезапуск без потери работы ===
+
+    // Перезапуск одной под-задачи волны (кнопка в строке задачи поповера): тот же путь
+    // перевыдачи, что у провала хода координатора, — потолок перевыдач бюджета общий.
+    // 409 с человеческим текстом — гейт (живая задача, завершённая, повторный клик).
+    [HttpPost("{id}/team-wave/tasks/{taskId}/restart")]
+    public async Task<IActionResult> RestartWaveTask(string id, string taskId)
+    {
+        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        try
+        {
+            var result = await teamWaves.RestartWaveTaskAsync(session, taskId);
+            return Ok(new { outcome = result.Outcome, message = result.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    // Перезапуск волны (кнопка в поповере при liveness stalled/dead): пере-раздача
+    // незакрытого, Done не трогается. Живые исполнения — сначала предупреждение
+    // (requiresConfirm + liveTasks), раздача идёт повторным вызовом с confirm=true.
+    [HttpPost("{id}/team-wave/restart")]
+    public async Task<IActionResult> RestartWave(string id, [FromBody] TeamWaveRestartRequest? req)
+    {
+        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        try
+        {
+            var result = await teamWaves.RestartWaveAsync(session, req?.Confirm == true);
+            return Ok(new
+            {
+                requiresConfirm = result.RequiresConfirm,
+                liveTasks = result.LiveTasks,
+                reissued = result.Reissued,
+                escalated = result.Escalated,
+                failed = result.Failed,
+                message = result.Message,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    // Перезапуск зависшего хода штаба (главный сценарий): чат занят, процесс молчит,
+    // написать в него нельзя. Kill → ожидание смерти → валидация транскрипта → новый ход
+    // с --resume; отложенные сообщения уходят, режим и прогресс не теряются. Повреждённый
+    // транскрипт — 409 c code=transcript_damaged: фронт предлагает «начать ход заново»
+    // (повторный вызов с startFresh=true сбрасывает контекст и возвращает чат в работу).
+    [HttpPost("{id}/team-wave/restart-turn")]
+    public async Task<IActionResult> RestartTeamWaveTurn(string id, [FromBody] TeamTurnRestartRequest? req)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            var result = await sessions.RestartStuckTurnAsync(id, req?.StartFresh == true);
+            return Ok(new { outcome = result.Resumed ? "restarted" : "fresh", resumed = result.Resumed, message = result.Message });
+        }
+        catch (SessionManager.TurnTranscriptDamagedException ex)
+        {
+            return Conflict(new { error = ex.Message, code = "transcript_damaged" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    public sealed record TeamWaveRestartRequest(bool? Confirm);
+    public sealed record TeamTurnRestartRequest(bool? StartFresh);
+
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // Force подтверждает потерю несохранённых правок дерева. Как loop, работает и для

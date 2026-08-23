@@ -728,13 +728,18 @@ public class TeamWaveService
 
     // Составить снапшот текущей волны. null — пульса нет: режим выключен либо стадия
     // не в работе (Wave/Checking) — интервью и «ждёт решения» человек видит карточками,
-    // пульс там добавил бы шум.
-    internal WaveSnapshot? BuildWaveSnapshot(Session session)
+    // пульс там добавил бы шум. Дочерние чаты-исполнители собирает вызывающий: тику
+    // дешевле один проход по всем чатам на весь тик (SendWavePulsesAsync), одиночному
+    // вызову (REST-снапшот) дешевле достать их самому.
+    internal WaveSnapshot? BuildWaveSnapshot(Session session) =>
+        BuildWaveSnapshot(session, _sessions.GetAll().Where(s => s.ParentSessionId == session.Id));
+
+    internal WaveSnapshot? BuildWaveSnapshot(Session session, IEnumerable<Session> childSessions)
     {
         if (session.TeamImplement is not { } team) return null;
         if (team.Stage is not (TeamImplementStage.Wave or TeamImplementStage.Checking)) return null;
 
-        var children = _sessions.GetAll().Where(s => s.ParentSessionId == session.Id).ToList();
+        var children = childSessions as IReadOnlyList<Session> ?? childSessions.ToList();
         var waveTasks = WaveTasks(session, team.WaveNumber);
         var now = DateTime.UtcNow;
         // Последняя активность волны: старт/закрытие/перевыдача её задач (их UpdatedAt —
@@ -810,11 +815,17 @@ public class TeamWaveService
     // стоит копейки.
     public async Task SendWavePulsesAsync()
     {
+        // Дети всех штабов — одним проходом на тик: собирать их внутри каждого снапшота
+        // значило бы полный GetAll() на каждый штаб (O(N×M), растёт с числом чатов).
+        // ParentSessionId вычисляемый, поэтому фильтруем по нему всех сразу.
+        var childrenByParent = _sessions.GetAll()
+            .Where(s => s.ParentSessionId is not null)
+            .ToLookup(s => s.ParentSessionId!);
         foreach (var session in _sessions.GetTeamImplementSessions())
         {
             try
             {
-                if (BuildWaveSnapshot(session) is not { } snap) continue;
+                if (BuildWaveSnapshot(session, childrenByParent[session.Id]) is not { } snap) continue;
                 var msg = new Protocol.TeamWavePulseMessage(
                     Stage: snap.Stage.ToWireToken(),
                     WaveNumber: snap.WaveNumber,

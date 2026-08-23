@@ -250,8 +250,10 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpGet("{id}/team-wave-snapshot")]
     public IActionResult GetTeamWaveSnapshot(string id)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        if (teamWaves.BuildWaveSnapshot(sessions.GetById(id)!) is not { } snap) return NotFound();
+        // Сессию берём из GetOwned одним lookup'ом: повторный GetById — двойная работа
+        // и NRE→500, если чат удалён между вызовами (ревью этапа 1).
+        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        if (teamWaves.BuildWaveSnapshot(session) is not { } snap) return NotFound();
         return Ok(new
         {
             sessionId = id,

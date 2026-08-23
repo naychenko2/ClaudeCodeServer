@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Dossiers;
@@ -242,6 +243,20 @@ public class DossierImporterTests : IDisposable
         // secretsEmpty: секрет уезжает в ветку как есть — импортёр обязан поймать его сам
         await WriteBranchAsync(p1, Owner, secretsEmpty: true, dirty);
 
+        // Tip-коммит от чужого автора с секретом в user.name: ImportedAuthor — внешний
+        // вход той же природы, что subject, и обязан проходить редакцию на входе
+        var tree = (await _git.RunAsync(Owner, p1.RootPath,
+            ["rev-parse", $"{GitService.DossiersRef}^{{tree}}"])).Stdout.Trim();
+        var tip = (await _git.RunAsync(Owner, p1.RootPath,
+            ["commit-tree", tree, "-p", GitService.DossiersRef, "-m", "test: чужой tip"],
+            env: new Dictionary<string, string>
+            {
+                ["GIT_AUTHOR_NAME"] = "Чужой " + Secret,
+                ["GIT_AUTHOR_EMAIL"] = "foreign@elsewhere.test",
+            })).Stdout.Trim();
+        (await _git.RunAsync(Owner, p1.RootPath, ["update-ref", GitService.DossiersRef, tip]))
+            .Ok.Should().BeTrue();
+
         var result = await MkImporter().ImportAsync(Owner2, p2);
 
         result.Added.Should().Be(1);
@@ -250,6 +265,7 @@ public class DossierImporterTests : IDisposable
         imported.Why.Should().Contain("[REDACTED:instance-secret]").And.NotContain(Secret);
         imported.Decisions.Should().ContainSingle()
             .Which.Should().Contain("[REDACTED:instance-secret]").And.NotContain(Secret);
+        imported.ImportedAuthor.Should().Contain("[REDACTED:instance-secret]").And.NotContain(Secret);
     }
 
     // --- (д) битые записи index (файл не читается / кривой sha) не роняют импорт и
@@ -263,15 +279,31 @@ public class DossierImporterTests : IDisposable
         var good = Dossier(p1.Id, "66ff66aa", "feat: годный паспорт");
         await WriteBranchAsync(p1, Owner, secretsEmpty: false, good);
 
-        // Портим index.json: у годной записи sha невалиден, добавляем фантомный файл
+        // Портим index.json на уровне JsonNode: запись {} (все поля null после
+        // десериализации) и путь вне репо не собрать через record-инициализатор.
+        // Годную запись не трогаем.
         var indexJson = await _git.ReadDossiersFileAsync(Owner, p1.RootPath, "index.json");
-        var index = JsonSerializer.Deserialize<DossierBranchIndex>(indexJson!, IndexOpts)!;
-        var entries = new List<DossierIndexEntry>(index.Entries)
+        var root = JsonNode.Parse(indexJson!)!;
+        var entries = (JsonArray)root["entries"]!;
+        var badSha = (JsonObject)entries[0]!.DeepClone()!;
+        badSha["sha"] = "../traversal";   // невалидный sha
+        entries.Add(badSha);
+        entries.Add(new JsonObject   // валидный sha, файла в ветке нет
         {
-            index.Entries[0] with { Sha = "../traversal" },
-            index.Entries[0] with { Sha = "77ff77ff", File = "dossiers/2026/08/нет-файла.md" },
-        };
-        var broken = JsonSerializer.Serialize(new DossierBranchIndex(1, entries), IndexOpts);
+            ["sha"] = "77ff7700",
+            ["file"] = "dossiers/2026/08/нет-файла.md",
+            ["subject"] = "feat: фантом",
+            ["committedAt"] = "2026-08-01T00:00:00Z",
+        });
+        entries.Add(new JsonObject());   // {} — null во всех строковых полях
+        entries.Add(new JsonObject   // валидный sha + traversal: SafeJoin откажет
+        {
+            ["sha"] = "88ab8800",
+            ["file"] = "../../evil.md",
+            ["subject"] = "feat: traversal",
+            ["committedAt"] = "2026-08-01T00:00:00Z",
+        });
+        var broken = root.ToJsonString();
         await _git.WriteDossiersBranchAsync(Owner, p1.RootPath,
             [.. (await BranchFilesWithContentAsync(p1)).Where(f => f.Path != "index.json"),
              new GitDossierFile("index.json", broken)],
@@ -280,7 +312,7 @@ public class DossierImporterTests : IDisposable
         var result = await MkImporter().ImportAsync(Owner2, p2);
 
         result.Added.Should().Be(1, "годная запись импортируется, невзирая на соседний мусор");
-        result.Skipped.Should().Be(2, "кривой sha + нечитаемый файл");
+        result.Skipped.Should().Be(4, "кривой sha + нечитаемый файл + пустая запись + traversal");
         _store.List(Owner2, p2.Id).Single().CommitSha.Should().Be("66ff66aa");
     }
 

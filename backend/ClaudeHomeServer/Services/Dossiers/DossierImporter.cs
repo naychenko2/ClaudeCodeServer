@@ -97,6 +97,14 @@ public class DossierImporter
         var valid = new List<DossierIndexEntry>();
         foreach (var e in index.Entries)
         {
+            // Пустые sha/файл — тоже мусор во внешнем входе: десериализатор кривого JSON
+            // молча даёт null конструкторным параметрам записи. Такая запись пропускается,
+            // а не роняет импорт всей ветки.
+            if (string.IsNullOrWhiteSpace(e.Sha) || string.IsNullOrWhiteSpace(e.File))
+            {
+                _log?.LogWarning("dossiers: импорт проекта {Project}: запись без sha или файла пропущена", project.Id);
+                continue;
+            }
             if (!IsValidSha(e.Sha))
             {
                 _log?.LogWarning("dossiers: импорт проекта {Project}: запись с некорректным sha пропущена", project.Id);
@@ -129,7 +137,25 @@ public class DossierImporter
         var candidates = new List<ChangeDossier>();
         foreach (var e in valid)
         {
-            var md = await _git.ReadDossiersFileAsync(ownerId, project.RootPath, e.File, ct);
+            string? md;
+            try
+            {
+                md = await _git.ReadDossiersFileAsync(ownerId, project.RootPath, e.File, ct);
+            }
+            // Путь записи — внешний вход: SafeJoin откажет на выходе за корень репо
+            // (traversal), и этот отказ стоит пропустить одной записью, а не партии.
+            catch (UnauthorizedAccessException ex)
+            {
+                _log?.LogWarning(ex, "dossiers: импорт проекта {Project}: путь {File} вне репозитория, запись пропущена",
+                    project.Id, e.File);
+                continue;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _log?.LogWarning(ex, "dossiers: импорт проекта {Project}: путь {File} не читается, запись пропущена",
+                    project.Id, e.File);
+                continue;
+            }
             if (md is null)
             {
                 _log?.LogWarning("dossiers: импорт проекта {Project}: файл {File} ветки не читается, запись пропущена",
@@ -160,9 +186,10 @@ public class DossierImporter
 
     // sha из index.json — внешний вход: валидируем формально (hex 6-40), как это делает
     // GitService для своих аргументов, — мусорный sha ломал бы пути при реэкспорте
-    // (dossiers/{yyyy}/{mm}/{sha7}-…) и спуфил бы поиск по коммиту.
-    private static bool IsValidSha(string sha) =>
-        sha.Length is >= 6 and <= 40
+    // (dossiers/{yyyy}/{mm}/{sha7}-…) и спуфил бы поиск по коммиту. Null-толерантна:
+    // валидацию проходят и элементы SupersededSha, где null возможен из кривого JSON.
+    private static bool IsValidSha(string? sha) =>
+        sha is { Length: >= 6 and <= 40 }
         && sha.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'));
 
     private static bool IsPlausibleCommittedAt(DateTimeOffset at) =>
@@ -184,7 +211,7 @@ public class DossierImporter
             CommitSha = e.Sha,
             CommitSubject = R(e.Subject),
             CommittedAt = e.CommittedAt,
-            SupersededSha = e.SupersededSha.Where(IsValidSha).ToList(),
+            SupersededSha = (e.SupersededSha ?? []).Where(IsValidSha).ToList(),
             SessionId = parsed.SessionId,
             TaskId = e.TaskId,
             Files = parsed.Files.Select(R).ToList(),
@@ -195,7 +222,10 @@ public class DossierImporter
             Pitfalls = parsed.Pitfalls.Select(R).ToList(),
             Invariants = parsed.Invariants.Select(R).ToList(),
             Origin = DossierOrigin.Imported,
-            ImportedAuthor = tip.Author,
+            // Автор tip-коммита — внешний вход той же природы, что subject: user.name —
+            // свободная строка с чужой машины, редакция обязана покрывать её симметрично
+            // экспорту (README ветки обещает «секреты вычищаются» и на входе)
+            ImportedAuthor = R(tip.Author),
             ImportedFromBranch = NormalizeBranch(tip.Ref),
         };
     }

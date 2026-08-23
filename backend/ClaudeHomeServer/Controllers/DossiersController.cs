@@ -19,16 +19,20 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects")]
 public class DossiersController(ProjectManager projects, DossierStore store,
     CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
-    GitService git, SessionManager sessions, UserStore users, InstanceSecretsProvider secrets) : ControllerBase
+    GitService git, SessionManager sessions, UserStore users, InstanceSecretsProvider secrets,
+    DossierDiscussionService discussions, DossierCaptureState captureState) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     // Экспортёр паспортов не в DI (Program.cs — вне файлов этой волны): собираем сами
     // из инжектируемых синглтонов. Объект тонкий, состояния не держит — ок per-request.
-    private DossierGitExporter Exporter => new(sessions, store, git, secrets);
+    private DossierGitExporter Exporter => new(sessions, store, git, secrets, discussions);
 
     // Импортёр — тот же паттерн: тонкий объект над синглтонами, per-request
     private DossierImporter Importer => new(store, git, secrets);
+
+    // Гейт автовыгрузки — тот же паттерн: опрашивается статусом выгрузки (autoExport)
+    private DossierAutoExportGate AutoExportGate => new(projects, git, captureState);
 
     // Чужой проект — 404, а не 403: подтверждать его существование незачему
     private Project? Owned(string id)
@@ -117,6 +121,10 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // осознанно, признак нужен только для честного диалога подтверждения.
     // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1 (один git-вызов):
     // им гейтится кнопка «Загрузить» (импорт), пока ветки нет.
+    // autoExport — причина гейта АВТОвыгрузки (DossierAutoExportGate): после сужения
+    // фона («ветка заведомо наша») общая подсказка «выгружается само» врала бы при
+    // чужом tip / одной origin-ветке / общей папке — панель выбирает текст по причине.
+    // null, когда проект не git-репозиторий (подсказка тогда всё равно скрыта).
     [HttpGet("{id}/dossiers/export/status")]
     public async Task<IActionResult> ExportStatus(string id, CancellationToken ct)
     {
@@ -124,11 +132,13 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         var p = Owned(id);
         if (p is null) return NotFound();
 
+        var isGitRepo = GitService.IsGitRepo(p.RootPath);
         return Ok(new
         {
-            isGitRepo = GitService.IsGitRepo(p.RootPath),
+            isGitRepo,
             sharedFolder = projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != p.OwnerId),
             hasDossierBranch = await git.HasDossiersBranchAsync(p.OwnerId, p.RootPath, ct),
+            autoExport = isGitRepo ? await AutoExportGate.ClassifyAsync(UserId, p, ct) : null,
         });
     }
 
@@ -143,7 +153,11 @@ public class DossiersController(ProjectManager projects, DossierStore store,
 
         try
         {
-            var result = await Exporter.ExportAsync(UserId, p, ct);
+            var result = await Exporter.ExportAsync(UserId, p, ct: ct);
+            // Tip ручной выгрузки — тоже «наш»: тик автоимпорта не должен завозить
+            // содержимое только что выгруженной ветки обратно как «чужое» (та же
+            // петля, что у автовыгрузки — разбор 23.08)
+            captureState.MarkOwnTip(UserId, p.Id, result.CommitSha);
             return Ok(new
             {
                 status = result.Committed ? "exported" : "nothingToExport",
@@ -171,6 +185,11 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         try
         {
             await git.PushDossiersBranchAsync(p.OwnerId, p.RootPath, creds, ct);
+            // Отправленная ветка — наша по определению (кнопку жмёт владелец): фиксируем
+            // её tip, чтобы тик автоимпорта не завёз содержимое ветки обратно как «чужое».
+            // Push tip не двигает, но ветка могла быть создана до включения автоимпорта.
+            var tip = await git.GetDossiersTipAsync(p.OwnerId, p.RootPath, ct);
+            captureState.MarkOwnTip(UserId, p.Id, tip?.CommitSha);
             return Ok(new { pushed = true });
         }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }

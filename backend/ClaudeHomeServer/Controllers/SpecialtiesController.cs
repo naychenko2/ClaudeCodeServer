@@ -23,10 +23,11 @@ public class SpecialtiesController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Каталог специальностей: ключ (wire-значение), подпись, семейство исполнителя
-    // и эффективный шаблон прав вызывающего (настройки поверх дефолтов кода).
-    // Три исполнительские SpecialtyCatalog отдаёт с подписями:
-    // «Исполнитель (универсальный)», «Исполнитель (бэкенд)», «Исполнитель (фронтенд)».
+    // Каталог специальностей: ключ (wire-значение), подпись, описание (для карточек
+    // панели «Инструкции для роли»), семейство исполнителя и эффективный шаблон прав
+    // вызывающего (настройки поверх дефолтов кода). Три исполнительские SpecialtyCatalog
+    // отдаёт с подписями: «Исполнитель (универсальный)», «Исполнитель (бэкенд)»,
+    // «Исполнитель (фронтенд)».
     [HttpGet]
     public IActionResult List()
     {
@@ -34,11 +35,52 @@ public class SpecialtiesController(
         {
             key = e.Key,
             label = e.Label,
+            description = e.Description,
             executorFamily = e.ExecutorFamily,
             template = settings.EffectiveTemplate(UserId, e.Specialty) is { } t
                 ? new { access = t.Access, tools = t.Tools, disallowedTools = t.DisallowedTools }
                 : null,
         }));
+    }
+
+    // Каталог секций промптов (дефолты кода): состав секций задаёт система, здесь — их
+    // метаданные, дефолтная включённость и типовой текст по каждой специальности (пресет
+    // «Типовой текст…» и read-only дефолт в UI), плюс типовой профиль умений роли.
+    // Значения по слоям и эффективный резолв — в settings (слои отдаются как есть).
+    [HttpGet("prompt-sections")]
+    public IActionResult PromptSectionsCatalog()
+    {
+        return Ok(new
+        {
+            textLimit = SpecialtyPromptPresets.SectionTextLimit,
+            sections = SpecialtyPromptPresets.Sections.Select(s => new
+            {
+                id = s.Id,
+                label = s.Label,
+                description = s.Description,
+            }),
+            specialties = SpecialtyCatalog.All
+                .Where(e => e.Specialty != PersonaSpecialty.None)
+                .ToDictionary(
+                    e => e.Key,
+                    e => new
+                    {
+                        sections = SpecialtyPromptPresets.Sections.Select(s => new
+                        {
+                            id = s.Id,
+                            enabled = SpecialtyPromptPresets.DefaultEnabled(s.Id, e.Specialty),
+                            text = SpecialtyPromptPresets.DefaultText(s.Id, e.Specialty),
+                        }),
+                        defaultBindings = SpecialtyPromptPresets.DefaultBindingsProfile(e.Specialty)
+                            .Select(b => new
+                            {
+                                type = b.Type,
+                                mode = b.Mode,
+                                condition = b.Condition,
+                                skillName = b.SkillName,
+                            }),
+                    }),
+        });
     }
 
     // Настройки специальностей и пресетов-цепочек: глобальный слой, назначенный

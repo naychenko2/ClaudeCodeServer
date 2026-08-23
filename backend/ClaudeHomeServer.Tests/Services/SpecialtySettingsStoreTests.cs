@@ -429,7 +429,7 @@ public class SpecialtySettingsStoreTests : IDisposable
         store.EffectivePresets(Owner).Should().BeEmpty();
 
         // Файл сохранён с новой версией
-        store.Snapshot.Version.Should().Be(2);
+        store.Snapshot.Version.Should().Be(SpecialtySettingsStore.FormatVersion);
     }
 
     [Fact]
@@ -565,5 +565,333 @@ public class SpecialtySettingsStoreTests : IDisposable
         store.RemapModels(GlmMap).Should().Be(1);
         store.RemapModels(GlmMap).Should().Be(0, "новых id в карте нет — переписывать нечего");
         store.Snapshot.Global.Presets[0].Steps.Should().Equal("glm-5.3");
+    }
+
+    // --- Секции промптов: посекочное наследование (не «замена слоя целиком») ---
+
+    private static SpecialtyPromptSectionSettings Section(string id, bool enabled, string? text = null) => new()
+    {
+        Id = id,
+        Enabled = enabled,
+        Text = text,
+    };
+
+    private static SpecialtyTemplateSettings TmplWithSections(
+        params SpecialtyPromptSectionSettings[] sections) => new() { PromptSections = sections.ToList() };
+
+    [Fact]
+    public void EffectivePromptSections_ПустойСтор_ДефолтыКода()
+    {
+        var store = NewStore();
+        var states = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Analyst);
+
+        states.Select(s => s.Id).Should()
+            .Equal(["history", "codeGraph", "processes", "roleRules"], "порядок — порядок каталога");
+        states.Should().OnlyContain(s => s.EnabledSource == SpecialtySettingsStore.SectionSource.Code
+            && s.TextSource == SpecialtySettingsStore.SectionSource.Code);
+
+        // Таблица дефолтов аналитика: история и правила роли включены, граф и процессы — нет
+        var enabled = store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Select(s => s.Id).ToList();
+        enabled.Should().Equal("history", "roleRules");
+        states.Single(s => s.Id == "history").Text
+            .Should().Be(SpecialtyPromptPresets.DefaultText("history", PersonaSpecialty.Analyst));
+    }
+
+    [Fact]
+    public void Секции_None_Пусто()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", true)) }));
+        store.EffectivePromptSections(Owner, PersonaSpecialty.None).Should().BeEmpty(
+            "у «Не задана» секций нет вовсе — поведение как до фичи");
+    }
+
+    [Fact]
+    public void Секции_ЯвныйOffВладельцаПерекрываетOnАдмина()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "админский текст")) }));
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", false)) }));
+
+        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Should().NotContain(s => s.Id == "history",
+            "заданное значение владельца (off), а не отсутствие записи");
+        // Чужой владелец — на on админа
+        store.EffectivePromptSections(Other, PersonaSpecialty.Analyst)
+            .Should().Contain(s => s.Id == "history");
+    }
+
+    [Fact]
+    public void Секции_ТочечноеПерекрытиеНеТрогаетСоседние()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new()
+        {
+            ["planner"] = TmplWithSections(
+                Section("history", true, "админ: история"),
+                Section("roleRules", true, "админ: правила")),
+        }));
+        // Владелец переопределяет ТОЛЬКО roleRules — история админа должна уцелеть
+        store.SetOwner(Owner, Layer(new()
+        {
+            ["planner"] = TmplWithSections(Section("roleRules", true, "владелец: правила")),
+        }));
+
+        var effective = store.EffectivePromptSections(Owner, PersonaSpecialty.Planner)
+            .ToDictionary(s => s.Id);
+        effective["history"].Text.Should().Be("админ: история",
+            "переопределение одной секции не сносит соседние");
+        effective["roleRules"].Text.Should().Be("владелец: правила");
+    }
+
+    [Fact]
+    public void Секции_EnabledИТекстНаследуютсяНезависимо()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", false, "текст админа")) }));
+        // Владелец задаёт только enabled (text = null): текст падает вниз к админу
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true)) }));
+
+        var state = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Analyst)
+            .Single(s => s.Id == "history");
+        state.Enabled.Should().BeTrue();
+        state.EnabledSource.Should().Be(SpecialtySettingsStore.SectionSource.Owner);
+        state.Text.Should().Be("текст админа");
+        state.TextSource.Should().Be(SpecialtySettingsStore.SectionSource.Global);
+    }
+
+    [Fact]
+    public void Секции_ЦепочкаСлоёвOwnerUserGlobal()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "глобальный")) }));
+        store.SetUser(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "пользователя")) }));
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "личный")) }));
+
+        var byOwner = store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Single(s => s.Id == "history");
+        byOwner.Text.Should().Be("личный", "личный слой сильнее назначения пользователя");
+
+        store.SetOwner(Owner, Layer());
+        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Single(s => s.Id == "history").Text
+            .Should().Be("пользователя", "без личного слоя видно назначение пользователя");
+
+        store.SetUser(Owner, Layer());
+        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Single(s => s.Id == "history").Text
+            .Should().Be("глобальный", "без назначения — глобальный");
+    }
+
+    // --- Типовой профиль умений ---
+
+    [Fact]
+    public void DefaultBindings_ВерхнийЗаданныйСлой_ИначеДефолтКода()
+    {
+        var store = NewStore();
+        var custom = new List<SpecialtyDefaultBinding>
+        {
+            new() { Type = PersonaBindingType.Knowledge, Condition = "когда базы знаний" },
+        };
+        store.SetGlobal(Layer(new() { ["librarian"] = new SpecialtyTemplateSettings { DefaultBindings = custom } }));
+
+        // У владельца ЕСТЬ запись (модели), но профиля в ней нет — профиль падает к глобальному
+        store.SetOwner(Owner, Layer(new() { ["librarian"] = Tmpl(strong: "glm-5.3") }));
+        store.EffectiveDefaultBindings(Owner, PersonaSpecialty.Librarian).Should().BeEquivalentTo(custom,
+            "профиль наследуется полем, а не «записью целиком» — override моделей его не сносит");
+
+        // И глобального нет — дефолт кода
+        store.SetGlobal(Layer());
+        var codeProfile = SpecialtyPromptPresets.DefaultBindingsProfile(PersonaSpecialty.Librarian);
+        store.EffectiveDefaultBindings(Owner, PersonaSpecialty.Librarian).Select(b => b.Type)
+            .Should().Equal(codeProfile.Select(b => b.Type));
+
+        store.EffectiveDefaultBindings(Owner, PersonaSpecialty.None).Should().BeEmpty();
+    }
+
+    // --- Валидация секций и профиля ---
+
+    [Fact]
+    public void SetOwner_НеизвестнаяСекция_Ошибка()
+    {
+        var store = NewStore();
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("no-such", true)) }))
+            .Should().Contain("неизвестная секция");
+    }
+
+    [Fact]
+    public void SetOwner_ДубльСекции_Ошибка()
+    {
+        var store = NewStore();
+        store.SetOwner(Owner, Layer(new()
+        {
+            ["analyst"] = TmplWithSections(Section("history", true), Section(" history ", false)),
+        })).Should().Contain("дважды");
+    }
+
+    [Fact]
+    public void SetOwner_ТекстСекцииНадЛимитом_Ошибка()
+    {
+        var store = NewStore();
+        var tooLong = new string('а', SpecialtyPromptPresets.SectionTextLimit + 1);
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, tooLong)) }))
+            .Should().Contain("длиннее");
+    }
+
+    [Fact]
+    public void SetOwner_НавыкБезИмени_Ошибка()
+    {
+        var store = NewStore();
+        var profile = new SpecialtyTemplateSettings
+        {
+            DefaultBindings = [new SpecialtyDefaultBinding { Type = PersonaBindingType.Skill }],
+        };
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = profile }))
+            .Should().Contain("не указано имя скилла");
+    }
+
+    [Fact]
+    public void SetOwner_ИмяСкиллаНеУНавыка_Ошибка()
+    {
+        var store = NewStore();
+        var profile = new SpecialtyTemplateSettings
+        {
+            DefaultBindings =
+            [
+                new SpecialtyDefaultBinding { Type = PersonaBindingType.Notes, SkillName = "чужой скилл" },
+            ],
+        };
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = profile }))
+            .Should().Contain("только у типового умения типа «Навык»");
+    }
+
+    [Fact]
+    public void SetOwner_НавыкСИменем_ПроходитИНормализуется()
+    {
+        var store = NewStore();
+        var profile = new SpecialtyTemplateSettings
+        {
+            DefaultBindings =
+            [
+                new SpecialtyDefaultBinding
+                {
+                    Type = PersonaBindingType.Skill,
+                    SkillName = "  my-skill  ",
+                    Condition = "  по сценарию  ",
+                    Mode = PersonaBindingMode.Always,
+                },
+            ],
+        };
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = profile })).Should().BeNull();
+
+        var saved = store.Snapshot.Owners[Owner].Specialties["analyst"].DefaultBindings!.Single();
+        saved.SkillName.Should().Be("my-skill");
+        saved.Condition.Should().Be("по сценарию");
+        saved.Mode.Should().Be(PersonaBindingMode.Always);
+    }
+
+    // --- Совместимость формата (v2-файл без новых полей; v3 переживает рестарт) ---
+
+    [Fact]
+    public void Совместимость_V2ФайлБезНовыхПолей_ГрузитсяСДефолтамиКода()
+    {
+        File.WriteAllText(Path.Combine(_dir, "specialty-settings.json"), JsonSerializer.Serialize(new
+        {
+            version = 2,
+            global = new
+            {
+                specialties = new Dictionary<string, object> { ["analyst"] = new { tierStrong = "opus" } },
+                presets = new List<object>(),
+            },
+            owners = new Dictionary<string, object>(),
+            users = new Dictionary<string, object>(),
+        }));
+        var store = NewStore();
+        store.Snapshot.Version.Should().Be(SpecialtySettingsStore.FormatVersion);
+        store.Snapshot.Global.Specialties["analyst"].PromptSections.Should().BeNull("полей не было — дефолты из кода");
+        store.Snapshot.Global.Specialties["analyst"].DefaultBindings.Should().BeNull();
+        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst)
+            .Should().OnlyContain(s => s.TextSource == SpecialtySettingsStore.SectionSource.Code);
+    }
+
+    [Fact]
+    public void Совместимость_СекцииПереживаютПерезапуск()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new()
+        {
+            ["reviewer"] = TmplWithSections(Section("history", true, "текст секции")),
+        }));
+        NewStore().Snapshot.Global.Specialties["reviewer"].PromptSections!.Single().Text
+            .Should().Be("текст секции");
+    }
+
+    [Fact]
+    public void Совместимость_ФайлБудущегоВерсии_СтартСДефолтами()
+    {
+        File.WriteAllText(Path.Combine(_dir, "specialty-settings.json"), JsonSerializer.Serialize(new
+        {
+            version = SpecialtySettingsStore.FormatVersion + 1,
+            global = new { specialties = new Dictionary<string, object>(), presets = new List<object>() },
+            owners = new Dictionary<string, object>(),
+        }));
+        NewStore().Snapshot.Global.IsEmpty.Should().BeTrue();
+    }
+
+    // --- Сброс настроек моделей не сносит секции ---
+
+    [Fact]
+    public void ResetModelSettings_ЗаписьТолькоССекциями_НеУдаляется()
+    {
+        var store = NewStore();
+        // Права эквивалентны нижнему слою (совпадают с дефолтом), но запись несёт секции
+        store.SetOwner(Owner, Layer(new()
+        {
+            ["analyst"] = TmplWithSections(Section("history", true, "ценное")),
+        }));
+
+        var result = store.ResetModelSettings(Owner, "analyst", apply: true);
+        result.Changed.Should().Be(0, "снимать нечего — уровней в записи не было");
+        store.Snapshot.Owners[Owner].Specialties["analyst"].PromptSections!.Single().Text
+            .Should().Be("ценное", "сброс МОДЕЛЕЙ не трогает секции промптов");
+
+        // Запись с уровнями И секциями: уровни снимаются, секции остаются
+        var mixed = new SpecialtyTemplateSettings
+        {
+            TierStrong = "glm-5.3",
+            PromptSections = [Section("history", true, "тоже ценное")],
+        };
+        store.SetOwner(Owner, Layer(new() { ["analyst"] = mixed }));
+        store.ResetModelSettings(Owner, "analyst", apply: true).Changed.Should().Be(1);
+        var after = store.Snapshot.Owners[Owner].Specialties["analyst"];
+        after.TierStrong.Should().BeNull();
+        after.PromptSections!.Single().Text.Should().Be("тоже ценное");
+    }
+
+    // --- Бенчмарк резолва (план «Секции промптов» этап 3, риск «цена резолва per-turn») ---
+
+    [Fact]
+    public void EffectivePromptSectionStates_Бенчмарк_УкладываетсяВПорог()
+    {
+        var store = NewStore();
+        // Слой с переопределениями по всем 14 специальностям — резолв идёт по полному пути
+        // (owner → user → global) на каждый вызов, не по короткому «слоя нет вовсе»
+        var specialties = new Dictionary<string, SpecialtyTemplateSettings>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in SpecialtyCatalog.All.Where(e => e.Specialty != PersonaSpecialty.None))
+            specialties[entry.Key] = TmplWithSections(
+                Section("history", true, "переопределённый текст истории"),
+                Section("codeGraph", true, "переопределённый текст графа"));
+        store.SetOwner(Owner, Layer(specialties));
+
+        // Прогрев (JIT) — не считаем в замер
+        foreach (var e in SpecialtyCatalog.All) store.EffectivePromptSectionStates(Owner, e.Specialty);
+
+        var roles = SpecialtyCatalog.All.Where(e => e.Specialty != PersonaSpecialty.None)
+            .Select(e => e.Specialty).ToList();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < 100; i++)
+            store.EffectivePromptSectionStates(Owner, roles[i % roles.Count]);
+        sw.Stop();
+
+        var avgMs = sw.Elapsed.TotalMilliseconds / 100;
+        avgMs.Should().BeLessThan(SpecialtySettingsStore.PromptSectionsResolveBenchmarkThresholdMs,
+            "резолвер — чистые словари/списки в памяти без I/O; превышение порога — сигнал " +
+            "завести кэш per-specialty (см. комментарий у константы), а не молчаливая деградация хода");
     }
 }

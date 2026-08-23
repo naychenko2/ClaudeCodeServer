@@ -129,4 +129,8 @@ public class Project
     // Дефолт false: старые записи projects.json читаются штатно, BackupSchema.Version не
     // двигается (аддитивное поле с дефолтом формат не ломает).
     public bool DesktopAgentEnabled { get; set; }
+    // Автоимпорт «Историй решений»: наблюдать ветку ccs/dossiers/v1 и подтягивать
+    // паспорта по новому tip (сценарий «вторая машина / сосед по общей папке» —
+    // ветку привозит чужой git pull, DossierAutoImporter только читает её).
+    public bool AutoImportDossiers { get; set; } = false;
 }

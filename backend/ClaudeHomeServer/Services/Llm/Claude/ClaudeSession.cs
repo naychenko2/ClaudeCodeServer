@@ -176,6 +176,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // 0 — не объявляли. Уходит в паспорта сабагентов: без него «контекст 198k при обрыве»
     // читается по-разному в окне 200k и в окне 1M. Считается при сборке env хода.
     private int _turnContextWindow;
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR), с которым реально запущен прогон: env хода
+    // (сторонний провайдер / подписка пула — BuildCliEnv/BuildOAuthCliEnv), иначе корень
+    // сессии. Именно ЭТОТ, а не _cliConfigRoot: FallbackLlmSessionAdapter меняет провайдера
+    // у того же инстанса, и корень сессии после фолбэка устаревает. Ватчер сабагентов ищет
+    // папку сессии сначала здесь — в других профилях лежат её копии от фолбэк-ходов.
+    private string? _turnConfigRoot;
 
     // Максимальная тишина stdout активного хода: при живой работе (генерация, инструмент,
     // субагент, компакция, ожидание пользователя) CLI шлёт события регулярно; полное молчание
@@ -483,6 +489,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<string, Task<string?>>? _bindingsProvider;
     // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
     private readonly Func<string?, Task<string?>>? _codeGraphProvider;
+    // Секции промпта специальности персоны (план «Секции промптов», флаг specialty-prompt-sections)
+    private readonly Func<string?, Task<string?>>? _promptSectionsProvider;
     // Снимок промпта хода: черновик → id записанного снимка. null — снимки не ведутся.
     private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
     // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
@@ -576,6 +584,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
         _codeGraphProvider = context.CodeGraphProvider;
+        _promptSectionsProvider = context.PromptSectionsProvider;
         _promptSnapshotSink = context.PromptSnapshotSink;
         _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
         _subagentRunSink = context.SubagentRunSink;
@@ -2276,9 +2285,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
             // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
             // Заодно собираем манифест (что подтянулось) для «использовано сейчас» (F3).
+            RecallBlock? memRecall = null;
             if (_personaRecallProvider is not null && _memoryMcp is not null)
             {
-                RecallBlock? memRecall = null;
                 try { memRecall = await _personaRecallProvider(text); }
                 catch { /* recall памяти не должен ронять ход */ }
                 Add("recall-memory", "Что персона помнит по теме", memRecall?.Text, stable: false, group: "persona");
@@ -2288,6 +2297,27 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.AddRange(memRecall.Items);
                 }
             }
+
+            // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+            // specialty-prompt-sections): сценарные инструкции «когда и как» по роли — история,
+            // граф кода, процессы, правила. Позиция — между recall-memory и блоком досье
+            // (контракт плана: «призыв и данные рядом»), провайдер сам гейтит по флагу/
+            // специальности/групповому чату, ошибки не роняют ход.
+            if (_promptSectionsProvider is not null)
+            {
+                string? promptSectionsBlock = null;
+                try { promptSectionsBlock = await _promptSectionsProvider(text); }
+                catch { /* секции специальности не должны ронять ход */ }
+                Add("prompt-sections", "Инструкции по специальности", promptSectionsBlock, group: "persona");
+            }
+
+            // Блок досье (план «Секции промптов» этап 3, флаг specialty-prompt-sections): при
+            // включённом флаге PersonaMemoryService отдаёт его ОТДЕЛЬНО от recall-memory (см.
+            // RecallBlock.DossierText) — своей секцией, сразу после prompt-sections (призыв и
+            // данные рядом); при выключенном флаге DossierText всегда null (досье уже внутри
+            // recall-memory выше, как до фичи).
+            Add("dossier-recall", "История решений по коду хода", memRecall?.DossierText,
+                stable: false, group: "persona");
 
             // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
             // «когда → откуда» + выжимки режима «всегда». Только у персонных сессий;
@@ -2401,6 +2431,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _turnContextWindow = envOverrides.TryGetValue("CLAUDE_CODE_MAX_CONTEXT_TOKENS", out var declaredWindow)
             && int.TryParse(declaredWindow, NumberStyles.Integer, CultureInfo.InvariantCulture, out var windowValue)
             ? windowValue : 0;
+        _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
+            && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
 
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
@@ -3262,8 +3294,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Same-process ход (init повторяется в том же процессе, контекст тот же) —
                     // ватчер переиспользуем: пересоздание помечало бы файлы «прочитанными
                     // целиком» и теряло хвост текста доживающих агентов. Иной контекст —
-                    // дочитываем хвост (Drain) и только потом пересоздаём.
-                    if (_subagentWatcher is null || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!))
+                    // дочитываем хвост (Drain) и только потом пересоздаём. Профиль прогона —
+                    // часть контекста: новый процесс под другим CLAUDE_CONFIG_DIR (фолбэк сменил
+                    // провайдера) пишет транскрипты в другую папку, старый ватчер с закешированной
+                    // папкой их не увидит.
+                    if (_subagentWatcher is null
+                        || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot))
                     {
                         if (_subagentWatcher is not null)
                         {
@@ -3271,7 +3307,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             _subagentWatcher.Dispose();
                         }
                         _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage,
-                            Info.Id, _subagentRunSink, _turnContextWindow);
+                            Info.Id, _subagentRunSink, _turnContextWindow, preferredConfigRoot: _turnConfigRoot);
                         _subagentWatcher.Start();
                     }
 

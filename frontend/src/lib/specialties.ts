@@ -6,7 +6,12 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { presetRoute } from './presets';
-import type { ModelTierValue, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtyTemplateSettings } from '../types';
+import type {
+  ModelTierValue, PersonaBindingMode, PersonaBindingType, SpecialtyCatalogEntry,
+  SpecialtyDefaultBinding, SpecialtyPromptSection, SpecialtyPromptSectionsCatalog,
+  SpecialtyPromptSectionsForSpecialty, SpecialtyPromptSectionMeta, SpecialtySettingsLayer,
+  SpecialtyTemplateSettings,
+} from '../types';
 
 let _catalog: SpecialtyCatalogEntry[] | null = null;
 let _loading: Promise<void> | null = null;
@@ -175,3 +180,200 @@ export function effectiveSpecialtyRecord(globalLayer: SpecialtySettingsLayer,
   if (key === ANY_SPECIALTY) return ownerLayer.defaultSpecialty ?? globalLayer.defaultSpecialty ?? null;
   return ownerLayer.specialties[key] ?? globalLayer.specialties[key] ?? null;
 }
+
+// === Секции промптов (фича specialty-prompt-sections, план «Секции промптов») ===
+//
+// Семантика наследования посекочная: enabled и text берутся каждый СВОИМ резолвом
+// из верхнего слоя, где параметр ЗАДАН; явный off владельца перекрывает on админа
+// (заданное значение, а не отсутствие записи). Повторяет логику бэкенда
+// (SpecialtySettingsStore.EffectivePromptSectionStates).
+
+// Откуда пришло значение параметра секции — для бейджа источника в UI.
+export type PromptSectionSource = 'code' | 'global' | 'user' | 'owner';
+
+export interface EffectivePromptSection {
+  id: string;
+  enabled: boolean;
+  text: string;
+  enabledSource: PromptSectionSource;
+  textSource: PromptSectionSource;
+}
+
+// Каталог секций промптов: грузится по требованию, кэшируется на модуль — UI пере-
+// рисовывается редко, повторные заходы не должны дёргать бэк заново. Инвалидация —
+// перезагрузкой страницы (состав каталога меняется только с деплоем бэка).
+let _promptSectionsCatalog: SpecialtyPromptSectionsCatalog | null = null;
+let _promptSectionsLoading: Promise<SpecialtyPromptSectionsCatalog | null> | null = null;
+
+export async function loadPromptSectionsCatalog(): Promise<SpecialtyPromptSectionsCatalog | null> {
+  if (_promptSectionsCatalog) return _promptSectionsCatalog;
+  if (_promptSectionsLoading) return _promptSectionsLoading;
+  _promptSectionsLoading = api.specialties.promptSectionsCatalog()
+    .then(c => { _promptSectionsCatalog = c; return c; })
+    .catch(() => null)
+    .finally(() => { _promptSectionsLoading = null; });
+  return _promptSectionsLoading;
+}
+
+export function getPromptSectionsCatalog(): SpecialtyPromptSectionsCatalog | null {
+  return _promptSectionsCatalog;
+}
+
+// Эффективные значения enabled/text и источник каждого для пары (specialty, sectionId).
+// Поиск по слоям сверху вниз: сначала запись специальности (owner/user/global), затем
+// defaultSpecialty той же цепочки. Источник `code` — дефолт кода из каталога.
+export function effectivePromptSection(
+  catalog: SpecialtyPromptSectionsCatalog | null,
+  ownerLayer: SpecialtySettingsLayer | null,
+  userLayer: SpecialtySettingsLayer | null,
+  globalLayer: SpecialtySettingsLayer | null,
+  specialtyKey: string,
+  sectionId: string,
+): EffectivePromptSection {
+  const code = catalog?.specialties[specialtyKey]?.sections.find(s => s.id === sectionId);
+  let enabled = code?.enabled ?? false;
+  let text = code?.text ?? '';
+  let enabledSource: PromptSectionSource = 'code';
+  let textSource: PromptSectionSource = 'code';
+  let enabledSet = false;
+  let textSet = false;
+  // Запись специальности в каждом слое + defaultSpecialty того же слоя (defaultSpecialty
+  // применяется к «любой специальности» в логике матриц; здесь пробуем по факту наличия).
+  const layerEntries: Array<[SpecialtySettingsLayer | null | undefined, PromptSectionSource]> = [
+    [ownerLayer, 'owner'],
+    [userLayer, 'user'],
+    [globalLayer, 'global'],
+  ];
+  for (const [layer, source] of layerEntries) {
+    if (!layer) continue;
+    // Запись специальности и defaultSpecialty одного слоя — обе ищем; первое заданное
+    // значение выигрывает, дальше не идём (сверху вниз, owner важнее global).
+    for (const rec of [layer.specialties[specialtyKey], layer.defaultSpecialty]) {
+      if (!rec?.promptSections) continue;
+      const entry = rec.promptSections.find(p => p.id === sectionId);
+      if (!entry) continue;
+      if (!enabledSet) {
+        enabled = entry.enabled;
+        enabledSource = source;
+        enabledSet = true;
+      }
+      if (!textSet && entry.text && entry.text.trim()) {
+        text = entry.text.trim();
+        textSource = source;
+        textSet = true;
+      }
+      if (enabledSet && textSet) break;
+    }
+    if (enabledSet && textSet) break;
+  }
+  return { id: sectionId, enabled, text, enabledSource, textSource };
+}
+
+// Записать/обновить секцию в ЗАПИСИ специальности текущего слоя. enabledSet=true —
+// пишем enabled, textSet=true — пишем text; пустой text трактуется как «снять override».
+// override=null удаляет всю запись секции из слоя (наследование вниз).
+export function withPromptSection(layer: SpecialtySettingsLayer, specialtyKey: string,
+  sectionId: string, patch: { enabled?: boolean; text?: string | null; override?: false }): SpecialtySettingsLayer {
+  const next = cloneLayer(layer);
+  const rec = ensureSpecialtyRecord(next, specialtyKey);
+  const sections = (rec.promptSections ?? []).filter(p => p.id !== sectionId);
+  if (patch.override === false) {
+    // Прямое обновление существующего override (нас не вызывают с override=false,
+    // но семантика чёткая): сохраняем как есть
+  }
+  const existing = rec.promptSections?.find(p => p.id === sectionId);
+  const merged: SpecialtyPromptSection = {
+    id: sectionId,
+    enabled: patch.enabled !== undefined ? patch.enabled : existing?.enabled ?? false,
+    text: patch.text !== undefined ? patch.text : existing?.text ?? null,
+  };
+  sections.push(merged);
+  rec.promptSections = sections;
+  return next;
+}
+
+// Снять override секции в слое: запись секции удаляется целиком (наследование вниз).
+export function withoutPromptSection(layer: SpecialtySettingsLayer, specialtyKey: string,
+  sectionId: string): SpecialtySettingsLayer {
+  const next = cloneLayer(layer);
+  const rec = next.specialties[specialtyKey];
+  if (!rec?.promptSections) return next;
+  const filtered = rec.promptSections.filter(p => p.id !== sectionId);
+  if (filtered.length === 0) {
+    delete rec.promptSections;
+  } else {
+    rec.promptSections = filtered;
+  }
+  // Если после удаления запись полностью пустая (нет прав, матриц и секций) — стираем
+  // её, чтобы слой оставался «честным»: иначе пустая запись продолжала бы перекрывать
+  // нижний слой (см. аналогичное поведение для матриц в SpecialtySettingsStore).
+  if (isRecordEmpty(rec)) delete next.specialties[specialtyKey];
+  return next;
+}
+
+// Записать/обновить запись DefaultBindings (типовой профиль умений роли) в слое.
+// null — снять override профиля целиком (наследование вниз).
+export function withDefaultBindings(layer: SpecialtySettingsLayer, specialtyKey: string,
+  bindings: SpecialtyDefaultBinding[] | null): SpecialtySettingsLayer {
+  const next = cloneLayer(layer);
+  const rec = ensureSpecialtyRecord(next, specialtyKey);
+  if (bindings == null) {
+    delete rec.defaultBindings;
+  } else {
+    rec.defaultBindings = bindings.slice();
+  }
+  if (isRecordEmpty(rec)) delete next.specialties[specialtyKey];
+  return next;
+}
+
+// Убедиться, что в слое есть запись специальности; создать пустую при отсутствии.
+// Копия приватной логики SpecialtySettingsStore.EnsureRecord (бэкенд тоже так делает).
+export function ensureSpecialtyRecord(layer: SpecialtySettingsLayer, specialtyKey: string): SpecialtyTemplateSettings {
+  let rec = layer.specialties[specialtyKey];
+  if (!rec) {
+    rec = { access: 'full', tools: null, disallowedTools: null };
+    layer.specialties[specialtyKey] = rec;
+  }
+  return rec;
+}
+
+// Запись специальности пуста по всем нашим полям (кроме access/tools/disallowedTools,
+// которые мы не трогаем в этом плане — фронт их не правит здесь).
+function isRecordEmpty(rec: SpecialtyTemplateSettings): boolean {
+  const noSections = !rec.promptSections || rec.promptSections.length === 0;
+  const noBindings = !rec.defaultBindings || rec.defaultBindings.length === 0;
+  return noSections && noBindings;
+}
+
+// === Профиль умений роли ===
+//
+// Каталог отдаёт дефолтный профиль по специальности; в слое он переопределяется
+// поэлементно (список целиком заменяет наследование вниз). Удобный конструктор DTO
+// для UI (SkillSearchDialog и т. п.): skillName нужен только для типа 'skill'.
+
+export function newDefaultBinding(type: PersonaBindingType,
+  condition: string, mode: PersonaBindingMode = 'auto',
+  skillName?: string | null): SpecialtyDefaultBinding {
+  return { type, mode, condition: condition.trim(), skillName: type === 'skill' ? (skillName ?? null) : null };
+}
+
+// id временной записи профиля: в UI до сохранения работаем с черновиком по id.
+// На бэке у SpecialtyDefaultBinding нет id (это просто запись в списке слоя); для
+// key в React используем сгенерированный uuid, в PUT уходит весь список без id.
+export function newDefaultBindingId(): string {
+  try { return crypto.randomUUID(); } catch { return `db-${Date.now()}-${Math.round(Math.random() * 1e6)}`; }
+}
+
+// === Список секций каталога по порядку (для рендера в UI) ===
+
+export function sectionsOf(catalog: SpecialtyPromptSectionsCatalog | null): SpecialtyPromptSectionMeta[] {
+  return catalog?.sections ?? [];
+}
+
+// Запись секций для конкретной специальности (из каталога, не из слоя)
+export function sectionsForSpecialty(catalog: SpecialtyPromptSectionsCatalog | null,
+  specialtyKey: string): SpecialtyPromptSectionsForSpecialty | null {
+  if (!catalog) return null;
+  return catalog.specialties[specialtyKey] ?? null;
+}
+

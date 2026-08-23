@@ -172,7 +172,18 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecrets
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallService>();
+// Конспекты обсуждений (ADR-004 §6): стор снятых конспектов + генерация через
+// CheapTextRunner (ключ discussion-digest); снимаются на экспорте, живут до ветки
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionService>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
+// Автовыгрузка паспортов в локальную ветку ccs/dossiers/v1 после захвата — singleton +
+// hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>();
+AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
+// Автоимпорт паспортов по новому tip ветки ccs/dossiers/v1 (тумблер проекта
+// AutoImportDossiers): наблюдение за веткой тиком 60 с, без fetch/pull
+AddHosted<ClaudeHomeServer.Services.Dossiers.DossierAutoImporter>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.

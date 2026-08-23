@@ -70,7 +70,10 @@ public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
 public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
 
 // Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).
-public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
+// DossierText — блок паспортов изменений ОТДЕЛЬНО от Text (план «Секции промптов» этап 3,
+// флаг specialty-prompt-sections): секция dossier-recall клеится своим местом промпта;
+// null — флаг выключен/досье нет (тогда, если есть, оно уже внутри Text — как до фичи).
+public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items, string? DossierText = null);
 
 // Контекст MCP-сервера уведомлений: адрес API и сервисный токен владельца.
 // Всегда подключается, когда есть владелец сессии — Claude и агенты могут
@@ -185,6 +188,12 @@ public sealed record LlmSessionContext(
     // (не используется — god-узлы структурны), null — фича выключена или сессия без rootPath;
     // ошибки внутри → null (ход идёт без блока).
     Func<string?, Task<string?>>? CodeGraphProvider = null,
+    // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+    // specialty-prompt-sections): сценарные инструкции «когда и как» по роли (история,
+    // граф кода, процессы, правила роли) — текст хода не используется (секции статичны для
+    // owner+специальности), null — фича выключена, персона без специальности, групповой
+    // чат или сессия без владельца/персоны. Гейт по флагу — внутри, на каждый ход.
+    Func<string?, Task<string?>>? PromptSectionsProvider = null,
     // Файловые сабагенты-персоны: вычисляется на КАЖДЫЙ ход
     // (актуальные персоны/модель сессии), внутри — троттлёный reconcile файлов.
     // null — фича выключена или нет владельца; вызов может вернуть null.

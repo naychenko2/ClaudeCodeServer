@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -176,5 +177,74 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
         var noBranch = await ExportStatusAsync(projectId);
         noBranch.GetProperty("hasDossierBranch").GetBoolean()
             .Should().BeFalse("ветки ccs/dossiers/v1 нет");
+    }
+
+    // Ручная выгрузка (кнопка «Выгрузить», POST /dossiers/export) и тик автоимпорта:
+    // tip, до которого довела ветку кнопка, — «наш», импортированных дублей не появляется
+    // (петля автовыгрузка↔автоимпорт, разбор 23.08; транспорт — здесь, координация через
+    // DossierCaptureState.MarkOwnTip покрыта также сервисными тестами DossierAutoExportTests).
+    [Fact]
+    public async Task РучнаяВыгрузкаЗатемТикАвтоимпорта_НичегоНеИмпортирует()
+    {
+        (await _client.PutAsJsonAsync(
+            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
+            .EnsureSuccessStatusCode();
+
+        // Репозиторий без ветки паспортов: её создаст сама ручная выгрузка
+        var dir = Path.Combine(_factory.TempDir, "dossier_export_loop_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        await new GitService(TestLauncherFactory.Instance).InitAsync(null, dir);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "DossierExportLoop", rootPath = dir });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        // Тумблер автоимпорта — как проводит PUT /api/projects
+        (await _client.PutAsJsonAsync($"/api/projects/{projectId}", new { autoImportDossiers = true }))
+            .EnsureSuccessStatusCode();
+
+        // Живой чат проекта: паспорт без него в выгрузку не попадёт (fail-closed)
+        var sessionResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        sessionResp.EnsureSuccessStatusCode();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(await sessionResp.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        // Собственный паспорт в стор — как после захвата коммита
+        var ownerId = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        _factory.Services.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>().Add(
+            new ChangeDossier
+            {
+                OwnerId = ownerId,
+                ProjectId = projectId,
+                CommitSha = "5f5f5f5f",
+                CommitSubject = "feat: паспорт для ручной выгрузки",
+                CommittedAt = new DateTimeOffset(2026, 8, 20, 10, 0, 0, TimeSpan.Zero),
+                SessionId = sessionId,
+                Why = "почему изменение сделано",
+                Decisions = ["решили так"],
+            });
+
+        var export = await _client.PostAsync($"/api/projects/{projectId}/dossiers/export", null);
+        export.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await export.Content.ReadAsStringAsync())
+            .GetProperty("status").GetString().Should().Be("exported");
+
+        // Тик автоимпорта на тех же синглтонах хоста
+        var sp = _factory.Services;
+        await new ClaudeHomeServer.Services.Dossiers.DossierAutoImporter(
+            sp.GetRequiredService<ClaudeHomeServer.Services.ProjectManager>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Git.GitService>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.FeatureFlagService>())
+            .TickAsync();
+
+        var payload = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync($"/api/projects/{projectId}/dossiers")).Content.ReadAsStringAsync());
+        var entries = payload.GetProperty("entries").EnumerateArray().ToList();
+        entries.Should().ContainSingle("тик автоимпорта не завёз копию паспорта после ручной выгрузки");
+        entries.Single().GetProperty("origin").GetString().Should().Be("own");
     }
 }

@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // «{username}:dossiers:{projectName}» (дифф по хешам, дебаунс) для будущего семантического
 // recall (этап 2); без Dify — REST-фильтры (Find) работают полнотекстово прямо по стору,
 // graceful degradation не требуется отдельно. Эталон структуры — TeamMemoryService.
-public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
+public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposable
 {
     private sealed class KnowledgeState
     {
@@ -78,6 +78,13 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     public bool Available => _knowledge?.IsConfigured == true;
     public int MaxEntries => _maxEntries;
 
+    // Изменился состав СОБСТВЕННЫХ паспортов: новый захват (Add) или переякорение при
+    // squash (Reanchor). Подписана автовыгрузка ветки (DossierAutoExporter). Импорт
+    // (AddImportedRange) событие НЕ поднимает: привнесённые записи пришли из ветки и
+    // состава выгрузки захватов не меняют. Обработчики обязаны быть быстрыми — событие
+    // синхронное, планирование у подписчика своё.
+    public event Action<string, string>? OnOwnDossierChanged;
+
     public IReadOnlyList<ChangeDossier> List(string ownerId, string projectId) => Snapshot(ownerId, projectId);
 
     // Полнотекстовый фильтр по якорям — используется REST-эндпоинтом; независим от Dify.
@@ -128,6 +135,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
             WarnIfApproachingMigration(dossier.OwnerId, dossier.ProjectId, list);
         }
         QueueSync(dossier.OwnerId, dossier.ProjectId);
+        OnOwnDossierChanged?.Invoke(dossier.OwnerId, dossier.ProjectId);
         return dossier;
     }
 
@@ -203,6 +211,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     {
         lock (_saveLock) Save(dossier.OwnerId, dossier.ProjectId);
         QueueSync(dossier.OwnerId, dossier.ProjectId);
+        OnOwnDossierChanged?.Invoke(dossier.OwnerId, dossier.ProjectId);
     }
 
     public async Task DeleteProjectDossiersAsync(string ownerId, string projectId)
@@ -425,15 +434,34 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     private void Save(string ownerId, string projectId) =>
         JsonFileStore.Save(StorePath(ownerId, projectId), Get(ownerId, projectId), JsonOpts);
 
-    // Потолок Dossiers:MaxEntries — вытесняем самые старые (по CommittedAt) в архивный JSONL.
-    // Вызывается под _saveLock.
+    // Потолок Dossiers:MaxEntries — вытесняем лишнее в архивный JSONL (в поиске и recall
+    // архив не участвует). Порядок жертв (разбор консилиума 23.08): первыми уходят
+    // импортированные (старейшие вперёд) — чужие записи, даже с более старой датой, не
+    // вправе выдавливать собственную историю владельца из активного стора; когда
+    // импортированных сверх потолка не осталось, ротация own-записей идёт как прежде —
+    // старейшие по CommittedAt. Вызывается под _saveLock.
     private void EvictIfNeeded(string ownerId, string projectId, List<ChangeDossier> list)
     {
         if (list.Count <= _maxEntries) return;
-        list.Sort((a, b) => a.CommittedAt.CompareTo(b.CommittedAt));
-        var toEvict = list.Count - _maxEntries;
-        var evicted = list.GetRange(0, toEvict);
-        list.RemoveRange(0, toEvict);
+        var evicted = new List<ChangeDossier>();
+
+        foreach (var d in list.Where(d => d.Origin == DossierOrigin.Imported)
+                     .OrderBy(d => d.CommittedAt)
+                     .Take(list.Count - _maxEntries)
+                     .ToList())
+        {
+            list.Remove(d);
+            evicted.Add(d);
+        }
+
+        if (list.Count > _maxEntries)
+        {
+            var rest = list.Count - _maxEntries;
+            list.Sort((a, b) => a.CommittedAt.CompareTo(b.CommittedAt));
+            evicted.AddRange(list.GetRange(0, rest));
+            list.RemoveRange(0, rest);
+        }
+
         AppendArchive(ownerId, projectId, evicted);
     }
 
@@ -457,4 +485,8 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     }
 
     private void SaveKnowledge() => JsonFileStore.Save(_knowledgeStorePath, _kStore, JsonOpts);
+
+    // Уборка при остановке хоста (DI dispose'ит синглтон): таймеры дебаунса Dify-синка
+    // не должны переживать остановку и запускать синк по мёртвому приложению
+    public void Dispose() => _debounce.Dispose();
 }

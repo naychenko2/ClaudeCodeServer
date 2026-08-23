@@ -585,6 +585,33 @@ public class LlmProviderRegistry
         || model.Equals("sonnet", StringComparison.OrdinalIgnoreCase)
         || model.Equals("haiku", StringComparison.OrdinalIgnoreCase);
 
+    // Модель РОДНОГО Claude (подписка), а не неизвестный id. Нужна там, где null от
+    // ResolveByModel надо прочитать однозначно: он означает и «родной Claude», и «такой
+    // модели нет ни у одного провайдера» — а последствия у этих двух случаев разные
+    // (переезд на подписку против честного отказа). Форма id: пусто (решает CLI), алиас
+    // каталога default/opus/sonnet/haiku (в т.ч. с суффиксом окна opus[1m]) и полный
+    // id Anthropic claude-* (claude-fable-5[1m] и пр.). Знание о форме id живёт здесь же,
+    // рядом с остальными разборщиками алиасов.
+    //
+    // Две оговорки для того, кто будет править:
+    // 1) Корректность держится на ПОРЯДКЕ вызовов — ResolveByModel зовётся ПЕРЕД этим
+    //    предикатом (SessionManager.MigrateProviderAsync). Сторонний провайдер, объявивший
+    //    модель с id claude-* или перехвативший алиас, резолвится в себя, и до предиката
+    //    управление не доходит; переставленные местами проверки дадут ложноположительные.
+    // 2) Список форм — ручная копия ModelCatalogService.Fallback: реальный каталог родных
+    //    моделей приходит от живого CLI (QueryCliAsync → models[].value), а сюда он не
+    //    заглядывает. Появился новый алиас в каталоге CLI — дописать и здесь, иначе выбор
+    //    родной модели из выпадающего списка даст ложное «модель не найдена».
+    public static bool IsNativeClaudeModel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return true;
+        var m = model.Trim();
+        return m.Equals(DefaultClaudeModel, StringComparison.OrdinalIgnoreCase)
+            || IsClaudeTierAlias(m)
+            || IsClaudeTierWindowAlias(m)
+            || m.StartsWith("claude-", StringComparison.OrdinalIgnoreCase);
+    }
+
     // Стоимость хода по ценам конфига модели. CLI на чужом эндпоинте считает
     // total_cost_usd по ценам Anthropic — доверять ему нельзя, пересчитываем сами.
     // null — модель родная Claude или цены не заданы (стоимость не показываем).

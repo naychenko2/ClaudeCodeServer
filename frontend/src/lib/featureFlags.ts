@@ -11,6 +11,7 @@ export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
   changeDossiersRecall: 'change-dossiers-recall',
   desktopAgent: 'desktop-agent',
+  specialtyPromptSections: 'specialty-prompt-sections',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

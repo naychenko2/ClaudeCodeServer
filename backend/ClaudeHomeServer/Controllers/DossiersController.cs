@@ -31,6 +31,9 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // Импортёр — тот же паттерн: тонкий объект над синглтонами, per-request
     private DossierImporter Importer => new(store, git, secrets);
 
+    // Гейт автовыгрузки — тот же паттерн: опрашивается статусом выгрузки (autoExport)
+    private DossierAutoExportGate AutoExportGate => new(projects, git, captureState);
+
     // Чужой проект — 404, а не 403: подтверждать его существование незачему
     private Project? Owned(string id)
     {
@@ -118,6 +121,10 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // осознанно, признак нужен только для честного диалога подтверждения.
     // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1 (один git-вызов):
     // им гейтится кнопка «Загрузить» (импорт), пока ветки нет.
+    // autoExport — причина гейта АВТОвыгрузки (DossierAutoExportGate): после сужения
+    // фона («ветка заведомо наша») общая подсказка «выгружается само» врала бы при
+    // чужом tip / одной origin-ветке / общей папке — панель выбирает текст по причине.
+    // null, когда проект не git-репозиторий (подсказка тогда всё равно скрыта).
     [HttpGet("{id}/dossiers/export/status")]
     public async Task<IActionResult> ExportStatus(string id, CancellationToken ct)
     {
@@ -125,11 +132,13 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         var p = Owned(id);
         if (p is null) return NotFound();
 
+        var isGitRepo = GitService.IsGitRepo(p.RootPath);
         return Ok(new
         {
-            isGitRepo = GitService.IsGitRepo(p.RootPath),
+            isGitRepo,
             sharedFolder = projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != p.OwnerId),
             hasDossierBranch = await git.HasDossiersBranchAsync(p.OwnerId, p.RootPath, ct),
+            autoExport = isGitRepo ? await AutoExportGate.ClassifyAsync(UserId, p, ct) : null,
         });
     }
 

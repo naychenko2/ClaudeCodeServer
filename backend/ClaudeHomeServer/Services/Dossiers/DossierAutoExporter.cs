@@ -43,6 +43,7 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly DossierDiscussionService _discussions;
     private readonly FeatureFlagService _flags;
     private readonly DossierCaptureState _state;
+    private readonly DossierAutoExportGate _gate;
     private readonly ILogger<DossierAutoExporter>? _log;
     private readonly MemoryDifyDebouncer _debounce;
 
@@ -59,6 +60,7 @@ public sealed class DossierAutoExporter : IHostedService
         _discussions = discussions;
         _flags = flags;
         _state = state;
+        _gate = new DossierAutoExportGate(projects, git, state);
         _log = log;
         // Окно батча: всплеск коммитов одного рабочего дня не должен крутить git-процессы
         // без остановки, но и затягивать сверх пары минут незачем. Минимум 1 с — осмысленная
@@ -100,30 +102,26 @@ public sealed class DossierAutoExporter : IHostedService
             if (project is null || project.OwnerId != ownerId) return;
             if (!GitService.IsGitRepo(project.RootPath)) return;
 
-            // Приватность общей папки (блокер консилиума 23.08): тот же признак, по
-            // которому ручной диалог держит фазу confirmShared. Папку делят несколько
-            // владельцев — фон не выгружает вовсе: переток паспортов к соседу без
-            // единого клика недопустим; ручная выгрузка с предупреждением остаётся.
-            if (_projects.GetByRootPath(project.RootPath).Any(x => x.OwnerId != project.OwnerId))
-            {
-                _log?.LogInformation(
-                    "dossiers: автовыгрузка проекта {Project} пропущена: папку делят несколько владельцев — только ручная выгрузка с предупреждением",
-                    project.Id);
-                return;
-            }
-
             // Гейт «ветка заведомо наша» (вариант «б» вердикта консилиума): снапшот
             // собирается только из своих паспортов, поэтому чужой tip он молча стёр бы,
-            // а MarkOwnTip закрыл бы соседу дорогу назад через автоимпорт. Фон трогает
-            // ветку лишь когда она точно наша — остальное работа ручной кнопки.
-            switch (await ClassifyBranchAsync(ownerId, project))
+            // а MarkOwnTip закрыл бы соседу дорогу назад через автоимпорт. Общая папка
+            // нескольких владельцев — тоже стоп: переток паспортов к соседу без единого
+            // клика недопустим. Фон трогает ветку лишь когда она точно наша — остальное
+            // работа ручной кнопки. Та же классификация опрашивается из
+            // GET /dossiers/export/status (поле autoExport).
+            switch (await _gate.ClassifyAsync(ownerId, project))
             {
-                case BranchOwnership.Foreign:
+                case DossierAutoExportGate.SharedFolder:
+                    _log?.LogInformation(
+                        "dossiers: автовыгрузка проекта {Project} пропущена: папку делят несколько владельцев — только ручная выгрузка с предупреждением",
+                        project.Id);
+                    return;
+                case DossierAutoExportGate.ForeignTip:
                     _log?.LogInformation(
                         "dossiers: автовыгрузка проекта {Project} пропущена: tip {Ref} не создан нашей выгрузкой — ветку трогает только ручная выгрузка",
                         project.Id, GitService.DossiersRef);
                     return;
-                case BranchOwnership.Orphan:
+                case DossierAutoExportGate.OriginOnly:
                     _log?.LogInformation(
                         "dossiers: автовыгрузка проекта {Project} пропущена: есть только origin-ветка, локальная поверх неё не создаётся",
                         project.Id);
@@ -152,30 +150,5 @@ public sealed class DossierAutoExporter : IHostedService
             // кнопка «Выгрузить», следующий захват переиграет попытку.
             _log?.LogWarning(ex, "dossiers: автовыгрузка проекта {Project} не удалась", projectId);
         }
-    }
-
-    // Классификация ветки паспортов для гейта «ветка заведомо наша»:
-    //   • Absent  — ветки нет нигде (ни локальной, ни origin): первая выгрузка на этой
-    //               машине, фон создаёт ветку как раньше;
-    //   • Ours    — локальный tip совпадает с меткой ImportKey/MarkOwnTip: его создала
-    //               наша же выгрузка (авто- или ручная), фон пишет поверх как раньше;
-    //   • Foreign — локальная ветка есть, но tip чужой (git pull соседа/второй машины)
-    //               либо метки нет: полный снапшот своих паспортов молча стёр бы чужие
-    //               записи — фон молчит;
-    //   • Orphan  — локальной нет, есть только origin/ccs/dossiers/v1: локальный
-    //               корневой коммит без родителя превратил бы ветку в непрошиваемую
-    //               сироту (push — non-fast-forward) — фон молчит.
-    private enum BranchOwnership { Absent, Ours, Foreign, Orphan }
-
-    private async Task<BranchOwnership> ClassifyBranchAsync(string ownerId, Project project)
-    {
-        var localTip = await _git.ResolveDossiersLocalTipAsync(ownerId, project.RootPath);
-        if (localTip is null)
-            return await _git.HasDossiersRemoteAsync(ownerId, project.RootPath)
-                ? BranchOwnership.Orphan
-                : BranchOwnership.Absent;
-        return _state.Get(DossierCaptureState.ImportKey(ownerId, project.Id)) == localTip
-            ? BranchOwnership.Ours
-            : BranchOwnership.Foreign;
     }
 }

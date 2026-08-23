@@ -1419,8 +1419,16 @@ export const api = {
     // sharedFolder — предупреждение о втором владельце той же папки. hasDossierBranch —
     // наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет, импорт из неё
     // бессмыслен, кнопку «Загрузить» в UI гейтим этим признаком.
+    // autoExport — причина гейта АВТОвыгрузки: панель выбирает по ней текст подсказки
+    // (после сужения фона «ветка заведомо наша» общая фраза «выгружается само» врала
+    // бы при чужом tip / одной origin-ветке / общей папке). null у не-git проекта.
     exportStatus: (projectId: string) =>
-      request<{ isGitRepo: boolean; sharedFolder: boolean; hasDossierBranch: boolean }>(
+      request<{
+        isGitRepo: boolean;
+        sharedFolder: boolean;
+        hasDossierBranch: boolean;
+        autoExport: 'active' | 'foreignTip' | 'originOnly' | 'sharedFolder' | null;
+      }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
     // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
     // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:

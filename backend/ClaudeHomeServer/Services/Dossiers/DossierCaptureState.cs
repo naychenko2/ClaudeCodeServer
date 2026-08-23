@@ -29,6 +29,12 @@ public sealed class DossierCaptureState
         return $"{ownerId}:{projectId}:{hash}";
     }
 
+    // Ключ импортного tip ветки паспортов (автоимпорт по новому tip): {owner}:{project}
+    // без дерева — ветка ccs/dossiers/v1 одна на весь репозиторий, наблюдение идёт от
+    // корня проекта. Префикс "import:" разводит его с ключами захвата HEAD в той же
+    // карте state.json (ownerId — GUID, с "import" никогда не совпадает).
+    public static string ImportKey(string ownerId, string projectId) => $"import:{ownerId}:{projectId}";
+
     public string? Get(string key)
     {
         lock (_lock) return _map.GetValueOrDefault(key);

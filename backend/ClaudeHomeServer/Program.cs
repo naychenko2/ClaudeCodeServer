@@ -180,6 +180,9 @@ AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 // hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>();
 AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
+// Автоимпорт паспортов по новому tip ветки ccs/dossiers/v1 (тумблер проекта
+// AutoImportDossiers): наблюдение за веткой тиком 60 с, без fetch/pull
+AddHosted<ClaudeHomeServer.Services.Dossiers.DossierAutoImporter>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.

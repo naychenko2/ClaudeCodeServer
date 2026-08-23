@@ -156,9 +156,12 @@ public record ErrorMessage(string Text, bool ExpectResultFollows = false, string
 // Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля
 // использования окна; LimitType — five_hour/seven_day/weekly; Status — allowed/allowed_warning/
 // rejected. Используется и для непрерывного индикатора, и для баннера (при warning/rejected).
+// OverageDisabledReason — причина выключенного перерасхода (out_of_credits, org_level_disabled):
+// «кончились кредиты» и «выключено организацией» — разные причины с разными действиями.
 public record RateLimitMessage(string LimitType, string? ResetsAt, string? Status = null,
     double? Utilization = null, bool IsUsingOverage = false,
-    string? OverageStatus = null, string? OverageResetsAt = null)
+    string? OverageStatus = null, string? OverageResetsAt = null,
+    string? OverageDisabledReason = null)
     : ServerMessage("rate_limit");
 
 // Граница компакции контекста: Claude свернул часть истории (system/compact_boundary).

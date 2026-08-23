@@ -239,7 +239,12 @@ public sealed class SubscriptionUsageWarmupService(
             var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
                 ? (DateTime?)dt.ToUniversalTime() : null;
             pool.MarkExhausted(key, resetsAt);
-            Console.Error.WriteLine($"[SubscriptionWarmup] '{key}': лимит исчерпан (status={m.Status}), выведена из ротации");
+            // Причина выключенного перерасхода (out_of_credits / org_level_disabled) — ключевая
+            // деталь разбора инцидентов: «кончились кредиты» и «выключено организацией» лечатся
+            // по-разному, без неё в логе видно только status=rejected
+            var overageReason = string.IsNullOrWhiteSpace(m.OverageDisabledReason)
+                ? "" : $", перерасход выключен: {m.OverageDisabledReason}";
+            Console.Error.WriteLine($"[SubscriptionWarmup] '{key}': лимит исчерпан (status={m.Status}{overageReason}), выведена из ротации");
         }
         else if (pool.IsExhausted(key))
         {

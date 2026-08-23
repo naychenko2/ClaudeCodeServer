@@ -38,7 +38,15 @@ public static class ClaudeRateLimitParser
         var overageStatus = info.TryGetProperty("overageStatus", out var osEl) ? osEl.GetString() : null;
         var overageResetsAt = NormalizeReset(info, "overageResetsAt", "overage_resets_at");
 
-        message = new RateLimitMessage(limitType, resetsAt, status, utilization, isUsingOverage, overageStatus, overageResetsAt);
+        // Почему перерасход выключен (наблюдались out_of_credits и org_level_disabled) —
+        // ключевая деталь для разбора инцидентов: «кончились кредиты» и «выключено на
+        // уровне организации» лечатся по-разному
+        var overageDisabledReason =
+            (info.TryGetProperty("overageDisabledReason", out var odrEl) ? odrEl.GetString() : null)
+            ?? (info.TryGetProperty("overage_disabled_reason", out var odrEl2) ? odrEl2.GetString() : null);
+
+        message = new RateLimitMessage(limitType, resetsAt, status, utilization, isUsingOverage,
+            overageStatus, overageResetsAt, overageDisabledReason);
         return true;
     }
 

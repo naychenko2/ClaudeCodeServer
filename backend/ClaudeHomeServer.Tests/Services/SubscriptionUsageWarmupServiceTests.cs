@@ -119,6 +119,34 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
     }
 
     [Fact]
+    public void RecordAndGuard_RejectedПричинаПерерасхода_ДоезжаетДоЛога()
+    {
+        // Инцидент 20–23.08.2026: без причины в логе видно только status=rejected, а
+        // «кончились кредиты» (out_of_credits) и «выключено организацией»
+        // (org_level_disabled) — разные причины с разными действиями
+        var (svc, pool, _, _) = MkService(subKeys: ["second"]);
+        var msg = new RateLimitMessage("five_hour", DateTime.UtcNow.AddHours(2).ToString("o"),
+            "rejected", null, false, OverageDisabledReason: "out_of_credits");
+
+        var log = CaptureErr(() => svc.RecordAndGuard("second", msg));
+
+        pool.IsExhausted("second").Should().BeTrue();
+        log.Should().Contain("out_of_credits");
+    }
+
+    [Fact]
+    public void RecordAndGuard_БезПричиныПерерасхода_ЛогБезПустойПричины()
+    {
+        var (svc, _, _, _) = MkService(subKeys: ["second"]);
+        var msg = new RateLimitMessage("five_hour", DateTime.UtcNow.AddHours(2).ToString("o"),
+            "rejected", null, false);
+
+        var log = CaptureErr(() => svc.RecordAndGuard("second", msg));
+
+        log.Should().Contain("лимит исчерпан (status=rejected), выведена из ротации");
+    }
+
+    [Fact]
     public void RecordAndGuard_ЗдоровыйОтветНаИсчерпанном_ВозвращаетВРотацию()
     {
         var (svc, pool, _, _) = MkService(subKeys: ["second"]);

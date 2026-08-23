@@ -41,6 +41,12 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateChatRequest req)
     {
+        // Грань десктопного агента выдаётся по оси «проект + чат» (ADR-008), поэтому вне
+        // проекта десктопного чата не бывает вовсе: он завёлся бы заведомо без грани.
+        if (req.Desktop) return BadRequest(new { error = DesktopChatGuard.OutsideProject });
+        // Транскрипт десктопного чата обычному чату не отдаётся — в нём кадры рабочего стола
+        if (DesktopChatGuard.Refuse(sessions, desktop: false, req.ResumeSessionId) is string desktopRefusal)
+            return BadRequest(new { error = desktopRefusal });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной»: без
         // personaId/resumeSessionId сначала провижним ассистента и продолжим создание с ним.
@@ -350,7 +356,8 @@ public class ChatsController(SessionManager sessions, FileService files,
 
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
 // (либо resumeSessionId — продолжение существующего разговора).
-public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null, string? PersonaId = null);
+// Desktop — попытка завести десктопный чат вне проекта: 400 (грань живёт только в проекте)
+public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null, string? PersonaId = null, bool Desktop = false);
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать чат постоянным;
 // N > 0 — временный, авто-удаление через N минут после последней активности.

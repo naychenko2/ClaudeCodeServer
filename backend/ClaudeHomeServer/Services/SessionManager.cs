@@ -308,6 +308,8 @@ public class SessionManager : IDisposable
     private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;
     private readonly JwtService _jwt;
+    // Токены грани десктопа (ADR-008): кеш по чату поверх _jwt, отдельный от сервисных
+    private readonly Desktop.DesktopCapabilityTokenService _desktopTokens;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
     // Сервисный токен MCP-серверов — ОДИН на владельца (задачи/заметки/память/персоны/…
@@ -514,6 +516,7 @@ public class SessionManager : IDisposable
         _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
         _users = users;
         _jwt = jwt;
+        _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);
         _server = server;
         _config = config;
         // Sweep-terminus grace (P12/P15): потолок ожидания exited после result до принудительного
@@ -647,6 +650,44 @@ public class SessionManager : IDisposable
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         var token = GetServiceToken(ownerId);
         return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
+    }
+
+    // Право чата на десктопную грань по СУЩНОСТИ чата — единая точка правды (ADR-008:
+    // «Грань не доставляется в ходы исполнения задач, отложенные и регулярные чаты,
+    // групповые чаты»), никаких дублей-предикатов рядом. internal static — чистая функция,
+    // тестируется напрямую (DesktopTurnEligibleTests).
+    internal static bool DesktopTurnEligible(Session session) =>
+        // Десктопный ли чат (тип чата «Десктопный») — свойство конфигурации чата, а не хода
+        session.DesktopChat
+        // Чат-исполнитель задачи (в том числе отложенной и регулярной — их создаёт
+        // TaskExecutionService по расписанию, человека у машины в этот момент нет) и чат
+        // правила проактивности: Origin выводится из TaskId/AutomationRuleId (Session.Origin)
+        && session.Origin == ChatOrigin.Manual
+        && !session.TaskExecution
+        // Групповой чат: руки одного устройства на несколько собеседников не делятся.
+        // Participants заполняется ТОЛЬКО у групповых (ValidateParticipants: 2–8 персон);
+        // чат с одной персоной хранит её в PersonaId — поэтому «есть участники» == «групповой».
+        // Проверяем Count > 0, а не Count > 1: если валидацию состава когда-нибудь ослабят
+        // до одиночных участников, грань не должна молча поехать в чат с чужой персоной.
+        && session.Participants is not { Count: > 0 };
+
+    // Контекст MCP-сервера десктопной грани (ADR-008, «Два уровня, которые нельзя смешивать»):
+    // состав грани решает КОНФИГУРАЦИЯ на момент запуска CLI — тип чата «Десктопный» плюс
+    // включение грани в проекте, — и никогда состояние хода. Право на каждый конкретный вызов
+    // проверяет бэкенд (DesktopAccessGate), поэтому здесь нет ни сеанса рук, ни устройства:
+    // их появление и исчезновение не должно менять tools/list и перезапускать процесс CLI.
+    // Право чата по его сущности — DesktopTurnEligible (единственная точка правды);
+    // персона может отказаться от грани Off-привязкой tool:desktop, как от codegraph/widgets.
+    private DesktopMcpContext? BuildDesktopContext(string? ownerId, Session session, Persona? persona)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (!DesktopTurnEligible(session)) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.DesktopAgent)) return null;
+        if (_projects.GetById(session.ProjectId!)?.DesktopAgentEnabled != true) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "desktop")) return null;
+        // Capability-токен чата, а не сервисный JWT владельца: /api/devices/* его не принимают
+        return new DesktopMcpContext(ResolveTasksApiUrl(ownerId),
+            _desktopTokens.TokenFor(ownerId, session.Id), session.Id);
     }
 
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): только
@@ -1690,7 +1731,7 @@ public class SessionManager : IDisposable
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null)
+        string? onboardingKind = null, bool desktopChat = false)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -1712,6 +1753,9 @@ public class SessionManager : IDisposable
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
+            // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
+            // состав грани фиксируется на момент запуска CLI
+            DesktopChat = desktopChat,
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -2769,6 +2813,7 @@ public class SessionManager : IDisposable
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
             CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
+            DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
@@ -4134,6 +4179,7 @@ public class SessionManager : IDisposable
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
                 CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
+                DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
@@ -4672,6 +4718,15 @@ public class SessionManager : IDisposable
         if (enabled && entry.Info.TeamImplement is not null)
             throw new SessionModeConflictException(
                 "Автопилот недоступен в чате «Командной реализации» — здесь работа идёт через задачи исполнителям.");
+
+        // ADR-008 («Два уровня, которые нельзя смешивать»): автопродолжение work-loop
+        // в десктопном чате запрещено. Цикл ведёт агента по итерациям без человека, а вся
+        // модель грани держится на том, что человек подтверждает каждое действие на
+        // устройстве. Выключение не запрещаем — вернуть false всегда можно.
+        if (enabled && entry.Info.DesktopChat)
+            throw new SessionModeConflictException(
+                "Цикл «до готово» недоступен в десктопном чате: агент не должен действовать на " +
+                "вашем компьютере без подтверждения каждого действия.");
 
         var wasEnabled = entry.Info.WorkLoop is not null;
         // Присвоение WorkLoop и очистку буфера хода держим под одним локом: иначе обнуление

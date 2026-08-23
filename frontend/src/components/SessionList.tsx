@@ -8,6 +8,8 @@ import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
+import { showToast } from '../lib/toast';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
@@ -146,6 +148,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
 
+  // Кнопка десктопного чата видна, когда фича включена у человека И грань включена
+  // в этом проекте: без второй половины оси сервер откажет, а кнопка врала бы
+  const desktopReady = useFeature(FLAGS.desktopAgent) && project.desktopAgentEnabled === true;
+
   const createNew = async (): Promise<Session> => {
     // Чат создаётся от лица дефолт-персоны проекта
     const s = await createChatWithContextPersona(project, { mode: 'auto' });
@@ -153,6 +159,22 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);
     return s;
+  };
+
+  // Десктопный чат (ADR-008): тип задаётся ТОЛЬКО при создании — продолжить его обычным
+  // чатом нельзя, поэтому и создаётся он отдельной дверью, а не переключателем в готовом
+  // чате. Персону сюда не подставляем: у грани своя ось выдачи «проект + тип чата».
+  const createDesktop = async () => {
+    try {
+      const s = await api.sessions.create(project.id, 'auto', undefined, undefined,
+        undefined, undefined, undefined, true);
+      setSessions(prev => [s, ...prev]);
+      onSelect(s);
+    } catch (e: unknown) {
+      // Отказ сервера показываем как есть: он называет причину (флаг, тумблер проекта)
+      showToast('Десктопный чат не создан',
+        e instanceof Error && e.message ? e.message : 'Сервер отказал', 'info');
+    }
   };
 
 
@@ -469,6 +491,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChatListToolbar
         onNew={() => { void createNew(); }}
+        onNewDesktop={desktopReady ? () => { void createDesktop(); } : undefined}
         hideNew={!online}
         sessions={sessions}
         filters={filters}

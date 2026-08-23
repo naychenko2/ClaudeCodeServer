@@ -415,6 +415,19 @@ public class ProjectManager
     }
 
     // Кастомные колонки Kanban-доски проекта; пустой список/null → дефолтные 3
+    // Тумблер грани десктопного агента в проекте (ADR-008): вторая половина оси выдачи
+    // «проект + тип чата». Гашение живых сеансов рук — забота вызывающего контроллера,
+    // здесь только состояние проекта.
+    public Project SetDesktopAgent(string id, bool enabled)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.DesktopAgentEnabled = enabled;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     public Project UpdateBoardColumns(string id, List<BoardColumn>? columns)
     {
         var project = _projects.GetValueOrDefault(id)

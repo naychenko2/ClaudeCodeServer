@@ -506,6 +506,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WidgetsMcpContext? _widgetsMcp;
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
+    // MCP-сервер десктопной грани (ADR-008): null — грань чату не доставляется
+    private readonly DesktopMcpContext? _desktopMcp;
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004): null — флаг выключен/вне проекта
     private readonly string? _dossierTrailerHint;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
@@ -584,6 +586,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
         _codeGraphMcp = context.CodeGraphMcp;
+        _desktopMcp = context.DesktopMcp;
         _dossierTrailerHint = context.DossierTrailerHint;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
@@ -639,6 +642,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasWidgets = widgetsServerPath is not null;
         var codeGraphServerPath = _codeGraphMcp is not null ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
         var hasCodeGraph = codeGraphServerPath is not null;
+        var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
+        var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var hasModules = _modulesMcp is { Servers.Count: > 0 };
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
@@ -649,7 +654,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var externalMcp = _externalMcpProvider?.Invoke();
         var hasExternal = externalMcp is { Servers.Count: > 0 };
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
+            && !hasWidgets && !hasCodeGraph && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal
             && !(hasConsultants && memoryServerPath is not null)) return (null, "", []);
 
@@ -1040,6 +1045,32 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
                         // Рабочее дерево хода: отдельное worktree чата имеет свой граф
                         ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
+                    },
+                };
+            }
+
+            if (hasDesktop && _desktopMcp is not null)
+            {
+                // Десктопная грань (ADR-008): шесть инструментов desktop_* — руки на машине
+                // пользователя. Состав постоянный: офлайн-устройство и отсутствие сеанса рук —
+                // это ОТВЕТ инструмента честным текстом, а не изменение tools/list. Право чата
+                // на грань бэкенд проверяет на КАЖДЫЙ вызов (тип чата + включение в проекте +
+                // активный сеанс), чат-вызывателя выводит из capability-токена.
+                servers["desktop"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { desktopServerPath! },
+                    // alwaysLoad — по той же причине, что у tasks (см. выше): без него первый
+                    // вызов в ходе падает «No such tool available», а ретраить клик по чужому
+                    // рабочему столу нельзя — ввод не идемпотентен
+                    ["alwaysLoad"] = true,
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["DESKTOP_API_URL"] = _desktopMcp.ApiUrl,
+                        // Capability-токен грани, а не сервисный JWT владельца: /api/devices/*
+                        // сервисный токен не принимает вовсе (ADR-008, «Авторизация канала»)
+                        ["DESKTOP_API_TOKEN"] = _desktopMcp.Token,
+                        ["DESKTOP_SESSION_ID"] = _desktopMcp.SessionId,
                     },
                 };
             }

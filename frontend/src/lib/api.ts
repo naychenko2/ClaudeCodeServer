@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -315,6 +315,34 @@ export const api = {
       }),
   },
 
+  // Десктопный агент (ADR-008): устройства владельца, сопряжение и веб-половина сеанса рук.
+  // Начать сеанс отсюда нельзя ни при каких условиях — эта дверь на самом устройстве,
+  // веб-морда может только попросить (request) и остановить (handsStop).
+  devices: {
+    list: () => request<DesktopDevice[]>('/devices'),
+    // Код сопряжения: 8 символов, живёт 5 минут, принадлежит ЭТОЙ веб-сессии
+    startPairing: () => request<DesktopPairingCode>('/devices/pairing', { method: 'POST' }),
+    pairingStatus: () => request<DesktopPairingCode>('/devices/pairing'),
+    cancelPairing: () => request<void>('/devices/pairing', { method: 'DELETE' }),
+    rename: (id: string, name: string) =>
+      request<DesktopDevice>(`/devices/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify({ name }),
+      }),
+    // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
+    revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+    // Статус сеанса для бейджа «руки на …». Отдельный запрос, а не только событие ленты:
+    // событие эфемерное, и после перезагрузки страницы бейдж погас бы при живых руках
+    handsChat: (chatSessionId: string) =>
+      request<DesktopHandsChatStatus>(`/devices/hands/chat/${encodeURIComponent(chatSessionId)}`),
+    handsRequest: (chatSessionId: string) =>
+      request<{ requested: boolean; active: boolean; requestedAt?: string }>(
+        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/request`, { method: 'POST' }),
+    handsStop: (chatSessionId: string) =>
+      request<{ stopped: boolean }>(
+        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/stop`, { method: 'POST' }),
+  },
+
   providers: {
     balance: (key: string) => request<ProviderBalanceInfo>(`/providers/${key}/balance`),
     usage: (key: string) =>
@@ -465,6 +493,14 @@ export const api = {
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[] }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
+    // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
+    // сколько погасил (состав инструментов зафиксирован на запуске CLI, и запущенный ход
+    // иначе доработал бы с гранью в руках)
+    setDesktopAgent: (id: string, enabled: boolean) =>
+      request<{ project: Project; handsStopped: number }>(
+        `/projects/${encodeURIComponent(id)}/desktop-agent`,
+        { method: 'PUT', body: JSON.stringify({ enabled }) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)
     updateTags: (id: string, registry: ProjectTag[]) =>
@@ -1101,10 +1137,12 @@ export const api = {
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки тем»)
     iconBatch: (projectId: string) =>
       request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
-    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string, desktop?: boolean) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
+        // desktop — ТИП чата (ADR-008), задаётся только при создании: из десктопного чата
+        // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {

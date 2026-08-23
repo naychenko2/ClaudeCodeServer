@@ -1,0 +1,11 @@
+<Solution>
+  <!--
+    Решение десктопного клиента ЖИВЁТ ОТДЕЛЬНО от backend/ClaudeHomeServer.slnx (ADR-008,
+    «Последствия»): клиент Windows-only, а CI гоняет тесты на Linux — общий прогон он бы
+    уронил. В backend/ClaudeHomeServer.slnx эти проекты не добавляются никогда.
+  -->
+  <Project Path="AiHomeDesktop.Core/AiHomeDesktop.Core.csproj" />
+  <Project Path="AiHomeDesktop.Core.Tests/AiHomeDesktop.Core.Tests.csproj" />
+  <Project Path="AiHomeDesktop.Windows/AiHomeDesktop.Windows.csproj" />
+  <Project Path="AiHomeDesktop.App/AiHomeDesktop.App.csproj" />
+</Solution>

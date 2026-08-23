@@ -14,6 +14,8 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
+import { DevicesModal } from '../features/desktop/DevicesModal';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { DeployModal } from './DeployModal';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
@@ -62,6 +64,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
+  const [showDevices, setShowDevices] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
   // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
   // переключаем набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
@@ -167,6 +170,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     window.addEventListener(BADGE_EVENT, refresh);
     return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
   }, [isAdmin]);
+
+  // Грань десктопного агента за фич-флагом: без него пункта «Устройства» нет —
+  // сопрягать нечего, а сервер всё равно откажет
+  const desktopEnabled = useFeature(FLAGS.desktopAgent);
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
   // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
@@ -484,6 +491,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
+          // Устройства десктопной грани — только при поднятом флаге: без него сопрягать
+          // нечего, сервер всё равно откажет
+          onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile || isTablet}
           // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:
@@ -512,6 +522,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
+      {showDevices && <DevicesModal onClose={() => setShowDevices(false)} />}
       {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
     </div>
   );

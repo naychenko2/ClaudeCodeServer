@@ -42,6 +42,10 @@
 
 **features/** — [decision-history-import-texts.md](features/decision-history-import-texts.md)
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
+[desktop-agent.md](features/desktop-agent.md) (десктопный агент: что сделано серверной
+половиной первой волны, эндпоинты и чего ещё нет),
+[desktop-agent-client.md](features/desktop-agent-client.md) (десктопный клиент второй волны:
+устройство решения, сопряжение и токен, фазы вызова в канале, запуск и отладка),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
 иконка проекта, аватар персоны), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),
@@ -79,6 +83,8 @@
 [ADR-007](adr/ADR-007-model-preset-chains.md) (пресет как именованная цепочка моделей),
 [ADR-008](adr/ADR-008-project-background-generation.md) (фон проекта: контракт генерации
 без разметки, серверная сборка тайла и форма хранения),
+[ADR-008-desktop-agent](adr/ADR-008-desktop-agent.md) (десктопный агент: авторизация канала,
+сеанс рук, форма снапшота — номер совпал с фоном проекта, это разные решения),
 [ADR-009](adr/ADR-009-project-icon-glyph.md) (значок проекта: контракт ответа модели,
 белый список lucide и форма хранения);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
@@ -87,6 +93,9 @@
 **research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),
 [roadmap-team-zone.md](research/roadmap-team-zone.md),
+[uia-snapshot-spike.md](research/uia-snapshot-spike.md) и
+[browser-channel-spike.md](research/browser-channel-spike.md) с
+[browser-channel.md](research/browser-channel.md) (замеры под ADR-008),
 [voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
 и Claude: разрывы и план P0/P1/P2). Читать как «так было тогда».
 

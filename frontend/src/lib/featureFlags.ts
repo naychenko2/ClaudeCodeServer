@@ -10,6 +10,7 @@ import { useSyncExternalStore } from 'react';
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
   changeDossiersRecall: 'change-dossiers-recall',
+  desktopAgent: 'desktop-agent',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

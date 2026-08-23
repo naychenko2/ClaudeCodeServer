@@ -8412,6 +8412,8 @@ public class SessionManagerTests : IDisposable
         var result = await _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
 
         result.Resumed.Should().BeTrue();
+        result.Message.Should().Contain("напишите сообщение",
+            "очередь пуста — текст не обещает ход, которого не будет (minor 3)");
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active,
             "главное: в чат снова можно писать");
         var team = _sut.GetById(session.Id)!.TeamImplement!;
@@ -8532,6 +8534,60 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
         _sut.GetById(session.Id)!.ClaudeSessionId.Should().BeNull(
             "ход начнётся заново — без --resume по повреждённому файлу");
+    }
+
+    // Major ревью: реальный таймлайн гибели на битом транскрипте — первый вызов убил
+    // процесс и вернул 409 transcript_damaged, финализация убитого прогона перевела
+    // чат в Active, а отложенная очередь умерла на --resume по тому же файлу. У
+    // свободного чата с битым якорем единственный выход — startFresh, и он обязан
+    // проходить: раньше здесь навсегда стоял «Чат не занят».
+    [Fact]
+    public async Task ПерезапускХода_СвободныйЧатСБитымТранскриптом_СпасениеStartFreshРазрешено()
+    {
+        const string csid = "resq0123456789abcd";
+        var session = await MkStuckTeamSessionAsync("turn-rescue", claudeSessionId: csid);
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"mess");
+        _sut.GetById(session.Id)!.Status = SessionStatus.Active;
+
+        var fresh = await _sut.RestartStuckTurnAsync(session.Id, startFresh: true);
+
+        fresh.Resumed.Should().BeFalse();
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active, "чат снова доступен");
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().BeNull(
+            "битый resume-якорь сброшен — новый ход не упрётся в повреждённый файл");
+    }
+
+    // Спасательная ветка — не лазейка: свободный чат с целым транскриптом startFresh
+    // не получает — обычное сообщение продолжит разговор без потери контекста
+    [Fact]
+    public async Task ПерезапускХода_СвободныйЧатСЦелымТранскриптом_СпасениеНеОткрываетДыру()
+    {
+        const string csid = "resqok0123456789ab";
+        var session = await MkStuckTeamSessionAsync("turn-rescue-ok", claudeSessionId: csid);
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n");
+        _sut.GetById(session.Id)!.Status = SessionStatus.Active;
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: true);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Чат не занят*",
+                "целый транскрипт — спасать нечего: сообщение продолжит разговор");
+    }
+
+    // Minor 4 ревью: перезапуск хода — семантика штаба (кнопка и тексты говорят
+    // «штаб»), вне «Командной реализации» — отказ; обобщение на все чаты — отдельно
+    [Fact]
+    public async Task ПерезапускХода_ВнеРежимаКР_Отказ()
+    {
+        var dir = MkProjectDir("turn-no-team");
+        var project = _projectManager.Create("turn-no-team", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.GetById(session.Id)!.Status = SessionStatus.Working;
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*штаба*");
     }
 
     [Fact]

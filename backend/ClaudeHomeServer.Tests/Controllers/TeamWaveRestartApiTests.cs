@@ -213,6 +213,8 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("outcome").GetString().Should().Be("restarted");
         body.GetProperty("resumed").GetBoolean().Should().BeTrue();
+        body.GetProperty("message").GetString().Should().Contain("с того же места",
+            "в очереди стоит сообщение — продолжение действительно будет");
 
         // Отложенное сообщение уходит первым ходом нового процесса (фабрика адаптеров —
         // фейк: SentMessages фиксирует доставку без запуска claude)
@@ -244,6 +246,48 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("error").GetString().Should().Contain("не занят");
+    }
+
+    // Minor 4 ревью: кнопка и тексты — про штаб, вне «Командной реализации»
+    // перезапуск хода не работает (обобщение на все чаты — отдельное решение)
+    [Fact]
+    public async Task ПерезапускХода_ВнеРежимаКР_409СТекстом()
+    {
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projects = _factory.Services.GetRequiredService<ProjectManager>();
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var dir = Path.Combine(_factory.TempDir, "proj_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = projects.Create("plain-" + Guid.NewGuid().ToString("N")[..6], dir, ownerId,
+            TestWebApplicationFactory.TestUsername);
+        var session = await sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        sessions.GetById(session.Id)!.Status = SessionStatus.Working;
+
+        var response = await _client.PostAsync(
+            $"/api/chats/{session.Id}/team-wave/restart-turn", Body(new { }));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("error").GetString().Should().Contain("штаба");
+    }
+
+    // Minor 3 ревью: очередь пуста — нового хода не будет, текст не обещает продолжения
+    [Fact]
+    public async Task ПерезапускХода_ПустаяОчередь_ТекстГоворитПоФакту()
+    {
+        var (sessionId, _) = await MakeWaveAsync(busy: true);
+
+        var response = await _client.PostAsync(
+            $"/api/chats/{sessionId}/team-wave/restart-turn", Body(new { }));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var message = body.GetProperty("message").GetString()!;
+        message.Should().Contain("напишите сообщение",
+            "очередь пуста — ход не начнётся сам, человек должен знать об этом");
+        message.Should().NotContain("с того же места",
+            "обещание продолжения без хода — враньё");
     }
 
     [Fact]
@@ -282,6 +326,9 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
             "фронт по коду показывает «начать ход заново» вместо пустой ошибки");
         sessions.GetById(sessionId)!.Status.Should().Be(SessionStatus.Working);
 
+        // Major ревью: пока 409 идёт к человеку, финализация убитого прогона переводит
+        // чат в Active — повторный startFresh обязан проходить и из этого состояния
+        sessions.GetById(sessionId)!.Status = SessionStatus.Active;
         var fresh = await _client.PostAsync(
             $"/api/chats/{sessionId}/team-wave/restart-turn", Body(new { startFresh = true }));
 

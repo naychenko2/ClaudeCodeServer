@@ -4881,14 +4881,32 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
+        // Гейт режима: кнопка и тексты — про штаб «Командной реализации», семантика
+        // перезапуска (kill → resume хода штаба) работает только там. Обобщение на
+        // все чаты — отдельное решение, не побочный эффект.
+        if (entry.Info.TeamImplement is null)
+            throw new InvalidOperationException(
+                "Перезапуск хода доступен только в чате штаба «Командной реализации»");
         if (!_turnRestarts.TryAdd(sessionId, 0))
             throw new InvalidOperationException("Ход уже перезапускается — дождитесь результата");
         try
         {
-            // 1. Живость: чат обязан быть занят — свободному чату перезапуск не нужен
+            // 1. Живость: чат обязан быть занят — свободному чату перезапуск не нужен.
+            // Спасательная ветка (major ревью): первый вызов успел убить процесс и
+            // вернуть 409 transcript_damaged, финализация убитого прогона перевела
+            // чат в Active, а отложенная очередь умерла на --resume по тому же битому
+            // файлу. Чат свободен, но resume-якорь отравлен — без пропуска здесь
+            // повторный startFresh вечно упирался бы в «Чат не занят», и у чата не
+            // было бы штатного выхода из повреждённого транскрипта.
             if (entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting))
-                throw new InvalidOperationException(
-                    "Чат не занят: ход не идёт. Просто напишите сообщение — оно продолжит разговор");
+            {
+                var rescue = startFresh
+                    && FindResumeTranscript(entry) is { } damaged
+                    && !Llm.Claude.TranscriptProbe.IsTailIntact(damaged);
+                if (!rescue)
+                    throw new InvalidOperationException(
+                        "Чат не занят: ход не идёт. Просто напишите сообщение — оно продолжит разговор");
+            }
             // Штаб ждёт ответа человека на карточку (разрешение/вопрос/план) — это не
             // зависание: ответ лежит в ленте чата, прерывать ожидание рестартом нельзя
             if (entry.PendingInteraction is not null)
@@ -4924,14 +4942,11 @@ public class SessionManager : IDisposable
             // подписки пула может не входить в AllowedRoots, и ложный «повреждён» на
             // здоровом разговоре хуже пропущенной проверки (CLI сам скажет при resume).
             // startFresh идёт мимо — транскрипт всё равно выбрасываем.
-            if (!startFresh && entry.Info.ClaudeSessionId is { } csid)
-            {
-                var transcript = Llm.Claude.TranscriptProbe.FindMainTranscript(ResolveTurnCwd(entry.Info), csid);
-                if (transcript is not null && !Llm.Claude.TranscriptProbe.IsTailIntact(transcript))
-                    throw new TurnTranscriptDamagedException(
-                        "Файл разговора повреждён — продолжить с прежним контекстом нельзя. " +
-                        "Можно начать ход заново: старый контекст будет потерян, чат снова заработает");
-            }
+            if (!startFresh && FindResumeTranscript(entry) is { } transcript
+                && !Llm.Claude.TranscriptProbe.IsTailIntact(transcript))
+                throw new TurnTranscriptDamagedException(
+                    "Файл разговора повреждён — продолжить с прежним контекстом нельзя. " +
+                    "Можно начать ход заново: старый контекст будет потерян, чат снова заработает");
 
             // 5. Revive: убираем ожидающую карточку и отравленный адаптер (у него мог
             // остаться захваченным _turnLock зависшей финализацией — DisposeAsync с
@@ -4962,10 +4977,19 @@ public class SessionManager : IDisposable
                 SaveSessions();
             }
             await ApplyStatusAsync(sessionId, entry, SessionStatus.Active);
+            // Честный текст (minor ревью): продолжение разговора обещаем, только если
+            // в очереди правда что-то стоит или активный цикл продолжит себя сам —
+            // при пустой очереди нового хода не будет, и «разговор продолжится
+            // с того же места» обещало бы его напрасно.
+            bool willContinue;
+            lock (entry.PendingLock) willContinue = !entry.QueueFrozen && entry.Pending.Count > 0;
+            willContinue |= entry.Info.WorkLoop is not null;
             await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "team_restart",
                 startFresh
                     ? "Ход перезапущен вручную с чистого листа: прежний контекст утерян — напишите, что делать дальше"
-                    : "Ход перезапущен вручную — разговор продолжится с сохранённым контекстом");
+                    : willContinue
+                        ? "Ход перезапущен вручную — разговор продолжится с сохранённым контекстом"
+                        : "Ход перезапущен вручную — чат снова доступен, контекст сохранён");
 
             // Новый ход с --resume: сообщения, отложенные зависшим ходом, уходят обычной
             // доставкой (DrainInFlight гасит параллельные разборы). Замороженная «Стоп»
@@ -4975,8 +4999,12 @@ public class SessionManager : IDisposable
             return new StuckTurnRestartResult(
                 Resumed: !startFresh,
                 Message: startFresh
-                    ? "Ход начнётся заново — контекст сброшен, чат снова доступен"
-                    : "Ход перезапущен: чат снова доступен, разговор продолжится с того же места");
+                    ? willContinue
+                        ? "Ход начнётся заново — контекст сброшен, чат снова доступен"
+                        : "Контекст сброшен, чат снова доступен — напишите сообщение, чтобы начать новый ход"
+                    : willContinue
+                        ? "Ход перезапущен: чат снова доступен, разговор продолжится с того же места"
+                        : "Ход перезапущен: чат снова доступен — напишите сообщение, чтобы продолжить разговор");
         }
         finally { _turnRestarts.TryRemove(sessionId, out _); }
     }
@@ -4988,6 +5016,14 @@ public class SessionManager : IDisposable
         info.WorktreePath
         ?? (info.ProjectId is { } pid ? _projects.GetById(pid)?.RootPath : null)
         ?? "";
+
+    // Транскрипт resume-якоря чата: null — якоря нет или файл не найден (проверку
+    // целостности тогда пропускаем). Обе точки RestartStuckTurnAsync — гейт
+    // спасательной ветки и валидация перед resume — ищут файл одним путём.
+    private string? FindResumeTranscript(SessionEntry entry) =>
+        entry.Info.ClaudeSessionId is { } csid
+            ? Llm.Claude.TranscriptProbe.FindMainTranscript(ResolveTurnCwd(entry.Info), csid)
+            : null;
 
     // Дефолт лимитов цикла «до готово». Невалидное значение конфига (не число или ≤ 0)
     // сваливается в дефолт, а не молча отрубает цикл: MaxTaskExecutions=0 иначе даёт

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gauge, ListChecks, Pause, Power, Users, Zap } from 'lucide-react';
+import { AlertTriangle, Clock, Gauge, ListChecks, Pause, Power, Users, Zap } from 'lucide-react';
 import type { Persona, SessionTeamImplement, TeamWavePulse, TeamWaveSnapshot } from '../../types';
 import { C, FS, FONT, R, MODAL_W } from '../../lib/design';
 import { Button, ConfirmDialog, Menu, Modal } from '../../components/ui';
@@ -14,9 +14,17 @@ import {
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
   teamPulseTone, teamPulseBadgeText, teamPulseBadgeShort,
   teamPulseMeaning, teamPulseStage, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
+  isTeamWavePulseStale,
 } from '../../lib/teamImplement';
 import { teamMechanic } from './teamMechanics';
+import { useOnline } from '../../hooks/useOnline';
 import type { Mode } from '../../lib/modes';
+
+// Тик для переоценки свежести pulse (см. isTeamWavePulseStale): при живом pulse периодически
+// обновляем now, чтобы бейдж вовремя свалился обратно на stageTone, когда бэк замолчал
+// дольше TEAM_WAVE_PULSE_STALE_MS. 30с — половина порога: ложное «зависло» не появится
+// быстрее реального (а реальное обгоняет порог на ~30с после первого пропуска тика)
+const PULSE_NOW_TICK_MS = 30_000;
 
 // Бейдж режима «Командная реализация» в композере.
 // По образцу loopBadge цикла «до готово»: pill 24/26, FS.xs, weight 600 — но с иконкой
@@ -80,15 +88,35 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
     return () => { cancelled = true; };
   }, [infoOpen, sessionId, state.stage]);
 
+  // Свежесть пульса: либо прошло больше порога от lastActivityAt, либо SignalR offline
+  // (обновлений физически не будет). В обоих случаях НЕЛЬЗЯ показывать пульс как живую
+  // сводку: бейдж падает на stageTone, блок «Что это значит» не рисуется. Это лечит сразу
+  // две находки QA: (а) при обрыве связи бейдж перестаёт утверждать «штаб работает» по
+  // вчерашнему числу; (б) после F5 до первого WS-события state.teamWavePulse === undefined
+  // — livePulse остаётся null, бейдж показывает чистую стадию, без stale-данных
+  const online = useOnline();
+  // Тик «сейчас»: пока пульс потенциально живой (есть pulse и стейдж дышит), переоцениваем
+  // его каждые 30с. Снимаем тик как только livePulse стал null — лишних ререндеров не нужно
+  const [now, setNow] = useState(() => Date.now());
+  const pulseStage = teamPulseStage(state.stage) && pulse;
+  useEffect(() => {
+    if (!pulseStage) return;
+    const t = setInterval(() => setNow(Date.now()), PULSE_NOW_TICK_MS);
+    return () => clearInterval(t);
+  }, [pulseStage]);
+  const livePulse: TeamWavePulse | null = pulseStage && pulse && !isTeamWavePulseStale(pulse, now, online)
+    ? pulse
+    : null;
+
   // Эффективный тон на стадии волны/проверки: пульс живого бэка перебивает дефолтный
-  // тон стадии. Вне этих стадий или без пульса — как раньше, по стадии
+  // тон стадии. Вне этих стадий или без (свежего) пульса — как раньше, по стадии
   const stageTone = teamImplementTone(state.stage);
   const effectiveTone: 'work' | 'wait' | 'idle' | 'warning' | 'danger' =
-    teamPulseStage(state.stage) && pulse ? teamPulseTone(pulse.liveness) : stageTone;
+    livePulse ? teamPulseTone(livePulse.liveness) : stageTone;
 
-  // Полная и короткая подпись бейджа при живом пульсе на стадии волны/проверки
-  const pulseFullText = pulse ? teamPulseBadgeText(state, pulse) : null;
-  const pulseShortText = pulse ? teamPulseBadgeShort(pulse) : null;
+  // Полная и короткая подпись бейджа при ЖИВОМ пульсе на стадии волны/проверки
+  const pulseFullText = livePulse ? teamPulseBadgeText(state, livePulse) : null;
+  const pulseShortText = livePulse ? teamPulseBadgeShort(livePulse) : null;
 
   // Дефолтные подписи (как раньше, без пульса)
   const fullText = teamImplementBadgeText(state.stage, state.waveNumber, state.plannedWaves);
@@ -124,12 +152,23 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   })();
 
   // Текст и тултип бейджа с учётом пульса
-  const badgeText = teamPulseStage(state.stage) && pulse
+  const badgeText = livePulse
     ? (isMobile ? (pulseShortText ?? text) : (pulseFullText ?? text))
     : text;
-  const badgeTitle = teamPulseStage(state.stage) && pulse
-    ? `${fullText} — ${teamPulseMeaning(pulse.liveness)}`
+  const badgeTitle = livePulse
+    ? `${fullText} — ${teamPulseMeaning(livePulse.liveness)}`
     : `${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`;
+
+  // Иконка состояния пульса в бейдже: различает liveness ДО чтения текста — периферийным
+  // зрением quiet и stalled дают одинаковый тёплый фон (--c-warning-bg vs --c-danger-bg
+  // бледные и неразличимы), а иконка видна сразу. alive — точка и так «дышит», лишний
+  // Loader рядом шумел бы; quiet — часы (тишина); stalled/dead — треугольник (нужно
+  // внимание). Тот же приём ниже усиливает блок «Что это значит»
+  const LivenessIcon = livePulse
+    ? (effectiveTone === 'warning' ? Clock
+      : effectiveTone === 'danger' ? AlertTriangle
+        : null)
+    : null;
 
   const budgetLine = teamBudgetLine(state.budget);
   const budgetTight = teamBudgetTight(state.budget);
@@ -140,10 +179,12 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
         {TEAM_IMPLEMENT_DESCRIPTION}
       </p>
       {/* Пульс волны: блок «Что это значит» — объясняет состояние человеческим языком.
-          На стадии волны/проверки при живом пульсе. Тон по liveness: alive — спокойный,
-          quiet — янтарный (это нормально), stalled/dead — красный (нужно внимание) */}
-      {teamPulseStage(state.stage) && pulse && (
-        <PulseBlock pulse={pulse} tone={effectiveTone} />
+          На стадии волны/проверки при ЖИВОМ пульсе (livePulse === null при обрыве SignalR
+          или после F5 до первого события — тогда не рисуем, чтобы не врать). Тон по
+          liveness: alive — спокойный, quiet — янтарный (это нормально), stalled/dead —
+          красный (нужно внимание) */}
+      {livePulse && (
+        <PulseBlock pulse={livePulse} tone={effectiveTone} />
       )}
       {/* Список задач волны: refetch снапшота при КАЖДОМ открытии (живёт в родителе —
           useTeamWaveSnapshot в ChatPanel). Здесь только рендер: задачи, исполнители,
@@ -225,11 +266,17 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, height,
           padding: '0 9px', borderRadius: R.pill, border: 'none', cursor: 'pointer',
-          fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
+          // Текст бейджа: при danger — жирнее (700 vs 600), иначе периферийным зрением
+          // quiet/stalled различимы только в иконке, шрифт подкрепляет ту же идею
+          fontSize: FS.xs, fontWeight: effectiveTone === 'danger' ? 700 : 600,
+          whiteSpace: 'nowrap', flexShrink: 0,
           fontFamily: FONT.sans, ...toneStyle,
         }}
       >
         <Users size={11} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+        {LivenessIcon && (
+          <LivenessIcon size={11} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} aria-hidden="true" />
+        )}
         {badgeText}
         <span style={{
           width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0,
@@ -304,7 +351,12 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
 
 // Блок «Что это значит» в поповере/шторке. Тон по liveness: alive — нейтральный,
 // quiet — янтарный (тишина в пределах нормы), stalled/dead — красный (нужно внимание).
-// Текст готов с бэка в lib/teamImplement.teamPulseMeaning — одной строкой на состояние
+// Текст готов с бэка в lib/teamImplement.teamPulseMeaning — одной строкой на состояние.
+// На danger добавляем левый бордер C.dangerBorder и жирный шрифт: бледный dangerBg рядом с
+// бледным warningBg периферийным зрением не различить, а разница «тихо vs похоже, зависло»
+// должна читаться до чтения текста (находка QA: Вера приняла quiet за stalled, потому что
+// десктопный поповер не разводил их цветом). Иконка состояния в строке усиливает тот же
+// сигнал — см. LivenessIcon в бейдже
 function PulseBlock({ pulse, tone }: {
   pulse: TeamWavePulse;
   tone: 'work' | 'wait' | 'idle' | 'warning' | 'danger';
@@ -317,13 +369,32 @@ function PulseBlock({ pulse, tone }: {
     : tone === 'warning' ? C.warningText
       : tone === 'danger' ? C.dangerText
         : C.textSecondary;
+  // Левый бордер у danger: 3px заметной ширины, токен из дизайн-системы (C.dangerBorder).
+  // Не используем border со всех сторон — это сломало бы ритм блока на общем фоне поповера.
+  // padding-left сдвинут, чтобы текст встал ровно по сетке поповера
+  const isDanger = tone === 'danger';
+  const LivenessIcon = tone === 'warning' ? Clock
+    : tone === 'danger' ? AlertTriangle
+      : null;
   return (
     <div style={{
-      marginTop: 8, padding: '6px 8px', borderRadius: R.md,
+      marginTop: 8,
+      padding: isDanger ? '6px 8px 6px 10px' : '6px 8px',
+      paddingLeft: isDanger ? 10 : 8,
+      borderRadius: R.md,
       background: bg, color: fg,
       fontSize: FS.xs, lineHeight: 1.4,
+      fontWeight: isDanger ? 700 : 400,
+      // borderLeft только у danger: 3px цветной полосы слева. Светлая/тёмная тема обе
+      // держат C.dangerBorder как отдельный токен — менять его ради блока нельзя (используют
+      // и кнопки, и карточки опасности), и не нужно: сам токен достаточно насыщен
+      ...(isDanger ? { borderLeft: `3px solid ${C.dangerBorder}` } : {}),
+      display: 'flex', alignItems: 'flex-start', gap: 6,
     }}>
-      {teamPulseMeaning(pulse.liveness)}
+      {LivenessIcon && (
+        <LivenessIcon size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+      )}
+      <span>{teamPulseMeaning(pulse.liveness)}</span>
     </div>
   );
 }

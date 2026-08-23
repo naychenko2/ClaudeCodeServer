@@ -29,6 +29,14 @@ export function teamImplementTone(stage: TeamImplementStage): TeamImplementTone 
 // dead    — процесс штаба остановлен при активной волне (danger)
 export type TeamPulseTone = 'work' | 'warning' | 'danger';
 
+// Порог «свежести» пульса. Пульс приходит с бэка раз в минуту (TeamWaveWatchdog.SendWavePulsesAsync);
+// считать пульс живым только пока с момента lastActivityAt прошло меньше порога. Два пропущенных
+// тика — уже подозрительно: один блип (короткий разрыв WS) укладывается в окно в 60с, дальше
+// бэк молчит и бейдж рискует показывать stale-число («тихо 1 мин» при реальных 5 минутах).
+// Параллельно гейт по online: при обрыве SignalR новых пульсов физически нет, и старый
+// пульс врал бы ровно ту же ложь «штаб работает», от которой мы здесь и уходим.
+export const TEAM_WAVE_PULSE_STALE_MS = 180_000;
+
 export function teamPulseTone(liveness: TeamWaveLiveness): TeamPulseTone {
   switch (liveness) {
     case 'alive': return 'work';
@@ -39,6 +47,24 @@ export function teamPulseTone(liveness: TeamWaveLiveness): TeamPulseTone {
     // безопасности, лучше лишний раз предупредить о проблемном состоянии
     default: return 'danger';
   }
+}
+
+// Пульс протух (его нельзя показывать как живую сводку штаба): либо прошло больше порога
+// от lastActivityAt, либо SignalR offline (обновлений физически не будет). Чистая функция —
+// для тестов; в UI её зовёт бейдж через useNow/useOnline и подменяет «живой» pulse на null.
+// Невалидный lastActivityAt трактуем как «свежий» — пульс только что пришёл, и перепутать
+// формат с бэком мы не хотим: лучше показать живую сводку, чем сорваться в stale на ровном
+// месте. Порог симметричный по обе стороны (online=false → stale всегда).
+export function isTeamWavePulseStale(
+  pulse: TeamWavePulse,
+  now: number,
+  online: boolean,
+  staleMs: number = TEAM_WAVE_PULSE_STALE_MS,
+): boolean {
+  if (!online) return true;
+  const ts = Date.parse(pulse.lastActivityAt);
+  if (!Number.isFinite(ts)) return false;
+  return now - ts > staleMs;
 }
 
 // Сколько минут прошло с момента активности штаба (по серверным секундам тишины).

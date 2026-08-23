@@ -13,6 +13,7 @@ import {
   teamPulseTone, teamPulseActivityLabel, teamPulseMeaning, teamPulseBadgeText,
   teamPulseBadgeShort, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel,
   teamWaveTasksSorted, TEAM_IMPLEMENT_SHORT_NAME,
+  isTeamWavePulseStale, TEAM_WAVE_PULSE_STALE_MS,
 } from '../teamImplement';
 import { applyServerMessage, initialChatState, type ChatState } from '../chatReducer';
 
@@ -615,5 +616,59 @@ describe('teamPulseBadgeText под стадию', () => {
     const text = teamPulseBadgeText(state, { ...basePulse, stage: 'checking' });
     expect(text).toContain('проверка');
     expect(text).not.toContain('волна');
+  });
+});
+
+// Свежесть пульса (см. isTeamWavePulseStale): бейдж/поповер перестают показывать старую
+// сводку штаба, когда (а) прошло больше порога от lastActivityAt — бэк молчит дольше
+// двух тиков, (б) SignalR offline — обновлений физически нет, и текст «штаб работает»
+// стал бы ложью. Без гейта бейдж продолжал бы показывать «тихо 1 мин» при реальных
+// 5 минутах тишины, а в QA-приёмке это назвали «врёт индикатор живости»
+// Покрываем три ветви:
+//   1) свежий + онлайн — null (живой)
+//   2) протухший по времени — true (stale)
+//   3) свежий, но offline — true (SignalR мёртв, бэк не дошлёт)
+//   4) кривой lastActivityAt — false (показываем свежим, чтобы не сорваться из-за формата)
+describe('isTeamWavePulseStale: свежесть пульса', () => {
+  const basePulse = {
+    stage: 'wave' as const, waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5, quietSeconds: 60, liveness: 'alive' as TeamWaveLiveness,
+  };
+
+  it('свежий пульс при живом SignalR — не протухший', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + 30_000, true)).toBe(false);
+  });
+
+  it('свежий пульс, но прошло ровно порог — ещё не протухший (строгое сравнение)', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + TEAM_WAVE_PULSE_STALE_MS, true)).toBe(false);
+  });
+
+  it('протухший по времени (больше порога) — бэк молчит', () => {
+    const ts = 1_000_000;
+    const old = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(old, ts + TEAM_WAVE_PULSE_STALE_MS + 1, true)).toBe(true);
+  });
+
+  it('свежий по времени, но SignalR offline — всё равно протухший (обновлений не будет)', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + 1_000, false)).toBe(true);
+  });
+
+  it('кривой lastActivityAt не считается протухшим — пульс только что пришёл, формат трогать нельзя', () => {
+    const weird = { ...basePulse, lastActivityAt: 'not-a-date' };
+    expect(isTeamWavePulseStale(weird, Date.now(), true)).toBe(false);
+  });
+
+  // Кастомный порог (для тестов): свежий по дефолту, но протухший по укороченному
+  it('порог параметризован — можно сократить окно в тестах', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + 5_000, true, 3_000)).toBe(true);
+    expect(isTeamWavePulseStale(fresh, ts + 2_000, true, 3_000)).toBe(false);
   });
 });

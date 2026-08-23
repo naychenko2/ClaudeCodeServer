@@ -542,6 +542,14 @@ public class TeamWaveService
         if (session.TeamImplement is not { PlanCardId: { } planId } team)
             return new ReissueDecision(false, "под-задача не принадлежит плану практики", null);
 
+        // Гонка ревью этапа 3: задача закрылась (или её удалили), пока вызов добирался
+        // сюда — остановка исполнителя ждёт до 10 с, и закрывшаяся за это время задача
+        // успевала получить «Повторная попытку» в описание и впустую списать Attempts
+        // и бюджет. Отказ без карточки эскалации: закрытая задача — не проблема.
+        var current = _tasks.GetById(task.Id);
+        if (current is null || current.Status == TaskItemStatus.Done)
+            return new ReissueDecision(false, "задача уже закрыта", null);
+
         // m2 (второй проход Глеба): без лока и перечитывания два параллельных провала волны
         // брали каждый свой (возможно устаревший) снимок плана и потом целиком перезаписывали
         // его на диск (SaveTeamPlanCardAsync ниже) — последняя запись затирала Attempts++
@@ -615,6 +623,13 @@ public class TeamWaveService
     private async Task<(bool Ok, string? Error)> LaunchReissueAsync(
         TaskItem task, TeamImplementSubtask subtask, string? humanNote = null)
     {
+        // Гонка ревью этапа 3: задача закрылась, пока запуск добирался сюда (решение о
+        // перевыдаче и запись плана — свои await'ы). Готовую работу не трогаем: ни
+        // «Повторная попытка» в описании, ни запуск исполнителя поверх закрытого.
+        var live = _tasks.GetById(task.Id);
+        if (live is null || live.Status == TaskItemStatus.Done)
+            return (false, "задача уже закрыта");
+        task = live;
         var reason = humanNote ?? (string.IsNullOrWhiteSpace(task.ClaudeResult)
             ? "ход завершился ошибкой" : task.ClaudeResult);
         var updated = _tasks.Update(task.Id, new UpdateTaskRequest(
@@ -678,6 +693,11 @@ public class TeamWaveService
         task.LinkedSessionId is { } sid
         && _sessions.GetById(sid) is { Status: SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting };
 
+    // Занят ли исполнитель задачи по id: задачу могли удалить за окно ожидания останова
+    // (NRE ревью этапа 3) — удалённая задача занятым исполнителем не считается
+    internal bool ExecutorBusyById(string taskId) =>
+        _tasks.GetById(taskId) is { } t && IsExecutorBusy(t);
+
     // Дождаться, пока чат-исполнитель перестанет числиться занятым после Interrupt:
     // статус убирается асинхронно (реанимация зависшего / финализация убитого прогона),
     // а перевыдача сразу после стопа упиралась бы в гейт «по задаче уже работает сессия».
@@ -731,7 +751,14 @@ public class TeamWaveService
                 await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
             }
 
-            var decision = await DecideReissueAsync(session, task);
+            // Перепроверка перед перевыдачей (гонка ревью этапа 3): исполнитель мог
+            // закрыть задачу, пока мы его останавливали (окно до 10 с). Отказ тем же
+            // текстом, что и входной гейт, — без расхода Attempts и бюджета
+            var recheck = _tasks.GetById(taskId);
+            if (recheck is null || recheck.Status == TaskItemStatus.Done)
+                throw new InvalidOperationException("Задача уже завершена — перезапуск не нужен");
+
+            var decision = await DecideReissueAsync(session, recheck);
             if (decision is not { Allowed: true, Subtask: { } subtask })
                 return new TaskRestartResult("escalated",
                     $"Перевыдача не разрешена: {decision.Refusal}. Карточка с решением — в ленте штаба");
@@ -798,7 +825,7 @@ public class TeamWaveService
             {
                 if (_tasks.GetById(s.TaskId!) is not { } t || !IsExecutorBusy(t)) continue;
                 _sessions.Interrupt(t.LinkedSessionId!);
-                await WaitExecutorIdleAsync(() => IsExecutorBusy(_tasks.GetById(t.Id)!), TimeSpan.FromSeconds(10));
+                await WaitExecutorIdleAsync(() => ExecutorBusyById(t.Id), TimeSpan.FromSeconds(10));
             }
 
             var reissued = 0;
@@ -806,7 +833,12 @@ public class TeamWaveService
             var failed = 0;
             foreach (var s in undone)
             {
-                if (_tasks.GetById(s.TaskId!) is not { } task) continue;
+                // Перечитываем и пропуск закрывшегося (гонка ревью этапа 3): остановка
+                // соседних исполнителей ждёт до 10 с на каждого, и закрывшаяся за это
+                // время задача не должна получать ни «Повторную попытку», ни расход
+                // Attempts/бюджета, ни счётчик эскалаций
+                var task = _tasks.GetById(s.TaskId!);
+                if (task is null || task.Status == TaskItemStatus.Done) continue;
                 var decision = await DecideReissueAsync(session, task);
                 if (decision is not { Allowed: true, Subtask: { } subtask }) { escalated++; continue; }
                 var launch = await LaunchReissueAsync(task, subtask,

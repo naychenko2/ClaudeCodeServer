@@ -2365,6 +2365,58 @@ public class TeamWaveServiceTests : IDisposable
         }
     }
 
+    // Гонка ревью этапа 3: задача закрылась, пока вызов держал гейт перезапуска — окно
+    // между входной проверкой статуса и перевыдачей (остановка исполнителя ждёт до 10 с).
+    // Готовую задачу не трогаем: ни «Повторная попытка» в описании, ни расход бюджета
+    [Fact]
+    public async Task ПерезапускЗадачи_ЗакрыласьПокаИдётВызов_ОтказБезРасходаИДописки()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-race");
+        _tasks.MarkClaudeResult(a.Id, "error");
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id));
+            // Гейт перезапуска захвачен — входная проверка статуса уже пройдена
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight("task:" + a.Id) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight("task:" + a.Id).Should().BeTrue("вызов внутри окна гонки");
+
+            // Задача закрывается ровно между проверкой и перевыдачей
+            _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+            _sut.TestHoldRestart.TrySetResult();
+
+            var act = async () => await first;
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*уже завершена*");
+            Team(session.Id).Budget.RetriesUsed.Should().Be(0,
+                "перевыдача закрытой задачи бюджет не списывает");
+            _tasks.GetById(a.Id)!.Description.Should().NotContain("Повторная попытка",
+                "описание готовой задачи не трогаем");
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
+    }
+
+    // NRE ревью этапа 3: задачу удалили за 10-секундное окно ожидания останова —
+    // предикат занятости обязан отвечать «не занят», а не ронять перезапуск волны
+    [Fact]
+    public async Task ЗанятостьИсполнителя_ЗадачуУдалили_ЛожьВместоNRE()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("busy-deleted");
+        await AttachExecutorAsync(a, session, busyStatus: true);
+
+        _sut.ExecutorBusyById(a.Id).Should().BeTrue("занятый исполнитель виден");
+
+        _tasks.Delete(a.Id);
+        _sut.ExecutorBusyById(a.Id).Should().BeFalse(
+            "удалённая задача занятым исполнителем не считается");
+    }
+
     [Fact]
     public async Task ПерезапускВолны_ЖиваяВолна_ТребуетПодтверждения()
     {

@@ -52,6 +52,41 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         subs.GetProperty("claude-2").GetProperty("name").GetString().Should().Be("Claude 2 (Max)");
     }
 
+    // Карточка подписки должна показывать ограничения тарифа (Opus / 1M), иначе UI
+    // честно объявляет аккаунт «В ротации», а по факту Pick его не отдаст ни одному
+    // opus- или 1m-ходу. Реальный случай: claude-3 стоял с обоими флагами false.
+    [Fact]
+    public async Task GetUsage_АккаунтПула_ОтдаётВозможностиАккаунтаИзКонфига()
+    {
+        using var withPool = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-one",
+                    [$"{ClaudeSubscriptionPool.Section}:claude:SupportsOpus"] = "true",
+                    [$"{ClaudeSubscriptionPool.Section}:claude:Supports1M"] = "true",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-3:OAuthToken"] = "token-three",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-3:DisplayName"] = "Claude 3 (Pro)",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-3:SupportsOpus"] = "false",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-3:Supports1M"] = "false",
+                });
+            });
+        });
+        var client = await AuthenticateAsync(withPool);
+
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+
+        var claude = usage.GetProperty("subscriptions").GetProperty("claude");
+        claude.GetProperty("supportsOpus").GetBoolean().Should().BeTrue();
+        claude.GetProperty("supports1M").GetBoolean().Should().BeTrue();
+
+        var claude3 = usage.GetProperty("subscriptions").GetProperty("claude-3");
+        claude3.GetProperty("supportsOpus").GetBoolean().Should().BeFalse();
+        claude3.GetProperty("supports1M").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task GetUsage_АккаунтПула_ОтдаётLoginCommandСПутёмПрофиля()
     {

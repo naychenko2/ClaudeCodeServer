@@ -48,4 +48,80 @@ describe('rotationBadgeState', () => {
     expect(s.label).toBe('В ротации');
     expect(s.reason).toBe('может принимать новые чаты');
   });
+
+  // Ограничения тарифа — третья ось бейджа: не ломают четыре состояния, но ВСЕГДА
+  // подмешиваются в reason как «· кроме Opus / 1M-ходов». Сценарий прода 2026-08-23:
+  // claude-3 с SupportsOpus=false и Supports1M=false показывался «в ротации», а по
+  // факту Pick его не отдавал ~2/3 чатов (opus/opus[1m]). Без оговорки бейдж
+  // «направляются сюда» врал. Tone и label не двигаем — только reason.
+  it('вне ротации + без Opus — reason упоминает ограничение', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, exhausted: true, freeAvailable: true,
+      supportsOpus: false,
+    });
+    expect(s.tone).toBe('warn');
+    expect(s.label).toBe('Выведен из ротации');
+    expect(s.reason).toBe('лимит исчерпан — новые чаты идут на свободные аккаунты · кроме Opus');
+  });
+
+  it('вне ротации + без Opus и без 1M — обе способности в суффиксе через «/»', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, exhausted: true, freeAvailable: true,
+      supportsOpus: false, supports1M: false,
+    });
+    expect(s.reason).toBe('лимит исчерпан — новые чаты идут на свободные аккаунты · кроме Opus / 1M-ходов');
+  });
+
+  it('вне ротации + только без 1M — суффикс упоминает только 1M', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, exhausted: true, freeAvailable: false,
+      targetName: 'Claude 2', supports1M: false,
+    });
+    expect(s.reason).toBe('лимит исчерпан — новые чаты идут на «Claude 2» · кроме 1M-ходов');
+  });
+
+  it('спилл (цель, но вне ротации) + без Opus — суффикс тоже подмешивается', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: true, utilization: 0.91, threshold: 0.8,
+      supportsOpus: false,
+    });
+    expect(s.reason).toBe('свободных аккаунтов нет — нагрузка 5ч 91% ≥ порога 80% · кроме Opus');
+  });
+
+  it('в ротации + без Opus — reason ВСЕГДА упоминает ограничение, даже на зелёной ветке', () => {
+    const s = rotationBadgeState({
+      inRotation: true, isTarget: true, utilization: 0.3, threshold: 0.8,
+      supportsOpus: false,
+    });
+    expect(s.tone).toBe('ok');
+    expect(s.label).toBe('В ротации');
+    expect(s.reason).toBe('новые чаты направляются сюда · кроме Opus');
+  });
+
+  it('в ротации, не цель + без Opus и 1M — оговорка перечисляет оба', () => {
+    const s = rotationBadgeState({
+      inRotation: true, isTarget: false, utilization: 0.5, threshold: 0.8,
+      supportsOpus: false, supports1M: false,
+    });
+    expect(s.tone).toBe('ok');
+    expect(s.reason).toBe('может принимать новые чаты · кроме Opus / 1M-ходов');
+  });
+
+  it('supportsOpus=true/1M=true — оговорки нет, существующий текст без суффикса', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, exhausted: true, freeAvailable: true,
+      supportsOpus: true, supports1M: true,
+    });
+    expect(s.reason).toBe('лимит исчерпан — новые чаты идут на свободные аккаунты');
+  });
+
+  // Поля флагов не пришли (старый бэкенд или бэкенд без конфигурации пула) — undefined
+  // НЕ превращается в «не принимает»: отдавать false «по умолчанию» было бы враньём, бэк
+  // шлёт null → фронт мапит в undefined и суффикс не подмешивается.
+  it('supportsOpus/supports1M не заданы — оговорки нет ни в одной ветке', () => {
+    const ok = rotationBadgeState({ inRotation: true, isTarget: true, utilization: 0.3, threshold: 0.8 });
+    expect(ok.reason).toBe('новые чаты направляются сюда');
+    const warn = rotationBadgeState({ inRotation: false, isTarget: false, exhausted: true, freeAvailable: true });
+    expect(warn.reason).toBe('лимит исчерпан — новые чаты идут на свободные аккаунты');
+  });
 });

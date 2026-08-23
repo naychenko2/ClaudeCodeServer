@@ -42,6 +42,10 @@ export interface ProviderCardData {
   windows: QuotaWindowView[];        // percent-окна на поверхности
   labelWidth?: number;               // подпись QuotaWindow (64 — провайдеры, 92 — подписки)
   pills: PillSpec[];                 // пилюли шапки (planLabel, «бесплатный», «Предел»)
+  // Пилюли, дублирующиеся в раскрытии рядом со строкой тарифа — для мобила, где шапка
+  // тесна (пилюли скрыты) и warn-пилюли об ограничениях тарифа иначе не видны вообще.
+  // Тариф в этот список НЕ входит: он уже идёт отдельной строкой в раскрытии.
+  expandedPills?: PillSpec[];
   routingBadge?: { tone: 'ok' | 'warn'; label: string };  // бейдж ротации — только карточка-цель
   freshness?: FreshnessSpec;         // свежесть в углу шапки
   hint?: ReactNode;                  // хинт-строка (подписки: сброс худшего окна + reason)
@@ -306,7 +310,15 @@ export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMob
       {/* Раскрытие: count-окна/тренд/кабинет (провайдеры) + тариф/порог/свежесть/команда (подписки) */}
       {open && clickable && (
         <div style={{ marginTop: 10, borderTop: `1px dashed ${C.dashed}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {data.tier && <Pill>Тариф: {data.tier}</Pill>}
+          {data.tier && (
+            // Строка тарифа + пилюли ограничений (Без Opus / Без 1M). На мобиле шапка тесна
+            // и пилюли там не показываются — здесь их единственное место на этом устройстве.
+            // Оборачиваем в flex, чтобы пилюли не переносились под длинный тариф, а ужимались
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+              <Pill>Тариф: {data.tier}</Pill>
+              {data.expandedPills?.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
+            </div>
+          )}
           {data.thresholdNote && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{data.thresholdNote}</div>}
           {data.freshnessDetail && <div style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>{data.freshnessDetail}</div>}
           {data.copyCommand ? (

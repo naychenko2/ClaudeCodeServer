@@ -263,6 +263,29 @@ interface SubCtx {
   usageError: boolean;
 }
 
+// Пилюли шапки карточки подписки: тариф + ограничения. Третья ось наблюдаемости рядом
+// с бейджем «в ротации»: false → «Без Opus» / «Без 1M», null/undefined — поле не пришло
+// со старого бэка (обратная совместимость снимков), дефолт true неинформативен и пилюлю
+// не рисует. Сами пилюли warn-цвета — это «ограничение», а не норма.
+function subscriptionPills(sub: SubscriptionUsage): PillSpec[] {
+  const pills: PillSpec[] = [];
+  if (sub.tier) pills.push({ label: `Тариф: ${sub.tier}`, tone: 'plain' });
+  if (sub.supportsOpus === false) pills.push({ label: 'Без Opus', tone: 'warn' });
+  if (sub.supports1M === false) pills.push({ label: 'Без 1M', tone: 'warn' });
+  return pills;
+}
+
+// Только warn-пилюли ограничений — отдельный массив для раскрытия карточки: на мобиле
+// шапка тесна (точка, имя, бейдж ротации, свежесть) и пилюли там скрыты, поэтому без
+// дубля в раскрытии warn-пилюли вообще не видны. Тариф НЕ включаем: он уже отдельной
+// строкой `<Pill>Тариф: …</Pill>` рядом.
+function subscriptionExpandedPills(sub: SubscriptionUsage): PillSpec[] {
+  const pills: PillSpec[] = [];
+  if (sub.supportsOpus === false) pills.push({ label: 'Без Opus', tone: 'warn' });
+  if (sub.supports1M === false) pills.push({ label: 'Без 1M', tone: 'warn' });
+  return pills;
+}
+
 // Подписка Claude → общая вью-модель. Окна — напрямую из latestPerWindow: при !hasUtil
 // не выдумываем «0%», а пишем «в пределах нормы» (как UsageWidget.WindowRow).
 function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx): ProviderCardData {
@@ -277,8 +300,10 @@ function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx)
     return {
       key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
       windows: [], labelWidth: 92,
-      // Тариф — в шапке (раскрытия у пустой карточки нет, кроме unauthorized с командой)
-      pills: sub.tier ? [{ label: `Тариф: ${sub.tier}`, tone: 'plain' as const }] : [],
+      // Тариф — в шапке (раскрытия у пустой карточки нет, кроме unauthorized с командой);
+      // рядом — пилюли ограничений аккаунта (false = «Без Opus» / «Без 1M»).
+      pills: subscriptionPills(sub),
+      expandedPills: subscriptionExpandedPills(sub),
       hint: unauthorized
         ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
         : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
@@ -315,13 +340,19 @@ function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx)
     isTarget,
     targetName: ctx.routingTarget ? (ctx.subs[ctx.routingTarget]?.name ?? ctx.routingTarget) : undefined,
     freeAvailable: ctx.freeAvailable,
+    // Ограничения тарифа — третья ось: не ломают бейдж, но подмешиваются в reason
+    // («· не принимает Opus / 1M-ходы»). Подробнее — lib/rotation.ts.
+    supportsOpus: sub.supportsOpus ?? undefined,
+    supports1M: sub.supports1M ?? undefined,
   });
   const series = seriesByWindow(sub.snapshots);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
 
   return {
     key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
-    windows: winViews, labelWidth: 92, pills: [],
+    windows: winViews, labelWidth: 92,
+    pills: subscriptionPills(sub),
+    expandedPills: subscriptionExpandedPills(sub),
     routingBadge: isTarget ? { tone: rot.tone, label: rot.label } : undefined,
     freshness: fresh.corner,
     hint: buildSubHint(worst, rot),

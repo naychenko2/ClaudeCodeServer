@@ -67,6 +67,12 @@ public record OllamaActionInfo(string Key, string Title, string Group, bool Rout
 // (SubscriptionOAuthUsageService.LoginCommandFor); null — у аккаунта нет файлового
 // профиля, куда логин имел бы смысл. Отдаётся всегда, не только при unauthorized —
 // фронт сам решает, когда показать кнопку копирования.
+// SupportsOpus / Supports1M — возможности аккаунта по тарифу (из ClaudeSubscriptionConfig).
+// Третья ось наблюдаемости рядом с «в ротации»: Pick их уже учитывает (SupportsModel),
+// карточка — нет. false = «Без Opus» / «Без 1M» пилюля. Тип bool?, потому что в блок
+// подписок попадают только аккаунты с настроенной конфигурацией пула (HasExtra), где
+// оба поля невыключаемые; null остаётся для обратной совместимости со старыми бэкапами
+// снимков (data/usage.json), где этих полей ещё не было.
 public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
     bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null,
-    string? LoginCommand = null);
+    string? LoginCommand = null, bool? SupportsOpus = null, bool? Supports1M = null);

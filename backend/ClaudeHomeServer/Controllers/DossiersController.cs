@@ -20,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 public class DossiersController(ProjectManager projects, DossierStore store,
     CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
     GitService git, SessionManager sessions, UserStore users, InstanceSecretsProvider secrets,
-    DossierDiscussionService discussions) : ControllerBase
+    DossierDiscussionService discussions, DossierCaptureState captureState) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -145,6 +145,10 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         try
         {
             var result = await Exporter.ExportAsync(UserId, p, ct);
+            // Tip ручной выгрузки — тоже «наш»: тик автоимпорта не должен завозить
+            // содержимое только что выгруженной ветки обратно как «чужое» (та же
+            // петля, что у автовыгрузки — разбор 23.08)
+            captureState.MarkOwnTip(UserId, p.Id, result.CommitSha);
             return Ok(new
             {
                 status = result.Committed ? "exported" : "nothingToExport",
@@ -172,6 +176,11 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         try
         {
             await git.PushDossiersBranchAsync(p.OwnerId, p.RootPath, creds, ct);
+            // Отправленная ветка — наша по определению (кнопку жмёт владелец): фиксируем
+            // её tip, чтобы тик автоимпорта не завёз содержимое ветки обратно как «чужое».
+            // Push tip не двигает, но ветка могла быть создана до включения автоимпорта.
+            var tip = await git.GetDossiersTipAsync(p.OwnerId, p.RootPath, ct);
+            captureState.MarkOwnTip(UserId, p.Id, tip?.CommitSha);
             return Ok(new { pushed = true });
         }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }

@@ -35,6 +35,17 @@ public sealed class DossierCaptureState
     // карте state.json (ownerId — GUID, с "import" никогда не совпадает).
     public static string ImportKey(string ownerId, string projectId) => $"import:{ownerId}:{projectId}";
 
+    // Зафиксировать tip ветки паспортов как созданный НАШЕЙ выгрузкой (авто- или ручной):
+    // автоимпорт сравнивает наблюдаемый tip с этим ключом и свой tip пропускает — иначе
+    // петля «автовыгрузка двигает tip → автоимпорт видит "новый" tip» завозит импортированные
+    // копии собственных паспортов (разбор 23.08). Чужой tip с git pull отличается и
+    // импортируется штатно. Неизвестный tip (null/пусто — ветки нет) не фиксируется.
+    public void MarkOwnTip(string ownerId, string projectId, string? tipSha)
+    {
+        if (string.IsNullOrWhiteSpace(tipSha)) return;
+        Set(ImportKey(ownerId, projectId), tipSha);
+    }
+
     public string? Get(string key)
     {
         lock (_lock) return _map.GetValueOrDefault(key);

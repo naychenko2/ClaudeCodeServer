@@ -29,6 +29,7 @@ public class DossierAutoExportTests : IDisposable
     private readonly ChatHistoryService _history;
     private readonly Mock<IHubContext<SessionHub>> _hub;
     private readonly DossierStore _store;
+    private readonly DossierCaptureState _state;
     private readonly GitService _git = new(TestLauncherFactory.Instance);
     private readonly List<IDisposable> _disposables = [];
 
@@ -51,6 +52,7 @@ public class DossierAutoExportTests : IDisposable
         _flags = new FeatureFlagService(_users);
         _history = new ChatHistoryService(_config);
         _store = new DossierStore(_config);
+        _state = new DossierCaptureState(_config);
 
         var clients = new Mock<IHubClients>();
         var clientProxy = new Mock<IClientProxy>();
@@ -167,8 +169,13 @@ public class DossierAutoExportTests : IDisposable
             _store, sessions, new Mock<ClaudeHomeServer.Services.Llm.ICheapTextRunner>().Object,
             new InstanceSecretsProvider(_config));
         return new DossierAutoExporter(_store, _projects, sessions, _git,
-            new InstanceSecretsProvider(_config), discussions, _flags, _config);
+            new InstanceSecretsProvider(_config), discussions, _flags, _state, _config);
     }
+
+    // Автоимпортёр на тех же сторах, что и автовыгрузка, — для тестов петли
+    // «автовыгрузка двигает tip → тик автоимпорта» (разбор 23.08)
+    private DossierAutoImporter MkAutoImporter() => new(_projects, _store, _state, _git,
+        new InstanceSecretsProvider(_config), _flags);
 
     // --- Хелперы git-проверок ---
 
@@ -275,5 +282,77 @@ public class DossierAutoExportTests : IDisposable
         tree.Stdout.Should().Contain("ff66ff6");
         tree.Stdout.Should().NotContain("ee55ee5",
             "паспорт чата с ExcludeFromDossiers отсекается на автовыгрузке, как и на ручной");
+    }
+
+    // --- Фикстура чужой ветки: как её написал бы сосед по общей папке / вторая машина
+    // (git pull) — пишется напрямую plumbing-методом, минуя наш экспортёр ---
+
+    private static readonly JsonSerializerOptions IndexOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    private async Task WriteForeignBranchAsync(Project p, params ChangeDossier[] dossiers)
+    {
+        var files = new List<GitDossierFile>();
+        var entries = new List<DossierIndexEntry>();
+        foreach (var d in dossiers)
+        {
+            var path = DossierGitExporter.DossierPath(d.CommittedAt, d.CommitSha, d.CommitSubject);
+            files.Add(new GitDossierFile(path, DossierGitExporter.FormatDossier(d, [])));
+            entries.Add(new DossierIndexEntry(d.CommitSha, path, d.CommitSubject, d.CommittedAt,
+                Discussion: null, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
+        }
+        files.Add(new GitDossierFile("index.json",
+            JsonSerializer.Serialize(new DossierBranchIndex(1, entries), IndexOpts)));
+        await _git.WriteDossiersBranchAsync(p.OwnerId, p.RootPath, files, "test: ветка соседа");
+    }
+
+    // --- (д) петля автовыгрузка→автоимпорт (разбор 23.08): tip, созданный нашей
+    // автовыгрузкой, помечается своим — тик автоимпорта не завозит копии собственных паспортов ---
+
+    [Fact]
+    public async Task АвтовыгрузкаЗатемТикАвтоимпорта_НичегоНеИмпортирует()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_loop_own", flagOn: true);
+        _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
+        var s = Sess("sess-loop-own", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+        await auto.StartAsync(default);
+
+        _store.Add(Dossier(user.Id, p.Id, "a1b2c3d4", "feat: свой паспорт", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);   // та же работа, что по дебаунсу — без ожидания
+
+        await MkAutoImporter().TickAsync();
+
+        var list = _store.List(user.Id, p.Id);
+        list.Should().ContainSingle("тик автоимпорта не завёз копию собственного паспорта — tip помечен нашим");
+        list.Single().Origin.Should().Be(DossierOrigin.Own);
+    }
+
+    // --- (е) чужой tip после нашей выгрузки: ветка переписана извне (pull соседа) —
+    // отличается от помеченного своего tip и импортируется штатно ---
+
+    [Fact]
+    public async Task ЧужойTipПослеНашейВыгрузки_ИмпортируетсяТиком()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_loop_foreign", flagOn: true);
+        _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
+        var s = Sess("sess-loop-foreign", p.Id);
+        var auto = MkAutoExporter(MkSessions(s));
+        await auto.StartAsync(default);
+
+        _store.Add(Dossier(user.Id, p.Id, "b2c3d4e5", "feat: свой паспорт", s.Id));
+        await auto.ExportSafeAsync(user.Id, p.Id);
+        await MkAutoImporter().TickAsync();
+        _store.List(user.Id, p.Id).Should()
+            .ContainSingle("свой tip пропущен — в сторе только own-запись");
+
+        var foreign = Dossier("neighbor-owner", p.Id, "c3d4e5f6", "feat: паспорт соседа", "sess-neighbor");
+        await WriteForeignBranchAsync(p, foreign);
+
+        await MkAutoImporter().TickAsync();
+
+        var list = _store.List(user.Id, p.Id);
+        list.Should().HaveCount(2, "чужой tip отличается от помеченного своего — записи соседа импортированы");
+        list.Should().Contain(d => d.Origin == DossierOrigin.Own && d.CommitSha == "b2c3d4e5");
+        list.Should().Contain(d => d.Origin == DossierOrigin.Imported && d.CommitSha == "c3d4e5f6");
     }
 }

@@ -19,6 +19,10 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   • push — никогда и никак: публикация остаётся только ручной (POST /export/push).
 // Конфликт с ручной кнопкой «Выгрузить» не разрешается отдельно — их сериализует
 // лок per-root в GitService.WriteDossiersBranchAsync.
+//
+// Tip, созданный выгрузкой, помечается своим в DossierCaptureState (MarkOwnTip):
+// автоимпорт по нему не запускается — петля «автовыгрузка → автоимпорт» разомкнута
+// (разбор 23.08), иначе импортёр завозил бы копии собственных паспортов.
 public sealed class DossierAutoExporter : IHostedService
 {
     private readonly DossierStore _store;
@@ -28,12 +32,14 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly InstanceSecretsProvider _secrets;
     private readonly DossierDiscussionService _discussions;
     private readonly FeatureFlagService _flags;
+    private readonly DossierCaptureState _state;
     private readonly ILogger<DossierAutoExporter>? _log;
     private readonly MemoryDifyDebouncer _debounce;
 
     public DossierAutoExporter(DossierStore store, ProjectManager projects, SessionManager sessions,
         GitService git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
-        FeatureFlagService flags, IConfiguration config, ILogger<DossierAutoExporter>? log = null)
+        FeatureFlagService flags, DossierCaptureState state, IConfiguration config,
+        ILogger<DossierAutoExporter>? log = null)
     {
         _store = store;
         _projects = projects;
@@ -42,6 +48,7 @@ public sealed class DossierAutoExporter : IHostedService
         _secrets = secrets;
         _discussions = discussions;
         _flags = flags;
+        _state = state;
         _log = log;
         // Окно батча: всплеск коммитов одного рабочего дня не должен крутить git-процессы
         // без остановки, но и затягивать сверх пары минут незачем. Минимум 1 с — осмысленная
@@ -82,6 +89,9 @@ public sealed class DossierAutoExporter : IHostedService
             // Тонкий объект над синглтонами — тот же состав, что у DossiersController
             var exporter = new DossierGitExporter(_sessions, _store, _git, _secrets, _discussions);
             var result = await exporter.ExportAsync(ownerId, project);
+            // Tip нашей выгрузки — «наш»: автоимпорт его пропустит. CommitSha не-null и при
+            // Committed=false (дерево совпало с уже существующим tip — содержимое тоже наше).
+            _state.MarkOwnTip(ownerId, project.Id, result.CommitSha);
             if (result.Committed)
                 _log?.LogInformation(
                     "dossiers: автовыгрузка проекта {Project} в {Ref}: {Count} паспортов, коммит {Sha}",

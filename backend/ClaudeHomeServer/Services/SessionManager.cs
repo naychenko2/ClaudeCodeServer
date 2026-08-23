@@ -7518,6 +7518,10 @@ public class SessionManager : IDisposable
         Llm.Claude.SubagentRunPassport run, int attempt)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
+        // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта
+        // после перепроверки): последний паспорт агента уже штатный — директиву не шлём.
+        // Источник истины — стор паспортов, а не пометки на сессии: их разобрали до планирования
+        if (_subagentRuns?.Latest(run.AgentId) is { Truncated: false }) return;
         // Директива добивания уже несёт все факты обрыва — дублировать их пометкой
         // в том же ходе незачем (пометка чужого агента остаётся ждать своего хода)
         if (entry.TruncatedBgNote?.AgentId == run.AgentId) entry.TruncatedBgNote = null;

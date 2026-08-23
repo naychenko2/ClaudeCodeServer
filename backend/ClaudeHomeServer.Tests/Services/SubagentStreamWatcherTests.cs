@@ -289,6 +289,42 @@ public class SubagentStreamWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task BgDone_ФиналДоехалПослеПерепроверки_УходитОпровержение()
+    {
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+            {
+                BgDoneRecheckDelay = TimeSpan.FromMilliseconds(100),
+            };
+            var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-slow", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+
+            await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
+            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15)))).Should().Be(got.Task);
+            _passports.Should().ContainSingle().Which.Truncated.Should().BeTrue();
+
+            // Хвост дозаписи длиннее окна перепроверки: финал доехал уже после оборванного
+            // паспорта — очередной скан обязан отдать опровержение тем же finishedBy
+            File.AppendAllText(agentFile, Report("2026-08-22T10:00:40.000Z") + "\n");
+            await watcher.DrainAsync();
+
+            _passports.Should().HaveCount(2);
+            _passports[1].Truncated.Should().BeFalse();
+            _passports[1].FinishedBy.Should().Be("bg_done");
+
+            watcher.Dispose();
+            _passports.Should().HaveCount(2, "Dispose без новой активности паспорт не задваивает");
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
     public async Task BgDone_ВатчерУмерРаньшеПерепроверки_ПаспортОтдаётDisposeОдинРаз()
     {
         WorkflowAgentParser.ProfilesRoot = _profilesRoot;
@@ -306,10 +342,13 @@ public class SubagentStreamWatcherTests : IDisposable
             _passports.Should().BeEmpty();
 
             // Ход закончился, ватчер умирает до перепроверки: паспорт обязан уйти финальной
-            // эмиссией Dispose (run_end), а отменённая перепроверка — не эмитить второй
+            // эмиссией Dispose, а отменённая перепроверка — не эмитить второй. Закрыт он как
+            // bg_done — продукт уже объявил результат агента: с run_end SessionManager не звал
+            // бы NoteTruncatedBgAgent, и реальный обрыв ждал бы result, который уже прошёл
             watcher.Dispose();
             _passports.Should().HaveCount(1);
-            _passports[0].FinishedBy.Should().Be("run_end");
+            _passports[0].FinishedBy.Should().Be("bg_done");
+            _passports[0].Truncated.Should().BeTrue();
         }
         finally { WorkflowAgentParser.ProfilesRoot = null; }
     }

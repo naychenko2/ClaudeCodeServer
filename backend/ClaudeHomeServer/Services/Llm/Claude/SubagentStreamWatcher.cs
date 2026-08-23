@@ -42,9 +42,10 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly Dictionary<string, string?> _toolIdByFile = [];
     // Паспорт прогона по файлу транскрипта (копится по мере чтения)
     private readonly Dictionary<string, SubagentRunTally> _tallies = [];
-    // Момент последней активности, с которым паспорт уже отдан наружу: агент, которого добили,
-    // дописывает ТОТ ЖЕ транскрипт и завершается повторно — второй одинаковый паспорт не нужен
-    private readonly Dictionary<string, DateTime> _reported = [];
+    // Что уже отдано наружу по файлу: момент последней активности (агент, которого добили,
+    // дописывает ТОТ ЖЕ транскрипт и завершается повторно — второй одинаковый паспорт не нужен),
+    // был ли паспорт оборванным и чем закрыт — чтобы опровергнуть обрыв, когда финал доехал позже
+    private readonly Dictionary<string, (DateTime At, bool Truncated, string FinishedBy)> _reported = [];
     // Скан зовётся из цикла поллинга и из DrainAsync (перед tool_result) — не параллелим
     private readonly SemaphoreSlim _scanLock = new(1, 1);
     // Файлы с назначенной перепроверкой обрыва (защита от второй эмиссии тем же bg_done);
@@ -180,23 +181,31 @@ internal sealed class SubagentStreamWatcher : IDisposable
     // Отложенная перепроверка обрыва по bg_done: выждать, перечитать хвост транскрипта и только
     // тогда эмитить паспорт (штатный, если доехал end_turn). Фоновая задача не блокирует ни цикл
     // поллинга, ни Dispose; остановка ватчера отменяет её через _cts — паспорт тогда уходит
-    // финальным Emit из Dispose (run_end) после его собственного дренажа, без дубля.
+    // финальным Emit из Dispose (с тем же bg_done) после его собственного дренажа, без дубля.
     private void ScheduleBgDoneRecheck(string file)
     {
+        // Токен — до запуска задачи: Dispose освобождает _cts, и обращение к _cts.Token из
+        // фоновой задачи бросало бы ObjectDisposedException вместо штатной отмены
+        var ct = _cts.Token;
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.Delay(BgDoneRecheckDelay, _cts.Token);
-                await _scanLock.WaitAsync(_cts.Token);
+                await Task.Delay(BgDoneRecheckDelay, ct);
+                await _scanLock.WaitAsync(ct);
                 try
                 {
                     if (IsDisposed) return; // паспорт уже эмитнул Dispose
                     await ScanFileAsync(file);
-                    _bgRechecks.Remove(file);
                     Emit(file, "bg_done");
                 }
-                finally { _scanLock.Release(); }
+                finally
+                {
+                    // Снимаем отметку и при сбое чтения — иначе файл навсегда остался бы
+                    // «на перепроверке», и следующий bg_done того же агента глотался бы
+                    _bgRechecks.Remove(file);
+                    _scanLock.Release();
+                }
             }
             catch (OperationCanceledException) { /* ватчер остановлен — паспорт отдал Dispose */ }
             catch (Exception ex)
@@ -212,8 +221,8 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private void Emit(string file, string finishedBy)
     {
         if (_runSink is null || !_tallies.TryGetValue(file, out var tally)) return;
-        if (_reported.TryGetValue(file, out var at) && at == tally.LastActivityAt) return;
-        _reported[file] = tally.LastActivityAt;
+        if (_reported.TryGetValue(file, out var last) && last.At == tally.LastActivityAt) return;
+        _reported[file] = (tally.LastActivityAt, tally.Truncated, finishedBy);
 
         long size = 0;
         try { size = new FileInfo(file).Length; } catch (Exception) { /* файл мог исчезнуть */ }
@@ -290,6 +299,12 @@ internal sealed class SubagentStreamWatcher : IDisposable
             }
             catch (JsonException) { /* битая строка — норма для дописываемого файла */ }
         }
+
+        // Финал доехал позже перепроверки (хвост дозаписи бывает и в десятки секунд): паспорт
+        // уже ушёл оборванным — отдаём опровержение тем же finishedBy, иначе пометка обрыва в
+        // чате так и останется (Emit зовётся только из Finalize/перепроверки/Dispose)
+        if (_reported.TryGetValue(file, out var last) && last.Truncated && !tally.Truncated)
+            Emit(file, last.FinishedBy);
     }
 
     // Блоки assistant-строки транскрипта: text/thinking эмитим, tool_use пропускаем —
@@ -423,9 +438,16 @@ internal sealed class SubagentStreamWatcher : IDisposable
             try
             {
                 foreach (var file in _tallies.Keys.ToList())
+                {
                     // Только агенты с новыми строками при этом ватчере: старые файлы без новой
                     // активности молчат — их содержимое уже в истории прошлого хода
-                    if (_tallies[file].FeedCalled) Emit(file, "run_end");
+                    if (!_tallies[file].FeedCalled) continue;
+                    // Агент, чью перепроверку оборвала остановка ватчера (ход кончился раньше
+                    // BgDoneRecheckDelay), закрыт продуктом как bg_done — так и отдаём: run_end
+                    // для SessionManager не фоновый, и реальный обрыв остался бы без добивания,
+                    // а конец хода его уже не разберёт
+                    Emit(file, _bgRechecks.Remove(file) ? "bg_done" : "run_end");
+                }
             }
             finally { _scanLock.Release(); }
         _cts.Dispose();

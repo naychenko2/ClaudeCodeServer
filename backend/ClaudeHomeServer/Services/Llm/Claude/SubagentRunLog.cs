@@ -243,6 +243,13 @@ public sealed class SubagentRunLog
         if (updated is not null) AppendToFile(updated);
     }
 
+    /// <summary>Последний известный паспорт агента (в памяти — один на AgentId).</summary>
+    public SubagentRunPassport? Latest(string agentId)
+    {
+        lock (_lock)
+            return _runs.Find(r => r.AgentId == agentId);
+    }
+
     /// <summary>Последние паспорта, свежие — первыми.</summary>
     public IReadOnlyList<SubagentRunPassport> Recent(int limit = 50)
     {

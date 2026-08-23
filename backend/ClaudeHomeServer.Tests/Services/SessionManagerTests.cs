@@ -37,6 +37,8 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly UsageService _usage;
     private readonly SubscriptionActivityTracker _activity;
+    // Стор паспортов сабагентов (только память): без него сток паспортов SessionManager = null
+    private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
@@ -157,7 +159,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns);
     }
 
     public void Dispose()
@@ -2253,6 +2255,103 @@ public class SessionManagerTests : IDisposable
         adapter.Verify(a => a.SendMessageAsync(
             It.Is<string>(t => t.Contains("ВЕРИФИКАЦИЯ")), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    // ─── Обрыв фонового сабагента: сквозной путь «паспорт → добивание» ────────────────
+
+    private static ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport CutBgPassport(
+        string sessionId, string agentId = "a-cut", string finishedBy = "bg_done", bool truncated = true) =>
+        new(agentId, "mark", "Волна 1", sessionId, "toolu_1",
+            DateTime.UtcNow.AddMinutes(-5), DateTime.UtcNow, 300, 20, 40, 1, 120_000, 3000,
+            truncated ? "tool_use" : "end_turn", truncated, "Bash", "claude-opus-5", 1024, 0, false,
+            finishedBy, DateTime.UtcNow);
+
+    // Сток паспортов — ровно тот делегат, что SessionManager отдаёт ватчеру сабагентов
+    private Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport> SubagentSink(string sessionId) =>
+        (Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport>)typeof(SessionManager)
+            .GetMethod("SubagentRunSinkFor", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(_sut, [sessionId])!;
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ПаспортBgDoneПослеВыходаПроцесса_УходитДобивание()
+    {
+        // Сценарий ревью: bg_done → паспорт отложен на перепроверку → координатор дописал ход →
+        // result (статус Active) → процесс CLI вышел → Dispose ватчера отдаёт паспорт с bg_done.
+        // В этот момент entry.Process — живой адаптер (он переживает выход CLI), ход не в полёте,
+        // и NoteTruncatedBgAgent обязан дойти до директивы, а не ограничиться пометкой
+        var session = await MkBusySessionAsync("bg-cut-after-exit", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id));
+
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(5));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("обрывок") && t.Contains("1/2")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ХодВПолёте_ТолькоПометка_БезВторогоХода()
+    {
+        var session = await MkBusySessionAsync("bg-cut-in-flight", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id));
+
+        // Ветка «ход идёт» выходит до планирования отправки — проверка без ожидания честная
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        entry.GetType().GetField("TruncatedBgNote")!.GetValue(entry).Should().NotBeNull();
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ДобиваниеСабагента_ОбрывОпровергнутПокаПланировалось_ДирективаНеУходит()
+    {
+        var session = await MkBusySessionAsync("bg-cut-late-final", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        var cut = CutBgPassport(session.Id);
+        // Пока добивание планировалось, ватчер прислал опровержение: последний паспорт штатный
+        _subagentRuns.Record(cut with { Truncated = false, LastStopReason = "end_turn" });
+
+        var nudge = (Task)typeof(SessionManager).GetMethod("NudgeTruncatedSubagentAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(_sut, [session.Id, cut, 1])!;
+        await nudge;
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ОпровергнутШтатнымОтчётом_ПометкиСняты()
+    {
+        var session = await MkBusySessionAsync("bg-cut-refuted", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        var sink = SubagentSink(session.Id);
+
+        sink(CutBgPassport(session.Id, agentId: "a-other"));
+        sink(CutBgPassport(session.Id, agentId: "a-cut"));
+        // Штатный отчёт ЧУЖОГО агента пометку a-cut не трогает
+        sink(CutBgPassport(session.Id, agentId: "a-other", truncated: false));
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedSubagent")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+
+        // Финал a-cut доехал до транскрипта позже сигнала — ватчер прислал опровержение:
+        // обе пометки сняты, ложная директива по result и префикс координатору не уйдут
+        sink(CutBgPassport(session.Id, agentId: "a-cut", truncated: false));
+        entry.GetType().GetField("TruncatedBgNote")!.GetValue(entry).Should().BeNull();
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().BeNull();
     }
 
     [Fact]

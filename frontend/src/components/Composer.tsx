@@ -31,6 +31,7 @@ import { useMicLevel } from '../hooks/useMicLevel';
 import { primeAudio } from '../lib/tts';
 import { isMicKeyboardFallback } from '../lib/voiceInput';
 import { talkDiag, talkDiagSave } from '../lib/talkDiag';
+import { VOICE_STYLE_TALK, VOICE_STYLE_DIGEST, type VoiceStyle } from '../lib/voiceStyle';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
@@ -82,6 +83,9 @@ export interface ComposerProps {
   participantIds?: string[] | null;
   // Создание нового группового чата из селектора собеседника (флаг persona-group-chats)
   onCreateGroup?: (personaIds: string[]) => void;
+  // Собеседник чата: его голосом петля разговора произносит реплики о себе
+  // («Слушаю.», «Выключаю разговор») — иначе они звучали бы не тем голосом, что ответ
+  voicePersonaId?: string;
   // Цикл «до готово» (флаг work-loop): текущее состояние (live с фолбэком на Session.workLoop);
   // null — цикл выключен. Тумблер виден при заданном onToggleWorkLoop.
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
@@ -119,6 +123,10 @@ export interface ComposerProps {
   // после провалившегося PUT или смены чата
   voiceMode?: boolean;
   onToggleVoiceMode?: (next: boolean) => void | Promise<void>;
+  // Стиль озвучки — не настройка, выводится из ширины экрана в ChatPanel
+  // (см. lib/voiceStyle.ts). Кнопка от него не зависит: разговор без рук работает на
+  // любом устройстве, стиль решает только, что читается вслух — весь ответ или пересказ
+  voiceStyle?: VoiceStyle;
   // Модель ждёт решения человека (permission_request / ask_question): режим разговора
   // по нему выходит из петли — голосом на такое не ответишь
   awaitingResponse?: boolean;
@@ -132,6 +140,9 @@ export interface ComposerProps {
   // Оборвать играющую озвучку (владелец — ChatPanel): тап по кнопке разговора начинает
   // с неё, иначе микрофон откроется под чтение предыдущего ответа
   onStopSpeech?: () => void;
+  // Барж-ин: погасить озвучку ТЕКУЩЕГО хода до следующей отправки
+  // (владелец флага подавления — ChatPanel, обе точки озвучки там)
+  onBargeSuppress?: () => void;
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
   // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
   chatContext?: string;
@@ -149,9 +160,11 @@ export interface ComposerProps {
   // Сигнал «поставь курсор в поле»: растущее число (на стене — фокус колонки).
   // Именно счётчик, а не boolean: повторный запрос на то же значение не сработал бы.
   focusSignal?: number;
-  // Фирменный цвет проекта чата (projectMainColor): им светится aurora-сияние
-  // при озвучке ответа AI. Не задан (чат вне проекта) — тоже accent (auroraUser)
-  projectColorHex?: string;
+  // Цвет aurora-сияния при озвучке ответа: цвет говорящей персоны, иначе фирменный
+  // цвет проекта чата (projectMainColor). Кто говорит, решает ChatPanel — там же
+  // берётся цвет кольца у её аватара в ленте, чтобы свет и кольцо не разъезжались.
+  // Не задан (чат вне проекта, говорит голос инстанса) — accent (токен auroraUser)
+  auroraColorHex?: string;
 }
 
 // Ступени полосы контролов («губы» под полем ввода) — по ширине САМОЙ полосы, не окна.
@@ -251,7 +264,7 @@ function Aurora({ color, bandRef }: { color: string; bandRef: React.RefObject<HT
 
 // Цвет проекта приезжает непрозрачным hex (#AABBCC) — лентам нужна альфа для
 // мягкого затухания градиентов. Переводим в rgba, альфу берём как у токена
-// auroraUser (одинаковая плотность света у «моего» и «проектного» цвета).
+// auroraUser (одинаковая плотность света у «моего» голоса и голоса, который звучит).
 // Нестандартный формат — пропускаем насквозь, слой просто станет плотнее
 function withAuroraAlpha(hex: string, alpha: number): string {
   const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
@@ -419,8 +432,32 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
   );
 }
 
+// Строка состояния озвучки НАД полем ввода — общая для обоих стилей. Поле остаётся
+// полем: в голосовом режиме без петли человек продолжает печатать, и подменять его
+// плашкой нельзя. Действий у строки нет намеренно: продолжение разговора висело здесь
+// кнопкой, дублирующей кнопку режима в композере строкой ниже — тот же обработчик и то
+// же состояние. Строка только напоминает, что ответы будут озвучены.
+function VoiceStatusRow({ icon, text, isMobile }: {
+  icon: ReactNode;
+  text: string;
+  isMobile?: boolean;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: isMobile ? '7px 10px 0' : '6px 10px 0',
+    }}>
+      {icon}
+      <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600, flex: 1, minWidth: 0 }}>
+        {text}
+      </span>
+    </div>
+  );
+}
+
 export function Composer({
   sessionId,
+  voicePersonaId,
   onSend,
   onStop,
   onAttach,
@@ -463,17 +500,19 @@ export function Composer({
   onToggleWorktree,
   voiceMode = false,
   onToggleVoiceMode,
+  voiceStyle = VOICE_STYLE_TALK,
   awaitingResponse = false,
   speechPhase = 'idle',
   onHandsFreeActiveChange,
   onStopSpeech,
+  onBargeSuppress,
   chatContext,
   promptSuggestion = null,
   rateWindow,
   restore = null,
   onReplaceAttachments,
   focusSignal,
-  projectColorHex,
+  auroraColorHex,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
@@ -628,7 +667,7 @@ export function Composer({
   // и признак quiet читаются синхронно, в момент события движка
   const talkActiveRef = useRef(false);
   // Колбэки петли доступны только после её объявления (ниже) — держим ссылку
-  const handsFreeRef = useRef<{ onRecognized: (t: string) => void; onCycleEnd: () => void; onCycleError: (c: string) => void } | null>(null);
+  const handsFreeRef = useRef<{ onRecognized: (t: string) => void; onCycleEnd: () => void; onCycleError: (c: string) => void; onMisheard: () => void } | null>(null);
   // Буфер петли на момент конца цикла: пустой буфер после cycleEnded = бесплодный
   // цикл (движок не отдал ни слова). Читается в onEnd ниже для детектора конфликта
   // амплитуды; ref обновляется эффектом ниже, где буфер уже известен
@@ -653,6 +692,10 @@ export function Composer({
       }
     },
     onKeyboardFallback: () => textareaRef.current?.focus(),
+    // Движок реально слышит звук — снимает подозрение раннего детектора конфликта
+    onHeard: () => { if (talkActiveRef.current) reportEngineHeardRef.current?.(); },
+    // Движок захватил аудио: до этого момента детектору судить не о чем
+    onCycleStart: () => { if (talkActiveRef.current) reportCycleStartRef.current?.(); },
     onEnd: () => {
       if (!talkActiveRef.current) return;
       // Бесплодный цикл: буфер петли пуст — движок не услышал ни слова. Корм
@@ -929,9 +972,15 @@ export function Composer({
     // Голосовая команда выхода («стоп»): петля уже погашена редьюсером, здесь только
     // общий хвост выхода — прерывание хода и PUT voiceMode=false (Р3)
     onVoiceExit: exitTalk,
+    // Барж-ин: подавление озвучки перебитого хода ведёт ChatPanel (обе точки озвучки там)
+    onBargeSuppress,
+    voicePersonaId,
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;
+  // Вслух идёт пересказ, а не весь ответ. Признак СТИЛЯ (то есть устройства), а не
+  // состояния озвучки и не отдельного режима кнопки: на поведение кнопки он не влияет
+  const digestVoice = voiceStyle === VOICE_STYLE_DIGEST;
   // Диагностика петли: фазы и старт/стоп. Дамп сохраняется при остановке —
   // его можно вытащить с телефона через window.__talkDiag() или localStorage
   useEffect(() => { talkDiag('loop: фаза', handsFree.phase); }, [handsFree.phase]);
@@ -959,13 +1008,30 @@ export function Composer({
   // амплитуды нет). Вне петли озвучка видна по speechPhase
   const auroraMicActive = talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending');
   const auroraSpeechActive = talkActive ? handsFree.phase === 'speaking' : speechPhase !== 'idle';
-  const { reportMicDead: reportMicDeadToAurora, reportCycleEnd: reportCycleEndToAurora } = useMicLevel({ active: auroraVisible, micActive: auroraMicActive, speechActive: auroraSpeechActive, targetRef: auroraRef });
+  const {
+    reportMicDead: reportMicDeadToAurora,
+    reportCycleEnd: reportCycleEndToAurora,
+    reportEngineHeard: reportEngineHeardToAurora,
+    reportCycleStart: reportCycleStartToAurora,
+  } = useMicLevel({
+    active: auroraVisible,
+    micActive: auroraMicActive,
+    speechActive: auroraSpeechActive,
+    targetRef: auroraRef,
+    // Конфликт пойман на лету: поток амплитуды уже погашен детектором, петле
+    // остаётся сказать человеку, что не расслышали, и открыть микрофон заново
+    onEarlyConflict: () => { if (talkActiveRef.current) handsFreeRef.current?.onMisheard(); },
+  });
   // useVoiceInput объявлен ВЫШЕ и его onError уже позвал канарейку — держим
   // актуальную ссылку для объявления ниже по файлу, не копию на момент рендера
   const reportMicDeadRef = useRef(reportMicDeadToAurora);
   useEffect(() => { reportMicDeadRef.current = reportMicDeadToAurora; });
   const reportCycleEndRef = useRef(reportCycleEndToAurora);
   useEffect(() => { reportCycleEndRef.current = reportCycleEndToAurora; });
+  const reportEngineHeardRef = useRef(reportEngineHeardToAurora);
+  useEffect(() => { reportEngineHeardRef.current = reportEngineHeardToAurora; });
+  const reportCycleStartRef = useRef(reportCycleStartToAurora);
+  useEffect(() => { reportCycleStartRef.current = reportCycleStartToAurora; });
 
   // Отсчёт окна отмены (2 секунды) — только для подписи в полосе ввода; сам таймер
   // ведёт автомат петли
@@ -1021,7 +1087,7 @@ export function Composer({
   // Тап по кнопке режима. Синхронная часть жеста (прайминг аудио и старт микрофона) идёт
   // ДО любого await: политика autoplay и разрешение микрофона живут только внутри жеста
   const handleVoiceButton = () => {
-    talkDiag('tap: кнопка режима разговора', { talkActive });
+    talkDiag('tap: кнопка режима разговора', { talkActive, voiceStyle });
     if (talkActive) {
       // В разговоре у кнопки ОДИН смысл — «прекрати»: заткнуть чтение, прервать ход,
       // выйти из режима. Разбирать, в какой фазе мы сейчас, человеку на ходу некогда,
@@ -1651,9 +1717,12 @@ export function Composer({
       title={talkActive
         ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
         : voiceMode
-          ? 'Голосовой режим включён (ответы короткие и вслух). Нажми — начнём разговор без рук'
-          : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
+          ? 'Голосовой режим включён. Нажми — начнём разговор без рук'
+          : digestVoice
+            ? 'Режим разговора: говори — отвечу вслух коротким пересказом, ответ останется на экране'
+            : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
       aria-label="Режим разговора"
+      aria-pressed={voiceMode}
       style={{
         ...iconBtnGuard,
         width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
@@ -1910,9 +1979,9 @@ export function Composer({
           // обеих темах = accent). Весь цикл ответа AI (ход + озвучка) и озвучка
           // вне петли — цвет проекта («голос проекта», альфу накладываем поверх
           // hex — см. withAuroraAlpha); вне проекта — тоже accent (как «я говорю»)
-          color={talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending') || !projectColorHex
+          color={talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending') || !auroraColorHex
             ? C.auroraUser
-            : withAuroraAlpha(projectColorHex, 1)}
+            : withAuroraAlpha(auroraColorHex, 1)}
           bandRef={auroraRef}
         />
       )}
@@ -1958,29 +2027,21 @@ export function Composer({
           а петли разговора нет — она не переживает смену чата/раздела/F5. Отдельная
           строка НАД полем ввода, а не замена его: поле обязано оставаться полем —
           и тесты, и человек продолжают печатать в голосовом режиме без петли */}
+      {/* Строка обязательна, а не декоративна: режим переживает F5 и смену чата, и без
+          напоминания единственными признаками включённой озвучки остаются оттенок кнопки
+          и сияние в момент речи — включил утром, вернулся вечером, ответ заговорил.
+          Текст следует за стилем: он объясняет, что именно прозвучит, а выбирать тут
+          нечего — стиль выводится из ширины экрана */}
       {voiceMode && !talkActive && !workLoop?.active && !teamMech && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: isMobile ? '7px 10px 0' : '6px 10px 0',
-        }}>
-          <VolumeX size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600, flex: 1, minWidth: 0 }}>
-            Разговор на паузе — ответы всё ещё озвучиваются
-          </span>
-          <button
-            type="button"
-            onClick={handleVoiceButton}
-            title="Продолжить разговор без касаний"
-            style={{
-              ...iconBtnGuard,
-              flexShrink: 0, border: 'none', cursor: 'pointer', borderRadius: R.pill,
-              background: C.accentLight, color: C.accent, fontWeight: 600, fontSize: FS.xs,
-              padding: isMobile ? '6px 12px' : '5px 11px', whiteSpace: 'nowrap',
-            }}
-          >
-            Продолжить
-          </button>
-        </div>
+        <VoiceStatusRow
+          icon={digestVoice
+            ? <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+            : <VolumeX size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+          text={digestVoice
+            ? 'Вслух — короткий пересказ, ответ на экране целиком'
+            : 'Разговор на паузе — ответы всё ещё озвучиваются'}
+          isMobile={isMobile}
+        />
       )}
       {/* Чипы вложений */}
       {attachments.length > 0 && (

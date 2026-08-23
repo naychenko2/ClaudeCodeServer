@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Plus, Menu, FileText, Tags } from 'lucide-react';
+import { Plus, Menu, Tags } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { HandsBadge } from '../../features/desktop/HandsBadge';
@@ -19,7 +19,7 @@ import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
-import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../../lib/breakpoints';
+import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, ChatTopicIcon, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
@@ -788,9 +788,6 @@ interface ChatHeaderBarProps {
   // Последняя запущенная в чате механика «Обсудить с командой» — компактный бейдж в шапке
   lastMechanic?: TeamMechanicId | null;
   onOpenSidebar?: () => void;
-  artifactsOpen?: boolean;
-  onToggleArtifacts?: () => void;
-  artifactFileCount?: number;
   ctxEstimate: ContextEstimate;
   isWaiting: boolean;
   isCompacting: boolean;
@@ -946,12 +943,20 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
-  // Планшет (601–1199): мобильная механика — объединённый чип, wide-поповер, плотная
-  // группа кнопок, заголовок с многоточием. Объединяем с mobile через `isCompact`,
-  // чтобы не дублировать ветки внутри costBadges / rightCluster / actionBtns.
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+  // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
+  // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
+  // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
+  // actionBtns.
+  //
+  // Верхняя граница — TABLET_WIDE_MIN, а не TABLET_MAX: тулбарная ветка ниже
+  // растягивается на всю ширину острова, тогда как лента и композер зажаты в
+  // CHAT_MAX_W = 950 и центрированы. На широком планшете (1120 у MatePad) остров
+  // шире — шапка вылезала за колонку сообщений на 37px с каждой стороны, и контролы
+  // висели левее и правее всего остального. Hero-ветка такой ширины не имеет:
+  // maxWidth: CHAT_MAX_W ставит её ровно над лентой.
   const ww = useWindowWidth();
-  const isTablet = !isMobile && ww > MOBILE_MAX && ww <= TABLET_MAX;
+  const isTablet = !isMobile && ww > MOBILE_MAX && ww < TABLET_WIDE_MIN;
   const isCompact = isMobile || isTablet;
 
   // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).
@@ -1333,22 +1338,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {spendBadge}
     </>
   );
-  const artifactsBtn = onToggleArtifacts ? (
-    <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isCompact} active={artifactsOpen}>
-      <div style={{ position: 'relative', display: 'flex' }}>
-        <FileText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-        {artifactFileCount !== undefined && artifactFileCount > 0 && (
-          <span style={{
-            position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-            borderRadius: 7, background: C.accent, color: C.onAccent,
-            fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-          }}>
-            {artifactFileCount}
-          </span>
-        )}
-      </div>
-    </ToolbarIconButton>
-  ) : null;
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
@@ -1375,10 +1364,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных

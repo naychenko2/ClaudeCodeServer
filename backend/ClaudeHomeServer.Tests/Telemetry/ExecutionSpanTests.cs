@@ -174,7 +174,7 @@ public class ExecutionSpanTests
     [Fact]
     public void RecordRateLimit_DoesNotThrow()
     {
-        var act = () => TurnTelemetry.RecordRateLimit("glm");
+        var act = () => TurnTelemetry.RecordRateLimit("glm", "allowed");
         act.Should().NotThrow();
     }
 

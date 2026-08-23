@@ -68,16 +68,23 @@ public class KnowledgeIndexReconcilerTests
         public IReadOnlyList<KnowledgeSyncTarget> ListTargets() => Targets;
     }
 
-    // Фейковый канал уведомлений: доставку проверяет NotificationService, здесь важен дедуп
-    private sealed class FakeNotifier : IKnowledgeAlertNotifier
+    // Фейковый канал уведомлений: доставку проверяет NotificationService, здесь важен дедуп.
+    // LastAt играет роль персистентного стора — он переживает пересоздание реконсайлера,
+    // как настоящий NotificationStore переживает рестарт процесса.
+    private sealed class FakeNotifier(FakeTime time) : IKnowledgeAlertNotifier
     {
         public readonly List<string> Sent = new();
+        public readonly Dictionary<string, DateTimeOffset> LastAt = new();
 
         public Task NotifyAsync(string userId, string title, string body, CancellationToken ct = default)
         {
             Sent.Add(userId);
+            LastAt[userId] = time.GetUtcNow();
             return Task.CompletedTask;
         }
+
+        public Task<DateTimeOffset?> LastNotifiedAtAsync(string userId, CancellationToken ct = default) =>
+            Task.FromResult(LastAt.TryGetValue(userId, out var at) ? at : (DateTimeOffset?)null);
     }
 
     private static string Doc(string id, string status = "error", string? error = null) =>
@@ -335,7 +342,7 @@ public class KnowledgeIndexReconcilerTests
     [Fact]
     public async Task Уведомление_Со_Второго_Обхода_И_Не_Чаще_Раза_В_Сутки()
     {
-        var notifier = new FakeNotifier();
+        var notifier = new FakeNotifier(_time);
         _participant.AddTarget("ds-1", "t1", new() { ["doc-1"] = "entry-1" });
         _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-1", error: "Connection refused")}]";
         var sut = Create("heal", maxAttempts: 100, notifier: notifier);
@@ -367,7 +374,7 @@ public class KnowledgeIndexReconcilerTests
     {
         // Видимость от режима лечения не зависит: в observe сторы не мутируются, но
         // владелец всё равно узнаёт, что поиск неполный
-        var notifier = new FakeNotifier();
+        var notifier = new FakeNotifier(_time);
         _participant.AddTarget("ds-1", "t1", new() { ["doc-1"] = "entry-1" });
         _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-1", error: "Connection refused")}]";
         var sut = Create("observe", notifier: notifier);
@@ -378,6 +385,36 @@ public class KnowledgeIndexReconcilerTests
 
         notifier.Sent.Should().BeEquivalentTo(["owner-1"]);
         _participant.Invalidations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Дедуп_Уведомления_Переживает_Рестарт()
+    {
+        // Отметка «когда уведомляли» живёт в сторе уведомлений, а не только в памяти:
+        // продукт перезапускается по нескольку раз в день (watchdog, выкатки), и на
+        // in-memory дедупе владелец получал бы алерт после каждого подъёма
+        var notifier = new FakeNotifier(_time);
+        _participant.AddTarget("ds-1", "t1", new() { ["doc-1"] = "entry-1" });
+        _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-1", error: "Connection refused")}]";
+
+        var before = Create("observe", notifier: notifier);
+        await before.TickAsync();
+        _time.Advance(TimeSpan.FromMinutes(16));
+        await before.TickAsync();
+        notifier.Sent.Should().BeEquivalentTo(["owner-1"]);
+
+        // Рестарт: новый инстанс, память пуста, ошибки те же
+        var after = Create("observe", notifier: notifier);
+        _time.Advance(TimeSpan.FromMinutes(16));
+        await after.TickAsync();
+        _time.Advance(TimeSpan.FromMinutes(16));
+        await after.TickAsync();
+        notifier.Sent.Should().HaveCount(1, "сутки с прошлого уведомления не прошли");
+
+        // А через сутки после ФАКТИЧЕСКОГО уведомления — напоминаем
+        _time.Advance(TimeSpan.FromHours(25));
+        await after.TickAsync();
+        notifier.Sent.Should().BeEquivalentTo(["owner-1", "owner-1"]);
     }
 
     [Fact]

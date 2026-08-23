@@ -74,8 +74,11 @@ public static class IncidentDossierText
             foreach (var chat in dossier.Chats)
             {
                 sb.Append("- ").Append(chat.Title ?? "без названия")
-                  .Append(" (").Append(chat.ChatId).Append(')')
-                  .Append(" · падений ").Append(chat.Failures);
+                  .Append(" (").Append(chat.ChatId).Append(')');
+                // «Указан алертом» вместо «падений 0»: у правил с разрезом по чату ходы
+                // успешные, просто долгие, и ноль падений здесь ничего не опровергает.
+                if (chat.FromAlert) sb.Append(" · указан алертом");
+                if (chat.Failures > 0) sb.Append(" · падений ").Append(chat.Failures);
                 if (chat.TotalTokens > 0) sb.Append(" · токенов ").Append(chat.TotalTokens);
                 if (chat.McpFailures.Count > 0)
                     sb.Append(" · отказы MCP: ").Append(string.Join(", ", chat.McpFailures));

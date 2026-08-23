@@ -9,6 +9,12 @@ namespace ClaudeHomeServer.Services.Knowledge;
 public interface IKnowledgeAlertNotifier
 {
     Task NotifyAsync(string userId, string title, string body, CancellationToken ct = default);
+
+    // Когда владельцу последний раз уходило это уведомление (UTC) — отметка, пережившая
+    // рестарт. Без неё кулдаун жил только в памяти реконсайлера и обнулялся при каждом
+    // подъёме процесса: продукт перезапускается watchdog'ом и выкатками по нескольку раз
+    // в день, и владелец получал «раз в сутки» несколько раз в сутки.
+    Task<DateTimeOffset?> LastNotifiedAtAsync(string userId, CancellationToken ct = default);
 }
 
 // Доставка целиком переиспользует NotificationService (запись в колокол + тост по
@@ -16,8 +22,28 @@ public interface IKnowledgeAlertNotifier
 // будить телефон незачем.
 public sealed class KnowledgeAlertNotifier(
     NotificationService notifications,
+    NotificationStore store,
     ILogger<KnowledgeAlertNotifier> log) : IKnowledgeAlertNotifier
 {
+    // Подтип уведомления — он же ключ, по которому ищется отметка в сторе
+    public const string NotifType = "knowledge_index_error";
+
+    public async Task<DateTimeOffset?> LastNotifiedAtAsync(string userId, CancellationToken ct = default)
+    {
+        try
+        {
+            var last = await store.GetLastCreatedAtByTypeAsync(userId, NotifType);
+            return last is null ? null : new DateTimeOffset(last.Value, TimeSpan.Zero);
+        }
+        catch (Exception ex)
+        {
+            // Нечитаемый стор не должен обрывать обход: считаем, что отметки нет,
+            // и полагаемся на кулдаун в памяти
+            log.LogWarning(ex, "Не удалось прочитать отметку уведомления для {UserId}", userId);
+            return null;
+        }
+    }
+
     public async Task NotifyAsync(string userId, string title, string body, CancellationToken ct = default)
     {
         try
@@ -25,7 +51,7 @@ public sealed class KnowledgeAlertNotifier(
             await notifications.SendAsync(userId, new CreateNotificationRequest
             {
                 Kind = "alert",
-                Type = "knowledge_index_error",
+                Type = NotifType,
                 Title = title,
                 Body = body,
                 Url = "#/knowledge",

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -35,6 +35,7 @@ public class DesktopFallbackGateTests
         public bool HasQueuedTurn => false;
         public bool OrchestrationActive => false;
         public bool HasPendingBg => false;
+        public bool HasTrackedBg => false;
         public bool IsContinuationInFlight => false;
         public long SubmittedTurnSeq { get; private set; }
 

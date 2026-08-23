@@ -19,7 +19,11 @@ public sealed record AlertMemo(
     DateTimeOffset? ResolvedAt = null,
     // Заглушён человеком: инцидент остаётся видимым в разделе, но не идёт в счётчик
     // и не будит push. Поле необязательное — файлы прошлых версий читаются как есть.
-    DateTimeOffset? MutedAt = null);
+    DateTimeOffset? MutedAt = null,
+    // Чат из меток алерта (правила с разрезом по chat_id). Помним его вместе с памяткой:
+    // у погасшего инцидента самого алерта уже нет, а карточку по диплинку из уведомления
+    // открывают как раз тогда, когда всё закончилось.
+    string? ChatId = null);
 
 /// <summary>Запись истории: отпечаток и памятка по нему.</summary>
 public sealed record AlertHistoryEntry(string Fingerprint, AlertMemo Memo)

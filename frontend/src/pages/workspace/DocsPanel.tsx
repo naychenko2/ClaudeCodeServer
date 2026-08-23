@@ -236,7 +236,7 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, statusColor, statusTitle, onTogglePin, onContextMenu, press, pressing = false }: {
+function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, statusColor, statusTitle, onTogglePin, onContextMenu, press, pressing = false }: {
   folder: string;
   // Действия раздела правым кликом — те же, что у строки документа (переименование)
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -246,8 +246,6 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
   // Подпись группы: у раздела это заголовок его страницы («Расширения»), у обычной папки —
   // её путь (значение по умолчанию). Считает панель: она знает, есть ли у папки пара
   title?: string;
-  // Родительский раздел приглушённо после подписи — заменяет собой путь целиком
-  subtitle?: string;
   collapsed: boolean;
   // Сколько документов скрыто — показываем только у свёрнутой: у развёрнутой они и так видны
   hidden: number;
@@ -341,8 +339,8 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
         {...foldHoverProps}
         title={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
         style={{
-          // Своё поле у шеврона: без левой черты подпись с бейджем подтянулись влево,
-          // и шеврон вплотную к краю плашки смотрелся выпавшим из колонки
+          // Своё поле у шеврона: шеврон вплотную к краю плашки смотрелся выпавшим
+          // из колонки иконок документов
           width: 16, flexShrink: 0, height: 20, padding: 0, border: 'none',
           marginLeft: SP.xs,
           background: 'transparent', cursor: 'pointer',
@@ -353,8 +351,8 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
       </button>
       <div style={{ flex: 1, minWidth: 0 }}>
         <ListDateDivider
-          title={title} subtitle={subtitle}
-          align="left" dense
+          title={title}
+          dense
           onClick={onOpenPage}
           highlightOnHover
           active={active}
@@ -424,8 +422,8 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
       background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
     }}>
       <ListDateDivider
-        title={title} subtitle={subtitle}
-        align="left" dense
+        title={title}
+        dense
         onClick={onToggle}
         titleAttr={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы`}
         leading={
@@ -1087,8 +1085,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   }, [deepCollapsed]);
 
   // Подпись группы: у раздела — заголовок его страницы, у прочих папок — путь как раньше.
-  // Родитель приписывается приглушённо: полный путь в подписи читается хуже, чем
-  // «Расширения · docs», а знать, где ты находишься, всё равно нужно
+  // Родитель отдаётся отдельным полем и нужен только там, где папку выбирают вслепую
+  // (диалог создания): в разделителе списка место группы и так видно по дереву
   const groupTitle = useCallback((folder: string): { title: string; subtitle?: string } => {
     const page = sectionPages.get(folder);
     if (!page) return { title: groupLabel(folder) };
@@ -2174,7 +2172,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                   // Глубокое сворачивание тоже прячет свои документы (grid ниже)
                   const isCollapsed = !!folder && (collapsed.has(folder) || deepCollapsed.has(folder));
                   const page = sectionPages.get(folder);
-                  const { title, subtitle } = groupTitle(folder);
+                  const { title } = groupTitle(folder);
                   return (
                   <div
                     key={key}
@@ -2196,7 +2194,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                       <FolderSticky
                         folder={folder}
                         title={title}
-                        subtitle={subtitle}
                         collapsed={isCollapsed}
                         hidden={docs.length}
                         onToggle={() => toggleFolder(folder)}

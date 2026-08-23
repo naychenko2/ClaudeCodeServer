@@ -83,3 +83,9 @@ export const GlifCostContext = createContext<Map<string, number>>(new Map());
 // null — карта не построена (рендер вне ленты): блок показывает своё медиа как есть.
 // Тип массива — MediaItem из MediaBlock (импорт type-only, чтобы не тянуть компонент в контексты)
 export const MediaVisibilityContext = createContext<Map<string, import('./MediaBlock').MediaItem[]> | null>(null);
+
+// Кто сейчас звучит: индекс реплики в ленте, у аватара которой идёт пульс, и цвет
+// говорящей персоны для колец. Единый источник с цветом aurora-сияния над композером —
+// ChatPanel считает его одним мемо, чтобы «кольцо» и «свет» не разъезжались.
+// null — озвучки нет либо говорит голос инстанса (лицо не резолвится, подсвечивать нечего).
+export const SpeakingItemContext = createContext<{ index: number; color: string } | null>(null);

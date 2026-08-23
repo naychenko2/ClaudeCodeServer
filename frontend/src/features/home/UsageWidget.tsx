@@ -11,6 +11,9 @@ import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 // Балансы инертны — раз в 5 минут достаточно
 const POLL_MS = 5 * 60_000;
 const LOW_BALANCE = 5;
+// Тот же «мало осталось», но в рублях: доллар и рубль на одной шкале сравнивать нельзя —
+// 5 ₽ это не «мало», это уже почти ноль
+const LOW_BALANCE_RUB = 300;
 
 // Строка окна лимита: название, время сброса, «израсходовано N%» (или «в пределах
 // нормы») + шкала. Доля всегда подписана словом расхода — голый процент рядом со
@@ -62,7 +65,9 @@ function WindowRow({ w }: { w: RateWindow }) {
 // Компактная выжимка раздела «Модели и расход»; «Подробнее» открывает полную модалку.
 export function UsageWidget() {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
-  const [balances, setBalances] = useState<Array<{ key: string; label: string; value: number; credits?: boolean }>>([]);
+  const [balances, setBalances] = useState<Array<{
+    key: string; label: string; value: number; credits?: boolean; rub?: boolean;
+  }>>([]);
   const [showUsage, setShowUsage] = useState(false);
 
   useEffect(() => {
@@ -88,6 +93,16 @@ export function UsageWidget() {
         .then(d => {
           if (cancelled || !d.enabled || typeof d.balance !== 'number') return;
           setBalances(prev => [...prev.filter(b => b.key !== 'fal'), { key: 'fal', label: 'fal.ai', value: d.balance! }]);
+        })
+        .catch(() => {});
+      // Yandex Cloud: баланс приходит строкой и только админу (не-админу поле пустое —
+      // плашки просто не будет). Валюта своя, поэтому формат и порог «мало» отдельные
+      api.yandex.account(30)
+        .then(d => {
+          const v = d.account?.balance ? parseFloat(d.account.balance) : NaN;
+          if (cancelled || !d.enabled || isNaN(v)) return;
+          setBalances(prev => [...prev.filter(b => b.key !== 'yandex'),
+            { key: 'yandex', label: 'Yandex Cloud', value: v, rub: (d.account?.currency ?? 'RUB') === 'RUB' }]);
         })
         .catch(() => {});
       api.glif.account()
@@ -158,11 +173,13 @@ export function UsageWidget() {
             }}>
               <span style={{
                 fontFamily: FONT.mono, fontSize: 15, fontWeight: 700,
-                color: b.value < LOW_BALANCE ? C.dangerText : C.textHeading,
+                color: b.value < (b.rub ? LOW_BALANCE_RUB : LOW_BALANCE) ? C.dangerText : C.textHeading,
               }}>
                 {b.credits
                   ? `${(Number.isInteger(b.value) ? b.value.toLocaleString('ru-RU') : b.value.toFixed(2))} кр.`
-                  : `$${b.value < 1 ? b.value.toFixed(3) : b.value.toFixed(2)}`}
+                  : b.rub
+                    ? `${b.value.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`
+                    : `$${b.value < 1 ? b.value.toFixed(3) : b.value.toFixed(2)}`}
               </span>
               <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>{b.label}</span>
             </div>

@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, type CSSProperties } from 'react';
-import { AlertCircle, Bell, BellOff, CheckCircle2, Clock, Columns3, Hourglass, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, Hourglass, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_STROKE } from './ui/icons';
-import { STATUS_CONFIG, STATUS_GLOW, type SessionStatus } from './StatusIndicator';
+import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
+import { useAgentsRunning } from '../lib/agentsPresence';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
@@ -119,6 +120,9 @@ interface Props {
   online: boolean;
   hovered: boolean;
   workflowRunning: boolean;
+  // Переопределение «в чате работают фоновые агенты». Не задано — берём из стора
+  // agentsPresence; проп нужен витрине UI-кита, где стора нет
+  agentsRunning?: boolean;
   onSelect: () => void;
   onHover: (hovered: boolean) => void;
   onDelete: () => void;
@@ -155,6 +159,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
+  agentsRunning: agentsRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
   onEdited, leadingInset = 0,
 }: Props) {
@@ -304,7 +309,15 @@ export function ChatCard({
   // Переключаем визуал статуса на 'waiting' (медовый, slow) — он усиливает жёлтый
   // маркер, а не спорит с ним. Сам s.status не трогаем: это факт CLI, а не визуал
   const teamWait = !!s.teamImplement && teamImplementTone(s.teamImplement.stage) === 'wait';
-  const visualStatus: SessionStatus = teamWait ? 'waiting' : s.status;
+  // Фоновые агенты доживают уже после конца хода: статус сессии при этом Active, у него
+  // нулевое свечение — карточка выглядела остывшей, хотя работа идёт. Приоритет ниже
+  // teamWait (там ждут ЧЕЛОВЕКА — это важнее) и выше собственного статуса сессии:
+  // перебиваем только спокойные состояния, живой working подменять незачем
+  const agentsRunningLive = useAgentsRunning(s.id);
+  const agentsRunning = agentsRunningProp ?? agentsRunningLive;
+  const visualStatus: VisualStatus = teamWait ? 'waiting'
+    : agentsRunning && !STATUS_GLOW[s.status].breath ? 'agents'
+      : s.status;
   const glow = STATUS_GLOW[visualStatus];
   const hasGlow = glow.alpha > 0;
   const glowClass = !hasGlow ? ''
@@ -479,6 +492,15 @@ export function ChatCard({
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
           {s.isPinned && (
             <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />
+          )}
+          {/* Работают фоновые агенты. Это единственное, чем такой чат отличим от чата
+              с идущим ходом: волна у них одна и та же (работа и там, и там реальная).
+              При чипе WF значок не дублируем — workflow и есть фоновая задача */}
+          {agentsRunning && !workflowRunning && (
+            <span title="Работают агенты" aria-label="Работают агенты"
+              style={{ display: 'flex', flexShrink: 0, color: C.accent }}>
+              <Bot size={13} strokeWidth={2.2} />
+            </span>
           )}
           {workflowRunning && (
             <div title="Выполняется Workflow" style={{

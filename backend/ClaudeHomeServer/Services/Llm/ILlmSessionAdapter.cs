@@ -54,6 +54,13 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // выше); default-реализация ломала бы gate в SessionManagerTests.
     bool HasPendingBg { get; }
 
+    // Фоновые задачи, УЧТЁННЫЕ поимённо (без «видели запуск, но id не распознали»). Ровно то,
+    // о чём честно сказать человеку «здесь работают агенты»: снимок присутствия для списка
+    // чатов берётся отсюда, а не из HasPendingBg. Разделение неслучайно — HasPendingBg
+    // намеренно консервативен (лучше подождать зря, чем убить живого агента), и для картинки
+    // эта консервативность оборачивается ложным значком при пустой панели агентов
+    bool HasTrackedBg { get; }
+
     // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт
     // (ContinuationActive) или вот-вот начнёт (окно ContinuationStartGrace, см. ClaudeSession.
     // ResolveWatchdog) ход-продолжение — ответ на task_notification завершившегося фонового агента.

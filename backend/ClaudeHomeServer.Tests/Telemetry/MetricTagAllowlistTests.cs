@@ -128,6 +128,8 @@ public class MetricTagAllowlistTests
             "tool_name",   // идентификатор MCP-инструмента (≤80-90 значений)
             "outcome",     // success, error, timeout
             "error_type",  // rate_limit, network, auth, ...
+            // Событие лимитов подписки: множество замкнуто протоколом CLI + unknown
+            "status",      // allowed | allowed_warning | rejected | unknown
             "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other
             // Гейдж ccs.dify.error_documents (реконсайлер): ровно 5 × 2 комбинации
             "dataset_type",// notes | persona | team | dossiers | project

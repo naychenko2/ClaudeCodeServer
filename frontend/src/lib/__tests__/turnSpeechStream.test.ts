@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { turnText, turnStreamChunks, turnStreamTail, TURN_STREAM_INIT } from '../turnSpeechStream';
+import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, turnVoiceItemIndex, TURN_STREAM_INIT } from '../turnSpeechStream';
 import type { ChatItem } from '../../types';
 
 // Ход в ленте: user_message → текст (возможно несколько элементов после tool_use) →
@@ -8,6 +8,82 @@ const user = (text: string): ChatItem => ({ kind: 'user_message', text });
 const text = (t: string, parentToolUseId?: string): ChatItem =>
   ({ kind: 'text', text: t, ...(parentToolUseId ? { parentToolUseId } : {}) });
 const result: ChatItem = { kind: 'result', totalCostUsd: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, numTurns: 1, durationMs: 1, contextTokens: 0 };
+
+// Чьим голосом читать ход. Цена ошибки — персона говорит чужим голосом, поэтому
+// правило детерминированное, а не «как получится»
+describe('turnVoicePersonaId', () => {
+  const said = (t: string, personaId?: string): ChatItem =>
+    ({ kind: 'text', text: t, ...(personaId ? { personaId } : {}) });
+
+  it('берёт персону последней реплики хода', () => {
+    const items: ChatItem[] = [user('вопрос'), said('первая', 'p1'), said('вторая', 'p2')];
+    expect(turnVoicePersonaId(items, 'чат')).toBe('p2');
+  });
+
+  it('без персон в ходе — собеседник чата', () => {
+    expect(turnVoicePersonaId([user('вопрос'), said('ответ')], 'чат')).toBe('чат');
+  });
+
+  it('ни персон, ни собеседника — голос инстанса (undefined)', () => {
+    expect(turnVoicePersonaId([user('вопрос'), said('ответ')], null)).toBeUndefined();
+  });
+
+  it('реплики сабагентов не считаются: голос ведёт собеседник, а не исполнитель', () => {
+    const items: ChatItem[] = [
+      user('вопрос'),
+      said('ответ', 'p1'),
+      { kind: 'text', text: 'сабагент', parentToolUseId: 't1', personaId: 'p9' } as ChatItem,
+    ];
+    expect(turnVoicePersonaId(items, 'чат')).toBe('p1');
+  });
+
+  it('персона прошлого хода не тянется в новый', () => {
+    const items: ChatItem[] = [user('первый'), said('старое', 'p1'), user('второй'), said('новое')];
+    expect(turnVoicePersonaId(items, 'чат')).toBe('чат');
+  });
+});
+
+// Какую реплику подсвечивать, пока идёт озвучка: кольцо у аватара обязано стоять
+// у той персоны, чьим голосом читают, иначе оно врёт про говорящего
+describe('turnVoiceItemIndex', () => {
+  const said = (t: string, personaId?: string): ChatItem =>
+    ({ kind: 'text', text: t, ...(personaId ? { personaId } : {}) });
+
+  it('последняя реплика говорящей персоны в текущем ходу', () => {
+    const items: ChatItem[] = [user('вопрос'), said('первая', 'p1'), said('вторая', 'p1')];
+    expect(turnVoiceItemIndex(items, 'p1', null)).toBe(2);
+  });
+
+  it('реплика без персоны принадлежит собеседнику чата', () => {
+    const items: ChatItem[] = [user('вопрос'), said('ответ')];
+    expect(turnVoiceItemIndex(items, 'чат', 'чат')).toBe(1);
+  });
+
+  it('чужую реплику не подсвечивает: в группе последним мог ответить другой', () => {
+    const items: ChatItem[] = [user('вопрос'), said('моя', 'p1'), said('чужая', 'p2')];
+    expect(turnVoiceItemIndex(items, 'p1', null)).toBe(1);
+    expect(turnVoiceItemIndex(items, 'p3', null)).toBeNull();
+  });
+
+  it('реплики сабагентов не подсвечиваются', () => {
+    const items: ChatItem[] = [
+      user('вопрос'),
+      said('ответ', 'p1'),
+      { kind: 'text', text: 'сабагент', parentToolUseId: 't1', personaId: 'p1' } as ChatItem,
+    ];
+    expect(turnVoiceItemIndex(items, 'p1', null)).toBe(1);
+  });
+
+  it('прошлый ход не подсвечивается', () => {
+    const items: ChatItem[] = [user('первый'), said('старое', 'p1'), user('второй')];
+    expect(turnVoiceItemIndex(items, 'p1', null)).toBeNull();
+  });
+
+  it('без спикера и без хода — null', () => {
+    expect(turnVoiceItemIndex([user('в'), said('о', 'p1')], undefined, null)).toBeNull();
+    expect(turnVoiceItemIndex([said('о', 'p1')], 'p1', null)).toBeNull();
+  });
+});
 
 describe('turnText', () => {
   it('конкатенирует text-элементы последнего хода, сабагентов пропускает', () => {

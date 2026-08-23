@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, ChevronUp, MessageSquare, Sparkles } from 'lucide-react';
 import type { Project, Session } from '../types';
 import { C, FONT, R, SP } from '../lib/design';
-import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
+import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../lib/breakpoints';
 import { basename } from '../lib/paths';
 import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat } from '../lib/git';
 import type { TurnTree } from '../lib/turnWorktree';
@@ -68,14 +68,21 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс стейта попапа при смене чата
   useEffect(() => { setCommitMenu(null); }, [session?.id]);
 
-  // Планшет (601–1199): компактная геометрия — slim-бар (44 + поля 6/6 ≈ 56px),
-  // действия иконками. Сворачивание в микростроку 28 + поля 4/4 ≈ 36px, дефолт
-  // свёрнуто. На десктопе и мобиле — без изменений (мобил вообще скрыт гейтом ChatPanel).
+  // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): компактная геометрия — slim-бар
+  // (44 + поля 6/6 ≈ 56px), действия иконками. Сворачивание в микростроку
+  // 28 + поля 4/4 ≈ 36px, дефолт свёрнуто. На десктопе и мобиле — без изменений
+  // (мобил вообще скрыт гейтом ChatPanel).
+  //
+  // Верхняя граница — TABLET_WIDE_MIN, а не TABLET_MAX: дефолт «свёрнуто» экономит
+  // высоту там, где её мало, но на широком планшете (1120 у MatePad) бар оказывался
+  // микрострокой при свободной ширине — кнопки выглядели пропавшими, хотя просто
+  // никогда не разворачивались. Ручной выбор в localStorage по-прежнему главнее
+  // дефолта, так что уже сделанный выбор эта граница не переигрывает.
   // ВАЖНО: весь блок держим ВЫШЕ раннего `return null` ниже — иначе на первом рендере
   // (git-статус ещё не пришёл) хуки не вызовутся, а на следующем вызовутся, и React
   // падает с «Rendered more hooks than during the previous render» (#310).
   const ww = useWindowWidth();
-  const isCompact = ww > MOBILE_MAX && ww <= TABLET_MAX;
+  const isCompact = ww > MOBILE_MAX && ww < TABLET_WIDE_MIN;
 
   // Состояние сворачивания: планшет → дефолт свёрнуто, десктоп → развёрнуто.
   // Значение в localStorage переживает перезагрузку и переключение проектов.

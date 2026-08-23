@@ -80,4 +80,55 @@ public class TurnPromptAssemblerTests
             .Should().BeGreaterThan(text.IndexOf(VoicePrompts.SectionText));
         text.Should().EndWith(VoicePrompts.PersonaOverride);
     }
+
+    // Развилка «какой формат увидит модель» — единственная точка (VoicePrompts.SectionFor),
+    // вынесенная из ClaudeSession ради этого шва. Тут решается, придёт ответ коротким
+    // целиком или полным с маркером <voice>, поэтому проверяем все четыре исхода.
+    // Озвучка выключена — секция всё равно едет, но другая: выдержку у длинных ответов
+    // просим и в обычном текстовом чате, она нужна глазами не меньше, чем вслух
+    [Fact]
+    public void ВыборСекции_БезОзвучки_ПроситВыдержкуУДлинных()
+    {
+        VoicePrompts.SectionFor(voiceMode: false, digest: false, heard: true)
+            .Should().Be(VoicePrompts.LongAnswerSectionText);
+
+        // Ход без живого читателя (исполнитель задачи, автоматизация, делегированный)
+        // выдержку не просит: смотреть на плашку некому, а маркер засорит транскрипт
+        VoicePrompts.SectionFor(voiceMode: false, digest: false, heard: false)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void ВыборСекции_Разговор_ЭтоКороткийФормат()
+    {
+        VoicePrompts.SectionFor(voiceMode: true, digest: false, heard: true)
+            .Should().Be(VoicePrompts.SectionText);
+        // Разговор формат не теряет и без живого слушателя — поведение оставлено как было
+        VoicePrompts.SectionFor(voiceMode: true, digest: false, heard: false)
+            .Should().Be(VoicePrompts.SectionText);
+    }
+
+    [Fact]
+    public void ВыборСекции_Digest_ТолькоКогдаЕстьКомуСлушать()
+    {
+        VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: true)
+            .Should().Be(VoicePrompts.DigestSectionText);
+
+        // Ход исполнителя задачи / правила автоматизации / делегированный: озвучивать
+        // некому, а маркер <voice> засорил бы транскрипт
+        VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: false)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void ВыборСекции_ОзвучкаПеребиваетВыдержку()
+    {
+        // Разговор: ответ и так короткий целиком, отдельный блок выдержки в нём не нужен
+        VoicePrompts.SectionFor(voiceMode: true, digest: false, heard: true)
+            .Should().Be(VoicePrompts.SectionText);
+
+        // Озвучка выжимки: там блок обязателен ВСЕГДА, а не только у длинных ответов
+        VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: true)
+            .Should().Be(VoicePrompts.DigestSectionText);
+    }
 }

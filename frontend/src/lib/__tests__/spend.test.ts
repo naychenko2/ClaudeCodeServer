@@ -54,11 +54,13 @@ describe('plural: русское склонение числительных (т
   });
 });
 
-describe('isGenSource: источники-«генерации медиа»', () => {
-  it('fal и glif — генерации; токенные источники — нет', () => {
-    expect(GEN_SOURCES).toEqual(['fal', 'glif']);
+describe('isGenSource: источники без токенов', () => {
+  it('fal, glif и озвучка — счётчиком вызовов; токенные источники — нет', () => {
+    // Озвучка тоже считается вызовами, а не токенами: тарификация SpeechKit идёт за запрос
+    expect(GEN_SOURCES).toEqual(['fal', 'glif', 'tts']);
     expect(isGenSource('glif')).toBe(true);
     expect(isGenSource('fal')).toBe(true);
+    expect(isGenSource('tts')).toBe(true);
     expect(isGenSource('chat-turn')).toBe(false);
     expect(isGenSource('one-shot')).toBe(false);
     expect(isGenSource('free')).toBe(false);

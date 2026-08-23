@@ -15,11 +15,12 @@
 // Второй захват микрофона на части платформ (WebKit: iPhone/iPad/Safari) убивает
 // сессию SpeechRecognition — то есть весь разговор, а не только сияние. Тройная
 // защита прежняя: гейт платформ (Apple — сразу псевдо), канарейка (micDead при
-// открытом потоке → псевдо до конца вкладки), псевдо-режим как безопасный fallback.
+// открытом потоке → псевдо), псевдо-режим как безопасный fallback. Вердикт о
+// конфликте запоминается на устройстве, а не на вкладке (lib/ampConflict).
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { takeAuroraPulse, onAuroraWake } from '../lib/auroraPulse';
-import { AmpConflictDetector } from '../lib/ampConflict';
+import { AmpConflictDetector, isAmpUnsafeDevice, markAmpUnsafeDevice } from '../lib/ampConflict';
 import { talkDiag } from '../lib/talkDiag';
 
 // Окно канарейки: смерть движка распознавания в это время после открытия нашего
@@ -29,19 +30,59 @@ const CANARY_MS = 10_000;
 const ATTACK = 0.4;
 const RELEASE = 0.06;
 
-// Модульное состояние вкладки: после конфликта — псевдо до перезагрузки
+// Кэш вкладки поверх памяти устройства (lib/ampConflict): вердикт переживает
+// перезагрузку страницы, иначе каждое новое открытие вкладки платило бы за урок
+// первым циклом слушания целиком
 let ampUnsafeSession = false;
+
+function isAmpUnsafe(): boolean {
+  return ampUnsafeSession || isAmpUnsafeDevice();
+}
+
+// Подтверждённый вердикт: был реальный бесплодный цикл распознавания (или смерть
+// движка под нашим потоком). Запоминаем на устройстве — урок дорогой, повторять его
+// в каждой новой вкладке незачем
+function markAmpUnsafe(): void {
+  ampUnsafeSession = true;
+  markAmpUnsafeDevice();
+}
+
+// Ранний вердикт — эвристика по расхождению амплитуды и слуха движка: на устройстве
+// НЕ запоминаем. Отката в интерфейсе нет, а ложное срабатывание навсегда посадило бы
+// сияние на псевдо. Вкладке этого хватает: конфликт устойчив, и подтверждённый
+// вердикт всё равно придёт следующим бесплодным циклом
+function markAmpUnsafeSession(): void {
+  ampUnsafeSession = true;
+}
 
 // Apple-платформы: WebKit-реализация SpeechRecognition не терпит параллельного
 // getUserMedia — там конфликт убивает распознавание. Считаем по UA: iOS-браузеры
 // (включая Chrome на iPhone — он WebKit) и Safari macOS. Риск потерять весь
 // разговор дороже честной амплитуды. Ложный негатив ловит канарейка, ложный
-// позитив — деградация до псевдо, что безопасно
+// позитив — деградация до псевдо, что безопасно.
+//
+// ВАЖНО: этим гейтом закрыт и VAD-канал барж-ина (lib/bargeVad.ts), а он живёт в
+// фазе озвучки, когда Web Speech ЗАКРЫТ. Расширять эту функцию под «просто мобилу»
+// нельзя — перебивание голосом выключилось бы там, где никакого конфликта нет.
+// Для одновременного захвата есть отдельный гейт ниже
 export function isAmpUnsafePlatform(): boolean {
   if (typeof navigator === 'undefined') return true;
   const ua = navigator.userAgent;
   return /iPhone|iPad|iPod/i.test(ua)
     || (/Safari/i.test(ua) && !/Chrome|Chromium|Edg|OPR/i.test(ua));
+}
+
+// Платформы, где нельзя держать свой поток ОДНОВРЕМЕННО с открытым распознаванием.
+// Это строго про честную амплитуду: только у неё захват идёт параллельно Web Speech.
+//
+// Кроме Apple сюда попадают мобильные вообще: замер на Android-планшете показал
+// тихую глухоту — движок формально жив (audiostart пришёл), но аудио достаётся
+// нашему потоку, и первая фраза разговора пропадает целиком. Обучение по факту
+// конфликта тут не спасает: урок стоит ~7 секунд и приходится ровно на первую
+// фразу, когда человек уже говорит. Честная амплитуда остаётся десктопу
+export function isParallelCaptureUnsafe(): boolean {
+  if (typeof navigator === 'undefined') return true;
+  return isAmpUnsafePlatform() || /Android|Mobile|Tablet/i.test(navigator.userAgent);
 }
 
 // Общий слот анализатора между двумя эффектами хука: эффект потока наполняет,
@@ -60,6 +101,10 @@ export interface MicLevelOptions {
   speechActive: boolean;
   // Узел сияния: сюда пишется --amp на каждом кадре rAF
   targetRef: React.RefObject<HTMLElement | null>;
+  // Ранний вердикт конфликта: мы слышим голос, движок молчит дольше порога.
+  // Поток к этому моменту уже погашен и устройство помечено — вызывающему
+  // остаётся перезапустить распознавание и сказать человеку, что не расслышали
+  onEarlyConflict?: () => void;
 }
 
 export interface MicLevel {
@@ -71,9 +116,16 @@ export interface MicLevel {
   // Прокидывается в детектор конфликта: голос в нашей амплитуде при глухом
   // движке = второй захват перехватил микрофон
   reportCycleEnd: (barren: boolean) => void;
+  // Движок подал признак слуха (soundstart/speechstart/результат): звук до него
+  // доходит, ранний вердикт в этом цикле снимается
+  reportEngineHeard: () => void;
+  // Движок запущен и захватил аудио: до этого момента его молчание законно — наш
+  // поток открыт всю микрофонную фазу, а циклы распознавания идут в ней чередой,
+  // и между ними речь человека никем не слушается по определению
+  reportCycleStart: () => void;
 }
 
-export function useMicLevel({ active, micActive, speechActive, targetRef }: MicLevelOptions): MicLevel {
+export function useMicLevel({ active, micActive, speechActive, targetRef, onEarlyConflict }: MicLevelOptions): MicLevel {
   const slotRef = useRef<AnalyserSlot>({ analyser: null });
   // Детектор конфликта захватов: наша амплитуда голос слышит, движок — нет.
   // Живёт между фазами петли (слушание → ожидание → слушание), поэтому ref
@@ -84,6 +136,10 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
   // Момент открытия real-потока (0 — не открыт). Нужен канарейке: reportMicDead
   // приходит извне, после факта
   const openedAtRef = useRef(0);
+  // Колбэк раннего вердикта в ref: rAF-луп живёт весь период active и замкнул бы
+  // устаревшую версию
+  const earlyRef = useRef(onEarlyConflict);
+  useEffect(() => { earlyRef.current = onEarlyConflict; });
   // Зеркало speechActive: эффект лупа живёт весь период active (deps [active]),
   // а фаза озвучки приходит/уходит по ходу — читаем актуальное значение из ref,
   // иначе замыкание навсегда запоминает speechActive рендера запуска
@@ -147,6 +203,18 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
         // дыхания/шума комнаты)
         if (raw > 0.2) {
           conflictRef.current.noteVoice();
+          // Ранний вердикт: голос идёт, движок молчит. Ждать конца цикла нельзя —
+          // он тянется 5-6 секунд, и всё сказанное за них пропадает
+          if (conflictRef.current.earlyConflict()) {
+            talkDiag('amp: РАННИЙ КОНФЛИКТ — движок глух под нашим захватом');
+            markAmpUnsafeSession();
+            // Вердикт разовый: закрываем цикл сразу, иначе следующий же кадр rAF
+            // выстрелил бы им повторно — поток гаснет только к следующему проходу
+            // эффекта, и до тех пор условие оставалось бы истинным
+            conflictRef.current.cycleEnd(false);
+            setStreamKick(k => k + 1);
+            earlyRef.current?.();
+          }
           // Диагностика: фиксируем первый громкий кадр цикла (не спамим каждый кадр).
           // Латиница в значении — чтобы не путаться в похожих кириллических логах
           if (performance.now() - lastVoiceLogRef.current > 2000) {
@@ -202,10 +270,10 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
     let cancelled = false;
 
     conflictRef.current.setStream(true);
-    if (ampUnsafeSession) {
+    if (isAmpUnsafe()) {
       talkDiag('amp: поток не открываем — вкладка помечена ampUnsafe (конфликт/канарейка)');
-    } else if (isAmpUnsafePlatform()) {
-      talkDiag('amp: поток не открываем — Apple-платформа (WebKit)');
+    } else if (isParallelCaptureUnsafe()) {
+      talkDiag('amp: поток не открываем — платформа не терпит параллельный захват');
     } else {
       talkDiag('amp: открываю getUserMedia для амплитуды');
       // real-путь с деградацией: отказ — тихо остаёмся в псевдо, разговор не трогаем.
@@ -239,12 +307,12 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
       openedAtRef.current = 0;
     };
     // streamKick: конфликт захватов гасит живой поток немедленно — эффект
-    // перезапускается, но real-путь уже закрыт ampUnsafeSession
+    // перезапускается, но real-путь уже закрыт вердиктом ampUnsafe
   }, [micActive, streamKick]);
 
   const reportMicDead = useCallback(() => {
     const opened = openedAtRef.current;
-    if (opened && Date.now() - opened <= CANARY_MS) ampUnsafeSession = true;
+    if (opened && Date.now() - opened <= CANARY_MS) markAmpUnsafe();
   }, []);
 
   const reportCycleEnd = useCallback((barren: boolean) => {
@@ -254,10 +322,13 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
     // Конфликт подтверждён: голос был у нас, движок глух. Честная амплитуда
     // отключается до перезагрузки вкладки — разговор дороже сияния. Немедленный
     // перезапуск эффекта гасит живой захват, не дожидаясь смены фазы петли
-    talkDiag('amp: КОНФЛИКТ ЗАХВАТОВ — вырубаю честную амплитуду до перезагрузки');
-    ampUnsafeSession = true;
+    talkDiag('amp: КОНФЛИКТ ЗАХВАТОВ — вырубаю честную амплитуду (запомнено на устройстве)');
+    markAmpUnsafe();
     setStreamKick(k => k + 1);
   }, []);
 
-  return { reportMicDead, reportCycleEnd };
+  const reportEngineHeard = useCallback(() => conflictRef.current.noteEngineHeard(), []);
+  const reportCycleStart = useCallback(() => conflictRef.current.cycleStart(), []);
+
+  return { reportMicDead, reportCycleEnd, reportEngineHeard, reportCycleStart };
 }

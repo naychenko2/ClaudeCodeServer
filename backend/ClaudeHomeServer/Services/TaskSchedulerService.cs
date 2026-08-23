@@ -49,6 +49,7 @@ public class TaskSchedulerService(
                 if (task.Status == TaskItemStatus.Done) continue;
                 await ProcessReminderAsync(task, tz, nowUtc);
                 await ProcessClaudeAutoStartAsync(task, tz, nowUtc);
+                await ProcessStalledExecutorAsync(task, nowUtc);
             }
             // Утренний бриф раз в день в таймзоне юзера (быстрый выход, если не время/выключено)
             await briefing.MaybeRunScheduledAsync(user, tz, nowUtc);
@@ -90,6 +91,22 @@ public class TaskSchedulerService(
         catch (Exception ex)
         {
             log.LogWarning(ex, "Автозапуск Claude-исполнителя не удался: задача {TaskId} «{Title}»",
+                task.Id, task.Title);
+        }
+    }
+
+    // Страховка «ход кончился, а задачу никто не закрыл»: решение принимает
+    // TaskExecutionService (там же отметки о шагах), тик только зовёт его по каждой задаче.
+    // Сбой одной задачи не должен рвать проход по остальным — как у автозапуска выше.
+    private async Task ProcessStalledExecutorAsync(TaskItem task, DateTime nowUtc)
+    {
+        try
+        {
+            await executor.CheckStalledExecutorAsync(task, nowUtc);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Проверка незакрытой задачи {TaskId} «{Title}» не удалась",
                 task.Id, task.Title);
         }
     }

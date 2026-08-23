@@ -650,6 +650,30 @@ public class PersonaManager
         return persona;
     }
 
+    // Голос персоны в голосовом режиме; сохранение мгновенное. Пустой объект (ни голоса,
+    // ни роли, ни темпа) нормализуется в null — так форма сбрасывает голос к дефолту
+    // инстанса, не изобретая отдельного маркера «сбросить».
+    //
+    // Отдельным методом, а не очередным параметром Update: там их уже больше двадцати,
+    // и двадцать пятый позиционный аргумент ради голоса — плохой шов.
+    public Persona SetVoice(string id, string userId, PersonaVoice? voice)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        lock (_saveLock)
+        {
+            // Имя голоса нормализуем к каноническому: алиас в сторе означал бы, что форма
+            // не найдёт его в списке и покажет «голос не выбран» у настроенной персоны
+            if (voice is { IsEmpty: false })
+                voice.Voice = Services.Tts.TtsVoiceCatalog.Canonical(voice.Voice) ?? voice.Voice;
+            persona.Voice = voice is { IsEmpty: false } ? voice : null;
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return persona;
+    }
+
     // Полная замена привязок персоны (фича persona-bindings); сохранение мгновенное.
     // Пустой список нормализуется в null (поведение как без привязок).
     public Persona UpdateBindings(string id, string userId, List<PersonaBinding>? bindings)

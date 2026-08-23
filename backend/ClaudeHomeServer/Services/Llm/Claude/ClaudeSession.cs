@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -315,6 +315,34 @@ public class ClaudeSession : ILlmSessionAdapter
             get { lock (PendingBg) return PendingBg.Count > 0 || PendingBgUnknown; }
         }
 
+        // CLI прислал снэпшот живых фоновых задач, и он ПУСТ: «здесь никто не работает»
+        // из первых рук. Гасит только КАРТИНКУ (HasTrackedBg), не живучесть прогона:
+        // закрытие карточек и решение «держать процесс» остаются за task_notification и
+        // финализацией — пустой снэпшот наблюдался живьём и до уведомления о завершении.
+        // Снимается стартом любой новой задачи и непустым снэпшотом.
+        public volatile bool BgTasksEmptySnapshot;
+
+        // Только ТОЧНО учтённые фоновые задачи (без PendingBgUnknown) — то, о чём можно
+        // честно сказать человеку «здесь работают агенты». HasPendingBg для этого не
+        // годится: PendingBgUnknown значит «видели запуск, но id не распознали», и он
+        // намеренно консервативен — держать процесс живым лучше зря, чем убить рабочего
+        // агента. Для картинки та же консервативность превращается в ложный значок:
+        // задачи нет, в панели агентов пусто, а карточка чата светится.
+        //
+        // Пустой снэпшот перебивает счётчик: завершение задачи доезжает ТРЕМЯ путями
+        // (структурный task_notification, текстовый <task-notification>, TaskOutput), и если
+        // все три прошли мимо — запись висела в PendingBg до самой смерти процесса, а значок
+        // агентов горел в списке чатов часами. Снэпшот от CLI авторитетнее нашего учёта.
+        public bool HasTrackedBg
+        {
+            get { lock (PendingBg) return !BgTasksEmptySnapshot && PendingBg.Count > 0; }
+        }
+
+        // Последнее опубликованное наружу значение HasPendingBg (0/1) — гейт события
+        // bg_agents_presence: список чатов интересует только переход 0↔N, а не каждая
+        // задача. Поле (а не свойство) — читается-пишется через Interlocked.Exchange
+        public int BgPresencePublished;
+
         public static TaskCompletionSource NewTcs() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -349,6 +377,13 @@ public class ClaudeSession : ILlmSessionAdapter
     // — P12/P15). Тем же признаком пользуется CloseStdinIfIdle, чтобы не закрыть stdin у прогона с
     // живыми агентами. Чтение _run — как в HasLiveTurn: ссылка атомарна, устаревший в момент чтения
     // run даёт лишь консервативный «фоновые есть» (sweep пропустит), что безопаснее ложного terminus.
+    // Учтённые поимённо фоновые задачи — источник признака «в чате работают агенты» для
+    // списка чатов (см. ILlmSessionAdapter.HasTrackedBg)
+    public bool HasTrackedBg
+    {
+        get { var run = _run; return run is not null && run.HasTrackedBg; }
+    }
+
     public bool HasPendingBg
     {
         get { var run = _run; return run is not null && run.HasPendingBg; }
@@ -384,21 +419,37 @@ public class ClaudeSession : ILlmSessionAdapter
     // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
     private readonly string[] _disallowedTools;
 
-    // Встроенные Task-инструменты Claude Code (Tasks-фича, синхронизация с claude.ai) —
-    // дублируют наш MCP tasks-server. Пока tasks-server подключён, блокируем их через
-    // --disallowedTools (см. сборку _disallowedTools в конструкторе), чтобы модель звала
-    // mcp__tasks__*, а не пустой встроенный трекер. ВНИМАНИЕ: «Task» (без суффикса) —
-    // это тул ЗАПУСКА СУБАГЕНТА (делегирование), его НЕ трогаем; только трекерные
-    // TaskGet/TaskList/TaskCreate/TaskUpdate.
+    // Встроенные Task-инструменты Claude Code делятся на ДВА набора с разной судьбой.
+    // ВНИМАНИЕ: «Task» (без суффикса) — это тул ЗАПУСКА СУБАГЕНТА (делегирование), его
+    // НЕ трогаем ни при каких условиях; здесь только трекерные, с суффиксом.
     //
-    // ВНИМАНИЕ: раньше тут стояло «несуществующие claude молча проигнорирует» и список
-    // содержал TaskComplete/TaskDelete/TaskSearch. Это допущение сломалось: CLI 2.1.x
-    // ВАЛИДИРУЕТ имена в deny-правилах. В интерактивном режиме он ругается в stderr на
-    // каждый ход, а в `--print` (one-shot) вообще падает с кодом 1 — так у нас разом легли
-    // все ИИ-фичи из-за мёртвого MultiEdit. Мёртвые имена сюда не добавлять: список сверять
-    // с реальным набором инструментов CLI при его обновлении.
-    private static readonly string[] BuiltInTaskTools =
-        ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate"];
+    // ВНИМАНИЕ (общее для обоих списков): раньше тут стояло «несуществующие claude молча
+    // проигнорирует» и список содержал TaskComplete/TaskDelete/TaskSearch. Это допущение
+    // сломалось: CLI 2.1.x ВАЛИДИРУЕТ имена в deny-правилах. В интерактивном режиме он
+    // ругается в stderr на каждый ход, а в `--print` (one-shot) вообще падает с кодом 1 —
+    // так у нас разом легли все ИИ-фичи из-за мёртвого MultiEdit. Мёртвые имена сюда не
+    // добавлять: список сверять с реальным набором инструментов CLI при его обновлении.
+
+    // ЧТЕНИЕ трекера claude.ai — блокируем всегда, пока подключён наш tasks-server: там
+    // пусто, а модель (особенно haiku) шла за задачей туда вместо mcp__tasks__*, получала
+    // «No tasks» и бросала работу.
+    private static readonly string[] BuiltInTaskReadTools =
+        ["TaskGet", "TaskList"];
+
+    // ПЛАН ТЕКУЩЕГО ХОДА (преемник TodoWrite, которого CLI 2.1.226 уже не отдаёт) — нужен
+    // модели, чтобы вести многошаговую работу; по нему же фронт рисует карточку чек-листа
+    // и вкладку «Задачи» артефактов (computeTodos). Блокируем ТОЛЬКО у сессий-исполнителей
+    // задач: там на руках задача продуктового трекера, и «закрытие» её через TaskUpdate
+    // вместо mcp__tasks__tasks_complete оставило бы её висеть в inProgress навсегда
+    // (страховки на этот случай в продукте нет — заведена отдельная задача).
+    //
+    // Граница проходит по «на руках задача трекера», а НЕ по «автономности сессии»:
+    // ходы правил автоматизации персон (Info.AutomationRuleId) и делегированные ходы
+    // план-инструменты получают — путать их не с чем. По той же причине план-тулы НЕ
+    // добавлены в PersonaAccessPolicy.ReadOnlyDisallowed: план хода — не запись наружу
+    // и не правка файлов проекта.
+    private static readonly string[] BuiltInTaskPlanTools =
+        ["TaskCreate", "TaskUpdate"];
 
     // Браузерные инструменты, которые приходят в сессию ПОМИМО нашего MCP-конфига, — два
     // независимых канала: MCP плагина playwright (профили CLI) и коннектор аккаунта claude.ai
@@ -605,12 +656,18 @@ public class ClaudeSession : ILlmSessionAdapter
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
             : disallowedTools ?? [];
-        // Пока подключён наш MCP tasks-server, запрещаем встроенные Task-инструменты
-        // Claude Code (синхронизация с claude.ai — там пусто): они дублируют mcp__tasks__*
-        // и путают модель (особенно haiku зовёт TaskGet/TaskList вместо tasks_get/tasks_list,
-        // получает «No tasks» и бросает задачу). Без задач в сессии — не трогаем.
+        // Пока подключён наш MCP tasks-server, запрещаем ЧТЕНИЕ встроенного трекера
+        // claude.ai: он дублирует mcp__tasks__* и путает модель (haiku звал TaskGet/TaskList
+        // вместо tasks_get/tasks_list, получал «No tasks» и бросал задачу). Без задач
+        // в сессии — не трогаем.
         if (context.TasksMcp is not null)
-            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskTools];
+            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskReadTools];
+        // План хода (TaskCreate/TaskUpdate) закрыт только исполнителю задачи — см. коммент
+        // у BuiltInTaskPlanTools. Условие идёт по свойству СЕССИИ, а не хода: _disallowedTools
+        // считается один раз в конструкторе и в сигнатуру прогона (BuildLaunchSignature)
+        // попадает стабильным — мерцания сигнатуры и перезапуска CLI тут не возникает.
+        if (info.TaskExecution)
+            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskPlanTools];
         // Браузер не положен персоне по роли — закрываем оба канала (плагин + коннектор)
         if (!_browserEnabled)
             _disallowedTools = [.. _disallowedTools, .. BrowserTools];
@@ -1583,6 +1640,14 @@ public class ClaudeSession : ILlmSessionAdapter
         // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
         if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
             return "allow";
+        // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
+        // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
+        // режиме и hands-free отвечать на такую карточку вовсе некому — ход завис бы в
+        // Waiting до таймаута. Ветка стоит превентивно: если CLI разрешения на эти тулы не
+        // спрашивает, она просто не сработает. Оба канала permission-запроса
+        // (sdk_control_request и основной) сходятся сюда — второго места для правки нет.
+        if (ruleDecision == null && Array.Exists(BuiltInTaskPlanTools, t => string.Equals(t, toolName, StringComparison.Ordinal)))
+            return "allow";
         // «Всегда разрешать» этого чата: читаем с ЖИВОЙ сессии (Info — тот же объект, что
         // держит SessionManager), поэтому список свежий на каждый запрос и переживает
         // рестарт сервера. Копию на старте адаптера делать нельзя: RespondPermission
@@ -2008,11 +2073,23 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("ask-question", "Как задавать вопросы кнопками", askHint);
             }
 
-            // Голосовой режим чата: ответ слушают, а не читают — коротко и без таблиц/кода/схем.
+            // Голосовой режим чата. talk — ответ слушают, а не читают: коротко и без
+            // таблиц/кода/схем. digest — ответ читают с экрана и слушают выжимку: формат
+            // обычный, а вслух идёт блок <voice> в конце.
             // Вторая половина правила — оговорка в конце слоя персоны (PersonaPromptBuilder):
             // слой персоны клеится ПОСЛЕ секций и без неё перебил бы этот формат своим.
-            if (Info.VoiceMode)
-                Add("voice-mode", "Формат для голосового режима", Prompts.VoicePrompts.SectionText);
+            //
+            // Ходу без живого слушателя digest-секция не нужна: озвучивать некому, а маркер
+            // засорил бы транскрипт. Признаки те же, что у подсказки ask-question выше —
+            // исполнитель задачи, ход правила автоматизации и делегированный ход из другого
+            // чата. talk трогать не стали: там формат ответа устоялся, менять его задним
+            // числом — отдельное решение.
+            var heard = !Info.TaskExecution && Info.AutomationRuleId is null && _currentTurnAgentDepth < 1;
+            if (Prompts.VoicePrompts.SectionFor(Info.VoiceMode, Info.IsVoiceDigest, heard) is { } voiceSection)
+                Add("voice-mode", Info.VoiceMode
+                        ? (Info.IsVoiceDigest ? "Формат для озвучки ответов" : "Формат для голосового режима")
+                        : "Краткая выдержка у длинных ответов",
+                    voiceSection);
 
             // Подсказка про систему задач — только когда tasks-server подключён
             if (_tasksMcp is not null)
@@ -2050,7 +2127,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM. " +
+                    "Не путай их со встроенными TaskCreate/TaskUpdate: те ведут план ТЕКУЩЕГО хода " +
+                    "(шаги работы, видны пользователю чек-листом в ленте) и в систему задач не попадают. " +
+                    "Задача пользователя — только mcp__tasks__*." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
                 Add("mcp-tasks", "Как работать с задачами", tasksHint, group: "mcp");
             }
 
@@ -2848,6 +2928,9 @@ public class ClaudeSession : ILlmSessionAdapter
             run.UnknownBgToolUses.Clear();
         }
         run.PendingBgUnknown = false;
+        // Процесс умер — фона у чата больше нет. Публикуем ДО закрытия карточек: список
+        // чатов гасит свечение сразу, не дожидаясь рассылки bg_agent_done по каждой карточке
+        PublishBgPresence(run);
         // drainSubagent: false — _subagentWatcher либо уже продренирован и обнулён выше
         // (wasCurrent), либо принадлежит НОВОМУ прогону, заместившему этот (!wasCurrent):
         // дренировать чужой поток здесь было бы порчей его состояния.
@@ -3589,7 +3672,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Разбор вынесен в ClaudeRateLimitParser (общий со стартовым прогревом подписок).
     private async Task HandleRateLimitAsync(JsonElement root)
     {
-        TurnTelemetry.RecordRateLimit(Info.Provider);
+        TurnTelemetry.RecordRateLimit(Info.Provider, ClaudeRateLimitParser.ReadStatus(root));
         if (ClaudeRateLimitParser.TryParse(root, out var msg))
             await _onMessage(msg);
     }
@@ -3766,12 +3849,39 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!m.Success && content.Contains("in the background", StringComparison.Ordinal))
             m = BgResumedRe.Match(content);
         if (m.Success)
+        {
+            run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
             lock (run.PendingBg) run.PendingBg[m.Groups[1].Value] = toolUseId;
+        }
         else if (candidate)
         {
             run.PendingBgUnknown = true;
             lock (run.PendingBg) run.UnknownBgToolUses.Add(toolUseId);
         }
+        PublishBgPresence(run);
+    }
+
+    // Наружу («у чата есть живые фоновые агенты») — ЕДИНСТВЕННАЯ точка публикации: её зовут
+    // после КАЖДОЙ мутации набора фоновых задач, а событие уходит только когда значение
+    // реально сменилось (переход 0↔N). Так не приходится угадывать «те самые» места: учёт
+    // ведут семь разных путей (текстовый TrackBgLaunch, структурные task_started /
+    // task_notification / background_tasks_changed, TaskOutput, финализация прогона).
+    //
+    // Звать СТРОГО вне lock (PendingBg): рассылка уходит в SessionManager, а тот под своим
+    // _saveLock сериализует сессии — держать наш лок в этот момент значило бы выстроить два
+    // лока в противоположном порядке. HasPendingBg берёт лок сам, на мгновение.
+    private void PublishBgPresence(CliRun run)
+    {
+        var active = run.HasTrackedBg ? 1 : 0;
+        if (Interlocked.Exchange(ref run.BgPresencePublished, active) == active) return;
+        _ = Task.Run(async () =>
+        {
+            try { await _onMessage(new BgAgentsPresenceMessage(active == 1)); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] bg_agents_presence не разослан: {ex.Message}");
+            }
+        });
     }
 
     // Этот tool_use — фоновый агент, который только запустился и ещё работает? Учёт ведут
@@ -3830,6 +3940,7 @@ public class ClaudeSession : ILlmSessionAdapter
             removed = before - run.PendingBg.Count;
             left = run.PendingBg.Count;
         }
+        PublishBgPresence(run);
         if (removed > 0)
             Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась ({removed} шт.), осталось {left}");
         if (doneTools.Count > 0)
@@ -3859,6 +3970,7 @@ public class ClaudeSession : ILlmSessionAdapter
             run.PendingBg.Remove(agentId, out doneTool);
             left = run.PendingBg.Count;
         }
+        PublishBgPresence(run);
         if (string.IsNullOrEmpty(doneTool)) return;
 
         Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась через TaskOutput (aborted={aborted}), осталось {left}");
@@ -3883,6 +3995,7 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         if (ParseTaskStarted(root) is not { } started) return;
         var (taskId, toolUseId) = started;
+        run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
         lock (run.PendingBg)
         {
             run.PendingBg[taskId] = toolUseId;
@@ -3890,6 +4003,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (run.UnknownBgToolUses.Remove(toolUseId) && run.UnknownBgToolUses.Count == 0)
                 run.PendingBgUnknown = false;
         }
+        PublishBgPresence(run);
     }
 
     // Структурное событие CLI: завершение фоновой задачи (completed/failed/stopped) — точный
@@ -3923,6 +4037,7 @@ public class ClaudeSession : ILlmSessionAdapter
             }
             if (wasTracked) doneTool = toolUseId;
         }
+        PublishBgPresence(run);
         if (string.IsNullOrEmpty(doneTool)) return;
 
         Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась (структурно, aborted={aborted})");
@@ -3944,8 +4059,17 @@ public class ClaudeSession : ILlmSessionAdapter
     // за ним (и за финализацией прогона), не за этим событием.
     private void HandleBackgroundTasksChanged(CliRun run, JsonElement root)
     {
-        if (IsBackgroundTasksEmptySnapshot(root)) run.PendingBgUnknown = false;
+        if (!IsBackgroundTasksSnapshot(root)) return;
+        var empty = IsBackgroundTasksEmptySnapshot(root);
+        run.BgTasksEmptySnapshot = empty;
+        if (empty) run.PendingBgUnknown = false;
+        PublishBgPresence(run);
     }
+
+    // Событие вообще несёт снэпшот задач (массив tasks на месте)? Непустой снэпшот —
+    // такой же законный сигнал, как пустой: он снимает отметку «работать некому».
+    internal static bool IsBackgroundTasksSnapshot(JsonElement root) =>
+        root.TryGetProperty("tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array;
 
     private async Task HandleStreamEventAsync(JsonElement root)
     {

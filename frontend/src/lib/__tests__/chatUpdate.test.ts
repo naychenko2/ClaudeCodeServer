@@ -20,6 +20,14 @@ describe('updateChatFields — частичный патч, а не полная
     expect(api.sessions.update).toHaveBeenCalledWith('p1', 's1', { voiceMode: true });
   });
 
+  // Стиль озвучки уходит и БЕЗ voiceMode: он принадлежит устройству, и второе устройство
+  // выправляет его у чата с уже включённой озвучкой. Поле из тех, что молча теряются —
+  // белый список подмешивает только известные ключи
+  it('стиль озвучки не теряется в белом списке полей', async () => {
+    await updateChatFields(session, { voiceStyle: 'digest' });
+    expect(api.sessions.update).toHaveBeenCalledWith('p1', 's1', { voiceStyle: 'digest' });
+  });
+
   it('переданные поля уходят как есть, включая очистку имени пустой строкой', async () => {
     await updateChatFields(session, { name: '', model: 'glm-5.2' });
     expect(api.sessions.update).toHaveBeenCalledWith('p1', 's1', { name: '', model: 'glm-5.2' });

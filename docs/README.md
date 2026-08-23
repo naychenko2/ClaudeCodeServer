@@ -54,7 +54,9 @@
 [project-icon-glyphs.md](features/project-icon-glyphs.md) (значок проекта вместо картинки:
 тексты интерфейса и «Что нового»),
 [project-onboarding-v2.md](features/project-onboarding-v2.md) (знакомство с проектом v2:
-статус и источники правды).
+статус и источники правды),
+[voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
+устройство, ограничения, критерии снятия флага).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
@@ -70,8 +72,9 @@
 [remote-access.md](operations/remote-access.md) (Tailscale + HTTPS).
 
 **design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
-[audit.md](design/audit.md) (сверка реализации с макетами), `mockups/` — кликабельные
-прототипы в HTML.
+[target-devices.md](design/target-devices.md) (приоритетные устройства и их ширины
+в CSS-пикселях), [audit.md](design/audit.md) (сверка реализации с макетами),
+`mockups/` — кликабельные прототипы в HTML.
 
 **adr/** —
 [ADR-001](adr/ADR-001-task-and-chat-origin.md) (происхождение задач и чатов),
@@ -97,7 +100,9 @@
 [browser-channel-spike.md](research/browser-channel-spike.md) с
 [browser-channel.md](research/browser-channel.md) (замеры под ADR-008),
 [voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
-и Claude: разрывы и план P0/P1/P2). Читать как «так было тогда».
+и Claude: разрывы и план P0/P1/P2),
+[speechkit-pricing.md](research/speechkit-pricing.md) (биллинг Yandex SpeechKit: цены STT/TTS,
+правила округления, расчёт голосового режима, v1 против v3). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

@@ -17,7 +17,7 @@ public static class ClaudeRateLimitParser
 
         // Форвардим ВСЕ события (включая "allowed"): utilization нужен для непрерывного
         // индикатора использования подписки.
-        var status = info.TryGetProperty("status", out var stEl) ? stEl.GetString() : null;
+        var status = ReadStatus(root);
 
         var utilization = info.TryGetProperty("utilization", out var utEl) && utEl.ValueKind == JsonValueKind.Number
             ? utEl.GetDouble() : (double?)null;
@@ -49,6 +49,18 @@ public static class ClaudeRateLimitParser
             overageStatus, overageResetsAt, overageDisabledReason);
         return true;
     }
+
+    /// <summary>
+    /// Только статус события, без полного разбора. Нужен телеметрии, которая пишется на
+    /// КАЖДОЕ событие — включая те, где <see cref="TryParse"/> вернёт false (нет ни типа
+    /// окна, ни utilization). null — поля нет.
+    /// </summary>
+    public static string? ReadStatus(JsonElement root) =>
+        root.TryGetProperty("rate_limit_info", out var info)
+        && info.TryGetProperty("status", out var st)
+        && st.ValueKind == JsonValueKind.String
+            ? st.GetString()
+            : null;
 
     // Нормализует поле времени сброса (ISO-строка или unix сек/мс) в ISO-строку
     private static string? NormalizeReset(JsonElement info, string key1, string key2)

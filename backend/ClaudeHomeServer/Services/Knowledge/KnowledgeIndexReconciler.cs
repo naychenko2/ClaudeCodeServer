@@ -55,8 +55,9 @@ public sealed record ReconcileTargetStatus(string Label, int Healable, int Unhea
 //   отбрасывается сразу после ResolveAsync, до мутации. Карантин — до рестарта.
 // - Видимость (шаг 4): снимок LastCounts/RecoveredTotal читают гейджи телеметрии, а
 //   владельцам целей уходит уведомление, когда healable-ошибки держатся ≥2 обходов
-//   подряд — не чаще раза в сутки на владельца (дедуп in-memory: после рестарта
-//   уведомление может продублироваться, осознанный компромисс плана).
+//   подряд — не чаще раза в сутки на владельца. Кулдаун переживает рестарт: отметка
+//   в памяти — только быстрый кэш, источник истины — время последнего такого
+//   уведомления в сторе (IKnowledgeAlertNotifier.LastNotifiedAtAsync).
 public sealed class KnowledgeIndexReconciler : BackgroundService
 {
     // Сколько обходов подряд ошибки должны держаться, чтобы беспокоить владельца:
@@ -87,7 +88,7 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
     private readonly Dictionary<string, int> _attempts = new();       // «Label:EntryKey» → попыток
     private readonly HashSet<string> _quarantine = new();
     private readonly Dictionary<string, ReconcileTargetStatus> _lastCounts = new();
-    private readonly Dictionary<string, DateTimeOffset> _notifiedAt = new();   // userId → когда уведомляли
+    private readonly Dictionary<string, DateTimeOffset> _notifiedAt = new();   // userId → когда уведомляли (кэш поверх стора)
     private long _recovered;
     private string _lastMode = "off";
 
@@ -257,13 +258,14 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
                     target.Label, unhealable);
 
             // Владельцу сообщаем и в observe: видимость от режима лечения не зависит.
-            // Отметку времени ставим здесь же, под локом — иначе два датасета одного
-            // владельца в одном тике дали бы два уведомления.
             if (st.HealableRounds >= RoundsBeforeNotify)
             {
                 foreach (var userId in target.OwnerUserIds)
                 {
                     if (_notifiedAt.TryGetValue(userId, out var last) && now - last < NotifyCooldown) continue;
+                    // Отметку ставим здесь же, под локом — иначе два датасета одного
+                    // владельца в одном тике дали бы два уведомления. Фактическое время
+                    // уточнит NotifyOwnersAsync по стору (там же решается, слать ли вообще).
                     _notifiedAt[userId] = now;
                     notifyOwners.Add(userId);
                 }
@@ -310,8 +312,20 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
     private async Task NotifyOwnersAsync(IReadOnlyList<string> userIds, CancellationToken ct)
     {
         if (_notifier is null) return;
+        var now = _time.GetUtcNow();
         foreach (var userId in userIds)
         {
+            // Кулдаун сверяем со стором, а не только с памятью: после рестарта
+            // _notifiedAt пуст, и без этой проверки владелец получал бы «раз в сутки»
+            // при каждом подъёме процесса
+            var last = await _notifier.LastNotifiedAtAsync(userId, ct);
+            if (last is not null && now - last.Value < NotifyCooldown)
+            {
+                // Кэш поправляем фактическим временем — до конца суток больше не спросим
+                lock (_gate) _notifiedAt[userId] = last.Value;
+                continue;
+            }
+
             await _notifier.NotifyAsync(userId,
                 "Часть знаний не проиндексирована",
                 "Некоторые записи знаний и памяти не удалось проиндексировать — поиск и recall "

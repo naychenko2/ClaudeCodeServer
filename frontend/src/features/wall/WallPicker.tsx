@@ -10,12 +10,15 @@ import { api } from '../../lib/api';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useWallState, addChat, MAX_CHATS } from './wallStore';
 import { showToast } from '../../lib/toast';
+import { useAgentsPresence } from '../../lib/agentsPresence';
 
 export function WallPicker({ onClose }: { onClose: () => void }) {
   const { chats, projects } = useWallState();
   const [candidates, setCandidates] = useState<Session[] | null>(null);
   const [query, setQuery] = useState('');
   const [busyOnly, setBusyOnly] = useState(false);
+  // Чаты с живыми фоновыми агентами — для фильтра «активные сейчас» и бейджа строки
+  const agentsRunningIds = useAgentsPresence();
 
   useEffect(() => {
     api.wall.candidates().then(setCandidates).catch(() => setCandidates([]));
@@ -28,7 +31,11 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
     if (!candidates) return [];
     const q = query.trim().toLowerCase();
     const list = candidates.filter(s => {
-      if (busyOnly && s.status !== 'working' && s.status !== 'waiting') return false;
+      // «Активные сейчас» — про идущую работу, а не про статус процесса: чат с живыми
+      // фоновыми агентами имеет спокойный active и без этого молча выпадал бы из
+      // фильтра, включённого ровно ради него
+      if (busyOnly && s.status !== 'working' && s.status !== 'waiting'
+        && !agentsRunningIds.has(s.id)) return false;
       if (!q) return true;
       const project = s.projectId ? projects.get(s.projectId) : undefined;
       return (s.name ?? '').toLowerCase().includes(q) || (project?.name ?? '').toLowerCase().includes(q);
@@ -46,7 +53,7 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
       if (b === '') return -1;
       return (projects.get(a)?.name ?? '').localeCompare(projects.get(b)?.name ?? '');
     });
-  }, [candidates, query, busyOnly, projects]);
+  }, [candidates, query, busyOnly, projects, agentsRunningIds]);
 
   return (
     <Modal
@@ -96,7 +103,11 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
               </div>
               {list.map(s => {
                 const isTaken = taken.has(s.id);
-                const busy = s.status === 'working' || s.status === 'waiting';
+                const agentsRunning = agentsRunningIds.has(s.id);
+                const busy = s.status === 'working' || s.status === 'waiting' || agentsRunning;
+                const busyLabel = s.status === 'working' ? 'идёт ход'
+                  : s.status === 'waiting' ? 'ждёт вас'
+                    : 'работают агенты';
                 return (
                   <button
                     key={s.id}
@@ -122,7 +133,7 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
                       {s.name?.trim() || 'Без названия'}
                     </span>
                     {isTaken && <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>уже на стене</span>}
-                    {!isTaken && busy && <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent, flexShrink: 0 }}>{s.status === 'working' ? 'идёт ход' : 'ждёт вас'}</span>}
+                    {!isTaken && busy && <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent, flexShrink: 0 }}>{busyLabel}</span>}
                   </button>
                 );
               })}

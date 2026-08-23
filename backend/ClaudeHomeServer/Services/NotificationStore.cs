@@ -226,6 +226,28 @@ public class NotificationStore
         lock (_lock) { return all.Count(n => !n.IsRead); }
     }
 
+    // Когда владельцу последний раз слали уведомление этого подтипа (UTC).
+    // Нужен фоновым отправителям, чей кулдаун обязан пережить рестарт процесса:
+    // сам стор персистентен, отдельного хранилища для отметки заводить незачем.
+    // Кольцевой буфер MaxPerUser — известная граница: если подтип вытеснен более
+    // свежими уведомлениями, отметка теряется и кулдаун начинается заново.
+    public async Task<DateTime?> GetLastCreatedAtByTypeAsync(string userId, string type)
+    {
+        var all = await GetAllAsync(userId);
+        lock (_lock)
+        {
+            var last = all.Where(n => n.Type == type)
+                .Select(n => n.CreatedAt)
+                .DefaultIfEmpty()
+                .Max();
+            if (last == default) return null;
+            // В файле время лежит в UTC; Kind после десериализации может быть Unspecified
+            return last.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(last, DateTimeKind.Utc)
+                : last.ToUniversalTime();
+        }
+    }
+
     // ======== Internal ========
 
     private async Task<List<AppNotification>> GetAllAsync(string userId)

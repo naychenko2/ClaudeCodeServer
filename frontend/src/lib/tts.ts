@@ -82,9 +82,66 @@ export function verbalizeIdentifiers(text: string): string {
   return text;
 }
 
+// Маркер выжимки для озвучки (стиль digest): всё от первого вхождения `<voice` до конца
+// текста. Правило одно и то же в санитайзере и на рендере ленты — и оно намеренно
+// «до конца», а не «до закрывающего тега»: пока ход стримится, тег приезжает по кусочкам,
+// и полуоткрытый `<voi` иначе то мигал бы в ленте, то читался бы вслух.
+//
+// Вырез БЕЗУСЛОВНЫЙ, не гейтится стилем: маркер остаётся в сохранённой истории и
+// транскрипте CLI (без него --resume вернул бы контекст без примера формата), поэтому
+// модель может повторить его и после выключения digest — а HTML-подобные теги санитайзер
+// иначе не трогает вовсе, и синтезатор зачитал бы «voice» вслух.
+export const VOICE_MARKER_RE = /<voice[\s\S]*$/i;
+const VOICE_TAG = '<voice';
+// Фенсы кода — с их началом, чтобы можно было отличить открытый блок от закрытого
+const FENCE_RE = /(```|~~~)/g;
+
+export function stripVoiceMarker(text: string): string {
+  if (!text) return '';
+  // Резать можно ТОЛЬКО вне блоков кода. Иначе ответ, показывающий формат маркера
+  // примером (а он теперь описан и в доках проекта, и в этом файле), обрывался бы на
+  // экране навсегда — причём у всех, включая тех, у кого фича выключена: этот путь
+  // флагом не гейтится. Правило совпадает с extractVoiceDigest, который фенсы тоже
+  // игнорирует; разъедься они — пользователь молча теряет кусок ответа.
+  let inCode = false;
+  let fence = '';
+  let i = 0;
+  FENCE_RE.lastIndex = 0;
+  for (let m = FENCE_RE.exec(text); m; m = FENCE_RE.exec(text)) {
+    if (!inCode) {
+      // Кусок до открывающего фенса — обычный текст: маркер в нём и режем
+      const at = findMarker(text.slice(i, m.index));
+      if (at >= 0) return text.slice(0, i + at);
+      inCode = true;
+      fence = m[1];
+    } else if (m[1] === fence) {
+      inCode = false;
+    }
+    i = m.index + m[1].length;
+  }
+  // Хвост после последнего фенса. Незакрытый блок кода (ход ещё стримится) маркера
+  // содержать не может — там код
+  if (inCode) return text;
+  const at = findMarker(text.slice(i));
+  return at >= 0 ? text.slice(0, i + at) : text;
+}
+
+// Позиция начала маркера в куске обычного текста: полный тег либо его оборванный
+// хвост в самом конце («…<voi») — на стриме тег приезжает по буквам, и без этого он
+// успевал бы мелькнуть в ленте и уехать в синтез. Минимум две буквы («<v»), чтобы
+// ответ, оканчивающийся на одиночный «<», не терял символ. -1 — маркера нет
+function findMarker(chunk: string): number {
+  const full = chunk.search(/<voice/i);
+  if (full >= 0) return full;
+  for (let n = Math.min(VOICE_TAG.length - 1, chunk.length); n >= 2; n--) {
+    if (VOICE_TAG.startsWith(chunk.slice(chunk.length - n).toLowerCase())) return chunk.length - n;
+  }
+  return -1;
+}
+
 export function sanitizeForSpeech(md: string): string {
   if (!md) return '';
-  let text = md;
+  let text = stripVoiceMarker(md);
 
   // Блоки кода целиком (```...```) и однострочный код `...`
   text = text.replace(/```[\s\S]*?```/g, ' ');
@@ -189,6 +246,47 @@ export function splitSentences(text: string): string[] {
   return out;
 }
 
+// --- Упаковка предложений в пакеты под лимит одного запроса синтеза ---
+
+// Лимит запроса SpeechKit v3 — 249 символов (250 уже 400 «Too long text»).
+export const PACK_LIMIT = 249;
+
+// Хвост короче этого приклеиваем к предыдущему пакету: запрос тарифицируется целиком,
+// и огрызок в пять символов стоит столько же, сколько полный пакет
+const MIN_TAIL = 40;
+
+// Предложения → пакеты. Синтез v3 берёт деньги ЗА ЗАПРОС, а не за символы (точка
+// безубыточности против v1 — 121 символ, разбор в docs/research/speechkit-pricing.md §4),
+// поэтому слать каждое предложение отдельно — значит платить втрое. Но первое предложение
+// уходит В ОДИНОЧКУ: звук обязан пойти сразу, а не после того, как наберётся полный пакет.
+// Чистая функция без состояния — под юнит-тестом.
+export function packSentences(sentences: string[], limit = PACK_LIMIT): string[] {
+  const packs: string[] = [];
+  let buf = '';
+  const flush = () => { if (buf) { packs.push(buf); buf = ''; } };
+
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (packs.length === 0 && !buf) { packs.push(s); continue; } // разгонный пакет
+    if (buf && buf.length + 1 + s.length > limit) flush();
+    buf = buf ? `${buf} ${s}` : s;
+    if (buf.length >= limit) flush();
+  }
+  flush();
+
+  // Огрызок в конце приклеиваем к предыдущему — но только когда пакетов уже больше двух:
+  // иначе склейка удлинит разгонный пакет и отложит первый звук
+  if (packs.length >= 3) {
+    const last = packs[packs.length - 1];
+    const prev = packs[packs.length - 2];
+    if (last.length < MIN_TAIL && prev.length + 1 + last.length <= limit) {
+      packs.splice(packs.length - 2, 2, `${prev} ${last}`);
+    }
+  }
+  return packs;
+}
+
 // --- Поточная резка нарастающего текста хода (режим разговора) ---
 
 // Незакрытое предложение длиннее лимита режем принудительно: модель пишет без точек —
@@ -262,6 +360,25 @@ export function isSpeaking(): boolean {
   if (typeof speechSynthesis !== 'undefined' && (speechSynthesis.speaking || speechSynthesis.pending)) return true;
   return false;
 }
+// Громкость озвучки: 1 — обычная, меньше — приглушение под барж-ин (первая ступень
+// перебивания, см. lib/bargeDetect). Приглушение обратимо и потому дёшево: чужая реплика
+// рядом стоит полусекундной тишины, а не потерянного ответа.
+let speechVolume = 1;
+
+// Ставится на играющий кусок И на все следующие в очереди: между кусками элемент
+// пересоздаётся, и без общего значения приглушение слетало бы на первой же точке
+export function setSpeechVolume(v: number): void {
+  speechVolume = Math.min(1, Math.max(0, v));
+  if (currentAudio) currentAudio.volume = speechVolume;
+  // У speechSynthesis громкость на лету не меняется (она свойство реплики, а не движка) —
+  // приглушаем паузой: для фолбэка это тот же смысл «замолчи, но не насовсем»
+  if (typeof speechSynthesis === 'undefined') return;
+  try {
+    if (speechVolume < 1) speechSynthesis.pause();
+    else speechSynthesis.resume();
+  } catch { /* движок не поддержал — озвучка просто доиграет как есть */ }
+}
+
 // Показать разовое сообщение о фолбэке (Р4): «на прогулке замолчало» не должно выглядеть багом
 let toastFn: ((text: string) => void) | null = null;
 
@@ -286,6 +403,8 @@ export function primeAudio() {
 
 export function stopSpeaking() {
   speakToken++;
+  // Приглушение живёт ровно в пределах одной озвучки: следующая начинается в полный голос
+  speechVolume = 1;
   if (currentAudio) {
     currentAudio.pause();
     currentAudio.src = '';
@@ -302,7 +421,7 @@ export function stopSpeaking() {
 // Озвучить текст ответа. Санитайзер + нарезка + очередь; при отказе сервера — голос браузера.
 // Промис резолвится по опустошении очереди (и никогда не реджектится): режим разговора
 // открывает микрофон именно по нему, поэтому «резолв раньше конца звука» = эхо.
-export function speak(rawText: string): Promise<void> {
+export function speak(rawText: string, personaId?: string, sessionId?: string): Promise<void> {
   watchConnection();
   stopSpeaking();
   const token = ++speakToken;
@@ -315,14 +434,15 @@ export function speak(rawText: string): Promise<void> {
       resolve();
     };
     speechWaiters.push(finish);
-    void runSpeak(rawText, token).then(finish, finish);
+    void runSpeak(rawText, token, personaId, sessionId).then(finish, finish);
   });
 }
 
-async function runSpeak(rawText: string, token: number): Promise<void> {
+async function runSpeak(rawText: string, token: number, personaId?: string,
+  sessionId?: string): Promise<void> {
   const text = sanitizeForSpeech(rawText);
   if (!text) return;
-  const parts = splitSentences(text);
+  const parts = packSentences(splitSentences(text));
   if (parts.length === 0) return;
 
   // Сервер уже сказал «синтеза нет» — не долбим его на каждое предложение
@@ -332,10 +452,10 @@ async function runSpeak(rawText: string, token: number): Promise<void> {
   }
 
   // Очередь: следующий кусок синтезируется, пока играет текущий
-  let next: Promise<Blob | null> | null = synthesize(parts[0]);
+  let next: Promise<Blob | null> | null = synthesize(parts[0], personaId, sessionId);
   for (let i = 0; i < parts.length; i++) {
     const blobPromise = next;
-    next = i + 1 < parts.length ? synthesize(parts[i + 1]) : null;
+    next = i + 1 < parts.length ? synthesize(parts[i + 1], personaId, sessionId) : null;
 
     let blob: Blob | null;
     try {
@@ -368,10 +488,19 @@ async function runSpeak(rawText: string, token: number): Promise<void> {
   }
 }
 
-function synthesize(text: string): Promise<Blob | null> {
+// sessionId — чат, которому засчитывается расход на озвучку (аналитика трат). Передаётся
+// вызывающим, а не хранится модульно: панелей чата на экране бывает несколько (колонки
+// «Стены», два чата рядом), и общая переменная приписала бы траты чужому чату.
+// Реплики автомата разговора и прослушивание голоса в карточке персоны его не шлют —
+// у них своего чата нет, трата ложится на владельца без разреза.
+//
+// personaId — чьим голосом читать. Сервер сам проверяет владельца и молча берёт голос
+// инстанса, если персона чужая или уже удалена: 400 здесь увёл бы остаток фразы на голос
+// браузера из-за одной устаревшей вкладки
+function synthesize(text: string, personaId?: string, sessionId?: string): Promise<Blob | null> {
   return request('/tts', {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, personaId, sessionId }),
     parse: 'blob',
     // Синтез длинной фразы бывает дольше дефолтных 30 с только в патологии,
     // но обрыв не должен трактоваться как «связи нет»
@@ -379,11 +508,65 @@ function synthesize(text: string): Promise<Blob | null> {
   });
 }
 
+// --- Прослушивание голоса в форме персоны ---
+
+// Фраза-образец: одна и та же для всех голосов (сравнивать надо тембр, а не текст) и
+// заведомо короче лимита одного запроса — иначе примерка стоила бы кратно дороже
+export const VOICE_SAMPLE_TEXT = 'Привет! Так я буду звучать в разговоре с тобой.';
+
+// Уже синтезированные образцы: повторное нажатие на ту же строку не должно стоить денег
+// (запрос тарифицируется целиком, независимо от длины). Живёт до перезагрузки вкладки.
+const sampleCache = new Map<string, Blob>();
+
+export class VoicePreviewError extends Error {}
+
+// Послушать голос, не сохраняя его персоне.
+//
+// ОТДЕЛЬНЫЙ путь, а не speak(): в форме выбора голоса фолбэк на синтезатор браузера был бы
+// прямой ложью — человек услышал бы не «Алёну», а голос системы и решил, что она так звучит.
+// Поэтому отказ здесь — исключение с текстом для интерфейса, а не тихая подмена.
+//
+// Токен общий со всей озвучкой: внешний stopSpeaking() (смена чата, начало хода) обязан
+// глушить и примерку тоже. Обратное неверно — вызывающий не должен запускать превью поверх
+// идущего ответа: озвучка хода оборвалась бы, а петля разговора получила бы ложное
+// «озвучка закончилась». Гейт на isSpeaking() — на стороне кнопки.
+export async function previewVoice(voice: string, role?: string, speed?: number): Promise<void> {
+  watchConnection();
+  const key = `${voice}|${role ?? ''}|${speed ?? ''}`;
+  const token = ++speakToken;
+
+  let blob = sampleCache.get(key) ?? null;
+  if (!blob) {
+    try {
+      blob = await request('/tts', {
+        method: 'POST',
+        body: JSON.stringify({ text: VOICE_SAMPLE_TEXT, voice, role, speed }),
+        parse: 'blob',
+        timeoutMs: 45_000,
+      });
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      const reason = (e as { body?: { reason?: string } }).body?.reason;
+      const error = (e as { body?: { error?: string } }).body?.error;
+      if (status === undefined) throw new VoicePreviewError('Нет связи с сервером');
+      if (status === 503 && reason === 'not_configured')
+        throw new VoicePreviewError('Синтез речи не настроен на сервере');
+      throw new VoicePreviewError(error ?? 'Не удалось синтезировать образец');
+    }
+    if (!blob) throw new VoicePreviewError('Сервер вернул пустой ответ');
+    sampleCache.set(key, blob);
+  }
+
+  if (token !== speakToken) return; // примерку успели погасить, пока шёл синтез
+  await playBlob(blob, token);
+}
+
 function playBlob(blob: Blob, token: number): Promise<void> {
   return new Promise((resolve) => {
     if (typeof Audio === 'undefined') { resolve(); return; }
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
+    audio.volume = speechVolume; // приглушены барж-ином — следующий кусок тоже тихий
     currentAudio = audio;
     currentUrl = url;
 
@@ -428,10 +611,15 @@ export interface StreamSpeech {
 // stop(), внешний stopSpeaking(), потеря токена). Колбэк-канал вместо нескольких
 // done.then в вызывающем коде закрывает гонку «кто первый занулил ref — тот и
 // снял фазу»: снятие фазы всегда в одном месте
-export function startStreamSpeak(onDone?: () => void): StreamSpeech {
+export function startStreamSpeak(onDone?: () => void, personaId?: string,
+  sessionId?: string): StreamSpeech {
   watchConnection();
   const token = ++speakToken;
   const queue: string[] = [];
+  // Копилка предложений перед отправкой: синтез берёт деньги за ЗАПРОС, и слать каждое
+  // предложение отдельно втрое дороже (см. packSentences). Копим, только пока в очереди
+  // есть чем занять уши, — иначе пакуем в ущерб паузе, ради которой стриминг и писался
+  let buffer = '';
   let ended = false;
   let stopped = false;
   let failedToServer = false;
@@ -466,7 +654,7 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
     if (next === undefined) return;
     prefetchText = next;
     prefetchFailed = false;
-    prefetch = synthesize(next)
+    prefetch = synthesize(next, personaId, sessionId)
       .catch(e => {
         const status = (e as { status?: number }).status;
         const reason = (e as { body?: { reason?: string } }).body?.reason;
@@ -487,6 +675,15 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
     prefetchText = '';
   };
 
+  // Копилка → очередь. Дальше всё как раньше: prefetch подхватит пакет, пока играет текущий
+  const flushBuffer = () => {
+    if (!buffer) return;
+    queue.push(buffer);
+    buffer = '';
+    startPrefetch();
+    void pump();
+  };
+
   const pump = async () => {
     if (pumping) return;
     pumping = true;
@@ -495,6 +692,9 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
         if (token !== speakToken) { finishDone(); return; }
         const text = queue.shift();
         if (text === undefined) {
+          // В очереди пусто, но в копилке лежит недособранный пакет — доигрываем его,
+          // а не ждём следующей дельты: пауза здесь слышна, экономия неощутима
+          if (buffer) { flushBuffer(); continue; }
           if (ended) { finishDone(); return; }
           return; // ждём следующих кусков; pump перезапустится из enqueue/end
         }
@@ -516,7 +716,7 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
         } else {
           dropPrefetch();
           try {
-            blob = await synthesize(text);
+            blob = await synthesize(text, personaId, sessionId);
           } catch (e) {
             const status = (e as { status?: number }).status;
             const reason = (e as { body?: { reason?: string } }).body?.reason;
@@ -553,11 +753,19 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
   const stream: StreamSpeech = {
     enqueue(text) {
       if (ended || stopped) return; // поздние дельты после end() не читаются
-      queue.push(text);
-      startPrefetch(); // цикл может стоять на playBlob текущего куска — prefetch продолжит без него
-      void pump();
+      const piece = text.trim();
+      if (!piece) return;
+      if (buffer && buffer.length + 1 + piece.length > PACK_LIMIT) flushBuffer();
+      buffer = buffer ? `${buffer} ${piece}` : piece;
+      // Отдаём накопленное, когда пакет полон ЛИБО когда очередь пуста. Пустая очередь —
+      // это либо разгон (ещё ничего не звучало), либо текущий кусок вот-вот кончится:
+      // придержать буфер здесь значит получить ровно ту паузу, от которой уходили
+      if (buffer.length >= PACK_LIMIT || queue.length === 0) flushBuffer();
     },
     end() {
+      // Флаш ДО ended: иначе цикл увидит пустую очередь при ended и закроет done,
+      // недоговорив последний пакет
+      flushBuffer();
       ended = true;
       void pump();
     },
@@ -565,6 +773,7 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
       if (stopped) return;
       stopped = true;
       queue.length = 0;
+      buffer = '';
       finishDone();
       // Оборвать играющий кусок и осиротить стрим: чистящий цикл увидит чужой токен
       stopSpeaking();

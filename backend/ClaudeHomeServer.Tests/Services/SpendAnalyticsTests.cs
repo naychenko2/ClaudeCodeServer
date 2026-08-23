@@ -122,6 +122,46 @@ public class SpendAnalyticsTests : IDisposable
         Assert.Equal(1, rows.Single(r => r.Source == SpendSources.Fal).Generations);
     }
 
+    [Fact]
+    public void Aggregate_РубляхСуммируетОтдельноОтДолларов()
+    {
+        // Озвучка тарифицируется в рублях, ходы моделей — в долларах. Свёртка дня обязана
+        // держать валюты врозь: сложенные в одно поле, они дали бы бессмысленное число.
+        var day = new DateTime(2026, 7, 5, 10, 0, 0, DateTimeKind.Utc);
+        var rows = SpendStore.Aggregate("2026-07-05",
+        [
+            new SpendRecord
+            {
+                Timestamp = day, OwnerId = "u1", Provider = "yandex", Model = "marina",
+                Source = SpendSources.Tts, Generations = 3, CostRub = 0.4878,
+            },
+            new SpendRecord
+            {
+                Timestamp = day, OwnerId = "u1", Provider = "yandex", Model = "marina",
+                Source = SpendSources.Tts, Generations = 1, CostRub = 0.1626,
+            },
+            Rec(day),
+        ]);
+
+        var tts = rows.Single(r => r.Source == SpendSources.Tts);
+        Assert.Equal(4, tts.Generations);
+        Assert.Equal(0.6504, tts.CostRub, 4);
+        Assert.Equal(0, tts.CostUsd);
+        Assert.Equal(0, rows.Single(r => r.Source == SpendSources.ChatTurn).CostRub);
+    }
+
+    [Fact]
+    public void Tokenless_ИсточникиБезТокенов_ОпознаютсяВсе()
+    {
+        // По этому признаку источники без токенов вылетают из рейтинга «дорогих ходов»:
+        // там сортировка по токенам, а у них их нет — висели бы внизу вечным нулём
+        Assert.True(SpendSources.IsTokenless(SpendSources.Tts));
+        Assert.True(SpendSources.IsTokenless(SpendSources.Fal));
+        Assert.True(SpendSources.IsTokenless(SpendSources.Glif));
+        Assert.False(SpendSources.IsTokenless(SpendSources.ChatTurn));
+        Assert.False(SpendSources.IsTokenless(SpendSources.Free));
+    }
+
     // --- авторизация admin/mine ---
 
     [Fact]
@@ -188,14 +228,14 @@ public class SpendAnalyticsTests : IDisposable
         List<SpendSlice> slices =
         [
             new(d, "u1", "p1", "s1", null, null, "claude", "opus", SpendSources.ChatTurn,
-                100, 50, 0, 0, 0, 0, 1, Detailed: true),
+                100, 50, 0, 0, 0, 0, 0, 1, Detailed: true),
             new(d, "u1", "p1", "s2", null, null, "claude", "opus", SpendSources.ChatTurn,
-                10, 5, 0, 0, 0, 0, 1, Detailed: true),
+                10, 5, 0, 0, 0, 0, 0, 1, Detailed: true),
             // Свёрнутый день той же модели и день другой модели
             new(d.AddDays(-40), "u1", "p1", "s1", null, null, "claude", "opus", SpendSources.ChatTurn,
-                1000, 0, 0, 0, 0, 0, 7, Detailed: false),
+                1000, 0, 0, 0, 0, 0, 0, 7, Detailed: false),
             new(d, "u1", "p1", "s1", null, null, "deepseek", "deepseek-chat", SpendSources.ChatTurn,
-                1, 1, 0, 0, 0, 0, 1, Detailed: true),
+                1, 1, 0, 0, 0, 0, 0, 1, Detailed: true),
         ];
 
         var byModel = SpendAnalyticsService.GroupRaw(slices, "model");
@@ -222,11 +262,11 @@ public class SpendAnalyticsTests : IDisposable
         List<SpendSlice> slices =
         [
             new(d, "u1", "p1", "s1", null, null, "claude", "default", SpendSources.ChatTurn,
-                100, 50, 0, 0, 0, 0, 1, Detailed: true),
+                100, 50, 0, 0, 0, 0, 0, 1, Detailed: true),
             new(d, "u1", "p1", "s2", null, null, "claude", "default", SpendSources.ChatTurn,
-                10, 5, 0, 0, 0, 0, 1, Detailed: true),
+                10, 5, 0, 0, 0, 0, 0, 1, Detailed: true),
             new(d, "u1", "p1", "s3", null, null, "claude", "opus", SpendSources.ChatTurn,
-                5, 5, 0, 0, 0, 0, 1, Detailed: true),
+                5, 5, 0, 0, 0, 0, 0, 1, Detailed: true),
         ];
 
         var byModel = SpendAnalyticsService.GroupRaw(slices, "model");

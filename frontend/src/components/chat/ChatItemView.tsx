@@ -10,6 +10,7 @@ import type { ProviderAvailabilityVerdict } from '../../lib/providerLimit';
 import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
+import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
@@ -21,8 +22,10 @@ import { stripTeamMechanicMarkers, TeamMechanicOfferCard, type TeamMechanicOffer
 import {
   stripProjectPresetMarkers, ProjectPresetOfferCard, type PresetCardState,
 } from '../../features/onboarding/ProjectPresetOffer';
+import { stripVoiceMarker } from '../../lib/tts';
+import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, useAssistantName } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -71,41 +74,8 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
           {done}/{todos.length}
         </span>
       </div>
-      <div style={{ padding: '7px 13px 10px', display: 'flex', flexDirection: 'column', gap: 1 }}>
-        {todos.map((t, i) => {
-          const isDone = t.status === 'completed';
-          const isActive = t.status === 'in_progress';
-          const label = isActive && t.activeForm ? t.activeForm : t.content;
-          return (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '4px 0' }}>
-              <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
-                {isDone ? (
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="8" fill={C.success} />
-                    <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                ) : isActive ? (
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="7" fill={C.accent} />
-                    <circle cx="8" cy="8" r="2.6" fill={C.accentLight} />
-                  </svg>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="6.5" stroke={C.dashed} strokeWidth="1.5" />
-                  </svg>
-                )}
-              </span>
-              <span style={{
-                fontSize: 13, lineHeight: 1.4,
-                color: isDone ? C.textMuted : isActive ? C.textHeading : C.textSecondary,
-                textDecoration: isDone ? 'line-through' : 'none',
-                fontWeight: isActive ? 600 : 400,
-              }}>
-                {label}
-              </span>
-            </div>
-          );
-        })}
+      <div style={{ padding: '7px 13px 10px' }}>
+        <TodoList todos={todos} />
       </div>
     </div>
   );
@@ -441,7 +411,7 @@ function UserMessageBubble({ text, ts, children }: {
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead }: {
+function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
   text: string; online: boolean; onRetry: () => void; streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
   turnCache?: { read: number; creation: number } | null;
@@ -449,6 +419,10 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
   // обтекают его справа, дальше текст идёт полной шириной — под аватаром не копится
   // пустая полоса на всю высоту длинного сообщения
   lead?: ReactNode;
+  // Хвост ВНУТРИ пузыря (выжимка для озвучки). Не сиблингом снаружи: у обёртки снизу
+  // marginBottom под абсолютную строку действий, и блок за ней читался бы отдельной
+  // карточкой ленты, а не концом этого ответа
+  footer?: ReactNode;
 }) {
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
   const project = useContext(ChatProjectContext);
@@ -486,6 +460,7 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
           {/* Мигающая каретка стриминга (B2) */}
           {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
         </div>
+        {footer}
       </div>
       {/* Строка под постом: действия, затем модель и время. Оверлей, места не занимает */}
       {!streaming && (
@@ -636,6 +611,10 @@ interface ItemProps {
   onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
+  // тогда она встаёт в один ряд с итогом хода, а не висит отдельной строкой ниже.
+  // Пока ход идёт, пилюлю рисует ChatPanel рядом с индикатором ожидания.
+  planPill?: ReactNode;
   // Снимок промпта хода, к которому относится этот пост, и размер контекста его запроса —
   // оба считает ChatPanel скользящим окном по ленте (у поста ассистента своего id нет).
   // undefined — история до появления снимков либо пост сабагента: кнопки не будет
@@ -985,10 +964,12 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
+  // Кто сейчас звучит (индекс реплики + цвет персоны) — им подсвечивается аватар
+  const speakingItem = useContext(SpeakingItemContext);
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
@@ -1172,10 +1153,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const report = parseDelegationReport(item.text);
       // Маркер предложения механики <team-mechanic/> из отображаемого текста стрижём всегда
       // (вместе с незакрытым префиксом в хвосте стрима); карточку рендерит проп ниже
-      const bodyText = stripProjectPresetMarkers(
+      // Маркер выжимки для озвучки стрижём БЕЗУСЛОВНО — тем же правилом, что санитайзер
+      // речи (stripVoiceMarker): всё от первого `<voice` до конца текста. «До конца», а не
+      // «до закрывающего тега», потому что на стриме тег приезжает по кусочкам и
+      // полуоткрытый `<voi` иначе мигал бы в ленте. Само содержимое показывает плашка ниже
+      const bodyText = stripVoiceMarker(stripProjectPresetMarkers(
         stripTeamMechanicMarkers(report ? report.body : item.text, streaming),
         streaming,
-      );
+      ));
+      const voiceDigestNote = parseVoiceDigest(report ? report.body : item.text);
       // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
       // а наш снимок описывает ход основного агента
       //
@@ -1185,6 +1171,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // лидом ВНУТРЬ пузыря (lead в TextMessageView): текст обтекает его, и под ним не
       // тянется пустая полоса на всю высоту длинного ответа.
       const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
+      // Её голосом сейчас читают ход — аватар пульсирует цветом персоны (кто говорит).
+      // Индекс, а не id: у text-реплики ленты идентичности нет, место в items и есть её адрес
+      const speaking = speakingItem?.index === index ? speakingItem.color : undefined;
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
@@ -1192,7 +1181,12 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
             turnContextTokens={turnContextTokens} turnCache={turnCache}
-            lead={author ? <PersonaAvatar persona={author} size={28} /> : undefined} />
+            lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined}
+            // Выжимка для озвучки — она же краткое содержание ответа для глаз. Внутри
+            // пузыря: это хвост ЭТОГО ответа, а не отдельная карточка ленты
+            footer={voiceDigestNote
+              ? <VoiceDigestNote text={voiceDigestNote} personaId={author?.id} />
+              : undefined} />
           {/* Карточка предложения командной механики — запуск только по кнопке */}
           {teamMechanicOffer && (
             <TeamMechanicOfferCard
@@ -1525,9 +1519,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Плашка токенов/времени — только у последнего хода (экономия места); у прошлых скрываем
       if (!isLastResult) return null;
 
-      return (
+      const meta = (
         <div style={{
-          fontSize: 11, color: C.textMuted, alignSelf: 'center',
+          fontSize: 11, color: C.textMuted,
           background: C.bgSelected, borderRadius: 8, padding: '4px 11px',
           fontFamily: FONT.mono,
           display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'center',
@@ -1558,6 +1552,23 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
+      // Пилюля плана — в ОДНОМ ряду с итогом: обе служебные, и держать их на разных
+      // строках значит гонять взгляд по вертикали за состоянием одного и того же хода
+      return planPill
+        ? (
+          // Итог хода остаётся ТОЧНО по центру ленты, как и без пилюли: держат его две
+          // равные распорки по краям, а не justifyContent — иначе центр съезжал бы влево
+          // ровно на ширину пилюли, и мета-строка «прыгала» бы при её появлении.
+          // Пилюля живёт в правой распорке, прижатая к краю.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+            <div style={{ flex: 1, minWidth: 0 }} />
+            {meta}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
+              {planPill}
+            </div>
+          </div>
+        )
+        : <div style={{ alignSelf: 'center' }}>{meta}</div>;
     }
 
     case 'rate_limit': {

@@ -38,6 +38,13 @@ public sealed record SignozAlert
     /// <summary>Идентификатор правила — из него строится ссылка в UI SigNoz.</summary>
     public string? RuleId => Value("ruleId");
 
+    /// <summary>
+    /// Чат, на который указал сам алерт. Появляется у правил с разрезом по <c>chat_id</c>
+    /// («Ходы массово встали»): виновник там известен из меток, а не из упавших ходов —
+    /// ходы в этом инциденте успешные, просто долгие.
+    /// </summary>
+    public string? ChatId => Value("chat_id");
+
     public string? Description
         => Annotations.TryGetValue("description", out var d) && !string.IsNullOrWhiteSpace(d) ? d
          : Annotations.TryGetValue("summary", out var s) && !string.IsNullOrWhiteSpace(s) ? s

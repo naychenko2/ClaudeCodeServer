@@ -622,8 +622,12 @@ export interface Session {
   lastReadAt?: string | null;
   // Чат заглушён: браузерные уведомления по нему не показываются
   notificationsMuted?: boolean;
-  // Голосовой режим чата: ответ короткий и озвучивается (POST /api/tts)
+  // Голосовой режим чата: ответы озвучиваются (POST /api/tts)
   voiceMode?: boolean;
+  // Стиль озвучки: 'talk' — ответ короткий целиком (разговор), 'digest' — ответ обычный,
+  // вслух читается выжимка из блока <voice> в его конце. Пусто = talk.
+  // Выбор принадлежит УСТРОЙСТВУ (localStorage), здесь — последнее выставленное значение
+  voiceStyle?: string | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
   // Режим «Командная реализация»; null/отсутствует — режим выключен
@@ -875,6 +879,9 @@ export type ServerMessage = { sessionId: string } & (
   // достоверный сигнал «ответ готов» (по task-notification CLI). aborted=true — агенты
   // умерли вместе с процессом (Стоп/несовместимый ход), не доработав
   | { type: 'bg_agent_done'; toolUseIds: string[]; aborted?: boolean }
+  // У чата появились/закончились живые фоновые агенты. Событие для СПИСКА чатов (карточка
+  // светится, пока агенты работают), а не для ленты: приходит только на переходе 0↔N
+  | { type: 'bg_agents_presence'; active: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
@@ -1275,6 +1282,26 @@ export interface GlifAccountResponse {
   balance?: number | null;
   currency?: string | null;
   spend?: GlifSpend | null;
+}
+
+// Деньги Yandex Cloud (GET /api/yandex/account): остаток на биллинг-аккаунте и НАШ расход
+// на озвучку за период. Баланс приходит строкой — так его отдаёт Billing API, и валюта у него
+// своя (обычно RUB). balanceHidden=true — смотрит не админ: кошелёк инстанса ему не показываем.
+// spend считает продукт сам: разбивку по услугам Billing API не отдаёт в принципе.
+export interface YandexAccountResponse {
+  enabled: boolean;
+  error?: string | null;
+  account?: {
+    id: string;
+    name?: string | null;
+    balance?: string | null;
+    currency?: string | null;
+    active: boolean;
+  } | null;
+  asOf?: string | null;
+  balanceHidden: boolean;
+  days: number;
+  spend?: { total: number; requests: number } | null;
 }
 
 // === Генерация картинок (иконка проекта, аватар персоны) ===
@@ -2238,6 +2265,27 @@ export interface PersonaContract {
   instructions?: string;      // полный регламент роли (длинный markdown)
 }
 
+// Голос из каталога синтеза: канонический ключ, подпись для человека, пол и амплуа
+export interface TtsVoiceInfo {
+  voice: string;
+  label: string;
+  gender: 'female' | 'male';
+  roles: string[];
+}
+
+// configured=false — синтеза на сервере нет: предлагать слушать нечего
+export interface TtsVoicesResponse {
+  configured: boolean;
+  voices: TtsVoiceInfo[];
+}
+
+// Как персона звучит в голосовом режиме; отсутствует — голосом инстанса из конфига
+export interface PersonaVoice {
+  voice?: string;        // имя голоса SpeechKit (белый список на сервере)
+  role?: string;         // амплуа голоса («good», «strict», …); не у всех голосов есть
+  speed?: number | null; // темп 0.1–3.0; null/отсутствие — из конфига
+}
+
 export interface Persona {
   id: string;
   ownerId: string;
@@ -2262,6 +2310,7 @@ export interface Persona {
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'
   avatar: PersonaAvatar;
+  voice?: PersonaVoice | null; // личный голос; null/отсутствие — голос инстанса
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
@@ -2626,6 +2675,9 @@ export interface SpendOverviewResponse {
   // «Модели и расход» → плитка «По тарифам API»: бэк отдаёт не всегда —
   // без поля плитка просто не рисуется.
   costUsd?: number | null;
+  // Расход на сервисы Яндекса за период (озвучка SpeechKit): рубли и число оплаченных
+  // запросов. null — таких трат не было; с долларами и токенами НЕ складывается — другая валюта
+  rub?: { total: number; requests: number } | null;
   byDay: SpendDayPoint[];
   cards: {
     // Разрез по пользователям бэк кладёт только в ответ scope=all — в scope=mine поля нет вовсе
@@ -2960,6 +3012,9 @@ export interface IncidentChat {
   failures: number;
   totalTokens: number;
   mcpFailures: string[];
+  // Чат назвал сам алерт (правила с разрезом по chat_id): попадает в список даже
+  // без упавших ходов — они там успешные, просто долгие.
+  fromAlert?: boolean;
 }
 
 export interface IncidentDossier {

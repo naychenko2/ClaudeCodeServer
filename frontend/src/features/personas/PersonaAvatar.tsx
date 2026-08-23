@@ -14,8 +14,45 @@ import { personaInitials } from '../../lib/personas';
 // чтобы картинка точно совпадала с кругом на каждом кадре, а не по фиксированному
 // size, который успевает рассинхронизироваться с анимацией. size при этом всё равно
 // передавай — от него считается кегль инициалов (у img objectFit cover и так отлично).
-export function PersonaAvatar({ persona, size = 40, fill = false }: {
-  persona: Persona; size?: number; fill?: boolean;
+// speaking — цвет колец «сейчас говорит»: аватар оборачивается пульсом этого цвета,
+// пока её голосом читают ответ (источник — SpeakingItemContext ленты). Не задан —
+// рендер ровно как раньше, без обёрток.
+export function PersonaAvatar({ persona, size = 40, fill = false, speaking }: {
+  persona: Persona; size?: number; fill?: boolean; speaking?: string;
+}) {
+  const face = <PersonaFace persona={persona} size={size} fill={fill} />;
+  if (!speaking) return face;
+  return <SpeakingHalo color={speaking} size={size} fill={fill}>{face}</SpeakingHalo>;
+}
+
+// Два расходящихся кольца вокруг лица (те же .cc-echo-ring, что у индикатора ожидания,
+// но мелким размахом: аватар сидит внутри пузыря с overflow: hidden). При
+// prefers-reduced-motion колец нет вовсе — иначе от них осталась бы статичная обводка.
+function SpeakingHalo({ color, size, fill, children }: {
+  color: string; size: number; fill: boolean; children: React.ReactNode;
+}) {
+  const reduced = typeof window !== 'undefined'
+    && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  return (
+    <span style={{
+      position: 'relative', display: 'inline-flex', flexShrink: 0,
+      width: fill ? '100%' : size, height: fill ? '100%' : size,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...({ ['--cc-echo-color' as any]: color }),
+    }}>
+      {children}
+      {!reduced && (
+        <>
+          <span className="cc-echo-ring cc-echo-ring--tight" />
+          <span className="cc-echo-ring cc-echo-ring--2 cc-echo-ring--tight" />
+        </>
+      )}
+    </span>
+  );
+}
+
+function PersonaFace({ persona, size, fill }: {
+  persona: Persona; size: number; fill: boolean;
 }) {
   const [hasError, setHasError] = useState(false);
   const imageUrl = persona.avatar?.kind === 'image' ? api.personas.avatarUrl(persona) : null;

@@ -258,6 +258,111 @@ describe('handsFreeReducer', () => {
   });
 });
 
+describe('барж-ин (перебивание голосом)', () => {
+  const speaking = () => run([
+    { type: 'recognized', text: 'расскажи' }, { type: 'pendingElapsed' },
+    { type: 'turnStarted' }, { type: 'speechWillStart' },
+  ], listening());
+
+  it('перебивание под озвучку возвращает в слушание с пустым буфером и репликой', () => {
+    const s = handsFreeReducer(speaking(), { type: 'bargeIn' });
+    expect(s.phase).toBe('listening');
+    expect(s.buffer).toBe('');
+    // Оборванная на полуслове озвучка неотличима от обрыва связи — петля отвечает
+    // словом, что перебивание засчитано
+    expect(s.notice).toBe('bargeAck');
+  });
+
+  it('вопрос модели важнее перебивания: с pendingExit выходим к решению', () => {
+    const withExit = handsFreeReducer(speaking(), { type: 'needsDecision' });
+    expect(withExit.pendingExit).toBe(true);
+    const s = handsFreeReducer(withExit, { type: 'bargeIn' });
+    expect(s.phase).toBe('off');
+    expect(s.notice).toBe('needDecision');
+  });
+
+  it('перебитая реплика петли гасит noticeSpeech — следующий speechFinished настоящий', () => {
+    // «Ты ещё здесь?» → человек перебил → ход → озвучка ответа. Без сброса noticeSpeech
+    // конец ЭТОЙ озвучки ушёл бы в ветку реплики и не сбросил счётчик бесплодных циклов
+    let s = listening();
+    for (let i = 0; i < BARREN_WARN; i++) s = handsFreeReducer(s, { type: 'cycleEnded' });
+    expect(s.noticeSpeech).toBe(true);
+    s = handsFreeReducer(s, { type: 'bargeIn' });
+    expect(s.phase).toBe('listening');
+    expect(s.noticeSpeech).toBe(false);
+    // Счётчик не обнулился перебиванием: его сбрасывает только распознанная речь
+    expect(s.barren).toBe(BARREN_WARN);
+    s = run([
+      { type: 'recognized', text: 'вопрос' }, { type: 'pendingElapsed' },
+      { type: 'turnStarted' }, { type: 'speechWillStart' }, { type: 'speechFinished' },
+    ], s);
+    expect(s.phase).toBe('listening');
+    expect(s.barren).toBe(0);
+  });
+
+  it('вне фазы озвучки событие глотается', () => {
+    for (const from of [
+      listening(),
+      handsFreeReducer(listening(), { type: 'recognized', text: 'а' }), // pending
+      run([{ type: 'recognized', text: 'а' }, { type: 'pendingElapsed' }, { type: 'turnStarted' }], listening()), // waiting
+      HANDS_FREE_INITIAL, // off
+    ]) {
+      expect(handsFreeReducer(from, { type: 'bargeIn' })).toEqual(from);
+    }
+  });
+});
+
+// Конфликт захватов микрофона пойман на лету: человек говорит, а движок под нашим
+// вторым захватом глух. Ждать конца цикла (5-6 с) нельзя — сказанное всё равно
+// потеряно, поэтому признаёмся вслух и слушаем заново
+describe('нерасслышанная речь (ранний конфликт захватов)', () => {
+  it('из слушания уводит в реплику, а не молчит', () => {
+    const s = handsFreeReducer(listening(), { type: 'misheard' });
+    expect(s.phase).toBe('speaking');
+    expect(s.notice).toBe('misheard');
+    expect(s.noticeSpeech).toBe(true);
+  });
+
+  it('огрызок фразы в буфере не уходит в чат', () => {
+    const withTail = run([{ type: 'recognized', text: 'посмотри' }], listening());
+    expect(withTail.buffer).not.toBe('');
+    expect(handsFreeReducer(withTail, { type: 'misheard' }).buffer).toBe('');
+  });
+
+  it('по концу реплики петля возвращается слушать', () => {
+    const s = run([{ type: 'misheard' }, { type: 'speechFinished' }], listening());
+    expect(s.phase).toBe('listening');
+  });
+
+  it('счётчик бесплодных циклов обнуляется: движок был глух не по вине человека', () => {
+    const barren = run([{ type: 'cycleEnded' }, { type: 'cycleEnded' }], listening());
+    expect(barren.barren).toBeGreaterThan(0);
+    expect(handsFreeReducer(barren, { type: 'misheard' }).barren).toBe(0);
+  });
+
+  // Вместе со счётчиком снимается и отметка «уже спрашивали»: иначе следующая серия
+  // пустых циклов пройдёт без вопроса «Ты ещё здесь?» и разговор выключится молча
+  it('отметка о заданном вопросе снимается вместе со счётчиком', () => {
+    // BARREN_WARN пустых циклов уводят в реплику «Ты ещё здесь?»; по её концу петля
+    // возвращается слушать, неся отметку warned
+    const warned = run([
+      ...Array.from({ length: BARREN_WARN }, () => ({ type: 'cycleEnded' as const })),
+      { type: 'speechFinished' },
+    ], listening());
+    expect(warned.phase).toBe('listening');
+    expect(warned.warned).toBe(true);
+    expect(handsFreeReducer(warned, { type: 'misheard' }).warned).toBe(false);
+  });
+
+  it.each([
+    ['waiting', run([{ type: 'recognized', text: 'да' }, { type: 'pendingElapsed' },
+      { type: 'turnStarted' }], listening())],
+    ['off', HANDS_FREE_INITIAL],
+  ])('в фазе %s микрофон закрыт — вердикт игнорируется', (_phase, from) => {
+    expect(handsFreeReducer(from, { type: 'misheard' })).toEqual(from);
+  });
+});
+
 describe('pendingDelayFor — адаптивное окно отправки', () => {
   it.each([
     ['ну вот смотри я тут подумал и'],
@@ -293,5 +398,32 @@ describe('pendingDelayFor — адаптивное окно отправки', (
   it('регистр и пунктуация не мешают распознать хвост', () => {
     expect(pendingDelayFor('Значит, надо сделать И')).toBe(PENDING_SLOW_MS);
     expect(pendingDelayFor('Да!')).toBe(PENDING_FAST_MS);
+  });
+
+  // Правило «4+ слов = мысль дозрела» перебивает всё остальное, поэтому длинная
+  // фраза, оборванная на местоимении, союзном слове или числительном, улетала
+  // через минимальную паузу — замер на планшете поймал ровно эти формы
+  it.each([
+    ['слушай а что если мы'],
+    ['давай посмотрим на файл который'],
+    ['проверь пожалуйста вот эти три'],
+    ['мне кажется тут дело в том какой'],
+    ['открой настройки и покажи мне'],
+  ])('«%s…» — длинная фраза оборвана, ждём дольше', (text) => {
+    expect(pendingDelayFor(text)).toBe(PENDING_SLOW_MS);
+  });
+
+  // Обратная сторона: слова, которыми фразу как раз ЗАКАНЧИВАЮТ, в список
+  // висячих не попали — иначе законченная реплика ждала бы впустую
+  it.each([
+    ['ну давай на этом всё'],
+    ['да мне это непонятно вообще'],
+    // Винительный падеж — обычный хвост императива, в том числе с предлогом
+    ['открой конфиг и посмотри на него'],
+    ['проверь ссылки и почини их'],
+    ['возьми последнюю версию и накати её'],
+    ['а это вообще зачем'],
+  ])('«%s» — слово-завершитель не считается висячим', (text) => {
+    expect(pendingDelayFor(text)).toBe(PENDING_FAST_MS);
   });
 });

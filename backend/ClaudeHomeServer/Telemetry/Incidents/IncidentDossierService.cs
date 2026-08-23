@@ -114,6 +114,10 @@ public sealed class IncidentDossierService(
 
         var foreign = summary.Environment is { } env
                       && !env.Equals(options.Environment, StringComparison.OrdinalIgnoreCase);
+
+        // Чат-виновник у правил с разрезом по chat_id известен из самих меток. Живой алерт
+        // отдаёт его прямо, погасший — только через памятку: метки исчезают вместе с ним.
+        var alertChatId = alert?.ChatId ?? state.Recall(fingerprint)?.ChatId;
         var (metric, tag) = BreakdownByRule.TryGetValue(RuleNameOf(alert, summary), out var mapped)
             ? mapped : DefaultBreakdown;
 
@@ -152,7 +156,7 @@ public sealed class IncidentDossierService(
             LogsTotal = logs.Count,
             // Чужой контур: локальных чатов по нему нет и быть не может — карточка скажет
             // это плашкой, а не покажет пустой список как факт «чаты не пострадали».
-            Chats = foreign ? [] : localContext.Describe(turns, from, to),
+            Chats = foreign ? [] : localContext.Describe(turns, from, to, alertChatId),
             RulePath = AlertDigest.RulePath(alert?.RuleId ?? state.Recall(fingerprint)?.RuleId),
         };
 
@@ -185,7 +189,7 @@ public sealed class IncidentDossierService(
             if (alert is not null)
                 fallback = new AlertMemo(AlertDigest.Describe(alert).Title,
                     alert.StartsAt ?? DateTimeOffset.UtcNow,
-                    alert.Severity, alert.Environment, alert.RuleId);
+                    alert.Severity, alert.Environment, alert.RuleId, ChatId: alert.ChatId);
         }
         state.SetMuted(fingerprint, muted, fallback);
     }

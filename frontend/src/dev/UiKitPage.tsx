@@ -12,7 +12,7 @@ import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
   LayoutTemplate, MoreHorizontal, Pencil, Copy, Trash2,
-  Ruler, Mail, Search,
+  Ruler, Mail, Search, Smartphone,
   LayoutGrid, Columns2, Settings, X,
   MousePointerClick,
   Plus,
@@ -29,11 +29,12 @@ import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
-import { STATUS_CONFIG, STATUS_GLOW, type SessionStatus } from '../components/StatusIndicator';
+import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from '../components/StatusIndicator';
 import { ProviderLimitCard } from '../components/chat/ChatItemView';
-import type { Session, ChatItem } from '../types';
+import type { Session, ChatItem, Persona } from '../types';
+import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
-import { useIsMobile } from '../lib/breakpoints';
+import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
@@ -99,6 +100,7 @@ const BADGE_TONES: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'da
 // Порядок соответствует основному flow ниже. При добавлении новой секции —
 // добавь её сюда и повесь rootProps={{ id }} на её Island.
 const TOC_SECTIONS: { id: string; label: string }[] = [
+  { id: 'sec-viewport',   label: 'Замер экрана'      },
   { id: 'sec-toggles',    label: 'Переключатели'     },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -185,6 +187,11 @@ export function UiKitPage() {
             flexDirection: 'column',
             gap: ISLAND.gap,
           }}>
+            {/* Замер реальных CSS-размеров устройства (см. ViewportSection) */}
+            <div id="sec-viewport" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ViewportSection />
+            </div>
+
             {/* Примитивы — переключатели */}
             <div id="sec-toggles" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <TogglesSection />
@@ -442,6 +449,21 @@ function TogglesSection() {
 }
 
 // === Секция «Примитивы — оверлеи и меню» ==========================
+// Лица для витрины подсветки «сейчас говорит»: цвет колец приходит извне (в продукте —
+// из ChatPanel, вместе с цветом сияния композера), поэтому держим его рядом с персоной
+const KIT_PERSONAS: Array<{ persona: Persona; color: string }> = [
+  { persona: { id: 'kit-1', ownerId: 'kit', name: 'Вера', handle: 'vera', scope: 'global', avatar: { kind: 'initials', color: 'purple' } } as Persona, color: AGENT_COLORS.purple },
+  { persona: { id: 'kit-2', ownerId: 'kit', name: 'Олег', handle: 'oleg', scope: 'global', avatar: { kind: 'initials', color: 'green' } } as Persona, color: AGENT_COLORS.green },
+];
+function KitAvatarSample({ persona, caption, speaking }: { persona: Persona; caption: string; speaking?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm }}>
+      <PersonaAvatar persona={persona} size={28} speaking={speaking} />
+      <span style={{ fontSize: FS.xs, color: C.textMuted }}>{persona.name} · {caption}</span>
+    </div>
+  );
+}
+
 // Modal / ConfirmDialog / Menu+MenuItem / BackButton / WaitingIndicator.
 // Триггеры открывают соответствующие оверлеи; BackButton — статично;
 // WaitingIndicator показан в обычном режиме и с hint. Стили — только токены
@@ -531,6 +553,20 @@ function OverlaysSection() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
             <WaitingIndicator />
             <WaitingIndicator hint="Читаю файлы проекта…" />
+          </div>
+        </SubBlock>
+
+        {/* Аватар персоны: обычный и «сейчас говорит» (пульс цветом персоны при озвучке).
+            Размах колец здесь МЕЛЬЧЕ, чем у WaitingIndicator выше: в ленте аватар сидит
+            лидом внутри пузыря с overflow: hidden, полный размах срезало бы кромкой. */}
+        <SubBlock label="PersonaAvatar — кто сейчас говорит (озвучка ответа)">
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xl }}>
+            {KIT_PERSONAS.map(({ persona, color }) => (
+              <div key={persona.id} style={{ display: 'flex', alignItems: 'flex-end', gap: SP.lg }}>
+                <KitAvatarSample persona={persona} caption="молчит" />
+                <KitAvatarSample persona={persona} caption="говорит" speaking={color} />
+              </div>
+            ))}
           </div>
         </SubBlock>
       </div>
@@ -692,6 +728,160 @@ function FieldsSection() {
             placeholder="you@example.com"
           />
         </Field>
+      </div>
+    </Island>
+  );
+}
+
+// === Секция «Замер экрана» ========================================
+// Служебная плашка: снимает РЕАЛЬНЫЕ CSS-размеры устройства, на котором открыта
+// витрина. Нужна потому, что справочники устройств считают CSS как «физика ÷ 3»
+// и промахиваются (у Fold 7 расчёт давал 728 CSS, живой замер — 673, отсюда и
+// MOBILE_MAX = 600), а консоли и `javascript:`-строк в адресной строке на
+// телефоне нет. Снятые цифры переносятся в docs/design/target-devices.md.
+
+type ViewportMetrics = {
+  w: number; h: number; dpr: number;
+  screenW: number; screenH: number;
+  standalone: boolean;
+};
+
+function readViewportMetrics(): ViewportMetrics {
+  return {
+    w: window.innerWidth,
+    h: window.innerHeight,
+    dpr: window.devicePixelRatio,
+    screenW: window.screen.width,
+    screenH: window.screen.height,
+    standalone: window.matchMedia('(display-mode: standalone)').matches,
+  };
+}
+
+// Пересъём на resize и повороте. Зум страницы меняет DPR и тоже приходит
+// resize'ом, поэтому отдельная подписка на плотность не нужна.
+function useViewportMetrics(): ViewportMetrics {
+  const [m, setM] = useState(readViewportMetrics);
+  useEffect(() => {
+    const onChange = () => setM(readViewportMetrics());
+    window.addEventListener('resize', onChange);
+    window.addEventListener('orientationchange', onChange);
+    return () => {
+      window.removeEventListener('resize', onChange);
+      window.removeEventListener('orientationchange', onChange);
+    };
+  }, []);
+  return m;
+}
+
+// Строка «подпись — значение»: значение моноширинным, чтобы цифры стояли
+// колонкой, а не плясали по ширине глифов.
+function MetricRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: SP.xxxl * 3 }}>{label}</span>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.md, color: C.textPrimary }}>{value}</span>
+      {hint ? <span style={{ fontSize: FS.xs, color: C.textMuted }}>{hint}</span> : null}
+    </div>
+  );
+}
+
+function ViewportSection() {
+  const m = useViewportMetrics();
+
+  const layout = m.w <= MOBILE_MAX ? 'мобильная'
+    : m.w <= TABLET_MAX ? 'планшетная'
+    : 'десктопная';
+
+  // Запас до ближайшего порога раскладки. У раскладных он бывает в десяток
+  // пикселей — тогда это решающая цифра, а не любопытная.
+  const gap = m.w <= MOBILE_MAX ? MOBILE_MAX - m.w
+    : m.w <= TABLET_MAX ? Math.min(m.w - MOBILE_MAX, TABLET_MAX - m.w)
+    : m.w - TABLET_MAX;
+  const tight = gap <= 40;
+
+  const dpr = Math.round(m.dpr * 1000) / 1000;
+  const summary = `${m.w} × ${m.h} CSS @ DPR ${dpr} → ${Math.round(m.w * dpr)} × ${Math.round(m.h * dpr)} физических`;
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={
+          <Smartphone
+            size={ICON_SIZE.md}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.accent, flexShrink: 0 }}
+          />
+        }
+        title="Замер экрана"
+        badge={`${layout} раскладка`}
+      />
+      <div style={{
+        padding: ISLAND.pad,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: ISLAND.gap,
+      }}>
+        {/* Готовая строка для доки: userSelect:'all' — на телефоне выделяется
+            одним тапом, иначе её пришлось бы ловить пальцем по символу.
+            Clipboard API тут не годится: с телефона витрину открывают по http
+            в локальной сети, а там navigator.clipboard недоступен. */}
+        <SubBlock label="Строка для docs/design/target-devices.md — выдели и скопируй">
+          <div style={{
+            fontFamily: FONT.mono,
+            fontSize: FS.lg,
+            color: C.textPrimary,
+            background: C.bgWhite,
+            border: `1px solid ${C.border}`,
+            borderRadius: R.xl,
+            padding: SP.md,
+            userSelect: 'all',
+            overflowWrap: 'anywhere',
+          }}>
+            {summary}
+          </div>
+        </SubBlock>
+
+        <SubBlock label="Подробно">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <MetricRow label="Окно (CSS)" value={`${m.w} × ${m.h}`} hint="то, с чем работает вёрстка" />
+            <MetricRow label="Плотность (DPR)" value={String(dpr)} hint="физических точек на CSS-пиксель" />
+            <MetricRow
+              label="Физические точки"
+              value={`${Math.round(m.w * dpr)} × ${Math.round(m.h * dpr)}`}
+              hint="паспортная цифра производителя"
+            />
+            <MetricRow
+              label="Экран целиком (CSS)"
+              value={`${m.screenW} × ${m.screenH}`}
+              hint="весь дисплей, а не окно браузера"
+            />
+            <MetricRow label="Ориентация" value={m.h >= m.w ? 'портрет' : 'ландшафт'} />
+            <MetricRow
+              label="Режим отображения"
+              value={m.standalone ? 'установленная PWA' : 'вкладка браузера'}
+              hint="в PWA высота больше — нет адресной строки"
+            />
+            <MetricRow
+              label="Пороги раскладки"
+              value={`MOBILE_MAX ${MOBILE_MAX} · TABLET_MAX ${TABLET_MAX}`}
+              hint={`запас до ближайшего — ${gap}px`}
+            />
+          </div>
+        </SubBlock>
+
+        {tight ? (
+          <Badge tone="warning">
+            До переключения раскладки {gap}px — экран на границе, проверь оба режима
+          </Badge>
+        ) : null}
+
+        <SubBlock label="Чтобы замер не врал">
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.6 }}>
+            Зум страницы — 100% (в Chrome он множится на DPR). Режим «версия для ПК» —
+            выключен, он подменяет ширину десктопной. Складные меряем в обоих состояниях,
+            остальные — в обеих ориентациях.
+          </div>
+        </SubBlock>
       </div>
     </Island>
   );
@@ -1580,12 +1770,12 @@ const DEMO_SESSIONS: Session[] = [
 // Порядок состояний для витрины ореола: сначала светящиеся (живые, потом ошибка),
 // следом спокойные. Подписи и цвета не дублируем — берём боевые таблицы
 // STATUS_CONFIG / STATUS_GLOW, чтобы витрина не разъезжалась с карточкой.
-const GLOW_STATES: SessionStatus[] = [
-  'starting', 'working', 'waiting', 'error', 'active', 'orphaned', 'finished',
+const GLOW_STATES: VisualStatus[] = [
+  'starting', 'working', 'agents', 'waiting', 'error', 'active', 'orphaned', 'finished',
 ];
 
 // Чем состояние себя ведёт — подпись под демо-карточкой
-const glowBehaviour = (st: SessionStatus) => {
+const glowBehaviour = (st: VisualStatus) => {
   const g = STATUS_GLOW[st];
   if (g.alpha === 0) return 'без свечения';
   if (!g.breath) return `ровный контур · ${g.alpha}%`;
@@ -2460,11 +2650,11 @@ function PanelsSection() {
         </SubBlock>
 
         {/* Состояние чата в списке несёт ореол самой карточки — точки статуса в ней
-            больше нет. Ниже боевой ChatCard во всех 7 состояниях: он рисует ореол сам
+            больше нет. Ниже боевой ChatCard во всех 8 видах: он рисует ореол сам
             по таблицам STATUS_CONFIG / STATUS_GLOW (StatusIndicator.tsx) классами
             cc-glow-* из index.css. Цвет отвечает «что происходит», переливание —
             «происходит прямо сейчас», сила (alpha) — насколько это требует внимания. */}
-        <SubBlock label="ChatCard — ореол статуса, все 7 состояний">
+        <SubBlock label="ChatCard — ореол статуса, все 8 видов">
           <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
             <div style={{
               padding: SP.md, display: 'grid',
@@ -2473,7 +2663,10 @@ function PanelsSection() {
               {GLOW_STATES.map(st => (
                 <div key={st}>
                   <ChatCard
-                    session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`, status: st, isPinned: false }}
+                    // 'agents' — не статус CLI, а вид: сессия при живом фоне Active
+                    session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`,
+                      status: st === 'agents' ? 'active' : st, isPinned: false }}
+                    agentsRunning={st === 'agents'}
                     isActive={false}
                     isMobile={false}
                     fallbackName="Новый чат"

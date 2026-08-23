@@ -6,8 +6,9 @@ import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonas
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { projectMainColor } from '../features/projects/projectUtil';
+import { agentDotColor } from './AgentSelector';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
-import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
+import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
@@ -30,9 +31,11 @@ import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
-import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, type StreamSpeech } from '../lib/tts';
-import { turnText, turnStreamChunks, turnStreamTail, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
+import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, sanitizeForSpeech, splitSentences, type StreamSpeech } from '../lib/tts';
+import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, turnVoiceItemIndex, extractVoiceDigest, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
+import { talkDiag } from '../lib/talkDiag';
 import { needAnswer, primeBeep } from '../lib/beep';
+import { voiceStyleFor, normalizeVoiceStyle, VOICE_STYLE_DIGEST, VOICE_STYLE_TALK } from '../lib/voiceStyle';
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
@@ -48,8 +51,9 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
+import { TurnPlanPill } from './chat/TurnPlanPill';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -99,9 +103,6 @@ interface Props {
   agents?: AgentInfo[];
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
-  // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
-  artifactsOpen?: boolean;
-  onToggleArtifacts?: () => void;
   // Приветственный бабл персоны: показывается в пустом чате вместо обычного empty state
   // (чисто визуально, в бэкенд не отправляется). Как только пойдут реальные сообщения — исчезает.
   greetingBubble?: React.ReactNode;
@@ -191,7 +192,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -233,23 +234,49 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // бэке) + озвучка ответа. Прайминг аудио прямо в обработчике клика — политика autoplay
   // разрешает воспроизведение только после пользовательского жеста.
   const voiceMode = session.voiceMode === true;
+  // Стиль озвучки живёт ЗДЕСЬ, а не в модуле-хранилище: значение читают четыре места в
+  // двух компонентах (ветка кнопки и плашка состояния в Composer, гейт стрима и ветка
+  // озвучки здесь). Голые функции чтения/записи не реактивны — выбор пункта в меню
+  // записал бы localStorage и не перерисовал ни кнопку, ни гейты
+  // Стиль НЕ настраивается — выводится из ширины экрана (см. lib/voiceStyle.ts)
+  const voiceStyle = voiceStyleFor(isMobile === true);
+  const voiceDigest = voiceMode && voiceStyle === VOICE_STYLE_DIGEST;
+  // Чат, чей стиль уже выправлен на сервере в этот заход (см. эффект синхронизации ниже)
+  const styleSyncedRef = useRef<string | null>(null);
+  // Стиль сменился на лету (окно растянули, планшет повернули) — снять гард, чтобы
+  // эффект ниже выправил значение на сервере: иначе ход собрался бы в прежнем формате
+  const prevStyleRef = useRef(voiceStyle);
+  if (prevStyleRef.current !== voiceStyle) {
+    prevStyleRef.current = voiceStyle;
+    styleSyncedRef.current = null;
+  }
   // Фаза озвучки для режима разговора: петля в композере открывает микрофон только когда
   // она вернулась в idle. Ведётся С ТОКЕНОМ вызова (Р12): новый speak внутри себя зовёт
   // stopSpeaking(), и finally предыдущего иначе сбросил бы фазу уже начавшейся озвучки —
   // микрофон открылся бы под играющее аудио
   const [speechPhase, setSpeechPhase] = useState<SpeechPhase>('idle');
   const speechCallRef = useRef(0);
-  const startSpeaking = useCallback((text: string) => {
+  // personaId — чьим голосом читать; передаёт вызывающий, у которого под рукой ход
+  // (колбэк стабильный, без зависимостей — брать персону из замыкания здесь нечем)
+  // Чей голос звучит ПРЯМО СЕЙЧАС — захваченная на ход персона. Отсюда питаются оба
+  // визуальных эффекта «кто говорит»: кольцо у её аватара в ленте и цвет сияния над
+  // композером (см. activeSpeaker). Захват на ход, а не пересчёт по ленте: голос тоже
+  // берётся один раз (пакеты синтеза уходят вперёд), и подсветка обязана совпадать с ним
+  const [speakingPersonaId, setSpeakingPersonaId] = useState<string | null>(null);
+  const startSpeaking = useCallback((text: string, personaId?: string) => {
     const call = ++speechCallRef.current;
     // Синхронно, ДО первого await: в кадре завершения хода петля обязана видеть, что
     // озвучка будет, иначе успеет открыть микрофон ровно под старт синтеза
     setSpeechPhase('willSpeak');
+    setSpeakingPersonaId(personaId ?? null);
     void (async () => {
       try {
         setSpeechPhase('speaking');
-        await speak(text);
+        await speak(text, personaId, session.id);
       } finally {
-        if (speechCallRef.current === call) setSpeechPhase('idle');
+        // Токен тот же, что у фазы: поздний finally осиротевшего вызова не должен
+        // гасить подсветку уже начавшейся озвучки
+        if (speechCallRef.current === call) { setSpeechPhase('idle'); setSpeakingPersonaId(null); }
       }
     })();
   }, []);
@@ -258,17 +285,38 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     speechCallRef.current++;
     stopSpeaking();
     setSpeechPhase('idle');
+    setSpeakingPersonaId(null);
   }, []);
   // Значение ПРИХОДИТ от композера: запрошенное состояние (PUT ещё в полёте) знает
   // только он — там же живёт петля разговора. Свой ref здесь был вторым источником
   // правды и после провала PUT или смены чата инвертировал режим
+  // Выправить стиль на сервере, если он остался от ДРУГОГО устройства. Гейт по voiceMode
+  // обязателен: дефолт digest на широком экране расходится со стилем каждого старого чата,
+  // и без него PUT (то есть перезапись всего sessions.json) уходил бы на открытие любого
+  // чата, включая те, где озвучкой не пользовались. При выключенной озвучке стиль на
+  // сервере никого не интересует — секцию промпта по нему не выбирают.
+  // Один PUT на открытие чата: onSessionUpdated вернул бы новый объект сессии и эффект
+  // пошёл бы по кругу. Ответ намеренно ИГНОРИРУЕМ — поздний ответ, разошедшийся с тапом
+  // по кнопке, вернул бы voiceMode прошлого состояния и перевернул её (см. комментарий
+  // к handleToggleVoiceMode ниже). Ошибки молча: чинить тут человеку нечего
+  useEffect(() => {
+    if (!voiceMode) return;
+    if (normalizeVoiceStyle(session.voiceStyle) === voiceStyle) return;
+    if (styleSyncedRef.current === session.id) return;
+    styleSyncedRef.current = session.id;
+    void updateChatFields(session, { voiceStyle }).catch(() => {});
+  }, [session, voiceMode, voiceStyle]);
+
   const handleToggleVoiceMode = useCallback(async (next: boolean) => {
     primeAudio();
     // Разбудить аудиоконтекст сигналов в том же жесте: сигнал «нужно решение» может
     // понадобиться и без запуска петли, а вне жеста браузер контекст не пустит
     primeBeep();
     try {
-      const updated = await updateChatFields(session, { voiceMode: next });
+      // Стиль уходит вместе с включением: серверу он нужен уже на первом ходу, а
+      // sync-эффект выше сработал бы только на следующем открытии чата
+      const updated = await updateChatFields(session, next ? { voiceMode: true, voiceStyle } : { voiceMode: false });
+      styleSyncedRef.current = session.id;
       onSessionUpdated?.(updated); // без этого кнопка не перерисуется
       if (!next) stopSpeech();
     } catch (err) {
@@ -277,7 +325,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // и петля разговора крутилась бы вхолостую — композер по ошибке её гасит
       throw err;
     }
-  }, [session, onSessionUpdated, stopSpeech]);
+  }, [session, onSessionUpdated, stopSpeech, voiceStyle]);
 
   // Режим «Командная реализация»: live-состояние из событий team_implement,
   // до первого события — из Session.teamImplement; null — режим выключен
@@ -421,6 +469,26 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [session.participants, personasVersion]
   );
+
+  // === Кто сейчас говорит ===
+  // ОДИН источник на оба эффекта: кольцо у аватара её реплики в ленте и цвет aurora-
+  // сияния над композером. Гейт по фазе, а не по одному speakingPersonaId: захваченная
+  // персона переживает конец озвучки, и без гейта свет горел бы после того, как смолкло.
+  // Персона не резолвится (стор не загружен, чат ведёт голос инстанса) — эффекта нет:
+  // цвета взять неоткуда, а серый пульс врал бы про говорящего.
+  const activeSpeaker = useMemo(() => {
+    if (speechPhase === 'idle' || !speakingPersonaId) return null;
+    const p = getPersonaById(speakingPersonaId);
+    if (!p) return null;
+    return { color: agentDotColor(p.avatar?.color), index: turnVoiceItemIndex(items, speakingPersonaId, session.personaId) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion: стор персон нереактивен, бамп заставляет перечитать getPersonaById
+  }, [speechPhase, speakingPersonaId, items, session.personaId, personasVersion]);
+  // Значение контекста ленты: подсвечиваемой реплики может не быть вовсе (её ход уже
+  // сменился, говорит не автор последней реплики) — тогда светится только композер
+  const speakingItem = useMemo(
+    () => (activeSpeaker && activeSpeaker.index !== null ? { index: activeSpeaker.index, color: activeSpeaker.color } : null),
+    [activeSpeaker]);
+
   const isGroupChat = participantPersonas.length > 1;
   // Есть ли уже ходы — назначать/менять персону можно только у пустого чата (бэкенд иначе 400)
   // Персоны, доступные в контексте чата (глобальные + этого проекта) — для селектора,
@@ -502,11 +570,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     [persona]
   );
 
-  // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
-  const artifactFileCount = useMemo(
-    () => onToggleArtifacts && project ? countFiles(items, project.rootPath) : 0,
-    [onToggleArtifacts, items, project]
-  );
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
@@ -713,6 +776,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // из чата с 2 результатами в чат с 5 зачитал бы вслух чужой старый ответ.
   const speakCountRef = useRef<number | null>(null);
   const speakSessionRef = useRef(session.id);
+  // Счётчик реплик человека — фактическая граница нового хода для снятия подавления
+  // барж-ина: handleSend для этого не годится (queued-ход не рождает user_message,
+  // и поздняя дельта СТАРОГО перебитого хода зачитала бы его с начала)
+  const userMsgCountRef = useRef<number | null>(null);
 
   // === Поточная озвучка хода (только режим разговора: voiceMode && handsFreeActive) ===
   // Единственный владелец звука хода в talk-режиме — StreamSpeech: speak() тут не зовётся
@@ -729,6 +796,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     streamRef.current?.stop();
     streamRef.current = null;
   }, []);
+  // Барж-ин: озвучка ТЕКУЩЕГО хода погашена перебиванием.
+  // Гейтит ОБЕ точки озвучки — пересоздание стрима на дельте и одиночный speak на
+  // result: interrupt хода асинхронный, и проскочившие после перебивания дельта или
+  // result воскресили бы звук, утащив петлю из слушания обратно в speaking.
+  // Снимается на границах нового хода/чата — там же, где сбрасывается стрим
+  const bargeSuppressedRef = useRef(false);
+  const handleBargeSuppress = useCallback(() => {
+    bargeSuppressedRef.current = true;
+    stopSpeech();
+    resetStreamSpeech();
+  }, [stopSpeech, resetStreamSpeech]);
 
   useEffect(() => { setSpeechToast((text) => showToast('Озвучка', text)); }, []);
   useEffect(() => {
@@ -736,8 +814,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     if (switched) {
       speakSessionRef.current = session.id;
       speakCountRef.current = null; // первая загрузка нового чата — молчим
+      userMsgCountRef.current = null;
       stopSpeech();
       resetStreamSpeech();
+      bargeSuppressedRef.current = false;
     }
     // Пока история грузится, items пуст у ЛЮБОГО чата: базовая отметка, взятая здесь,
     // равна нулю, и первый же загруженный снапшот выглядел бы как новые ответы —
@@ -745,16 +825,25 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // с первого ЗАГРУЖЕННОГО снапшота (та же причина, что у emptyChatFocus выше).
     if (isHistoryLoading) {
       speakCountRef.current = null;
+      userMsgCountRef.current = null;
       resetStreamSpeech();
+      bargeSuppressedRef.current = false;
       return;
     }
+    // Подавление барж-ина живёт до СЛЕДУЮЩЕГО хода, и его граница — появление реплики
+    // человека в ленте, а не сам факт отправки: у queued-хода user_message придёт позже
+    const um = items.reduce((acc, it) => acc + (it.kind === 'user_message' ? 1 : 0), 0);
+    if (userMsgCountRef.current !== null && um > userMsgCountRef.current)
+      bargeSuppressedRef.current = false;
+    userMsgCountRef.current = um;
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
     const prev = speakCountRef.current;
     speakCountRef.current = rc;
     if (switched || prev === null) return;
     if (rc <= prev) {
-      // Новый ход начался (счётчик result сброшен редьюсером) — резка с нуля
-      if (rc < prev) resetStreamSpeech();
+      // Новый ход начался (счётчик result сброшен редьюсером) — резка с нуля,
+      // подавление барж-ина осталось у прошлого хода
+      if (rc < prev) { resetStreamSpeech(); bargeSuppressedRef.current = false; }
       return;
     }
 
@@ -781,13 +870,30 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
     // Стрим не создавался (гейт talk-режима не прошёл ни разу) — старый путь: озвучка
     // всего текста хода одним speak(). Гейты одиночного режима прежние.
+    // Перебитый ход сюда попадает с уже сброшенным стримом — молчит и он
+    if (bargeSuppressedRef.current) return;
     if (!voiceMode) return;
     // Цикл «до готово» (Р8): отличить финальный result от промежуточного в момент события
     // нельзя, а читать вслух каждую итерацию — мусор
     if (workLoopState) return;
+    // Стиль digest: вслух идёт ТОЛЬКО выжимка из блока <voice> в конце ответа. Полный текст
+    // хода здесь не озвучивается никогда — иначе синтезатор зачитает код и таблицы.
+    // Извлечение синхронное и до первого await (дисциплина токена speechCallRef)
+    if (voiceDigest) {
+      const digest = extractVoiceDigest(text);
+      // Модель забыла маркер — читаем ПЕРВЫЕ ТРИ ПРЕДЛОЖЕНИЯ, чтобы не молчать вовсе.
+      // Именно предложения, а не первую строку: ответ одним абзацем без переводов строки
+      // уехал бы в синтез целиком — ровно то поведение, от которого этот стиль и уходит
+      const spoken = digest ?? splitSentences(sanitizeForSpeech(text)).slice(0, 3).join(' ');
+      if (!digest) talkDiag('digest: ход без маркера <voice>', { fallback: spoken.length });
+      if (!spoken.trim()) { showToast('Озвучка', 'В ответе нечего озвучить'); return; }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- см. ниже: фаза выставляется синхронно в этом же кадре (Р12)
+      startSpeaking(spoken, turnVoicePersonaId(items, session.personaId));
+      return;
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
-    if (text) startSpeaking(text);
-  }, [items, session.id, voiceMode, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
+    if (text) startSpeaking(text, turnVoicePersonaId(items, session.personaId));
+  }, [items, session.id, session.personaId, voiceMode, voiceDigest, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
 
   // Эффект стриминга: режет нарастающий текст хода на предложения и озвучивает их
   // по мере появления, не дожидаясь result. tool_use/thinking_delta ничего не делают —
@@ -795,6 +901,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // время работы инструмента — цель фичи)
   useEffect(() => {
     if (!voiceMode || !handsFreeActive) return;
+    // Явная проверка стиля, а не расчёт на «в digest петли не бывает»: один промах — и
+    // стрим зачитает вслух полный ответ с кодом и таблицами. Заодно это держит инвариант
+    // «единственный владелец звука в talk — StreamSpeech»: стрим и ветка digest выше
+    // не пересекаются никогда
+    if (voiceStyle !== VOICE_STYLE_TALK) return;
+    if (bargeSuppressedRef.current) return; // ход перебит — дельты больше не озвучиваем
     const r = turnStreamChunks(streamStRef.current, items);
     if (r.off) { streamStRef.current = { ...streamStRef.current, off: true }; return; }
     streamStRef.current = { ...streamStRef.current, cursor: r.cursor };
@@ -805,6 +917,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // только onDone-колбэк стрима: он срабатывает при любом исходе (очередь
       // доиграла / stop() / внешний stopSpeaking) ровно один раз
       const call = ++speechCallRef.current;
+      const voiceId = turnVoicePersonaId(items, session.personaId);
       const s = startStreamSpeak(() => {
         if (speechCallRef.current !== call) return; // осиротели — фазу трогать нельзя
         if (streamRef.current !== s) return; // стрим уже сброшен (новый ход/чат)
@@ -812,14 +925,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         streamStRef.current = TURN_STREAM_INIT;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- финал озвучки: микрофон петли открывается именно отсюда
         setSpeechPhase('idle');
-      });
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- вместе с фазой: подсветка говорящей гаснет ровно тогда, когда смолкает голос
+        setSpeakingPersonaId(null);
+        // Голос захватывается ОДИН раз на весь ход: пакеты синтезируются заранее
+        // (prefetch), и смена голоса посреди хода выбросила бы оплаченный пакет
+      }, voiceId, session.id);
       streamRef.current = s;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- см. startSpeaking: та же дисциплина токена
       setSpeechPhase('willSpeak');
       setSpeechPhase('speaking');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- подсветка говорящей зажигается тем же кадром, что и фаза
+      setSpeakingPersonaId(voiceId ?? null);
     }
     for (const c of r.chunks) streamRef.current!.enqueue(c);
-  }, [items, voiceMode, handsFreeActive]);
+  }, [items, voiceMode, voiceStyle, handsFreeActive, session.personaId]);
 
   // Уход со страницы/размонтирование — озвучка не должна пережить чат
   useEffect(() => () => stopSpeaking(), []);
@@ -1232,8 +1351,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   useEffect(() => {
     const was = prevAwaitingRef.current;
     prevAwaitingRef.current = awaitingResponse;
-    if (awaitingResponse && !was && voiceMode) needAnswer();
-  }, [awaitingResponse, voiceMode]);
+    // В digest не пищим: сигнал заведён для разговора, где человек не смотрит на экран,
+    // а здесь карточку с вопросом он видит глазами
+    if (awaitingResponse && !was && voiceMode && !voiceDigest) needAnswer();
+  }, [awaitingResponse, voiceMode, voiceDigest]);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
@@ -1280,16 +1401,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [items]);
 
   // Todo через TaskCreate/TaskUpdate инкрементальны (в отличие от TodoWrite с полным
-  // списком) — карточку чек-листа рисуем один раз, на последнем task-вызове ленты:
-  // там агрегат computeTodos отражает актуальное состояние всего списка
-  const lastTaskIdx = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      if (it.kind === 'tool_use' && !it.parentToolUseId && (it.name === 'TaskCreate' || it.name === 'TaskUpdate')) return i;
-    }
-    return -1;
-  }, [items]);
-  const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
+  // списком), а CLI ведёт ОДИН список на сессию — поэтому лента режется на пачки
+  // (computeTodoBatches): карточка чек-листа рисуется на последнем вызове КАЖДОЙ пачки
+  // со своим составом. Раньше карточка была одна на весь чат, и прошлые планы, сколько бы
+  // их ни было за сессию, в истории не показывались вовсе.
+  const todoBatches = useMemo(() => computeTodoBatches(items), [items]);
+  // индекс последнего вызова пачки → её список (для рендера карточки на этом месте)
+  const batchByIndex = useMemo(
+    () => new Map(todoBatches.filter(b => b.lastIndex >= 0).map(b => [b.lastIndex, b.todos])),
+    [todoBatches]);
+  // Текущая пачка — для пилюли прогресса и подписи «на каком я шаге». useMemo обязателен:
+  // список уходит в зависимости renderItem, и новый массив на каждый рендер сбрасывал бы
+  // мемоизацию всей ленты
+  const taskTodos = useMemo(
+    () => (todoBatches.length ? todoBatches[todoBatches.length - 1].todos : []),
+    [todoBatches]);
+
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
   // своего snapshotId нет — он лежит на сообщении, которым начался ход, а contextTokens
@@ -1538,6 +1665,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       online={online}
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
+      planPill={!showWaiting && i === lastResultIndex && taskTodos.length > 0
+        ? <TurnPlanPill todos={taskTodos} />
+        : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
       onToggleThinking={toggleThinking}
       onAllowPermission={allowPermission}
@@ -1554,7 +1684,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onRetry={handleRetry}
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
-      taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
+      taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
@@ -1594,7 +1724,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
@@ -1624,7 +1754,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Карточка группы встаёт на место ПЕРВОЙ ошибки дня, остальные из ленты уходят в кат.
   //
   // Схлопывать массив ленты НЕЛЬЗЯ: индексы элементов — ключ к turnMeta, turnBoundaries,
-  // lastTaskIdx и execZone, и укороченный display сдвинул бы всю метаинформацию после
+  // batchByIndex и execZone, и укороченный display сдвинул бы всю метаинформацию после
   // первой же группы. Поэтому группа живёт картой «индекс первой ошибки дня → группа»,
   // а остальные ошибки гасятся набором индексов — как suppressedByWorkflow.
   const errorGroups = useMemo(() => {
@@ -1656,14 +1786,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
     // Display-лента = сама items: индексы обязаны совпадать с items (по ним ходят
-    // turnMeta, turnBoundaries, lastTaskIdx, execZone). Ошибки прошлых дней рисуются
+    // turnMeta, turnBoundaries, batchByIndex, execZone). Ошибки прошлых дней рисуются
     // группой через errorGroups — карту «индекс → error_group» и набор гашеных индексов.
     const display = items;
-    // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
+    // Последний вызов каждой пачки (batchByIndex) исключаем из блока действий, как и TodoWrite:
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
     // Выкатка прода исключена из блока действий по той же причине, что и workflow:
     // на её месте стоит карточка хода выкатки, а не строка инструмента
-    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow' && !isDeployStart(it.name);
+    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !batchByIndex.has(idx) && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow' && !isDeployStart(it.name);
     const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
     // Ссылка на родителя есть у tool_use и у текста/thinking сабагента
     const parentOf = (it: ChatItem): string | undefined =>
@@ -1938,7 +2068,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, session.id]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, session.id]);
 
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге
@@ -2016,9 +2146,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       activeWorkflow={activeWorkflowInfo ?? undefined}
       lastMechanic={lastMechanic}
       onOpenSidebar={onOpenSidebar}
-      artifactsOpen={artifactsOpen}
-      onToggleArtifacts={onToggleArtifacts}
-      artifactFileCount={artifactFileCount}
       ctxEstimate={ctxEstimate}
       isWaiting={isWaiting}
       isCompacting={isCompacting}
@@ -2138,7 +2265,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           </>
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}>{visibleNodes}</SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
@@ -2153,8 +2280,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // 12px (scale 1.85 от 28) — бокового поля ленты (CHAT_GUTTER_L / на мобиле
           // CHAT_GUTTER_MOBILE + мельче размах, media query в index.css) на них хватает,
           // клип области прокрутки (overflow-x: hidden) пульс не режет.
-          <div style={{ marginTop: 5 }}>
+          //
+          // Пилюля плана — в ЭТОЙ ЖЕ строке, справа, и живёт независимо от хода: индикатор
+          // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
+          // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
+          <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
             <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
+            <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
+              <TurnPlanPill todos={taskTodos} />
+            </div>
           </div>
         )}
 
@@ -2306,6 +2440,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // стора черновиков (getDraft) уже под новый sessionId.
             key={session.id}
             sessionId={session.id}
+            voicePersonaId={session.personaId ?? undefined}
             offline={!online}
             onSend={handleSend}
             onStop={interrupt}
@@ -2351,6 +2486,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
             voiceMode={voiceMode}
             onToggleVoiceMode={handleToggleVoiceMode}
+            voiceStyle={voiceStyle}
             // Вопрос модели выводит режим разговора из петли: голосом на разрешение
             // не ответишь. Именно awaitingResponse, а НЕ isWaiting (тот = «ход идёт»
             // и уходит выше как isGenerating)
@@ -2358,6 +2494,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             speechPhase={speechPhase}
             onHandsFreeActiveChange={setHandsFreeActive}
             onStopSpeech={stopSpeech}
+            onBargeSuppress={handleBargeSuppress}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}
@@ -2367,9 +2504,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
             // из них; 0 = сигнала не было (Composer такое значение игнорирует).
             focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
-            // Фирменный цвет проекта — им светится aurora-сияние при озвучке
-            // ответа (говорит «голос проекта»); чат вне проекта — фиолетовый токен
-            projectColorHex={project ? projectMainColor(project) : undefined}
+            // Цвет сияния при озвучке: сперва цвет говорящей персоны (тот же, что у кольца
+            // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
+            // ни того, ни другого нет — оранжевый токен внутри композера
+            auroraColorHex={activeSpeaker?.color ?? (project ? projectMainColor(project) : undefined)}
           />
           </div>
         </div>

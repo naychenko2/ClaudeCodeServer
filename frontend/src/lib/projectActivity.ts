@@ -5,6 +5,7 @@ import { C } from './design';
 import { hasUnread, subscribeReadState } from './chatReadState';
 import { loadChatFilters, matchChatFilter } from './chatFilters';
 import { onMessage, onReconnected } from './signalr';
+import { agentsPresenceSnapshot, subscribeAgentsPresence } from './agentsPresence';
 
 // Стор активности проектов для переключателя в сайдбаре (флаг sidebar-project-switcher):
 // агрегат «в каком проекте агент работает / ждет ответа» по live-сессиям всех проектов.
@@ -64,6 +65,7 @@ let _timer: ReturnType<typeof setInterval> | null = null;
 let _offMessage: (() => void) | null = null;
 let _offReconnected: (() => void) | null = null;
 let _offReadState: (() => void) | null = null;
+let _offPresence: (() => void) | null = null;
 
 // Кэш предикатов фильтра по projectId: чтение localStorage — по разу на проект
 // за пересчёт (clear в начале aggregate, иначе смена фильтра не подхватится)
@@ -110,6 +112,16 @@ function aggregate(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<st
     }
   }
 
+  // Чат с живыми ФОНОВЫМИ агентами: ход в нём завершён, статус Active — сервер отдаёт
+  // такой чат в recent, то есть «живым» он не считается нигде. Работа при этом идёт,
+  // и точка проекта обязана гореть, иначе рельса разойдётся со списком чатов, где у
+  // той же сессии светится значок агентов. Фильтр видимости здесь не применяем — он
+  // про непрочитанность (ниже), а работа идёт независимо от того, что скрыто в списке
+  const withAgents = agentsPresenceSnapshot();
+  if (withAgents.size > 0)
+    for (const s of [...active, ...recent])
+      if (s.projectId && withAgents.has(s.id)) put(s.projectId, { status: 'working' });
+
   for (const s of [...active, ...recent]) {
     if (!s.projectId) continue;
     // Непрочитанность считаем только по чатам, видимым в фильтре ЭТОГО проекта:
@@ -127,6 +139,10 @@ function aggregate(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<st
 function aggregateChats(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<string, ActivityStatus> {
   const next = new Map<string, ActivityStatus>();
   for (const s of active) next.set(s.id, s.status === 'waiting' ? 'waiting' : 'working');
+  // Живой фон — та же работа: без этого номерок чата в доке стены остался бы немым
+  // (или серым «сюда не заходили»), пока агенты пашут
+  const withAgents = agentsPresenceSnapshot();
+  for (const s of recent) if (withAgents.has(s.id)) next.set(s.id, 'working');
   for (const s of [...active, ...recent]) {
     if (next.has(s.id)) continue; // живой статус важнее непрочитанности
     if (hasUnread(s.updatedAt, s.id, s.lastReadAt)) next.set(s.id, 'unread');
@@ -187,6 +203,9 @@ function start() {
   // поллинга. Данные с сервера при этом не меняются, поэтому пересобираем
   // агрегат из последнего ответа
   _offReadState = subscribeReadState(recompute);
+  // Фон появился/закончился — данные сводки те же, пересобираем агрегат из последнего
+  // ответа (как и с прочитанностью). Заодно подписка поднимает сам стор присутствия
+  _offPresence = subscribeAgentsPresence(recompute);
 }
 
 function stop() {
@@ -194,6 +213,7 @@ function stop() {
   _offMessage?.(); _offMessage = null;
   _offReconnected?.(); _offReconnected = null;
   _offReadState?.(); _offReadState = null;
+  _offPresence?.(); _offPresence = null;
 }
 
 function subscribe(fn: () => void): () => void {
@@ -203,6 +223,20 @@ function subscribe(fn: () => void): () => void {
     _listeners.delete(fn);
     if (_listeners.size === 0) stop();
   };
+}
+
+// Только для тестов: агрегаты без React и сброс состояния между кейсами
+export const __subscribeActivity = subscribe;
+export const __projectAggSnapshot = () => _agg;
+export const __chatAggSnapshot = () => _chatAgg;
+export function __resetProjectActivity() {
+  _agg = new Map();
+  _chatAgg = new Map();
+  _fingerprint = '';
+  _chatFingerprint = '';
+  _lastSummary = null;
+  _listeners.clear();
+  stop();
 }
 
 // Активность проектов: Map<projectId, ProjectActivity>. Проекты без live-сессий в Map отсутствуют.

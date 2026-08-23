@@ -40,7 +40,9 @@ export function talkDiag(msg: string, ...args: unknown[]): void {
 // реально прозвучавшим звуком; метки внутри круга пишутся ОДИН раз (первая побеждает),
 // чтобы повторные события фаз не смазывали картину.
 
-export type TalkMark = 'speech-end' | 'send' | 'turn-start' | 'first-audio';
+// barge-in — перебивание голосом (одно на круг: метки пишутся «первая побеждает»,
+// поэтому в сводке это булево «перебит», а не счётчик)
+export type TalkMark = 'speech-end' | 'send' | 'turn-start' | 'first-audio' | 'barge-in';
 
 interface TalkCycle { t0: number; marks: Partial<Record<TalkMark, number>> }
 
@@ -71,8 +73,10 @@ function timingSummary(): string[] {
   if (cycles.length === 0) return [];
   const rows = cycles.map((c, i) => {
     const cell = (m: TalkMark) => c.marks[m] === undefined ? '—' : `+${c.marks[m]}мс`;
+    // Перебивание — не у каждого круга: хвост строки только при метке
+    const barge = c.marks['barge-in'] === undefined ? '' : `  перебит +${c.marks['barge-in']}мс`;
     return `#${String(i + 1).padStart(2, ' ')}  отправка ${cell('send')}` +
-      `  ход ${cell('turn-start')}  первый звук ${cell('first-audio')}`;
+      `  ход ${cell('turn-start')}  первый звук ${cell('first-audio')}${barge}`;
   });
   const audio = cycles.map(c => c.marks['first-audio']).filter((v): v is number => v !== undefined);
   const send = cycles.map(c => c.marks['send']).filter((v): v is number => v !== undefined);

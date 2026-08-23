@@ -15,8 +15,14 @@ namespace ClaudeHomeServer.Telemetry.Incidents;
 /// </summary>
 public interface IIncidentLocalContext
 {
+    /// <param name="alertChatId">
+    /// Чат, названный самим алертом (метка <c>chat_id</c> у правил с разрезом по чату).
+    /// Попадает в список даже без упавших ходов — иначе у «Ходы массово встали» раздел
+    /// оказывался пустым при заведомо известном виновнике.
+    /// </param>
     IReadOnlyList<IncidentChat> Describe(
-        IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to);
+        IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to,
+        string? alertChatId);
 }
 
 public sealed class IncidentLocalContext(
@@ -26,21 +32,24 @@ public sealed class IncidentLocalContext(
     ILogger<IncidentLocalContext> log) : IIncidentLocalContext
 {
     public IReadOnlyList<IncidentChat> Describe(
-        IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to)
+        IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to,
+        string? alertChatId)
     {
+        // Число упавших ходов на чат. Чат из меток алерта добавляется сюда с нулём: он
+        // виновник по мнению самого правила, а падений у него может не быть вовсе.
         var byChat = turns
             .Where(t => !string.IsNullOrWhiteSpace(t.ChatId))
             .GroupBy(t => t.ChatId!, StringComparer.Ordinal)
-            .ToList();
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(alertChatId)) byChat.TryAdd(alertChatId, 0);
         if (byChat.Count == 0) return [];
 
         var spendRows = SafeSpend(from, to);
         var failures = mcpCalls.RecentFailures();
 
         var result = new List<IncidentChat>();
-        foreach (var group in byChat)
+        foreach (var (chatId, turnFailures) in byChat)
         {
-            var chatId = group.Key;
             Session? session = null;
             try { session = sessions.GetById(chatId); }
             catch (Exception ex) { log.LogDebug(ex, "Чат {ChatId} не найден при сборе досье", chatId); }
@@ -60,11 +69,14 @@ public sealed class IncidentLocalContext(
                 ChatId: chatId,
                 ProjectId: session?.ProjectId,
                 Title: session?.Name,
-                Failures: group.Count(),
+                Failures: turnFailures,
                 TotalTokens: tokens,
-                McpFailures: mcp));
+                McpFailures: mcp,
+                FromAlert: string.Equals(chatId, alertChatId, StringComparison.Ordinal)));
         }
-        return [.. result.OrderByDescending(c => c.Failures)];
+        // Названный алертом — первым: по падениям он может быть последним (их ноль),
+        // а разбирать инцидент начинают именно с него.
+        return [.. result.OrderByDescending(c => c.FromAlert).ThenByDescending(c => c.Failures)];
     }
 
     private IReadOnlyList<SpendRecord> SafeSpend(DateTimeOffset from, DateTimeOffset to)

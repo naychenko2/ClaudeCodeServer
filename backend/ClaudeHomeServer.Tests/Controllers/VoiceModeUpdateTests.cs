@@ -107,4 +107,58 @@ public class VoiceModeUpdateTests : IClassFixture<TestWebApplicationFactory>
             .GetProperty("voiceMode").GetBoolean()
             .Should().BeTrue("отсутствие поля в PUT — «не менять», а не «выключить»");
     }
+
+    // Стиль озвучки (Session.VoiceStyle) принадлежит УСТРОЙСТВУ, поэтому приезжает и
+    // отдельным запросом — у чата, где озвучка уже включена с другого устройства.
+    // Условие «в теле есть voiceMode» такой запрос молча потеряло бы.
+    [Fact]
+    public async Task Put_ТолькоСтиль_СохраняетсяИНеГаситРежим()
+    {
+        var id = await CreateProjectlessChatAsync();
+        await _client.PutAsJsonAsync($"/api/chats/{id}", new { voiceMode = true });
+
+        var styleOnly = await _client.PutAsJsonAsync($"/api/chats/{id}", new { voiceStyle = "digest" });
+        styleOnly.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var chat = await GetChatAsync(id);
+        chat.GetProperty("voiceStyle").GetString().Should().Be("digest");
+        chat.GetProperty("voiceMode").GetBoolean()
+            .Should().BeTrue("запрос без voiceMode не должен выключать озвучку");
+    }
+
+    [Fact]
+    public async Task Put_ПроектнаяСессия_ТолькоСтиль_Сохраняется()
+    {
+        var (projectId, sessionId) = await CreateProjectSessionAsync();
+
+        var resp = await _client.PutAsJsonAsync($"/api/projects/{projectId}/sessions/{sessionId}", new { voiceStyle = "digest" });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("voiceStyle").GetString().Should().Be("digest");
+    }
+
+    [Fact]
+    public async Task Put_НеизвестныйСтиль_ОтбиваетсяОшибкой()
+    {
+        var id = await CreateProjectlessChatAsync();
+
+        var resp = await _client.PutAsJsonAsync($"/api/chats/{id}", new { voiceStyle = "shout" });
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var chat = await GetChatAsync(id);
+        (chat.TryGetProperty("voiceStyle", out var style) && style.ValueKind == JsonValueKind.String)
+            .Should().BeFalse("мусор из API не должен доезжать до стора");
+    }
+
+    // Дефолт: поле пустое — стиль talk, то есть прежнее поведение старых чатов
+    [Fact]
+    public async Task НовыйЧат_БезСтиля_ЭтоРазговор()
+    {
+        var id = await CreateProjectlessChatAsync();
+        var chat = await GetChatAsync(id);
+
+        var style = chat.TryGetProperty("voiceStyle", out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() : null;
+        ClaudeHomeServer.Models.VoiceStyles.Normalize(style).Should().Be(ClaudeHomeServer.Models.VoiceStyles.Talk);
+    }
 }

@@ -177,23 +177,85 @@ function classifyTextPath(raw: string, rootPath: string): { path: string; extern
   return null; // относительный, но вне корня — мусор
 }
 
-// Собрать актуальный todo-список сессии из ленты чата. Понимает оба механизма CLI:
-// старый TodoWrite (каждый вызов несет полный список — последний побеждает) и новые
-// TaskCreate/TaskUpdate (инкрементальные). Экспортируется отдельно от computeArtifacts:
-// по нему же ChatPanel рисует карточку чек-листа в ленте.
-export function computeTodos(items: ChatItem[]): TodoItem[] {
+// «Где модель сейчас» для индикатора ожидания: текст текущего шага + счётчик.
+//
+// Отдельного места на экране это не занимает — индикатор и так висит на время хода,
+// а зона над композером у проектного чата занята git-баром, и полноценный список там
+// съел бы самую ценную полосу экрана (особенно на мобиле). Карточка чек-листа в ленте
+// остаётся: она про «что запланировано», эта строка — про «на каком я шаге».
+//
+// text и счётчик разделены намеренно: индикатор рисует их в РАЗНЫХ местах — текст
+// подписью под глаголом, а done/total прижатым вправо на уровне лица (см. WaitingIndicator).
+//
+// activeForm задуман ровно для текста шага («present continuous form shown in spinner»
+// в схеме TaskCreate); модель шлёт его не всегда — тогда берём заголовок пункта.
+// undefined — плана нет либо он весь выполнен (ход продолжается уже не по нему).
+export interface PlanHint {
+  text: string;
+  done: number;
+  total: number;
+}
+
+export function planHint(todos: TodoItem[]): PlanHint | undefined {
+  if (!todos.length) return undefined;
+  const current = todos.find(t => t.status === 'in_progress')
+    ?? todos.find(t => t.status !== 'completed');
+  if (!current) return undefined;
+  return {
+    text: current.activeForm ?? current.content,
+    done: todos.filter(t => t.status === 'completed').length,
+    total: todos.length,
+  };
+}
+
+// Одна ПАЧКА плана: список пунктов и индекс последнего вызова, который её менял
+// (по нему лента рисует карточку чек-листа ровно там, где пачка закончилась).
+export interface TodoBatch {
+  lastIndex: number;
+  todos: TodoItem[];
+}
+
+// Разобрать ленту на пачки плана. CLI ведёт ОДИН список задач на сессию со сквозной
+// нумерацией, поэтому за длинный чат он разрастается в простыню: у нас доходило до 28
+// пунктов, где реальной работы в каждый момент было 3-6. Режем по естественной границе:
+// новый TaskCreate, пришедший когда все прежние пункты выполнены, начинает новую пачку.
+// Так счётчик показывает текущую работу, а не весь путь сессии, а история не теряется —
+// каждая пачка остаётся в ленте своей карточкой.
+//
+// Понимает оба механизма CLI: старый TodoWrite (каждый вызов несёт полный список —
+// последний побеждает, пачка всегда одна) и новые TaskCreate/TaskUpdate (инкрементальные).
+export function computeTodoBatches(items: ChatItem[]): TodoBatch[] {
+  const batches: TodoBatch[] = [];
   let todos: TodoItem[] = [];          // из TodoWrite (полный список, последний побеждает)
-  const tasks = new Map<string, TodoItem>(); // из TaskCreate/TaskUpdate, ключ — taskId
+  let todoWriteIdx = -1;
+  let tasks = new Map<string, TodoItem>(); // из TaskCreate/TaskUpdate, ключ — taskId
+  let tasksIdx = -1;
   let taskAutoId = 0; // запасная нумерация, если id не удалось достать из результата
 
-  for (const it of items) {
-    if (it.kind !== 'tool_use') continue;
+  // Пачка закрывается и уезжает в историю; сквозные id CLI не переиспользуются,
+  // поэтому TaskUpdate по пункту прошлой пачки просто не найдёт цели — и не должен.
+  const flush = () => {
+    if (tasks.size) batches.push({ lastIndex: tasksIdx, todos: [...tasks.values()] });
+    tasks = new Map();
+  };
+
+  // Приоритет источника: если в ленте есть план хода встроенным TaskCreate — задачи
+  // ПРОДУКТОВОГО трекера (mcp__tasks__*) сюда не подмешиваем. Ветки mcp появились как
+  // компенсация, когда встроенные тулы были запрещены наглухо (тот же день, что и запрет);
+  // теперь план хода вернулся в обычные чаты, и смешивать два разных смысла в одном
+  // чек-листе незачем — задачи пользователя видны в своей панели. Фолбэк на mcp остаётся
+  // для сессий-исполнителей (там план-тулы закрыты) и для старых транскриптов.
+  const hasBuiltInPlan = items.some(it => it.kind === 'tool_use' && it.name === 'TaskCreate');
+
+  items.forEach((it, i) => {
+    if (it.kind !== 'tool_use') return;
+    if (hasBuiltInPlan && it.name.startsWith('mcp__tasks__')) return;
     if (it.name === 'TodoWrite') {
       const t = (it.input as { todos?: unknown } | null)?.todos;
       if (Array.isArray(t)) {
         const parsed = t.filter((x): x is TodoItem =>
           !!x && typeof x === 'object' && typeof (x as TodoItem).content === 'string');
-        if (parsed.length) todos = parsed;
+        if (parsed.length) { todos = parsed; todoWriteIdx = i; }
       }
     } else if (it.name === 'TaskCreate') {
       const o = it.input as { subject?: unknown; description?: unknown; activeForm?: unknown } | null;
@@ -201,6 +263,8 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
         ? o.subject
         : typeof o?.description === 'string' ? o.description : '';
       if (subject) {
+        // Граница пачки: прошлая работа доделана целиком, этот пункт открывает новую
+        if (tasks.size && [...tasks.values()].every(t => t.status === 'completed')) flush();
         taskAutoId += 1;
         // Сервер отвечает "Task #N created successfully: …" — берем id оттуда;
         // пока результата нет (стрим) — порядковый номер (в свежей сессии совпадает)
@@ -211,6 +275,7 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
           status: 'pending',
           activeForm: typeof o?.activeForm === 'string' ? o.activeForm : undefined,
         });
+        tasksIdx = i;
       }
     } else if (it.name === 'TaskUpdate') {
       const o = it.input as { taskId?: unknown; status?: unknown; subject?: unknown } | null;
@@ -224,6 +289,7 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
           if (typeof o?.subject === 'string' && o.subject) ex.content = o.subject;
           if (typeof o?.status === 'string' && o.status) ex.status = o.status;
         }
+        tasksIdx = i;
       }
     } else if (it.name === 'mcp__tasks__tasks_create') {
       // Создание задачи в прикладном трекере через MCP
@@ -233,6 +299,7 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
       if (title) {
         taskAutoId += 1;
         tasks.set(`mcp-${taskAutoId}`, { content: title, status: 'pending' });
+        tasksIdx = i;
       }
     } else if (it.name === 'mcp__tasks__tasks_update') {
       // Обновление статуса задачи: ищем по совпадению заголовка в созданных MCP-задачах
@@ -245,15 +312,25 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
           if (t.content === title) {
             if (status === 'done' || status === 'completed') t.status = 'completed';
             else if (status === 'in_progress') t.status = 'in_progress';
+            tasksIdx = i;
             break;
           }
         }
       }
     }
-  }
+  });
+  flush();
 
   // Механизмы не смешиваются в одной сессии; если вдруг оба — Task* новее и точнее
-  return tasks.size ? [...tasks.values()] : todos;
+  if (!batches.length && todos.length) batches.push({ lastIndex: todoWriteIdx, todos });
+  return batches;
+}
+
+// Актуальный список плана — ТЕКУЩАЯ (последняя) пачка. По нему считается пилюля прогресса
+// и подпись «на каком я шаге»; прошлые пачки живут в ленте своими карточками.
+export function computeTodos(items: ChatItem[]): TodoItem[] {
+  const batches = computeTodoBatches(items);
+  return batches.length ? batches[batches.length - 1].todos : [];
 }
 
 // Имена инструментов запуска субагентов и шеллов (регистр в разных версиях CLI плавает)
@@ -502,28 +579,6 @@ export function computeArtifacts(items: ChatItem[], rootPath: string, executingT
     comments: [...comments.values()],
     executingTask,
   };
-}
-
-// Счётчик файлов для бейджа в шапке — ровно то же множество, что и список «Файлы»
-// (изменённые + упомянутые в тексте), чтобы число на бейдже совпадало со вкладкой.
-// Отдельно от computeArtifacts: не собирает ссылки/план (без new URL), только ключи файлов.
-export function countFiles(items: ChatItem[], rootPath: string): number {
-  const keys = new Set<string>();
-  for (const it of items) {
-    if (it.kind === 'file_changed') {
-      keys.add(it.path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase());
-    } else if (it.kind === 'tool_use' && WRITE_TOOLS.has(it.name)) {
-      const raw = extractToolPath(it.input);
-      const rel = raw ? toRelative(raw, rootPath) : null;
-      if (rel) keys.add(rel.toLowerCase());
-    } else if (it.kind === 'text') {
-      for (const p of extractTextFilePaths(it.text)) {
-        const c = classifyTextPath(p, rootPath);
-        if (c) keys.add(c.path.toLowerCase());
-      }
-    }
-  }
-  return keys.size;
 }
 
 // Хук: подписывается на ленту активной сессии и мемоизует артефакты.

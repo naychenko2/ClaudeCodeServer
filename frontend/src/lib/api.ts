@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -255,6 +255,12 @@ export const api = {
   glif: {
     // Агрегаты расхода приходят сразу за три окна (24ч/7д/30д) — параметра периода нет
     account: () => request<GlifAccountResponse>('/glif/account'),
+  },
+
+  // Деньги Yandex Cloud: остаток на счёте (только админу) и расход на озвучку за N дней —
+  // его продукт считает сам, у Яндекса такого разреза в API нет
+  yandex: {
+    account: (days = 30) => request<YandexAccountResponse>(`/yandex/account?days=${days}`),
   },
 
   // Генератор картинок инстанса ПО МЕСТАМ (иконка проекта, аватар персоны): у каждого
@@ -1050,6 +1056,17 @@ export const api = {
       request<void>(`/personas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`, {
         method: 'DELETE',
       }),
+    // Подбор голоса по характеру. Без id: характер в момент подбора ещё не сохранён, а у
+    // новой персоны id нет вовсе. voice=null в ответе — модель никого не выбрала (не ошибка)
+    suggestVoice: (req: { name?: string; role?: string; description?: string; character?: string; tone?: string }) =>
+      request<{ voice: string | null; role: string | null }>('/personas/ai/voice', {
+        method: 'POST', body: JSON.stringify(req),
+      }),
+    // Личный голос персоны; пустой объект снимает его — персона снова говорит голосом инстанса
+    setVoice: (id: string, voice: PersonaVoice | null) =>
+      request<Persona>(`/personas/${encodeURIComponent(id)}/voice`, {
+        method: 'PUT', body: JSON.stringify(voice ?? {}),
+      }),
     // Полная замена набора привязок одним запросом (атомарно на бэке) — напр. пресет «Минимум»
     setBindings: (id: string, bindings: PersonaBindingDto[]) =>
       request<PersonaBinding[]>(`/personas/${encodeURIComponent(id)}/bindings`, {
@@ -1156,7 +1173,7 @@ export const api = {
         // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
         body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
@@ -1223,13 +1240,16 @@ export const api = {
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
+    // id чатов (в т.ч. проектных), где прямо сейчас работают фоновые агенты. Снимок нужен
+    // потому, что событие bg_agents_presence приходит только на переходе 0↔N
+    agentsPresence: () => request<string[]>('/chats/agents-presence'),
     get: (id: string) => request<Session>(`/chats/${id}`),
     create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
       }),
-    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean }) =>
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/chats/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),
@@ -1899,6 +1919,13 @@ export const api = {
       }),
     remove: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/sync?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  },
+
+  tts: {
+    // Каталог голосов для формы выбора: канонические имена, подписи, пол и амплуа.
+    // live — мимо офлайн-кеша: сразу после того, как ключ SpeechKit пропишут в конфиг,
+    // из IndexedDB прилетал бы устаревший configured: false и форма врала бы про синтез
+    voices: () => request<TtsVoicesResponse>('/tts/voices', { live: true }),
   },
 
   reader: {

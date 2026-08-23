@@ -34,7 +34,7 @@ import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
-import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
+import { getWallEntry, getWallReturn, isWallActive, setWallActive, setWallEntry, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
@@ -749,7 +749,17 @@ export default function App() {
   // проектов уводит другой жест — клик по подсвеченной пилюле «Проекты» (switchHubTab).
   // Проекта нет (пришли по диплинку #/wall) — остаётся список.
   const exitWall = () => {
+    // Метку входа читаем ДО setWallActive(false): он её и стирает
+    const entry = getWallEntry()
     setWallActive(false)
+    // Вошли с дашборда — туда и возвращаемся: зона проектов тут ни при чём,
+    // человек в ней не был
+    if (entry === 'home') {
+      localStorage.setItem(HUB_TAB_KEY, 'home')
+      setHubTab('home')
+      navPush({ screen: 'home' })
+      return
+    }
     localStorage.setItem(HUB_TAB_KEY, 'projects')
     setHubTab('projects')
     navPush(project ? { screen: 'project', project, view: 'sidebar', file: null } : { screen: 'projects' })
@@ -763,6 +773,17 @@ export default function App() {
     // ниже, чтобы покрыть каждый путь ухода.
     if (t !== 'projects' && (hubTab === 'projects' || hubTab === 'wall')) {
       setWallReturn(hubTab === 'wall' ? 'wall' : project ? 'workspace' : 'list')
+    }
+    // Вход НА стену: запоминаем раздел-источник, чтобы «Выйти со стены» вернуло
+    // именно туда (exitWall). Пишем здесь, а не в точке входа, — так покрыты все
+    // пути разом: виджет дашборда, док воркспейса, AI-хаб.
+    if (t === 'wall' && hubTab !== 'wall') {
+      setWallEntry(hubTab === 'home' ? 'home' : 'projects')
+      // Вход с дашборда оставил бы wallReturn пустым, а ветка «Проекты при активной
+      // стене» ниже трактует пустоту как «вернуть на стену» — и пилюля уводила бы
+      // туда человека, который в зоне проектов вообще не был. Пишем то же, что
+      // записал бы уход с дашборда в любой другой раздел.
+      if (hubTab === 'home') setWallReturn(project ? 'workspace' : 'list')
     }
     // Покидаем «Аналитику токенов» — чистим контекст открытия, чтобы следующий
     // вход через меню/таб открыл чистый обзор (виджет/бейдж выставят свежий ctx)

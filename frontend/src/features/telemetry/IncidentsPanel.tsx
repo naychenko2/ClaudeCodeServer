@@ -640,8 +640,11 @@ function ChatRow({ chat, isMobile, onOpen }: {
   isMobile: boolean;
   onOpen?: () => void;
 }) {
+  // «Указан алертом» вместо «падений 0»: у правил с разрезом по чату (например «Ходы
+  // массово встали») ходы успешные, просто долгие, и ноль падений тут ничего не значит.
   const meta = [
-    `падений ${chat.failures}`,
+    chat.fromAlert ? 'указан алертом' : null,
+    chat.failures > 0 ? `падений ${chat.failures}` : null,
     chat.totalTokens > 0 ? `${chat.totalTokens} токенов` : null,
     chat.mcpFailures.length > 0 ? `MCP: ${chat.mcpFailures.length}` : null,
   ].filter(Boolean).join(' · ');

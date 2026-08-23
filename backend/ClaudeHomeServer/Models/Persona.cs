@@ -172,6 +172,9 @@ public class Persona
     // Для Scope == Project — id проекта, к которому привязана персона
     public string? ProjectId { get; set; }
     public PersonaAvatar Avatar { get; set; } = new();
+    // Как персона звучит в голосовом режиме; null — голосом инстанса из конфига.
+    // Аддитивное nullable-поле: старый personas.json читается без миграции
+    public PersonaVoice? Voice { get; set; }
     // Возможности персоны (ключи: tasks, notes, web). null — без ограничений
     // (как раньше, по фич-флагам владельца); список — только перечисленные.
     public List<string>? Tools { get; set; }

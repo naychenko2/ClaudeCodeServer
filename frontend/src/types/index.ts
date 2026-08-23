@@ -953,8 +953,10 @@ export type ServerMessage = { sessionId: string } & (
   // Пульс волны командной реализации (Э2 КР-наблюдаемости). Эфемерное: в ленту НЕ
   // попадает и в историю НЕ пишется, состояние держится в ChatState.teamWavePulse.
   // Список задач приходит отдельным REST-снапшотом (/chats/{id}/team-wave-snapshot) при
-  // открытии поповера бейджа — иначе пришлось бы раздувать каждое событие массивом
-  | { type: 'team_wave_pulse'; stage: 'wave'; waveNumber: number; plannedWaves: number; tasksActive: number; tasksTotal: number; lastActivityAt: string; quietSeconds: number; liveness: TeamWaveLiveness }
+  // открытии поповера бейджа — иначе пришлось бы раздувать каждое событие массивом.
+  // stage: бэк шлёт пульс и в финальной проверке — она тоже работа команды и может
+  // «зависнуть», отбрасывать её WS-события как мусор было ошибкой
+  | { type: 'team_wave_pulse'; stage: 'wave' | 'checking'; waveNumber: number; plannedWaves: number; tasksActive: number; tasksTotal: number; lastActivityAt: string; quietSeconds: number; liveness: TeamWaveLiveness }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
   // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
@@ -1408,9 +1410,11 @@ export interface TeamImplementState extends SessionTeamImplement {
 // стадию — обратная совместимость.
 export type TeamWaveLiveness = 'alive' | 'quiet' | 'stalled' | 'dead';
 
-// То, что шлёт бэкенд в WS-событии team_wave_pulse (краткая форма, без списка задач)
+// То, что шлёт бэкенд в WS-событии team_wave_pulse (краткая форма, без списка задач).
+// stage ограничен двумя значениями: волна исполнителей и финальная проверка — обе стадии
+// могут «дышать» (задачи ещё крутятся), остальные стадии пульса не шлют
 export interface TeamWavePulse {
-  stage: 'wave';
+  stage: 'wave' | 'checking';
   waveNumber: number;
   plannedWaves: number;
   tasksActive: number;

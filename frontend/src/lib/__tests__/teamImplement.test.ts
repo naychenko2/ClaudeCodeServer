@@ -603,4 +603,36 @@ describe('пульс волны: эфемерность — событие не 
     expect(s.teamWavePulse?.liveness).toBe('stalled');
     expect(s.teamWavePulse?.quietSeconds).toBe(2400);
   });
+
+  // stage приходит с бэка: пульс шлётся и в финальной проверке. Раньше редьюсер
+  // хардкодил stage: 'wave' и отбрасывал всё в checking — это лишало поповер
+  // и бейдж актуального состояния при зависшей проверке
+  it('stage берётся из события, а не хардкодится', () => {
+    const after: ChatState = applyServerMessage(
+      applyServerMessage(initialChatState(), waveState()),
+      wavePulse({ stage: 'checking' }),
+    );
+    expect(after.teamWavePulse?.stage).toBe('checking');
+  });
+});
+
+// Подпись пульса различается по стадии: на проверке пишем «проверка», без номера
+// волны — иначе бейдж при зависшей проверке показывал бы чужой «волна 1/2»
+describe('teamPulseBadgeText под стадию', () => {
+  const state = {} as SessionTeamImplement;
+  const basePulse = {
+    stage: 'wave' as const, waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5,
+    lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds: 240, liveness: 'alive' as TeamWaveLiveness,
+  };
+
+  it('на волне подпись включает номер волны', () => {
+    expect(teamPulseBadgeText(state, basePulse)).toContain('волна 1 из 2');
+  });
+
+  it('на проверке подпись — «проверка», номера волны нет', () => {
+    const text = teamPulseBadgeText(state, { ...basePulse, stage: 'checking' });
+    expect(text).toContain('проверка');
+    expect(text).not.toContain('волна');
+  });
 });

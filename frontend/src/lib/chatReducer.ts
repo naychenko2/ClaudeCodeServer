@@ -841,11 +841,12 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // Пульс волны — эфемерное состояние бейджа/поповера. В ленту и историю НЕ
       // пишем: это оперативный «дышит ли штаб», а не содержательный элемент чата.
       // Просто заменяем последний пульс на свежий — задачи подтягиваются отдельным
-      // REST-запросом при открытии поповера
+      // REST-запросом при открытии поповера. stage приходит с бэка: пульс шлётся
+      // и в финальной проверке (Э2 — финальная проверка тоже работа команды)
       return {
         ...prev,
         teamWavePulse: {
-          stage: 'wave',
+          stage: msg.stage,
           waveNumber: msg.waveNumber,
           plannedWaves: msg.plannedWaves,
           tasksActive: msg.tasksActive,

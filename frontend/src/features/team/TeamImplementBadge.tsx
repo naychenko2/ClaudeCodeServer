@@ -13,7 +13,7 @@ import {
   TEAM_IMPLEMENT_NO_CODE_ON, TEAM_IMPLEMENT_NO_CODE_OFF, TEAM_IMPLEMENT_MODE_HELD,
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
   teamPulseTone, teamPulseBadgeText, teamPulseBadgeShort,
-  teamPulseMeaning, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
+  teamPulseMeaning, teamPulseStage, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
   TEAM_IMPLEMENT_SHORT_NAME,
 } from '../../lib/teamImplement';
 import { teamMechanic } from './teamMechanics';
@@ -26,9 +26,9 @@ import type { Mode } from '../../lib/modes';
 //   work  (accent)  — планирование / волна N из M / проверка — команда работает
 //   wait  (warning) — ждёт подтверждения / нужно решение — практика стоит и ждёт человека
 //   idle  (muted)   — ждёт задачу — итерация закрыта, режим жив
-// На стадии волны при ЖИВОМ пульсе (Э2) тон дополнительно корректируется по liveness:
-// alive — work, quiet — warning, stalled/dead — danger. Без пульса (бэк старый) —
-// тон остаётся прежним, обратная совместимость
+// На стадии волны/проверки при ЖИВОМ пульсе (Э2) тон дополнительно корректируется
+// по liveness: alive — work, quiet — warning, stalled/dead — danger. Без пульса
+// (бэк старый) — тон остаётся прежним, обратная совместимость
 // Клик по бейджу — поповер (десктоп) / шторка (мобила) с описанием и выключением режима;
 // выключение — с подтверждением. Чип «Авто» переключается одним кликом без подтверждения.
 export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId, personas, onToggleAuto, onDisable, onStop }: {
@@ -39,8 +39,9 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   chatMode?: Mode;
   isMobile?: boolean;
   // Эфемерный пульс волны (Э2 КР-наблюдаемости). undefined — пульса ещё не было
-  // (бэк старый, чат открыт до первой минуты волны). При наличии в стадии wave бейдж
-  // показывает активность («2/5 · 4 мин»), тон пересчитывается по liveness
+  // (бэк старый, чат открыт до первой минуты волны). При наличии в стадии волны/
+  // проверки бейдж показывает активность («2/5 · 4 мин»), тон пересчитывается по
+  // liveness
   pulse?: TeamWavePulse | null;
   // sessionId нужен для refetch снапшота при открытии поповера — список задач волны
   // самодостаточен внутри бейджа, чтобы не раздувать пропсы родителя. Без sessionId
@@ -72,7 +73,7 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   // закроется и поповер, и обновление уйдёт в никуда. Не критично: новый открытие
   // подтянет свежее
   useEffect(() => {
-    if (!infoOpen || !sessionId || state.stage !== 'wave') return;
+    if (!infoOpen || !sessionId || !teamPulseStage(state.stage)) return;
     let cancelled = false;
     api.chats.getTeamWaveSnapshot(sessionId)
       .then(s => { if (!cancelled) setSnapshot(s); })
@@ -80,13 +81,13 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
     return () => { cancelled = true; };
   }, [infoOpen, sessionId, state.stage]);
 
-  // Эффективный тон на стадии волны: пульс живого бэка перебивает дефолтный тон стадии.
-  // Вне стадии волны или без пульса — как раньше, по стадии
+  // Эффективный тон на стадии волны/проверки: пульс живого бэка перебивает дефолтный
+  // тон стадии. Вне этих стадий или без пульса — как раньше, по стадии
   const stageTone = teamImplementTone(state.stage);
   const effectiveTone: 'work' | 'wait' | 'idle' | 'warning' | 'danger' =
-    state.stage === 'wave' && pulse ? teamPulseTone(pulse.liveness) : stageTone;
+    teamPulseStage(state.stage) && pulse ? teamPulseTone(pulse.liveness) : stageTone;
 
-  // Полная и короткая подпись бейджа при живом пульсе на стадии волны
+  // Полная и короткая подпись бейджа при живом пульсе на стадии волны/проверки
   const pulseFullText = pulse ? teamPulseBadgeText(state, pulse) : null;
   const pulseShortText = pulse ? teamPulseBadgeShort(pulse) : null;
 
@@ -124,10 +125,10 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   })();
 
   // Текст и тултип бейджа с учётом пульса
-  const badgeText = state.stage === 'wave' && pulse
+  const badgeText = teamPulseStage(state.stage) && pulse
     ? (isMobile ? (pulseShortText ?? text) : (pulseFullText ?? text))
     : text;
-  const badgeTitle = state.stage === 'wave' && pulse
+  const badgeTitle = teamPulseStage(state.stage) && pulse
     ? `${fullText} — ${teamPulseMeaning(pulse.liveness)}`
     : `${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`;
 
@@ -140,15 +141,16 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
         {TEAM_IMPLEMENT_DESCRIPTION}
       </p>
       {/* Пульс волны: блок «Что это значит» — объясняет состояние человеческим языком.
-          Только на стадии волны при живом пульсе. Тон по liveness: alive — спокойный,
+          На стадии волны/проверки при живом пульсе. Тон по liveness: alive — спокойный,
           quiet — янтарный (это нормально), stalled/dead — красный (нужно внимание) */}
-      {state.stage === 'wave' && pulse && (
+      {teamPulseStage(state.stage) && pulse && (
         <PulseBlock pulse={pulse} tone={effectiveTone} />
       )}
       {/* Список задач волны: refetch снапшота при КАЖДОМ открытии (живёт в родителе —
           useTeamWaveSnapshot в ChatPanel). Здесь только рендер: задачи, исполнители,
-          статусы, сколько минут в работе. Без снапшота (бэк старый) — пропускаем */}
-      {state.stage === 'wave' && snapshot && (
+          статусы, сколько минут в работе. Без снапшота (бэк старый) — пропускаем.
+          На проверке список тоже показывается — задачи проверки идут тем же путём */}
+      {teamPulseStage(state.stage) && snapshot && (
         <WaveTaskList snapshot={snapshot} personas={personas ?? {}} />
       )}
       {/* Правило «любая работа — через задачу»: настройка режима, менять её на ходу нельзя —
@@ -327,8 +329,8 @@ function PulseBlock({ pulse, tone }: {
   );
 }
 
-// Список задач волны. Только для стадии wave и при наличии снапшота: бэк старый
-// (без пульса) сюда не доходит — обратная совместимость
+// Список задач волны. Только для стадии волны/проверки и при наличии снапшота: бэк
+// старый (без пульса) сюда не доходит — обратная совместимость
 function WaveTaskList({ snapshot, personas }: {
   snapshot: TeamWaveSnapshot;
   personas: Record<string, Persona>;

@@ -84,20 +84,30 @@ export function teamPulseMeaning(liveness: TeamWaveLiveness): string {
   }
 }
 
-// Полная подпись бейджа при живом пульсе на стадии волны.
+// Стадии, на которых пульс волны может приходить: волна исполнителей и финальная
+// проверка — обе «дышат» (задачи крутятся). На остальных стадиях пульса нет, и
+// бейдж показывает только подпись стадии — единая точка, чтобы не дублировать
+// условие в гардах и стилях
+export function teamPulseStage(stage: TeamImplementStage): boolean {
+  return stage === 'wave' || stage === 'checking';
+}
+
+// Полная подпись бейджа при живом пульсе на стадии волны/проверки.
 // «КР · волна 1 · 2/5 · активность 4 мин назад» — plannedWaves=0 даёт просто «волна 1»
-// (план ещё не запускался, как в teamImplementStageLabel). state не используется
-// напрямую — оставлен в сигнатуре как единая точка для будущих полей (например,
-// отдельный таймстамп активности по стадии), чтобы вызов не ломался при появлении
-// дополнительных данных
+// (план ещё не запускался, как в teamImplementStageLabel). На стадии проверки номер
+// волны не нужен — пишем «проверка», тон активности тот же по liveness. state не
+// используется напрямую — оставлен в сигнатуре как единая точка для будущих полей
 export function teamPulseBadgeText(_state: SessionTeamImplement, pulse: TeamWavePulse): string {
-  const stage = teamImplementStageLabel('wave', pulse.waveNumber, pulse.plannedWaves);
+  const stage = pulse.stage === 'checking'
+    ? teamImplementStageLabel('checking', 0, 0)
+    : teamImplementStageLabel('wave', pulse.waveNumber, pulse.plannedWaves);
   return `${teamMechanicShort} · ${stage} · ${pulse.tasksActive}/${pulse.tasksTotal} · ${teamPulseActivityLabel(pulse)}`;
 }
 
 // Короткая форма для узкой ширины/мобилы: «КР · 2/5 · 4 мин».
 // Сохраняем главное — сколько задач идёт и тон активности, без номера волны и
-// приставки «волна» — на 320px строка должна умещаться целиком
+// приставки «волна» — на 320px строка должна умещаться целиком. На проверке формат
+// тот же, что и на волне (счётчик задач/тон — основная информация)
 export function teamPulseBadgeShort(pulse: TeamWavePulse): string {
   const mins = minutesFromSeconds(pulse.quietSeconds);
   switch (pulse.liveness) {

@@ -33,8 +33,8 @@ public static class SpecialtyPromptPresets
     [
         new("history", "История решений",
             "Сценарии «когда и как использовать досье» (dossier_lookup / dossier_get)."),
-        new("codeGraph", "Граф кода",
-            "Сценарии codegraph: find «где объявлен», neighbors «что сломается», hubs «с чего начать»."),
+        new("codeGraph", "Навигация по коду",
+            "Сценарии навигации: codegraph (типы и связность), LSP (символ и позиция), Grep (текст)."),
         new("processes", "Процессы роли (DoD)",
             "Что сделать перед сдачей результата (сборка/тесты/lint) и куда его складывать."),
         new("roleRules", "Правила роли",
@@ -198,67 +198,85 @@ public static class SpecialtyPromptPresets
             "Ссылайся на паспорт, а не на пересказ.",
     };
 
+    // Секция codeGraph = «Навигация по коду» (ADR-011 шаг 3): развёрнутые сценарии трёх
+    // уровней — codegraph (типы и связность) + LSP (символ и позиция) + Grep (текст).
+    // Строки уровней LSP берутся из CodeNavigationPrompts (единая точка истины), роль
+    // добавляет только языковую привязку и собственный акцент. Глобальный короткий блок
+    // ходов страхует покрытие: секция без специальности не едет вовсе.
+
     private const string CodeGraphFallback =
-        "Граф кода — карта типов и связей проекта.\n" +
-        "Когда звать: «где объявлен X» — codegraph_find; «что связано с X» — codegraph_neighbors; обзор подсистемы — codegraph_hubs.\n" +
-        "Структуру кода уточняй графом, а не пересказом из памяти. " +
+        "Навигация по коду — три уровня, не взаимозаменяемы: codegraph (типы и связность), LSP (символ и позиция), Grep (текст).\n" +
+        "Когда звать: «где объявлен X» — codegraph_find; «что связано с X» — codegraph_neighbors; обзор подсистемы — codegraph_hubs. " +
+        Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+        "Структуру кода уточняй инструментами, а не пересказом из памяти. " +
         "Grep — только для текстовых вхождений и файлов вне графа (конфиги, .md, разметка).";
 
     private static readonly Dictionary<PersonaSpecialty, string> CodeGraphTexts = new()
     {
         [PersonaSpecialty.Executor] =
-            "Граф кода — карта типов и связей проекта; текстовый поиск тут промахивается.\n" +
+            "Навигация по коду — три уровня, не взаимозаменяемы; текстовый поиск по символам промахивается.\n" +
             "Когда звать:\n" +
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа, без шума совпадений;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие Calls/Implements/References;\n" +
-            "• «с чего начать в незнакомом модуле» — codegraph_hubs.\n" +
+            "• «с чего начать в незнакомом модуле» — codegraph_hubs;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            Prompts.CodeNavigationPrompts.PresetRenameMoment + " " +
             "Grep — только для текстовых вхождений и файлов вне графа (конфиги, .md, разметка).",
         [PersonaSpecialty.BackendExecutor] =
-            "Граф кода серверной части — карта типов и связей; перед правкой уточняй по графу, а не по догадке.\n" +
+            "Навигация по серверному коду (.cs): codegraph — типы и связности, LSP — символ и позиция.\n" +
             "Когда звать:\n" +
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие Calls/Implements/References;\n" +
-            "• незнакомая подсистема — codegraph_hubs: точки входа.\n" +
+            "• незнакомая подсистема — codegraph_hubs: точки входа;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + " Методы и поля .cs — LSP, не текстовый поиск.\n" +
+            Prompts.CodeNavigationPrompts.PresetRenameMoment + " " +
             "Grep — только для текстовых вхождений и файлов вне графа.",
         [PersonaSpecialty.FrontendExecutor] =
-            "Граф кода фронта — карта типов и связей; перед правкой уточняй по графу, а не по догадке.\n" +
+            "Навигация по коду фронта (.tsx/.ts): codegraph — типы и связности, LSP — символ и позиция.\n" +
             "Когда звать:\n" +
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие Calls/Implements/References;\n" +
-            "• незнакомый модуль — codegraph_hubs: точки входа.\n" +
+            "• незнакомый модуль — codegraph_hubs: точки входа;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + " Компоненты и хуки .tsx — LSP, не текстовый поиск.\n" +
+            Prompts.CodeNavigationPrompts.PresetRenameMoment + " " +
             "Grep — только для текстовых вхождений и файлов вне графа.",
         [PersonaSpecialty.DevopsExecutor] =
-            "Граф кода — карта типов и связей проекта; текстовый поиск тут промахивается.\n" +
+            "Навигация по коду — три уровня, не взаимозаменяемы; текстовый поиск по символам промахивается.\n" +
             "Когда звать:\n" +
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие связи;\n" +
-            "• незнакомая подсистема — codegraph_hubs: точки входа.\n" +
+            "• незнакомая подсистема — codegraph_hubs: точки входа;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
             "Grep — только для текстовых вхождений и файлов вне графа.",
         [PersonaSpecialty.Reviewer] =
-            "Граф кода — карта типов и связей проекта.\n" +
+            "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
             "Когда звать:\n" +
             "• оценивая влияние изменений — codegraph_neighbors по тронутым типам: кто ещё зависит;\n" +
             "• «где объявлен X» — codegraph_find: точное место и вид типа;\n" +
-            "• незнакомая подсистема — codegraph_hubs.\n" +
-            "Находку «правка заденет N мест» подтверждай графом, а не прикидкой.",
+            "• незнакомая подсистема — codegraph_hubs;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            "Находку «правка заденет N мест» подтверждай инструментом, а не прикидкой.",
         [PersonaSpecialty.Tester] =
-            "Граф кода — карта типов и связей проекта.\n" +
+            "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
             "Когда звать:\n" +
             "• «что затронет эта правка» — codegraph_neighbors: границы влияния для объёма проверки;\n" +
             "• «где объявлен X» — codegraph_find;\n" +
-            "• незнакомая подсистема — codegraph_hubs: точки входа.\n" +
+            "• незнакомая подсистема — codegraph_hubs: точки входа;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
             "Проверяй не только изменённый файл, но и его входящих соседей.",
         [PersonaSpecialty.Planner] =
-            "Граф кода — карта типов и связей проекта.\n" +
+            "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
             "Когда звать:\n" +
             "• «с чего начать» в незнакомом модуле — codegraph_hubs;\n" +
             "• «где объявлен X» — codegraph_find: точное место;\n" +
-            "• «что связано с X» — codegraph_neighbors.\n" +
-            "План по коду строй от графа, а не от имён файлов.",
+            "• «что связано с X» — codegraph_neighbors;\n" +
+            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            "План по коду строй от графа и символов, а не от имён файлов.",
         [PersonaSpecialty.Analyst] =
-            "Граф кода — карта типов и связей проекта.\n" +
-            "Когда звать: карта подсистемы — codegraph_hubs; «где объявлен термин» — codegraph_find; связи понятия — codegraph_neighbors.\n" +
-            "Архитектуру подтверждай графом, а не догадкой.",
+            "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
+            "Когда звать: карта подсистемы — codegraph_hubs; «где объявлен термин» — codegraph_find; связи понятия — codegraph_neighbors. " +
+            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            "Архитектуру подтверждай инструментом, а не догадкой.",
     };
 
     private const string ProcessesFallback =

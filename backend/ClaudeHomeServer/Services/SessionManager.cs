@@ -405,6 +405,10 @@ public class SessionManager : IDisposable
     private readonly Mcp.McpOAuthService? _mcpOAuth;
     // Recall паспортов изменений (этап 2, ADR-004 §5); null — в тестах, секции паспортов нет
     private readonly Dossiers.DossierRecallService? _dossierRecall;
+    // Резолвер секций промпта специальности (план «Секции промптов», флаг
+    // specialty-prompt-sections); null — в тестах, секция prompt-sections в промпт не попадает
+    // (перестановка блока досье в dossier-recall от него не зависит — только от флага).
+    private readonly SpecialtySettingsStore? _specialtySettings;
     // Кеш якорей «файлы предыдущего хода» для recall паспортов: sessionId → (отпечаток истории,
     // файлы). Пересбор — только когда файл истории сменился (LastWriteUtc), не на каждый ход.
     private readonly Dictionary<string, (DateTime? Stamp, List<string> Files)> _dossierAnchorCache = new();
@@ -477,11 +481,15 @@ public class SessionManager : IDisposable
         // модели — ветка локального голосового хода (chat-voice). Без них разговор
         // идёт через claude CLI как раньше.
         Llm.LocalActionRouter? router = null,
-        Llm.OllamaClient? ollama = null)
+        Llm.OllamaClient? ollama = null,
+        // Опционально (в тестах не передаётся): резолвер секций промпта специальности
+        // (план «Секции промптов») — без него секция prompt-sections не собирается
+        SpecialtySettingsStore? specialtySettings = null)
     {
         _subagentRuns = subagentRuns;
         _router = router;
         _ollama = ollama;
+        _specialtySettings = specialtySettings;
 
         _skills = skills;
         _mcpRegistry = mcpRegistry;
@@ -763,11 +771,16 @@ public class SessionManager : IDisposable
                         text);
                 }
 
-                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore, dossier);
+                // Перестановка блока досье в свою секцию (план «Секции промптов» этап 3) —
+                // за тем же флагом, что и вклейка prompt-sections (dark launch единым флагом):
+                // выключен — досье остаётся ВНУТРИ recall-memory, как до фичи.
+                var splitDossier = _flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections);
+                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore,
+                    dossier, splitDossier);
                 var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
                 if (completed != recallTask) return null;   // таймаут — ход без recall
                 var recall = await recallTask;
-                if (recall?.Text is null) return null;
+                if (recall?.Text is null && recall?.DossierText is null) return null;
                 // Манифест: hits личной памяти + команды проекта + паспорта → айтемы (F3).
                 // Паспорта — видимость для человека: видно, какие записи истории решений
                 // реально учтены персоной в этом ходу.
@@ -776,7 +789,7 @@ public class SessionManager : IDisposable
                     .Concat(recall.DossierHits.Select(d => new RecallItem("dossier", d.Id,
                         $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                     .ToList();
-                return new RecallBlock(recall.Text, items);
+                return new RecallBlock(recall.Text, items, recall.DossierText);
             }
             catch (Exception ex)
             {
@@ -2112,6 +2125,29 @@ public class SessionManager : IDisposable
         return _ => _codeGraphPrompt.GetSliceAsync(rootPath, fallbackRoot);
     }
 
+    // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+    // specialty-prompt-sections): сценарные инструкции «когда и как» по роли (история, граф
+    // кода, процессы, правила роли) — резолвер EffectivePromptSections (SpecialtySettingsStore,
+    // этап 2). Текст хода игнорируется (секции статичны для owner+специальности). null —
+    // провайдер не injecting (тесты), нет владельца/персоны, специальность none или групповой
+    // чат (несколько собеседников — контракт плана: секции только у персонных сессий).
+    // Гейт по флагу — ВНУТРИ, на каждый ход (переключение действует сразу, как у dossier).
+    private Func<string?, Task<string?>>? BuildPromptSectionsProvider(
+        string? ownerId, Session session, Persona? persona)
+    {
+        if (ownerId is null || _specialtySettings is null || persona is null) return null;
+        if (persona.Specialty == PersonaSpecialty.None) return null;
+        if (session.Participants is { Count: > 1 }) return null;
+        return _ =>
+        {
+            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections))
+                return Task.FromResult<string?>(null);
+            var sections = _specialtySettings.EffectivePromptSections(ownerId, persona.Specialty);
+            var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
+            return Task.FromResult(text);
+        };
+    }
+
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
     // процесс пересоздаётся при следующем сообщении с актуальным контекстом,
     // транскрипт продолжается через --resume (паттерн SetPersona)
@@ -2808,6 +2844,7 @@ public class SessionManager : IDisposable
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             CodeGraphProvider: BuildCodeGraphProvider(ownerId, persona.Persona, rootPath, projectRoot),
+            PromptSectionsProvider: BuildPromptSectionsProvider(ownerId, session, persona.Persona),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
@@ -4134,6 +4171,7 @@ public class SessionManager : IDisposable
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(entry.Info.OwnerId, persona.Persona, rootPath),
+                PromptSectionsProvider: BuildPromptSectionsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
@@ -4174,6 +4212,7 @@ public class SessionManager : IDisposable
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(project.OwnerId, persona.Persona, rootPath, project.RootPath),
+                PromptSectionsProvider: BuildPromptSectionsProvider(project.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),

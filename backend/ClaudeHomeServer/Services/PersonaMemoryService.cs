@@ -435,8 +435,13 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
     // TeamHits — записи памяти команды проекта (③-3.4), попавшие в тот же блок, отдельно от
     // личных hits: это чужой тип данных (TeamMemoryEntry, не PersonaMemoryHit), без scoring.
     // DossierHits — паспорта изменений (этап 2, ADR-004 §5), третий кусок того же блока.
+    // DossierText — блок паспортов ОТДЕЛЬНО от Text: заполнен только при splitDossier=true
+    // (план «Секции промптов» этап 3, флаг specialty-prompt-sections) — секция dossier-recall
+    // вклеивается своим местом в промпте, рядом с секцией «история»; при splitDossier=false
+    // (дефолт, persona_ask и выключенный флаг) досье остаётся ВНУТРИ Text, как до фичи.
     public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits,
-        IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits);
+        IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits,
+        string? DossierText = null);
 
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
@@ -444,8 +449,11 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
     // Text=null — память включена, но подмешивать нечего.
     // dossierRequest — контекст паспортов изменений (проект чата + якоря хода); null —
     // вызов вне проектного контекста (REST-проверка, persona_ask), секции паспортов нет.
+    // splitDossier — вынести блок досье в PersonaRecallResult.DossierText вместо инлайна
+    // в Text (см. комментарий записи выше); false (дефолт) — поведение «как до фичи».
     public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
-        int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null)
+        int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null,
+        bool splitDossier = false)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || !persona.MemoryEnabled) return null;
@@ -525,12 +533,13 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(teamBlock);
         }
-        if (dossierBlock is not null)
+        if (dossierBlock is not null && !splitDossier)
         {
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(dossierBlock);
         }
-        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top, teamHits, dossierHits);
+        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top, teamHits, dossierHits,
+            DossierText: splitDossier ? dossierBlock : null);
     }
 
     // Reinforcement: отметить обращение к записям (LastAccessedAt = now). Dify не трогаем —

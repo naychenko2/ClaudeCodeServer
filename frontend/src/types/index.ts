@@ -1974,11 +1974,13 @@ export interface SpecialtyTemplate {
   disallowedTools: string[] | null;
 }
 
-// Запись каталога специальностей из GET /api/specialties: подписи и эффективный
-// шаблон прав вызывающего (настройки поверх дефолтов кода) приходят с бэкенда.
+// Запись каталога специальностей из GET /api/specialties: подписи, описание (для
+// карточек панели «Инструкции для роли») и эффективный шаблон прав вызывающего
+// (настройки поверх дефолтов кода) приходят с бэкенда.
 export interface SpecialtyCatalogEntry {
   key: PersonaSpecialty;
   label: string;
+  description?: string;
   executorFamily: boolean;
   template: SpecialtyTemplate | null;
 }
@@ -2004,6 +2006,9 @@ export interface ScopedPreset extends ModelRoutePreset {
 // моделей по уровням (ADR-007 §2). Значение ячейки — id модели ИЛИ "preset:{id}";
 // пустая ячейка — «спроси матрицу шире». defaultTier — уровень по умолчанию для
 // персон специальности без своего. Запись в личном слое заменяет глобальную ЦЕЛИКОМ.
+// PromptSections и DefaultBindings — посекочное наследование (отдельный резолв по
+// каждой секции/записи): переопределение одной секции не затирает соседние. Соответствует
+// SpecialtyTemplateSettings на бэке (Services/SpecialtySettingsStore.cs).
 export interface SpecialtyTemplateSettings {
   access: PersonaAccess;
   tools?: string[] | null;
@@ -2012,6 +2017,65 @@ export interface SpecialtyTemplateSettings {
   tierMedium?: string | null;
   tierWeak?: string | null;
   defaultTier?: ModelTierValue | null;
+  // Секции промптов специальности (плана «Секции промптов»): null/[] — слой секций
+  // не задаёт, наследование вниз (owner → user → global → дефолт кода).
+  promptSections?: SpecialtyPromptSection[] | null;
+  // Типовой профиль умений роли (материализуется в личные привязки при создании
+  // персоны, см. PersonaMaterialization). null/[] — слой профиль не задаёт.
+  defaultBindings?: SpecialtyDefaultBinding[] | null;
+}
+
+// Секция промпта специальности в слое (id из каталога SpecialtyPromptPresets.Sections).
+// enabled и text наследуются НЕЗАВИСИМО: переопределение enabled не сбрасывает текст и
+// наоборот. На бэке соответствует SpecialtyPromptSectionSettings.
+export interface SpecialtyPromptSection {
+  id: string;
+  enabled: boolean;
+  // null/пусто — текст наследуется снизу (или дефолт кода, если нигде не задан)
+  text?: string | null;
+}
+
+// Типовое умение роли: при создании персоны специальности материализуется в её
+// личные привязки (модель «копия при создании», не динамическое наследование). Цель
+// НЕ хранится: конкретную цель подбирает AI по каталогу владельца; исключение — тип
+// «Навык» (Skill), там явное имя скилла (skillName), отсутствующие в каталоге скиллы
+// пропускаются молча. На бэке соответствует SpecialtyDefaultBinding.
+export interface SpecialtyDefaultBinding {
+  type: PersonaBindingType;
+  mode: PersonaBindingMode;
+  // Условие «когда применять» — попадает в индекс системного промпта
+  condition: string;
+  // Имя скилла из каталога владельца — только при type === 'skill'
+  skillName?: string | null;
+}
+
+// Каталог секций промптов: дефолты кода, единые для всех (фича specialty-prompt-sections).
+// Источник — GET /api/specialties/prompt-sections. textLimit жёстко ограничивает длину
+// текста секции (1024 символа на бэке, SpecialtyPromptPresets.SectionTextLimit).
+export interface SpecialtyPromptSectionsCatalog {
+  textLimit: number;
+  sections: SpecialtyPromptSectionMeta[];
+  specialties: Record<string, SpecialtyPromptSectionsForSpecialty>;
+}
+
+export interface SpecialtyPromptSectionMeta {
+  id: string;
+  label: string;
+  description: string;
+}
+
+// Состав каталога по конкретной специальности: включённость и типовой текст каждой
+// секции + профиль типовых умений роли (дефолты кода).
+export interface SpecialtyPromptSectionsForSpecialty {
+  sections: { id: string; enabled: boolean; text: string }[];
+  defaultBindings: SpecialtyDefaultBinding[];
+}
+
+// Результат POST /api/personas/{id}/bindings/apply-defaults: сколько типовых умений
+// роли ДОБАВЛЕНО в личные привязки персоны (0 — профиль пуст или ничего не подошло).
+export interface ApplyDefaultBindingsResult {
+  persona: Persona;
+  applied: number;
 }
 
 // Слой настроек специальностей и пресетов: шаблоны + «любая специальность» + пресеты-цепочки

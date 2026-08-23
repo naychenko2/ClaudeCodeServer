@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe, Minimize2 } from 'lucide-react';
+import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe, Minimize2, Sparkles } from 'lucide-react';
 import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage, SkillSuggestion } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
@@ -97,6 +97,35 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const [allAccessBusy, setAllAccessBusy] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- черновик флага «все проекты» зеркалирует состояние персоны
   useEffect(() => { setAllAccess(persona.allProjectsAccess ?? false); }, [persona.id, persona.allProjectsAccess]);
+
+  // «Применить типовые» — фича specialty-prompt-sections, плашка появляется у персон
+  // с заданной специальностью. Состояние — отдельное от тумблера allAccess, чтобы плашку
+  // можно было скрыть после успешного применения (визуальный итог).
+  const [applyDefaultsBusy, setApplyDefaultsBusy] = useState(false);
+  const [applyDefaultsDone, setApplyDefaultsDone] = useState(false);
+  // Сброс плашки «уже применено» при смене персоны/специальности: эффект — единственное
+  // место, где ловится смена зависимости без ломки ленивой загрузки каталога.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setApplyDefaultsDone(false);
+    setApplyDefaultsBusy(false);
+  }, [persona.id, persona.specialty]);
+
+  const applyDefaults = async () => {
+    setApplyDefaultsBusy(true);
+    try {
+      const res = await api.personas.applyDefaultBindings(persona.id);
+      setApplyDefaultsDone(true);
+      showToast('Умения', res.applied > 0
+        ? `Типовые умения применены: ${res.applied}`
+        : 'Типовых умений для этой роли нет или ничего не подошло.');
+      void load();
+    } catch (e) {
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось применить типовые умения.');
+    } finally {
+      setApplyDefaultsBusy(false);
+    }
+  };
 
   const toggleAllAccess = async (next: boolean) => {
     setAllAccess(next);
@@ -673,6 +702,40 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         {mcpServers.length > 0 && (
           <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
             MCP: {mcpAvailableCount} из {mcpServers.length} выдано лично (плюс доступ через проект, если есть)
+          </div>
+        )}
+
+        {/* Плашка «Применить типовые» (фича specialty-prompt-sections): для персон с
+            заданной специальностью — кнопка материализует профиль роли в личные привязки
+            поверх существующих (свои записи не трогаются). Скрывается после применения
+            до смены персоны или специальности. */}
+        {persona.specialty && persona.specialty !== 'none' && (
+          <div style={{
+            marginTop: 12, display: 'flex', gap: 12, alignItems: 'flex-start',
+            background: applyDefaultsDone ? C.successBg : C.infoBg,
+            border: `1px solid ${applyDefaultsDone ? C.successText : C.info}`,
+            borderRadius: R.xl, padding: '12px 14px',
+          }}>
+            <Sparkles size={18} strokeWidth={ICON_STROKE}
+              style={{ color: applyDefaultsDone ? C.successText : C.info, flexShrink: 0, marginTop: 1 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
+                {applyDefaultsDone ? 'Типовые умения применены' : 'Есть типовые умения роли'}
+              </div>
+              <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2, lineHeight: 1.45 }}>
+                {applyDefaultsDone
+                  ? 'Профиль роли материализован в личные привязки. Свои записи не трогались.'
+                  : 'Можно добавить умения этой роли одним нажатием. Уже существующие записи не трогаем.'}
+              </div>
+              {!applyDefaultsDone && (
+                <div style={{ marginTop: 10 }}>
+                  <Button variant="primary" size="sm" loading={applyDefaultsBusy}
+                    disabled={applyDefaultsBusy} onClick={() => void applyDefaults()}>
+                    {applyDefaultsBusy ? 'Применяю…' : 'Применить типовые'}
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

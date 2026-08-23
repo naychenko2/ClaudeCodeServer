@@ -6,9 +6,39 @@ using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services;
 
-// Настройка шаблона специальности (слой: глобальный или per-owner). Слой, если он
-// задан для специальности, заменяет шаблон ЦЕЛИКОМ (полевого слияния между слоями нет):
-// не задан — берётся слой ниже (per-owner → глобальный → дефолт кода SpecialtyCatalog).
+// Секция промпта специальности в слое настроек: id из каталога (SpecialtyPromptPresets),
+// enabled — явное вкл/выкл (параметр «задан» самим наличием элемента с id в слое),
+// text — переопределение типового текста (null/пусто — типовой текст из кода).
+public class SpecialtyPromptSectionSettings
+{
+    public string Id { get; set; } = "";
+    public bool Enabled { get; set; }
+    public string? Text { get; set; }
+}
+
+// Типовое умение роли: привязка-заготовка, материализуемая в Persona.Bindings при
+// создании персоны (модель «копия при создании», не динамическое наследование).
+// Цель НЕ хранится: конкретную цель подбирает AI по каталогу владельца; исключение —
+// «Навык» (Skill): там явное имя скилла (SkillName), отсутствующие скиллы при
+// материализации пропускаются молча.
+public class SpecialtyDefaultBinding
+{
+    public PersonaBindingType Type { get; set; }
+    public PersonaBindingMode Mode { get; set; } = PersonaBindingMode.Auto;
+    // Условие «когда применять» — попадает в индекс системного промпта (как Condition привязки)
+    public string Condition { get; set; } = "";
+    // Имя скилла из каталога владельца — только при Type == Skill
+    public string? SkillName { get; set; }
+}
+
+// Настройка шаблона специальности (слой: глобальный или per-owner). ДВЕ семантики
+// наследования (не сводить одну к другой):
+//  - права и модели (Access/Tools/DisallowedTools/матрицы/DefaultTier) — слой, если он
+//    задан для специальности, заменяет шаблон ЦЕЛИКОМ (полевого слияния нет): не задан —
+//    берётся слой ниже (per-owner → пользовательский → глобальный → дефолт кода);
+//  - PromptSections и DefaultBindings — ПОСЕКОЧНОЕ наследование отдельными резолверами
+//    (см. EffectivePromptSections/EffectiveDefaultBindings): каждый параметр берётся из
+//    верхнего слоя, где он задан, и переопределение одной секции не затирает соседние.
 public class SpecialtyTemplateSettings
 {
     public PersonaAccess Access { get; set; } = PersonaAccess.Full;
@@ -16,6 +46,10 @@ public class SpecialtyTemplateSettings
     public List<string>? Tools { get; set; }
     // Имеет смысл только при Access == Custom
     public List<string>? DisallowedTools { get; set; }
+    // Секции промпта специальности (null/пусто — слой секций не задаёт, наследование вниз)
+    public List<SpecialtyPromptSectionSettings>? PromptSections { get; set; }
+    // Типовой профиль умений роли (null/пусто — слой профиль не задаёт, наследование вниз)
+    public List<SpecialtyDefaultBinding>? DefaultBindings { get; set; }
 
     // Матрица моделей по уровням (ADR-007 §2): значение ячейки — id модели ИЛИ "preset:{id}".
     // Пустая ячейка = «спроси следующую (широкую) матрицу». "tier:*" в ячейке запрещён
@@ -99,7 +133,16 @@ public sealed class SpecialtySettingsStore
 {
     // v2 — пресет из «сборника правил специальность→маршрут» стал именованной цепочкой Steps;
     // у специальности появились матрица моделей по уровням + DefaultTier; у слоя — DefaultSpecialty.
-    public const int FormatVersion = 2;
+    // v3 — аддитивно: секции промптов (PromptSections) и типовой профиль умений
+    // (DefaultBindings) в записи специальности; файлы v2 читаются как есть, разноски не требуют.
+    public const int FormatVersion = 3;
+
+    // Порог бенчмарка резолва EffectivePromptSectionStates (план «Секции промптов» этап 3,
+    // риск «цена резолва per-turn»): вызывается на КАЖДЫЙ ход персоны специальности, резолвер —
+    // чистые словари/списки в памяти, без I/O. Бенчмарк (100 вызовов) держит среднее время
+    // вызова ниже порога; превышение — сигнал завести кэш per-specialty с инвалидацией при
+    // записи слоя (SetGlobal/SetOwner/SetUser), а не немедленно строить кэш заранее.
+    public const double PromptSectionsResolveBenchmarkThresholdMs = 5.0;
 
     // Ключи возможностей персоны (PersonaManager.AllTools) — по ним фильтруем Tools шаблонов
     private static readonly string[] CoreToolKeys = ["tasks", "notes", "web"];
@@ -247,6 +290,92 @@ public sealed class SpecialtySettingsStore
         return owner?.DefaultSpecialty?.DefaultTier
             ?? user?.DefaultSpecialty?.DefaultTier
             ?? file.Global.DefaultSpecialty?.DefaultTier;
+    }
+
+    // --- Секции промпта и типовые умения (посекочное наследование) ---
+
+    // Слой-источник значения параметра секции (для UI-бейджа и тестов).
+    public enum SectionSource { Code, Global, User, Owner }
+
+    // Эффективное состояние секции промпта: enabled и text наследуются КАЖДЫЙ СВОИМ
+    // параметром (см. EffectivePromptSectionStates).
+    public sealed record EffectivePromptSection(
+        string Id, bool Enabled, string Text,
+        SectionSource EnabledSource, SectionSource TextSource);
+
+    // ВАЖНО: здесь вторая семантика наследования стора. Права и модели (выше) — «запись
+    // слоя заменяет нижнюю целиком»; секции промпта — ПОСЕКОЧНО: для каждого параметра
+    // (секция × специальность, отдельно enabled и отдельно text) значение берётся из
+    // самого верхнего слоя (owner → user → global), где параметр ЗАДАН; явный off
+    // владельца перекрывает on админа (заданное значение, а не отсутствие записи);
+    // переопределение одной секции не трогает соседние. Не задан нигде — дефолт кода
+    // (SpecialtyPromptPresets). «Замена целиком» здесь была бы ошибкой: owner-настройка
+    // одной секции сносила бы остальные три, заданные админом.
+    public IReadOnlyList<EffectivePromptSection> EffectivePromptSectionStates(
+        string ownerId, PersonaSpecialty specialty)
+    {
+        if (specialty == PersonaSpecialty.None) return [];
+        var key = SpecialtyCatalog.KeyOf(specialty);
+        var file = _file;
+
+        var result = new List<EffectivePromptSection>(SpecialtyPromptPresets.Sections.Count);
+        foreach (var meta in SpecialtyPromptPresets.Sections)
+        {
+            var enabled = SpecialtyPromptPresets.DefaultEnabled(meta.Id, specialty);
+            var text = SpecialtyPromptPresets.DefaultText(meta.Id, specialty);
+            var enabledSource = SectionSource.Code;
+            var textSource = SectionSource.Code;
+            var enabledSet = false;
+            var textSet = false;
+
+            // Сверху вниз (owner → user → global): первый слой, где параметр задан, выигрывает
+            foreach (var (layer, source) in new[]
+                     {
+                         ((SpecialtySettingsLayer?)file.Owners.GetValueOrDefault(ownerId), SectionSource.Owner),
+                         (file.Users.GetValueOrDefault(ownerId), SectionSource.User),
+                         (file.Global, SectionSource.Global),
+                     })
+            {
+                var entry = layer?.Specialties.GetValueOrDefault(key)?.PromptSections?
+                    .FirstOrDefault(p => string.Equals(p.Id, meta.Id, StringComparison.OrdinalIgnoreCase));
+                if (entry is not null && !enabledSet)
+                {
+                    enabled = entry.Enabled;
+                    enabledSource = source;
+                    enabledSet = true;
+                }
+                if (!string.IsNullOrWhiteSpace(entry?.Text) && !textSet)
+                {
+                    text = entry.Text!.Trim();
+                    textSource = source;
+                    textSet = true;
+                }
+            }
+            result.Add(new EffectivePromptSection(meta.Id, enabled, text, enabledSource, textSource));
+        }
+        return result;
+    }
+
+    // Эффективные секции промпта специальности (контракт вклейки в системный промпт):
+    // только включённые, в порядке каталога, с уже развёрнутым текстом.
+    public IReadOnlyList<EffectivePromptSection> EffectivePromptSections(
+        string ownerId, PersonaSpecialty specialty) =>
+        EffectivePromptSectionStates(ownerId, specialty).Where(s => s.Enabled).ToList();
+
+    // Типовой профиль умений роли: верхний слой (owner → user → global), где задан
+    // НЕПУСТОЙ DefaultBindings; не задан нигде — дефолт кода (SpecialtyPromptPresets).
+    // Наследуется полем записи (точечно, как секции): переопределение админом уровней
+    // моделей не должно сносить типовые умения, и наоборот.
+    public IReadOnlyList<SpecialtyDefaultBinding> EffectiveDefaultBindings(
+        string ownerId, PersonaSpecialty specialty)
+    {
+        if (specialty == PersonaSpecialty.None) return [];
+        var key = SpecialtyCatalog.KeyOf(specialty);
+        var file = _file;
+        return file.Owners.GetValueOrDefault(ownerId)?.Specialties.GetValueOrDefault(key)?.DefaultBindings
+            ?? file.Users.GetValueOrDefault(ownerId)?.Specialties.GetValueOrDefault(key)?.DefaultBindings
+            ?? file.Global.Specialties.GetValueOrDefault(key)?.DefaultBindings
+            ?? SpecialtyPromptPresets.DefaultBindingsProfile(specialty);
     }
 
     // Разворот маршрута в цепочку шагов (ADR-007 §3). Единая точка разворачивания цепочки:
@@ -407,7 +536,10 @@ public sealed class SpecialtySettingsStore
                 {
                     if (!all && !string.Equals(specKey, key, StringComparison.OrdinalIgnoreCase)) continue;
                     var record = layer.Specialties[specKey];
-                    if (RightsEquivalent(record, LowerRights(next, ownerId, specKey)))
+                    // Удаляем запись только когда и прав своих нет, и секций/профиля умений:
+                    // сброс настроек МОДЕЛЕЙ не должен сносить секции промптов
+                    if (RightsEquivalent(record, LowerRights(next, ownerId, specKey))
+                        && !CarriesPromptSettings(record))
                     {
                         layer.Specialties.Remove(specKey);
                         changed++;
@@ -418,7 +550,8 @@ public sealed class SpecialtySettingsStore
 
             if ((all || anyOnly) && layer.DefaultSpecialty is { } ds)
             {
-                if (RightsEquivalent(ds, LowerRights(next, ownerId, SpecialtyCatalog.AnySpecialtyKey)))
+                if (RightsEquivalent(ds, LowerRights(next, ownerId, SpecialtyCatalog.AnySpecialtyKey))
+                    && !CarriesPromptSettings(ds))
                 {
                     layer.DefaultSpecialty = null;
                     changed++;
@@ -454,6 +587,11 @@ public sealed class SpecialtySettingsStore
     private static bool CarriesTier(SpecialtyTemplateSettings s) =>
         !string.IsNullOrWhiteSpace(s.TierStrong) || !string.IsNullOrWhiteSpace(s.TierMedium)
         || !string.IsNullOrWhiteSpace(s.TierWeak) || s.DefaultTier is not null;
+
+    // Запись несёт секции промптов или профиль типовых умений (своё, что не «наследование
+    // моделей»): удаление такой записи сбросом моделей уничтожило бы их настройки
+    private static bool CarriesPromptSettings(SpecialtyTemplateSettings s) =>
+        s.PromptSections is { Count: > 0 } || s.DefaultBindings is { Count: > 0 };
 
     // Снять уровни и DefaultTier (у DefaultTier интерфейса нет — оставленный, он остался бы
     // невидимым остатком, который продолжает гонять персон прежним уровнем)
@@ -552,6 +690,35 @@ public sealed class SpecialtySettingsStore
             if (LocalActionOverridesStore.ParseTierRoute(cell) is not null)
                 return $"Специальность «{name}»: в ячейке уровня не может быть tier:* — уровень уже выбран строкой";
         }
+
+        // Секции промптов: id из каталога, без дублей, текст в лимите (общий с UI счётчиком)
+        var seenSections = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var section in settings.PromptSections ?? [])
+        {
+            if (!SpecialtyPromptPresets.TryGetSection(section.Id, out var meta))
+                return $"Специальность «{name}»: неизвестная секция промпта: {section.Id}";
+            if (!seenSections.Add(meta.Id))
+                return $"Специальность «{name}»: секция промпта задаётся дважды: {meta.Id}";
+            if (section.Text?.Length > SpecialtyPromptPresets.SectionTextLimit)
+                return $"Специальность «{name}»: текст секции «{meta.Label}» длиннее {SpecialtyPromptPresets.SectionTextLimit} символов";
+        }
+
+        // Типовой профиль умений: валидные тип/режим, имя скилла — только у «Навыка»
+        if (settings.DefaultBindings is { Count: > SpecialtyPromptPresets.MaxDefaultBindings })
+            return $"Специальность «{name}»: типовых умений не больше {SpecialtyPromptPresets.MaxDefaultBindings}";
+        foreach (var binding in settings.DefaultBindings ?? [])
+        {
+            if (!Enum.IsDefined(binding.Type))
+                return $"Специальность «{name}»: неизвестный тип типового умения";
+            if (!Enum.IsDefined(binding.Mode))
+                return $"Специальность «{name}»: неизвестный режим типового умения";
+            if (binding.Type == PersonaBindingType.Skill && string.IsNullOrWhiteSpace(binding.SkillName))
+                return $"Специальность «{name}»: у типового умения типа «Навык» не указано имя скилла";
+            if (binding.Type != PersonaBindingType.Skill && !string.IsNullOrWhiteSpace(binding.SkillName))
+                return $"Специальность «{name}»: имя скилла имеет смысл только у типового умения типа «Навык»";
+            if (binding.Condition.Length > SpecialtyPromptPresets.MaxConditionLength)
+                return $"Специальность «{name}»: условие типового умения длиннее {SpecialtyPromptPresets.MaxConditionLength} символов";
+        }
         return null;
     }
 
@@ -590,7 +757,54 @@ public sealed class SpecialtySettingsStore
         TierMedium = CleanCell(s.TierMedium),
         TierWeak = CleanCell(s.TierWeak),
         DefaultTier = s.DefaultTier,
+        PromptSections = NormalizeSections(s.PromptSections),
+        DefaultBindings = NormalizeDefaultBindings(s.DefaultBindings),
     };
+
+    // Канонический вид секций: id из каталога, text триммирован (пустой → null = типовой
+    // текст кода). Неизвестные id молча выпадают (валидация API их отсекает до записи).
+    private static List<SpecialtyPromptSectionSettings>? NormalizeSections(
+        List<SpecialtyPromptSectionSettings>? sections)
+    {
+        if (sections is not { Count: > 0 }) return null;
+        var result = new List<SpecialtyPromptSectionSettings>();
+        foreach (var section in sections)
+        {
+            if (!SpecialtyPromptPresets.TryGetSection(section.Id, out var meta)) continue;
+            var text = section.Text?.Trim();
+            result.Add(new SpecialtyPromptSectionSettings
+            {
+                Id = meta.Id,
+                Enabled = section.Enabled,
+                Text = string.IsNullOrEmpty(text) ? null : text,
+            });
+        }
+        return result.Count > 0 ? result : null;
+    }
+
+    // Канонический вид типового профиля: тримм полей, SkillName — только у «Навыка»;
+    // записи с невалидными тип/режим (мусор из внешнего файла) молча выпадают.
+    private static List<SpecialtyDefaultBinding>? NormalizeDefaultBindings(
+        List<SpecialtyDefaultBinding>? bindings)
+    {
+        if (bindings is not { Count: > 0 }) return null;
+        var result = new List<SpecialtyDefaultBinding>();
+        foreach (var b in bindings)
+        {
+            if (!Enum.IsDefined(b.Type) || !Enum.IsDefined(b.Mode)) continue;
+            var skill = b.SkillName?.Trim();
+            result.Add(new SpecialtyDefaultBinding
+            {
+                Type = b.Type,
+                Mode = b.Mode,
+                Condition = b.Condition?.Trim() ?? "",
+                SkillName = b.Type == PersonaBindingType.Skill && !string.IsNullOrWhiteSpace(skill)
+                    ? skill
+                    : null,
+            });
+        }
+        return result.Count > 0 ? result : null;
+    }
 
     private static string? CleanCell(string? cell) =>
         string.IsNullOrWhiteSpace(cell) ? null : cell.Trim();
@@ -658,7 +872,9 @@ public sealed class SpecialtySettingsStore
         SpecialtySettingsFile file;
         try
         {
-            file = version < FormatVersion
+            // v1 → разноска правил пресетов по матрицам; v2+ читается как есть (v3 —
+            // аддитивные поля, старым ключам десериализация не препятствует)
+            file = version == 1
                 ? MigrateFromV1(root)
                 : root.Deserialize<SpecialtySettingsFile>(JsonOpts)!;
         }

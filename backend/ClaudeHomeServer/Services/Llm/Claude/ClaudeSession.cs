@@ -483,6 +483,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<string, Task<string?>>? _bindingsProvider;
     // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
     private readonly Func<string?, Task<string?>>? _codeGraphProvider;
+    // Секции промпта специальности персоны (план «Секции промптов», флаг specialty-prompt-sections)
+    private readonly Func<string?, Task<string?>>? _promptSectionsProvider;
     // Снимок промпта хода: черновик → id записанного снимка. null — снимки не ведутся.
     private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
     // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
@@ -576,6 +578,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
         _codeGraphProvider = context.CodeGraphProvider;
+        _promptSectionsProvider = context.PromptSectionsProvider;
         _promptSnapshotSink = context.PromptSnapshotSink;
         _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
         _subagentRunSink = context.SubagentRunSink;
@@ -2276,9 +2279,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
             // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
             // Заодно собираем манифест (что подтянулось) для «использовано сейчас» (F3).
+            RecallBlock? memRecall = null;
             if (_personaRecallProvider is not null && _memoryMcp is not null)
             {
-                RecallBlock? memRecall = null;
                 try { memRecall = await _personaRecallProvider(text); }
                 catch { /* recall памяти не должен ронять ход */ }
                 Add("recall-memory", "Что персона помнит по теме", memRecall?.Text, stable: false, group: "persona");
@@ -2288,6 +2291,27 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.AddRange(memRecall.Items);
                 }
             }
+
+            // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+            // specialty-prompt-sections): сценарные инструкции «когда и как» по роли — история,
+            // граф кода, процессы, правила. Позиция — между recall-memory и блоком досье
+            // (контракт плана: «призыв и данные рядом»), провайдер сам гейтит по флагу/
+            // специальности/групповому чату, ошибки не роняют ход.
+            if (_promptSectionsProvider is not null)
+            {
+                string? promptSectionsBlock = null;
+                try { promptSectionsBlock = await _promptSectionsProvider(text); }
+                catch { /* секции специальности не должны ронять ход */ }
+                Add("prompt-sections", "Инструкции по специальности", promptSectionsBlock, group: "persona");
+            }
+
+            // Блок досье (план «Секции промптов» этап 3, флаг specialty-prompt-sections): при
+            // включённом флаге PersonaMemoryService отдаёт его ОТДЕЛЬНО от recall-memory (см.
+            // RecallBlock.DossierText) — своей секцией, сразу после prompt-sections (призыв и
+            // данные рядом); при выключенном флаге DossierText всегда null (досье уже внутри
+            // recall-memory выше, как до фичи).
+            Add("dossier-recall", "История решений по коду хода", memRecall?.DossierText,
+                stable: false, group: "persona");
 
             // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
             // «когда → откуда» + выжимки режима «всегда». Только у персонных сессий;

@@ -7,6 +7,7 @@ import { useIsMobile } from '../../lib/breakpoints';
 import { TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
 import { presetRoute } from '../../lib/presets';
 import { ANY_SPECIALTY, useSpecialtyCatalog, withTierCell } from '../../lib/specialties';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import type { ProviderData } from '../../lib/modelProvidersShared';
 import type { ModelOption } from '../../lib/models';
 import type {
@@ -22,6 +23,7 @@ import {
   countFilledFields, fieldsWord, groupsWord, pickStartScope, rolesWord, sameTriple,
   totalFields, tripleOf, type RoleRow,
 } from './specialRules/model';
+import { SpecialtyPromptSectionsPanel } from './SpecialtyPromptSectionsPanel';
 
 // === Вкладка «Особые правила для специальностей» (макет v4) ===
 //
@@ -147,6 +149,10 @@ export function SpecialRulesTab({
   const filled = countFilledFields(layer, catalog);
   const ownerFilled = countFilledFields(settings?.owner ?? null, catalog);
   const total = totalFields(catalog);
+
+  // Панель «Инструкции для роли» (фича specialty-prompt-sections): рендерим под блоком
+  // матриц/карточек, перед подвалом. Флаг по умолчанию выключен — реестр покажет тумблер.
+  const promptSectionsEnabled = useFeature(FLAGS.specialtyPromptSections);
 
   // Смена слоя/пользователя сбрасывает состояния вида: раскрытая карточка показала бы
   // значения другого слоя, а выделенные роли относятся к прежнему набору записей.
@@ -509,6 +515,23 @@ export function SpecialRulesTab({
           )}
 
           {/* Подвал: добавление правила, сброс слоя и порядок наследования */}
+
+          {/* Панель «Инструкции для роли» (план «Секции промптов», этап 4) — за флагом */}
+          {promptSectionsEnabled && (
+            <SpecialtyPromptSectionsPanel
+              isMobile={isMobile}
+              activeScope={activeScope}
+              globalLayer={settings?.global ?? null}
+              editLayer={layer}
+              userLayer={userLayer}
+              contextUserId={contextUserId}
+              catalog={catalog}
+              saving={busy}
+              canEdit={canEdit}
+              onSaveLayer={async (next) => { saveLayer(next); }}
+            />
+          )}
+
           {canEdit && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginTop: SP.md,

@@ -118,10 +118,38 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
             // реальный claude.exe в интеграционных тестах. Регистрация перезаписывает боевой
             // синглтон LlmSessionAdapterFactory из Program.cs (последняя побеждает).
             services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(LlmAdapters);
+
+            // Дешёвые one-shot вызовы → стаб по умолчанию: тестовый хост не должен запускать
+            // настоящий claude.exe из фоновых действий (типовые умения при создании персон,
+            // теги, сводки). Тестам, которым нужны управляемые ответы, — свои заглушки
+            // через ExtraServices (регистрация позже — побеждает).
+            services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
+                new StubCheapTextRunner("[]"));
         });
 
         if (ExtraServices is { } extra)
             builder.ConfigureServices(extra);
+    }
+
+    /// <summary>
+    /// Заглушка ICheapTextRunner по умолчанию: пустой JSON-массив — все парсеры кандидатов
+    /// (привязки, черновики) читают его как «ничего не подошло», вызов мгновенный и без сети.
+    /// </summary>
+    private sealed class StubCheapTextRunner(string answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
+    {
+        public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(answer);
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default) => Task.FromResult<string?>(answer);
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
+        public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 
     private static void CreateUsersFile(string dir)

@@ -20,6 +20,19 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // профильного файла. Кому он нужен по роли — решает Tool-ключ «browser» персоны
 // (PersonaBindingsService, дефолт по пресету: тестировщику включён).
 //
+// Третья обязанность файла — ретенция транскриптов: cleanupPeriodDays продлевает
+// плановую уборку CLI (дефолт ~30 дней, вычищает {csid}.jsonl вместе с контекстом
+// --resume). Ключ выпал из актуальной документации, но действует — проверено
+// экспериментально 2026-08-24: транскрипт с внутренними timestamp −45 дней и mtime
+// −40 дней удаляется при cleanupPeriodDays=1 и выживает при 9999, в том числе когда
+// ключ приходит только из этого --settings-файла (чистка идёт на старте CLI, не чаще
+// раза в сутки — метка .last-cleanup в корне профиля; срабатывает лишь при старых
+// ОБОИХ признаках: и timestamp внутри jsonl, и mtime файла). Гигантское значение —
+// осознанный выбор: серверные транскрипты чистит сам продукт точечно (DeleteEverywhere
+// при удалении чата, копия при архивации — ArchivedTranscriptStore), беззаботная
+// ретенция CLI срезала бы контент из-под архива. На чужие интерактивные сессии не
+// влияет: файл подкладывается только нашим запускам.
+//
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
 // внутри контейнера недоступен — там --settings не добавляем (и гейт браузера
 // в песочнице не работает; браузера в образе всё равно нет).
@@ -27,6 +40,10 @@ public static class ClaudeRuntimeSettings
 {
     // Плагин официального маркетплейса, дающий mcp__plugin_playwright_playwright__browser_*
     private const string BrowserPluginKey = "playwright@claude-plugins-official";
+
+    // 10 лет: практическое «не чистить» без рискованной магии нуля (его семантика
+    // не документирована и не проверялась)
+    private const int TranscriptRetentionDays = 3650;
 
     // Ключ кэша — (temp-каталог среды, режим): temp у драйверов запуска разный, и одного
     // флага мало — первый владелец «застолбил» бы путь в своей папке для всех остальных
@@ -54,7 +71,7 @@ public static class ClaudeRuntimeSettings
             var path = Path.Combine(dir,
                 browserEnabled ? "hooks-off.settings.json" : "hooks-off-no-browser.settings.json");
             File.WriteAllText(path,
-                $"{{\"disableAllHooks\":true,\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}}}}");
+                $"{{\"disableAllHooks\":true,\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays}}}");
             _cachedPaths[cacheKey] = path;
             return path;
         }

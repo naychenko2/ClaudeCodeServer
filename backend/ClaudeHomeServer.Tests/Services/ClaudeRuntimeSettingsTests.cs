@@ -50,4 +50,15 @@ public class ClaudeRuntimeSettingsTests
         // путь --settings) не отличала бы сессию с браузером от сессии без него
         Settings(browserEnabled: true).Path.Should().NotBe(Settings(browserEnabled: false).Path);
     }
+
+    [Fact]
+    public void РетенцияТранскриптовПродленаКлючомCleanupPeriodDays()
+    {
+        // Плановая уборка CLI (дефолт ~30 дней) вычищает {csid}.jsonl из-под архива чатов;
+        // эксперимент 2026-08-24 подтвердил, что ключ действует и из --settings-файла.
+        // Без ключа транскрипт переживает дефолтную ретенцию, и --resume возвращённого
+        // чата начинает разговор с нуля
+        foreach (var browser in new[] { true, false })
+            Settings(browser).Json.GetProperty("cleanupPeriodDays").GetInt32().Should().BeGreaterThan(30);
+    }
 }

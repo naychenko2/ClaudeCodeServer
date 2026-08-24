@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Prompts;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -42,6 +43,22 @@ public class SpecialtyPromptPresetsTests
         foreach (var section in SpecialtyPromptPresets.Sections)
             SpecialtyPromptPresets.DefaultText(section.Id, PersonaSpecialty.None).Should().BeEmpty();
         SpecialtyPromptPresets.DefaultBindingsProfile(PersonaSpecialty.None).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DefaultText_Навигация_ВсеРолиНесутТриУровняИзЕдинойТочки()
+    {
+        // Секция codeGraph = «Навигация по коду» (ADR-011 шаг 3): типы (codegraph) +
+        // символ (LSP) + текст (Grep). Формулировка LSP-уровня — из CodeNavigationPrompts
+        // (единая точка истины с глобальным блоком хода), свои копии в пресетах запрещены.
+        foreach (var specialty in AllSpecialties)
+        {
+            var text = SpecialtyPromptPresets.DefaultText("codeGraph", specialty);
+            text.Should().Contain("codegraph_", $"{specialty} разводит типы в граф");
+            text.Should().Contain(CodeNavigationPrompts.PresetLspLine,
+                $"{specialty} берёт формулировку LSP-уровня из CodeNavigationPrompts, а не пишет свою");
+            text.Should().Contain("Grep", $"{specialty} фиксирует и текстовый уровень");
+        }
     }
 
     [Fact]

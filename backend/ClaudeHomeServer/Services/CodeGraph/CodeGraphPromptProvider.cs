@@ -173,14 +173,11 @@ public sealed class CodeGraphPromptProvider
                 sb.AppendLine($"{Path.GetFileName(file.Key)} ({names})");
             }
         }
-        // Куда идти за остальным графом. Раньше здесь стояли панель «Граф» и REST-эндпоинт —
-        // обе двери для агента закрыты (панель для человека, ключа к REST у него нет).
-        sb.AppendLine("Когда звать граф вместо Grep:");
-        sb.AppendLine("• «где объявлен X» — codegraph_find: отдаёт файл со строкой и вид типа, без текстового шума совпадений;");
-        sb.AppendLine("• «что сломается, если правлю X» — codegraph_neighbors: входящие связи с типом (Calls/Implements/References);");
-        sb.AppendLine("• «с чего начать в незнакомой подсистеме» — codegraph_hubs.");
-        sb.Append("Grep остаётся для текстовых вхождений и файлов вне графа (конфиги, .md, разметка).");
-        return sb.ToString();
+        // Сценарные правила «когда звать граф» раньше жили здесь хвостом slice — с ADR-011
+        // (шаг 3) они переехали в отдельную статичную секцию хода CodeNavigationPrompts:
+        // единый блок трёх уровней (codegraph / LSP / Grep), виден и без построенного
+        // графа. Slice — только данные: хабы и словарь.
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>

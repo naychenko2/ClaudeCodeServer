@@ -119,10 +119,11 @@ public class CodeGraphPromptProviderTests
         slice.Should().Contain("Demo.Hub");
         slice.Should().Contain("(Hub.cs)");
         slice.Should().Contain("12 связей");
-        // Дверь к остальному графу — MCP-инструменты: REST и панель для агента недоступны
-        slice.Should().Contain("codegraph_find");
-        slice.Should().Contain("codegraph_neighbors");
-        slice.Should().Contain("codegraph_hubs");
+        // Сценарные правила codegraph — отдельная секция хода (CodeNavigationPrompts,
+        // ADR-011 шаг 3): slice остаётся данными и правил не дублирует
+        slice.Should().NotContain("codegraph_find");
+        slice.Should().NotContain("codegraph_neighbors");
+        slice.Should().NotContain("codegraph_hubs");
         slice.Should().NotContain("устаревшим", "исходники не менялись после построения");
     }
 

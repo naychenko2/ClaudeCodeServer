@@ -661,6 +661,18 @@ export interface Session {
   // "project" — гейт проекта; отсутствует у обычных чатов. По признаку фронт прячет
   // командные механики («Обсудить с командой») — команды в интервью ещё нет
   onboardingKind?: 'user' | 'project' | null;
+  // Архив чатов (план «Архив чатов» v4, шаги 4-5). archived — готовый bool с бэка,
+  // производный от ArchivedAt и UpdatedAt (см. Session.IsArchived в C#). На фронте
+  // НЕ пересчитываем — вторая копия правила ломалась бы на равных таймстемпах.
+  // ArchiveSummary/ArchiveSummaryAt — кэш сводки карточки архива (ChatDigestService);
+  // SummaryNoteId проставляется SessionSummaryService при «Сохранить в заметки».
+  // ArchivedAt — для совместимости с серверной сериализацией (не используется на
+  // чтении фронтом: достаточно bool archived).
+  archived?: boolean;
+  archivedAt?: string | null;
+  archiveSummary?: string | null;
+  archiveSummaryAt?: string | null;
+  summaryNoteId?: string | null;
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта
@@ -907,6 +919,11 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'chat_deleted' }
+  // Чат убран в архив или возвращён из архива (archived — направление): архив ПРЯЧЕТ
+  // чат, а не удаляет (на chat_deleted строятся ChatsPage/awaiting, здесь — нет).
+  // Принимает строго по этому типу: подписки на chat_archived не должны случайно
+  // отрабатывать событие удаления, и наоборот.
+  | { type: 'chat_archived'; archived: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }

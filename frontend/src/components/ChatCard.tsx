@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties } from 'react';
-import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, Hourglass, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, Hourglass, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -24,6 +24,7 @@ import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
+import { isArchivedChat } from '../lib/chatFilters';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -143,6 +144,13 @@ interface Props {
   // Изменение чата из меню карточки (мьют уведомлений, срок хранения) — обновлённую
   // сессию возвращает бэкенд, список обновляет ею своё состояние. Не задан — пунктов нет
   onEdited?: (s: Session) => void;
+  // «Убрать в архив» / «Вернуть из архива» (план «Архив чатов» v4): пункт меню в
+  // карточках. Направление читается из session.archived (готовый bool с бэка) и не
+  // вычисляется фронтом заново — производный признак архива один и тот же на обеих
+  // сторонах (см. isArchivedChat). Не задан — пункта нет (например, витрина UI-кита).
+  // 409 от сервера (живой ход/фоновые агенты) ловится вызывающей стороной и
+  // показывается тостом с человеческим текстом «в чате идёт ход».
+  onArchive?: (archived: boolean) => void;
   // Доп. отступ содержимого слева (px). В дереве чатов контрол ветки садится в шов
   // на левый край карточки — под ним нужно освободить место, иначе он ляжет на
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
@@ -161,7 +169,7 @@ export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
-  onEdited, leadingInset = 0,
+  onEdited, onArchive, leadingInset = 0,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -580,7 +588,8 @@ export function ChatCard({
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
           // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
           maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)
-            + (onAddToWall ? 1 : 0) + (canEditChat ? (canMute ? 2 : 1) : 0)) * 34 + 10}
+            + (onAddToWall ? 1 : 0) + (canEditChat ? (canMute ? 2 : 1) : 0)
+            + (onArchive ? 1 : 0)) * 34 + 10}
           gap={4}>
           {canRename && (
             <MenuItem
@@ -631,6 +640,28 @@ export function ChatCard({
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); setExpiryMenu(anchor); }}
             />
           )}
+          {/* Архив (план «Архив чатов» v4): ручное движение чата между обычным списком и
+              разделом «Архив». Архив ПРЯЧЕТ чат, а не удаляет — иконка archive на уходе
+              и archive-restore на возврате, чтобы разница читалась одним взглядом. Сам
+              запрос идёт через onArchive: вызывающая сторона ловит 409 «в чате идёт ход»
+              и показывает тостом. Пункт доступен только когда обработчик задан — на витрине
+              UI-кита, например, его нет. */}
+          {onArchive && (() => {
+            const isArchived = isArchivedChat(s);
+            return (
+              <MenuItem
+                icon={isArchived
+                  ? <ArchiveRestore size={15} strokeWidth={2} />
+                  : <Archive size={15} strokeWidth={2} />}
+                label={isArchived ? 'Вернуть из архива' : 'Убрать в архив'}
+                onClick={e => {
+                  e.stopPropagation();
+                  setMenu(null);
+                  onArchive(!isArchived);
+                }}
+              />
+            );
+          })()}
           <MenuItem
             icon={<Trash2 size={15} strokeWidth={2} />}
             label="Удалить"

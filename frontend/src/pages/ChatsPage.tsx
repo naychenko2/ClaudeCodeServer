@@ -23,6 +23,7 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
+import { isArchivedChat } from '../lib/chatFilters';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -179,8 +180,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   const activeChat = chats.find(c => c.id === activeId) ?? null;
 
-  // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
-  const unreadCount = useUnreadChatCount(chats);
+  // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead. Считаем по
+  // СЫРОМУ массиву (без filter()) — matchChatFilter в ChatList прячет архивные,
+  // и без ручного отсечения бейдж рельсы показывал бы «1» от скрытого архивного
+  // чата, пока пользователь не откроет раздел «Архив». Фильтр архивных — узкий
+  // type guard isArchivedChat из chatFilters (готовый bool с сервера).
+  const unreadCount = useUnreadChatCount(chats.filter(c => !isArchivedChat(c)));
 
   // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
   // берутся по одной сессии.

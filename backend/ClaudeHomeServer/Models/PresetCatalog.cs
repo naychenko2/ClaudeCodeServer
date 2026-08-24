@@ -91,7 +91,7 @@ public static class PresetCatalog
 
         - Markdown — источник правды. Офисные форматы собираются из него и руками не правятся.
         - Все `.md` — UTF-8 без BOM.
-        - Схемы — ASCII-артом в кодовых блоках; широкие — виджетом.
+        - Схемы — Mermaid-кодом в ```mermaid-блоках; сложная вёрстка — виджетом.
         """;
 
     private const string DocsStatusMd = $"""

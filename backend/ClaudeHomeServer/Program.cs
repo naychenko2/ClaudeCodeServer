@@ -389,6 +389,9 @@ builder.Services.AddSingleton<TeamWaveService>();
 // в стадии «волна N» навсегда
 AddHosted<TeamWaveWatchdog>();
 builder.Services.AddSingleton<SessionSummaryService>();
+// Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов»): one-shot сборка
+// по кнопке с кэшем в Session.ArchiveSummary; «Итог сессии» выше — другой маршрут
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ChatDigestService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
@@ -442,6 +445,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGat
 AddHosted<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>();
 AddHosted<TaskSchedulerService>();
 AddHosted<ChatExpiryService>();
+// Автоправило архивации чатов (флаг chat-auto-archive) — singleton + hosted: кнопка
+// «Применить сейчас» (POST /api/chats/archive-run) дёргает RunNowAsync того же инстанса
+builder.Services.AddSingleton<ChatArchiveService>();
+AddHostedFrom(sp => sp.GetRequiredService<ChatArchiveService>());
 AddHosted<ChatTurnLoggerService>();
 AddHosted<NoteExpiryService>();
 // Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию

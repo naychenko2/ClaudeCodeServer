@@ -35,7 +35,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays };
     }
 
     // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ — имя рисует компонент lucide фронта,
@@ -302,6 +302,23 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(new { project = WithCount(updated), handsStopped = stopped });
     }
 
+    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive, план v4 шаг 6):
+    // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
+    // личный порог владельца. Настройка за флагом: ручной архив и раздел «Архив» работают
+    // без него, поэтому и настраивать порог без флага нельзя (правило не работает).
+    [HttpPut("{id}/archive-days")]
+    public IActionResult SetArchiveDays(string id, [FromBody] SetProjectArchiveDaysRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
+            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
+        if (req.Days is not null && req.Days is not (>= 1 and <= 365))
+            return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
+        var updated = projects.SetArchiveAfterDays(id, req.Days);
+        return Ok(WithCount(updated));
+    }
+
     // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)
     [HttpPut("{id}/board-columns")]
     public IActionResult UpdateBoardColumns(string id, [FromBody] UpdateBoardColumnsRequest req)
@@ -503,6 +520,8 @@ public record CreateProjectRequest(string Name, string? RootPath, bool CreateDir
 // null = не менять, пустой список = «никто не включён»).
 // Enabled — грань десктопного агента в проекте (ADR-008): выключение гасит сеансы рук
 public record SetDesktopAgentRequest(bool Enabled);
+// Порог автоправила архивации проекта (дней); null — наследовать личный порог владельца
+public record SetProjectArchiveDaysRequest(int? Days);
 
 public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOn = null, bool? AutoImportDossiers = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);

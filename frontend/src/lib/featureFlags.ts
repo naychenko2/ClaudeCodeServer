@@ -12,6 +12,11 @@ export const FLAGS = {
   changeDossiersRecall: 'change-dossiers-recall',
   desktopAgent: 'desktop-agent',
   specialtyPromptSections: 'specialty-prompt-sections',
+  // Автоправило архивации чатов (план «Архив чатов» v4, шаг 6): фоновый сервис
+  // раз в час убирает в архив чаты без активности дольше порога. Флаг закрывает
+  // ТОЛЬКО автоправило и его настройки; ручной архив, раздел «Архив» и сводка
+  // карточки работают без флага.
+  chatAutoArchive: 'chat-auto-archive',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

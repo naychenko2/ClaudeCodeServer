@@ -409,6 +409,21 @@ public class Session
     // ТОЛЬКО ей, а не выбранной существующей: молчаливая дозапись прав готовой персоне —
     // тихая эскалация (как и ручная смена дефолта из настроек). Персистится в sessions.json.
     public string? OnboardingCreatedPersonaId { get; set; }
+    // --- Архив чатов (план v4): архив ПРЯЧЕТ чат, а не удаляет — история, метаданные и
+    // ClaudeSessionId целы, возврат одной кнопкой. Все поля nullable с дефолтом: старые
+    // записи sessions.json читаются штатно, BackupSchema.Version не двигается (добавление
+    // поля с дефолтом формат не ломает). Момент архивации; null — чата в архиве нет.
+    public DateTime? ArchivedAt { get; set; }
+    // Кто архивировал: "user" (пункт «Убрать в архив») | "rule" (автоправило за флагом
+    // chat-auto-archive).
+    public string? ArchivedBy { get; set; }
+    // Идентификатор прохода автоправила: откат из уведомления возвращает ровно одну пачку
+    // этого прохода, а не всю историю правила. null у ручной архивации.
+    public string? ArchiveBatchId { get; set; }
+    // Кэш сводки карточки архива (место chat-digest): строится по кнопке «Собрать сводку»,
+    // инвалидируется активностью (при UpdatedAt > ArchiveSummaryAt сводка не актуальна).
+    public string? ArchiveSummary { get; set; }
+    public DateTime? ArchiveSummaryAt { get; set; }
     // Онбординг этой сессии уже финализирован (make-default прошёл): повторный вызов из живой
     // сессии — no-op, второе событие onboarding_completed в ленту не уходит (знакомство v2, п.5).
     // Персистится в sessions.json.
@@ -476,4 +491,13 @@ public class Session
     // задачи. Вычисляется, не хранится — как Origin/ParentSessionId. Фронт объединяет его с
     // статусом Finished в чип «Готово» фильтра чатов (маппинг статусов, макет A).
     public bool TaskDone => TaskId is not null && (TaskDoneResolver?.Invoke(TaskId) ?? false);
+
+    // Чат в архиве: его архивировали (ArchivedAt) и активности после этого не было
+    // (UpdatedAt не двигался). Вычисляется, не хранится — как Origin/TaskDone. Признак
+    // ПРОИЗВОДНЫЙ, поэтому мутатора «снять архив» нет: сообщения в ленту дописываются
+    // не только ходом человека (фоновые агенты, task_notification, доклад задачи), и одна
+    // точка «старт хода» ловила бы меньшинство — а здесь любая активность (UpdatedAt >
+    // ArchivedAt) возвращает чат сама. Исключения «не-активности» (значки тем, переименование,
+    // правка name/model/effort/tags) UpdatedAt у архивного чата не двигают — см. SessionManager.
+    public bool IsArchived => ArchivedAt is DateTime archived && UpdatedAt <= archived;
 }

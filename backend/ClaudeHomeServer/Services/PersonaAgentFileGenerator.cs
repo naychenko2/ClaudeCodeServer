@@ -39,7 +39,9 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
     public string Generate(Persona persona, PersonaAgentFileContext context)
     {
         var tools = PersonaConsultantToolset.Build(persona, context.WebAllowed,
-            context.TasksAllowed, context.NotesAllowed, context.CodeGraphAllowed);
+            context.TasksAllowed, context.NotesAllowed,
+            notesWriteAllowed: context.NotesAllowed, tasksWriteAllowed: context.TasksAllowed,
+            context.CodeGraphAllowed);
         var pmemKey = PersonaConsultantToolset.PmemServerKey(persona.Handle);
 
         var sb = new StringBuilder();

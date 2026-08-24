@@ -105,4 +105,50 @@ public class SpecialtyCatalogTests
         SpecialtyCatalog.TryGetByKey("", out _).Should().BeFalse();
         SpecialtyCatalog.TryGetByKey(null, out _).Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Secretary)]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Planner)]
+    [InlineData(PersonaSpecialty.Analyst)]
+    [InlineData(PersonaSpecialty.Librarian)]
+    public void CanWriteNotes_TrueДляРазрешённыхСпециальностей(PersonaSpecialty specialty)
+        => SpecialtyCatalog.CanWriteNotes(specialty).Should().BeTrue();
+
+    [Theory]
+    [InlineData(PersonaSpecialty.None)]
+    [InlineData(PersonaSpecialty.Reviewer)]
+    [InlineData(PersonaSpecialty.Executor)]
+    [InlineData(PersonaSpecialty.Mentor)]
+    [InlineData(PersonaSpecialty.Designer)]
+    [InlineData(PersonaSpecialty.Consultant)]
+    [InlineData(PersonaSpecialty.Tester)]
+    [InlineData(PersonaSpecialty.BackendExecutor)]
+    [InlineData(PersonaSpecialty.FrontendExecutor)]
+    [InlineData(PersonaSpecialty.DevopsExecutor)]
+    public void CanWriteNotes_FalseДляОстальных(PersonaSpecialty specialty)
+        => SpecialtyCatalog.CanWriteNotes(specialty).Should().BeFalse();
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Secretary)]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Planner)]
+    public void CanWriteTasks_TrueДляРазрешённыхСпециальностей(PersonaSpecialty specialty)
+        => SpecialtyCatalog.CanWriteTasks(specialty).Should().BeTrue();
+
+    [Theory]
+    [InlineData(PersonaSpecialty.None)]
+    [InlineData(PersonaSpecialty.Analyst)]
+    [InlineData(PersonaSpecialty.Librarian)]
+    [InlineData(PersonaSpecialty.Reviewer)]
+    [InlineData(PersonaSpecialty.Executor)]
+    [InlineData(PersonaSpecialty.Mentor)]
+    [InlineData(PersonaSpecialty.Designer)]
+    [InlineData(PersonaSpecialty.Consultant)]
+    [InlineData(PersonaSpecialty.Tester)]
+    [InlineData(PersonaSpecialty.BackendExecutor)]
+    [InlineData(PersonaSpecialty.FrontendExecutor)]
+    [InlineData(PersonaSpecialty.DevopsExecutor)]
+    public void CanWriteTasks_FalseДляОстальных(PersonaSpecialty specialty)
+        => SpecialtyCatalog.CanWriteTasks(specialty).Should().BeFalse();
 }

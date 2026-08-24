@@ -99,4 +99,18 @@ public static class SpecialtyCatalog
     // (OmcPersonaRouting), git-секция (PersonaBindingsService). Tester сюда НЕ входит:
     // у него свой набор секций, исполнительские права он получает отдельным условием.
     public static bool IsExecutorKind(PersonaSpecialty specialty) => Get(specialty).ExecutorFamily;
+
+    // Write-доступ к заметкам у сабагента: секретарь/координатор/планировщик + аналитик/библиотекарь
+    public static bool CanWriteNotes(PersonaSpecialty specialty) =>
+        specialty is PersonaSpecialty.Secretary
+         or PersonaSpecialty.Coordinator
+         or PersonaSpecialty.Planner
+         or PersonaSpecialty.Analyst
+         or PersonaSpecialty.Librarian;
+
+    // Write-доступ к задачам у сабагента: секретарь/координатор/планировщик
+    public static bool CanWriteTasks(PersonaSpecialty specialty) =>
+        specialty is PersonaSpecialty.Secretary
+         or PersonaSpecialty.Coordinator
+         or PersonaSpecialty.Planner;
 }

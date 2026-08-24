@@ -11,10 +11,11 @@
 
 import { useContext, useEffect, useState } from 'react';
 import { AudioLines, Volume2, Square } from 'lucide-react';
-import { C, FS, R } from '../../lib/design';
+import { C, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui';
 import { speak, stopSpeaking, primeAudio } from '../../lib/tts';
+import { splitVoiceDigest } from '../../lib/turnSpeechStream';
 import { ChatSessionContext } from './contexts';
 
 // Правило разбора ОДНО с озвучкой (extractVoiceDigest): что читают вслух, то и
@@ -24,6 +25,9 @@ export { extractVoiceDigest as parseVoiceDigest } from '../../lib/turnSpeechStre
 
 export function VoiceDigestNote({ text, personaId }: { text: string; personaId?: string }) {
   const [playing, setPlaying] = useState(false);
+  // Вывод и тезисы. Вслух при этом читается СЫРОЙ text (санитайзер речи сам срежет
+  // дефисы в начале строк): разбор — дело показа, а не произношения
+  const { lead, bullets } = splitVoiceDigest(text);
   // Чат берём из контекста ленты: разовое чтение — такие же деньги, как озвучка хода,
   // и в аналитике трат оно должно лечь на свой чат
   const sessionId = useContext(ChatSessionContext);
@@ -58,7 +62,13 @@ export function VoiceDigestNote({ text, personaId }: { text: string; personaId?:
             можно было НЕ читать, а мелкий приглушённый текст к этому не располагает.
             wordBreak — против длинной ссылки в пересказе на узком экране (360 CSS) */}
         <div style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.45, wordBreak: 'break-word' }}>
-          {text}
+          {lead && <div>{lead}</div>}
+          {bullets.length > 0 && (
+            /* Отступ списка небольшой: плашка стоит под ответом и вложенности не изображает */
+            <ul style={{ margin: lead ? `${SP.xs}px 0 0` : 0, paddingLeft: SP.lg }}>
+              {bullets.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+          )}
         </div>
       </div>
       <IconButton

@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Полоса контролов композера — приоритетное схлопывание · макет</title>
+<style>
+/* ===== Токены (значения из frontend/src/lib/theme.css; семантика — C.* из design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-smoke:#B4A899;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-lift:0 -1px 2px rgba(60,50,35,.06), 0 -6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-smoke:#7E7566;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-lift:0 -1px 2px rgba(0,0,0,.30), 0 -8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --shadow-press:inset 0 1px 4px rgba(0,0,0,.38);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+.serif { font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg.ic { width:14px; height:14px; flex-shrink:0; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1180px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:48px 0 4px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+h2.sec:first-of-type { margin-top:8px; }
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:78ch; }
+p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 8px; }
+.card {
+  background:var(--c-bg-panel); border:1px solid var(--c-border-light);
+  border-radius:14px; box-shadow:var(--shadow-island); padding:16px; margin-bottom:16px;
+}
+.card h3 { margin:0 0 2px; font-size:14px; font-weight:700; color:var(--c-text-heading); }
+.card .sub { margin:0 0 12px; font-size:12px; color:var(--c-text-secondary); }
+.row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+.pillbox { display:flex; flex-direction:column; gap:10px; align-items:flex-start; }
+
+/* ===== Полоса контролов («губа») — как в Composer.tsx: bgMain, borderLight, radius 0 0 14 14 ===== */
+.strip {
+  display:flex; align-items:center; gap:4px; flex-wrap:nowrap; min-width:0;
+  padding:15px 8px 4px; background:var(--c-bg-main);
+  border:1px solid var(--c-border-light); border-radius:0 0 14px 14px;
+  box-shadow:var(--shadow-island);
+}
+.strip.mobile { gap:6px; padding:7px 2px; border:none; box-shadow:none; background:transparent; border-radius:0; }
+.s-left { display:flex; align-items:center; gap:4px; flex-shrink:0; }
+.s-badges { display:flex; align-items:center; gap:4px; min-width:0; }
+.s-right { margin-left:auto; display:flex; align-items:center; gap:4px; flex-shrink:0; }
+
+/* Круглые кнопки левого блока (modeButton + сворачиваемые) */
+.rbtn {
+  width:36px; height:36px; border-radius:50%; border:1px solid var(--c-border);
+  background:var(--c-bg-white); color:var(--c-text-secondary); cursor:pointer; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+}
+.rbtn:active { box-shadow:var(--shadow-press); }
+.rbtn.accent { background:var(--c-accent); border-color:transparent; color:var(--c-on-accent); }
+
+/* Кнопка «⋯» (ToolbarOverflowMenu) */
+.dots {
+  width:38px; height:28px; border-radius:9px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); color:var(--c-text-secondary); cursor:pointer; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+.dots .doti { width:3px; height:3px; border-radius:50%; background:currentColor; margin:0 1.5px; }
+
+/* Пикеры правой группы: модель / усилие / собеседник */
+.pick {
+  height:28px; padding:0 10px; border-radius:9px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); color:var(--c-text-secondary); cursor:pointer; flex-shrink:0;
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:11px; font-weight:600; white-space:nowrap;
+}
+.pick.icononly { width:28px; padding:0; justify-content:center; }
+.avatar {
+  width:22px; height:22px; border-radius:50%; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:#8E4A82; color:#fff; font-size:10px; font-weight:700;
+}
+.pick .avatar { margin-left:-4px; }
+
+/* ModePill (пилюля механики / цикла) — как в Composer.tsx: accentLight, R.pill=9 */
+.pill {
+  display:inline-flex; align-items:stretch; height:28px; max-width:100%;
+  border-radius:9px; overflow:hidden; flex-shrink:0; background:var(--c-accent-light);
+}
+.pill .seg {
+  width:28px; flex-shrink:0; border:none; padding:0;
+  border-right:1px solid var(--c-accent-muted); background:transparent; color:var(--c-accent);
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  transition:background .15s;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+}
+.pill .seg:hover { background:var(--c-accent-muted); }
+.pill .seg:active { box-shadow:var(--shadow-press); }
+.pill .val {
+  display:inline-flex; align-items:center; gap:6px; min-width:0; padding:0 9px;
+  color:var(--c-accent); font-size:11px; font-weight:600; white-space:nowrap;
+}
+.pill .x {
+  border:none; background:none; color:var(--c-accent); cursor:pointer;
+  width:18px; height:18px; border-radius:50%; padding:0; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+}
+.pill .x:active { box-shadow:var(--shadow-press); }
+
+/* Компактная пилюля механики: [иконка][✕], ✕ на постоянной заливке accentMuted —
+   волосяной разделитель в тёмной теме исчезает (accentMuted на accentLight), заливка — нет */
+.pill.compact .xseg {
+  width:26px; flex-shrink:0; border:none; padding:0; cursor:pointer;
+  background:var(--c-accent-muted); color:var(--c-accent);
+  display:flex; align-items:center; justify-content:center;
+  transition:filter .15s;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+}
+.pill.compact .xseg:hover { filter:brightness(.96); }
+.pill.compact .xseg:active { box-shadow:var(--shadow-press); }
+.pill.compact .seg { border-right:none; }
+/* Опция: короткое имя (shortName ≤ 4) остаётся и в компактной форме */
+.pill.compact .short {
+  display:inline-flex; align-items:center; padding:0 2px 0 7px;
+  color:var(--c-accent); font-size:11px; font-weight:600; white-space:nowrap;
+}
+/* Мобильная компактная: тач-цель 36×36 */
+.pill.compact.touch { height:36px; }
+.pill.compact.touch .seg { width:36px; }
+.pill.compact.touch .xseg { width:36px; }
+
+/* Бейдж «Командная реализация» (TeamImplementBadge), тон work */
+.krbadge {
+  display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 9px;
+  border-radius:9px; border:none; cursor:pointer; flex-shrink:0;
+  font-size:11px; font-weight:600; white-space:nowrap;
+  background:var(--c-accent-light); color:var(--c-accent);
+}
+.krbadge .pdot { width:6px; height:6px; border-radius:50%; background:var(--c-accent); flex-shrink:0; }
+/* Чип «Авто» */
+.autochip {
+  display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 9px;
+  border-radius:9px; cursor:pointer; flex-shrink:0;
+  font-size:11px; font-weight:600; white-space:nowrap;
+  background:var(--c-accent-light); color:var(--c-accent);
+  border:1px solid var(--c-accent-muted);
+}
+
+/* Меню «⋯» (карточка как у Menu: bgCard, shadow-dropdown) */
+.menu {
+  width:300px; background:var(--c-bg-card); border:1px solid var(--c-border-light);
+  border-radius:12px; box-shadow:var(--shadow-dropdown); padding:6px;
+}
+.mi {
+  display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+  border:none; cursor:pointer; padding:8px; border-radius:8px; background:none;
+  color:var(--c-text-heading); font-size:13px; font-weight:600; font-family:inherit;
+}
+.mi:hover { background:var(--c-bg-selected); }
+.mi .micon {
+  width:28px; height:28px; border-radius:8px; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--c-accent-light); color:var(--c-accent);
+}
+.mi .mtxt { flex:1; min-width:0; }
+.mi .msub { display:block; font-size:11px; font-weight:400; color:var(--c-text-muted); margin-top:1px; }
+
+/* Тумблер (toggle) */
+.tg {
+  width:32px; height:18px; border-radius:999px; background:var(--c-accent);
+  position:relative; flex-shrink:0; border:none; cursor:pointer; padding:0;
+}
+.tg::after {
+  content:''; position:absolute; width:14px; height:14px; border-radius:50%;
+  background:#fff; top:2px; right:2px; box-shadow:var(--shadow-thumb);
+}
+.tg.off { background:var(--c-track); }
+.tg.off::after { right:auto; left:2px; }
+
+/* Поповер бейджа КР (как Menu: bgCard, shadow-dropdown) */
+.popover {
+  width:300px; background:var(--c-bg-card); border:1px solid var(--c-border-light);
+  border-radius:12px; box-shadow:var(--shadow-dropdown); padding:7px 9px;
+}
+.popover h4 {
+  display:flex; align-items:center; gap:7px; margin:0 0 4px;
+  font-family:"PT Serif",Georgia,serif; font-size:14px; font-weight:700; color:var(--c-text-heading);
+}
+.popover p { margin:0; font-size:12px; color:var(--c-text-secondary); line-height:1.45; }
+.prow {
+  display:flex; align-items:center; gap:7px; width:100%; text-align:left;
+  border:none; cursor:pointer; padding:7px 8px; border-radius:8px; background:none;
+  color:var(--c-text-heading); font-size:13px; font-weight:600; font-family:inherit;
+}
+.prow:hover { background:var(--c-bg-selected); }
+.prow.danger { color:var(--c-danger-text); }
+.prow.danger:hover { background:var(--c-danger-bg); }
+.pdiv { margin:10px 0 0; padding-top:10px; border-top:1px dashed var(--c-divider); }
+/* Строка-свитч «Авто-волны» — сюда переезжает чип «Авто», когда его съедает схлопывание */
+.switchrow {
+  display:flex; align-items:center; gap:7px; width:100%;
+  padding:7px 8px; border-radius:8px; border:none; background:none; cursor:pointer;
+  color:var(--c-text-heading); font-size:13px; font-weight:600; font-family:inherit; text-align:left;
+}
+.switchrow:hover { background:var(--c-bg-selected); }
+.switchrow .sl { flex:1; min-width:0; }
+.switchrow .ssub { display:block; font-size:11px; font-weight:400; color:var(--c-text-muted); margin-top:1px; }
+.newbadge {
+  display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:9px;
+  background:var(--c-info-bg); color:var(--c-info); margin-left:6px; vertical-align:1px;
+}
+
+/* Живой стенд: ползунок + подпись ступени */
+.stage-ctl { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+.stage-ctl input[type=range] { flex:1; min-width:200px; accent-color:var(--c-accent); }
+.stage-ctl .w { font-family:"JetBrains Mono",monospace; font-size:13px; color:var(--c-text-heading); min-width:64px; text-align:right; }
+.stage-checks { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+.stage-checks label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--c-text-primary); cursor:pointer; }
+.stage-checks input { accent-color:var(--c-accent); }
+.stage-readout {
+  margin-top:10px; font-size:12px; color:var(--c-text-secondary);
+  font-family:"JetBrains Mono",monospace;
+}
+.stage-readout b { color:var(--c-text-heading); }
+.strip-host { overflow:hidden; }
+
+/* Мобильный фрейм 360 */
+.phone {
+  width:360px; max-width:100%; border:1px solid var(--c-border); border-radius:18px;
+  background:var(--c-bg-panel); padding:12px; box-shadow:var(--shadow-card);
+}
+.phone .scr { background:var(--c-bg-main); border-radius:10px; padding:8px; }
+
+@media (prefers-reduced-motion:no-preference) {
+  .krbadge .pdot { animation:pd 1.6s ease-in-out infinite; }
+  @keyframes pd { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+}
+</style>
+</head>
+<body>
+
+<!-- Иконки (lucide-подобные, inline): defs -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <g id="i-users"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="9" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-zap"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></g>
+    <g id="i-repeat"><path d="m17 2 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11v-1a4 4 0 0 1 4-4h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m7 22-4-4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 13v1a4 4 0 0 1-4 4H3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-x"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-clip"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g id="i-mic"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-cpu"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9" y="9" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-gauge"><path d="m12 14 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M3.34 19a10 10 0 1 1 17.32 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-chev"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g id="i-pause"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></g>
+    <g id="i-power"><path d="M12 2v10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+    <g id="i-msg"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></g>
+    <g id="i-list"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g>
+  </defs>
+</svg>
+
+<div class="bar">
+  <h1 class="serif">Полоса контролов композера — приоритетное схлопывание</h1>
+  <div class="toggle" role="group" aria-label="Тема">
+    <button id="tl" class="on" onclick="setTheme('light')">Светлая</button>
+    <button id="td" onclick="setTheme('dark')">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <h2 class="sec">Живая полоса</h2>
+  <p class="note">
+    Ползунок меняет ширину полосы (320…1100 px). Ступень считается по бюджету:
+    <code>free = ширина − padX − левый блок − «⋯» − зазоры</code>; перебираем форму правой группы
+    <code>A-wide → A → B → C</code>, берём первую, при которой активные бейджи влезают целиком;
+    если и при <code>C</code> не влезают — понижаем бейджи по рангу снизу вверх
+    (имя пилюли механики → чип «Авто» → цикл в «⋯» → бейдж КР в «⋯»). Пилюля механики остаётся всегда.
+    Порядок бейджей исправлен: <code>[пилюля механики][бейдж КР][цикл]</code> — обрезка справа больше не съедает самое важное.
+  </p>
+  <div class="card">
+    <div class="stage-ctl">
+      <input type="range" id="rng" min="320" max="1100" value="900" oninput="renderLive()">
+      <span class="w" id="rngW">900</span>
+    </div>
+    <div class="stage-checks">
+      <label><input type="checkbox" id="cbTp" checked onchange="renderLive()"> Пилюля механики «КС»</label>
+      <label><input type="checkbox" id="cbKr" checked onchange="renderLive()"> Бейдж «Командная реализация»</label>
+      <label><input type="checkbox" id="cbLoop" checked onchange="renderLive()"> Цикл «до готово»</label>
+    </div>
+    <div class="strip-host"><div id="liveStrip"></div></div>
+    <div class="stage-readout" id="liveReadout"></div>
+  </div>
+
+  <h2 class="sec">Ступени правой группы</h2>
+  <p class="note">
+    Форма правой группы выбирается по бюджету, а не по порогам 640/900. Порядок жертв внутри неё:
+    подпись собеседника → подписи модели и усилия (парой — на дефолте «Усилие» это имя контрола,
+    ноль информации за 100 px). Номиналы: A-wide 524 · A 364 · B 244 · C 160.
+  </p>
+  <div id="formsGrid"></div>
+
+  <h2 class="sec">Лестница жертв: предельный набор (три бейджа)</h2>
+  <p class="note">
+    Все три бейджа активны. Правая группа дошла до <code>C</code>, места всё ещё не хватает —
+    дальше понижаем бейджи по рангу снизу вверх. Пилюля механики (ранг 1) не жертвуется никогда:
+    она меняет смысл кнопки «Отправить» прямо сейчас. Пустая полоса (бейджей нет) — в конце.
+  </p>
+  <div id="ladderGrid"></div>
+
+  <h2 class="sec">Компактная пилюля механики</h2>
+  <p class="note">
+    <code>[иконка 28×28 → настройки][✕ 26×28 → снять]</code>. Разделитель между сегментами —
+    не волосяная линия: в тёмной теме <code>C.accentMuted</code> на <code>C.accentLight</code>
+    исчезает. Вместо него сегмент ✕ получает постоянную заливку <code>C.accentMuted</code> —
+    граница читается в обеих темах. Понажимайте сегменты: тач-состояние
+    <code>:active</code> — тень внутрь (<code>SHADOW.press</code>), <code>touch-action: manipulation</code>.
+  </p>
+  <div class="card">
+    <div class="row">
+      <div class="pillbox">
+        <div class="cap">Полная (ранг 1, по умолчанию)</div>
+        <span class="pill">
+          <button class="seg" title="Настройки механики"><svg class="ic"><use href="#i-msg"/></svg></button>
+          <span class="val">Командное обсуждение
+            <button class="x" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+          </span>
+        </span>
+      </div>
+      <div class="pillbox">
+        <div class="cap">Компактная — имя свёрнуто (ширина 72)</div>
+        <span class="pill compact">
+          <button class="seg" title="Механика «КС» — настройки"><svg class="ic"><use href="#i-msg"/></svg></button>
+          <button class="xseg" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+        </span>
+      </div>
+      <div class="pillbox">
+        <div class="cap">Опция: shortName ≤ 4 символов сохраняет слово (~26 px)</div>
+        <span class="pill compact">
+          <button class="seg" title="Механика «КС» — настройки"><svg class="ic"><use href="#i-msg"/></svg></button>
+          <span class="short">КС</span>
+          <button class="xseg" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+        </span>
+      </div>
+      <div class="pillbox">
+        <div class="cap">Мобильная: тач-цель 36×36</div>
+        <span class="pill compact touch">
+          <button class="seg" title="Механика «КС» — настройки"><svg class="ic"><use href="#i-msg"/></svg></button>
+          <button class="xseg" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Бейдж КР без чипа «Авто» → строка-свитч в поповере</h2>
+  <p class="note">
+    Когда место кончается, чип «Авто» уезжает из полосы, но переключатель не теряется:
+    в поповере бейджа появляется строка-свитч «Авто-волны» — та же механика, что у пункта в «⋯».
+  </p>
+  <div class="card">
+    <div class="row">
+      <div class="pillbox">
+        <div class="cap">Полоса: бейдж как есть, чипа нет</div>
+        <div class="strip" style="max-width:560px">
+          <div class="s-badges">
+            <button class="krbadge"><svg class="ic" style="width:11px;height:11px"><use href="#i-users"/></svg>КР · Волна 2/3<span class="pdot"></span></button>
+          </div>
+          <div class="s-right">
+            <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
+            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
+            <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="pillbox">
+        <div class="cap">Поповер бейджа (клик по «КР · Волна 2/3»)</div>
+        <div class="popover">
+          <h4><svg class="ic" style="color:var(--c-accent)"><use href="#i-users"/></svg>Командная реализация</h4>
+          <p>Штаб разбивает задачу на волны и раздаёт их исполнителям. Координатор следит за ходом и собирает итог.</p>
+          <div class="pdiv">
+            <button class="switchrow">
+              <svg class="ic" style="color:var(--c-accent)"><use href="#i-zap"/></svg>
+              <span class="sl">Авто-волны<span class="ssub">Следующая волна запускается без подтверждения</span></span>
+              <span class="tg" role="switch" aria-checked="true"></span>
+            </button>
+          </div>
+          <div class="pdiv">
+            <button class="prow"><svg class="ic"><use href="#i-pause"/></svg>Остановить</button>
+          </div>
+          <div class="pdiv">
+            <button class="prow danger"><svg class="ic"><use href="#i-power"/></svg>Выключить режим</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Уведённые в «⋯»: цикл и бейдж КР</h2>
+  <p class="note">
+    Пункт меню — это не обрезанный бейдж, а полноценная строка: иконка, название, состояние
+    одной строкой и тумблер. Клик по строке бейджа КР открывает его обычный поповер.
+  </p>
+  <div class="card">
+    <div class="row">
+      <div class="pillbox">
+        <div class="cap">Предельная полоса: всё, что не влезло, — в «⋯»</div>
+        <div class="strip" style="max-width:430px">
+          <div class="s-left">
+            <button class="rbtn" title="Режим"><svg class="ic"><use href="#i-zap"/></svg></button>
+          </div>
+          <div class="s-badges">
+            <span class="pill compact">
+              <button class="seg" title="Механика «КС» — настройки"><svg class="ic"><use href="#i-msg"/></svg></button>
+              <button class="xseg" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+            </span>
+          </div>
+          <button class="dots" title="Ещё"><span class="doti"></span><span class="doti"></span><span class="doti"></span></button>
+          <div class="s-right">
+            <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
+            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
+            <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="pillbox">
+        <div class="cap">Меню «⋯» открыто</div>
+        <div class="menu">
+          <button class="mi">
+            <span class="micon"><svg class="ic"><use href="#i-repeat"/></svg></span>
+            <span class="mtxt">Цикл «до готово»<span class="msub">Итерация 3 · работает</span></span>
+            <span class="tg" role="switch" aria-checked="true"></span>
+          </button>
+          <button class="mi">
+            <span class="micon"><svg class="ic"><use href="#i-users"/></svg></span>
+            <span class="mtxt">Командная реализация<span class="msub">Волна 2/3 · авто включено</span></span>
+            <span class="tg" role="switch" aria-checked="true"></span>
+          </button>
+          <button class="mi">
+            <span class="micon" style="background:var(--c-bg-selected);color:var(--c-text-secondary)"><svg class="ic"><use href="#i-list"/></svg></span>
+            <span class="mtxt">Режим «План»<span class="msub">Сначала план, потом код</span></span>
+            <span class="tg off" role="switch" aria-checked="false"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Мобильная колонка 360</h2>
+  <p class="note">
+    Тот же алгоритм на мобильных номиналах: левый блок 48, «⋯» 46, правая C 164,
+    компактная пилюля с тач-целями 36×36 (72). Нижний ориентир продукта — 360 CSS px
+    (<code>docs/design/target-devices.md</code>), ниже не проектируем.
+  </p>
+  <div class="row">
+    <div class="phone">
+      <div class="cap">Бейджей нет · правая C</div>
+      <div class="scr">
+        <div class="strip mobile">
+          <div class="s-left">
+            <button class="rbtn" title="Режим" style="width:42px;height:42px"><svg class="ic"><use href="#i-zap"/></svg></button>
+          </div>
+          <div class="s-right">
+            <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
+            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
+            <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="cap">Пилюля механики + КР без «Авто» + цикл</div>
+      <div class="scr">
+        <div class="strip mobile">
+          <div class="s-left">
+            <button class="rbtn" title="Режим" style="width:42px;height:42px"><svg class="ic"><use href="#i-zap"/></svg></button>
+          </div>
+          <div class="s-badges">
+            <span class="pill compact touch">
+              <button class="seg" title="Механика «КС» — настройки"><svg class="ic"><use href="#i-msg"/></svg></button>
+              <button class="xseg" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+            </span>
+            <button class="krbadge" style="height:26px"><svg class="ic" style="width:11px;height:11px"><use href="#i-users"/></svg>КР · 2/3<span class="pdot"></span></button>
+          </div>
+          <div class="s-right">
+            <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
+            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
+            <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="cap">Предельная: пилюля + «⋯» (цикл и КР в меню)</div>
+      <div class="scr">
+        <div class="strip mobile">
+          <div class="s-left">
+            <button class="rbtn" title="Режим" style="width:42px;height:42px"><svg class="ic"><use href="#i-zap"/></svg></button>
+          </div>
+          <div class="s-badges">
+            <span class="pill compact touch">
+              <button class="seg" title="Механика «КС» — настройки"><svg class="ic"><use href="#i-msg"/></svg></button>
+              <button class="xseg" title="Снять режим"><svg class="ic" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+            </span>
+          </div>
+          <button class="dots" title="Ещё" style="width:46px;height:30px"><span class="doti"></span><span class="doti"></span><span class="doti"></span></button>
+          <div class="s-right">
+            <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
+            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
+            <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ===== Строители элементов полосы (общие для живого стенда и статичных секций) =====
+const ICON = (id, size) => `<svg class="ic" style="width:${size||14}px;height:${size||14}px"><use href="#i-${id}"/></svg>`;
+
+function leftHTML() {
+  return `<div class="s-left">
+    <button class="rbtn" title="Режим работы">${ICON('zap')}</button>
+    <button class="rbtn" title="Прикрепить файл">${ICON('clip')}</button>
+    <button class="rbtn" title="Голосовой ввод">${ICON('mic')}</button>
+  </div>`;
+}
+function dotsHTML() {
+  return `<button class="dots" title="Ещё — здесь свёрнутые бейджи"><span class="doti"></span><span class="doti"></span><span class="doti"></span></button>`;
+}
+function tpHTML(form) { // пилюля механики: full | compact
+  if (form === 'compact') {
+    return `<span class="pill compact">
+      <button class="seg" title="Механика «КС» — настройки">${ICON('msg')}</button>
+      <button class="xseg" title="Снять режим">${ICON('x',12)}</button>
+    </span>`;
+  }
+  return `<span class="pill">
+    <button class="seg" title="Механика «Командное обсуждение» — настройки">${ICON('msg')}</button>
+    <span class="val">КС <button class="x" title="Снять режим">${ICON('x',12)}</button></span>
+  </span>`;
+}
+function krHTML(form) { // бейдж КР: full (с чипом «Авто») | noauto | null (в меню)
+  if (form === 'menu') return '';
+  const badge = `<button class="krbadge" title="Командная реализация — подробности">${ICON('users',11)}КР · Волна 2/3<span class="pdot"></span></button>`;
+  const chip = `<button class="autochip" title="Авто-волны: включено">${ICON('zap',10)}Авто</button>`;
+  return badge + (form === 'full' ? chip : '');
+}
+function loopHTML(form) { // пилюля цикла: full | null (в меню)
+  if (form === 'menu') return '';
+  return `<span class="pill">
+    <button class="seg" title="Цикл «до готово» — остановить">${ICON('repeat')}</button>
+    <span class="val">До готово · 3</span>
+  </span>`;
+}
+function rightHTML(form) {
+  const modelFull = `<button class="pick" title="Модель">${ICON('cpu',12)}Sonnet 4.5${ICON('chev',11)}</button>`;
+  const effortFull = `<button class="pick" title="Усилие">${ICON('gauge',12)}Усилие${ICON('chev',11)}</button>`;
+  const compWide = `<button class="pick" title="Собеседник" style="max-width:360px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">UI/UX-дизайнер и исследователь (Майя)</span>${ICON('chev',11)}</button>`;
+  const compA = `<button class="pick" title="Собеседник" style="max-width:200px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">Дизайнер (Майя)</span>${ICON('chev',11)}</button>`;
+  const compIcon = `<button class="pick icononly" title="Собеседник: Дизайнер (Майя)"><span class="avatar" style="margin:0">М</span></button>`;
+  const modelIcon = `<button class="pick icononly" title="Модель: Sonnet 4.5">${ICON('cpu')}</button>`;
+  const effortIcon = `<button class="pick icononly" title="Усилие: среднее">${ICON('gauge')}</button>`;
+  switch (form) {
+    case 'A-wide': return `<div class="s-right">${modelFull}${effortFull}${compWide}</div>`;
+    case 'A':      return `<div class="s-right">${modelFull}${effortFull}${compA}</div>`;
+    case 'B':      return `<div class="s-right">${modelFull}${effortFull}${compIcon}</div>`;
+    default:       return `<div class="s-right">${modelIcon}${effortIcon}${compIcon}</div>`;
+  }
+}
+function stripHTML(step, active) {
+  const menu = (step.kr === 'menu' && active.kr) || (step.loop === 'menu' && active.loop);
+  const badges = (active.tp ? tpHTML(step.tp) : '')
+    + (active.kr ? krHTML(step.kr) : '')
+    + (active.loop ? loopHTML(step.loop) : '');
+  return `<div class="strip">
+    ${leftHTML()}
+    ${badges ? `<div class="s-badges">${badges}</div>` : ''}
+    ${menu ? dotsHTML() : ''}
+    ${rightHTML(step.right)}
+  </div>`;
+}
+
+// ===== Алгоритм ступеней (номиналы «с зазором», десктоп) =====
+const PADX = 16, LEFT = 112, MENU = 38, GAPS = 12;
+const RW = { 'A-wide': 524, 'A': 364, 'B': 244, 'C': 160 };
+const TPW = { full: 150, compact: 130 };
+const KRW = { full: 180, noauto: 160, menu: 0 };
+const LPW = { full: 155, menu: 0 };
+
+// Лестница: форма правой группы, затем бейджи по рангу снизу вверх
+const STEPS = [
+  { right: 'A-wide', tp: 'full',    kr: 'full',   loop: 'full', lost: [] },
+  { right: 'A',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['длинная подпись собеседника'] },
+  { right: 'B',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись собеседника'] },
+  { right: 'C',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись собеседника', 'подписи модели и усилия'] },
+  { right: 'C',      tp: 'compact', kr: 'full',   loop: 'full', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики'] },
+  { right: 'C',      tp: 'compact', kr: 'noauto', loop: 'full', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики', 'чип «Авто»'] },
+  { right: 'C',      tp: 'compact', kr: 'noauto', loop: 'menu', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики', 'чип «Авто»', 'пилюля цикла → «⋯»'] },
+  { right: 'C',      tp: 'compact', kr: 'menu',   loop: 'menu', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики', 'чип «Авто»', 'пилюля цикла → «⋯»', 'бейдж КР → «⋯»'] },
+];
+
+function stepWidth(step, active) {
+  let w = PADX + LEFT + RW[step.right] + GAPS;
+  if (active.tp) w += TPW[step.tp];
+  if (active.kr) w += KRW[step.kr];
+  if (active.loop) w += LPW[step.loop];
+  // «⋯» резервируем, только когда в нём реально что-то есть
+  if ((step.kr === 'menu' && active.kr) || (step.loop === 'menu' && active.loop)) w += MENU;
+  return w;
+}
+// Жертвы, относящиеся к неактивным бейджам, из подписи убираем
+function visibleLost(step, active) {
+  return step.lost.filter(l =>
+    !(l.includes('пилюле механики') && !active.tp) &&
+    !(l.includes('«Авто»') && !active.kr) &&
+    !(l.includes('бейдж КР') && !active.kr) &&
+    !(l.includes('цикла') && !active.loop));
+}
+function pickStep(W, active) {
+  let chosen = STEPS[STEPS.length - 1];
+  for (const s of STEPS) {
+    // ступени, сворачивающие неактивный бейдж, ничего не дают — пропускаем,
+    // чтобы подпись не врала (ширину считаем всё равно по активным)
+    if (stepWidth(s, active) <= W) { chosen = s; break; }
+  }
+  return chosen;
+}
+
+// ===== Живой стенд =====
+function renderLive() {
+  const W = +document.getElementById('rng').value;
+  document.getElementById('rngW').textContent = W;
+  const active = {
+    tp: document.getElementById('cbTp').checked,
+    kr: document.getElementById('cbKr').checked,
+    loop: document.getElementById('cbLoop').checked,
+  };
+  const step = pickStep(W, active);
+  const host = document.getElementById('liveStrip');
+  host.style.width = W + 'px';
+  host.innerHTML = stripHTML(step, active);
+  const lost = visibleLost(step, active);
+  const fits = stepWidth(step, active) <= W;
+  document.getElementById('liveReadout').innerHTML =
+    `<b>${W}px</b> · правая группа: <b>форма ${step.right}</b>` +
+    (lost.length ? ` · свёрнуто: ${lost.join(' → ')}` : ' · ничего не свёрнуто') +
+    (fits ? '' : ` · <b style="color:var(--c-danger-text)">предельная ступень не влезает по десктопным номиналам — на такой ширине действуют мобильные (см. колонку 360 ниже)</b>`);
+}
+
+// ===== Статичные секции =====
+function renderForms() {
+  const forms = [
+    ['A-wide', 'Всё словами, собеседник до 360 px — 524', 'Ничего не свёрнуто'],
+    ['A', 'Собеседник с короткой подписью (до 200 px) — 364', 'Свёрнуто: длинная подпись собеседника'],
+    ['B', 'Собеседник иконкой — 244', 'Свёрнуто: подпись собеседника'],
+    ['C', 'Всё иконками — 160/164', 'Свёрнуто: подпись собеседника, подписи модели и усилия'],
+  ];
+  document.getElementById('formsGrid').innerHTML = forms.map(([f, sub, lost]) => `
+    <div class="card">
+      <h3>Форма ${f}</h3>
+      <p class="sub">${sub} · ${lost}</p>
+      ${stripHTML({ right: f, tp: 'full', kr: 'full', loop: 'full' }, { tp: true, kr: false, loop: false })}
+    </div>`).join('');
+}
+function renderLadder() {
+  const titles = [
+    '0. База: форма C, все бейджи развёрнуты',
+    '1. Имя в пилюле механики свёрнуто',
+    '2. Чип «Авто» уехал в поповер бейджа',
+    '3. Пилюля цикла уехала в «⋯»',
+    '4. Бейдж КР уехал в «⋯» — предел',
+  ];
+  const steps = [STEPS[3], STEPS[4], STEPS[5], STEPS[6], STEPS[7]];
+  const all = { tp: true, kr: true, loop: true };
+  let html = steps.map((s, i) => `
+    <div class="card">
+      <h3>${titles[i]}</h3>
+      <p class="sub">Свёрнуто: ${visibleLost(s, all).join(' → ') || '—'}</p>
+      ${stripHTML(s, all)}
+    </div>`).join('');
+  html += `
+    <div class="card">
+      <h3>Пустая полоса: бейджей нет</h3>
+      <p class="sub">Никаких состояний — полоса не оставляет пустого гнезда, правая группа прижата вправо</p>
+      ${stripHTML({ right: 'A', tp: 'full', kr: 'full', loop: 'full' }, { tp: false, kr: false, loop: false })}
+    </div>`;
+  document.getElementById('ladderGrid').innerHTML = html;
+}
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.getElementById('tl').classList.toggle('on', t === 'light');
+  document.getElementById('td').classList.toggle('on', t === 'dark');
+}
+
+renderLive();
+renderForms();
+renderLadder();
+</script>
+</body>
+</html>

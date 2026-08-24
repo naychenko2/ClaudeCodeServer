@@ -1,18 +1,26 @@
 import { useState, useCallback, useLayoutEffect, useEffect, type RefObject } from 'react';
 
 // Сколько одинаковых по ширине кнопок влезает в полосу контролов, чтобы она осталась
-// В ОДНУ строку. Не влезшие вызывающий уводит в меню «⋯» — с конца списка, то есть
+// в ОДНУ строку. Не влезшие вызывающий уводит в меню «⋯» — с конца списка, то есть
 // справа налево.
 //
-// Считаем арифметикой, а не измерением каждой кнопки: все сворачиваемые кнопки полосы
-// квадратные и одного размера, поэтому достаточно ширины самой полосы и трёх несжимаемых
-// блоков (левый фиксированный, чипы-бейджи, правая группа пикеров). Ширины этих блоков
+// Считаем арифметикой от ширины полосы и номиналов трёх несжимаемых блоков
+// (фиксированный левый, бейджи состояния, правая группа пикеров). Ширины этих блоков
 // от результата НЕ зависят — поэтому пересчёт сходится и не зацикливается.
+// Раньше блоки измерялись через offsetWidth, но badgesRef был сжимаемым (flexShrink:1),
+// и его ширина зависела от того, сколько круглых кнопок мы уже показали — петля
+// расходилась, и круглые кнопки оставались при нулевых пилюлях. Теперь badgesRef
+// несжимаем (flexShrink:0), и его ширину мы подаём как константу.
 interface Options {
   stripRef: RefObject<HTMLElement | null>;
-  fixedLeftRef: RefObject<HTMLElement | null>;
-  badgesRef: RefObject<HTMLElement | null>;
-  rightRef: RefObject<HTMLElement | null>;
+  // Ширина фиксированного левого блока (modeButton и обвязка) — номинал по макету
+  leftBlock: number;
+  // Суммарная ширина показываемых бейджей состояния (teamPill + бейдж КР + loopPill).
+  // 0, если ни один бейдж сейчас не активен — блок пуст.
+  badgesWidth: number;
+  // Ширина правой группы (модель + усилие + собеседник) в текущей форме —
+  // A-wide / A / B / C. Номинал, не измерение.
+  rightWidth: number;
   count: number;        // сколько кнопок можно сворачивать
   enabled: boolean;     // false — сворачивание выключено (широкий экран), видно всё
   itemWidth: number;
@@ -25,7 +33,7 @@ interface Options {
 }
 
 export function useToolbarOverflow({
-  stripRef, fixedLeftRef, badgesRef, rightRef,
+  stripRef, leftBlock, badgesWidth, rightWidth,
   count, enabled, itemWidth, gap, menuWidth, reserve = 0,
 }: Options): number {
   const [visible, setVisible] = useState(count);
@@ -40,19 +48,17 @@ export function useToolbarOverflow({
     const cs = getComputedStyle(strip);
     const total = strip.clientWidth - parseFloat(cs.paddingLeft || '0') - parseFloat(cs.paddingRight || '0');
     // Несжимаемые соседи: их ширина не зависит от того, сколько кнопок мы покажем
-    const fixed = (fixedLeftRef.current?.offsetWidth ?? 0)
-      + (badgesRef.current?.offsetWidth ?? 0)
-      + (rightRef.current?.offsetWidth ?? 0);
+    const fixed = leftBlock + badgesWidth + rightWidth;
     // Каждая кнопка добавляет свою ширину + зазор перед собой. Плюс два зазора на
-    // несжимаемые блоки справа (чипы-бейджи и группа пикеров) — они остаются
-    // отдельными flex-детьми и съедают зазор, даже когда пусты.
+    // несжимаемые блоки справа (бейджи и группа пикеров) — они остаются отдельными
+    // flex-детьми и съедают зазор, даже когда пусты.
     const avail = total - fixed - gap * 2 - reserve;
     const step = itemWidth + gap;
     if (avail >= count * step) { setVisible(count); return; }
     // Место под «⋯» резервируем, только если что-то реально прячем
     const fit = Math.floor((avail - (menuWidth + gap)) / step);
     setVisible(Math.max(0, Math.min(count, fit)));
-  }, [enabled, count, itemWidth, gap, menuWidth, reserve, stripRef, fixedLeftRef, badgesRef, rightRef]);
+  }, [enabled, count, itemWidth, gap, menuWidth, reserve, stripRef, leftBlock, badgesWidth, rightWidth]);
 
   // Пересчёт на КАЖДЫЙ рендер: первый layout может застать полосу недомеренной (панели
   // ещё раскладываются, аватар собеседника не загрузился), а разовый замер так и остался
@@ -61,17 +67,16 @@ export function useToolbarOverflow({
   // eslint-disable-next-line react-hooks/set-state-in-effect -- замер полосы после layout; итерация сходится, см. комментарий выше
   useLayoutEffect(measure);
 
-  // Ширина полосы меняется вместе с окном и боковыми панелями
+  // Ширина полосы меняется вместе с окном и боковыми панелями. Размеры трёх блоков
+  // здесь больше не отслеживаем: это номиналы, и на сжатие полосы они не реагируют —
+  // ровно поэтому и сходится пересчёт.
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
     ro.observe(strip);
-    if (fixedLeftRef.current) ro.observe(fixedLeftRef.current);
-    if (badgesRef.current) ro.observe(badgesRef.current);
-    if (rightRef.current) ro.observe(rightRef.current);
     return () => ro.disconnect();
-  }, [measure, stripRef, fixedLeftRef, badgesRef, rightRef]);
+  }, [measure, stripRef]);
 
   return enabled ? visible : count;
 }

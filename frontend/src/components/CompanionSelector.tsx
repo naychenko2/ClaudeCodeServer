@@ -35,12 +35,22 @@ interface Props {
   // Схлопнуть триггер до квадрата с аватаром/иконкой (узкая полоса контролов):
   // подпись и шеврон убираются, «Роль (Имя)» остаётся в тултипе
   compact?: boolean;
+  // Этап 2 (форма B правой группы компактной полосы): модель и усилие остаются с
+  // подписями, схлопываем ТОЛЬКО собеседника. Не путать с compact=true (схлопнуть всё);
+  // для формы B compact=false, compactCompanion=true
+  compactCompanion?: boolean;
+  // Потолок ширины подписи в полной (не-compact) форме. Задаётся родителем из таблицы
+  // номиналов полосы (STRIP_RIGHT_MAX в Composer.tsx) — без него длинное имя роли персоны
+  // или агента выпирает бы за край полосы и расчёт useToolbarOverflow расходился бы
+  // с фактом. Не задано — для персон 200, для .md-агентов 200 (только десктоп — на
+  // мобиле своя фиксированная ширина)
+  maxLabelWidth?: number;
 }
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact, compactCompanion, maxLabelWidth }: Props) {
   const [open, setOpen] = useState(false);
   // Режим мультивыбора участников группового чата (внутри того же дропдауна)
   const [groupMode, setGroupMode] = useState(false);
@@ -223,7 +233,11 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
   };
 
   // Схлопнутый триггер — аватар/иконка + шеврон без подписи (шеврон отличает список
-  // выбора от кнопки-действия, поэтому остаётся и в узкой полосе)
+  // выбора от кнопки-действия, поэтому остаётся и в узкой полосе). compactCompanion —
+  // этап 2: форма B правой группы компактной полосы (собеседник иконкой при полных
+  // подписях модели и усилия), у компонента compact=false, но триггер всё равно
+  // сворачивается
+  const useCompact = !!compact || !!compactCompanion;
   const compactStyle: React.CSSProperties = {
     height: isMobile ? 36 : 32, padding: '0 6px',
     borderRadius: R.md, border: 'none',
@@ -251,17 +265,17 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           // Фон только на наведении/открытии — иначе плашка режет тень карточки композера
           onMouseEnter={e => { if (!open) e.currentTarget.style.background = C.accentLight; }}
           onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
-          style={compact ? compactStyle : {
+          style={useCompact ? compactStyle : {
             height: isMobile ? 32 : 28, padding: '0 8px 0 4px', borderRadius: R.md, border: 'none',
             background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
             transition: 'background 0.15s',
             fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 6,
-            maxWidth: isMobile ? 120 : wide ? 360 : 200, overflow: 'hidden',
+            maxWidth: isMobile ? 120 : (maxLabelWidth ?? (wide ? 360 : 200)), overflow: 'hidden',
           }}
         >
-          <PersonaAvatar persona={selectedPersona} size={compact ? 24 : isMobile ? 24 : 20} />
-          {compact ? compactChevron : (
+          <PersonaAvatar persona={selectedPersona} size={useCompact ? 24 : isMobile ? 24 : 20} />
+          {useCompact ? compactChevron : (
             <>
               <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
                 {personaLabel(selectedPersona)}
@@ -279,17 +293,17 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           // Фон только на наведении/открытии — иначе плашка режет тень карточки композера
           onMouseEnter={e => { if (!open) e.currentTarget.style.background = C.accentLight; }}
           onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
-          style={compact ? compactStyle : {
+          style={useCompact ? compactStyle : {
             height: isMobile ? 32 : 28, padding: '0 8px', borderRadius: R.md, border: 'none',
             background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
             transition: 'background 0.15s',
             fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 5,
-            maxWidth: isMobile ? 110 : wide ? 360 : 200, overflow: 'hidden',
+            maxWidth: isMobile ? 110 : (maxLabelWidth ?? (wide ? 360 : 200)), overflow: 'hidden',
           }}
         >
-          <span style={{ width: compact ? 10 : 8, height: compact ? 10 : 8, borderRadius: '50%', flexShrink: 0, background: agentDotColor(selectedAgent?.color) }} />
-          {compact ? compactChevron : (
+          <span style={{ width: useCompact ? 10 : 8, height: useCompact ? 10 : 8, borderRadius: '50%', flexShrink: 0, background: agentDotColor(selectedAgent?.color) }} />
+          {useCompact ? compactChevron : (
             <>
               <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
                 {agentDisplayName}
@@ -308,7 +322,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           // Фон только на наведении/открытии — иначе плашка режет тень карточки композера
           onMouseEnter={e => { if (!open) e.currentTarget.style.background = C.accentLight; }}
           onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
-          style={compact ? compactStyle : {
+          style={useCompact ? compactStyle : {
             height: isMobile ? 32 : 28, padding: '0 8px', borderRadius: R.md, border: 'none',
             background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
             transition: 'background 0.15s',
@@ -316,8 +330,8 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, whiteSpace: 'nowrap',
           }}
         >
-          <MessageCircle size={compact ? 16 : 14} strokeWidth={2} style={{ flexShrink: 0 }} />
-          {compact ? compactChevron : (
+          <MessageCircle size={useCompact ? 16 : 14} strokeWidth={2} style={{ flexShrink: 0 }} />
+          {useCompact ? compactChevron : (
             <>
               Собеседник
               <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}

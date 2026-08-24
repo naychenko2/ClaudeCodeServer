@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Clock, Gauge, ListChecks, Pause, Power, RotateCw, Users, Zap } from 'lucide-react';
 import type { Persona, SessionTeamImplement, TeamWaveLiveness, TeamWavePulse, TeamWaveSnapshot } from '../../types';
-import { C, FS, FONT, R, MODAL_W } from '../../lib/design';
+import { C, FS, FONT, R, MODAL_W, SHADOW } from '../../lib/design';
 import { Button, ConfirmDialog, Menu, Modal } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { api } from '../../lib/api';
@@ -43,7 +43,7 @@ const PULSE_NOW_TICK_MS = 30_000;
 // (бэк старый) — тон остаётся прежним, обратная совместимость
 // Клик по бейджу — поповер (десктоп) / шторка (мобила) с описанием и выключением режима;
 // выключение — с подтверждением. Чип «Авто» переключается одним кликом без подтверждения.
-export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId, personas, onToggleAuto, onDisable, onStop }: {
+export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId, personas, onToggleAuto, onDisable, onStop, showAutoChip = true }: {
   state: SessionTeamImplement;
   // Текущий режим прав чата: под правилом «координатор не пишет код» он удерживается
   // на «Авто» — иначе гард обходится через терминал. Показываем сноской, чтобы
@@ -66,6 +66,10 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
   onDisable: () => void | Promise<void>;
   // «Остановить» прогон (режим при этом остаётся включённым). Без обработчика строки нет
   onStop?: () => void | Promise<void>;
+  // Этап 2: чип «Авто» рядом с бейджем опционален. На узкой полосе он уезжает в поповер
+  // (строка-свитч «Авто-волны»), иначе действие терялось бы вместе с чипом. По умолчанию
+  // отрисовываем чип — старое поведение этапа 1
+  showAutoChip?: boolean;
 }) {
   // Поповер держим на rect кнопки (anchor-режим Menu = fixed), а не на absolute внутри
   // бейджа: полоса бейджей композера живёт под overflow:hidden (схлопывание контролов),
@@ -215,13 +219,23 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
     return undefined; // danger — статика
   })();
 
-  // Текст и тултип бейджа с учётом пульса
+  // Текст и тултип бейджа с учётом пульса. На этапе 2: если чип «Авто» спрятан (узкая
+  // полоса), добавляем состояние авто прямо в badgeTitle — человек видит включено/нет
+  // только через клик в поповер, и tooltip должен это объяснить
   const badgeText = livePulse
     ? (isMobile ? (pulseShortText ?? text) : (pulseFullText ?? text))
     : text;
-  const badgeTitle = livePulse
-    ? `${fullText} — ${teamPulseMeaning(livePulse.liveness)}`
-    : `${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`;
+  const autoStateText = state.autoWaves ? 'авто-волны включены' : 'авто-волны выключены';
+  // badgeTitle строится по единой формуле «что это — пульс — авто»: описание режима
+  // ВСЕГДА (это якорь), пульс добавляется при ЖИВОМ livePulse, авто — при спрятанном
+  // чипе (showAutoChip=false). Раньше проверка livePulse шла первой и при наличии пульса
+  // состояние авто в tooltip не попадало — находка QA 2026-08-24: чип «Авто» уезжает
+  // в поповер именно когда идёт волна (то есть есть пульс), и человек без клика в
+  // поповер не видел, включены ли авто-волны. Запятая склеивает части предложения
+  const badgeTitle =
+    `${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`
+    + (livePulse ? `, ${teamPulseMeaning(livePulse.liveness)}` : '')
+    + (!showAutoChip ? `, ${autoStateText}` : '');
 
   // Иконка состояния пульса в бейдже: различает liveness ДО чтения текста — периферийным
   // зрением quiet и stalled дают одинаковый тёплый фон (--c-warning-bg vs --c-danger-bg
@@ -242,6 +256,43 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
       <p style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45, margin: 0 }}>
         {TEAM_IMPLEMENT_DESCRIPTION}
       </p>
+      {/* Строка-свитч «Авто-волны» (этап 2): показывается ТОЛЬКО когда чип «Авто» с
+          бейджем спрятан (showAutoChip=false). Когда чип виден, эта строка не нужна —
+          управление авто-волнами живёт в нём. Текст тоггла — из TEAM_IMPLEMENT_AUTO_TITLE,
+          чтобы человек в обеих точках видел одно и то же объяснение. Та же строка ещё раз
+          в пункте меню «⋯» (см. Composer.hiddenItems), когда бейдж целиком уехал туда */}
+      {!showAutoChip && (
+        <button
+          type="button"
+          onClick={() => { void onToggleAuto(); }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+            marginTop: 10, padding: '7px 8px', borderRadius: R.md,
+            border: 'none', background: 'transparent', cursor: 'pointer',
+            fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.bgSelected; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+        >
+          <Zap size={13} strokeWidth={ICON_STROKE} fill={state.autoWaves ? 'currentColor' : 'none'} style={{ color: C.accent, flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0 }}>
+            Авто-волны
+            <span style={{ display: 'block', fontSize: FS.xs, fontWeight: 400, color: C.textMuted, marginTop: 1 }}>
+              {TEAM_IMPLEMENT_AUTO_TITLE}
+            </span>
+          </span>
+          <span style={{
+            width: 34, height: 18, borderRadius: 999, position: 'relative', flex: 'none',
+            background: state.autoWaves ? C.accent : C.track, transition: 'background .15s',
+          }}>
+            <span style={{
+              position: 'absolute', top: 2, width: 14, height: 14, borderRadius: '50%',
+              background: C.bgWhite, boxShadow: SHADOW.thumb, transition: 'transform .15s',
+              transform: state.autoWaves ? 'translateX(18px)' : 'translateX(2px)',
+            }} />
+          </span>
+        </button>
+      )}
       {/* Пульс волны: блок «Что это значит» — объясняет состояние человеческим языком.
           На стадии волны/проверки при ЖИВОМ пульсе (livePulse === null при обрыве SignalR
           или после F5 до первого события — тогда не рисуем, чтобы не врать). Тон по
@@ -346,9 +397,25 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
     </>
   );
 
+  // Ref на кнопку бейджа — нужно для кастомного события «открыть поповер из меню» (этап 2):
+  // когда бейдж целиком уехал в «⋯», человек жмёт строку в меню, Composer шлёт
+  // window event, бейдж откликается и открывает свой поповер
+  const badgeBtnRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const onOpen = () => {
+      const btn = badgeBtnRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      setInfoAnchor(rect);
+    };
+    window.addEventListener('cc-team-impl-open-info', onOpen);
+    return () => window.removeEventListener('cc-team-impl-open-info', onOpen);
+  }, []);
+
   return (
     <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
       <button
+        ref={badgeBtnRef}
         onClick={e => {
           const rect = e.currentTarget.getBoundingClientRect();
           setInfoAnchor(prev => (prev ? null : rect));
@@ -375,23 +442,27 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
         }} />
       </button>
 
-      <button
-        onClick={() => { void onToggleAuto(); }}
-        title={TEAM_IMPLEMENT_AUTO_TITLE}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, height,
-          padding: '0 9px', borderRadius: R.pill, cursor: 'pointer',
-          fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
-          fontFamily: FONT.sans,
-          transition: 'color 0.15s, background 0.15s, border-color 0.15s',
-          ...(state.autoWaves
-            ? { background: C.accentLight, color: C.accent, border: `1px solid ${C.accentMuted}` }
-            : { background: 'transparent', color: C.textMuted, border: `1px solid ${C.border}` }),
-        }}
-      >
-        <Zap size={10} strokeWidth={ICON_STROKE} fill={state.autoWaves ? 'currentColor' : 'none'} style={{ flexShrink: 0 }} />
-        Авто
-      </button>
+      {showAutoChip && (
+        <button
+          onClick={() => { void onToggleAuto(); }}
+          title={TEAM_IMPLEMENT_AUTO_TITLE}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, height,
+            padding: '0 9px', borderRadius: R.pill, cursor: 'pointer',
+            fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
+            fontFamily: FONT.sans,
+            transition: 'color 0.15s, background 0.15s, border-color 0.15s',
+            ...(state.autoWaves
+              ? { background: C.accentLight, color: C.accent, border: `1px solid ${C.accentMuted}` }
+              : { background: 'transparent', color: C.textMuted, border: `1px solid ${C.border}` }),
+          }}
+        >
+          <Zap size={10} strokeWidth={ICON_STROKE} fill={state.autoWaves ? 'currentColor' : 'none'} style={{ flexShrink: 0 }} />
+          Авто
+        </button>
+      )}
+      {/* showAutoChip=false: строка-свитч «Авто-волны» добавляется в поповер ниже,
+          чтобы человек не терял действие при схлопывании чипа (см. disableBody) */}
 
       {/* Поповер: десктоп — карточка у бейджа (fixed по якорю, иначе её срезает
           overflow полосы бейджей), мобила — нижняя шторка (Modal) */}

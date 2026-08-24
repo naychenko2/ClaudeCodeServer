@@ -16,6 +16,10 @@ interface Props {
   isMobile?: boolean;
   // Схлопнуть плашку до иконки (узкая полоса контролов)
   compact?: boolean;
+  // Потолок ширины триггера в полной (не compact) форме. Источник — таблица номиналов
+  // полосы контролов (STRIP_RIGHT_MAX в Composer.tsx): без этого длинное имя уровня
+  // способно уехать за край полосы, и бюджет useToolbarOverflow разойдётся с фактом
+  maxTriggerWidth?: number;
 }
 
 const LEVELS = EFFORTS.filter(e => e.value !== '');
@@ -80,7 +84,7 @@ function EffortSlider({ value, onPick }: { value: string; onPick: (v: string) =>
   );
 }
 
-export function ComposerEffortPicker({ value, onChange, isMobile, compact }: Props) {
+export function ComposerEffortPicker({ value, onChange, isMobile, compact, maxTriggerWidth }: Props) {
   // Как и у модели: в сессии «по умолчанию» — null, в каталоге — ''
   const current = value ?? '';
   const isDefault = current === '';
@@ -96,6 +100,7 @@ export function ComposerEffortPicker({ value, onChange, isMobile, compact }: Pro
       title={`Усилие рассуждения: ${effortLabel(current)}`}
       isMobile={isMobile}
       compact={compact}
+      maxTriggerWidth={maxTriggerWidth}
       minWidth={280}
     >
       {() => (

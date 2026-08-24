@@ -1410,8 +1410,31 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const fixedLeftRef = useRef<HTMLDivElement>(null);
   const badgesRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
+  // Тулбар FileViewer меряет ширины трёх блоков через ResizeObserver: имя файла
+  // (fixedLeftRef) и бейджи (badgesRef) зависят от контента, и номиналами их не
+  // описать. Этап 1 composer-strip-priority перевёл useToolbarOverflow на номиналы
+  // (композер — фиксированные блоки), здесь оставил замер как было: петли тут нет,
+  // все блоки flexShrink:0, и замер не «сжимает» ничего с самого себя.
+  const [blockWidths, setBlockWidths] = useState({ left: 0, badges: 0, right: 0 });
+  useEffect(() => {
+    const read = () => setBlockWidths({
+      left: fixedLeftRef.current?.offsetWidth ?? 0,
+      badges: badgesRef.current?.offsetWidth ?? 0,
+      right: rightRef.current?.offsetWidth ?? 0,
+    });
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    if (fixedLeftRef.current) ro.observe(fixedLeftRef.current);
+    if (badgesRef.current) ro.observe(badgesRef.current);
+    if (rightRef.current) ro.observe(rightRef.current);
+    return () => ro.disconnect();
+  }, []);
   const visibleCount = useToolbarOverflow({
-    stripRef, fixedLeftRef, badgesRef, rightRef,
+    stripRef,
+    leftBlock: blockWidths.left,
+    badgesWidth: blockWidths.badges,
+    rightWidth: blockWidths.right,
     count: collapsible.length,
     enabled: true,
     itemWidth: iconBox,

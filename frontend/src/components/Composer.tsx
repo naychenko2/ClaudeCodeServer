@@ -167,12 +167,163 @@ export interface ComposerProps {
   auroraColorHex?: string;
 }
 
-// Ступени полосы контролов («губы» под полем ввода) — по ширине САМОЙ полосы, не окна.
-// Ниже STRIP_COMPACT правая группа (модель, усилие, собеседник) и селектор режима живут
-// иконками без подписей; выше STRIP_WIDE собеседнику разрешена длинная подпись. Между
-// ними — подписи есть, но короткие. Замеряется в самом Composer (stripWidth).
-const STRIP_COMPACT = 640;
-const STRIP_WIDE = 900;
+// Номиналы блоков полосы (десктоп / мобила, px, «с учётом зазора»). Этап 1
+// composer-strip-priority: правый блок и бейджи больше не измеряются через offsetWidth,
+// useToolbarOverflow получает готовые числа. Источник — docs/mockups/composer-strip-priority.html.
+// Этап 2 composer-strip-priority: форма правой группы и форма каждого бейджа выбираются
+// по бюджету лестницы ступеней — здесь лежат все варианты, pickLayout выбирает нужные по
+// ширине полосы. Изменение внешнего вида пилюль или формы правой группы правит ТАМ и
+// здесь парой, иначе бюджет разойдётся с фактом.
+const STRIP_LEFT_NOMINAL = { d: 112, m: 48 } as const;
+const STRIP_MENU_NOMINAL = { d: 38, m: 46 } as const;
+const STRIP_BUTTON_NOMINAL = { d: 36, m: 42 } as const;
+// Горизонтальный padding полосы (используется в бюджете). Десктоп берёт gap через
+// фиксированные `gap`, мобил — `2px` padding с обеих сторон по макету
+const STRIP_PADX = { d: 16, m: 4 } as const;
+const STRIP_GAP = { d: 4, m: 6 } as const;
+// Форма правой группы. «B» теперь реальный промежуточный шаг (собеседник иконкой при
+// полных подписях модели и усилия), не «резерв на будущее».
+//
+// Номиналы подняты до реалистичных потолков (таблица в docs/mockups/composer-strip-priority.md,
+// строки 61–66) — старые значения были занижены (524/364/244 vs реалистичные 534/384/293),
+// и длинное имя модели или роли персоны при старых номиналах выпирало бы за край полосы
+// после снятия overflow:hidden. C уже был верен.
+//
+// Параллельный объект STRIP_RIGHT_MAX задаёт MAX-ширины каждого ребёнка правой группы по
+// форме — пикеры и собеседник получают их пропами (ComposerMenu.maxTriggerWidth и
+// CompanionSelector.maxLabelWidth). Замок заморозки модели (16 px) и зазоры внутри
+// правой группы ВКЛЮЧЕНЫ в номинал — иначе сумма разъехалась бы с фактом и вернулась
+// старая петля, на этот раз с правой группой.
+const STRIP_RIGHT_NOMINAL = {
+  'A-wide': 534,           // всё словами, собеседник до 270 px (реалистичный потолок длинной роли + замок)
+  'A': 384,                // всё словами, собеседник короткий (≤140 px)
+  'B': 293,                // собеседник иконкой, модель+усилие словами
+  'C': { d: 160, m: 164 }, // всё иконками (мобильный номинал чуть больше за тач-цели)
+} as const;
+// MAX-ширины по форме. Источник — арифметика из той же таблицы:
+//   A-wide: модель 120 + усилие 120 + собеседник 270 + зазор 3×4 + замок 16 = 538 →
+//     номинал 534 удерживаем сужением зазора между собеседником и замком до ~0
+//     (marginLeft:auto прижимает группу к правому краю, зазора там нет).
+//   A: модель 110 + усилие 110 + собеседник 140 + зазор 2×4 + замок 16 = 384.
+//   B: модель 110 + усилие 110 + собеседник compact 49 + зазор 2×4 + замок 16 = 293.
+//   C: без maxWidth — пикеры и собеседник уже compact, их ширины фиксированы
+//     номиналами STRIP_PILL_NOMINAL через ModePill и собственный compactStyle.
+// Здесь лежит ТОЛЬКО правая группа — чтобы pickLayout выше не дублировал арифметику.
+// Изменил число — обнови Spec.таблицу и эту константу парой, иначе расчёт разойдётся с фактом.
+const STRIP_RIGHT_MAX = {
+  'A-wide': { model: 120, effort: 120, companionLabel: 270 },
+  'A':      { model: 110, effort: 110, companionLabel: 140 },
+  'B':      { model: 110, effort: 110, companionLabel: null /* собеседник compact */ },
+  'C':      { model: null, effort: null, companionLabel: null /* всё compact */ },
+} as const;
+// Ширины пилюль состояния. teamPill теперь имеет «полную» и «компактную» формы (компактная
+// — пилюля без имени, этап 2), teamImplementBadge — «полную» и «без чипа Авто»,
+// loopPill — только полную (в компактную не сворачивается, она уезжает сразу в «⋯»).
+// Алгоритм бюджета считает от максимума active-форм.
+const STRIP_PILL_NOMINAL = {
+  teamPill:           { full: { d: 150, m: 54 }, compact: { d: 130, m: 72 } },
+  teamImplementBadge: { full: { d: 180, m: 118 }, noauto: { d: 160, m: 118 } },
+  loopPill:           { d: 155, m: 62 },
+} as const;
+
+// Лестница ступеней полосы контролов (этап 2 composer-strip-priority). Единственный вход —
+// `stripWidth` плюс три дискретных флага активных бейджей; DOM не измеряется нигде, чтобы
+// ширина правой группы не зависела от собственного результата (иначе вернётся петля из
+// этапа 1). Шаг 1: перебираем форму правой группы A-wide → A → B → C, берём первую, при
+// которой все активные бейджи в полной форме + левый блок + «⋯» (если в нём что-то есть)
+// влезают. Шаг 2: если при C всё равно не влезает — понижаем бейджи по рангу снизу вверх
+// (имя пилюли механики → чип «Авто» → цикл в «⋯» → КР в «⋯»), форма C остаётся.
+// Пилюля механики остаётся всегда — ниже ранга 1 деградации нет
+type StripLayout = {
+  rightForm: 'A-wide' | 'A' | 'B' | 'C';
+  rightWidth: number;
+  compactTeamPill: boolean;
+  autoChipVisible: boolean;
+  loopInMenu: boolean;
+  krInMenu: boolean;
+};
+function pickLayout(
+  stripWidth: number,
+  hasTP: boolean,
+  hasKR: boolean,
+  hasLoop: boolean,
+  isMobile: boolean,
+): StripLayout {
+  const dKey = isMobile ? 'm' : 'd';
+  // Номинал правой группы в текущей форме (для C — мобильный или десктопный отдельно)
+  const rightW = (form: 'A-wide' | 'A' | 'B' | 'C') =>
+    form === 'C' ? STRIP_RIGHT_NOMINAL.C[dKey] : STRIP_RIGHT_NOMINAL[form];
+  // Бейдж в текущей форме. Активный бейдж, для которого не указана форма, даёт максимум
+  // («полную»), чтобы вписать худший случай — короткие имена (КС) не вылезали бы
+  // неожиданно за бюджет
+  const tpW = (compact: boolean) => STRIP_PILL_NOMINAL.teamPill[compact ? 'compact' : 'full'][dKey];
+  const krW = (noAuto: boolean) => STRIP_PILL_NOMINAL.teamImplementBadge[noAuto ? 'noauto' : 'full'][dKey];
+  const lpW = () => STRIP_PILL_NOMINAL.loopPill[dKey];
+  // Левый блок + зазоры по обе стороны + правый блок = «несжимаемый бюджет» полосы без
+  // учёта бейджей. Меню и его зазор добавляются только если в «⋯» реально что-то уехало
+  const baseW = STRIP_LEFT_NOMINAL[dKey] + STRIP_PADX[dKey] + STRIP_GAP[dKey] * 2;
+  const menuW = STRIP_MENU_NOMINAL[dKey] + STRIP_GAP[dKey];
+  // Шаг 1 — выбор формы правой группы. До замера (0) сразу даём «середину»: B на
+  // десктопе, C на мобиле. Промах на ступень незаметен, мигание A→C бросается в глаза
+  if (stripWidth === 0) {
+    return isMobile
+      ? { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: hasTP, autoChipVisible: hasKR,
+          loopInMenu: hasLoop, krInMenu: hasKR }
+      : { rightForm: 'B', rightWidth: rightW('B'), compactTeamPill: false, autoChipVisible: true,
+          loopInMenu: false, krInMenu: false };
+  }
+  // На ступенях жертв правая группа остаётся C, а бейджи теряют по одному рангу снизу.
+  // Самый «толстый» сценарий — все три бейджа в полной форме без меню, он задаёт верхнюю
+  // границу для выбора правой группы
+  const candidates: Array<'A-wide' | 'A' | 'B' | 'C'> = isMobile
+    ? ['C']
+    : ['A-wide', 'A', 'B', 'C'];
+  for (const f of candidates) {
+    // Меню нужно, только если в нём уже сейчас будет хотя бы один бейдж. На шаге 1 это
+    // означает «найдётся форма, в которой один из ушедших бейджей не нужен» — но мы ещё
+    // не знаем, какой. Считаем «полную», как если бы всё влезло в полосу: меню не
+    // резервируем, потому что первый кадр оно не нужно, иначе пустая кнопка «⋯»
+    // съедала бы себе драгоценное место
+    const w = baseW + rightW(f) + (hasTP ? tpW(false) : 0) + (hasKR ? krW(false) : 0) + (hasLoop ? lpW() : 0);
+    if (w <= stripWidth) return { rightForm: f, rightWidth: rightW(f),
+      compactTeamPill: false, autoChipVisible: true, loopInMenu: false, krInMenu: false };
+  }
+  // Шаг 2 — ни одна форма правой группы не вместила всё в полной форме. Понижаем бейджи
+  // по рангу снизу вверх. На каждой ступени считаем, помещается ли её бюджет: так
+  // получаем ОДНУ первую «самую щедрую» ступень, которая влезает
+  const ladder: Array<StripLayout> = [
+    // 1) имя в пилюле механики → компактная
+    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: true, loopInMenu: false, krInMenu: false },
+    // 2) чип «Авто» уезжает (переключатель переезжает в поповер)
+    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: false, loopInMenu: false, krInMenu: false },
+    // 3) пилюля цикла → в «⋯» (появляется кнопка «⋯» — резервируем её ширину)
+    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: false, loopInMenu: true, krInMenu: false },
+    // 4) бейдж КР → в «⋯» (предел; пилюля механики остаётся всегда)
+    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: false, loopInMenu: true, krInMenu: true },
+  ];
+  for (const step of ladder) {
+    // Только те ступени, которые реально что-то меняют для активных бейджей, имеют смысл
+    // (например, autoChipVisible=false ничего не даёт, если hasKR=false)
+    if (!hasTP && step.compactTeamPill) continue;
+    if (!hasKR && !step.autoChipVisible) continue;
+    if (!hasKR && step.krInMenu) continue;
+    if (!hasLoop && step.loopInMenu) continue;
+    // На ступенях с ушедшими бейджами «⋯» появляется → учитываем menuW. Ступень 2 (без
+    // авто) — бейдж КР ещё на полосе, меню не нужно. Ступени 3-4 — нужен «⋯»
+    const needMenu = step.loopInMenu || step.krInMenu;
+    const w = baseW + step.rightWidth + menuW * (needMenu ? 1 : 0)
+      + (hasTP ? tpW(step.compactTeamPill) : 0)
+      + (hasKR && !step.krInMenu ? krW(!step.autoChipVisible) : 0)
+      + (hasLoop && !step.loopInMenu ? lpW() : 0);
+    // Может, полоса настолько узкая, что и предельная ступень не влезает — на мобильных
+    // номиналах ниже 360 не проектируем, оставляем как есть (визуальный оверфлоу
+    // невозможен, см. таблицу проверки в спеке)
+    if (w <= stripWidth || step === ladder[ladder.length - 1]) return step;
+  }
+  // Если hasTP+hasKR+hasLoop === false, лестница даст предельную ступень выше; в этом
+  // месте код недостижим, но TS требует возврат
+  return ladder[ladder.length - 1];
+}
 
 // Гасим нативный touch-callout / контекстное меню на иконочных кнопках.
 // На планшете long-press по SVG-иконке внутри кнопки иначе вызывает меню
@@ -297,30 +448,61 @@ function ModePill({
   maxWidth,
   value,
   trailing = null,
+  // Этап 2: компактная форма пилюли механики. В полной форме не задано
+  compact = false,
+  // Короткое имя в компактной форме — рендерится только если ≤4 символов.
+  // Длина известна из данных, не из DOM, поэтому на сходимость бюджета не влияет
+  shortNameInCompact,
+  // Полное имя сущности (механики и т.п.) — обязательное для aria-label в компактной
+  // форме, где длинное имя скрыто из виду и без aria-label скринридер остался бы с
+  // role="group" без имени (находка QA 2026-08-24). Не путать с коротким именем —
+  // aria-label говорит человеку полное имя, чтобы объявление включало контекст
+  name,
+  // Действие компактного сегмента ✕. Отдельный проп — обходимся без хака с
+  // «достать onClick из children», это было бы непрозрачно для будущих правок
+  onTrailingClick,
+  trailingTitle,
 }: {
   isMobile?: boolean;
-  // Иконка сегмента — обязана совпадать с иконкой круглой кнопки, из которой переехала
   icon: ReactNode;
   leadTitle: string;
-  // Не задан — сегмент пассивен (курсор обычный, клик ничего не делает)
   onLeadClick?: () => void;
-  // Гейт «идёт ход»: та же форма, что у заблокированной круглой кнопки (opacity .4)
   leadDisabled?: boolean;
   valueTitle?: string;
   maxWidth?: number;
-  // Значение пилюли (номер итерации цикла, короткое имя механики)
-  value: ReactNode;
-  // Доп. узел в хвосте значения (✕ командной механики)
+  value?: ReactNode;
   trailing?: ReactNode;
+  compact?: boolean;
+  shortNameInCompact?: string;
+  name?: string;
+  onTrailingClick?: () => void;
+  trailingTitle?: string;
 }) {
-  const h = isMobile ? 30 : 28; // высоты пилюли из макета (badge-шкалы в design.ts нет)
+  // Высота пилюли. На компактной форме + мобила — сегменты 36×36 (тач-цель)
+  const h = isMobile ? 30 : 28;
+  const segW = compact && isMobile ? 36 : h;
+  const xSegW = compact && isMobile ? 36 : 26;
 
+  // Компактная пилюля: сегмент ✕ на постоянной заливке accentMuted — единственный
+  // способ различить сегменты в тёмной теме, где волосяная граница accentMuted на
+  // accentLight визуально исчезает. Полная форма — старая волосяная граница
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'stretch', height: h, maxWidth: maxWidth ?? '100%',
-      borderRadius: R.pill, overflow: 'hidden', flexShrink: 0,
-      background: C.accentLight,
-    }}>
+    <span
+      role={compact ? 'group' : undefined}
+      // aria-label в компактной форме ВСЕГДА по ПОЛНОМУ имени механики — короткое имя
+      // может быть пустым или обрезанным, и тогда скринридер читал бы «Активна механика»
+      // безымянно (находка QA 2026-08-24). Раньше условие было инвертированным: имя
+      // объявлялось, только если оно и так видно глазами — а когда пилюля осталась из
+      // иконки и ✕, role="group" оставался без имени
+      aria-label={compact && name ? `Активна механика «${name}»` : undefined}
+      style={{
+        display: 'inline-flex', alignItems: 'stretch',
+        height: compact && isMobile ? 36 : h,
+        maxWidth: maxWidth ?? '100%',
+        borderRadius: R.pill, overflow: 'hidden', flexShrink: 0,
+        background: C.accentLight,
+      }}
+    >
       <button
         type="button"
         title={leadTitle}
@@ -329,35 +511,76 @@ function ModePill({
         disabled={leadDisabled}
         onMouseEnter={e => { if (!leadDisabled && onLeadClick) e.currentTarget.style.background = C.accentMuted; }}
         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-        // Кольцо — outline внутри сегмента: SHADOW.focus рисуется наружу и срезался бы
-        // родительским overflow:hidden пилюли
         onFocus={e => { e.currentTarget.style.outline = `2px solid ${C.accent}`; e.currentTarget.style.outlineOffset = '-2px'; }}
         onBlur={e => { e.currentTarget.style.outline = 'none'; }}
+        // Тач у компактной пилюли: hover недоступен — нужен активный фон. CSS :active на
+        // inline-стилях не работает, поэтому фон переключаем через pointer events
+        onPointerDown={e => { if (!leadDisabled && onLeadClick) (e.currentTarget as HTMLElement).style.background = C.accentMuted; }}
+        onPointerUp={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+        onPointerCancel={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         style={{
-          width: h, flexShrink: 0, border: 'none', padding: 0,
-          borderRight: `1px solid ${C.accentMuted}`,
-          background: 'transparent',
-          color: C.accent,
+          width: segW, flexShrink: 0, border: 'none', padding: 0,
+          borderRight: compact ? 'none' : `1px solid ${C.accentMuted}`,
+          background: 'transparent', color: C.accent,
           cursor: leadDisabled || !onLeadClick ? 'default' : 'pointer',
           opacity: leadDisabled ? 0.4 : 1,
           display: 'flex', alignItems: 'center', justifyContent: 'center', outline: 'none',
           transition: 'background 0.15s, opacity 0.15s',
+          touchAction: 'manipulation', WebkitTouchCallout: 'none',
         }}
       >
         {icon}
       </button>
-      <span
-        title={valueTitle}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
-          padding: '0 9px',
-          color: C.accent,
-          fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
-        }}
-      >
-        {value}
-        {trailing}
-      </span>
+      {/* value-блок только в полной форме. В компактной: либо shortName (≤4 символов),
+          либо ничего — длинное имя обрезать нельзя (многоточие съедает почти столько
+          же, сколько половина слова, и огрызок не читается, см. спек) */}
+      {!compact && value != null && (
+        <span
+          title={valueTitle}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
+            padding: '0 9px',
+            color: C.accent,
+            fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
+          }}
+        >
+          {value}
+          {trailing}
+        </span>
+      )}
+      {compact && shortNameInCompact && (
+        <span
+          style={{
+            display: 'inline-flex', alignItems: 'center', minWidth: 0,
+            padding: '0 2px 0 7px',
+            color: C.accent,
+            fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
+          }}
+        >
+          {shortNameInCompact}
+        </span>
+      )}
+      {compact && (
+        <button
+          type="button"
+          aria-label={trailingTitle}
+          title={trailingTitle}
+          onClick={onTrailingClick}
+          // :active на тач-цели: временная заливка accentSoft, иначе hover-эквивалента нет
+          onPointerDown={e => { (e.currentTarget as HTMLElement).style.background = C.accentSoft; }}
+          onPointerUp={e => { (e.currentTarget as HTMLElement).style.background = C.accentMuted; }}
+          onPointerCancel={e => { (e.currentTarget as HTMLElement).style.background = C.accentMuted; }}
+          style={{
+            width: xSegW, flexShrink: 0, border: 'none', padding: 0,
+            background: C.accentMuted, color: C.accent, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'background 0.15s',
+            touchAction: 'manipulation', WebkitTouchCallout: 'none',
+          }}
+        >
+          <X size={12} strokeWidth={ICON_STROKE} />
+        </button>
+      )}
     </span>
   );
 }
@@ -657,10 +880,37 @@ export function Composer({
     read();
     return () => ro.disconnect();
   }, [offline]);
-  // Пикеры справа схлопнуты в иконки; подпись режима убрана
-  const compactStrip = !!isMobile || (stripWidth > 0 && stripWidth < STRIP_COMPACT);
-  // Собеседнику можно длинную подпись (иначе она режется по 200px)
-  const widePickers = !compactStrip && (stripWidth === 0 || stripWidth >= STRIP_WIDE);
+  // Флаги активных пилюль — нужны pickLayout выше, до modeButton и трёх пикеров правой
+  // группы. Сама полоса состояния рендерится позже, но компактность пилюли механики,
+  // видимость чипа «Авто» и увод бейджей в «⋯» считаются строго от этих трёх флагов
+  const hasTP = !!teamMech;
+  const hasKR = !!teamImplement && !!onToggleTeamImplementAuto && !!onDisableTeamImplement;
+  const hasLoop = !!workLoop?.active && !!onToggleWorkLoop;
+  // Ширина полосы раскладки: форма правой группы + свёрнутые формы бейджей по бюджету.
+  // До первого замера (stripWidth === 0) возвращаем «середину» (B / C-m), чтобы первый
+  // кадр не мигнул «слова → иконки» после ResizeObserver — промах на ступень тут
+  // незаметен, а двойной ререндер A→C бросается в глаза
+  const layout = pickLayout(stripWidth, hasTP, hasKR, hasLoop, !!isMobile);
+  const rightForm: 'A-wide' | 'A' | 'B' | 'C' = layout.rightForm;
+  const compactStrip = rightForm === 'C';
+  const widePickers = rightForm === 'A-wide';
+  const rightWidth = layout.rightWidth;
+  const compactTeamPill = layout.compactTeamPill;
+  const autoChipVisible = layout.autoChipVisible;
+  const loopInMenu = layout.loopInMenu;
+  const krInMenu = layout.krInMenu;
+  // Модель и усилие получают maxTriggerWidth по форме правой группы (выводится из таблицы
+  // номиналов — STRIP_RIGHT_MAX, см. комментарий выше). B/C-форма у собеседника — компактная,
+  // companionLabel=null передаём чтобы CompanionSelector не пытался выставить maxWidth на
+  // короткой форме (там собственный compactStyle)
+  const rightMax = STRIP_RIGHT_MAX[rightForm];
+  // Номиналы пилюль в выбранной форме — нужны и teamPill (для maxWidth),
+  // и useToolbarOverflow (сумма). Бейджи, ушедшие в «⋯», дают 0 — кнопка «⋯»
+  // учитывается отдельно хуком через свой счёт
+  const dKey = isMobile ? 'm' : 'd';
+  const tpPillW = STRIP_PILL_NOMINAL.teamPill[compactTeamPill ? 'compact' : 'full'][dKey];
+  const krBadgeW = STRIP_PILL_NOMINAL.teamImplementBadge[autoChipVisible ? 'full' : 'noauto'][dKey];
+  const loopPillW = STRIP_PILL_NOMINAL.loopPill[dKey];
 
   // Режим разговора активен — зеркало фазы петли для колбэков движка распознавания.
   // Объявлено ДО useVoiceInput: маршрут распознанного текста (буфер петли или поле ввода)
@@ -1294,11 +1544,31 @@ export function Composer({
       valueTitle={`Активна механика «${teamMechMeta.name}». Иконка — настройки, ✕ — снять режим`}
       // Короткое имя из словаря механик (teamMechanics.ts) — полное вываливалось бы за
       // границы пилюли на узкой ширине; расшифровка — в leadTitle/valueTitle выше
-      value={teamMechMeta.shortName}
+      // maxWidth по номиналу: длинное имя (или иная подпись в словаре) не должно
+      // превышать бюджет, иначе расчёт useToolbarOverflow разойдётся с фактом и
+      // полоса вылезет за край. Номинал — общая ширина пилюли (включая сегмент-иконку
+      // и крестик); сегмент уменьшит полезную зону для текста сам, overflow:hidden
+      // ModePill обрежет длинное имя без эллипсиса (так и задумано в дизайне).
+      // Этап 2: в компактной форме имя уходит (value=null), maxWidth — номинал
+      // выбранной формы (full/compact). Опция короткого имени (≤4) рисуется отдельным
+      // спаном в ModePill, чтобы КР/КС/QA оставались читаемыми на узкой полосе
+      maxWidth={tpPillW}
+      compact={compactTeamPill}
+      value={compactTeamPill ? null : teamMechMeta.shortName}
+      shortNameInCompact={
+        compactTeamPill && teamMechMeta.shortName.length <= 4 ? teamMechMeta.shortName : undefined
+      }
+      // Полное имя — для aria-label в компактной форме (см. ModePill). shortName
+      // оставляем визуальным якорем (≤4 символов), а диктору — длинное имя
+      name={teamMechMeta.name}
+      onTrailingClick={() => setTeamMech(null)}
+      trailingTitle={`Снять механику «${teamMechMeta.name}»`}
       trailing={
         <button
+          // Полная форма: ✕ остаётся в value-блоке, как было в этапе 1. Заголовок тот же
+          title={`Снять механику «${teamMechMeta.name}»`}
+          aria-label={`Снять механику «${teamMechMeta.name}»`}
           onClick={() => setTeamMech(null)}
-          title="Отменить режим"
           style={{
             border: 'none', background: 'none', color: C.accent, cursor: 'pointer',
             width: 18, height: 18, borderRadius: R.full, padding: 0, flexShrink: 0,
@@ -1334,7 +1604,9 @@ export function Composer({
       <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
-  const loopPill = onToggleWorkLoop && loopActive && workLoop ? (
+  // Пилюля цикла «до готово» НЕ рендерится, если она ушла в «⋯» (loopInMenu) — там её
+  // место занимает строка-свитч с тем же действием (toggleWorkLoopSafe)
+  const loopPill = !loopInMenu && onToggleWorkLoop && loopActive && workLoop ? (
     <ModePill
       isMobile={isMobile}
       icon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
@@ -1349,8 +1621,10 @@ export function Composer({
     />
   ) : null;
 
-  // Режим «Командная реализация»: бейдж стадии + чип «Авто»
-  const teamImplementBadge = teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
+  // Режим «Командная реализация»: бейдж стадии + чип «Авто». Если бейдж целиком ушёл
+  // в «⋯» (krInMenu на предельной ступени) — здесь его не рендерим, в «⋯» будет строка
+  // с sublabel состояния
+  const teamImplementBadge = !krInMenu && teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
     <TeamImplementBadge
       state={teamImplement}
       chatMode={mode}
@@ -1361,6 +1635,9 @@ export function Composer({
       onToggleAuto={onToggleTeamImplementAuto}
       onDisable={onDisableTeamImplement}
       onStop={onStopTeamImplement}
+      // Этап 2: на ступени «без Авто» чип рядом с бейджем не рисуем — переключатель
+      // авто-волн переезжает в поповер (строка-свитч). Иначе действие терялось бы
+      showAutoChip={autoChipVisible}
     />
   ) : null;
 
@@ -1843,6 +2120,14 @@ export function Composer({
       isMobile={isMobile}
       wide={widePickers}
       compact={compactStrip}
+      // Этап 2 форма B: модель+усилие с подписями, собеседник иконкой. compact=false —
+      // обычный стиль без подписи у собеседника, compactCompanion=true — схлопнуть
+      // только триггер собеседника. Используется при промежуточной форме B (нет в
+      // широкой, есть при узкой — собеседник иконкой экономит место)
+      compactCompanion={rightForm === 'B'}
+      // Потолок ширины подписи собеседника по форме (выводится из STRIP_RIGHT_MAX):
+      // A-wide=270, A=140, B/C=null (собеседник компактный, отдельный compactStyle)
+      maxLabelWidth={rightMax.companionLabel ?? undefined}
       onCreateGroup={onCreateGroup}
     />
   ) : null;
@@ -1859,55 +2144,73 @@ export function Composer({
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
 
+  // Пилюли активных режимов — сумма номиналов в ФАКТИЧЕСКОЙ форме (этап 2). Бейджи,
+  // ушедшие в «⋯», дают 0 — кнопка «⋯» отдельно учитывается ниже (useToolbarOverflow
+  // резервирует menuW только если в «⋯» что-то реально есть)
+  const badgesWidth =
+    (teamPill && !compactTeamPill ? tpPillW : 0)
+    + (teamImplementBadge && !krInMenu ? krBadgeW : 0)
+    + (loopPill && !loopInMenu ? loopPillW : 0);
+
   const visibleCount = useToolbarOverflow({
-    stripRef, fixedLeftRef, badgesRef, rightRef,
+    stripRef,
+    leftBlock: STRIP_LEFT_NOMINAL[isMobile ? 'm' : 'd'],
+    badgesWidth,
+    rightWidth,
     count: collapsible.length,
     // Всегда включено (как в шапке FileViewer): решает замер полосы, а не ширина окна.
     // Гейт по isMobile оставлял планшет и телефон в ландшафте вовсе без сворачивания —
     // кнопки с flexShrink:0 выдавливали строку за край губы
     enabled: true,
-    itemWidth: isMobile ? 36 : 32,
+    itemWidth: STRIP_BUTTON_NOMINAL[isMobile ? 'm' : 'd'],
     gap: isMobile ? 6 : 4,
-    menuWidth: isMobile ? 40 : 34,
+    menuWidth: STRIP_MENU_NOMINAL[isMobile ? 'm' : 'd'],
   });
-  // Запасной клапан переполнения: badgesRef не сворачивается поэлементно, он жмётся
-  // flex'ом и режет пилюли через overflow:hidden. До склейки на узком десктопе это
-  // прятало только ЗНАЧЕНИЯ (кнопки режимов оставались в ряду), а теперь прячет и
-  // управление — поэтому переполненные пилюли дублируем строками-свитчами в «⋯»
-  // (как в макете: «пилюля не влезла → режим свитчем, значение в sublabel»).
-  // Два нюанса замера: (1) scrollWidth меняется без resize самого блока (новая пилюля
-  // в том же clientWidth) — мерим и на каждый рендер, и по ResizeObserver;
-  // (2) сам клапан занимает menuWidth+gap полосы и мог бы поддерживать переполнение,
-  // его оправдывающее — поэтому порог с запасом: клапан только когда без него обрезка
-  // была бы заметной, а не пару пикселей
-  const OVERFLOW_SLACK = isMobile ? 62 : 54; // menuWidth + gap + ~16px запаса
-  const [badgesOverflowed, setBadgesOverflowed] = useState(false);
-  useEffect(() => {
-    const el = badgesRef.current;
-    if (!el) return;
-    const check = () => setBadgesOverflowed(el.scrollWidth > el.clientWidth + OVERFLOW_SLACK);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
+  // Запасной клапан переполнения badgesRef отключён (этап 2): раньше он ловил обрезку
+  // через overflow:hidden на самом блоке (scrollWidth > clientWidth). После снятия
+  // overflow:hidden и перехода на бюджет из pickLayout признак «scrollWidth > clientWidth»
+  // срабатывать перестал — клапан должен был молча выключиться. Здесь намеренно ничего
+  // не пишем: пилюли в полосе подбираются бюджетом, обрезки «в никуда» не должно быть.
+  // Флаг `badgesOverflowed` сохранён как локально используемый ниже — теперь он
+  // отражает «пилюля ушла в «⋯»» (loopInMenu/krInMenu), а не замер DOM
 
-  // Пилюли активных режимов не сворачиваются (живут в badgesRef). В «⋯» дублируем их
-  // строками-свитчами: цикл — только когда пилюли реально обрезаны (его «N/M» видно
-  // в самой пилюле); команду — также когда «⋯» уже открыт свёрнутыми кнопками (её
-  // значение короткое, sublabel — единственное место, где оно видно, а дубль в
-  // существующее меню ничего не стоит). Критерий узости — сам факт сворачивания, а не
-  // isMobile: полоса жмётся и на планшете. Дерева здесь нет: его кнопка-тумблер живёт
-  // в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль не нужен,
-  // а значение ветки показывает git-бар
-  const collapsedAny = visibleCount < collapsible.length;
+  // Пилюли активных режимов не сворачиваются в обычном смысле — их состав подбирается
+  // pickLayout (этап 2). В «⋯» дублируем их строками-свитчами ПО ФАКТУ свёрнутости
+  // (loopInMenu / krInMenu / collapsedAny), а не по измерению scrollWidth (после снятия
+  // overflow:hidden тот признак срабатывать перестал — клапан бы молча выключился).
+  // Команда — когда механика выбрана, но в полосе её нет (например, кнопка «Обсудить»
+  // уехала в «⋯» обычным ходом сворачивания — её значение короткое, sublabel —
+  // единственное место, где оно видно, а дубль в существующее меню ничего не стоит)
   const activeModeItems = ([
-    badgesOverflowed && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
+    loopInMenu && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on',
+      icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
       sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
       toggle: true, onClick: () => toggleWorkLoopSafe?.() },
-    (collapsedAny || badgesOverflowed) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
-      sublabel: `Включено · ${teamMechMeta.name}`, toggle: true,
-      onClick: () => setTeamMech(null) },
+    // Этап 2: бейдж «Командная реализация» в «⋯» как строка-свитч. Клик открывает тот же
+    // поповер (выключение с подтверждением остаётся там, где было). Toggle отражает
+    // состояние авто-волн (визуальный индикатор на правом краю меню). Если чип «Авто»
+    // видим в полосе — на бейдже уже есть его копия, эту строку не рисуем (autoState
+    // приходит из бейджа)
+    krInMenu && teamImplement && { key: 'team-impl-on',
+      icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Командная реализация',
+      sublabel: teamImplement.autoWaves ? 'авто-волны включены' : 'авто-волны выключены',
+      toggle: true,
+      // Этап 2: клик в «⋯» открывает ТОТ ЖЕ поповер, что и клик по бейджу в полосе —
+      // через window event. Подтверждение выключения остаётся в поповере, выключение
+      // одним тапом НЕ делаем (у него есть подтверждение — действие должно жить там же)
+      onClick: () => { window.dispatchEvent(new CustomEvent('cc-team-impl-open-info')); } },
+    // Этап 2: дубль «Обсудить с командой» в «⋯» — ТОЛЬКО когда механика выбрана И её
+      // пилюля в полосе свёрнута до компактной (полная форма показывает имя — дубль лишний).
+      // Без выбранной механики — НЕ рисуем: клавиша «discuss» уже ушла в «⋯» как обычная
+      // collapsed-кнопка (см. collapsible), а добавлять ещё один «Обсудить» с toggle=true
+      // было бы ложью для ассистивных технологий (диктор сказал бы «включено» при
+      // невыбранной механике) и для тултипа «⋯» («есть включённые режимы» — находка
+      // QA 2026-08-24). Условие именно «факт компактности пилюли», а не измерение DOM
+      // (спека, раздел «Риски»)
+      (teamMech && compactTeamPill) && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />,
+        label: 'Обсудить с командой',
+        sublabel: `Включено · ${teamMechMeta?.name ?? ''}`,
+        toggle: true, onClick: () => setTeamMech(null) },
   ].filter(Boolean) as OverflowItem[]);
   const hiddenItems = [...collapsible.slice(visibleCount).map(c => c.item), ...activeModeItems];
 
@@ -2153,13 +2456,28 @@ export function Composer({
       </div>
       {collapsible.slice(0, visibleCount).map(c => <span key={c.key} style={{ display: 'flex', flexShrink: 0 }}>{c.node}</span>)}
       {hiddenItems.length > 0 && (
-        <ToolbarOverflowMenu isMobile={isMobile} items={hiddenItems} title="Ещё"
-          indicator={hiddenItems.some(i => i.toggle)} />
+        // Этап 2: triggerTitle динамический — если в меню есть активные (toggle=true)
+        // строки, подсказываем, что внутри живое состояние, а не просто свёрнутые
+        // кнопки. Иначе «Ещё» безобидно, но человек думает, что там пусто
+        <ToolbarOverflowMenu
+          isMobile={isMobile}
+          items={hiddenItems}
+          title="Ещё"
+          indicator={hiddenItems.some(i => i.toggle)}
+          triggerTitle={hiddenItems.some(i => i.toggle)
+            ? 'Ещё · есть включённые режимы'
+            : 'Ещё'}
+        />
       )}
-      <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, minWidth: 0, overflow: 'hidden' }}>
-        {loopPill}
-        {teamImplementBadge}
+      <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
+        {/* Порядок — по приоритету важности: пилюля механики (меняет смысл «Отправить»
+            прямо сейчас), бейдж КР (живое состояние идущего хода), цикл «до готово»
+            (у него есть полноценный дубль строкой в «⋯»). Обрезка справа уезжала
+            бы первой в самую важную пилюлю — потому здесь и flexShrink:0, и без
+            overflow:hidden: состав подбирается бюджетом (этап 2), а не подрезкой. */}
         {teamPill}
+        {teamImplementBadge}
+        {loopPill}
       </div>
       {/* Правая группа: модель → усилие → собеседник, прижаты к правому краю */}
       {(onModelChange || onEffortChange || companionSelector) && (
@@ -2173,10 +2491,11 @@ export function Composer({
               compact={compactStrip}
               // У чата с персоной своё назначение модели — пункт «По умолчанию» подписывается им
               usage={selectedPersona ? USAGE.chatPersona : USAGE.chatNew}
+              maxTriggerWidth={rightMax.model ?? undefined}
             />
           )}
           {onEffortChange && (
-            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={compactStrip} />
+            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={compactStrip} maxTriggerWidth={rightMax.effort ?? undefined} />
           )}
           {companionSelector}
         </div>

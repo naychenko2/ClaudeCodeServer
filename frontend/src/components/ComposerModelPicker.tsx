@@ -29,6 +29,12 @@ interface Props {
   usage?: UsageKey;
   // Показывать пометку о заморозке модели у НАЧАТОГО чата. По умолчанию — да, когда started.
   showFreezeNote?: boolean;
+  // Потолок ширины триггера в полной (не compact) форме. Задаётся родителем из таблицы
+  // номиналов полосы контролов (STRIP_RIGHT_MAX в Composer.tsx) — иначе фактическая ширина
+  // пикера может уехать за край полосы после снятия overflow:hidden. Compact-форма
+  // (узкий экран) уже имеет фиксированную ширину в ComposerMenu — этот проп на неё
+  // не действует
+  maxTriggerWidth?: number;
 }
 
 // Иконка модели по «классу» (мощная/универсальная/экономичная/быстрая). Тир угадываем
@@ -46,7 +52,7 @@ export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: 
 }
 
 export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
-  usage = USAGE.chatNew, showFreezeNote }: Props) {
+  usage = USAGE.chatNew, showFreezeNote, maxTriggerWidth }: Props) {
   const models = useModels();
   const defaultOption = useDefaultModelOption(usage);
 
@@ -122,6 +128,7 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
         title={`Модель: ${current ? modelLabel(current) : defaultOption.label}`}
         isMobile={isMobile}
         compact={compact}
+        maxTriggerWidth={maxTriggerWidth}
       />
       {started && (showFreezeNote ?? true) && <ComposerFreezeNote />}
     </div>

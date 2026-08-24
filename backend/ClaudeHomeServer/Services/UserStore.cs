@@ -497,6 +497,40 @@ public class UserStore
         }
     }
 
+    /// <summary>
+    /// Личный порог автоправила архивации чатов (флаг chat-auto-archive; null — сброс:
+    /// правило для чатов вне проектов и наследуемый дефолт проектов не настроено).
+    /// </summary>
+    public bool SetArchiveAfterDays(string id, int? days)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.ArchiveAfterDays = days;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Момент первого прохода автоправила архивации (кнопка «Применить сейчас»):
+    /// до него фоновый тик владельца не архивирует ничего.
+    /// </summary>
+    public bool SetArchiveRuleFirstRunAt(string id, DateTime? atUtc)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.ArchiveRuleFirstRunAt = atUtc;
+            Save();
+            return true;
+        }
+    }
+
     // Вызывается только из Update/Delete, уже из-под взятого лока — отдельная синхронизация не нужна.
     private bool HasOtherAdmin(string excludeId) =>
         _users.Any(u => u.Id != excludeId && u.Role == "admin");

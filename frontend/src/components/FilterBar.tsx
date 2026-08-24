@@ -19,14 +19,17 @@ import {
 // или мобильная шторка (ui/Modal). Секции: поиск → статус → тип → персона → показать
 // только. Поиск намертво живёт первой секцией поповера (макет chat-unified-view):
 // редкий жест не занимает тулбар, активный поиск виден бейджем скрытых.
-// Архив (чаты выполненных задач) прячется чипом «Готово» в секции «Статус».
+// Архив (чаты выполненных задач) прячется чипом «Завершён» в секции «Статус».
+// Текст переименован в плане «Архив чатов» v4, чтобы не путать с разделом «Архив»
+// и циклом «до готово»; ключ `'done'` оставлен прежним (входит в персистенцию
+// cc_chat_filters:*).
 
 const STATUS_LABEL: Record<ChatStatusChip, string> = {
-  active: 'В работе', waiting: 'Ждёт меня', done: 'Готово', error: 'С ошибкой',
+  active: 'В работе', waiting: 'Ждёт меня', done: 'Завершён', error: 'С ошибкой',
 };
 // Строчные имена для сводки в title триггера
 const STATUS_SUMMARY: Record<ChatStatusChip, string> = {
-  active: 'в работе', waiting: 'ждут меня', done: 'готово', error: 'с ошибкой',
+  active: 'в работе', waiting: 'ждут меня', done: 'завершён', error: 'с ошибкой',
 };
 const STATUS_DOT: Record<ChatStatusChip, string> = {
   active: C.accent, waiting: C.warning, done: C.textMuted, error: C.danger,
@@ -315,7 +318,7 @@ function buildSummary(filters: ChatFilters, personaName: string | null): string 
   if (q) parts.push(`«${q}»`);
   const liveSel = (['active', 'waiting', 'error'] as ChatStatusChip[]).filter(s => filters.statuses.includes(s));
   if (liveSel.length < 3 && liveSel.length > 0) parts.push(liveSel.map(s => STATUS_SUMMARY[s]).join(', '));
-  if (!filters.statuses.includes('done')) parts.push('без готовых');
+  if (!filters.statuses.includes('done')) parts.push('без завершённых');
   if (filters.only.length) parts.push(filters.only.map(o => ONLY_SUMMARY[o]).join(', '));
   if (filters.personaId && personaName) parts.push(personaName);
   return parts.join(' · ');

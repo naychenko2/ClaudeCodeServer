@@ -201,12 +201,26 @@ export function chatStatusOf(s: Session): ChatStatusChip {
   return 'active'; // starting | working | active | finished
 }
 
+// Признак архива — производное бэка (ArchivedAt != null && UpdatedAt <= ArchivedAt),
+// отдаётся на фронт готовым bool в Session.archived / HomeSessionInfo.archived.
+// На фронте НЕ пересчитываем из updatedAt/archivedAt — это вторая копия правила,
+// плюс мигание на равных таймстемпах (см. docs/architecture/features.md, раздел
+// «Архив чатов»). Узкий type guard: тип Session/HomeSessionInfo сейчас не содержит
+// поля явно (тип обновляется параллельно), читаем без строгой типизации.
+export function isArchivedChat(s: Session): boolean {
+  return Boolean((s as { archived?: unknown }).archived);
+}
+
 // Предикат видимости чата по фильтрам. Возвращается функцией, чтобы один и тот же
 // предикат прошёл и по плоскому списку, и в buildChatTreeRows (isVisible — ко всем узлам).
 export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
   const q = filters.search.trim().toLowerCase();
   const onlySet = filters.only;
   return (s) => {
+    // Архив скрывается из обычных списков. Дочерние чаты архивного родителя
+    // «всплывают» через прокол в buildChatTreeRows (filterForest) — то же множество,
+    // что в плоском списке, и hiddenCount не зависит от вида.
+    if (isArchivedChat(s)) return false;
     if (!filters.origins.includes(s.origin)) return false;
     if (!filters.statuses.includes(chatStatusOf(s))) return false;
     if (filters.personaId && s.personaId !== filters.personaId) return false;

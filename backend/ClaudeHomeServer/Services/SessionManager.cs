@@ -312,6 +312,9 @@ public class SessionManager : IDisposable
     private readonly Desktop.DesktopCapabilityTokenService _desktopTokens;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
+    // Копии транскриптов заархивированных чатов (data/archived-transcripts) — шаг 0 плана
+    // «Архив чатов»: создаётся в конструкторе напрямую, см. там же
+    private readonly ArchivedTranscriptStore _archivedTranscripts;
     // Сервисный токен MCP-серверов — ОДИН на владельца (задачи/заметки/память/персоны/…
     // используют один и тот же owner-scoped JWT), с перевыпуском до истечения. См. GetServiceToken.
     private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _serviceTokens = new();
@@ -535,6 +538,10 @@ public class SessionManager : IDisposable
         _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);
         _server = server;
         _config = config;
+        // Копии транскриптов архивных чатов (шаг 0 плана «Архив чатов»): стор файловый и
+        // без зависимостей, создаём напрямую — точки вызова (SetArchived/DeleteAsync) живут
+        // здесь, отдельная регистрация в Program.cs ничего не добавляет.
+        _archivedTranscripts = new ArchivedTranscriptStore(config);
         // Sweep-terminus grace (P12/P15): потолок ожидания exited после result до принудительного
         // Active→Finished. <=0 — выключить sweep (только для тестов/отладки).
         _stuckActiveGraceSeconds = int.TryParse(config["Session:StuckActiveGraceSeconds"], out var grace)
@@ -1118,6 +1125,52 @@ public class SessionManager : IDisposable
             .Select(e => e.Info.Id)
             .ToList();
 
+    // Чаты, подпадающие под автоправило архивации «без сообщений дольше N дней» (план v4,
+    // флаг chat-auto-archive) — ЕДИНАЯ точка отбора для счётчика превью
+    // (GET /api/chats/archive-preview) и тика правила (ChatArchiveService.TickAsync):
+    // превью обязано считать той же функцией, что архивирует, иначе счётчик покажет «3»,
+    // а исчезнет 200 (пре-мортем №2). nowUtc — параметром, чтобы превью и тик сходились
+    // при одном моменте времени; фронт этот отбор повторить не может в принципе
+    // (HasTurnInFlight и живость агентов — серверные).
+    //
+    // projectId != null — чаты проекта (владение проектом контроллер проверил отдельно,
+    // у проектных сессий OwnerId null); null — чаты вне проекта владельца ownerId
+    // (личный дефолт правила). Потолок пачки и ArchivedBy="rule" — забота тика, не отбора.
+    public IReadOnlyList<Session> GetArchiveRuleCandidates(string ownerId, string? projectId, int days, DateTime nowUtc)
+    {
+        var cutoff = nowUtc - TimeSpan.FromDays(days);
+        var result = new List<Session>();
+        foreach (var entry in _sessions.Values)
+        {
+            var info = entry.Info;
+            if (projectId is null)
+            {
+                if (info.ProjectId is not null || info.OwnerId != ownerId) continue;
+            }
+            else if (info.ProjectId != projectId) continue;
+            if (!MatchesArchiveRule(info, cutoff)) continue;
+            // Живость в чистый предикат не входит: она — свойство entry/адаптера, не Session
+            if (HasTurnInFlight(entry) || entry.Process is { HasTrackedBg: true }) continue;
+            result.Add(info);
+        }
+        return result;
+    }
+
+    // Чистая часть предиката правила (порог + исключения плана v4; живость хода/фоновых
+    // агентов — в GetArchiveRuleCandidates). internal static для юнит-тестов, образец —
+    // ShouldExpire в ChatExpiryService. Исключения: закреплённые («чат нужен»), временные
+    // (ими управляет свой срок), онбординг (человек в середине знакомства), штаб в работе
+    // (Idle с закрытыми волнами — можно), чат живой задачи-исполнителя (выполненной — можно).
+    internal static bool MatchesArchiveRule(Session s, DateTime cutoff) =>
+        !s.IsArchived
+        && !s.IsPinned
+        && s.ExpiresAfterMinutes is null
+        && s.OnboardingKind is null
+        && s.UpdatedAt <= cutoff
+        && (s.TeamImplement is not { } ti
+            || (ti.Stage == TeamImplementStage.Idle && ti.WaveNumber <= ti.ClosedWave))
+        && (s.TaskId is null || s.TaskDone);
+
     // Число сессий проекта — для карточки проекта (без аллокации списка)
     public int CountByProject(string projectId) =>
         _sessions.Values.Count(e => e.Info.ProjectId == projectId);
@@ -1197,6 +1250,182 @@ public class SessionManager : IDisposable
             cur = GetById(pid);
         }
         return false;
+    }
+
+    // Убрать чат в архив (archived = true) / вернуть (false). Единственная точка записи
+    // полей архива — как SetParent для группировки. by — "user" (пункт меню) | "rule"
+    // (автоправило), batchId — идентификатор прохода правила (откат возвращает ровно одну
+    // пачку; у ручной архивации null).
+    //
+    // UpdatedAt/LastReadAt намеренно НЕ трогает (как SetExpiry): по ним сортируется список
+    // и считается непрочитанность, а архивация — не активность; возврат не должен всплывать
+    // чат наверх и метить его непрочитанным. Признак архива производный (Session.IsArchived),
+    // поэтому «снять архив» — это сброс полей, и повторная активность снимет его и без
+    // мутатора. Попутно копируем транскрипт в data/archived-transcripts (архивация) или
+    // возвращаем его в профиль (возврат) — best-effort, сбой файловой части не роняет вызов.
+    //
+    // SaveSessions сознательно НЕ зовём: ручная архивация сохранит стор сразу после вызова,
+    // а проход автоправила пишет файл ОДИН раз на всю пачку (до 200 чатов за тик — иначе
+    // каждая архивация перезаписывала бы sessions.json целиком и дёргала sweep).
+    public Session? SetArchived(string sessionId, bool archived, string by, string? batchId = null)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (archived)
+        {
+            entry.Info.ArchivedAt = DateTime.UtcNow;
+            entry.Info.ArchivedBy = by;
+            entry.Info.ArchiveBatchId = batchId;
+            ArchiveTranscriptCopy(entry.Info);
+        }
+        else
+        {
+            entry.Info.ArchivedAt = null;
+            entry.Info.ArchivedBy = null;
+            entry.Info.ArchiveBatchId = null;
+            RestoreTranscriptCopy(entry.Info);
+        }
+        return entry.Info;
+    }
+
+    // Копия транскрипта при архивации: источники — ВСЕ корни профилей, как у уборки при
+    // удалении (DeleteTranscript): за время жизни чат мог мигрировать между профилями и
+    // рабочими папками, а миграции исходники не удаляют. Сам стор валидирует csid белым
+    // списком и гейтит десктопные чаты; best-effort — сбой не имеет права ронять архивацию.
+    private void ArchiveTranscriptCopy(Session info)
+    {
+        try
+        {
+            if (info.ClaudeSessionId is not string csid) return;
+            _archivedTranscripts.Archive(csid, info.DesktopChat, TranscriptSearchRoots(info), TryResolveCwd(info));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Копия транскрипта при архивации чата {SessionId} не создана", info.Id);
+        }
+    }
+
+    // Возврат копии при возврате чата: цель резолвится НА МОМЕНТ возврата — за время в
+    // архиве могли смениться профиль провайдера (MigrateProviderAsync) и папка уплощённого
+    // cwd (worktree, правка RootPath), поэтому исходный путь не запоминаем.
+    private void RestoreTranscriptCopy(Session info)
+    {
+        try
+        {
+            if (info.ClaudeSessionId is not string csid) return;
+            var hostCwd = TryResolveCwd(info);
+            if (hostCwd is null) return;
+            var ownerId = ResolveOwnerId(info);
+            _archivedTranscripts.Restore(csid,
+                ConfigRootFor(ownerId, info.Provider), CwdForOwner(ownerId, hostCwd));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Копия транскрипта при возврате чата {SessionId} не возвращена", info.Id);
+        }
+    }
+
+    // Корни профилей CLI для поиска транскрипта чата: все конфиг-корни провайдеров плюс
+    // профили песочницы владельца (раскладка RewriteProfileEnv; берём ВСЕ папки владельца,
+    // а не один ключ — чат мог мигрировать). Выделено из DeleteTranscript: тот же список
+    // нужен и копии при архивации.
+    private IEnumerable<string> TranscriptSearchRoots(Session info)
+    {
+        var roots = new List<string>(_llmProviders.GetAllConfigRoots());
+        if (ResolveOwnerId(info) is string ownerId)
+        {
+            var ownerProfiles = Path.Combine(_sandbox.ProfilesHostDir, ownerId);
+            if (Directory.Exists(ownerProfiles))
+                roots.AddRange(Directory.GetDirectories(ownerProfiles));
+        }
+        return roots;
+    }
+
+    // Ручная архивация/возврат из архива (PUT /api/chats/{id}/archived, шаг 2 плана
+    // «Архив чатов»): обёртка над SetArchived для точки входа из UI — гейт живости,
+    // снятие срока временного чата, персист и событие ленты chat_archived. Автоправило
+    // (ChatArchiveService) зовёт SetArchived напрямую: у него свой гейт отбора и одна
+    // SaveSessions() на всю пачку.
+    //
+    // Гейт живости — только на архивацию: возврат ничего не рвёт, а «вернуть из архива,
+    // пока идёт ход» — ровно то, что происходит при снятии архива активностью. 409 на
+    // живом ходе отсюда уезжает InvalidOperationException (конвенция RestartWave и др.).
+    public async Task<Session?> SetArchivedAsync(string sessionId, string ownerId, bool archived)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } info) return null;
+        if (archived && _sessions.TryGetValue(sessionId, out var entry))
+        {
+            if (HasTurnInFlight(entry))
+                throw new InvalidOperationException(
+                    "В чате идёт ход — дождитесь его завершения или прервите его, затем уберите чат в архив");
+            if (entry.Process is { HasTrackedBg: true })
+                throw new InvalidOperationException(
+                    "В чате работают фоновые агенты — дождитесь их завершения, затем уберите чат в архив");
+            // Временный чат: архив бессрочен до возврата, срок снимаем ДО записи признака
+            // архива — иначе чат умер бы по таймеру ChatExpiryService уже в архиве
+            // (SetExpiry заодно обнуляет ExpiryAnchor). SetExpiry пишет стор сам —
+            // промежуточное состояние «срок снят, архива нет» безопасно.
+            if (info.ExpiresAfterMinutes is not null) SetExpiry(sessionId, null);
+        }
+        var updated = SetArchived(sessionId, archived, by: "user");
+        if (updated is null) return null;
+        SaveSessions();
+        await BroadcastChatArchivedAsync(sessionId, updated, archived);
+        return updated;
+    }
+
+    // Уведомить клиентов об архивации/возврате чата (адресация как у BroadcastChatDeletedAsync):
+    // project-группа для проектной сессии, user-группа для чата вне проекта
+    private async Task BroadcastChatArchivedAsync(string sessionId, Session info, bool archived)
+    {
+        var msg = new ChatArchivedMessage(archived) with { SessionId = sessionId };
+        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        if (info.ProjectId is string pid)
+            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+        else if (info.OwnerId is string oid)
+            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+        await Task.WhenAll(tasks);
+    }
+
+    // Проход автоправила архивации (ChatArchiveService, шаг 6 плана v4): заархивировать
+    // пачку одним batchId — ОДНОЙ SaveSessions на весь проход (до 200 чатов; иначе каждая
+    // архивация переписывала бы sessions.json целиком и дёргала sweep) и событием
+    // chat_archived каждому чату. Гейт живости не повторяем: отбор кандидатов
+    // (GetArchiveRuleCandidates) уже его отработал; кому-то стать живым между отбором и
+    // записью — допустимая гонка, чат вернёт из архива собственная активность.
+    public async Task ArchiveBatchAsync(IReadOnlyCollection<string> sessionIds, string batchId)
+    {
+        var archived = new List<(string Id, Session Info)>();
+        foreach (var id in sessionIds)
+        {
+            var updated = SetArchived(id, archived: true, by: "rule", batchId);
+            if (updated is not null) archived.Add((id, updated));
+        }
+        if (archived.Count == 0) return;
+        SaveSessions();
+        foreach (var (id, info) in archived)
+            await BroadcastChatArchivedAsync(id, info, archived: true);
+    }
+
+    // Откат пачки автоправила из уведомления/раздела «Архив»: вернуть РОВНО чаты прохода
+    // batchId (ArchivedBy="rule" и чат ещё в архиве), а не всю историю правила. Одна
+    // SaveSessions на пачку, событие возврата каждому. Владелец — по GetOwned: батч-id
+    // приходит из URL, чужой не должен возвращать чужие чаты (даже угаданный).
+    public async Task<int> RestoreArchiveBatchAsync(string ownerId, string batchId)
+    {
+        var restored = new List<(string Id, Session Info)>();
+        foreach (var s in _sessions.Values.Select(e => e.Info)
+                     .Where(s => s.ArchiveBatchId == batchId && s.ArchivedBy == "rule" && s.IsArchived)
+                     .ToList())
+        {
+            if (GetOwned(s.Id, ownerId) is null) continue;
+            var updated = SetArchived(s.Id, archived: false, by: "user");
+            if (updated is not null) restored.Add((s.Id, updated));
+        }
+        if (restored.Count == 0) return 0;
+        SaveSessions();
+        foreach (var (id, info) in restored)
+            await BroadcastChatArchivedAsync(id, info, archived: false);
+        return restored.Count;
     }
 
     // Включить/выключить временность чата: minutes > 0 — авто-удаление через N минут
@@ -1768,6 +1997,18 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Info.SummaryNoteId = noteId;
+        SaveSessions();
+    }
+
+    // Кэш сводки карточки архива (ChatDigestService, место chat-digest): текст и момент
+    // сборки — при UpdatedAt > ArchiveSummaryAt сводка не актуальна (см. Session).
+    // UpdatedAt намеренно не двигается: сборка сводки — не активность чата, иначе она
+    // сама снимала бы архив и поднимала чат в списке. null — сбросить кэш.
+    public void SetArchiveSummary(string sessionId, string? summary)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Info.ArchiveSummary = summary;
+        entry.Info.ArchiveSummaryAt = summary is null ? null : DateTime.UtcNow;
         SaveSessions();
     }
 
@@ -4491,7 +4732,9 @@ public class SessionManager : IDisposable
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.Name = line;
         entry.Info.NameLocked = true; // явное действие пользователя — авто больше не трогает
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Архивный чат из архива не выводим: «Обновить название» доступен и в разделе
+        // «Архив», а правка названия — не активность разговора (признак архива производный)
+        if (!entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
         return entry.Info;
@@ -4552,8 +4795,14 @@ public class SessionManager : IDisposable
             .Where(e => ResolveOwnerId(e.Info) == userId && (projectId is null || e.Info.ProjectId == projectId))
             .Select(e => e.Info)
             .ToList();
-        // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём
-        var pending = all.Where(s => string.IsNullOrEmpty(s.Topic)).Select(s => s.Id).ToList();
+        // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём.
+        // Архивные — туда же: у старых чатов Topic как раз пуст (значки появились позже),
+        // и один клик «Проставить значки» выводил бы из архива ВСЕ старые чаты (UpdatedAt
+        // двигается в SetChatIconAsync) и заказывал сотни вызовов модели
+        var pending = all
+            .Where(s => string.IsNullOrEmpty(s.Topic) && !s.IsArchived)
+            .Select(s => s.Id)
+            .ToList();
         var processed = 0;
         var skipped = all.Count - pending.Count;
         foreach (var id in pending)
@@ -4596,6 +4845,14 @@ public class SessionManager : IDisposable
         if (entry.TurnWaiter is not null) return true;
         lock (entry.PendingLock) return entry.Pending.Count > 0;
     }
+
+    // Публичная обёртка HasTurnInFlight для API-слоя (архивация чата, шаг 2 плана
+    // «Архив чатов»): нужен тот же гейт, что у смены провайдера, — Status для этого не
+    // годится (у свежего чата Starting, между стартом хода и сменой статуса есть окно).
+    // false и для отсутствующего чата — гейт по чужому id не должен падать, caller
+    // всё равно ответит 404 по GetOwned.
+    public bool HasTurnInFlight(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && HasTurnInFlight(entry);
 
     // Редактирование названия и модели. Модель применяется со следующего хода
     // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с адаптером.
@@ -4720,8 +4977,11 @@ public class SessionManager : IDisposable
         // настройками (срок хранения, тумблер уведомлений — их применяет контроллер до этого
         // вызова, сюда все поля доезжают как null): безусловный UpdatedAt поднимал бы чат
         // в списке и метил непрочитанным просто за смену настройки.
+        // Архивный чат из архива не выводим: правка имени/модели/тегов доступна и в разделе
+        // «Архив», а признак архива производный — UpdatedAt снимает его сам.
         if (name is not null || model is not null || effort is not null || tags is not null)
-            entry.Info.UpdatedAt = DateTime.UtcNow;
+            if (!entry.Info.IsArchived)
+                entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
     }
@@ -8109,6 +8369,9 @@ public class SessionManager : IDisposable
             {
                 _history.Delete(csid);
                 DeleteTranscript(entry.Info, csid);
+                // Архивная копия транскрипта уходит вместе с чатом — иначе переписка
+                // переживёт его и в data, и в бэкапе. Гейт тот же (общий csid у чата-двойника)
+                _archivedTranscripts.Delete(csid);
             }
         }
         // Снимки промпта ключуются id ЧАТА, а не транскриптом, — гейт общего разговора выше
@@ -8159,19 +8422,8 @@ public class SessionManager : IDisposable
     {
         try
         {
-            var roots = new List<string>(_llmProviders.GetAllConfigRoots());
-            // Профили песочницы владельца: {ProfilesHostDir}/{ownerId}/{key} (раскладку задает
-            // DockerProcessRunner.RewriteProfileEnv, ее же зеркалит ConfigRootFor). Здесь берем
-            // ВСЕ папки владельца, а не считаем ключ: чат мог мигрировать между профилями
-            if (ResolveOwnerId(info) is string ownerId)
-            {
-                var ownerProfiles = Path.Combine(_sandbox.ProfilesHostDir, ownerId);
-                if (Directory.Exists(ownerProfiles))
-                    roots.AddRange(Directory.GetDirectories(ownerProfiles));
-            }
-
             var removed = Llm.TranscriptMigrator.DeleteEverywhere(
-                roots, TryResolveCwd(info), claudeSessionId);
+                TranscriptSearchRoots(info), TryResolveCwd(info), claudeSessionId);
             if (removed > 0)
                 _log.LogInformation("Транскрипт чата {SessionId} удален ({Count} файлов)", info.Id, removed);
             else

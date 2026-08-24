@@ -67,6 +67,36 @@ describe('projectActivity: живые фоновые агенты', () => {
     await vi.waitFor(() => expect(__chatAggSnapshot().get('c1')).toBe('working'));
   });
 
+  it('архивный чат не попадает в номерок дока стены, даже если у него живые агенты', async () => {
+    // Шаг 4 плана v4: aggregateChats пропускает архивный чат — он скрыт в обычном
+    // списке, точка дока стены на нём смотрелась бы как сломанная навигация.
+    // Готовое поле archived с бэка; без сравнения updatedAt/archivedAt на фронте.
+    const archived = chat('c1', 'active') as HomeSessionInfo & { archived?: boolean };
+    archived.archived = true;
+    summary([], [archived]);
+    vi.mocked(api.chats.agentsPresence).mockResolvedValue(['c1']);
+
+    __subscribeActivity(() => {});
+    await vi.waitFor(() => expect(vi.mocked(api.home.summary)).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(__chatAggSnapshot().has('c1')).toBe(false);
+  });
+
+  it('архивный чат не считается непрочитанным в номерке дока стены', async () => {
+    // Тот же инвариант через ветку hasUnread: archived=true — чат скрыт,
+    // точка unread в доке стены на нём врёт
+    const archived = chat('c1', 'finished') as HomeSessionInfo & { archived?: boolean };
+    archived.archived = true;
+    summary([], [archived]);
+
+    __subscribeActivity(() => {});
+    await vi.waitFor(() => expect(vi.mocked(api.home.summary)).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(__chatAggSnapshot().has('c1')).toBe(false);
+  });
+
   it('без живого фона тихий чат точку не зажигает', async () => {
     summary([], [chat('c1', 'active')]);
 

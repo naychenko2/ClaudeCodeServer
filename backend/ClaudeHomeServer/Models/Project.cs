@@ -133,4 +133,9 @@ public class Project
     // паспорта по новому tip (сценарий «вторая машина / сосед по общей папке» —
     // ветку привозит чужой git pull, DossierAutoImporter только читает её).
     public bool AutoImportDossiers { get; set; } = false;
+    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive): убирать в архив
+    // чаты проекта без сообщений дольше N дней. null = наследовать личный порог владельца
+    // (User.ArchiveAfterDays); явное значение перекрывает его для этого проекта.
+    // Nullable с дефолтом: старые записи projects.json читаются штатно, стор уже в бэкапе.
+    public int? ArchiveAfterDays { get; set; }
 }

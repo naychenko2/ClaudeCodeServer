@@ -429,6 +429,19 @@ public class ProjectManager
         return project;
     }
 
+    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive): null — наследовать
+    // личный порог владельца. Диапазон валидирует контроллер, здесь сеттер, как у остальных
+    // точечных обновлений.
+    public Project SetArchiveAfterDays(string id, int? days)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.ArchiveAfterDays = days;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     public Project UpdateBoardColumns(string id, List<BoardColumn>? columns)
     {
         var project = _projects.GetValueOrDefault(id)

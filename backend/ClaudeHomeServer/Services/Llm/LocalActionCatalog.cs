@@ -89,6 +89,10 @@ public static class LocalActionCatalog
     public const string TaskDedup = "task-dedup";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
+    // Сводка карточки архива чата (шаг 5 плана «Архив чатов» v4): 2–3 предложения по кнопке
+    // «Собрать сводку», кэшируется в Session.ArchiveSummary. Не путать с SessionSummary —
+    // «Итогом сессии», который выносится заметкой и трогать который нельзя
+    public const string ChatDigest = "chat-digest";
     public const string NotificationSummary = "notification-summary";
     public const string GitCommitMsg = "git-commit-msg";
     public const string GitStashName = "git-stash-name";
@@ -205,6 +209,10 @@ public static class LocalActionCatalog
         new(TaskDedup, "Поиск дублей задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
+        // Сводка карточки архива: сырьё то же (транскрипт чата), а ответ — 2–3 предложения
+        // для карточки списка, поэтому Small вместо Large «Сводки сессии»: переплачивать
+        // профилем за три строки незачем
+        new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
         new(NotificationSummary, "Суть уведомления", "Уведомления", CheapProfile.Small, DefaultLocal: true),
         new(GitCommitMsg, "Commit-сообщения", "Git", CheapProfile.Text, DefaultLocal: true),
         new(GitStashName, "Названия стэшей", "Git", CheapProfile.Small, DefaultLocal: true),

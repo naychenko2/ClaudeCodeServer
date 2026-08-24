@@ -74,7 +74,10 @@ const _filterPreds = new Map<string, (s: HomeSessionInfo) => boolean>();
 // Виден ли чат сводки по фильтру его проекта. Предикат берём из того же matchChatFilter,
 // что красит список чатов, чтобы точка и список не разъезжались. Фильтр per-scope
 // (свой у каждого проекта). HomeSessionInfo несёт все поля, которые проверяет
-// matchChatFilter — приводим к Session
+// matchChatFilter — приводим к Session. Архив из matchChatFilter отсекается
+// сам (см. isArchivedChat в chatFilters): это и есть «ветка unread точки
+// активности проекта» из шага 4 — точка у проекта не светится из-за скрытого
+// архивного чата.
 function visibleInProjectFilter(s: HomeSessionInfo): boolean {
   if (!s.projectId) return true;
   let pred = _filterPreds.get(s.projectId);
@@ -135,15 +138,26 @@ function aggregate(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<st
 // Статус per-чат из того же снимка: живая сессия несёт свой статус (waiting/working),
 // у остальных смотрим непрочитанность. Фильтр списка чатов тут НЕ применяется:
 // потребитель (док стены) показывает явно выбранные чаты, и прятать их точку по
-// фильтру чужого списка было бы враньём.
+// фильтру чужого списка было бы враньём. Архивный чат при этом НЕ должен
+// зажигать точку в доке стены — он скрыт в обычном списке, и зря горящая точка
+// выглядела бы как сломанная навигация. Готовое поле archived с бэка
+// (см. isArchivedChat в chatFilters) — никаких сравнений updatedAt/archivedAt
+// на фронте.
 function aggregateChats(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<string, ActivityStatus> {
   const next = new Map<string, ActivityStatus>();
-  for (const s of active) next.set(s.id, s.status === 'waiting' ? 'waiting' : 'working');
+  for (const s of active) {
+    if ((s as { archived?: unknown }).archived === true) continue;
+    next.set(s.id, s.status === 'waiting' ? 'waiting' : 'working');
+  }
   // Живой фон — та же работа: без этого номерок чата в доке стены остался бы немым
   // (или серым «сюда не заходили»), пока агенты пашут
   const withAgents = agentsPresenceSnapshot();
-  for (const s of recent) if (withAgents.has(s.id)) next.set(s.id, 'working');
+  for (const s of recent) {
+    if ((s as { archived?: unknown }).archived === true) continue;
+    if (withAgents.has(s.id)) next.set(s.id, 'working');
+  }
   for (const s of [...active, ...recent]) {
+    if ((s as { archived?: unknown }).archived === true) continue;
     if (next.has(s.id)) continue; // живой статус важнее непрочитанности
     if (hasUnread(s.updatedAt, s.id, s.lastReadAt)) next.set(s.id, 'unread');
   }

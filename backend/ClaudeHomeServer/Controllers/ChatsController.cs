@@ -13,8 +13,10 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/chats")]
-public class ChatsController(SessionManager sessions, FileService files,
+public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
+    Services.Llm.ChatDigestService digest, ChatArchiveService autoArchive,
+    UserStore users, FeatureFlagService flags,
     ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -36,6 +38,59 @@ public class ChatsController(SessionManager sessions, FileService files,
     // старта агентов иначе не узнал бы о них до самого их завершения.
     [HttpGet("agents-presence")]
     public IActionResult AgentsPresence() => Ok(sessions.GetSessionsWithLiveAgents(UserId));
+
+    // Счётчик «под правило подпадёт N чатов» (настройка автоправила за флагом
+    // chat-auto-archive): та же функция отбора, что архивирует тик, — число превью
+    // совпадает с результатом прохода при том же моменте времени. projectId — проект,
+    // чьи чаты считаем (обязан принадлежать пользователю); без него — личный дефолт:
+    // чаты вне проекта. Read-only: ничего не архивирует.
+    [HttpGet("archive-preview")]
+    public IActionResult ArchivePreview([FromQuery] int days, [FromQuery] string? projectId = null)
+    {
+        if (days <= 0) return BadRequest(new { error = "Порог архивации должен быть положительным (дней)" });
+        if (projectId is not null && projects.GetById(projectId)?.OwnerId != UserId)
+            return NotFound();
+        var count = sessions.GetArchiveRuleCandidates(UserId, projectId, days, DateTime.UtcNow).Count;
+        return Ok(new { count });
+    }
+
+    // === Автоправило архивации (флаг chat-auto-archive, шаг 6 плана v4) ===
+    // Настройка и запуск правила — за флагом; откат пачки и ручной архив — без него.
+
+    // Личный порог правила: он же дефолт для проектов без своего, он же правило для чатов
+    // вне проектов. days = null — сброс (для своей сферы правило выключено).
+    [HttpPut("archive-days")]
+    public IActionResult SetArchiveDays([FromBody] ArchiveDaysRequest req)
+    {
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
+            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
+        if (req.Days is not null && req.Days is not (>= 1 and <= 365))
+            return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
+        if (!users.SetArchiveAfterDays(UserId, req.Days)) return Unauthorized();
+        return Ok(new { archiveAfterDays = req.Days });
+    }
+
+    // Кнопка «Применить сейчас»: запускает РОВНО один проход правила по всем сферам
+    // владельца, включая накопившиеся старые чаты (фоновый тик их не трогает до первого
+    // прохода), и снимает гейт первого прохода. Повторный клик — снова один проход.
+    [HttpPost("archive-run")]
+    public async Task<IActionResult> ArchiveRun()
+    {
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
+            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
+        var (archived, batchId) = await autoArchive.RunNowAsync(UserId, DateTime.UtcNow);
+        return Ok(new { archived, batchId });
+    }
+
+    // Откат пачки одного прохода правила (кнопка в уведомлении/разделе «Архив»): возвращает
+    // ровно чаты этого batchId, а не всю историю правила. Работает без флага — это возврат
+    // уже убранного, как ручной «Вернуть из архива».
+    [HttpPost("archive-batch/{batchId}/restore")]
+    public async Task<IActionResult> RestoreArchiveBatch(string batchId)
+    {
+        var restored = await sessions.RestoreArchiveBatchAsync(UserId, batchId);
+        return Ok(new { restored });
+    }
 
     // Получить сессию по ID независимо от типа (проектная / чат вне проекта).
     // Используется для ссылки «Связанная сессия» в карточке задачи без проекта.
@@ -159,6 +214,43 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpPut("{id}/read")]
     public IActionResult MarkRead(string id)
         => sessions.MarkRead(id, UserId) ? NoContent() : NotFound();
+
+    // Убрать чат в архив (archived=true) / вернуть (false) — шаг 2 плана «Архив чатов»:
+    // архив ПРЯЧЕТ чат, а не удаляет, история и claudeSessionId целы. Как /parent и /loop,
+    // работает и для проектной сессии (GetOwned внутри резолвит владельца через проект).
+    // 409 на живом ходе/фоновых агентах: архивация идущей работы рвала бы её (пре-мортем
+    // №3 плана v4); текст ошибки — человекочитаемый («в чате идёт ход»).
+    [HttpPut("{id}/archived")]
+    public async Task<IActionResult> SetArchived(string id, [FromBody] SetArchivedRequest req)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            var updated = await sessions.SetArchivedAsync(id, UserId, req.Archived);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Сводка карточки архива (шаг 5 плана «Архив чатов»): кнопка «Собрать сводку» строит
+    // 2–3 предложения о чём был разговор (место chat-digest) и кэширует их в чате — свежая
+    // сводка отдаётся из кэша без обращения к модели. Как /archived, работает и для
+    // проектной сессии (GetOwned внутри сервиса резолвит владельца через проект).
+    // Это НЕ «Итог сессии»: вынос в заметки — отдельная кнопка через существующий
+    // POST /api/sessions/{id}/summary, его контракт здесь не участвует.
+    [HttpPost("{id}/digest")]
+    public async Task<IActionResult> BuildDigest(string id, CancellationToken ct)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            return Ok(await digest.BuildDigestAsync(UserId, id, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (Services.Llm.DigestInProgressException ex) { return Conflict(new { error = ex.Message }); }
+        catch (Services.Llm.DigestGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
 
     // Назначить/снять собеседника у чата ДО первого хода (селектор в пустом чате):
     // персону (personaId) или .md-агента (agentName) — взаимоисключающе; оба пустые = снять.
@@ -508,6 +600,16 @@ public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "au
 public record SetParticipantsRequest(List<string>? PersonaIds);
 
 public record SetWorkLoopRequest(bool Enabled);
+
+// Archived: true — «Убрать в архив», false — «Вернуть из архива». Отдельного мутатора
+// «снять архив» в API нет: повторная активность возвращает чат сама (признак производный),
+// кнопка возврата — тот же эндпоинт. Полей архива в UpdateChatRequest/UpdateSessionRequest
+// нет намеренно (план v4, шаг 2).
+public record SetArchivedRequest(bool Archived);
+
+// Личный порог автоправила архивации (дней без активности); null — сброс правила
+// для чатов вне проектов и наследуемого дефолта проектов
+public record ArchiveDaysRequest(int? Days);
 
 // Включение режима «Командная реализация». ExecutorPersonaIds null/пустой = вся команда
 // проекта (планировщик подбирает по компетенциям в Э2). CoordinatorPersonaId/PlannerPersonaId

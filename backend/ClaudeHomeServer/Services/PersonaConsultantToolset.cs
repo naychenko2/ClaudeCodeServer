@@ -96,7 +96,9 @@ public static class PersonaConsultantToolset
     // при полном профиле доступа (не-Full профиль не даёт write независимо от специальности)
     public static bool IsExecutor(Persona persona) =>
         persona.Access == PersonaAccess.Full &&
-        (SpecialtyCatalog.IsExecutorKind(persona.Specialty) || persona.Specialty == PersonaSpecialty.Tester);
+        (SpecialtyCatalog.IsExecutorKind(persona.Specialty)
+         || persona.Specialty == PersonaSpecialty.Tester
+         || persona.Specialty == PersonaSpecialty.Designer);
 
     // Полный allow-list консультанта. Custom.DisallowedTools персоны только СУЖАЕТ набор
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента

@@ -175,6 +175,31 @@ public class PersonaConsultantToolsetTests
     }
 
     [Fact]
+    public void IsExecutor_Designer_Full_ВозвращаетTrue()
+    {
+        var designerFull = Make(access: PersonaAccess.Full);
+        designerFull.Specialty = PersonaSpecialty.Designer;
+        PersonaConsultantToolset.IsExecutor(designerFull).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsExecutor_Designer_ReadOnly_ВозвращаетFalse()
+    {
+        var designerReadOnly = Make(access: PersonaAccess.ReadOnly);
+        designerReadOnly.Specialty = PersonaSpecialty.Designer;
+        PersonaConsultantToolset.IsExecutor(designerReadOnly).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Build_Designer_Full_СодержитWriteEditBash()
+    {
+        var designerFull = Make(access: PersonaAccess.Full);
+        designerFull.Specialty = PersonaSpecialty.Designer;
+        PersonaConsultantToolset.Build(designerFull, webAllowed: false)
+            .Should().Contain(["Write", "Edit", "Bash"]);
+    }
+
+    [Fact]
     public void PmemServerKey_НормализуетHandle()
     {
         PersonaConsultantToolset.PmemServerKey("gefest").Should().Be("pmem_gefest");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   allRoleRows, buildGroups, buildLevelBars, configuredRoleRows, countFilledFields,
-  coverageOf, pickStartScope, totalFields, tripleOf,
+  coverageOf, pickStartScope, totalFields, tripleOf, unruledRoleRows,
 } from '../model';
 import type {
   SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse,
@@ -142,5 +142,42 @@ describe('счётчики и стартовый слой', () => {
     } as unknown as SpecialtySettingsResponse;
     expect(pickStartScope(settings, CATALOG, true)).toBe('global');
     expect(pickStartScope(settings, CATALOG, false)).toBe('owner');
+  });
+});
+
+describe('роли без правил (этап 5)', () => {
+  // Тот же слой, что в группах: librarian/mentor/secretary — конфигурированные,
+  // analyst/designer — одиночки. На этом фоне проверяем, что пустые роли
+  // (mentor вынесли в unruled через удаление правила) НЕ образуют «ложную группу» —
+  // buildGroups склеил бы их по пустому ключу '', а unruledRoleRows отдаёт их
+  // списком для отдельной секции.
+  const rows = allRoleRows(CATALOG, layer({
+    librarian: triple('preset:glm', 'preset:eco', 'preset:txt'),
+    mentor: triple('', '', ''),         // без правила
+    secretary: triple('preset:glm', 'preset:eco', 'preset:txt'),
+    analyst: triple('', '', ''),         // без правила
+    designer: triple('', '', ''),        // без правила
+  }));
+
+  it('возвращает только роли с пустой тройкой И хотя бы одной персоной', () => {
+    const counts = new Map<string, number>([
+      ['mentor', 3], ['analyst', 1], // designer без персон — не попадает
+    ]);
+    expect(unruledRoleRows(rows, counts).map(r => r.key)).toEqual(['mentor', 'analyst']);
+  });
+
+  it('роль без правил и без персон в список не попадает', () => {
+    expect(unruledRoleRows(rows, new Map()).map(r => r.key)).toEqual([]);
+  });
+
+  it('пустые тройки не образуют группу — buildGroups не считает их одинаковыми ролями', () => {
+    // Проверяем инвариант unruled: buildGroups слил бы mentor+analyst+designer в одну
+    // «группу из пустых троек», а singles оказались бы пустыми. unruledRoleRows
+    // разводит их по списку ролей без правил — одиночки/группы configuredRoleRows
+    // остаются нетронутыми.
+    const configured = configuredRoleRows(rows);
+    const { groups, singles } = buildGroups(configured);
+    expect(groups.map(g => g.roles.map(r => r.key))).toEqual([['librarian', 'secretary']]);
+    expect(singles.map(r => r.key)).toEqual([]);
   });
 });

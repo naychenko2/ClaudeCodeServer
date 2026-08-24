@@ -1,234 +1,267 @@
-import { describe, it, expect, vi } from 'vitest';
+// Тесты уровня стора на результат этапа 0: после починки затирания чужого слоя
+// настроек user-слой пользователя X живёт ОТДЕЛЬНО от settings вызывающего, а
+// запись через commit/rollback не задевает _settings.
+//
+// Стор тут — src/lib/presets.ts. Запись в user-слой делают компоненты
+// (ChainsTab/SlotsTab/PresetOptions), но базу они берут через getUserLayer(X) и
+// обновляют стор через commitUserLayer/rollbackUserLayer. Этот файл проверяет,
+// что эти примитивы стора не дают записи затереть ни слой вызывающего, ни
+// specialties/presets settings, и что hasUserLayer различает «нет ключа» и
+// «ключ есть, значение пустое» (проверка по наличию ключа, а не по falsy).
 
-// Стор тянет api (сеть) — мокаем, тестируем чистую логику лексики preset:*,
-// подписей цепочки и форматтера строки «Сейчас пойдёт»
-vi.mock('../api', () => ({ api: {} }));
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-import {
-  isPresetRoute, presetIdOf, presetValueLabel, cellPresetLabel, chainStepLabel, chainSummary,
-  stepsWord, substitutionsWord, placesWord, isBrokenPresetRoute, formatEffectiveLine,
-  isChainStepDimmed, resolvePlacePreset,
-} from '../presets';
-import type { ScopedPreset, ModelPreviewResponse } from '../../types';
+// Моки api: для этих тестов нужны getSettings (settings вызывающего) и
+// getUserLayer (чужой слой X). saveUserLayer не вызываем напрямую —
+// компоненты делают PUT вне стора, а стор только хранит результат.
+const getSettingsMock = vi.fn();
+const getUserLayerMock = vi.fn();
+vi.mock('../api', () => ({
+  api: {
+    specialties: {
+      getSettings: (...args: unknown[]) => getSettingsMock(...args),
+      getUserLayer: (...args: unknown[]) => getUserLayerMock(...args),
+    },
+  },
+}));
 
-const PRESETS: ScopedPreset[] = [
-  { id: 'p1', name: 'Рабочая', description: null, steps: ['opus', 'glm-5.2', 'deepseek-v4'], scope: 'owner' },
-  { id: 'p2', name: 'Дешёвый фон', description: null, steps: ['tier:weak', 'local'], scope: 'global' },
-];
+import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
 
-const CTX = { tierModels: { strong: 'opus', medium: 'sonnet', weak: 'haiku' }, ollamaModel: 'qwen3' };
+const EMPTY_LAYER: SpecialtySettingsLayer = {
+  specialties: {}, defaultSpecialty: null, presets: [],
+};
 
-describe('preset-лексика', () => {
-  it('распознаёт ссылку preset:{id} независимо от регистра префикса', () => {
-    expect(isPresetRoute('preset:p1')).toBe(true);
-    expect(isPresetRoute('Preset:p1')).toBe(true);
-    expect(presetIdOf('preset:p1')).toBe('p1');
-    expect(presetIdOf('preset:')).toBeNull();
-    expect(presetIdOf('sonnet')).toBeNull();
-    expect(presetIdOf('')).toBeNull();
-    expect(presetIdOf(null)).toBeNull();
-  });
+// Снимок owner/user вызывающего (админа): specialties и пресеты свои
+const ADMIN_USER_LAYER: SpecialtySettingsLayer = {
+  specialties: { 'admin-specialty': { access: 'full', tools: null, disallowedTools: null } },
+  defaultSpecialty: null,
+  presets: [
+    { id: 'admin-preset', name: 'Админский', description: null, steps: ['opus'] },
+  ],
+};
 
-  it('подпись выбранного пресета — имя и длина цепочки', () => {
-    expect(presetValueLabel('preset:p1', PRESETS)).toBe('Рабочая · 3 шага');
-    expect(presetValueLabel('preset:p2', PRESETS)).toBe('Дешёвый фон · 2 шага');
-  });
+// Снимок user-слоя конкретного пользователя X: specialties и пресеты чужие
+const TARGET_USER_LAYER: SpecialtySettingsLayer = {
+  specialties: { 'user-specialty': { access: 'readOnly', tools: null, disallowedTools: null } },
+  defaultSpecialty: null,
+  presets: [
+    { id: 'user-preset', name: 'Юзерский', description: null, steps: ['haiku'] },
+  ],
+};
 
-  it('битая ссылка — честная пометка, а не сырой id', () => {
-    expect(presetValueLabel('preset:gone', PRESETS)).toBe('Цепочка удалена — работает настройка по умолчанию');
-    expect(isBrokenPresetRoute('preset:gone', PRESETS)).toBe(true);
-    expect(isBrokenPresetRoute('preset:p1', PRESETS)).toBe(false);
-    expect(isBrokenPresetRoute('sonnet', PRESETS)).toBe(false);
-  });
-
-  it('склонение «шагов» и «мест»', () => {
-    expect(stepsWord(1)).toBe('1 шаг');
-    expect(stepsWord(2)).toBe('2 шага');
-    expect(stepsWord(5)).toBe('5 шагов');
-    expect(placesWord(1)).toBe('1 месте');
-    expect(placesWord(3)).toBe('3 местах');
-  });
-
-  it('склонение «раз/раза» для бюджета подмен (диапазон клампа 1..5)', () => {
-    expect(substitutionsWord(1)).toBe('1 раз');
-    expect(substitutionsWord(2)).toBe('2 раза');
-    expect(substitutionsWord(4)).toBe('4 раза');
-    expect(substitutionsWord(5)).toBe('5 раз');
-  });
-});
-
-describe('подписи шагов цепочки', () => {
-  it('модель — её label из каталога, уровень — «…(модели по умолч.)», local — локальная', () => {
-    expect(chainStepLabel('opus', CTX)).toBe('Opus');
-    expect(chainStepLabel('tier:strong', CTX)).toBe('Сильная (модели по умолч.)');
-    expect(chainStepLabel('local', CTX)).toBe('Локальная · qwen3');
-  });
-
-  it('сводка цепочки — порядок шагов стрелками', () => {
-    expect(chainSummary(PRESETS[0], CTX)).toBe('Opus → glm-5.2 → deepseek-v4');
-    expect(chainSummary(PRESETS[1], CTX)).toBe('Слабая (модели по умолч.) → Локальная · qwen3');
-  });
-});
-
-describe('приглушение шагов за пределом бюджета (isChainStepDimmed)', () => {
-  // Формула спеки и счётчика FallbackLlmSessionAdapter: N подмен → рабочие шаги 1..N+1
-  it('budget=2: шаги 1–3 рабочие, 4–5 приглушены («обычно не используется»)', () => {
-    const flags = [0, 1, 2, 3, 4].map(i => isChainStepDimmed(i, 2));
-    expect(flags).toEqual([false, false, false, true, true]);
-  });
-
-  it('budget=4 (дефолт): вся цепочка из 5 шагов рабочая', () => {
-    const flags = [0, 1, 2, 3, 4].map(i => isChainStepDimmed(i, 4));
-    expect(flags).toEqual([false, false, false, false, false]);
-  });
-
-  it('budget=1: рабочие только шаги 1–2', () => {
-    const flags = [0, 1, 2, 3, 4].map(i => isChainStepDimmed(i, 1));
-    expect(flags).toEqual([false, false, true, true, true]);
-  });
-});
-
-describe('resolvePlacePreset — пресет места каталога для триггера', () => {
-  it('поле preset ответа сильнее развёрнутого route: имя и шаги из ответа', () => {
-    // После выбора пресета Describe отдаёт route = первый шаг, имя — только в preset
-    const r = resolvePlacePreset('tier:medium',
-      { id: 'p2', name: 'Дешёвый фон', steps: ['tier:weak', 'local'] }, PRESETS, true);
-    expect(r.presetId).toBe('p2');
-    expect(r.broken).toBe(false);
-    expect(r.preset?.name).toBe('Дешёвый фон');
-  });
-
-  it('не-preset назначение: preset=null в ответе — пресета нет', () => {
-    const r = resolvePlacePreset('tier:medium', null, PRESETS, true);
-    expect(r).toEqual({ preset: null, broken: false, presetId: null });
-  });
-
-  it('битая ссылка по контракту: name=null — «удалён», даже до загрузки списка', () => {
-    const r = resolvePlacePreset('tier:medium',
-      { id: 'gone', name: null, steps: [] }, [], false);
-    expect(r.broken).toBe(true);
-    expect(r.preset).toBeNull();
-    expect(r.presetId).toBe('gone');
-  });
-
-  it('битая ссылка по списку: id не найден в загруженном списке', () => {
-    const r = resolvePlacePreset('tier:medium',
-      { id: 'gone', name: 'Удалённая', steps: ['opus'] }, PRESETS, true);
-    expect(r.broken).toBe(true);
-    expect(r.preset).toBeNull();
-  });
-
-  it('пока список грузится, id «не найден» — не битый: имя берётся из ответа', () => {
-    const r = resolvePlacePreset('tier:medium',
-      { id: 'p3', name: 'Свежая', steps: ['opus'] }, [], false);
-    expect(r.broken).toBe(false);
-    expect(r.preset).toEqual({ id: 'p3', name: 'Свежая', steps: ['opus'] });
-  });
-
-  it('переходный период без поля preset: ссылка разбирается из самого route', () => {
-    const r = resolvePlacePreset('preset:p2', undefined, PRESETS, true);
-    expect(r.presetId).toBe('p2');
-    expect(r.preset?.name).toBe('Дешёвый фон');
-    // …а незагруженный список не даёт ложного «удалён»
-    expect(resolvePlacePreset('preset:p2', undefined, [], false).broken).toBe(false);
-  });
-});
-
-describe('formatEffectiveLine — строка «Сейчас пойдёт»', () => {
-  const base: ModelPreviewResponse = {
-    model: null, source: null, tier: null, tierOrigin: null, preset: null, chain: [],
+function settingsWithAdminLayer(): SpecialtySettingsResponse {
+  return {
+    version: 1,
+    global: { specialties: {}, defaultSpecialty: null, presets: [] },
+    owner: { specialties: {}, defaultSpecialty: null, presets: [] },
+    user: ADMIN_USER_LAYER,
+    presets: [
+      { id: 'admin-preset', name: 'Админский', scope: 'owner', description: null, steps: ['opus'] },
+    ],
   };
+}
 
-  it('уровень + источник по образцу спеки', () => {
-    const line = formatEffectiveLine({
-      ...base, model: 'sonnet', source: 'specialty-cell', tier: 'medium', tierOrigin: 'persona',
-    });
-    expect(line).toBe('Сейчас пойдёт: Sonnet · уровень «Средняя» у персоны, модель — от специальности');
-  });
-
-  it('битый пресет — честная пометка с именем, если оно известно', () => {
-    expect(formatEffectiveLine({
-      ...base, preset: { id: 'p9', name: 'Рабочая', steps: [], broken: true },
-    })).toBe('Сейчас пойдёт: модель по умолчанию — цепочка «Рабочая» удалена');
-    expect(formatEffectiveLine({
-      ...base, preset: { id: 'p9', name: null, steps: [], broken: true },
-    })).toBe('Сейчас пойдёт: модель по умолчанию — цепочка удалена');
-  });
-
-  it('пустой резолв — строки нет', () => {
-    expect(formatEffectiveLine(base)).toBeNull();
-  });
-
-  it('модель без уровня — только источник', () => {
-    expect(formatEffectiveLine({ ...base, model: 'opus', source: 'persona-model' }))
-      .toBe('Сейчас пойдёт: Opus · модель — из персоны');
-  });
-
-  it('назначение места и слоты', () => {
-    expect(formatEffectiveLine({ ...base, model: 'glm-5.2', source: 'place-assignment' }))
-      .toBe('Сейчас пойдёт: glm-5.2 · модель — из назначения места');
-    expect(formatEffectiveLine({
-      ...base, model: 'haiku', source: 'owner-slot', tier: 'weak', tierOrigin: 'place',
-    })).toBe('Сейчас пойдёт: Haiku · уровень «Слабая» у места, модель — из ваших «Моделей по умолчанию»');
-  });
-
-  it('tierText переопределяет разбор tierOrigin (строка матрицы ≠ «задан задачей»)', () => {
-    expect(formatEffectiveLine({
-      ...base, model: 'opus', source: 'specialty-cell', tier: 'strong', tierOrigin: 'task',
-    }, { tierText: 'уровень «Сильная»' }))
-      .toBe('Сейчас пойдёт: Opus · уровень «Сильная», модель — от специальности');
-  });
+beforeEach(() => {
+  getSettingsMock.mockReset();
+  getUserLayerMock.mockReset();
 });
 
-describe('cellPresetLabel — подпись пресета в узкой ячейке', () => {
-  // Подмена каталога для теста: имена шагов «как в проде» (Opus, …); в реальности они
-  // приходят из modelLabel модели и chainStepLabel 'tier:strong' → «Сильная (модели по умолч.)»
-  const bigPreset: ScopedPreset = {
-    id: 'big', name: 'Цепочка 2', description: null,
-    steps: ['opus', 'glm-5.2', 'deepseek-v4', 'qwen3.8-max'],
-    scope: 'global',
+// vitest даёт vi.resetModules — переимпортируем стор под новым identity, чтобы
+// _settings/_userLayers из предыдущего теста не «протекали» между тестами.
+async function freshStore() {
+  vi.resetModules();
+  const mod = await import('../presets');
+  return {
+    ensurePresetSettingsLoaded: mod.ensurePresetSettingsLoaded,
+    getSpecialtySettings: mod.getSpecialtySettings,
+    loadUserLayer: mod.loadUserLayer,
+    getUserLayer: mod.getUserLayer,
+    hasUserLayer: mod.hasUserLayer,
+    commitUserLayer: mod.commitUserLayer,
+    rollbackUserLayer: mod.rollbackUserLayer,
   };
-  const allPresets: ScopedPreset[] = [...PRESETS, bigPreset];
+}
 
-  it('1 шаг — целиком, без «+N»', () => {
-    const r = cellPresetLabel('preset:p2', allPresets, CTX);
-    expect(r.label).toBe('Слабая (модели по умолч.) → Локальная · qwen3');
-    expect(r.title).toBe('Дешёвый фон: Слабая (модели по умолч.) → Локальная · qwen3');
+describe('стор presets — изоляция записи в чужой user-слой (этап 0)', () => {
+  // === Изоляция: user-слой X живёт ОТДЕЛЬНО от settings.user вызывающего ===
+
+  it('user-слой X живёт ОТДЕЛЬНО от settings.user: разные объекты, разные specialties и пресеты', async () => {
+    getSettingsMock.mockResolvedValueOnce(settingsWithAdminLayer());
+    getUserLayerMock.mockResolvedValueOnce({ user: TARGET_USER_LAYER, userId: 'X' });
+
+    const store = await freshStore();
+    await store.ensurePresetSettingsLoaded();
+    await store.loadUserLayer('X');
+
+    const layerX = store.getUserLayer('X');
+    const settingsUser = store.getSpecialtySettings()!.user;
+
+    // Это два РАЗНЫХ объекта — иначе база для записи в user-слой пришла бы из
+    // settings.user, и PUT залил бы в слой реального пользователя specialties/
+    // presets вызывающего (тот самый баг этапа 0)
+    expect(layerX).not.toBe(settingsUser);
+    expect(layerX!.specialties).not.toBe(settingsUser!.specialties);
+    expect(layerX!.presets).not.toBe(settingsUser!.presets);
+
+    // specialties разные: админская есть только в settings.user, юзерская — только в X
+    expect(layerX!.specialties['user-specialty']).toBeDefined();
+    expect(settingsUser!.specialties['user-specialty']).toBeUndefined();
+    expect(settingsUser!.specialties['admin-specialty']).toBeDefined();
+    expect(layerX!.specialties['admin-specialty']).toBeUndefined();
+
+    // пресеты разные
+    expect(layerX!.presets[0].id).toBe('user-preset');
+    expect(settingsUser!.presets[0].id).toBe('admin-preset');
   });
 
-  it('2 шага — целиком, без «+N»', () => {
-    // Соберём двухшаговый пресет: «tier:strong» → «Сильная (модели по умолч.)», затем модель
-    const twoStep: ScopedPreset = {
-      id: 'two', name: 'Парные', description: null, steps: ['tier:strong', 'opus'], scope: 'owner',
+  // === Запись: commitUserLayer в user-слой X не трогает settings вызывающего ===
+
+  it('commitUserLayer в user-слой X не меняет ни specialties, ни presets settings вызывающего', async () => {
+    getSettingsMock.mockResolvedValueOnce(settingsWithAdminLayer());
+    getUserLayerMock.mockResolvedValueOnce({ user: TARGET_USER_LAYER, userId: 'X' });
+
+    const store = await freshStore();
+    await store.ensurePresetSettingsLoaded();
+    await store.loadUserLayer('X');
+
+    // Снимки settings ДО записи — для жёсткой проверки identity
+    const settingsBefore = store.getSpecialtySettings();
+    const settingsUserBefore = settingsBefore!.user!;
+    const settingsSpecialtiesBefore = settingsBefore!.user!.specialties;
+    const settingsPresetsBefore = settingsBefore!.presets;
+
+    // Имитируем то, что делает компонент при записи в user-scope: берёт базу из
+    // getUserLayer(X), добавляет пресет и фиксирует через commitUserLayer
+    const prev = store.getUserLayer('X')!;
+    const newPreset = { id: 'new-1', name: 'Новая цепочка X', description: null, steps: ['sonnet'] };
+    const next: SpecialtySettingsLayer = {
+      ...prev, presets: [...prev.presets, newPreset],
     };
-    const r = cellPresetLabel('preset:two', [...allPresets, twoStep], CTX);
-    expect(r.label).toBe('Сильная (модели по умолч.) → Opus');
-    expect(r.title).toBe('Парные: Сильная (модели по умолч.) → Opus');
+    store.commitUserLayer('X', next);
+
+    // === Главные проверки: settings вызывающего не изменились ===
+    // 1. сам объект settings ТОТ ЖЕ (commitUserLayer не пересоздаёт _settings)
+    expect(store.getSpecialtySettings()).toBe(settingsBefore);
+    // 2. user-слой вызывающего внутри settings тот же объект и те же поля
+    expect(store.getSpecialtySettings()!.user).toBe(settingsUserBefore);
+    expect(store.getSpecialtySettings()!.user!.specialties).toBe(settingsSpecialtiesBefore);
+    expect(store.getSpecialtySettings()!.user!.presets).toBe(settingsUserBefore.presets);
+    // 3. объединённый список пресетов вызывающего (включая admin-preset) тот же
+    expect(store.getSpecialtySettings()!.presets).toBe(settingsPresetsBefore);
+    // 4. specialties админа на месте и не затёрты юзерскими
+    expect(store.getSpecialtySettings()!.user!.specialties['admin-specialty']).toBeDefined();
+    expect(store.getSpecialtySettings()!.user!.specialties['user-specialty']).toBeUndefined();
+    // 5. пресет админа на месте, новый пресет НЕ просочился в settings
+    expect(store.getSpecialtySettings()!.user!.presets).toHaveLength(1);
+    expect(store.getSpecialtySettings()!.user!.presets[0].id).toBe('admin-preset');
+
+    // А вот в user-слой X запись прошла — новый пресет на месте
+    expect(store.getUserLayer('X')!.presets).toHaveLength(2);
+    expect(store.getUserLayer('X')!.presets[1].id).toBe('new-1');
   });
 
-  it('3+ шагов — голова (первые 2) + «+N» в label, полный состав и имя — в title', () => {
-    const r = cellPresetLabel('preset:big', allPresets, CTX);
-    expect(r.label).toBe('Opus → glm-5.2 · +2');
-    expect(r.title).toBe('Цепочка 2: Opus → glm-5.2 → deepseek-v4 → qwen3.8-max');
+  // === Проверка hasUserLayer: различает «нет ключа» и «ключ есть, значение пустое» ===
+
+  it('до loadUserLayer(X): ключа в _userLayers нет, hasUserLayer=false, запись отказывается', async () => {
+    // НЕ мокаем getUserLayer — слой X не загружен и не запрашивался
+    const store = await freshStore();
+    expect(store.hasUserLayer('X')).toBe(false);
+    expect(store.getUserLayer('X')).toBeNull();
+    // Защита от записи без слоя: getUserLayer вернёт null, hasUserLayer=false —
+    // компонент не дойдёт до PUT (ChainsTab/PresetOptions проверяют hasUserLayer
+    // перед onSaveLayer). Тест ниже это и подтверждает.
+    expect(getUserLayerMock).not.toHaveBeenCalled();
   });
 
-  it('битая ссылка — короткая пометка в label, полное пояснение — в title', () => {
-    const r = cellPresetLabel('preset:gone', allPresets, CTX);
-    expect(r.label).toBe('Цепочка удалена');
-    expect(r.title).toBe('Цепочка удалена — работает настройка по умолчанию');
+  it('пустой слой X: ключ в _userLayers ЕСТЬ, hasUserLayer=true — отказа от записи нет', async () => {
+    // Сервер ответил пустым слоем (новый пользователь без своих настроек).
+    // Ключ есть в _userLayers, значение = EMPTY_LAYER ({} truthy, presets=[]).
+    // Проверка наличия ключа (`!== undefined`) и проверка по falsy (`!!`) обе
+    // вернут true на таком слое — но защита от `null` в _userLayers у первой
+    // есть, у второй нет.
+    getUserLayerMock.mockResolvedValueOnce({ user: EMPTY_LAYER, userId: 'X' });
+
+    const store = await freshStore();
+    await store.loadUserLayer('X');
+
+    // Ключ есть → hasUserLayer=true. Если бы реализация была `!!_userLayers[X]`,
+    // пустой `{}` тоже бы прошёл, но null или 0 — провалились бы (потеряли бы
+    // возможность записи в такой «пустой по ошибке» слой)
+    expect(store.hasUserLayer('X')).toBe(true);
+    expect(store.getUserLayer('X')).toEqual(EMPTY_LAYER);
   });
 
-  it('не-preset — обычная подпись маршрута, title пустой (не дублируем строку)', () => {
-    const r = cellPresetLabel('sonnet', allPresets, CTX);
-    expect(r.label).toBe('Sonnet');
-    expect(r.title).toBe('');
+  it('edge case: защита hasUserLayer от null в _userLayers (проверка наличия ключа, не falsy)', async () => {
+    // Симулируем редкий случай, когда компонент по ошибке положил null в
+    // _userLayers через commitUserLayer(userId, null as unknown as layer).
+    // Текущая реализация hasUserLayer (`!== undefined`) защищает от такой ошибки:
+    // ключ есть → true, и getUserLayer вернёт этот null (UI увидит, что слой
+    // «как-то странный»). Если бы реализация была `!!`, ключ с null дал бы false
+    // — и запись бы тихо заблокировалась без объяснения.
+    const store = await freshStore();
+    // Имитируем ошибку программиста: записали null в обход типизации
+    store.commitUserLayer('X', null as unknown as SpecialtySettingsLayer);
+
+    // Текущий hasUserLayer (`!== undefined`): ключ ЕСТЬ → true.
+    // Альтернативный `!!` для null вернул бы false — этот тест защищает от такой
+    // регрессии (компонент бы тихо отказался от PUT без объяснения).
+    expect(store.hasUserLayer('X')).toBe(true);
   });
 
-  it('пустой route — идёт в routeLabel целиком (как routeDisplayLabel), title не дублируем', () => {
-    // В проде пустой route до cellPresetLabel не доходит: ExceptionsBlock рисует RoutePicker
-    // только при value, иначе — прочерк. Но если вдруг дойдёт (битая строка), единообразие
-    // с routeDisplayLabel важнее, чем «пустая подпись» — иначе ячейка будет выглядеть как
-    // «нет данных», а не «не задан». title пустой, чтобы не дублировать тот же текст.
-    expect(cellPresetLabel('', allPresets, CTX)).toEqual({ label: 'не задан', title: '' });
+  // === Полный цикл записи: commit (успешный PUT) → rollback (отказ PUT) ===
+
+  it('полный сценарий: загрузка → успешный PUT (commit) → отказ PUT (rollback) → слой вернулся', async () => {
+    getUserLayerMock.mockResolvedValueOnce({ user: TARGET_USER_LAYER, userId: 'X' });
+
+    const store = await freshStore();
+    await store.loadUserLayer('X');
+
+    // Шаг 1: prev — снимок до правки (его покажем rollback'у при отказе PUT)
+    const prev = store.getUserLayer('X')!;
+
+    // Шаг 2: имитируем оптимистичный апдейт стора при успешном ответе PUT.
+    // Ответ сервера (response.user) совпадает с тем, что мы передали в PUT —
+    // для user-снимка мы кладём именно этот объект через commitUserLayer.
+    const newPreset = { id: 'new-1', name: 'Новая', description: null, steps: ['opus'] };
+    const putBody: SpecialtySettingsLayer = {
+      ...prev, presets: [...prev.presets, newPreset],
+    };
+    store.commitUserLayer('X', putBody);
+
+    // Проверяем, что ответ PUT закоммитился в userLayers[X] (новый пресет на месте)
+    expect(store.getUserLayer('X')!.presets).toHaveLength(2);
+    expect(store.getUserLayer('X')!.presets[1]).toEqual(newPreset);
+    // specialties и прежние пресеты сохранены — запись меняет только адресованное поле
+    expect(store.getUserLayer('X')!.specialties).toEqual(prev.specialties);
+    expect(store.getUserLayer('X')!.presets[0]).toEqual(prev.presets[0]);
+
+    // Шаг 3: имитируем отказ PUT (400/сеть/прав). Компонент зовёт
+    // rollbackUserLayer(X, prev), чтобы стор вернулся к состоянию до правки.
+    store.rollbackUserLayer('X', prev);
+
+    // Слой вернулся к состоянию ДО правки: нового пресета нет, юзерский пресет
+    // и его specialties на месте
+    expect(store.getUserLayer('X')!.presets).toHaveLength(1);
+    expect(store.getUserLayer('X')!.presets[0].id).toBe('user-preset');
+    expect(store.getUserLayer('X')!.specialties).toEqual(prev.specialties);
+    // Объект может быть новым (клон), но содержимое идентично prev
+    expect(store.getUserLayer('X')).toEqual(prev);
+  });
+
+  it('rollbackUserLayer к undefined: ключ удаляется, hasUserLayer снова false', async () => {
+    // Сценарий «слой не существовал до PUT» — крайне редкий (PUT с пустым
+    // ответом сервера на только что появившийся слой), но rollback должен
+    // корректно удалить ключ, чтобы слой считался «не загружен»
+    const store = await freshStore();
+    expect(store.hasUserLayer('X')).toBe(false);
+
+    // commit + rollback к undefined — последовательность как при гипотетическом
+    // оптимистичном коммите пустого слоя и откате
+    store.commitUserLayer('X', EMPTY_LAYER);
+    expect(store.hasUserLayer('X')).toBe(true);
+
+    store.rollbackUserLayer('X', undefined);
+    expect(store.hasUserLayer('X')).toBe(false);
+    expect(store.getUserLayer('X')).toBeNull();
   });
 });

@@ -101,6 +101,9 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
             return (
               <button
                 key={p.id}
+                role="option"
+                aria-selected={active}
+                aria-label={`${personaTitleLines(p).primary}${personaTitleLines(p).secondary ? ' — ' + personaTitleLines(p).secondary : ''}`}
                 onClick={() => onSelect(p.id)}
                 onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
                 onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
@@ -158,10 +161,10 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
             : [];
 
           return (
-            <>
+            <div role="listbox" aria-label="Список персон">
               {ownGlobal.map(row)}
               {ownByProject.map((g, i) => (
-                <div key={g.title}>
+                <div key={g.title} role="group" aria-label={g.title}>
                   <div style={{ ...groupHeader, marginTop: i === 0 && ownGlobal.length === 0 ? 2 : 8 }}>{g.title}</div>
                   {g.rows.map(row)}
                 </div>
@@ -187,7 +190,7 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
                   {pantheon.map(row)}
                 </>
               )}
-            </>
+            </div>
           );
         })()}
       </div>

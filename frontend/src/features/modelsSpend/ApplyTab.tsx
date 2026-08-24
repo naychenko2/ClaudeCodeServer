@@ -6,11 +6,12 @@ import { routeLabel, type ProviderData, type TierKey } from '../../lib/modelProv
 import { RoutePicker } from '../../components/RoutePicker';
 import { EffectiveLine } from '../../components/EffectiveLine';
 import { invalidateEffectiveLines, resolvePlacePreset, stepsWord, usePresets, useSpecialtySettings } from '../../lib/presets';
+import type { LayerReducer } from '../../lib/presets';
 import { C, FS, R } from '../../lib/design';
 import { ImageGenSection } from './ImageGenSection';
 import { api } from '../../lib/api';
 import { loadModels, type ModelOption } from '../../lib/models';
-import type { AppSettings, OllamaActionInfo, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import type { AppSettings, OllamaActionInfo } from '../../types';
 
 // Вкладка «Применение» (макет models-spend-v3.html §3): стратегия («Автоматически» /
 // «Бесплатно · локальная») + таблица «Кто что выполняет» — группы мест, выбор маршрута
@@ -24,12 +25,12 @@ interface ApplyTabProps {
   data: ProviderData;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
-  settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | 'user' | null;
-  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
 }
 
-export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingScope, onSaveLayer }: ApplyTabProps) {
+export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSaveLayer }: ApplyTabProps) {
   const { info, setInfo, globalSettings, setGlobalSettings } = data;
   const [busy, setBusy] = useState<string | null>(null);
   const [presetBusy, setPresetBusy] = useState<'tiers' | 'tiers-local' | null>(null);
@@ -149,7 +150,6 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
                 tierModels={tierModels}
                 ollamaModel={info.model ?? undefined}
                 models={models}
-                settings={settings}
                 savingScope={savingScope}
                 onSaveLayer={onSaveLayer}
                 onPick={route => pick(a, route)}
@@ -207,7 +207,7 @@ function StrategyCard({ active, disabled, loading, title, desc, onClick }: {
 }
 
 // === Строка места каталога ===
-function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, settings, savingScope,
+function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, savingScope,
   onSaveLayer, onPick, onReset, enabled, onToggleEnabled, toggleBusy }: {
   action: OllamaActionInfo;
   first: boolean;
@@ -215,17 +215,21 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   models: ModelOption[];
-  settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | 'user' | null;
-  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+  // Контракт редьюсерный (см. presets.saveLayer). ActionRow напрямую не пишет — он
+  // только прокидывает onSaveLayer в PresetCreationCtx (RoutePicker/PresetOptions).
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
   onPick: (route: string) => void;
   onReset: () => void;
   enabled?: boolean;
   onToggleEnabled?: (v: boolean) => void;
   toggleBusy?: boolean;
 }) {
+  // Снимок слоя берём сами из стора — снаружи не получаем (структурный запрет).
+  const settings = useSpecialtySettings();
   const presets = usePresets();
-  const settingsLoaded = useSpecialtySettings() !== null;
+  const settingsLoaded = settings !== null;
   const overridden = a.source === 'admin';
   const route = a.route ?? '';
   const localOnStrong = !!a.requiresStrong && route === 'local';
@@ -285,7 +289,10 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
           // не сохранить (MAJOR 2, ревью 65d8df66). Правка backend-валидации не нужна:
           // фронт просто не даёт создать/выбрать то, что бэкенд всё равно отклонит.
           presetScope="global"
-          presetCreation={{ settings, savingScope, onSaveLayer }}
+          presetCreation={settings ? {
+            savingScope,
+            onSaveLayer: (scope, reducer, userId) => onSaveLayer(scope, reducer, userId),
+          } : undefined}
           busy={busy}
           onChange={onPick}
           manual={{ models, presetIds: globalPresetIds }}

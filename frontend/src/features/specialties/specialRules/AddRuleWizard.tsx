@@ -96,7 +96,6 @@ export function AddRuleWizard({ roles, scope, ctx, onCancel, onSave }: {
           // вызывающему и сам значение не назначает — черновик мастера остался бы пустым.
           // Без него панель сохраняет цепочку и возвращает её сюда через onChange.
           presetCreation={{
-            settings: ctx.settings,
             savingScope: ctx.savingScope,
             onSaveLayer: ctx.onSaveLayer,
           }}

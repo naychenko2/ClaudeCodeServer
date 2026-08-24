@@ -14,7 +14,8 @@ import {
 import { C, FONT, FS, R, SHADOW, Z, FIELD } from '../lib/design';
 import { incPopupDepth } from '../lib/popupEscape';
 import type { ModelOption } from '../lib/models';
-import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
+import type { LayerReducer } from '../lib/presets';
+import type { SpecialtySettingsLayer } from '../types';
 
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;
@@ -56,10 +57,15 @@ export function RoutePicker({
   // (кнопка «Собрать цепочку…» правит черновик на месте вместо перехода в раздел).
   // Передаётся только там, где эти слои уже подняты в состояние (вкладки раздела
   // «Модели и расход»); без него — прежнее поведение (открыть раздел через nav-событие).
+  // Снимок слоя PresetOptions берёт сам из стора lib/presets.ts — снаружи проп settings
+  // не передаём (структурный запрет: точки записи не получают слой через проп).
   presetCreation?: {
-    settings: SpecialtySettingsResponse | null;
     savingScope: 'global' | 'owner' | 'user' | null;
-    onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+    // Контракт редьюсерный (см. presets.saveLayer): стор сам читает текущий слой и
+    // шлёт PUT в нужный scope+userId. Старая «(scope, next)» сигнатура несовместима
+    // с PresetCreationCtx — PresetOptions теперь сам готовит редьюсер.
+    onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+      userId?: string | null) => Promise<void>;
     // См. PresetCreationCtx.onCreated — сливать сохранение пресета с ДРУГОЙ правкой того
     // же слоя в один PUT (нужно там, где onChange этого пикера тоже пишет в этот слой).
     onCreated?: (presetId: string, scope: 'global' | 'owner' | 'user', layer: SpecialtySettingsLayer) => void;

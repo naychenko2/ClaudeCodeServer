@@ -6,13 +6,14 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChainStepsEditor } from '../../components/ChainStepsEditor';
 import { C, FONT, FS, SP, R } from '../../lib/design';
 import { api } from '../../lib/api';
-import { isChainStepDimmed, reloadPresetSettings, stepsWord, substitutionsWord,
-  usePresets, useSubstitutionBudget } from '../../lib/presets';
+import { hasUserLayer, isChainStepDimmed, loadUserLayer, reloadPresetSettings,
+  stepsWord, substitutionsWord, usePresets, useSubstitutionBudget } from '../../lib/presets';
+import type { LayerReducer } from '../../lib/presets';
 import { newPresetId, withNewPreset } from '../../lib/specialties';
+import { showToast } from '../../lib/toast';
 import type { ModelOption } from '../../lib/models';
 import type { TierKey } from '../../lib/modelProvidersShared';
-import type { ModelRoutePreset, PresetUsageResponse, ScopedPreset,
-  SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import type { PresetUsageResponse, ScopedPreset, SpecialtySettingsLayer } from '../../types';
 
 // === Четвёртая вкладка раздела «Модели и расход» (спекa B1–B3, C2, C4) ===
 // Здесь живут цепочки целиком: список, бейдж слоя, диалоги создания/переименования/
@@ -25,15 +26,20 @@ type ChainScope = 'owner' | 'global' | 'user';
 
 type CreateDraft = { name: string; scope: ChainScope; steps: string[] };
 
-export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSaveLayer, onReloadSettings,
-  models, tierModels, ollamaModel }: {
+export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
+  onReloadSettings, models, tierModels, ollamaModel }: {
   isAdmin: boolean;
   // Админ выбирает пользователя для user-слоя (нужен для создания user-цепочек)
   contextUserId: string | null;
-  settings: SpecialtySettingsResponse | null;
+  // Идёт ли сейчас сохранение какого-то слоя на стороне модалки — для busy на кнопках
+  // диалогов. ChainTab правит пресеты у всех трёх слоёв, и «свой userId» роли не играет:
+  // любая запись в user-слой у админа блокирует диалоги с тем же scope (savingScope === 'user').
   savingScope: 'global' | 'owner' | 'user' | null;
-  onSaveLayer: (scope: ChainScope, next: SpecialtySettingsLayer) => Promise<void>;
-  onReloadSettings: () => Promise<void>;
+  onSaveLayer: (scope: ChainScope, reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
+  // Неразрушающая перечитка настроек: пикеры продолжают показывать прежние цепочки,
+  // пока не пришёл новый снимок. Сигнатура void (не промис) — fire-and-forget.
+  onReloadSettings: () => void;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
@@ -50,27 +56,15 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
   // Развёрнутые цепочки: показывают шаги редактором, по умолчанию свёрнуты
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // Иммутабельная правка пресета в слое через клон слоя — вынесено, чтобы не дублировать
-  // в диалогах создания/правки/удаления. Возвращает null, если пресет не найден в слое.
-  const clonePreset = (scope: ChainScope,
-    mutate: (preset: ModelRoutePreset) => ModelRoutePreset,
-    predicate: (p: ModelRoutePreset) => boolean = () => true): SpecialtySettingsLayer | null => {
-    if (!settings) return null;
-    // user-слой может быть не загружен (админ ещё не открывал вкладку «Особые правила»
-    // для этого пользователя) — тогда правка невозможна, возвращаем null
-    const base = settings[scope];
-    if (!base) return null;
-    const next = JSON.parse(JSON.stringify(base)) as SpecialtySettingsLayer;
-    const i = next.presets.findIndex(predicate);
-    if (i === -1) return null;
-    const updated = mutate({ ...next.presets[i] });
-    if (!updated) {
-      next.presets.splice(i, 1);
-    } else {
-      next.presets[i] = updated;
-    }
-    return next;
-  };
+  // Каждая поверхность, разрешающая запись в user-слой, сама отвечает за его загрузку:
+  // без этого база для handleCreate/handleRename/handleDelete — settings.user (либо
+  // undefined, либо устаревший слой другого пользователя) и PUT затирает
+  // specialties/presets реального пользователя пустым шаблоном + одним пресетом.
+  // Прямо здесь «базу» уже не читаем — редьюсер onSaveLayer получает cur от стора,
+  // который выбирает слой по scope+userId.
+  useEffect(() => {
+    if (contextUserId) void loadUserLayer(contextUserId);
+  }, [contextUserId]);
 
   const openDelete = (target: { id: string; scope: ChainScope; name: string }) => {
     setDeleteUsage(null);
@@ -85,7 +79,6 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
   };
 
   const handleCreate = async (draft: CreateDraft) => {
-    if (!settings) return;
     // Общая и user-цепочка — только админ при выбранном пользователе. На уровне
     // контрола опция уже спрята от не-админа/без контекста; эта проверка — страховка
     // от рассинхронизации UI с правом.
@@ -93,31 +86,49 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
     if (draft.scope === 'user' && (!isAdmin || !contextUserId)) return;
     if (draft.name.trim() === '' || draft.steps.length === 0) return;
     const id = newPresetId();
-    // user-слой опционален в SpecialtySettingsResponse — если админ ещё не открыл
-    // вкладку «Особые правила» для этого пользователя, слой пуст. Клонируем пустой
-    // шаблон, withNewPreset поставит пресет в presets: [].
-    const base: SpecialtySettingsLayer = settings[draft.scope]
-      ?? { specialties: {}, defaultSpecialty: null, presets: [] };
-    const next = withNewPreset(base, id, draft.name.trim(), draft.steps);
-    await onSaveLayer(draft.scope, next);
+    // user-слой обязан быть загружен — иначе база = пустой шаблон, и единственный
+    // пресет затрёт specialties/presets реального пользователя. Отказ с сообщением
+    // (а не тихий return): пользователь видит причину.
+    if (draft.scope === 'user' && !hasUserLayer(contextUserId)) {
+      showToast('Цепочка', 'Слой пользователя ещё не загружен — откройте «Особые правила» и повторите.');
+      return;
+    }
+    const userId = draft.scope === 'user' ? contextUserId : null;
+    // Редьюсер «над» cur (стор уже выбрал актуальный слой для данного scope+userId),
+    // дописываем пресет. После успеха стор шлёт PUT и фиксирует снимок.
+    await onSaveLayer(draft.scope, (cur) => withNewPreset(cur, id, draft.name.trim(), draft.steps), userId);
     setCreating(null);
   };
 
   const handleRename = async (id: string, scope: ChainScope, name: string) => {
     const trimmed = name.trim();
     if (trimmed === '') return;
-    const next = clonePreset(scope, () => ({ id, name: trimmed, description: null, steps: presets
-      .find(p => p.id === id)?.steps ?? [] }) as ModelRoutePreset, p => p.id === id);
-    if (!next) return;
-    await onSaveLayer(scope, next);
+    // БЛОКЕР-1: гейт hasUserLayer на запись в user-слой — внутри стора saveLayer
+    // (см. lib/presets.doSave). UI-дубль не нужен: при отказе баннер ошибки поднимет
+    // settingsError на стороне модалки.
+    const sourceSteps = presets.find(p => p.id === id)?.steps ?? [];
+    const userId = scope === 'user' ? contextUserId : null;
+    await onSaveLayer(scope, (cur) => {
+      const next = JSON.parse(JSON.stringify(cur)) as SpecialtySettingsLayer;
+      const i = next.presets.findIndex(p => p.id === id);
+      if (i === -1) return cur;
+      next.presets[i] = { id, name: trimmed, description: null, steps: sourceSteps };
+      return next;
+    }, userId);
     setRenaming(null);
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget || !settings) return;
-    const next = clonePreset(deleteTarget.scope, () => null as unknown as ModelRoutePreset, p => p.id === deleteTarget.id);
-    if (!next) return;
-    await onSaveLayer(deleteTarget.scope, next);
+    if (!deleteTarget) return;
+    // БЛОКЕР-1: гейт hasUserLayer на удаление пресета в user-слое — внутри стора.
+    const userId = deleteTarget.scope === 'user' ? contextUserId : null;
+    await onSaveLayer(deleteTarget.scope, (cur) => {
+      const next = JSON.parse(JSON.stringify(cur)) as SpecialtySettingsLayer;
+      const i = next.presets.findIndex(p => p.id === deleteTarget.id);
+      if (i === -1) return cur;
+      next.presets.splice(i, 1);
+      return next;
+    }, userId);
     setDeleteTarget(null);
     setDeleteUsage(null);
   };
@@ -200,9 +211,15 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
               onRename={() => setRenaming({ id: p.id, scope: p.scope, name: p.name })}
               onDelete={() => openDelete({ id: p.id, scope: p.scope, name: p.name })}
               onSaveSteps={(steps) => {
-                const next = clonePreset(p.scope, () => ({ ...p, steps }), x => x.id === p.id);
-                if (!next) return Promise.resolve();
-                return onSaveLayer(p.scope, next).catch(() => {});
+                // БЛОКЕР-1: гейт hasUserLayer на правку шагов в user-слое — внутри стора.
+                const userId = p.scope === 'user' ? contextUserId : null;
+                return onSaveLayer(p.scope, (cur) => {
+                  const next = JSON.parse(JSON.stringify(cur)) as SpecialtySettingsLayer;
+                  const i = next.presets.findIndex(x => x.id === p.id);
+                  if (i === -1) return cur;
+                  next.presets[i] = { ...p, steps };
+                  return next;
+                }, userId).catch(() => {});
               }}
             />
           ))}

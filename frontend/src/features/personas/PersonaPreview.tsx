@@ -8,6 +8,7 @@ import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
+import { useSpecialtyCatalog } from '../../lib/specialties';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -49,7 +50,7 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, onOpenAutomation, onOpenMemory, isMobile }: {
+export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, onOpenAutomation, onOpenMemory, onOpenSpecialties, isMobile }: {
   persona: Persona;
   // Цвет персоны (уже разрезолвленный из палитры) — тот же, что в тулбаре
   accent: string;
@@ -71,6 +72,8 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
   onOpenAutomation?: () => void;
   // Перейти во вкладку «Память» (долгая память персоны)
   onOpenMemory?: () => void;
+  // Перейти на экран «Специальности» (мостик T9 — «Специальность: … →»)
+  onOpenSpecialties?: () => void;
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
@@ -310,7 +313,32 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
     </div>
   );
 
-  // === Правила (контракт роли, read-only): тон / всегда / никогда / формат / инструкция ===
+  // === Специальность (мостик T9 на экран «Специальности») ===
+// Показывается рядом с «Правилами» как единая точка входа: человек увидел роль персоны и
+// сразу прыгнул на вкладку с её правилами. Без специальности / с 'none' мостика нет —
+// «Любой специальности» отвечает сама карточка на вкладке.
+const specialtyCatalog = useSpecialtyCatalog();
+const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && onOpenSpecialties)
+  ? (() => {
+    const label = specialtyCatalog?.find(c => c.key === persona.specialty)?.label
+      ?? String(persona.specialty);
+    return (
+      <div style={section}>
+        <SectionLabel style={{ marginBottom: 8 }}>Специальность</SectionLabel>
+        <button type="button" onClick={onOpenSpecialties} style={{
+          ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '7px 10px', background: C.bgWhite,
+          border: `1px solid ${C.border}`, borderRadius: R.lg,
+          fontSize: 13, fontWeight: 600, color: C.textHeading, marginTop: 0,
+        }}>
+          <span>Специальность: {label} →</span>
+        </button>
+      </div>
+    );
+  })()
+  : null;
+
+// === Правила (контракт роли, read-only): тон / всегда / никогда / формат / инструкция ===
   const contract = persona.contract;
   const hasRules = !!contract && !!(
     contract.tone?.trim() || contract.mustDo?.length || contract.mustNot?.length
@@ -541,6 +569,7 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
       {sectionsNav}
       {characterSection}
       {rulesSection}
+      {specialtyBridge}
       {gatesSection}
       {isMobile && chatsSection}
     </div>

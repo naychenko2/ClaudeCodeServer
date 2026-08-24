@@ -28,6 +28,7 @@ import {
   newDefaultBinding, sectionsForSpecialty, sectionsOf, withDefaultBindings,
   withPromptSection, withoutPromptSection, type PromptSectionSource,
 } from '../../lib/specialties';
+import { useSpecialtySettings, useUserLayer, type LayerReducer } from '../../lib/presets';
 
 // === Тексты и словарь ===
 
@@ -66,12 +67,6 @@ const MODE_OPTIONS: { value: PersonaBindingMode; label: string }[] = [
 interface Props {
   isMobile: boolean;
   activeScope: ScopeKind;
-  // Глобальный слой (для бейджей источника) — нужен всегда, даже если редактируем owner
-  globalLayer: SpecialtySettingsLayer | null;
-  // Слой редактирования (тот, что пишем по saveDraft)
-  editLayer: SpecialtySettingsLayer | null;
-  // userLayer нужен только для бейджей при активном слое user (для admin)
-  userLayer: SpecialtySettingsLayer | null;
   contextUserId: string | null;
   // Каталог специальностей (для имён и описаний ролей) — глобальный, не зависит от слоя
   catalog: SpecialtyCatalogEntry[] | null;
@@ -79,8 +74,11 @@ interface Props {
   saving: boolean;
   // Можно ли править (для disabled)
   canEdit: boolean;
-  // Сохранение черновика слоя (атомарное, как SpecialRulesTab.onSaveLayer)
-  onSaveLayer: (next: SpecialtySettingsLayer) => Promise<void>;
+  // Сохранение черновика слоя (атомарное, как SpecialRulesTab.onSaveLayer). В этой
+  // панели всё считается вокруг editLayer (см. queueSave / resetDefault / overrideText),
+  // поэтому редьюсер почти всегда игнорирует cur и возвращает готовый слой — отдельной
+  // обработки user-scope не нужно, на уровне SpecialRulesTab.onSaveLayer это уже учтено.
+  onSaveLayer: (reducer: LayerReducer) => Promise<void>;
 }
 
 // Состояние UI черновика: под каждое поле редактирования — пара «значение + что считать
@@ -94,9 +92,18 @@ interface DraftState {
 function draftKey(roleKey: string, sectionId: string): string { return `${roleKey}:${sectionId}`; }
 
 export function SpecialtyPromptSectionsPanel({
-  isMobile, activeScope, globalLayer, editLayer, userLayer, contextUserId,
+  isMobile, activeScope, contextUserId,
   catalog, saving, canEdit, onSaveLayer,
 }: Props) {
+  // Слои читаем сами из стора — снаружи не получаем (структурный запрет этапа 1).
+  const settings = useSpecialtySettings();
+  const userLayerFromStore = useUserLayer(contextUserId);
+  const globalLayer = settings?.global ?? null;
+  const editLayer: SpecialtySettingsLayer | null = activeScope === 'global'
+    ? settings?.global ?? null
+    : activeScope === 'owner'
+      ? settings?.owner ?? null
+      : userLayerFromStore;
   // Загрузка каталога секций (один раз на сессию — модульный кэш в specialties.ts)
   const [sectionsCatalog, setSectionsCatalog] = useState<SpecialtyPromptSectionsCatalog | null>(
     () => getPromptSectionsCatalog(),
@@ -134,20 +141,20 @@ export function SpecialtyPromptSectionsPanel({
       let updated = editLayer;
       for (const [k, v] of Object.entries(layer.text)) {
         const [roleKey, sectionId] = k.split(':');
-        const eff = effectivePromptSection(sectionsCatalog, editLayer, userLayer, globalLayer, roleKey, sectionId);
+        const eff = effectivePromptSection(sectionsCatalog, editLayer, userLayerFromStore, globalLayer, roleKey, sectionId);
         // Не пишем, если текст совпадает с эффективным (наследование, нет override)
         if (v.trim() === eff.text) continue;
         updated = withPromptSection(updated, roleKey, sectionId, { text: v });
       }
       for (const [k, v] of Object.entries(layer.enabled)) {
         const [roleKey, sectionId] = k.split(':');
-        const eff = effectivePromptSection(sectionsCatalog, editLayer, userLayer, globalLayer, roleKey, sectionId);
+        const eff = effectivePromptSection(sectionsCatalog, editLayer, userLayerFromStore, globalLayer, roleKey, sectionId);
         if (v === eff.enabled) continue;
         updated = withPromptSection(updated, roleKey, sectionId, { enabled: v });
       }
-      void onSaveLayer(updated);
+      void onSaveLayer(() => updated);
     }, 350);
-  }, [editLayer, canEdit, sectionsCatalog, userLayer, globalLayer, onSaveLayer]);
+  }, [editLayer, canEdit, sectionsCatalog, userLayerFromStore, globalLayer, onSaveLayer]);
   useEffect(() => () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }, []);
 
   // При смене активного слоя — сбрасываем черновики (значения относятся к слою).
@@ -177,7 +184,7 @@ export function SpecialtyPromptSectionsPanel({
     // Снимаем override в editLayer
     if (!editLayer) return;
     const next = withoutPromptSection(editLayer, roleKey, sectionId);
-    void onSaveLayer(next);
+    void onSaveLayer(() => next);
     setDraft(d => {
       const t = { ...d.text }; delete t[draftKey(roleKey, sectionId)];
       const en = { ...d.enabled }; delete en[draftKey(roleKey, sectionId)];
@@ -188,9 +195,9 @@ export function SpecialtyPromptSectionsPanel({
   const overrideText = (roleKey: string, sectionId: string) => {
     // Создаём override: пишем текущий эффективный текст в editLayer
     if (!editLayer) return;
-    const eff = effectivePromptSection(sectionsCatalog, editLayer, userLayer, globalLayer, roleKey, sectionId);
+    const eff = effectivePromptSection(sectionsCatalog, editLayer, userLayerFromStore, globalLayer, roleKey, sectionId);
     const next = withPromptSection(editLayer, roleKey, sectionId, { text: eff.text, enabled: eff.enabled });
-    void onSaveLayer(next);
+    void onSaveLayer(() => next);
     setDraft(d => ({ ...d, text: { ...d.text, [draftKey(roleKey, sectionId)]: eff.text } }));
     showToast('Инструкции', 'Создано переопределение — текст можно править');
   };
@@ -202,7 +209,7 @@ export function SpecialtyPromptSectionsPanel({
     const list = (rec.defaultBindings ?? []).slice();
     list.push(binding);
     const next = withDefaultBindings(editLayer, roleKey, list);
-    void onSaveLayer(next);
+    void onSaveLayer(() => next);
   };
   const removeDefaultBinding = (roleKey: string, idx: number) => {
     if (!editLayer) return;
@@ -210,7 +217,7 @@ export function SpecialtyPromptSectionsPanel({
     const list = (rec.defaultBindings ?? []).slice();
     list.splice(idx, 1);
     const next = withDefaultBindings(editLayer, roleKey, list);
-    void onSaveLayer(next);
+    void onSaveLayer(() => next);
   };
   const updateDefaultBinding = (roleKey: string, idx: number, patch: Partial<SpecialtyDefaultBinding>) => {
     if (!editLayer) return;
@@ -218,7 +225,7 @@ export function SpecialtyPromptSectionsPanel({
     const list = (rec.defaultBindings ?? []).slice();
     list[idx] = { ...list[idx], ...patch };
     const next = withDefaultBindings(editLayer, roleKey, list);
-    void onSaveLayer(next);
+    void onSaveLayer(() => next);
   };
 
   // Заголовок-разделитель (спека §1) — общий для всей панели
@@ -266,7 +273,7 @@ export function SpecialtyPromptSectionsPanel({
               loading={!sectionsCatalog || !catalog}
               editLayer={editLayer}
               globalLayer={globalLayer}
-              userLayer={userLayer}
+              userLayer={userLayerFromStore}
               sectionsCatalog={sectionsCatalog}
               draft={draft}
               showDisabled={!!showDisabled[r.key]}

@@ -5,25 +5,151 @@ import { api } from '../../lib/api';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
 import { TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
-import { presetRoute } from '../../lib/presets';
+import { presetRoute, useSpecialtySettings } from '../../lib/presets';
+import type { LayerReducer } from '../../lib/presets';
+import { usePreview } from '../../lib/presets';
+import { modelLabel } from '../../lib/models';
 import { ANY_SPECIALTY, useSpecialtyCatalog, withTierCell } from '../../lib/specialties';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import type { ProviderData } from '../../lib/modelProvidersShared';
 import type { ModelOption } from '../../lib/models';
-import type {
-  Persona, ResetResult, SpecialtySettingsLayer, SpecialtySettingsResponse,
-} from '../../types';
-import { ResetConfirmDialog } from './ResetConfirmDialog';
+import type { Persona, ResetResult, SpecialtySettingsLayer } from '../../types';
+import { ResetConfirmDialog } from '../modelsSpend/ResetConfirmDialog';
 import { AddRuleWizard } from './specialRules/AddRuleWizard';
 import { LevelsPicture } from './specialRules/LevelsPicture';
-import { AnySpecialtyCard, RuleGroupCard, RuleSpecCard } from './specialRules/cards';
+import {
+  AnySpecialtyCard, RuleGroupCard, RuleSpecCard, UnruledRoleCard,
+} from './specialRules/cards';
 import { SectionTitle, type PickerCtx, type Scope } from './specialRules/parts';
 import {
-  allRoleRows, buildGroups, buildLevelBars, catalogRoles, configuredRoleRows,
-  countFilledFields, fieldsWord, groupsWord, pickStartScope, rolesWord, sameTriple,
-  totalFields, tripleOf, type RoleRow,
+  allRoleRows, buildGroups, buildLevelBars, buildRolePersonaLine,
+  catalogRoles, configuredRoleRows, countFilledFields, countPersonasBySpecialty,
+  fieldsWord, groupsWord, personasWord, pickStartScope, rolesWord,
+  sameTriple, totalFields, tripleOf, unruledRoleRows, type RolePersonaLine, type RoleRow,
 } from './specialRules/model';
 import { SpecialtyPromptSectionsPanel } from './SpecialtyPromptSectionsPanel';
+
+// Навигация к персоне из среза (этап 4): SpecialRulesTab не имеет прямого доступа к
+// PersonasPage, поэтому идём через sessionStorage + CustomEvent — обработчик cc-open-persona
+// в PersonasPage сам подхватит, переключит listMode на 'all' для не-глобальных и сделает navPush.
+function openPersonaFromSlice(personaId: string): void {
+  sessionStorage.setItem('cc_pending_persona_id', personaId);
+  window.dispatchEvent(new CustomEvent('cc-open-persona'));
+}
+
+// Один резолв персоны: usePreview даёт модель/source/preset по одному уровню.
+// Дочерний компонент PersonaSliceLine вызывает три usePreview для одной персоны; на список
+// персон мапим массив таких компонентов (правила хуков запрещают вызывать их в цикле).
+function usePersonaRoleResolves(personaId: string): {
+  modelByTier: Partial<Record<TierKey, string>>;
+  sourceByTier: Partial<Record<TierKey, string>>;
+  presetNameByTier: Partial<Record<TierKey, string>>;
+} {
+  const strong = usePreview({ kind: 'persona', personaId, tier: 'strong' });
+  const medium = usePreview({ kind: 'persona', personaId, tier: 'medium' });
+  const weak = usePreview({ kind: 'persona', personaId, tier: 'weak' });
+  const modelByTier: Partial<Record<TierKey, string>> = {};
+  const sourceByTier: Partial<Record<TierKey, string>> = {};
+  const presetNameByTier: Partial<Record<TierKey, string>> = {};
+  for (const [tier, d] of [['strong', strong], ['medium', medium], ['weak', weak]] as const) {
+    if (!d) continue;
+    if (d.model) modelByTier[tier] = modelLabel(d.model);
+    if (d.source) sourceByTier[tier] = d.source;
+    if (d.preset?.name) presetNameByTier[tier] = d.preset.name;
+  }
+  return { modelByTier, sourceByTier, presetNameByTier };
+}
+
+// Строка персоны для среза: подцепляет usePreview на этой персоне и формирует RolePersonaLine.
+// Возвращает null, но строку передаёт родителю через onLine в эффекте — это и есть
+// честный поток данных вместо записи в ref родителя прямо во время рендера.
+function PersonaSliceLine({ persona, index, onLine }: {
+  persona: { id: string; name: string };
+  index: number;
+  onLine: (index: number, line: RolePersonaLine) => void;
+}): null {
+  const resolves = usePersonaRoleResolves(persona.id);
+  const line = useMemo(() => buildRolePersonaLine(persona, resolves), [persona, resolves]);
+  useEffect(() => {
+    onLine(index, line);
+  }, [line, index, onLine]);
+  return null;
+}
+
+// Сборщик среза для одной роли: компонент-накопитель. Для каждой персоны списка мапит
+// PersonaSliceLine, который передаёт готовую RolePersonaLine в onLine.
+function RoleSlice({ personas, onLine }: {
+  personas: Persona[];
+  onLine: (index: number, line: RolePersonaLine) => void;
+}): React.ReactElement {
+  return (
+    <>
+      {personas.map((p, i) => (
+        <PersonaSliceLine key={p.id} persona={p} index={i} onLine={onLine} />
+      ))}
+    </>
+  );
+}
+
+// Хранилище срезов по ролям: поднимаем строки из дочерних RoleSlice в state, чтобы
+// getLines возвращал актуальные данные без записи в ref во время рендера.
+// MAJOR-fix: до правки дочерние PersonaSliceLine писали в ref родителя прямо в рендере
+// и родитель форсировал rerender через forceRefresh. В конкурентном рендере / StrictMode
+// это давало рассогласование. Теперь строка идёт через onLine в эффекте, state хранится
+// в useRoleSlices, getLines читает из state реактивно. usePreviewTick больше не нужен —
+// rerender происходит при обновлении linesByRole.
+function useRoleSlices(allPersonas: Persona[]): {
+  getLines: (roleKey: string) => RolePersonaLine[];
+  slicesNode: React.ReactNode;
+} {
+  // personsByRole — стабильная мемоизация ключей
+  const personsByRole = useMemo(() => {
+    const out: Record<string, Persona[]> = {};
+    for (const p of allPersonas) {
+      const k = !p.specialty || p.specialty === 'none' ? 'none' : p.specialty;
+      (out[k] ??= []).push(p);
+    }
+    return out;
+  }, [allPersonas]);
+  const roleKeys = useMemo(() => Object.keys(personsByRole), [personsByRole]);
+  // linesByRole[roleKey][index] = RolePersonaLine. Подъём состояния из дочерних
+  // PersonaSliceLine: rerender SpecialRulesTab при каждом обновлении строки.
+  const [linesByRole, setLinesByRole] = useState<Record<string, Record<number, RolePersonaLine>>>({});
+  // Стабильный колбэк под каждую роль — иначе useEffect в PersonaSliceLine будет триггериться
+  // на каждый рендер родителя.
+  const onLineByRole = useMemo(() => {
+    const out: Record<string, (i: number, line: RolePersonaLine) => void> = {};
+    for (const k of roleKeys) {
+      out[k] = (i, line) => {
+        setLinesByRole(prev => {
+          const cur = prev[k] ?? {};
+          if (cur[i] === line) return prev;
+          return { ...prev, [k]: { ...cur, [i]: line } };
+        });
+      };
+    }
+    return out;
+  }, [roleKeys]);
+  const getLines = useCallback((roleKey: string): RolePersonaLine[] => {
+    const lines = linesByRole[roleKey];
+    if (!lines) return [];
+    const maxIdx = (personsByRole[roleKey] ?? []).length;
+    return Object.keys(lines)
+      .filter(i => Number(i) < maxIdx)
+      .sort((a, b) => Number(a) - Number(b))
+      .map(i => lines[Number(i)])
+      .filter(Boolean);
+  }, [linesByRole, personsByRole]);
+  // Невидимый узел: мапит RoleSlice на каждую роль с персональным onLine.
+  const slicesNode = (
+    <div style={{ display: 'none' }} aria-hidden>
+      {roleKeys.map(k => (
+        <RoleSlice key={k} personas={personsByRole[k]} onLine={onLineByRole[k]} />
+      ))}
+    </div>
+  );
+  return { getLines, slicesNode };
+}
 
 // === Вкладка «Особые правила для специальностей» (макет v4) ===
 //
@@ -52,25 +178,32 @@ interface SpecialRulesTabProps {
   data: ProviderData;
   contextUserId: string | null;
   onContextUserId: (id: string | null) => void;
-  settings: SpecialtySettingsResponse | null;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   savingScope: Scope | null;
-  onSaveLayer: (scope: Scope, next: SpecialtySettingsLayer) => Promise<void>;
+  // Сейчас идёт запись для слоя активной вкладки (для user-слоя — выбранного пользователя).
+  // Вкладка сравнивает с activeScope + contextUserId и блокирует правки на время операции.
+  savingUserId: string | null;
+  // Запись слоя: редьюсерная семантика. Стор уже знает активный scope+userId, контракт
+  // единый: вкладка сама считает next через reducer, стор фиксирует оптимистичный
+  // снапшот и шлёт PUT в нужный scope.
+  onSaveLayer: (scope: Scope, reducer: LayerReducer, userId?: string | null) => Promise<void>;
   // Перечитывание настроек после сброса делает сама модалка внутри onReset — вкладке
   // остаётся лишь дочитать чужой слой (он живёт здесь, а не в settings)
-  onReloadSettings: () => Promise<void>;
+  onReloadSettings: () => void;
   resettingScope: Scope | null;
   onReset: (scope: Scope, key?: string) => Promise<ResetResult>;
 }
 
 export function SpecialRulesTab({
-  isAdmin, meUserId, data, contextUserId, onContextUserId, settings, models, tierModels,
-  ollamaModel, savingScope, onSaveLayer, resettingScope, onReset,
+  isAdmin, meUserId, data, contextUserId, onContextUserId, models, tierModels,
+  ollamaModel, savingScope, savingUserId, onSaveLayer, resettingScope, onReset,
 }: SpecialRulesTabProps) {
   const isMobile = useIsMobile();
   const catalog = useSpecialtyCatalog();
+  // Снимок настроек берём сами из стора — снаружи не получаем (структурный запрет).
+  const settings = useSpecialtySettings();
 
   // Слой выбирается один раз — как только доехали настройки и каталог. Дальше его
   // двигает только пользователь: пересчёт на каждом обновлении settings перекидывал бы
@@ -100,10 +233,15 @@ export function SpecialRulesTab({
   }, [activeScope, contextUserId, loadUserLayer]);
   const userLayer = userLayerState?.userId === contextUserId ? userLayerState.layer : null;
 
-  // Персоны владельца — только ради подписи «Любой специальности»: сколько персон идут
-  // без своей специальности. В чужом и общем слое счёт не показываем: он был бы про
-  // персон СМОТРЯЩЕГО, а карточка — про чужие настройки.
+  // Полный список персон владельца — единый источник и для подписи «Любой специальности»,
+  // и для среза «Кто работает по этой роли» в карточках (этап 4), и для секции
+  // «Правил нет — N персон работают по общим настройкам» (этап 5). Считаем по полному
+  // списку api.personas.list(), а НЕ по usePersonas() — он фильтруется по listMode, и
+  // число на бейдже «Любой специальности» разошлось бы с подписью в срезе.
   const [personaStats, setPersonaStats] = useState<{ noSpec: number; total: number } | null>(null);
+  // Полный список персон для среза и секции «роли без правил»: держим отдельно от personaStats
+  // (он нужен в любом случае, даже когда ещё не доехал — карточка покажет пустой срез).
+  const [allPersonas, setAllPersonas] = useState<Persona[]>([]);
   useEffect(() => {
     let cancelled = false;
     api.personas.list()
@@ -111,8 +249,9 @@ export function SpecialRulesTab({
         if (cancelled) return;
         const noSpec = list.filter(p => !p.specialty || p.specialty === 'none').length;
         setPersonaStats({ noSpec, total: list.length });
+        setAllPersonas(list);
       })
-      .catch(() => { /* персон нет или фича выключена — карточка обойдётся без счёта */ });
+      .catch(() => { /* персон нет или фича выключена — карточка обойдётся без среза */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -137,7 +276,11 @@ export function SpecialRulesTab({
     : null;
 
   const canEdit = activeScope === 'owner' || (isAdmin && (activeScope === 'global' || !!contextUserId));
-  const busy = savingScope === activeScope || resettingScope === activeScope;
+  // busy учитывает userId на user-слое, чтобы правки чужого user-слоя не блокировали
+  // текущий (savingScope === 'user' сам по себе не различает).
+  const busy = (savingScope === activeScope
+    && (activeScope !== 'user' || savingUserId === contextUserId))
+    || resettingScope === activeScope;
 
   const roles = useMemo(() => catalogRoles(catalog), [catalog]);
   const allRows = useMemo(() => allRoleRows(catalog, layer), [catalog, layer]);
@@ -145,6 +288,15 @@ export function SpecialRulesTab({
   const { groups, singles } = useMemo(() => buildGroups(rows, splitKeys), [rows, splitKeys]);
   const bars = useMemo(() => buildLevelBars(allRows), [allRows]);
   const anyTriple = useMemo(() => tripleOf(layer?.defaultSpecialty), [layer]);
+
+  // Срез «Кто работает по этой роли»: для каждой роли собираем RolePersonaLine[]
+  // через useRoleSlices. На activeScope !== 'owner' срез не рисуется (карточки получают
+  // пустой массив и сами показывают T8).
+  const personaCountByRole = useMemo(() => countPersonasBySpecialty(allPersonas), [allPersonas]);
+  const { getLines: getRoleSlice, slicesNode } = useRoleSlices(allPersonas);
+  // Роли без правил, но с хотя бы одной персоной (этап 5) — отдельная секция, не через buildGroups.
+  const unruledRows = useMemo(() => unruledRoleRows(allRows, personaCountByRole),
+    [allRows, personaCountByRole]);
 
   const filled = countFilledFields(layer, catalog);
   const ownerFilled = countFilledFields(settings?.owner ?? null, catalog);
@@ -171,32 +323,40 @@ export function SpecialRulesTab({
   };
 
   // === Запись слоя ===
-  // Чужой слой правится оптимистично в локальном состоянии: он живёт здесь, а не
-  // в settings модалки (там лежит user-слой самого админа).
-  const saveLayer = (next: SpecialtySettingsLayer) => {
-    if (activeScope === 'user') {
-      if (!contextUserId) return;
-      setUserLayerState({ userId: contextUserId, layer: next });
-      void onSaveLayer('user', next).catch(() => loadUserLayer(contextUserId));
+  // Контракт редьюсерный: onSaveLayer передаёт reducer, store сам считает next из
+  // текущего снимка (для user — из userLayers, для global/owner — из settings[scope]).
+  // catch намеренно пустой: отказ уже показан баннером модалки (useSaveState),
+  // здесь он нужен только чтобы отклонённый промис не всплыл как «Uncaught».
+  // БЛОКЕР-1: гейт hasUserLayer на запись в user-слой — внутри стора saveLayer.
+  // UI-дубль не нужен: при отказе settingsError покажется баннером модалки.
+  const saveLayer = (reducer: LayerReducer) => {
+    // Локальный оптимистичный апдейт для user-слоя: userLayerState живёт в этой вкладке
+    // и не реактивен к стору (читаем только синхронно через getUserLayer на запись).
+    // После отказа — дотянем свежий слой с сервера через стор.
+    if (activeScope === 'user' && contextUserId) {
+      void onSaveLayer('user', (cur) => {
+        const nextLayer = reducer(cur);
+        setUserLayerState({ userId: contextUserId, layer: nextLayer });
+        return nextLayer;
+      }, contextUserId).catch(() => { void loadUserLayer(contextUserId); });
       return;
     }
-    // catch пустой намеренно: отказ уже показан баннером модалки, здесь он нужен только
-    // чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
-    void onSaveLayer(activeScope, next).catch(() => {});
+    void onSaveLayer(activeScope, reducer).catch(() => {});
   };
 
   const templateOf = (key: string) => roles.find(e => e.key === key)?.template ?? null;
 
   // Правка полей ОДНИМ PUT: у группы значение уходит сразу всем её ролям — раздельные
   // запросы по одному слою гонятся, и последний ответ стёр бы предыдущие (класс 65d8df66).
-  // base — слой, поверх которого писать: обычно текущий, но при inline-сборке цепочки
-  // сюда приходит свежий клон с уже добавленным пресетом (см. applyCreatedPreset).
-  const setCells = (keys: string[], tier: TierKey, value: string, base?: SpecialtySettingsLayer) => {
-    const from = base ?? layer;
-    if (!from) return;
-    let next = from;
-    for (const key of keys) next = withTierCell(next, key, tier, value, templateOf(key));
-    saveLayer(next);
+  // Редьюсер видит текущий слой (для user — из userLayers в сторе), изменения накладываются
+  // последовательно через withTierCell. Параметр base упразднён: для случая inline-сборки
+  // цепочки см. applyCreatedPreset — там reducer стартует с готового freshLayer.
+  const setCells = (keys: string[], tier: TierKey, value: string) => {
+    saveLayer((cur) => {
+      let next = cur;
+      for (const key of keys) next = withTierCell(next, key, tier, value, templateOf(key));
+      return next;
+    });
   };
 
   const setCell = (key: string, tier: TierKey, value: string) => setCells([key], tier, value);
@@ -242,16 +402,27 @@ export function SpecialRulesTab({
   };
 
   // Inline-сборка цепочки прямо в поле: PresetOptions отдаёт СВЕЖИЙ слой (клон + новая
-  // цепочка, ещё не сохранён). Если цепочка легла в ТОТ ЖЕ слой, что правим, — дописываем
-  // значение на том же клоне и шлём один PUT (раздельные PUT по одному слою гонятся,
-  // и второй ответ стёр бы только что созданную цепочку). Если в другой (общая цепочка
-  // для чужого слоя) — сначала пишем слой с цепочкой и только после подтверждения
-  // назначаем поле: бэкенд проверяет preset:{id} по снимку, и обгон дал бы 400.
+  // цепочка, ещё не сохранён). Если цепочка легла в ТОТ ЖЕ слой, что правим, — сливаем
+  // «пресет + ячейки» в ОДИН редьюсер и шлём один PUT (раздельные PUT по одному слою
+  // гонятся, и второй ответ стёр бы только что созданную цепочку). Если в другой
+  // (общая цепочка для чужого слоя) — сначала пишем слой с цепочкой и только после
+  // подтверждения назначаем поле: бэкенд проверяет preset:{id} по снимку, и обгон дал
+  // бы 400.
   const applyCreatedPreset = (keys: string[], tier: TierKey,
     presetId: string, presetScope: Scope, freshLayer: SpecialtySettingsLayer) => {
     const route = presetRoute(presetId);
-    if (presetScope === activeScope) { setCells(keys, tier, route, freshLayer); return; }
-    void onSaveLayer(presetScope, freshLayer).then(() => setCells(keys, tier, route)).catch(() => {});
+    if (presetScope === activeScope) {
+      saveLayer(() => {
+        let next = freshLayer;
+        for (const key of keys) next = withTierCell(next, key, tier, route, templateOf(key));
+        return next;
+      });
+      return;
+    }
+    const userId = presetScope === 'user' ? contextUserId : null;
+    void onSaveLayer(presetScope, () => freshLayer, userId)
+      .then(() => setCells(keys, tier, route))
+      .catch(() => {});
   };
 
   // === Подсветка по сегменту полосы ===
@@ -304,8 +475,10 @@ export function SpecialRulesTab({
     }
   };
 
+  // PickerCtx теперь редьюсерный: пробросить onSaveLayer как есть (userId пробрасываем
+  // для user-scope, остальное оборачивает стор).
   const ctx: PickerCtx = {
-    models, tierModels, ollamaModel, settings, savingScope, onSaveLayer,
+    models, tierModels, ollamaModel, savingScope, onSaveLayer,
     // Личный слой берёт цепочки обоих слоёв и создаёт свои; общий и ЧУЖОЙ слой —
     // только общие: личная цепочка была бы битой ссылкой у всех, кроме автора
     presetScope: activeScope === 'owner' ? undefined : 'global',
@@ -427,6 +600,8 @@ export function SpecialRulesTab({
             onCell={(t, v) => setCell(ANY_SPECIALTY, t, v)}
             onClear={t => clearCell(ANY_SPECIALTY, t)}
             onPresetCreated={(t, id, s, l) => applyCreatedPreset([ANY_SPECIALTY], t, id, s, l)}
+            personaLines={getRoleSlice('none')}
+            onOpenPersona={openPersonaFromSlice}
           />
 
           {rows.length > 0 && (
@@ -487,6 +662,11 @@ export function SpecialRulesTab({
                     setSplitKeys(prev => new Set(prev).add(key));
                     setExpanded(`s:${key}`);
                   }}
+                  personaLines={g.roles.flatMap(r => getRoleSlice(r.key))}
+                  personaRoleById={Object.fromEntries(
+                    g.roles.flatMap(r => getRoleSlice(r.key).map(l => [l.id, r.label])),
+                  )}
+                  onOpenPersona={openPersonaFromSlice}
                 />
               ))}
             </>
@@ -509,10 +689,37 @@ export function SpecialRulesTab({
                   onClear={t => clearCell(r.key, t)}
                   onResetRole={() => void resetRoles([r.key])}
                   onPresetCreated={(t, id, s, l) => applyCreatedPreset([r.key], t, id, s, l)}
+                  personaLines={getRoleSlice(r.key)}
+                  onOpenPersona={openPersonaFromSlice}
                 />
               ))}
             </>
           )}
+
+          {/* Этап 5: роли без правил, но с персональной нагрузкой. Только owner.
+              Скрыты, если персон нет вовсе (счёт «0 персон» — лишний шум). */}
+          {activeScope === 'owner' && unruledRows.length > 0 && (
+            <>
+              <SectionTitle>Роли без правил · {personasWord(
+                unruledRows.reduce((n, r) => n + (personaCountByRole.get(r.key) ?? 0), 0),
+              )}</SectionTitle>
+              {unruledRows.map(r => (
+                <UnruledRoleCard
+                  key={r.key}
+                  role={r}
+                  open={expanded === `u:${r.key}`}
+                  onToggle={() => setExpanded(k => (k === `u:${r.key}` ? null : `u:${r.key}`))}
+                  personaLines={getRoleSlice(r.key)}
+                  onOpenPersona={openPersonaFromSlice}
+                />
+              ))}
+            </>
+          )}
+
+          {/* Невидимый узел: монтирует RoleSlice на каждую роль с персональной нагрузкой,
+              чтобы хуки usePreview внутри дочерних PersonaSliceLine вызвались.
+              На каждом рендере SpecialRulesTab собирает результат через getLines(). */}
+          {slicesNode}
 
           {/* Подвал: добавление правила, сброс слоя и порядок наследования */}
 
@@ -521,14 +728,11 @@ export function SpecialRulesTab({
             <SpecialtyPromptSectionsPanel
               isMobile={isMobile}
               activeScope={activeScope}
-              globalLayer={settings?.global ?? null}
-              editLayer={layer}
-              userLayer={userLayer}
               contextUserId={contextUserId}
               catalog={catalog}
               saving={busy}
               canEdit={canEdit}
-              onSaveLayer={async (next) => { saveLayer(next); }}
+              onSaveLayer={async (reducer) => { saveLayer(reducer); }}
             />
           )}
 

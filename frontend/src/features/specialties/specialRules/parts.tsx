@@ -5,8 +5,9 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { TIERS, TIER_ORDER, routeTier, type TierKey } from '../../../lib/modelProvidersShared';
 import { cellPresetLabel, findPreset, presetIdOf, usePreview, usePresets } from '../../../lib/presets';
+import type { LayerReducer } from '../../../lib/presets';
 import { modelLabel, type ModelOption } from '../../../lib/models';
-import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../../types';
+import type { SpecialtySettingsLayer } from '../../../types';
 
 // Мелкие детали вкладки «Особые правила», общие для карточки «Любой специальности»,
 // групповой карточки, карточки отдельной роли и мастера: строка поля уровня, строка
@@ -18,9 +19,12 @@ export interface PickerCtx {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
-  settings: SpecialtySettingsResponse | null;
   savingScope: Scope | null;
-  onSaveLayer: (scope: Scope, next: SpecialtySettingsLayer) => Promise<void>;
+  // Контракт редьюсерный (см. presets.saveLayer). Стор сам читает текущий слой и
+  // шлёт PUT в нужный scope+userId. Снимок слоя внутрь ctx не передаём — потребители
+  // либо пользуются редьюсером, либо берут слой из стора сами (структурный запрет).
+  onSaveLayer: (scope: Scope, reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
   // Слой пресетов панели выбора: 'global' — общий (место видят все), undefined — личный.
   // Для чужого слоя («Пользователю…») цепочка обязана быть ОБЩЕЙ, иначе у адресата
   // ссылка будет битой — поэтому там тоже 'global'.
@@ -71,7 +75,6 @@ export function TierFieldRow({ tier, route, placeholder, ctx, onChange, onClear,
           showPresets
           presetScope={ctx.presetScope}
           presetCreation={{
-            settings: ctx.settings,
             savingScope: ctx.savingScope,
             onSaveLayer: ctx.onSaveLayer,
             onCreated: onPresetCreated,

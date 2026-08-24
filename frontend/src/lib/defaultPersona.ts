@@ -14,11 +14,14 @@ interface MeState {
   // (например, смена фона проекта), без прокидывания auth пропсом через всё дерево
   userId: string | null;
   defaultPersonaId: string | null;
+  // Роль пользователя (копия Me.role) — нужна гейтам раздела «Персоны» (например,
+  // видимость вкладки «Специальности» и admin-only слоёв), без отдельного auth/me-фетча
+  role: string;
   needsOnboarding: boolean;
   onboardingSessionId: string | null;
 }
 
-let _me: MeState = { loaded: false, userId: null, defaultPersonaId: null, needsOnboarding: false, onboardingSessionId: null };
+let _me: MeState = { loaded: false, userId: null, defaultPersonaId: null, role: '', needsOnboarding: false, onboardingSessionId: null };
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
 
@@ -48,6 +51,7 @@ export function setMeFromServer(me: Me): void {
     loaded: true,
     userId: me.userId ?? null,
     defaultPersonaId: me.defaultPersonaId ?? null,
+    role: me.role ?? '',
     needsOnboarding: !!me.needsOnboarding,
     onboardingSessionId: me.onboardingSessionId ?? null,
   };
@@ -56,7 +60,7 @@ export function setMeFromServer(me: Me): void {
 
 // Сброс при разлогине — данные не должны протечь следующему аккаунту
 export function clearMe(): void {
-  _me = { loaded: false, userId: null, defaultPersonaId: null, needsOnboarding: false, onboardingSessionId: null };
+  _me = { loaded: false, userId: null, defaultPersonaId: null, role: '', needsOnboarding: false, onboardingSessionId: null };
   emit();
 }
 

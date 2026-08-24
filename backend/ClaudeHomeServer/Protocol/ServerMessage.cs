@@ -228,6 +228,13 @@ public record StatusChangedMessage(string Status, string? LastMessage = null, in
 public record ChatDeletedMessage()
     : ServerMessage("chat_deleted");
 
+// Чат убран в архив или возвращён из архива (Archived — направление): архив ПРЯЧЕТ чат,
+// а не удаляет — клиенты убирают/возвращают его в списках, но семантики «чата больше нет»
+// (как у chat_deleted — на ней строятся ChatsPage/awaiting/projectActivity) здесь нет.
+// SessionId — в базовом поле.
+public record ChatArchivedMessage(bool Archived)
+    : ServerMessage("chat_archived");
+
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
 // Прогресс фоновых агентов Workflow (шлётся через SignalR по мере завершения)

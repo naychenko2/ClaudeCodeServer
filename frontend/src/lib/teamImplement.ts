@@ -426,12 +426,35 @@ export const TEAM_PLANNING_TEXT = 'Изучает задачу и собирае
 export function teamPlanningIndicatorVisible(
   state: SessionTeamImplement | null | undefined,
   items: ChatItem[],
-  live?: { startedAt: number } | null,
+  live?: { startedAt: number; personaId?: string | null } | null,
 ): boolean {
   if (!state || state.stopped) return false;
   if (live === null) return false;
   if (state.stage !== 'planning' && !live) return false;
   return !items.some(it => it.kind === 'team_escalation' && !it.escalation.resolved);
+}
+
+// Резолв персоны для карточки «Готовит план…». Приоритет:
+//  1) live.personaId из события team_planning (бэкенд прокидывает ResolvePlanner).
+//     Это самый свежий ответ и совпадает с тем, кто реально строит план.
+//  2) state.plannerPersonaId — фиксируется в режиме при включении КР, переживает
+//     перезагрузку и старые события без personaId.
+//  3) state.coordinatorPersonaId — координатор как запасной кандидат.
+//  4) session.personaId — персона самого чата. Без всего этого карточка деградирует
+//     до безличной плашки; безымянного «Планировщика» рисовать нельзя — та же болезнь,
+//     что лечили для координатора
+//
+// live принимает любой объект с опциональным personaId — структурная типизация: и старые
+// события без поля (тогда liveId === null и резолв идёт по state), и новые с ним
+export function resolvePlannerPersonaId(
+  state: SessionTeamImplement | null | undefined,
+  livePersonaId: string | null | undefined,
+  chatPersonaId?: string | null,
+): string | null {
+  if (livePersonaId) return livePersonaId;
+  if (state?.plannerPersonaId) return state.plannerPersonaId;
+  if (state?.coordinatorPersonaId) return state.coordinatorPersonaId;
+  return chatPersonaId ?? null;
 }
 
 // Склонение числительного (ру) — своя копия, как и в остальных местах проекта

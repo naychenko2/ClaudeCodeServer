@@ -5705,7 +5705,8 @@ public class SessionManager : IDisposable
         if (_teamPlanning.ResolveCoordinator(entry.Info, ownerId) is null)
             return (null, "Выберите координатора — чат без персоны штабом быть не может");
 
-        if (_teamPlanning.ResolveCandidates(entry.Info, ownerId).Count == 0)
+        var candidates = _teamPlanning.ResolveCandidates(entry.Info, ownerId);
+        if (candidates.Count == 0)
             return (null, entry.Info.ProjectId is null
                 ? "Выберите исполнителей — вне проекта команды нет, и подбирать не из кого"
                 : "В команде проекта нет персон — выберите исполнителей явно");
@@ -5717,24 +5718,28 @@ public class SessionManager : IDisposable
         var previous = entry.Info.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
             ? await GetTeamPlanAsync(sessionId, prevId)
             : null;
+        // Планировщика резолвим тут же: фронту нужна его персона для карточки «Готовит план…»
+        // в ленте. ResolvePlanner без побочных эффектов (тот же пул кандидатов, что уйдёт
+        // в CreatePlanAsync ниже), так что лишнего запроса не добавляем
+        var plannerPersonaId = _teamPlanning.ResolvePlanner(entry.Info, ownerId, candidates)?.Id;
         // Событие «планировщик запущен» сразу после резолва кандидатов: фронт рисует
         // «Штаб планирует…», а сам факт не путается с долгим молчанием (контракт для Киры).
         var empty = new TeamPlanningService.Result(null, TeamPlanningService.Failure.Failed, null, 0, 0, TimeSpan.Zero);
-        await BroadcastTeamPlanningStartedAsync(sessionId, empty);
+        await BroadcastTeamPlanningStartedAsync(sessionId, empty, plannerPersonaId);
 
         var planning = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous, feedback);
         if (planning.Plan is null)
         {
             // Событие «планировщик закончил» с отказом — фронт снимет спиннер и покажет
             // причину в плашке рядом с карточкой отказа (контракт для Киры, см. docs).
-            await BroadcastTeamPlanningFinishedAsync(sessionId, planning);
+            await BroadcastTeamPlanningFinishedAsync(sessionId, planning, plannerPersonaId);
             return (null, PlannerFailureReason(planning.Failure));
         }
 
         // План построен — сохранённая вводная и правка отказа отработаны (повтор по кнопке
         // «Повторить планирование» после успеха не нужен)
         WithTeamState(sessionId, t => { t.LastPlanRequest = null; t.LastPlanFeedback = null; return true; });
-        await BroadcastTeamPlanningFinishedAsync(sessionId, planning);
+        await BroadcastTeamPlanningFinishedAsync(sessionId, planning, plannerPersonaId);
         await PublishTeamPlanAsync(sessionId, entry, planning.Plan, fromHuman);
         return (planning.Plan, null);
     }
@@ -5757,7 +5762,7 @@ public class SessionManager : IDisposable
     // Событие ТРАНЗИТНОЕ: в историю не пишется (карточка плана или карточка отказа уже там,
     // дублировать не надо), и при рестарте сервера не восстанавливается — спиннер просто
     // не показывается, карточка подтянется через /api/.../history.
-    private Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r) =>
+    private Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
         BroadcastAsync(sessionId, new TeamPlanningMessage(
             Start: true,
             Success: false,
@@ -5766,10 +5771,11 @@ public class SessionManager : IDisposable
             ElapsedMs: 0,
             Route: r.Route?.Model,
             Failure: null,
+            PersonaId: plannerPersonaId,
             PromptChars: r.PromptChars,
             ResponseChars: 0));
 
-    private Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r) =>
+    private Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
         BroadcastAsync(sessionId, new TeamPlanningMessage(
             Start: false,
             Success: r.Plan is not null,
@@ -5778,6 +5784,7 @@ public class SessionManager : IDisposable
             ElapsedMs: (long)r.Elapsed.TotalMilliseconds,
             Route: r.Route?.Model,
             Failure: r.Plan is null ? PlannerFailureReason(r.Failure) : null,
+            PersonaId: plannerPersonaId,
             PromptChars: r.PromptChars,
             ResponseChars: r.ResponseChars));
 

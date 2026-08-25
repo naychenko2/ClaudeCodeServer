@@ -23,9 +23,8 @@ import {
 import {
   buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
-import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
-import { buildCoordinatorTurns, coordinatorCollapsedSummary, coordinatorStatusLine } from '../lib/coordinatorTurns';
-import { CoordinatorTurnCard } from '../features/team/CoordinatorTurnCard';
+import { teamPlanningIndicatorVisible, resolvePlannerPersonaId } from '../lib/teamImplement';
+import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationStickyBanner';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
@@ -1549,6 +1548,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     node?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [items, findLaunchedIndex]);
 
+  // Открытые карточки остановки (есть неотвеченная team_escalation): закреплённая полоса
+  // над композером показывает самую свежую (последнюю по индексу — чем ниже, тем позже),
+  // остальные — счётчиком. Без открытых карточек полоса не рисуется. Карточки-плана и
+  // вопрос человеку НЕ считаются открытыми остановками: у них своя логика видимости
+  const openEscalations = useMemo(() => findOpenEscalations(items), [items]);
+  const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
+  // Прыжок из баннера к карточке: мягкая подсветка делается в самом баннере (класс
+  // .escalation-flash), здесь только скролл
+  const scrollToEscalation = useCallback((idx: number) => {
+    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-feed-index="${idx}"]`);
+    node?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
     setClickedOfferIndices(prev => new Set(prev).add(offerIndex));
     try {
@@ -1785,16 +1797,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return { at, suppressed };
   }, [items]);
 
-  // «Командная реализация»: работа координатора — это ходы САМОГО чата, поэтому в ленту
-  // они падают россыпью (плашка ⚑, голые вызовы инструментов, текст, result). Собираем
-  // их в карточку той же формы, что вызов персоны-субагента. Приём тот же, что у
-  // errorGroups: массив items НЕ схлопывается (индексы — ключ к turnMeta, turnBoundaries,
-  // batchByIndex и execZone), карта «индекс якоря → группа» + набор гашеных индексов.
-  // Вне режима штаба группировки нет вообще — лента обычного чата не меняется.
-  const coordinatorTurns = useMemo(
-    () => buildCoordinatorTurns(items, teamImplementState),
-    [items, teamImplementState],
-  );
+  // «Командная реализация»: ход координатора — ход самого чата (он же персона чата),
+  // поэтому он показывается обычной репликой этой персоны, как любой её ответ.
+  // Свёртка в CoordinatorTurnCard была нужна, пока автор выглядел чужим — теперь,
+  // когда координатор = персона чата, отдельная карточка лишь маскировала реального
+  // автора. Служебный шум (⚑ staffNote, авто-триггеры `[Режим «Командная реализация»] …`)
+  // скрывается в ChatItemView — на месте координатора в ленте остаются только реплики.
 
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
@@ -1832,6 +1840,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           for (const g of (childrenByParentId.get(e.item.id) ?? [])) suppressedByWorkflow.add(g.item);
       }
     }
+    // Служебный шум режима «Командная реализация» (⚑ staffNote, авто-триггеры штаба):
+    // гасим как suppressed-набор, чтобы индексы display не съезжали и прыжки по
+    // data-feed-index (закреплённая полоса эскалации, scrollToMechanicLaunch) остались
+    // корректными. Вне режима штаба набор пуст — обычный чат не меняется. systemDirective
+    // сюда не входит: цикл «до готово» не относится к КР-механике и в КР-чате не встречается
+    const suppressedByTeamNoise = new Set<number>();
+    if (teamImplementState) {
+      for (let k = 0; k < display.length; k++) {
+        const it = display[k];
+        if (it.kind !== 'user_message') continue;
+        if (it.staffNote || it.auto) suppressedByTeamNoise.add(k);
+      }
+    }
     // Дети top-level agent-вызовов рендерятся inline под родителем в блоке действий:
     // при параллельных агентах инструменты приходят вперемешку, и без группировки по родителю
     // все sub-tool строки сливаются в один безымянный блок.
@@ -1850,43 +1871,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     let i = 0;
     let prevNodeWasBlock = false;
     while (i < display.length) {
-      // Ход координатора штаба: карточка встаёт на место якоря (плашка ⚑ хода живёт
-      // строкой состояния в её шапке), остальные элементы хода пропускаем — индексы
-      // при этом не съезжают. Карточки для человека (эскалация, план, вопрос, запрос
-      // разрешения, ревью плана) и ошибки в группу не попадают по построению модели
-      // и остаются самостоятельными узлами ленты.
-      if (coordinatorTurns.suppressed.has(i)) { i++; continue; }
-      const coordTurn = coordinatorTurns.at.get(i);
-      if (coordTurn) {
-        const coordPersona = teamImplementState?.coordinatorPersonaId
-          ? getPersonaById(teamImplementState.coordinatorPersonaId) ?? null
-          : null;
-        const answerItem = coordTurn.answerIdx !== null ? display[coordTurn.answerIdx] : null;
-        pushNode(
-          <div key={`coord-${i}`} data-feed-index={i} style={{ marginTop: 3 }}>
-            <CoordinatorTurnCard
-              persona={coordPersona}
-              statusLine={coordinatorStatusLine(coordTurn)}
-              collapsedSummary={coordinatorCollapsedSummary(coordTurn)}
-              answer={answerItem?.kind === 'text' ? answerItem.text : ''}
-              metrics={{
-                tokens: coordTurn.metrics.tokens,
-                toolUses: coordTurn.metrics.tools > 0 ? coordTurn.metrics.tools : undefined,
-                durationMs: coordTurn.metrics.durationMs,
-              }}
-              running={coordTurn.running}
-              isError={coordTurn.isError}
-              aborted={coordTurn.aborted}
-              activity={coordTurn.activity}
-              renderChild={renderItem}
-              online={online}
-              onOpenFile={onOpenFile}
-            />
-          </div>,
-          i,
-        );
-        i++; prevNodeWasBlock = false; continue;
-      }
       // Ошибки прошлых дней: все ошибки одного дня рисуются одной группой на месте
       // первой из них, остальные пропускаем (индексы при этом не съезжают)
       if (errorGroups.suppressed.has(i)) { i++; continue; }
@@ -1916,6 +1900,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         );
         i++; prevNodeWasBlock = false; continue;
       }
+      // Служебный шум КР (⚑ staffNote и авто-триггеры штаба) — гасим, чтобы лента
+      // показывала координатора обычными репликами. Индекс при этом не съезжает,
+      // data-feed-index остальных элементов не страдает
+      if (suppressedByTeamNoise.has(i)) { i++; continue; }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
       if (suppressedByWorkflow.has(display[i]) || suppressedByAgentParent.has(display[i])) {
@@ -2118,7 +2106,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, coordinatorTurns, teamImplementState, session.id]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
 
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге
@@ -2317,10 +2305,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
         <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}>{visibleNodes}</SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
-        {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
+        {/* Карточка «Готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
-            Гаснет сама: стадия уходит с planning при карточке плана или отказа */}
-        {showTeamPlanningIndicator && <TeamPlanningIndicator startedAt={liveTeamPlanning?.startedAt} />}
+            Теперь — карточка той же формы, что PersonaConsultCard: аватар/имя/цвет
+            планировщика вместо безличной плашки. Персона приходит из события team_planning
+            (бэкенд прокидывает ResolvePlanner), фолбэк — резолв по teamImplementState и
+            персоне чата — на случай старого события без personaId. Гаснет сама по
+            teamPlanningIndicatorVisible */}
+        {showTeamPlanningIndicator && (() => {
+          const plannerId = resolvePlannerPersonaId(teamImplementState, liveTeamPlanning?.personaId, session.personaId);
+          // eslint-disable-next-line react-hooks/rules-of-hooks -- getPersonaById читает нереактивный стор; personasVersion нужен, чтобы бамп заставил пересчитать (deps через key в ChatPanel)
+          const plannerPersona = plannerId ? getPersonaById(plannerId) : null;
+          return (
+            <TeamPlanningIndicator
+              startedAt={liveTeamPlanning?.startedAt}
+              persona={plannerPersona}
+            />
+          );
+        })()}
 
         {online && showWaiting && (
           // Индикатор стоит В ПОТОКЕ, по левому краю сообщений — как аватар обычной
@@ -2483,6 +2485,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             style={{ display: 'none' }}
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) handleChatUpload(fs); }}
           />
+          {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
+              открытая карточка эскалации, человек видит её над композером, даже если
+              её уже унесло вверх потоком докладов. Клик скроллит к карточке и мягко
+              подсвечивает её (.escalation-flash в index.css) */}
+          {topEscalation && (
+            <EscalationStickyBanner
+              top={topEscalation}
+              others={openEscalations.length - 1}
+              onJump={scrollToEscalation}
+            />
+          )}
           <Composer
             // key по чату: Composer полностью перемонтируется при смене сессии, поэтому
             // его внутренний стейт (текст черновика, teamMech/teamOpen/teamSettings,

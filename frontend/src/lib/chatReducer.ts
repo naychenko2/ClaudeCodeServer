@@ -60,7 +60,7 @@ export interface ChatState {
   // ремонт плашки, честнее отсчёта от Date.now() при монтировании); null — планировщик уже
   // закончил (событие приходит раньше, чем стадия team_implement — та ждёт запись файла
   // плана на диск, и без этого поля плашка «работает» ещё висела бы после готового результата)
-  teamPlanning?: { startedAt: number } | null;
+  teamPlanning?: { startedAt: number; personaId?: string | null } | null;
   // Пульс волны командной реализации (Э2). Эфемерный — в ленту и историю не попадает;
   // бейдж показывает активность, поповер — список задач. undefined — пульсов ещё не было
   // (бэкенд старый или чат открыт до первой минуты волны); бейдж в этом случае выводит
@@ -824,7 +824,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // (та переключается отдельным событием team_implement и может отстать на запись
       // файла плана на диск). success=false — отказ: карточка team_escalation с тем же
       // текстом причины уже в пути, вторую строку с ним же не добавляем — просто гасим плашку
-      if (msg.start) return { ...prev, teamPlanning: { startedAt: Date.now() } };
+      if (msg.start) return { ...prev, teamPlanning: { startedAt: Date.now(), personaId: msg.personaId ?? null } };
       if (!msg.success) return { ...prev, teamPlanning: null };
       return {
         ...prev,

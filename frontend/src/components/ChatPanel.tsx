@@ -24,7 +24,7 @@ import {
   buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
-import { buildCoordinatorTurns, coordinatorCollapsedSummary } from '../lib/coordinatorTurns';
+import { buildCoordinatorTurns, coordinatorCollapsedSummary, coordinatorStatusLine } from '../lib/coordinatorTurns';
 import { CoordinatorTurnCard } from '../features/team/CoordinatorTurnCard';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1866,7 +1866,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           <div key={`coord-${i}`} data-feed-index={i} style={{ marginTop: 3 }}>
             <CoordinatorTurnCard
               persona={coordPersona}
-              statusLine={coordTurn.statusRunning}
+              statusLine={coordinatorStatusLine(coordTurn)}
               collapsedSummary={coordinatorCollapsedSummary(coordTurn)}
               answer={answerItem?.kind === 'text' ? answerItem.text : ''}
               metrics={{
@@ -1876,6 +1876,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               }}
               running={coordTurn.running}
               isError={coordTurn.isError}
+              aborted={coordTurn.aborted}
               activity={coordTurn.activity}
               renderChild={renderItem}
               online={online}

@@ -17,7 +17,7 @@
 
 import type { ChatItem, SessionTeamImplement } from '../types';
 import { toolWord } from '../components/chat/ToolUseView';
-import { formatTailDuration, formatTailTokens } from './agentTail';
+import { formatTailDuration } from './agentTail';
 import { parseDelegationReport } from './delegationReport';
 
 export interface CoordinatorActivityEntry { item: ChatItem; idx: number }
@@ -36,6 +36,7 @@ export interface CoordinatorTurnGroup {
   answerIdx: number | null;
   running: boolean;
   isError: boolean;
+  aborted: boolean;         // ход оборван человеком («Стоп»)
   metrics: { tools: number; durationMs?: number; tokens?: number };
 }
 
@@ -60,9 +61,9 @@ export const STAFF_NOTE_BACK_TO_INTERVIEW = 'Возврат в интервью 
 export const STAFF_NOTE_TASK_REPORT = 'Доклад по задаче передан постановщику';
 
 export const COORDINATOR_PHASE_CARD: CoordinatorPhaseLabel =
-  { running: 'Разбирает решение по карточке', done: 'разобрал решение по карточке' };
+  { running: 'Учитывает ваш ответ', done: 'учёл ответ' };
 export const COORDINATOR_PHASE_INTERVIEW: CoordinatorPhaseLabel =
-  { running: 'Возвращается к интервью', done: 'вернулся к интервью' };
+  { running: 'Готовит вопросы', done: 'подготовил вопросы' };
 export const COORDINATOR_PHASE_REPORT: CoordinatorPhaseLabel =
   { running: 'Разбирает доклад исполнителя', done: 'разобрал доклад исполнителя' };
 export const COORDINATOR_PHASE_ASSIGN: CoordinatorPhaseLabel =
@@ -74,8 +75,15 @@ export function coordinatorWavePhase(wave: number): CoordinatorPhaseLabel {
   return { running: `Разбирает доклады волны ${wave}`, done: `разобрал доклады волны ${wave}` };
 }
 
+// Прошедшая форма для строки «Координатор · … · …»: со строчной буквы и без хвостовой
+// пунктуации — точка внутри строки, разделённой точками, читается как опечатка.
 function lowerFirst(text: string): string {
-  return text.charAt(0).toLowerCase() + text.slice(1);
+  const trimmed = text.replace(/[.!;…]+$/, '');
+  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
+function upperFirst(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // Подпись фазы по заметке штаба. Незнакомая заметка — не выдумываем формулировку, а
@@ -247,6 +255,9 @@ function buildGroup(args: {
   const isError = (result !== null && result.subtype !== 'success')
     || items[endIdx + 1]?.kind === 'error'
     || prev?.kind === 'error';
+  // «Стоп» человека приходит отдельным элементом сразу за группой (в CONTENT_KINDS его
+  // нет, поэтому он её и завершает)
+  const aborted = items[endIdx + 1]?.kind === 'interrupted';
 
   // У координатора нет системного хвоста CLI (splitAgentResultTail неприменим):
   // время и токены берём из result хода, действия считаем сами
@@ -261,6 +272,7 @@ function buildGroup(args: {
     answerIdx,
     running,
     isError,
+    aborted,
     metrics: {
       tools: toolNames.length,
       durationMs: result?.durationMs,
@@ -269,13 +281,20 @@ function buildGroup(args: {
   };
 }
 
-// Строка свёрнутого вида: «Координатор · разобрал доклады волны 2 · 4 действия · 12с».
+// Строка состояния в шапке карточки: пока ход идёт — настоящее время, после — прошедшее
+// с заглавной («Разобрал доклады волны 2»). Завершённый ход не должен час спустя
+// уверять, что он всё ещё разбирает доклады.
+export function coordinatorStatusLine(group: CoordinatorTurnGroup): string {
+  return group.running ? group.statusRunning : upperFirst(group.statusDone);
+}
+
+// Строка свёрнутого вида: «Координатор · разобрал доклады волны 2 · 12с · 4 действия».
 // Пока ход идёт — настоящее время («разбирает доклады волны 2»): прошедшее посреди
-// работы врало бы. Порядок метрик — как в карточке консультанта: токены · действия · время.
+// работы врало бы. Метрики — от важного к второстепенному; токенов здесь нет совсем,
+// на узком экране строка обрывалась бы ровно на них (в развёрнутой карточке они есть).
 export function coordinatorCollapsedSummary(group: CoordinatorTurnGroup): string {
   const parts = ['Координатор', group.running ? lowerFirst(group.statusRunning) : group.statusDone];
-  if (group.metrics.tokens != null) parts.push(`${formatTailTokens(group.metrics.tokens)} токенов`);
-  if (group.metrics.tools > 0) parts.push(`${group.metrics.tools} ${toolWord(group.metrics.tools)}`);
   if (group.metrics.durationMs != null) parts.push(formatTailDuration(group.metrics.durationMs));
+  if (group.metrics.tools > 0) parts.push(`${group.metrics.tools} ${toolWord(group.metrics.tools)}`);
   return parts.join(' · ');
 }

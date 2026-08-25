@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import type { ChatItem, Persona } from '../../types';
-import { C, FONT, FS, SP } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { NEUTRAL_AGENT_ACCENT } from '../../components/chat/AgentContentBlocks';
 import { ActivitySection, PersonaConsultCard } from '../../components/chat/PersonaTaskView';
@@ -23,15 +22,15 @@ export function CoordinatorTurnCard({
   running, isError, aborted, runningLabel = 'Работает…',
   activity, renderChild, online = true, onOpenFile,
 }: {
-  persona?: Persona | null;      // координатор чата; нет — нейтральная серая шапка «Агент»
+  persona?: Persona | null;      // координатор чата; нет — нейтральная серая шапка «Координатор»
   statusLine: string;            // фаза хода: «Разбирает доклады волны 2»
-  collapsedSummary: string;      // свёрнутая строка: «Координатор · разобрал доклады волны 2 · 4 действия · 12 с»
+  collapsedSummary: string;      // свёрнутая строка: «Координатор · разобрал доклады волны 2 · 12 с · 4 действия»
   answer: string;                // сводка волны
   metrics?: CoordinatorTurnMetrics;
   running: boolean;
   isError: boolean;
-  aborted?: boolean;
-  runningLabel?: string;         // подпись у спиннера в шапке
+  aborted?: boolean;             // ход прерван человеком — статус в шапке и свёрнутой строке
+  runningLabel?: string;         // подпись у спиннера в шапке (со строкой состояния не рисуется)
   activity?: ActivityEntry[];    // вложенные действия координатора (вызовы инструментов, текст, размышления)
   renderChild?: (item: ChatItem, idx: number) => React.ReactNode;   // renderItem ленты
   online?: boolean;
@@ -48,45 +47,35 @@ export function CoordinatorTurnCard({
     ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_AGENT_ACCENT)
     : NEUTRAL_AGENT_ACCENT;
 
-  const card = (
+  return (
     <PersonaConsultCard
       persona={persona}
       badge="координатор"
+      fallbackTitle="Координатор"
       question=""
       statusLine={statusLine}
       running={running}
       isError={isError}
       aborted={aborted}
       answer={answer}
+      // Ход, который раздал задачи и замолчал, — штатный случай, а не «ответ без текста»
+      emptyAnswerNote="Без сводки: ход закрылся действиями"
       metrics={metrics}
       runningLabel={runningLabel}
+      // Чип отвечает на вопрос «какая модель поедет, если позвать ЭТУ персону сабагентом»,
+      // а ход координатора — ход самого чата
+      showModelChip={false}
+      // Рутинный отчёт не должен перекрикивать элементы, ждущие человека:
+      // вопрос человеку → эскалация → ход координатора
+      quiet
       collapsed={open ? undefined : { summary: collapsedSummary, onToggle: () => setUserOpen(true) }}
+      // Свернуть обратно — кликом по шапке (отдельной кнопки снаружи карточки в ленте нет)
+      onCollapse={open ? () => setUserOpen(false) : undefined}
     >
       {activity && activity.length > 0 && (
         <ActivitySection activity={activity} running={running} accent={accent}
           online={online} onOpenFile={onOpenFile} renderChild={renderChild} />
       )}
     </PersonaConsultCard>
-  );
-
-  if (!open) return card;
-
-  // Свернуть обратно: неприметная строка-кнопка НАД карточкой — у длинного хода она
-  // остаётся под рукой, а в шапку не лезет (там спиннер и статус)
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxWidth: '100%' }}>
-      <button
-        onClick={() => setUserOpen(false)}
-        style={{
-          alignSelf: 'flex-end', display: 'inline-flex', alignItems: 'center', gap: SP.xs,
-          border: 'none', background: 'transparent', cursor: 'pointer', padding: '0 2px',
-          fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
-        }}
-      >
-        <span>▾</span>
-        <span>Свернуть</span>
-      </button>
-      {card}
-    </div>
   );
 }

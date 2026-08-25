@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import type { ChatItem, SessionTeamImplement } from '../../types';
 import {
   buildCoordinatorTurns, coordinatorCollapsedSummary, coordinatorPhaseFromNote,
-  coordinatorPhaseFromTools, isCoordinatorTrigger,
+  coordinatorPhaseFromTools, coordinatorStatusLine, isCoordinatorTrigger,
   COORDINATOR_PHASE_ASSIGN, COORDINATOR_PHASE_CARD, COORDINATOR_PHASE_INTERVIEW,
   COORDINATOR_PHASE_REISSUE, COORDINATOR_PHASE_REPORT,
   STAFF_NOTE_BACK_TO_INTERVIEW, STAFF_NOTE_CARD_ANSWER, STAFF_NOTE_TASK_REPORT,
@@ -157,6 +157,9 @@ describe('подписи фаз', () => {
     expect(coordinatorPhaseFromNote(STAFF_NOTE_CARD_ANSWER)).toEqual(COORDINATOR_PHASE_CARD);
     expect(coordinatorPhaseFromNote(STAFF_NOTE_BACK_TO_INTERVIEW)).toEqual(COORDINATOR_PHASE_INTERVIEW);
     expect(coordinatorPhaseFromNote(STAFF_NOTE_TASK_REPORT)).toEqual(COORDINATOR_PHASE_REPORT);
+    // Формулировки макета: короче и понятнее прежних кодовых
+    expect(COORDINATOR_PHASE_CARD).toEqual({ running: 'Учитывает ваш ответ', done: 'учёл ответ' });
+    expect(COORDINATOR_PHASE_INTERVIEW).toEqual({ running: 'Готовит вопросы', done: 'подготовил вопросы' });
   });
 
   it('незнакомая заметка штаба показывается как есть', () => {
@@ -164,6 +167,18 @@ describe('подписи фаз', () => {
       running: 'Напоминание исполнителю: задача не закрыта',
       done: 'напоминание исполнителю: задача не закрыта',
     });
+  });
+
+  it('хвостовая пунктуация незнакомой заметки срезается — строка разделена точками', () => {
+    expect(coordinatorPhaseFromNote('Задача снята с исполнителя.').done)
+      .toBe('задача снята с исполнителя');
+    expect(coordinatorPhaseFromNote('Ждём ответа…').done).toBe('ждём ответа');
+    expect(coordinatorPhaseFromNote('Волна сорвалась!').done).toBe('волна сорвалась');
+    // Вопрос остаётся вопросом
+    expect(coordinatorPhaseFromNote('Что дальше?').done).toBe('что дальше?');
+    const items = [note('Задача снята с исполнителя.'), tool('Read'), text(), result()];
+    expect(coordinatorCollapsedSummary(only(buildCoordinatorTurns(items, team).at)))
+      .toBe('Координатор · задача снята с исполнителя · 12с · 1 действие');
   });
 
   it('триггер без заметки (доклад делегированной задачи) — разбор доклада', () => {
@@ -193,11 +208,11 @@ describe('подписи фаз', () => {
 });
 
 describe('свёрнутый вид', () => {
-  it('«Координатор · разобрал доклады волны 2 · 4 действия · 12с»', () => {
+  it('«Координатор · разобрал доклады волны 2 · 12с · 4 действия»', () => {
     const items = [note(WAVE_NOTE), tool('Read', 'a'), tool('Grep', 'b'), tool('Read', 'c'), tool('Bash', 'd'), text(), result()];
     const g = only(buildCoordinatorTurns(items, team).at);
     expect(g.metrics.tools).toBe(4);
-    expect(coordinatorCollapsedSummary(g)).toBe('Координатор · разобрал доклады волны 2 · 4 действия · 12с');
+    expect(coordinatorCollapsedSummary(g)).toBe('Координатор · разобрал доклады волны 2 · 12с · 4 действия');
   });
 
   it('пока ход идёт — настоящее время, метрик результата ещё нет', () => {
@@ -207,14 +222,16 @@ describe('свёрнутый вид', () => {
     expect(coordinatorCollapsedSummary(g)).toBe('Координатор · разбирает доклады волны 2 · 1 действие');
   });
 
-  it('токены result попадают в строку в формате карточек', () => {
+  it('токенов в свёрнутой строке нет — на узком экране обрывалась бы ровно на них', () => {
     const items: ChatItem[] = [
       note(WAVE_NOTE), tool('Read', 'a'), text(),
       { kind: 'result', subtype: 'success', durationMs: 72000, numTurns: 2, usage: { inputTokens: 12000, outputTokens: 300, cacheReadTokens: 0, cacheCreationTokens: 0 } },
     ];
     const g = only(buildCoordinatorTurns(items, team).at);
+    // Метрика жива (её показывает футер развёрнутой карточки), но в строку не идёт
     expect(g.metrics.tokens).toBe(12300);
-    expect(coordinatorCollapsedSummary(g)).toBe('Координатор · разобрал доклады волны 2 · 12k токенов · 1 действие · 1м 12с');
+    expect(coordinatorCollapsedSummary(g)).toBe('Координатор · разобрал доклады волны 2 · 1м 12с · 1 действие');
+    expect(coordinatorCollapsedSummary(g)).not.toContain('токен');
   });
 
   it('пустая сводка без инструментов/метрик — текст уходит в answerIdx', () => {
@@ -227,6 +244,48 @@ describe('свёрнутый вид', () => {
     expect(g.metrics.durationMs).toBeUndefined();
     expect(g.metrics.tokens).toBeUndefined();
     expect(coordinatorCollapsedSummary(g)).toBe('Координатор · разбирает доклады волны 2');
+  });
+});
+
+describe('строка состояния в шапке', () => {
+  it('завершённый ход говорит в прошедшем времени, с заглавной', () => {
+    const items = [note(WAVE_NOTE), tool('Read'), text(), result()];
+    const g = only(buildCoordinatorTurns(items, team).at);
+    expect(g.running).toBe(false);
+    expect(coordinatorStatusLine(g)).toBe('Разобрал доклады волны 2');
+  });
+
+  it('живой ход — настоящее время как есть', () => {
+    const items = [note(WAVE_NOTE), tool('Read')];
+    const g = only(buildCoordinatorTurns(items, team).at);
+    expect(g.running).toBe(true);
+    expect(coordinatorStatusLine(g)).toBe('Разбирает доклады волны 2');
+  });
+});
+
+describe('прерывание хода человеком', () => {
+  it('«Стоп» сразу за группой помечает её как прерванную, ошибкой не считая', () => {
+    const items: ChatItem[] = [note(WAVE_NOTE), tool('Read'), text(), { kind: 'interrupted' }];
+    const { at, suppressed } = buildCoordinatorTurns(items, team);
+    const g = at.get(0)!;
+    expect(g.endIdx).toBe(2);
+    expect(g.aborted).toBe(true);
+    expect(g.isError).toBe(false);
+    expect(g.running).toBe(false);
+    // Сам маркер прерывания остаётся в ленте
+    expect(suppressed.has(3)).toBe(false);
+  });
+
+  it('обычный завершённый ход прерванным не считается', () => {
+    const items = [note(WAVE_NOTE), tool('Read'), text(), result()];
+    expect(only(buildCoordinatorTurns(items, team).at).aborted).toBe(false);
+  });
+
+  it('ошибка следом за группой прерыванием не становится', () => {
+    const items: ChatItem[] = [note(WAVE_NOTE), tool('Read'), { kind: 'error', text: 'упало' }];
+    const g = buildCoordinatorTurns(items, team).at.get(0)!;
+    expect(g.isError).toBe(true);
+    expect(g.aborted).toBe(false);
   });
 });
 

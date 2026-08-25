@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ProjectIcons;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -40,6 +41,38 @@ public class SpecialtyCatalogTests
     {
         SpecialtyCatalog.All.Select(e => e.Specialty)
             .Should().BeEquivalentTo(Enum.GetValues<PersonaSpecialty>());
+    }
+
+    // Имена значков рисует фронт динамическим компонентом lucide-react, и серверное
+    // значение он предпочитает своему фолбэку: несуществующее имя даст ошибку в консоли
+    // и пустой значок роли (QA B1, 25.08.2026 — «chart», «checks», «flask» и др.).
+    // Белый список — генерируемая копия установленного пакета (см. LucideGlyphs).
+    [Fact]
+    public void Icons_ВсеРоли_СуществуютВНабореLucide()
+    {
+        var roles = SpecialtyCatalog.All.Where(e => e.Specialty != PersonaSpecialty.None);
+        foreach (var entry in roles)
+        {
+            entry.Icon.Should().NotBeNullOrWhiteSpace($"у роли {entry.Label} задан значок");
+            LucideGlyphs.Contains(entry.Icon).Should().BeTrue(
+                $"имя значка «{entry.Icon}» роли «{entry.Label}» обязано существовать в установленном lucide-react");
+        }
+        roles.Should().HaveCount(14);
+    }
+
+    [Fact]
+    public void Icons_УтверждённыеИмена_Стабильны()
+    {
+        SpecialtyCatalog.Get(PersonaSpecialty.Analyst).Icon.Should().Be("chart-line");
+        SpecialtyCatalog.Get(PersonaSpecialty.Planner).Icon.Should().Be("list-checks");
+        SpecialtyCatalog.Get(PersonaSpecialty.Tester).Icon.Should().Be("flask-conical");
+        SpecialtyCatalog.Get(PersonaSpecialty.Mentor).Icon.Should().Be("graduation-cap");
+        SpecialtyCatalog.Get(PersonaSpecialty.Consultant).Icon.Should().Be("lightbulb");
+        SpecialtyCatalog.Get(PersonaSpecialty.Secretary).Icon.Should().Be("notebook-pen");
+        SpecialtyCatalog.Get(PersonaSpecialty.Coordinator).Icon.Should().Be("share-2");
+        SpecialtyCatalog.Get(PersonaSpecialty.Librarian).Icon.Should().Be("book-open");
+        SpecialtyCatalog.Get(PersonaSpecialty.FrontendExecutor).Icon.Should().Be("monitor-smartphone");
+        SpecialtyCatalog.Get(PersonaSpecialty.DevopsExecutor).Icon.Should().Be("package");
     }
 
     [Fact]

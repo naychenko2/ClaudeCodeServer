@@ -7,10 +7,14 @@
 //
 // Тон берётся из teamEscalationTone: warning/success/muted/work — единая палитра
 // с карточкой остановки, чтобы баннер и его цель читались как одна история.
-// При клике «К карточке» — прокрутка ленты к data-feed-index с мягкой подсветкой
-// (мигание рамки 1.5с), без ремаунта/мутаций в items.
+//
+// Прыжок к карточке делает ChatPanel через onJump: расширяет окно ленты до
+// нужного узла, скроллит и навешивает .escalation-flash ПОСЛЕ ререндера. Сам
+// баннер никаких DOM-эффектов не запускает — так подсветка привязана к клику,
+// а не к появлению полосы (раньше useEffect на [top.idx] мигал на каждой новой
+// «самой свежей» карточке и никогда при ручном клике — отсюда ревью)
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback } from 'react';
 import { AlertTriangle, ChevronUp } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FS, R, SHADOW } from '../../lib/design';
@@ -43,35 +47,10 @@ export function EscalationStickyBanner({
   top: OpenEscalation;
   // Сколько ещё открытых помимо неё
   others: number;
-  // Прыжок к карточке в ленте: скролл + мягкая подсветка
+  // Прыжок к карточке в ленте: раздвинуть окно, скролл, мягкая подсветка
   onJump: (idx: number) => void;
 }) {
-  const flashRef = useRef<number | null>(null);
-
-  // Мягкая подсветка: при добавлении класса на 1.5с элемент мигает рамкой.
-  // На смене top.idx (новая «самая свежая») повторяем эффект — иначе человек кликал
-  // бы в баннер и не видел реакции, если карточка за пределами видимой области
-  useEffect(() => {
-    const idx = top.idx;
-    const node = document.querySelector<HTMLElement>(`[data-feed-index="${idx}"]`);
-    if (!node) return;
-    node.classList.add('escalation-flash');
-    flashRef.current = window.setTimeout(() => {
-      node.classList.remove('escalation-flash');
-      flashRef.current = null;
-    }, 1500);
-    return () => {
-      if (flashRef.current !== null) {
-        window.clearTimeout(flashRef.current);
-        flashRef.current = null;
-      }
-      node.classList.remove('escalation-flash');
-    };
-  }, [top.idx]);
-
-  const handleJump = useCallback(() => {
-    // Прокручиваем ПОСЛЕ снятия подсветки из прошлого прыжка: иначе кратковременный
-    // класс зависает на старой карточке, а новая мигает «поверх» старого стиля
+  const handleClick = useCallback(() => {
     onJump(top.idx);
   }, [onJump, top.idx]);
 
@@ -83,7 +62,7 @@ export function EscalationStickyBanner({
     <button
       type="button"
       data-testid="escalation-sticky-banner"
-      onClick={handleJump}
+      onClick={handleClick}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -132,6 +111,10 @@ export function EscalationStickyBanner({
           ещё {others}
         </span>
       )}
+      {/* Кнопка «К карточке» — span, потому что nested <button> запрещён HTML; визуально
+          это бейдж справа от текста, клик всплывает в <button data-testid="…"> выше.
+          Контраст проверен в обеих темах глазами: для warning/success ctaBg = текст-тона
+          (тёмный на светлом фоне) → C.onAccent читается; для muted/work ctaBg = accent */}
       <span style={{
         display: 'inline-flex',
         alignItems: 'center',

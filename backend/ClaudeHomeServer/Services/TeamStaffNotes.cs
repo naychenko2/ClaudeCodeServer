@@ -1,9 +1,13 @@
 namespace ClaudeHomeServer.Services;
 
-// Подписи плашек ⚑ (staffNote) молчаливых ходов координатора в чате-штабе. Единственное
-// место этих строк: фронт читает их как строку состояния фазы в шапке карточки координатора
-// (frontend/src/lib/coordinatorTurns.ts), поэтому правка текста мимо каталога молча меняла бы
-// подпись фазы в ленте. Сторож — TeamStaffNotesTests.
+// Подписи плашек ⚑ (staffNote) молчаливых ходов координатора в чате-штабе. Эти строки
+// шлются как user_message со staffNote=…; фронт гасит их в ленте набором suppressedByTeamNoise
+// (см. frontend/src/components/ChatPanel.tsx) — показывать в ленте их не нужно: всё
+// содержательное координатор уже сказал репликой персоны чата (карточку CoordinatorTurnCard
+// убрали в пользу обычной реплики), а триггер нужен только как якорь для фазы и метрик.
+// Контракт: каждый штабный триггер (WaveClosed / EscalationResolved / InterviewReturn)
+// приходит именно как staffNote=true (без auto — авто-репорты исполнителей несут auto,
+// но НЕ staffNote, и гасить их нельзя). Сторож — TeamStaffNotesTests.
 public static class TeamStaffNotes
 {
     // Волна закрыта: бэкенд отдал координатору факты закрытия, тот публикует сводку.

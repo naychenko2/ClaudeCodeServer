@@ -457,6 +457,24 @@ export function resolvePlannerPersonaId(
   return chatPersonaId ?? null;
 }
 
+// Перевод item-индекса в позицию узла ленты. Лента режется окном (WINDOW_FIRST=50) по
+// УЗЛАМ, а data-feed-index на элементах — это item-индекс. Без перевода прыжок «К
+// карточке» врал бы дважды: «уже видно» (item-индекс >= числа узлов) и перелёт
+// (item-индекс как hiddenCount). Чистая функция — чтобы тест не тянул весь ChatPanel
+// и signalr. Устойчивый перевод: для одиночной карточки берём узел с start === idx,
+// для цели внутри склеенного блока действий — самый поздний узел с start <= idx
+// (клик «К карточке» попадает в шапку блока, а не в рандомный tool_use внутри)
+export function itemIdxToNodePos(
+  nodes: ReadonlyArray<{ start: number }>,
+  idx: number,
+): number {
+  if (nodes.length === 0 || idx < 0) return -1;
+  for (let k = nodes.length - 1; k >= 0; k--) {
+    if (nodes[k].start <= idx) return k;
+  }
+  return -1;
+}
+
 // Склонение числительного (ру) — своя копия, как и в остальных местах проекта
 // (TeamPlanView, ProductHistory, BackupWidget…): маленькая и специфичная, шарить не стоит.
 function pluralRu(n: number, one: string, few: string, many: string): string {

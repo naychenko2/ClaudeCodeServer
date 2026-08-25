@@ -10,6 +10,7 @@ import {
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
   teamPlanningIndicatorVisible, teamPlanningElapsedLabel, teamPlanningDoneText,
   TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT,
+  itemIdxToNodePos,
   teamPulseTone, teamPulseActivityLabel, teamPulseMeaning, teamPulseBadgeText,
   teamPulseBadgeShort, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel,
   teamWaveTasksSorted, TEAM_IMPLEMENT_SHORT_NAME,
@@ -670,5 +671,82 @@ describe('isTeamWavePulseStale: свежесть пульса', () => {
     const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
     expect(isTeamWavePulseStale(fresh, ts + 5_000, true, 3_000)).toBe(true);
     expect(isTeamWavePulseStale(fresh, ts + 2_000, true, 3_000)).toBe(false);
+  });
+});
+
+describe('itemIdxToNodePos (прыжок «К карточке»)', () => {
+  // Сценарий: 200 items, склеенных в блоки по 3 (tool_use). Узлов ~70, hidden
+  // по умолчанию = max(0, 70-50) = 20. Карточка эскалации в первой трети items
+  // попадает в склеенный блок действия — прыжок должен:
+  //   • не сработать «уже видно» (item-индекс 100 > 20 — но он невидим,
+  //     потому что относится к УЗЛУ 25, который скрыт);
+  //   • раздвинуть hidden так, чтобы УЗЕЛ с целевым item попал в срез;
+  //   • дать корректный УЗЕЛ-индекс для setHiddenCount.
+  const buildLongFeed = () => {
+    const nodes: Array<{ start: number }> = [];
+    let i = 0;
+    while (i < 200) {
+      const blockSize = i % 7 === 0 ? 1 : 3;
+      nodes.push({ start: i });
+      i += blockSize;
+    }
+    return { nodes, totalItems: i };
+  };
+
+  it('одиночная карточка в первой трети items — нужный УЗЕЛ не hidden', () => {
+    const { nodes } = buildLongFeed();
+    // Карточка items[100] — одиночный (i % 7 === 0 на i=98, 99, 100 → i=100 % 7 = 2,
+    // значит блок 3 элемента 100..102. Возьмём items[98] (i=98 % 7 = 0 → одиночный)
+    const targetItem = 98;
+    const nodePos = itemIdxToNodePos(nodes, targetItem);
+    expect(nodePos).toBeGreaterThanOrEqual(0);
+    // Узел не должен быть «уже видно» (hidden по умолчанию ~20, nodePos >> 20)
+    expect(nodePos).toBeGreaterThan(20);
+  });
+
+  it('цель внутри склеенного блока — берём последний узел с start <= idx', () => {
+    const { nodes } = buildLongFeed();
+    // Узлы: start 0, 1, 4, 7, 10, 13, ..., 196 — большинство блоков по 3 элемента
+    // Цель items[2] попадает в блок с start=1 (items 1..3)
+    expect(itemIdxToNodePos(nodes, 2)).toBe(1);
+    expect(itemIdxToNodePos(nodes, 3)).toBe(1);
+    // Граница блока: items[4] — это уже следующий узел
+    expect(itemIdxToNodePos(nodes, 4)).toBe(2);
+  });
+
+  it('карточка на границе окна — hidden = nodePos - 3 (не выходит за срез)', () => {
+    const { nodes } = buildLongFeed();
+    // Возьмём цель у самого края: 50 items → это примерно узел 16..17. Узел на
+    // границе должен попасть в окно (50-3=47 узлов до цели)
+    const targetItem = 49;
+    const nodePos = itemIdxToNodePos(nodes, targetItem);
+    // Раздвигаем окно так, чтобы 3 предыдущих узла остались как контекст:
+    const targetHidden = Math.max(0, nodePos - 3);
+    expect(targetHidden).toBeGreaterThanOrEqual(0);
+    expect(targetHidden).toBeLessThan(nodes.length);
+    // После раздвижения целевой узел попадает в visibleNodes.slice(targetHidden)
+    expect(nodePos).toBeGreaterThanOrEqual(targetHidden);
+  });
+
+  it('карточка в самом верху items — hidden=0 (а не отрицательное)', () => {
+    const { nodes } = buildLongFeed();
+    // items[0] — первая карточка, узел 0
+    expect(itemIdxToNodePos(nodes, 0)).toBe(0);
+    const nodePos = 0;
+    expect(Math.max(0, nodePos - 3)).toBe(0);
+  });
+
+  it('idx за пределами последнего item — берём последний узел', () => {
+    const { nodes, totalItems } = buildLongFeed();
+    expect(itemIdxToNodePos(nodes, totalItems + 50)).toBe(nodes.length - 1);
+  });
+
+  it('отрицательный idx — возвращает -1 (сигнал «нет совпадения»)', () => {
+    const { nodes } = buildLongFeed();
+    expect(itemIdxToNodePos(nodes, -1)).toBe(-1);
+  });
+
+  it('пустой массив узлов — возвращает -1', () => {
+    expect(itemIdxToNodePos([], 5)).toBe(-1);
   });
 });

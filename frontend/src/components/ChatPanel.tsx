@@ -23,7 +23,7 @@ import {
 import {
   buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
-import { teamPlanningIndicatorVisible, resolvePlannerPersonaId } from '../lib/teamImplement';
+import { teamPlanningIndicatorVisible, resolvePlannerPersonaId, itemIdxToNodePos } from '../lib/teamImplement';
 import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationStickyBanner';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1554,12 +1554,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // вопрос человеку НЕ считаются открытыми остановками: у них своя логика видимости
   const openEscalations = useMemo(() => findOpenEscalations(items), [items]);
   const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
-  // Прыжок из баннера к карточке: мягкая подсветка делается в самом баннере (класс
-  // .escalation-flash), здесь только скролл
-  const scrollToEscalation = useCallback((idx: number) => {
-    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-feed-index="${idx}"]`);
-    node?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, []);
+  // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
+  // узел за пределами видимой области физически отсутствует в DOM — простой
+  // querySelector+scrollIntoView вернёт null. Callback объявлен ПОСЛЕ renderedItems
+  // (см. ниже), иначе порядок определения нарушается. deps по длине — если items
+  // не менялись, callback стабильный
 
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
     setClickedOfferIndices(prev => new Set(prev).add(offerIndex));
@@ -1801,8 +1800,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // поэтому он показывается обычной репликой этой персоны, как любой её ответ.
   // Свёртка в CoordinatorTurnCard была нужна, пока автор выглядел чужим — теперь,
   // когда координатор = персона чата, отдельная карточка лишь маскировала реального
-  // автора. Служебный шум (⚑ staffNote, авто-триггеры `[Режим «Командная реализация»] …`)
-  // скрывается в ChatItemView — на месте координатора в ленте остаются только реплики.
+  // автора. Служебный шум (⚑ staffNote штаба) гасится здесь же, набором
+  // suppressedByTeamNoise — см. выше.
+
+  // Две системы координат ленты: items[i] — индекс item (то, что в data-feed-index),
+  // nodes[k] — индекс УЗЛА (включая склеенные блоки действий). hiddenCount и
+  // visibleNodes считают именно узлы. Актуальный массив узлов нужен jumpToEscalation
+  // для перевода item→узел, а deps по useMemo не ловят смену содержимого при той же
+  // длине — держим узлы в ref, который обновляется в самом useMemo (после построения
+  // nodes, до любого return)
+  type RenderedNode = { node: React.ReactNode; start: number };
+  const renderedNodesRef = useRef<RenderedNode[]>([]);
 
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
@@ -1840,17 +1848,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           for (const g of (childrenByParentId.get(e.item.id) ?? [])) suppressedByWorkflow.add(g.item);
       }
     }
-    // Служебный шум режима «Командная реализация» (⚑ staffNote, авто-триггеры штаба):
+    // Служебный шум режима «Командная реализация» (плашки ⚑ staffNote штаба):
     // гасим как suppressed-набор, чтобы индексы display не съезжали и прыжки по
     // data-feed-index (закреплённая полоса эскалации, scrollToMechanicLaunch) остались
-    // корректными. Вне режима штаба набор пуст — обычный чат не меняется. systemDirective
-    // сюда не входит: цикл «до готово» не относится к КР-механике и в КР-чате не встречается
+    // корректными. Вне режима штаба набор пуст — обычный чат не меняется.
+    //
+    // Гасим ТОЛЬКО по staffNote: каждый штабный триггер его несёт (TeamStaffNotes
+    // из TeamWaveService/SessionManager/TaskExecutionService), а доклады исполнителей
+    // без персоны приходят с auto=true и без staffNote — их трогать нельзя: они
+    // попадают в ленту и должны остаться видимыми, иначе реплей истории после F5
+    // даст расхождение (в историю пишется StoredUserMessage БЕЗ auto). systemDirective
+    // сюда не входит: цикл «до готово» не относится к КР-механике и в КР-чате не
+    // встречается
     const suppressedByTeamNoise = new Set<number>();
     if (teamImplementState) {
       for (let k = 0; k < display.length; k++) {
         const it = display[k];
         if (it.kind !== 'user_message') continue;
-        if (it.staffNote || it.auto) suppressedByTeamNoise.add(k);
+        if (it.staffNote) suppressedByTeamNoise.add(k);
       }
     }
     // Дети top-level agent-вызовов рендерятся inline под родителем в блоке действий:
@@ -1906,6 +1921,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       if (suppressedByTeamNoise.has(i)) { i++; continue; }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
+      if (suppressedByTeamNoise.has(i)) { i++; continue; }
       if (suppressedByWorkflow.has(display[i]) || suppressedByAgentParent.has(display[i])) {
         i++; continue;
       }
@@ -1943,15 +1959,21 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost' || it.kind === 'glif_cost';
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
-        const isSuppressed = (it: ChatItem) => suppressedByWorkflow.has(it) || suppressedByAgentParent.has(it);
+        // isSuppressed включает и гашение штабного шума по индексу — иначе
+        // блок действий соберёт соседей вокруг подавленных элементов и прыжки
+        // по data-feed-index поплывут
+        const isSuppressed = (it: ChatItem, idx: number) =>
+          suppressedByTeamNoise.has(idx)
+          || suppressedByWorkflow.has(it)
+          || suppressedByAgentParent.has(it);
         while (i < display.length) {
-          if (isSuppressed(display[i]) || isInvisible(display[i], i)) { i++; continue; }
+          if (isSuppressed(display[i], i) || isInvisible(display[i], i)) { i++; continue; }
           if (inBlock(display[i], i)) { slice.push([display[i], i]); i++; continue; }
           if (isThought(display[i])) {
             // Lookahead: впитываем размышления, только если дальше идёт ещё действие —
             // размышление перед финальным ответом остаётся видимой строкой над ним
             let j = i;
-            while (j < display.length && (isThought(display[j]) || isInvisible(display[j], j) || isSuppressed(display[j]))) j++;
+            while (j < display.length && (isThought(display[j]) || isInvisible(display[j], j) || isSuppressed(display[j], j))) j++;
             if (j < display.length && inBlock(display[j], j)) {
               for (; i < j; i++) if (isThought(display[i])) slice.push([display[i], i]);
               continue;
@@ -1989,7 +2011,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
         // действии, и группа мигала бы свернулась/раскрылась на каждом межшаговом thinking.
         let after = i;
-        while (after < display.length && (isThought(display[after]) || isInvisible(display[after], after) || isSuppressed(display[after]))) after++;
+        while (after < display.length && (isThought(display[after]) || isInvisible(display[after], after) || isSuppressed(display[after], after))) after++;
         // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
         // но ход уже завершён (сессия не работает): иначе действия последнего диалога
         // оставались бы раскрытыми в отличие от всех предыдущих групп.
@@ -2058,7 +2080,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         const item = display[i];
         const kind = item.kind;
         const node = renderItem(item, i);
-        const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error' || kind === 'error_group';
+        // Якорь прыжка ОБЯЗАН иметь бокс: scrollIntoView в Blink на элементах без
+        // layout-объекта (display:contents, span-обёртки) выходит сразу и не скроллит,
+        // а outline/background .escalation-flash рисовать не на чем. Поэтому любые
+        // карточки, к которым прыгает закреплённая полоса «Практика ждёт вашего решения»
+        // и сам ChatPanel через scrollToMechanicLaunch/scrollToEscalation, идут через
+        // ветку `<div ... data-feed-index>` ниже, а не через последнюю <span>
+        // display:contents
+        const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result'
+          || kind === 'error' || kind === 'error_group'
+          || kind === 'team_escalation' || kind === 'team_plan'
+          || kind === 'ask_question' || kind === 'permission_request'
+          || kind === 'plan_review';
         // Вправо идёт ТОЛЬКО настоящий пузырь пользователя. Плашки-разделители
         // (staffNote, systemDirective, авто-слэш-команды) и карточки viaAgent/auto
         // центрируются по колонке — как и result-узлы рядом.
@@ -2084,6 +2117,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
     // success-коннектор: непрерывные узлы из «зоны реализации» (после одобренного плана)
     // оборачиваем в одну левую зелёную линию — «эти правки реализуют план».
+    // ref обновляется ДО любого return ниже: jumpToEscalation читает актуальный срез,
+    // а useCallback-и могут зваться из эффектов уже на текущем рендере
+    renderedNodesRef.current = nodes;
     if (!execZone) return nodes.map(n => n.node);
     const result: React.ReactNode[] = [];
     let j = 0;
@@ -2108,6 +2144,37 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
   }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
 
+  // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
+  // узел за пределами видимой области физически отсутствует в DOM — простой
+  // querySelector+scrollIntoView вернёт null. idx — индекс item; сначала переводим
+  // его в позицию узла (см. renderedNodesRef выше), раздвигаем окно, и уже после
+  // ререндера — скроллим и подсвечиваем целевой item по data-feed-index (он
+  // адресует item, не узел — это правильно: scrollIntoView попадает ровно в ту
+  // карточку, к которой прыгаем). Поиск идёт внутри scrollRef, а не document:
+  // у ChatPanel бывает режим embedded, и две ленты в DOM одновременно
+  const jumpToEscalation = useCallback((idx: number) => {
+    const nodes = renderedNodesRef.current;
+    const nodePos = itemIdxToNodePos(nodes, idx);
+    if (nodePos < 0) return;
+    setHiddenCount((h) => {
+      const cur = h ?? Math.max(0, nodes.length - WINDOW_FIRST);
+      if (nodePos >= cur) return h;
+      // Открываем окно: 3 предыдущих узла остаются как контекст вокруг цели.
+      // Math.max здесь не нужен: nodePos < cur ≤ nodes.length, nodePos >= 0
+      return Math.max(0, nodePos - 3);
+    });
+    // После ререндера — querySelector по data-feed-index={idx} (item-индекс)
+    requestAnimationFrame(() => {
+      const node = scrollRef.current?.querySelector<HTMLElement>(`[data-feed-index="${idx}"]`);
+      if (!node) return;
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      node.classList.add('escalation-flash');
+      window.setTimeout(() => node.classList.remove('escalation-flash'), 1500);
+    });
+  }, []);
+
+  // Две системы координат ленты: items[i] — индекс item (то, что в data-feed-index),
+  // renderedNodes[k] — индекс УЗЛА (включая склеенные блоки действий). hiddenCount и
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге
   // новых сообщений хвост растёт сам, а позиция чтения в середине окна не прыгает.
@@ -2487,13 +2554,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           />
           {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
               открытая карточка эскалации, человек видит её над композером, даже если
-              её уже унесло вверх потоком докладов. Клик скроллит к карточке и мягко
-              подсвечивает её (.escalation-flash в index.css) */}
+              её уже унесло вверх потоком докладов. Клик раздвигает окно ленты,
+              скроллит к карточке и мягко подсвечивает (.escalation-flash в index.css) */}
           {topEscalation && (
             <EscalationStickyBanner
               top={topEscalation}
               others={openEscalations.length - 1}
-              onJump={scrollToEscalation}
+              onJump={jumpToEscalation}
             />
           )}
           <Composer

@@ -184,6 +184,8 @@ export function SpecialtyListView({
   const isMobile = useIsMobile();
   // «Показать все роли каталога» — состояние P15, чтобы персонализировать можно
   // было и роли без персон (например, назвать «Библиотекаря» до первой персоны).
+  // Сбрасывается при смене слоя: иначе после переключения владелец видит чужие
+  // роли без правил (на его слое) — это сбивает с толку (QA B4 «Что 2», 25.08.2026).
   const [showAll, setShowAll] = useState(false);
   const personasByRole = useRolePersonasOf(personas);
   const roles = useMemo(() => realRoles(catalog), [catalog]);
@@ -209,6 +211,12 @@ export function SpecialtyListView({
   const covered = withRules.length;
   const total = roles.length;
 
+  // Слой меняется снаружи — оборачиваем, чтобы сбросить раскрытие «Показать все».
+  const handleLayerChange = (s: Scope) => {
+    setShowAll(false);
+    onLayerChange(s);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       {/* Переключатель режима центра (P14, дословно из постановки) */}
@@ -221,16 +229,21 @@ export function SpecialtyListView({
         }}>
           <LayerSwitch
             scope={layer}
-            onScope={onLayerChange}
+            onScope={handleLayerChange}
             isAdmin={isAdmin}
             isMobile={isMobile}
           />
-          {covered > 0 && total > 0 && (
-            <span style={{
+          {/* Бейдж «N вручную» — сколько ролей каталога уже имеют правила на
+              текущем слое. Виден всегда (даже при 0), чтобы на любом слое было
+              видно, сколько ролей настроено (QA B4 «Что 1», 25.08.2026). */}
+          {total > 0 && (
+            <span title="Ролей с правилами на текущем слое" style={{
               fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700,
-              color: C.textSecondary, background: C.bgSelected,
+              color: covered > 0 ? C.textHeading : C.textMuted,
+              background: covered > 0 ? C.bgWhite : C.bgSelected,
               padding: '2px 8px', borderRadius: 12, marginLeft: 8,
-            }}>{covered} из {total}</span>
+              border: covered > 0 ? `1px solid ${C.borderLight}` : 'none',
+            }}>{covered} вручную</span>
           )}
         </div>
         <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>

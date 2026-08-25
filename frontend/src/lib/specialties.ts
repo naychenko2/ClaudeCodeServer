@@ -28,21 +28,25 @@ declare module '../types' {
 // не настраивается. Белый список имён совпадает с backend SpecialtyCatalog.Entry.Icon
 // (14 ролей). Когда бэкенд начнёт отдавать icon/color в /api/specialties — фронт
 // берёт их оттуда, а этот хардкод остаётся фолбэком для бэкендов младше волны.
+// Имена lucide-иконок — только из белого списка `iconNames` (lucide-react/dynamic).
+// Неверные имена дают «[lucide-react]: Name in Lucide DynamicIcon not found» в консоли
+// и пустой значок (см. QA B1, 25.08.2026). Когда бэк начнёт отдавать icon/color
+// в /api/specialties — фронт берёт их оттуда, а этот хардкод остаётся фолбэком.
 const ICON_COLOR_BY_KEY: Record<string, { icon: string; color: string }> = {
-  analyst:          { icon: 'chart',     color: 'blue' },
-  planner:          { icon: 'checks',    color: 'purple' },
-  reviewer:         { icon: 'shield',    color: 'red' },
-  executor:         { icon: 'hammer',    color: 'brown' },
-  secretary:        { icon: 'notebook',  color: 'green' },
-  coordinator:      { icon: 'share',     color: 'cyan' },
-  mentor:           { icon: 'cap',       color: 'yellow' },
-  designer:         { icon: 'palette',   color: 'orange' },
-  consultant:       { icon: 'bulb',      color: 'yellow' },
-  librarian:        { icon: 'book',      color: 'brown' },
-  tester:           { icon: 'flask',     color: 'green' },
-  backendExecutor:  { icon: 'server',    color: 'blue' },
-  frontendExecutor: { icon: 'monitor',   color: 'pink' },
-  devopsExecutor:   { icon: 'box',       color: 'red' },
+  analyst:          { icon: 'chart-line',       color: 'blue' },
+  planner:          { icon: 'list-checks',      color: 'purple' },
+  reviewer:         { icon: 'shield',           color: 'red' },
+  executor:         { icon: 'hammer',           color: 'brown' },
+  secretary:        { icon: 'notebook-pen',     color: 'green' },
+  coordinator:      { icon: 'share-2',          color: 'cyan' },
+  mentor:           { icon: 'graduation-cap',   color: 'yellow' },
+  designer:         { icon: 'palette',          color: 'orange' },
+  consultant:       { icon: 'lightbulb',        color: 'yellow' },
+  librarian:        { icon: 'book-open',        color: 'brown' },
+  tester:           { icon: 'flask-conical',    color: 'green' },
+  backendExecutor:  { icon: 'server',           color: 'blue' },
+  frontendExecutor: { icon: 'monitor-smartphone', color: 'pink' },
+  devopsExecutor:   { icon: 'package',          color: 'red' },
 };
 
 // Имя lucide-иконки роли. Если в каталоге icon не пришёл — возвращаем хардкод из

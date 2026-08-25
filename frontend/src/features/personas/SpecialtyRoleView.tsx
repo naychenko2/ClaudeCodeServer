@@ -12,10 +12,14 @@ import { ChevronLeft } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
-import { PersonaAvatar } from './PersonaAvatar';
 import { useIsMobile } from '../../lib/breakpoints';
 import { roleIconName, roleColorKey } from '../../lib/specialties';
-import type { Persona, SpecialtyCatalogEntry, SpecialtySettingsLayer } from '../../types';
+import { RolePeopleSlice } from '../../components/specialties/RolePeopleSlice';
+import { RolePresetsBlock } from '../../components/specialties/RolePresetsBlock';
+import type {
+  Persona, SpecialtyCatalogEntry, SpecialtyPromptSectionsCatalog,
+  SpecialtySettingsLayer,
+} from '../../types';
 import type { Scope } from './personaSpecialtyShared';
 import { LayerSwitch } from './personaSpecialtyShared';
 import { GlyphIcon } from '../../lib/projectGlyphs';
@@ -49,25 +53,6 @@ function RoleHeroIcon({ catalog, roleKey, size }: {
   );
 }
 
-// === Срез «Кто работает по этой роли» — read-only строка персоны ===
-function PersonaRow({ persona }: { persona: Persona }): React.ReactElement {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm,
-      padding: '7px 10px',
-      border: `1px solid ${C.borderLight}`, borderRadius: R.md,
-      background: C.bgWhite, fontFamily: FONT.sans, fontSize: FS.xs,
-      color: C.textPrimary, boxSizing: 'border-box',
-    }}>
-      <PersonaAvatar persona={persona} size={26} />
-      <span style={{
-        fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{persona.name}</span>
-    </div>
-  );
-}
-
 // === Карточка секции (внутренние секции визитки) ===
 function SectionTitle({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
@@ -96,18 +81,28 @@ export interface SpecialtyRoleViewProps {
   // но его всё ещё использует секция моделей и переключатель.
   layer: Scope;
   layerSettings: SpecialtySettingsLayer | null;
-  // Не используется после отката персонализации подписей — принимается для
-  // совместимости с PersonasSpecialties; удалить вместе с правкой родителя.
-  userLayer?: SpecialtySettingsLayer | null;
+  // Глобальный слой (settings.global) — нужен RolePresetsBlock для резолва
+  // effectivePromptSection поверх дефолтов кода.
+  globalLayer: SpecialtySettingsLayer | null;
+  // User-слой конкретного пользователя (только админ на слое «user»). На других
+  // слоях — null.
+  userLayer: SpecialtySettingsLayer | null;
+  // Каталог секций промптов (и типовых умений роли); null — ещё не загружен.
+  // Передаётся родителем — RolePeopleSlice использует его для подсчёта нехватки.
+  promptSectionsCatalog: SpecialtyPromptSectionsCatalog | null;
   // Только для owner-слоя: персоны, работающие по роли. На других слоях —
   // пустой массив (T8: «за другого пользователя список был бы про чужих»).
   personas: Persona[];
+  // Колбэк после успешного apply-defaults на срезе персон — перечитывает стор персон.
+  onPersonaUpdated?: (persona: Persona) => void;
+  onLayerChange: (s: Scope) => void;
   onBack: () => void;
   onEdit: () => void;
 }
 
 export function SpecialtyRoleView({
-  roleKey, catalog, layer, layerSettings, personas, onBack, onEdit,
+  roleKey, catalog, layer, layerSettings, globalLayer, userLayer,
+  promptSectionsCatalog, personas, onPersonaUpdated, onLayerChange, onBack, onEdit,
 }: SpecialtyRoleViewProps): React.ReactElement {
   const isMobile = useIsMobile();
   const role = useMemo(() => catalog.find(r => r.key === roleKey) ?? null, [catalog, roleKey]);
@@ -165,7 +160,9 @@ export function SpecialtyRoleView({
         }}>Настроить</button>
       </div>
 
-      {/* Переключатель слоёв — для навигации между специализациями роли */}
+      {/* Переключатель слоёв — рабочий: переключение делается через onLayerChange
+          (B5). На «Для всех» и «Пользователю …» список персон ниже заменяется
+          строкой-объяснением, чтобы не показывать чужих персон. */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
       }}>
@@ -175,7 +172,7 @@ export function SpecialtyRoleView({
         }}>
           <LayerSwitch
             scope={layer}
-            onScope={() => { /* слой меняется через navPush/PersonasSpecialties */ }}
+            onScope={onLayerChange}
             isAdmin={true}
             isMobile={isMobile}
           />
@@ -254,28 +251,39 @@ export function SpecialtyRoleView({
         )}
       </FlatSection>
 
-      {/* Срез «Кто работает по этой роли» — read-only список персон.
-          Только на owner-слое: на global/user подмешивать своих персон — враньё (T8). */}
+      {/* Секция «Пресеты для роли» — read-only блок из RolePresetsBlock.
+          Только включённые секции, без кнопок/счётчика. Пусто — строка «Выключено
+          пресетов: N — их видно в настройке роли.» (Баг #3). */}
       <FlatSection>
-        <SectionTitle>Кто работает по этой роли</SectionTitle>
+        <RolePresetsBlock
+          roleKey={roleKey}
+          catalog={promptSectionsCatalog}
+          editLayer={layerSettings}
+          globalLayer={globalLayer}
+          userLayer={userLayer}
+          mode="view"
+        />
+      </FlatSection>
+
+      {/* Срез «Кто работает по этой роли» — полный блок RolePeopleSlice с пометками
+          и кнопкой «Применить типовые» (B3). Только на owner: на global/user
+          подмешивать своих персон — враньё (T8). */}
+      <FlatSection>
         {isOwner ? (
-          personas.length === 0 ? (
-            <div style={{
-              fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5,
-            }}>
-              По этой роли пока никто не работает. Назначьте специальность персоне в её
-              карточке — она получит эти модели и доступы автоматически.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {personas.map(p => <PersonaRow key={p.id} persona={p} />)}
-            </div>
-          )
+          <RolePeopleSlice
+            roleKey={roleKey}
+            personas={personas}
+            catalog={promptSectionsCatalog}
+            onPersonaUpdated={onPersonaUpdated}
+          />
         ) : (
-          <div style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5 }}>
-            Список персон показан только в ваших настройках: за другого пользователя
-            он был бы про ваших персон.
-          </div>
+          <>
+            <SectionTitle>Кто работает по этой роли</SectionTitle>
+            <div style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5 }}>
+              Список персон показан только в ваших настройках: за другого пользователя
+              он был бы про ваших персон.
+            </div>
+          </>
         )}
       </FlatSection>
     </div>

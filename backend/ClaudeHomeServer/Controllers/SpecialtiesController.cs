@@ -46,10 +46,15 @@ public class SpecialtiesController(
         }));
     }
 
-    // Каталог секций промптов (дефолты кода): состав секций задаёт система, здесь — их
-    // метаданные, дефолтная включённость и типовой текст по каждой специальности (пресет
-    // «Типовой текст…» и read-only дефолт в UI), плюс типовой профиль умений роли.
-    // Значения по слоям и эффективный резолв — в settings (слои отдаются как есть).
+    // Каталог секций промптов: состав секций задаёт система, здесь — их метаданные и
+    // дефолты кода по каждой специальности (включённость и типовой текст — пресет
+    // «Типовой текст…» и база для клиентского резолва поверх слоёв). Профиль типовых
+    // умений роли отдаётся ЭФФЕКТИВНЫМ для вызывающего (owner → user → global → дефолт
+    // кода): его фронт не резолвит сам, и именно с ним сверяется счётчик «не хватает
+    // типовых умений: N» и кнопка «Применить типовые» (материализация идёт тем же
+    // резолвом). Поэтому перечитывание каталога после сохранения роли видит свежий
+    // профиль. Секции — дефолты кода: их резолв по слоям фронт делает сам (слои
+    // отдаются как есть в settings).
     [HttpGet("prompt-sections")]
     public IActionResult PromptSectionsCatalog()
     {
@@ -74,7 +79,7 @@ public class SpecialtiesController(
                             enabled = SpecialtyPromptPresets.DefaultEnabled(s.Id, e.Specialty),
                             text = SpecialtyPromptPresets.DefaultText(s.Id, e.Specialty),
                         }),
-                        defaultBindings = SpecialtyPromptPresets.DefaultBindingsProfile(e.Specialty)
+                        defaultBindings = settings.EffectiveDefaultBindings(UserId, e.Specialty)
                             .Select(b => new
                             {
                                 type = b.Type,

@@ -118,6 +118,70 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
     }
 
     [Fact]
+    public async Task Catalog_ПрофильУмений_ЭффективныйДляВызывающего()
+    {
+        // Профиль умений в каталоге — ЭФФЕКТИВНЫЙ (слои поверх дефолтов кода): фронт
+        // сверяет с ним счётчик «не хватает типовых умений» и не резолвит слои сам.
+        // Без этого перечитывание каталога после сохранения роли не видит новый профиль.
+        (await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object>
+            {
+                ["analyst"] = new
+                {
+                    defaultBindings = new object[]
+                    {
+                        new { type = "notes", mode = "auto", condition = "общий профиль" },
+                    },
+                },
+            },
+            presets = Array.Empty<object>(),
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Админ видит глобальный профиль вместо дефолта кода (knowledge+notes)
+        var adminCatalog = await (await _admin.GetAsync("/api/specialties/prompt-sections"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var adminProfile = adminCatalog.GetProperty("specialties").GetProperty("analyst")
+            .GetProperty("defaultBindings").EnumerateArray().ToList();
+        adminProfile.Should().HaveCount(1);
+        adminProfile.Single().GetProperty("condition").GetString().Should().Be("общий профиль");
+
+        // Личный профиль владельца перекрывает глобальный; у админа остаётся глобальный
+        (await _user.PutAsJsonAsync("/api/specialties/settings", new
+        {
+            specialties = new Dictionary<string, object>
+            {
+                ["analyst"] = new
+                {
+                    defaultBindings = new object[]
+                    {
+                        new { type = "knowledge", mode = "always", condition = "свой профиль" },
+                    },
+                },
+            },
+            presets = Array.Empty<object>(),
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var userCatalog = await (await _user.GetAsync("/api/specialties/prompt-sections"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var userProfile = userCatalog.GetProperty("specialties").GetProperty("analyst")
+            .GetProperty("defaultBindings").EnumerateArray().ToList();
+        userProfile.Should().HaveCount(1);
+        userProfile.Single().GetProperty("condition").GetString().Should().Be("свой профиль");
+        userProfile.Single().GetProperty("mode").GetString().Should().Be("always");
+
+        var adminAgain = await (await _admin.GetAsync("/api/specialties/prompt-sections"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        adminAgain.GetProperty("specialties").GetProperty("analyst")
+            .GetProperty("defaultBindings").EnumerateArray().Single()
+            .GetProperty("condition").GetString().Should().Be("общий профиль");
+
+        // Уборка
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", EmptyLayer);
+        await _user.PutAsJsonAsync("/api/specialties/settings", EmptyLayer);
+    }
+
+    [Fact]
     public async Task SettingsPut_ЯвныйOffВладельцаПерекрываетOnАдмина()
     {
         await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
@@ -331,6 +395,54 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
             .Content.ReadFromJsonAsync<JsonElement>();
         again.GetProperty("applied").GetInt32().Should().Be(0,
             "те же цели уже привязаны — дубликат type+target+path не проходит");
+    }
+
+    // Стаб, у которого AI-вызов падает: имитация недоступности подбора целей
+    private sealed class ThrowingCheap : ICheapTextRunner
+    {
+        public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => throw new InvalidOperationException("имитация сбоя провайдера");
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("имитация сбоя провайдера");
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task ApplyDefaults_ВнутреннийСбой_Возвращает502АНеНоль()
+    {
+        // У секретаря профиль без скиллов (Notes+ProjectTasks) — обе цели подбирает AI,
+        // и сбой подбора обязан отдать ошибку: у кнопки есть ветка «Не удалось применить —
+        // попробуйте позже», с 200 и applied=0 она недостижима.
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s => s.AddSingleton<ICheapTextRunner>(new ThrowingCheap()),
+        };
+        var user = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        // Сбой при создании персоны глотается (best-effort) — персона создаётся
+        var created = await (await user.PostAsJsonAsync("/api/personas", new
+        {
+            name = "Секретарь со сбоем подбора",
+            specialty = "secretary",
+        })).Content.ReadFromJsonAsync<JsonElement>();
+        created.GetProperty("id").GetString().Should().NotBeNullOrEmpty();
+
+        var apply = await user.PostAsync(
+            $"/api/personas/{created.GetProperty("id").GetString()}/bindings/apply-defaults", null);
+        apply.StatusCode.Should().Be(HttpStatusCode.BadGateway,
+            "внутренний сбой — ошибка, а не applied=0");
+        var error = await apply.Content.ReadFromJsonAsync<JsonElement>();
+        error.GetProperty("error").GetString().Should().Contain("Не удалось применить типовые умения");
     }
 
     private string SecondUserId() =>

@@ -297,7 +297,17 @@ public class PersonasController : ControllerBase
         // SpecialtyPromptPresets) материализуется в личные привязки персоны. Модель «копия
         // при создании»: смена дефолта роли существующих персон не трогает. Профиль — более
         // конкретная форма авто-подбора: когда он есть, общий autoBindings не нужен.
-        var (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(persona);
+        // Сбой материализации не роняет создание персоны (как и авто-подбор ниже):
+        // умения добавит кнопка «Применить типовые».
+        var (withDefaults, defaultsApplied) = (persona, 0);
+        try
+        {
+            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(persona);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "типовые умения: материализация при создании {Persona} не удалась", persona.Id);
+        }
         persona = withDefaults;
         // Авто-подбор привязок (autoBindings) — best-effort:
         // сбой подбора не роняет создание, персона остаётся без привязок
@@ -1909,7 +1919,10 @@ public class PersonasController : ControllerBase
 
     // Применить типовые умения специальности к существующей персоне (кнопка «Применить
     // типовые»): материализует профиль роли в личные привязки поверх текущих — вручную
-    // настроенное не трогается, дубликаты и недоступные цели пропускаются.
+    // настроенное не трогается, дубликаты и недоступные цели пропускаются. Ответ несёт
+    // число ДОБАВЛЕННЫХ умений; внутренний сбой (AI-подбор целей, каталог знаний) —
+    // это 502, а не applied=0: у кнопки есть ветка «Не удалось применить — попробуйте
+    // позже», и без ошибки она недостижима (сбой до записи ничего не меняет).
     [HttpPost("{id}/bindings/apply-defaults")]
     public async Task<ActionResult> ApplyDefaultBindings(string id)
     {
@@ -1917,8 +1930,16 @@ public class PersonasController : ControllerBase
         if (persona is null) return NotFound();
         if (persona.Specialty == PersonaSpecialty.None)
             return BadRequest(new { error = "У персоны не задана специальность — типовых умений роли нет" });
-        var (updated, applied) = await MaterializeDefaultBindingsAsync(persona);
-        return Ok(new { persona = updated, applied });
+        try
+        {
+            var (updated, applied) = await MaterializeDefaultBindingsAsync(persona);
+            return Ok(new { persona = updated, applied });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "типовые умения: применение для персоны {Persona} не удалось", id);
+            return StatusCode(502, new { error = $"Не удалось применить типовые умения: {ex.Message}" });
+        }
     }
 
     // Разбор DTO привязки: строковые type/mode → enum'ы, path нормализуется в валидации
@@ -1961,48 +1982,44 @@ public class PersonasController : ControllerBase
     // Типовые умения специальности → личные привязки персоны («копия при создании» и
     // кнопка «Применить типовые» для существующих). Скиллы материализуются напрямую из
     // каталога владельца (отсутствующие пропускаются молча — каталог у каждого свой),
-    // остальные типы — one-shot AI-подбор конкретных целей (best-effort: сбой не роняет
-    // создание персоны). Дубликаты и недоступные цели отбрасывает валидация. Возвращает
-    // персону и число ДОБАВЛЕННЫХ привязок (0 — профиль пуст или ничего не подошло).
+    // остальные типы — one-shot AI-подбор конкретных целей. Дубликаты и недоступные цели
+    // отбрасывает валидация. Возвращает персону и число ДОБАВЛЕННЫХ привязок (0 — профиль
+    // пуст или ничего не подошло). Сбой (например, недоступность AI-подбора) пробрасывает
+    // наружу: вызывающий сам решает семантику — создание персоны глотает его (best-effort),
+    // а кнопка «Применить типовые» отдаёт ошибку, иначе её ветка «Не удалось применить»
+    // недостижима (до записи привязок сбой ничего не меняет).
     private async Task<(Persona Persona, int Applied)> MaterializeDefaultBindingsAsync(Persona persona)
     {
         if (persona.Specialty == PersonaSpecialty.None) return (persona, 0);
         var profile = _specialtySettings.EffectiveDefaultBindings(UserId, persona.Specialty);
         if (profile.Count == 0) return (persona, 0);
-        try
-        {
-            var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
-            var added = new List<PersonaBinding>();
 
-            // Скиллы — явная цель профиля, AI не нужен
-            foreach (var entry in profile.Where(e => e.Type == PersonaBindingType.Skill))
+        var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
+        var added = new List<PersonaBinding>();
+
+        // Скиллы — явная цель профиля, AI не нужен
+        foreach (var entry in profile.Where(e => e.Type == PersonaBindingType.Skill))
+        {
+            var binding = new PersonaBinding
             {
-                var binding = new PersonaBinding
-                {
-                    Type = PersonaBindingType.Skill,
-                    Target = entry.SkillName?.Trim() ?? "",
-                    Condition = entry.Condition,
-                    Mode = entry.Mode,
-                };
-                if (await _bindings.ValidateAsync(UserId, binding, accepted, persona) is not null) continue;
-                accepted.Add(binding);
-                added.Add(binding);
-            }
-
-            var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
-            if (aiEntries.Count > 0)
-                added.AddRange(await SuggestBindingsAsync(persona, profile: aiEntries, acceptedSeed: accepted));
-
-            if (added.Count > 0)
-                persona = _personas.UpdateBindings(persona.Id, UserId,
-                    (persona.Bindings ?? []).Concat(added).ToList());
-            return (persona, added.Count);
+                Type = PersonaBindingType.Skill,
+                Target = entry.SkillName?.Trim() ?? "",
+                Condition = entry.Condition,
+                Mode = entry.Mode,
+            };
+            if (await _bindings.ValidateAsync(UserId, binding, accepted, persona) is not null) continue;
+            accepted.Add(binding);
+            added.Add(binding);
         }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "типовые умения: материализация для {Persona} не удалась", persona.Id);
-            return (persona, 0);
-        }
+
+        var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
+        if (aiEntries.Count > 0)
+            added.AddRange(await SuggestBindingsAsync(persona, profile: aiEntries, acceptedSeed: accepted));
+
+        if (added.Count > 0)
+            persona = _personas.UpdateBindings(persona.Id, UserId,
+                (persona.Bindings ?? []).Concat(added).ToList());
+        return (persona, added.Count);
     }
 
     // Подбор кандидатов-привязок: каталог целей владельца + профиль персоны → one-shot LLM

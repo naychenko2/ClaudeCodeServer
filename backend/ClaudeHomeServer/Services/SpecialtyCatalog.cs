@@ -24,13 +24,20 @@ public static class SpecialtyCatalog
     // Ключ-маркер «любая специальность» в правилах пресетов (SpecialtySettingsStore)
     public const string AnySpecialtyKey = "any";
 
+    // Icon и Color — дефолты кода, ТОЛЬКО для показа: персонализация их не
+    // переопределяет (в слое настроек полей значка и цвета нет). Значок — имя для
+    // отрисовки на фронте, цвет — ключ палитры аватаров (AGENT_COLORS фронта).
+    // Значения утверждены человеком, источник — макет персонализированных
+    // специальностей (каталог ролей в docs/mockups/personas-specialties/index.html).
     public sealed record Entry(
         PersonaSpecialty Specialty,
         string Key,
         string Label,
         string Description,
         bool ExecutorFamily,
-        SpecialtyTemplate? DefaultTemplate);
+        SpecialtyTemplate? DefaultTemplate,
+        string Icon = "",
+        string Color = "");
 
     // Универсальный исполнитель переименован в подписи (данные не мигрировались),
     // профильные добавлены рядом; их подписи утверждены человеком.
@@ -44,33 +51,47 @@ public static class SpecialtyCatalog
     [
         new(PersonaSpecialty.None, KeyOf(PersonaSpecialty.None), "Не задана", "", false, null),
         new(PersonaSpecialty.Analyst, KeyOf(PersonaSpecialty.Analyst), "Аналитик",
-            "Данные, выводы и риски — без домыслов и без переоценки найденного", false, null),
+            "Данные, выводы и риски — без домыслов и без переоценки найденного", false, null,
+            Icon: "chart", Color: "blue"),
         new(PersonaSpecialty.Planner, KeyOf(PersonaSpecialty.Planner), "Планировщик",
-            "Превращает задачу в план по шагам: что делаем, в каком порядке, кто и как проверим", false, null),
+            "Превращает задачу в план по шагам: что делаем, в каком порядке, кто и как проверим", false, null,
+            Icon: "checks", Color: "purple"),
         new(PersonaSpecialty.Reviewer, KeyOf(PersonaSpecialty.Reviewer), "Ревьюер",
-            "Находки по severity, соглашения проекта, сценарии отказа — спорит с решением, а не с оформлением", false, null),
+            "Находки по severity, соглашения проекта, сценарии отказа — спорит с решением, а не с оформлением", false, null,
+            Icon: "shield", Color: "red"),
         new(PersonaSpecialty.Executor, KeyOf(PersonaSpecialty.Executor), "Исполнитель (универсальный)",
-            "Универсальный исполнитель: доводит задачу до конца с минимальным диффом", true, ExecutorDefaultTemplate),
+            "Универсальный исполнитель: доводит задачу до конца с минимальным диффом", true, ExecutorDefaultTemplate,
+            Icon: "hammer", Color: "brown"),
         new(PersonaSpecialty.Secretary, KeyOf(PersonaSpecialty.Secretary), "Секретарь",
-            "Задачи и заметки: зафиксировать, напомнить, найти — коротко и ничего не терять", false, null),
+            "Задачи и заметки: зафиксировать, напомнить, найти — коротко и ничего не терять", false, null,
+            Icon: "notebook", Color: "green"),
         new(PersonaSpecialty.Coordinator, KeyOf(PersonaSpecialty.Coordinator), "Координатор",
-            "Распределяет работу по силам и зоне персон, эскалирует блокеры", false, null),
+            "Распределяет работу по силам и зоне персон, эскалирует блокеры", false, null,
+            Icon: "share", Color: "cyan"),
         new(PersonaSpecialty.Mentor, KeyOf(PersonaSpecialty.Mentor), "Наставник",
-            "Сначала вопросы, потом советы: учит через понимание, не решает за ученика", false, null),
+            "Сначала вопросы, потом советы: учит через понимание, не решает за ученика", false, null,
+            Icon: "cap", Color: "yellow"),
         new(PersonaSpecialty.Designer, KeyOf(PersonaSpecialty.Designer), "Дизайнер",
-            "Макеты в docs/mockups, дизайн-система проекта, обе темы и мобильная раскладка", false, null),
+            "Макеты в docs/mockups, дизайн-система проекта, обе темы и мобильная раскладка", false, null,
+            Icon: "palette", Color: "orange"),
         new(PersonaSpecialty.Consultant, KeyOf(PersonaSpecialty.Consultant), "Консультант",
-            "Отвечает на заданный вопрос с альтернативами и компромиссами, признаёт границы знания", false, null),
+            "Отвечает на заданный вопрос с альтернативами и компромиссами, признаёт границы знания", false, null,
+            Icon: "bulb", Color: "yellow"),
         new(PersonaSpecialty.Librarian, KeyOf(PersonaSpecialty.Librarian), "Библиотекарь",
-            "Отвечает про библиотеки и чужой код доказательствами: документ и пермалинк", false, null),
+            "Отвечает про библиотеки и чужой код доказательствами: документ и пермалинк", false, null,
+            Icon: "book", Color: "brown"),
         new(PersonaSpecialty.Tester, KeyOf(PersonaSpecialty.Tester), "Тестировщик",
-            "Воспроизводимость прежде вердикта: шаги, края, честный отчёт о проверке", false, null),
+            "Воспроизводимость прежде вердикта: шаги, края, честный отчёт о проверке", false, null,
+            Icon: "flask", Color: "green"),
         new(PersonaSpecialty.BackendExecutor, KeyOf(PersonaSpecialty.BackendExecutor), "Исполнитель (бэкенд)",
-            "Серверный исполнитель: инварианты слоя, стиль соседнего кода, сборка и тесты", true, ExecutorDefaultTemplate),
+            "Серверный исполнитель: инварианты слоя, стиль соседнего кода, сборка и тесты", true, ExecutorDefaultTemplate,
+            Icon: "server", Color: "blue"),
         new(PersonaSpecialty.FrontendExecutor, KeyOf(PersonaSpecialty.FrontendExecutor), "Исполнитель (фронтенд)",
-            "Фронтовый исполнитель: дизайн-система, мобильная ширина, ui-kit", true, ExecutorDefaultTemplate),
+            "Фронтовый исполнитель: дизайн-система, мобильная ширина, ui-kit", true, ExecutorDefaultTemplate,
+            Icon: "monitor", Color: "pink"),
         new(PersonaSpecialty.DevopsExecutor, KeyOf(PersonaSpecialty.DevopsExecutor), "Исполнитель (DevOps)",
-            "Исполнитель сборки и окружений: воспроизводимость, откатываемость, секреты вне git", true, ExecutorDefaultTemplate),
+            "Исполнитель сборки и окружений: воспроизводимость, откатываемость, секреты вне git", true, ExecutorDefaultTemplate,
+            Icon: "box", Color: "red"),
     ];
 
     private static readonly Dictionary<PersonaSpecialty, Entry> BySpecialty =

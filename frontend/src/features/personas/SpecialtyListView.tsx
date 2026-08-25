@@ -9,9 +9,7 @@
 // персон (принцип T8 — на чужом слое не рассказываем про своих).
 
 import { useMemo, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { PersonaAvatar } from './PersonaAvatar';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -128,39 +126,68 @@ function PersonaStack({ people }: { people: Persona[] }): React.ReactElement | n
   );
 }
 
-// === Строка роли ===
-function RoleRow({ role, layer, isOwner, people, onOpen }: {
+// === Карточка роли в плитке ===
+//
+// Плитка, а не строка: раздел стоит рядом с витриной персон и обязан читаться так же
+// (решение владельца 25.08.2026). Сетка — тот же showcaseGrid, что у витрины персон
+// (PersonasHub.tsx): minmax(150px, 1fr) держит две колонки на 360 CSS.
+const roleGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+  gap: 12,
+};
+
+// Обрезка в N строк многоточием: длинные подписи и описания не должны растягивать
+// карточку — иначе соседние в ряду разъезжаются по высоте.
+function clampLines(lines: number): React.CSSProperties {
+  return {
+    display: '-webkit-box',
+    WebkitLineClamp: lines,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  } as React.CSSProperties;
+}
+
+function RoleCard({ role, layer, isOwner, people, dimmed, onOpen }: {
   role: SpecialtyCatalogEntry;
   layer: SpecialtySettingsLayer | null;
   isOwner: boolean;
   people: Persona[];
+  // Роль без своих правил — приглушаем, но карточку не прячем: она отвечает на вопрос
+  // «по каким настройкам работают её персоны», а не «трогали ли её».
+  dimmed?: boolean;
   onOpen: () => void;
 }): React.ReactElement {
   const triple = tripleOfLayer(layer, role.key);
   return (
-    <button type="button" onClick={onOpen} style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      width: '100%', minWidth: 0,
-      padding: '11px 14px',
+    <button type="button" onClick={onOpen} title={role.label} style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8,
+      minWidth: 0, padding: '14px 12px',
       border: `1px solid ${C.border}`, borderRadius: R.xl,
-      background: C.bgWhite, textAlign: 'left', cursor: 'pointer',
-      fontFamily: FONT.sans, boxSizing: 'border-box',
+      background: dimmed ? C.bgSelected : C.bgWhite,
+      textAlign: 'left', cursor: 'pointer',
+      fontFamily: FONT.sans, boxSizing: 'border-box', height: '100%',
     }}>
-      <RoleIcon catalog={role} roleKey={role.key} size={36} />
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <RoleIcon catalog={role} roleKey={role.key} size={44} />
+      <span style={{
+        fontSize: FS.sm, fontWeight: 700, color: C.textHeading,
+        minWidth: 0, width: '100%', lineHeight: 1.3, ...clampLines(2),
+      }}>{role.label}</span>
+      {role.description && (
         <span style={{
-          fontSize: FS.base, fontWeight: 700, color: C.textHeading,
-          minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{role.label}</span>
-        <span style={{
-          fontSize: FS.xs, color: C.textMuted,
-          minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{rowSubtitle(triple, people, isOwner)}</span>
-      </span>
-      {isOwner && <PersonaStack people={people} />}
-      <ChevronRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{
-        color: C.textMuted, flexShrink: 0,
-      }} />
+          fontSize: FS.xs, color: C.textSecondary,
+          minWidth: 0, width: '100%', lineHeight: 1.4, ...clampLines(2),
+        }}>{role.description}</span>
+      )}
+      <span style={{
+        fontSize: FS.xs, color: C.textMuted,
+        minWidth: 0, width: '100%', lineHeight: 1.4, ...clampLines(2),
+      }}>{rowSubtitle(triple, people, isOwner)}</span>
+      {isOwner && people.length > 0 && (
+        <span style={{ marginTop: 'auto', paddingTop: 4 }}>
+          <PersonaStack people={people} />
+        </span>
+      )}
     </button>
   );
 }
@@ -264,9 +291,9 @@ export function SpecialtyListView({
           Откройте роль — и задайте ей модели, пресеты и типовые умения.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <div style={roleGrid}>
           {withRules.map(r => (
-            <RoleRow key={r.key} role={r} layer={layerSettings} isOwner={isOwner}
+            <RoleCard key={r.key} role={r} layer={layerSettings} isOwner={isOwner}
               people={personasByRole.get(r.key) ?? []}
               onOpen={() => onOpenRole(r.key)} />
           ))}
@@ -283,11 +310,13 @@ export function SpecialtyListView({
           }}>
             Без своих правил
           </div>
+          <div style={roleGrid}>
           {noRules.map(r => (
-            <RoleRow key={r.key} role={r} layer={layerSettings} isOwner={isOwner}
+            <RoleCard key={r.key} role={r} layer={layerSettings} isOwner={isOwner} dimmed
               people={personasByRole.get(r.key) ?? []}
               onOpen={() => onOpenRole(r.key)} />
           ))}
+          </div>
         </div>
       )}
 
@@ -321,9 +350,9 @@ export function SpecialtyListView({
       </label>
 
       {showAll && rest.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <div style={roleGrid}>
           {rest.map(r => (
-            <RoleRow key={r.key} role={r} layer={layerSettings} isOwner={isOwner}
+            <RoleCard key={r.key} role={r} layer={layerSettings} isOwner={isOwner} dimmed
               people={personasByRole.get(r.key) ?? []}
               onOpen={() => onOpenRole(r.key)} />
           ))}

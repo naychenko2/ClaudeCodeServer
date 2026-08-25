@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Архив чатов — раздел, карточка, плашка возврата · макет v1</title>
+<style>
+/* ===== Токены (значения из frontend/src/lib/theme.css; семантика — C.* из design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-smoke:#B4A899;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-lift:0 -1px 2px rgba(60,50,35,.06), 0 -6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-smoke:#7E7566;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-lift:0 -1px 2px rgba(0,0,0,.30), 0 -8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; letter-spacing:-.01em; }
+svg.ic { width:15px; height:15px; flex-shrink:0; }
+svg.ic-sm { width:13px; height:13px; flex-shrink:0; }
+svg.ic-lg { width:22px; height:22px; flex-shrink:0; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1180px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:48px 0 4px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+h2.sec:first-of-type { margin-top:8px; }
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:74ch; }
+p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 8px; }
+.cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+.cols > .col { flex:1; min-width:300px; }
+.stage { margin-bottom:20px; }
+
+/* ===== Панель-остров (ISLAND: bgPanel, R.xxl=14, borderLight, shadow-island) ===== */
+.island {
+  background:var(--c-bg-panel); border:1px solid var(--c-border-light);
+  border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden;
+}
+.island-head {
+  height:40px; display:flex; align-items:center; gap:8px; padding:0 12px;
+  background:var(--c-bg-inset); border-bottom:1px solid var(--c-border-light);
+  font-size:13px; font-weight:600; color:var(--c-text-heading);
+}
+.island-body { padding:8px; }
+
+/* ===== Кнопки (components/ui/Button) ===== */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
+  border-radius:12px; padding:7px 14px; font-size:13px; border:1px solid transparent;
+}
+.btn.sm { padding:5px 11px; font-size:12px; border-radius:8px; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.primary.glow { box-shadow:var(--shadow-button); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { background:transparent; color:var(--c-text-secondary); border-color:transparent; }
+.btn.disabled { background:var(--c-accent-soft); color:var(--c-on-accent); cursor:default; }
+.iconbtn {
+  width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center;
+  border-radius:8px; border:none; background:transparent; color:var(--c-text-muted); cursor:pointer;
+}
+.iconbtn.hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+
+/* ===== Карточка чата (ChatCard) ===== */
+.chat {
+  position:relative; display:flex; gap:8px; align-items:flex-start;
+  min-height:42px; padding:8px 30px 8px 10px; border-radius:10px;
+  background:var(--c-bg-card); border:1px solid transparent; margin-bottom:4px;
+}
+.chat.plain { background:transparent; }
+.chat.active { background:var(--c-bg-selected); }
+.chat .dot { width:7px; height:7px; border-radius:50%; margin-top:6px; flex-shrink:0; background:var(--c-smoke); }
+.chat .dot.run { background:var(--c-accent); }
+.chat .dot.wait { background:var(--c-warning); }
+.chat .body { min-width:0; flex:1; }
+.chat .title {
+  font-size:14px; font-weight:600; color:var(--c-text-heading); line-height:1.25;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.chat .prev {
+  font-size:11.5px; color:var(--c-text-secondary); margin-top:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.chat .meta { position:absolute; top:8px; right:8px; font-size:10px; color:var(--c-text-muted); }
+.chat .kebab { position:absolute; top:50%; right:4px; transform:translateY(-50%); }
+
+/* Архивная карточка: тон приглушён, «конверт» вокруг сводки */
+.chat.arch { background:var(--c-bg-card); border-color:var(--c-border-light); padding-bottom:10px; }
+.chat.arch .title { color:var(--c-text-primary); font-weight:600; }
+.arch-tag {
+  display:inline-flex; align-items:center; gap:4px; height:17px; padding:0 6px;
+  border-radius:999px; background:var(--c-bg-inset); color:var(--c-text-muted);
+  font-size:10px; font-weight:600; line-height:1; margin-bottom:3px;
+}
+.digest {
+  margin-top:6px; padding:8px 10px; border-radius:8px;
+  background:var(--c-bg-inset); color:var(--c-text-secondary); font-size:12px; line-height:1.45;
+}
+.digest .src { display:block; margin-top:6px; font-size:10px; color:var(--c-text-muted); }
+.arch-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.spin {
+  width:11px; height:11px; border-radius:50%; flex-shrink:0;
+  border:2px solid var(--c-accent-muted); border-top-color:var(--c-accent);
+  animation:sp .8s linear infinite;
+}
+@keyframes sp { to { transform:rotate(360deg); } }
+
+/* Секция списка (заголовок дня / «Архив») */
+.sechead {
+  display:flex; align-items:center; gap:6px; padding:6px 8px 4px;
+  font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--c-text-muted); cursor:pointer;
+}
+.sechead.archive { color:var(--c-text-secondary); text-transform:none; letter-spacing:0; font-size:12px;
+  border-top:1px solid var(--c-divider); margin-top:8px; padding-top:10px; }
+.count {
+  font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; line-height:14px;
+  min-width:16px; height:16px; padding:0 4px; text-align:center;
+  border-radius:999px; background:var(--c-bg-selected); color:var(--c-text-secondary);
+  border:1px solid var(--c-border);
+}
+.chev { margin-left:auto; color:var(--c-text-muted); transition:transform .15s; }
+.chev.open { transform:rotate(90deg); }
+
+/* ===== Меню действий (ui/Menu) ===== */
+.menu {
+  width:216px; padding:4px; border-radius:12px; background:var(--c-bg-white);
+  border:1px solid var(--c-border); box-shadow:var(--shadow-dropdown);
+}
+.menu .item {
+  display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:8px;
+  font-size:13px; color:var(--c-text-primary); cursor:pointer;
+}
+.menu .item.on { background:var(--c-bg-selected); }
+.menu .item.danger { color:var(--c-danger-text); }
+.menu .item svg { color:var(--c-text-muted); }
+.menu .item.danger svg { color:var(--c-danger-text); }
+.menu .sep { height:1px; background:var(--c-border-light); margin:4px 6px; }
+
+/* ===== Плашка возврата над лентой ===== */
+.banner {
+  display:flex; align-items:center; gap:10px; padding:10px 14px;
+  background:var(--c-bg-inset); border:1px solid var(--c-border); border-radius:12px;
+  color:var(--c-text-secondary); font-size:13px;
+}
+.banner .txt { flex:1; min-width:0; }
+.banner .txt b { color:var(--c-text-heading); font-weight:600; }
+.banner .hint { display:block; font-size:11px; color:var(--c-text-muted); margin-top:1px; }
+.banner svg { color:var(--c-text-muted); }
+.banner.warn { background:var(--c-warning-bg); border-color:var(--c-warning); color:var(--c-warning-text); }
+.banner.warn svg { color:var(--c-warning); }
+.banner.warn .txt b { color:var(--c-warning-text); }
+.banner.warn .hint { color:var(--c-warning-text); opacity:.85; }
+
+/* ===== Empty state (ui/EmptyState, вариант compact: кружок 44/R16, serif 16/700) ===== */
+.empty { display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:24px; gap:8px; }
+.empty .ico {
+  width:44px; height:44px; margin-bottom:8px; border-radius:16px;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--c-bg-selected); color:var(--c-text-muted);
+}
+.empty h3 { margin:0; font-size:16px; font-weight:700; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em; }
+.empty p { margin:0 auto; max-width:240px; font-size:12px; line-height:1.5; color:var(--c-text-secondary); }
+
+/* ===== Блок настройки ===== */
+.setting { padding:16px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:14px; }
+.setting .row { display:flex; align-items:center; gap:12px; }
+.setting .label { font-size:14px; color:var(--c-text-heading); font-weight:600; flex:1; min-width:0; }
+.setting .sub { font-size:12px; color:var(--c-text-secondary); margin-top:6px; }
+.select {
+  display:inline-flex; align-items:center; gap:8px; height:34px; padding:0 12px;
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  font-size:14px; color:var(--c-text-heading); cursor:pointer;
+}
+.select.focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.toggle-sw { width:38px; height:22px; border-radius:999px; background:var(--c-track); position:relative; flex-shrink:0; }
+.toggle-sw.on { background:var(--c-accent); }
+.toggle-sw i { position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%;
+  background:var(--c-bg-white); box-shadow:var(--shadow-thumb); }
+.toggle-sw.on i { left:19px; }
+.preview {
+  display:flex; align-items:center; gap:10px; margin-top:14px; padding:10px 12px;
+  border-radius:12px; background:var(--c-bg-inset); font-size:12px; color:var(--c-text-secondary);
+}
+.preview b { color:var(--c-text-heading); font-weight:600; }
+.preview .btn { margin-left:auto; }
+.flagline {
+  display:inline-flex; align-items:center; gap:6px; margin-bottom:10px;
+  font-size:11px; color:var(--c-text-muted);
+}
+.flagline .fchip {
+  padding:1px 7px; border-radius:6px; background:var(--c-bg-inset);
+  font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--c-text-secondary);
+}
+
+/* ===== Чипы фильтра (FilterBar) ===== */
+.chip {
+  display:inline-flex; align-items:center; gap:4px; padding:4px 10px; border-radius:9px;
+  border:1px solid var(--c-border-light); background:transparent;
+  color:var(--c-text-secondary); font-size:12px; font-weight:600;
+}
+.chip.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.chip .sd { width:6px; height:6px; border-radius:50%; }
+.chip .n { font-family:"JetBrains Mono",monospace; font-size:10px; opacity:.75; }
+.expiry {
+  display:inline-flex; align-items:center; gap:3px; font-family:"JetBrains Mono",monospace;
+  font-size:10.5px; color:var(--c-text-muted); line-height:1;
+}
+
+/* ===== Таблица разведения ===== */
+table.diff { width:100%; border-collapse:collapse; font-size:12.5px; }
+table.diff th, table.diff td { padding:10px 12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--c-border-light); }
+table.diff th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); font-weight:600; }
+table.diff td:first-child { width:150px; }
+table.diff tr:last-child td { border-bottom:none; }
+
+/* ===== Мобильная раскладка ===== */
+.phones { display:flex; gap:20px; flex-wrap:wrap; }
+.phone {
+  width:360px; flex-shrink:0; border:1px solid var(--c-border); border-radius:22px;
+  background:var(--c-bg-main); overflow:hidden; box-shadow:var(--shadow-island);
+}
+.phone .pbar {
+  height:56px; display:flex; align-items:center; gap:8px; padding:0 14px;
+  background:var(--c-bg-main); border-bottom:1px solid var(--c-border);
+  font-size:16px; font-weight:600; color:var(--c-text-heading);
+}
+.phone .pbody { padding:8px 14px 16px; }
+.phone .plabel { font-size:11px; color:var(--c-text-muted); padding:8px 14px 0; text-transform:uppercase; letter-spacing:.05em; }
+.sheet {
+  border-radius:22px 22px 0 0; background:var(--c-bg-panel); border-top:1px solid var(--c-border);
+  box-shadow:var(--shadow-lift); padding:14px; margin-top:60px;
+}
+.sheet .grip { width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:0 auto 12px; }
+.sheet .stitle { font-size:14px; font-weight:600; color:var(--c-text-heading); margin-bottom:10px; }
+.sheet .item {
+  display:flex; align-items:center; gap:10px; min-height:48px; padding:0 6px;
+  font-size:14px; color:var(--c-text-primary); border-radius:10px;
+}
+.sheet .item svg { color:var(--c-text-muted); }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Архив чатов — раздел, карточка архивного чата, плашка возврата · макет v1</h1>
+  <div class="toggle">
+    <button id="tl" class="on" onclick="setTheme('light')">Светлая</button>
+    <button id="td" onclick="setTheme('dark')">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="note">
+  Макет к плану «Архив чатов v4» (шаг 4 — фронт, шаг 5 — сводка карточки, шаг 6 — автоправило).
+  Архив <b>прячет</b> чат, а не удаляет: история и <code>claudeSessionId</code> целы, возврат — одной кнопкой.
+  Все цвета, радиусы, тени и размеры взяты из <code>design.ts</code> / <code>theme.css</code>; сырых значений мимо токенов нет.
+  Тексты интерфейса — утверждённые формулировки, менять их в реализации нельзя.
+</p>
+
+<!-- ============================================================ 1 -->
+<h2 class="sec">1. Раздел «Архив» в списке чатов</h2>
+<p class="note">
+  «Архив» — последняя секция списка, ниже секций по дням, свёрнута по умолчанию и со счётчиком.
+  Она отделена от списка сплошной чертой (<code>C.divider</code>), а не просто отступом: это граница
+  «видимое / убранное», а не очередной день. Заголовок секции набран строчными и вторичным цветом —
+  он не соревнуется с названиями чатов.
+</p>
+<div class="cols">
+  <div class="col stage">
+    <p class="cap">Свёрнут (состояние по умолчанию)</p>
+    <div class="island" style="max-width:340px">
+      <div class="island-head">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
+        Чаты
+      </div>
+      <div class="island-body">
+        <div class="sechead">Сегодня</div>
+        <div class="chat plain">
+          <span class="dot run"></span>
+          <div class="body">
+            <div class="title">Архив чатов — реализация</div>
+            <div class="prev">Волна 1 из 7: макеты, тексты, шаг 0</div>
+          </div>
+          <span class="meta mono">14:32</span>
+        </div>
+        <div class="chat plain">
+          <span class="dot wait"></span>
+          <div class="body">
+            <div class="title">Разбор инцидента SigNoz</div>
+            <div class="prev">Нужен ответ: перезапускать ли коллектор?</div>
+          </div>
+          <span class="meta mono">11:05</span>
+        </div>
+        <div class="sechead">Вчера</div>
+        <div class="chat plain">
+          <span class="dot"></span>
+          <div class="body">
+            <div class="title">Фон проекта — правки плотности</div>
+            <div class="prev">Ок, оставляем 0.07 в обеих темах</div>
+          </div>
+          <span class="meta mono">18:41</span>
+        </div>
+
+        <div class="sechead archive">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+          Архив
+          <span class="count">12</span>
+          <svg class="ic-sm chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col stage">
+    <p class="cap">Раскрыт</p>
+    <div class="island" style="max-width:340px">
+      <div class="island-head">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
+        Чаты
+      </div>
+      <div class="island-body">
+        <div class="sechead archive" style="margin-top:0; border-top:none; padding-top:6px">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+          Архив
+          <span class="count">12</span>
+          <svg class="ic-sm chev open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </div>
+
+        <div class="chat arch">
+          <div class="body">
+            <span class="arch-tag">
+              <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              В архиве с 14 июля
+            </span>
+            <div class="title">Миграция транскриптов между профилями</div>
+            <div class="digest">
+              Разобрали, почему <code>--resume</code> терял контекст при смене провайдера, и договорились
+              копировать <code>{csid}.jsonl</code> вместе с папкой сабагентов. Отдельно оговорили белый
+              список имён файла. Решение зафиксировано в плане.
+              <span class="src">Сводка · 14 июля</span>
+            </div>
+            <div class="arch-actions">
+              <button class="btn sm secondary">
+                <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+                Вернуть из архива
+              </button>
+              <button class="btn sm ghost">
+                <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+                Сохранить в заметки
+              </button>
+            </div>
+          </div>
+          <button class="iconbtn kebab">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+        </div>
+
+        <div class="chat arch">
+          <div class="body">
+            <span class="arch-tag">
+              <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              В архиве с 2 июля · правилом
+            </span>
+            <div class="title">Черновик письма в yar.net</div>
+            <div class="prev">Хорошо, тогда звоню им в понедельник после 12</div>
+            <div class="arch-actions">
+              <button class="btn sm secondary">
+                <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+                Вернуть из архива
+              </button>
+              <button class="btn sm ghost">
+                <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+                Собрать сводку
+              </button>
+            </div>
+          </div>
+          <button class="iconbtn kebab">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ 2 -->
+<h2 class="sec">2. Карточка архивного чата — четыре состояния текста</h2>
+<p class="note">
+  Приоритет текста (шаг 5 плана): свежая сводка → первые строки заметки → последнее сообщение → «Сообщений нет».
+  Ни один из вариантов не зовёт модель — модель работает только по нажатию <b>«Собрать сводку»</b>.
+  Кнопка «Сохранить в заметки» появляется только тогда, когда есть что сохранять: сводка собрана.
+</p>
+<div class="cols">
+  <div class="col stage">
+    <p class="cap">А. Сводки нет — дефолт (последнее сообщение)</p>
+    <div class="island" style="max-width:340px"><div class="island-body">
+      <div class="chat arch">
+        <div class="body">
+          <span class="arch-tag">
+            <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            В архиве с 2 июля
+          </span>
+          <div class="title">Черновик письма в yar.net</div>
+          <div class="prev">Хорошо, тогда звоню им в понедельник после 12</div>
+          <div class="arch-actions">
+            <button class="btn sm secondary">Вернуть из архива</button>
+            <button class="btn sm ghost">
+              <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+              Собрать сводку
+            </button>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="col stage">
+    <p class="cap">Б. Сводка собирается</p>
+    <div class="island" style="max-width:340px"><div class="island-body">
+      <div class="chat arch">
+        <div class="body">
+          <span class="arch-tag">
+            <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            В архиве с 2 июля
+          </span>
+          <div class="title">Черновик письма в yar.net</div>
+          <div class="digest" style="display:flex; align-items:center; gap:8px; color:var(--c-text-muted)">
+            <span class="spin"></span> Собираю сводку…
+          </div>
+          <div class="arch-actions">
+            <button class="btn sm secondary">Вернуть из архива</button>
+            <button class="btn sm ghost disabled" style="background:transparent; color:var(--c-text-muted)">
+              Собрать сводку
+            </button>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="col stage">
+    <p class="cap">В. Сводка собрана</p>
+    <div class="island" style="max-width:340px"><div class="island-body">
+      <div class="chat arch">
+        <div class="body">
+          <span class="arch-tag">
+            <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            В архиве с 2 июля
+          </span>
+          <div class="title">Черновик письма в yar.net</div>
+          <div class="digest">
+            Готовили письмо провайдеру про скоростной интернет: собрали адрес, тариф и вопрос
+            про сроки подключения. Договорились не писать, а звонить — быстрее.
+            <span class="src">Сводка · сегодня</span>
+          </div>
+          <div class="arch-actions">
+            <button class="btn sm secondary">Вернуть из архива</button>
+            <button class="btn sm ghost">
+              <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+              Сохранить в заметки
+            </button>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="col stage">
+    <p class="cap">Г. Сообщений нет · контекст мог устареть</p>
+    <div class="island" style="max-width:340px"><div class="island-body">
+      <div class="chat arch">
+        <div class="body">
+          <span class="arch-tag">
+            <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            В архиве с 3 марта · правилом
+          </span>
+          <div class="title">Настройка Proxifier</div>
+          <div class="prev" style="color:var(--c-text-muted)">Сообщений нет</div>
+          <div class="digest" style="background:var(--c-warning-bg); color:var(--c-warning-text)">
+            Контекст разговора мог устареть — чат откроется, но продолжить его с прежней памятью
+            может не получиться.
+          </div>
+          <div class="arch-actions">
+            <button class="btn sm secondary">Вернуть из архива</button>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ============================================================ 3 -->
+<h2 class="sec">3. Пункты меню карточки чата</h2>
+<p class="note">
+  Новый пункт встаёт в уже существующее меню <code>ChatCard</code> — предпоследним, между «Срок хранения»
+  и разделителем перед «Удалить». Место выбрано намеренно: архив соседствует с обратимыми действиями,
+  а не с необратимым удалением, и отделён от него чертой.
+</p>
+<div class="cols">
+  <div class="col stage">
+    <p class="cap">Обычный чат</p>
+    <div class="menu">
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>Переименовать</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>Закрепить</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5 6.3 6.3a2.4 2.4 0 0 1 0 3.4L17 19"/><path d="M9.586 5.586A2 2 0 0 0 8.172 5H3a1 1 0 0 0-1 1v5.172a2 2 0 0 0 .586 1.414L8.29 18.29a2.426 2.426 0 0 0 3.42 0l3.58-3.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="6.5" cy="9.5" r=".5" fill="currentColor"/></svg>Теги</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5v14"/><path d="M10 5v14"/><path d="M16 5v14"/><path d="M20 5v14"/></svg>На стену</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>Заглушить</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>Срок хранения</div>
+      <div class="item on"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>Убрать в архив</div>
+      <div class="sep"></div>
+      <div class="item danger"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Удалить</div>
+    </div>
+  </div>
+
+  <div class="col stage">
+    <p class="cap">Архивный чат</p>
+    <div class="menu">
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>Переименовать</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>Закрепить</div>
+      <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5 6.3 6.3a2.4 2.4 0 0 1 0 3.4L17 19"/><path d="M9.586 5.586A2 2 0 0 0 8.172 5H3a1 1 0 0 0-1 1v5.172a2 2 0 0 0 .586 1.414L8.29 18.29a2.426 2.426 0 0 0 3.42 0l3.58-3.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="6.5" cy="9.5" r=".5" fill="currentColor"/></svg>Теги</div>
+      <div class="item on"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>Вернуть из архива</div>
+      <div class="sep"></div>
+      <div class="item danger"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Удалить</div>
+    </div>
+    <p class="note" style="margin-top:12px; font-size:12px">
+      У архивного чата пунктов меньше: «На стену», «Заглушить» и «Срок хранения» скрыты —
+      убранный с глаз чат не шлёт уведомлений и не имеет срока (ручная архивация временного чата
+      срок снимает).
+    </p>
+  </div>
+</div>
+
+<!-- ============================================================ 4 -->
+<h2 class="sec">4. Плашка у открытого архивного чата</h2>
+<p class="note">
+  Архивный чат открывается по прямой ссылке и из раздела «Архив». Над лентой — плашка с кнопкой возврата:
+  тон нейтральный (<code>C.bgInset</code>), потому что это состояние, а не ошибка. Единственный
+  предупреждающий вариант — второй: копии транскрипта нет, и об этом честно сказано до того,
+  как человек напишет сообщение.
+</p>
+<div class="stage" style="max-width:760px">
+  <p class="cap">Обычный случай</p>
+  <div class="banner">
+    <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+    <span class="txt">
+      <b>Чат в архиве</b>
+      <span class="hint">Он не показывается в списке. Напишите сюда — и он вернётся сам.</span>
+    </span>
+    <button class="btn sm secondary">
+      <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+      Вернуть из архива
+    </button>
+  </div>
+</div>
+<div class="stage" style="max-width:760px">
+  <p class="cap">Копии транскрипта нет — контекст мог устареть</p>
+  <div class="banner warn">
+    <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+    <span class="txt">
+      <b>Чат в архиве. Контекст разговора мог устареть</b>
+      <span class="hint">Переписка на месте, но продолжить её с прежней памятью может не получиться.</span>
+    </span>
+    <button class="btn sm secondary">Вернуть из архива</button>
+  </div>
+</div>
+<div class="stage" style="max-width:760px">
+  <p class="cap">Как это стоит над лентой</p>
+  <div class="island">
+    <div class="island-head">Черновик письма в yar.net</div>
+    <div class="island-body" style="padding:12px">
+      <div class="banner" style="margin-bottom:12px">
+        <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        <span class="txt">
+          <b>Чат в архиве</b>
+          <span class="hint">Он не показывается в списке. Напишите сюда — и он вернётся сам.</span>
+        </span>
+        <button class="btn sm secondary">Вернуть из архива</button>
+      </div>
+      <div style="font-size:13px; color:var(--c-text-secondary); padding:0 4px 10px">
+        <p style="margin:0 0 10px"><b style="color:var(--c-text-heading)">Вы:</b> Составь письмо провайдеру про скоростной интернет.</p>
+        <p style="margin:0">Готово, черновик ниже. Но, честно говоря, звонок будет быстрее — у них почта отвечает сутками.</p>
+      </div>
+      <div style="border-top:1px solid var(--c-border-light); padding-top:10px; display:flex; gap:8px; align-items:center">
+        <div style="flex:1; height:36px; border:1px solid var(--c-border); border-radius:12px; background:var(--c-bg-white); display:flex; align-items:center; padding:0 12px; font-size:14px; color:var(--c-text-muted)">Написать сообщение…</div>
+        <button class="btn primary glow">Отправить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ 5 -->
+<h2 class="sec">5. Пустой архив</h2>
+<p class="note">Текст утверждён и переносится дословно.</p>
+<div class="stage" style="max-width:520px">
+  <div class="island">
+    <div class="island-head">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+      Архив
+    </div>
+    <div class="island-body">
+      <div class="empty">
+        <div class="ico">
+          <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        </div>
+        <h3>Здесь пусто</h3>
+        <p>Сюда попадают чаты, к которым давно не возвращались — они не удаляются и всегда открываются обратно</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ 6 -->
+<h2 class="sec">6. Настройка автоправила</h2>
+<p class="note">
+  Блок живёт в настройках проекта (и в личных — как дефолт для всех чатов). Счётчик превью
+  считает <b>сервер</b> той же функцией, что и сам тик: иначе он показал бы «3», а исчезло бы 200.
+  «Применить сейчас» — единственный способ первого прогона, по расписанию правило начнёт работать
+  только после него.
+</p>
+<div class="cols">
+  <div class="col stage">
+    <p class="cap">Правило выключено</p>
+    <div class="setting">
+      <div class="flagline">
+        <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>
+        Экспериментальная функция <span class="fchip">chat-auto-archive</span>
+      </div>
+      <div class="row">
+        <span class="label">Убирать в архив чаты без сообщений дольше…</span>
+        <div class="toggle-sw"><i></i></div>
+      </div>
+      <div class="sub">Закреплённые чаты и чаты с активными задачами остаются на месте</div>
+    </div>
+  </div>
+
+  <div class="col stage">
+    <p class="cap">Правило включено · превью и первый прогон</p>
+    <div class="setting">
+      <div class="flagline">
+        <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>
+        Экспериментальная функция <span class="fchip">chat-auto-archive</span>
+      </div>
+      <div class="row">
+        <span class="label">Убирать в архив чаты без сообщений дольше…</span>
+        <div class="select">
+          30 дней
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <div class="toggle-sw on"><i></i></div>
+      </div>
+      <div class="sub">Закреплённые чаты и чаты с активными задачами остаются на месте</div>
+      <div class="preview">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        Сейчас под правило попадает <b>17 чатов</b>
+        <button class="btn sm secondary">Применить сейчас</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="col stage">
+    <p class="cap">Под правило не попадает ничего</p>
+    <div class="setting">
+      <div class="row">
+        <span class="label">Убирать в архив чаты без сообщений дольше…</span>
+        <div class="select">90 дней
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <div class="toggle-sw on"><i></i></div>
+      </div>
+      <div class="sub">Закреплённые чаты и чаты с активными задачами остаются на месте</div>
+      <div class="preview">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted)"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+        Сейчас под правило не попадает ни один чат
+        <button class="btn sm secondary disabled" style="background:transparent; color:var(--c-text-muted); border-color:var(--c-border)">Применить сейчас</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col stage">
+    <p class="cap">Прогон закончился — уведомление с откатом пачки</p>
+    <div class="setting" style="background:var(--c-bg-white)">
+      <div style="display:flex; gap:10px; align-items:flex-start">
+        <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted); margin-top:2px"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        <div style="flex:1; min-width:0">
+          <div style="font-size:14px; font-weight:600; color:var(--c-text-heading)">Убрано в архив 17 чатов</div>
+          <div style="font-size:12px; color:var(--c-text-secondary); margin-top:2px">
+            Без сообщений дольше 30 дней. Они не удалены — открываются из раздела «Архив».
+          </div>
+          <div class="arch-actions">
+            <button class="btn sm secondary">Открыть архив</button>
+            <button class="btn sm ghost">Вернуть эти 17</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ 7 -->
+<h2 class="sec">7. «Архив» ≠ чип «Готово» ≠ временный чат</h2>
+<p class="note">
+  Три механики рядом, и их легко перепутать словами — поэтому они разведены <b>формой</b>:
+  архив — короб и отдельная секция списка, «Готово» — pill-чип статуса в фильтрах,
+  временный чат — песочные часы прямо в строке карточки. Ни одна из трёх не заимствует
+  визуальный ключ у другой.
+</p>
+<div class="stage">
+  <div class="island">
+    <div class="island-body" style="padding:4px 8px">
+      <table class="diff">
+        <tr>
+          <th>Механика</th><th>Как выглядит</th><th>Что значит</th><th>Кто ставит</th>
+        </tr>
+        <tr>
+          <td>
+            <span class="arch-tag" style="height:20px; font-size:11px">
+              <svg class="ic-sm" style="width:11px;height:11px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              Архив
+            </span>
+          </td>
+          <td>Отдельная секция внизу списка со счётчиком, за чертой. Иконка — короб.</td>
+          <td><b>Чат спрятан, но цел.</b> История и контекст на месте, возврат одной кнопкой,
+              любое новое сообщение возвращает сам.</td>
+          <td>Человек или правило проекта</td>
+        </tr>
+        <tr>
+          <td>
+            <span class="chip"><span class="sd" style="background:var(--c-text-muted)"></span>Готово <span class="n">24</span></span>
+          </td>
+          <td>Pill-чип в поповере фильтров, рядом с «В работе», «Ждёт меня», «С ошибкой».
+              Выключен по умолчанию.</td>
+          <td><b>Фильтр по статусу задачи.</b> Чат выполненной задачи-исполнителя. Он никуда не убран —
+              включите чип, и он снова в списке на своём месте по дате.</td>
+          <td>Система, по статусу задачи</td>
+        </tr>
+        <tr>
+          <td>
+            <span class="expiry">
+              <svg style="width:11px;height:11px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>
+              6 дн
+            </span>
+          </td>
+          <td>Метка в строке карточки: песочные часы и остаток моноширинным.</td>
+          <td><b>Чат будет удалён.</b> Вместе с историей и транскриптом — это противоположность архива,
+              а не его разновидность.</td>
+          <td>Человек, пунктом «Срок хранения»</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="stage">
+  <p class="cap">Как это читается в одном списке</p>
+  <div class="cols">
+    <div class="col">
+      <div class="island" style="max-width:340px">
+        <div class="island-head" style="gap:6px">
+          Чаты
+          <span style="margin-left:auto; display:flex; gap:4px">
+            <span class="chip on" style="padding:3px 8px; font-size:11px">В работе <span class="n">8</span></span>
+            <span class="chip" style="padding:3px 8px; font-size:11px"><span class="sd" style="background:var(--c-text-muted)"></span>Готово <span class="n">24</span></span>
+          </span>
+        </div>
+        <div class="island-body">
+          <div class="chat plain">
+            <span class="dot run"></span>
+            <div class="body">
+              <div class="title">Архив чатов — реализация</div>
+              <div class="prev">Волна 1 из 7: макеты, тексты, шаг 0</div>
+            </div>
+            <span class="meta mono">14:32</span>
+          </div>
+          <div class="chat plain">
+            <span class="dot"></span>
+            <div class="body">
+              <div class="title" style="display:flex; align-items:center; gap:6px">
+                Черновик отчёта за июль
+                <span class="expiry">
+                  <svg style="width:11px;height:11px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>
+                  6 дн
+                </span>
+              </div>
+              <div class="prev">Временный чат — удалится, если не будет активности</div>
+            </div>
+          </div>
+          <div class="chat plain">
+            <span class="dot"></span>
+            <div class="body">
+              <div class="title" style="display:flex; align-items:center; gap:6px">
+                Проставить значки темам
+                <svg class="ic-sm" style="width:11px;height:11px; color:var(--c-success-text)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              </div>
+              <div class="prev" style="color:var(--c-success-text)">Задача выполнена · 4/4</div>
+            </div>
+          </div>
+          <div class="sechead archive">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            Архив
+            <span class="count">12</span>
+            <svg class="ic-sm chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <p class="note" style="margin:0">
+        В одном экране: <b>«Готово»</b> — чип в шапке и чат «Проставить значки темам» на своём месте
+        по дате, с зелёной галочкой; <b>временный</b> — песочные часы прямо в строке названия;
+        <b>«Архив»</b> — черта, короб и счётчик внизу, содержимое скрыто.
+        Три разные формы, три разных места на экране, ни одного общего цвета.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ 8 -->
+<h2 class="sec">8. Мобильная раскладка (360 CSS-пикселей)</h2>
+<p class="note">
+  Нижний ориентир по <a href="../design/target-devices.md" style="color:var(--c-accent)">docs/design/target-devices.md</a>.
+  Кнопки архивной карточки на мобиле встают в полную ширину и складываются в столбец: два действия
+  по 12px в строке 360px не набирают комфортную цель нажатия. Меню карточки — шторка снизу
+  с высотой строки 48px.
+</p>
+<div class="phones">
+
+  <div class="phone">
+    <div class="pbar">Чаты</div>
+    <div class="plabel">Список · секция «Архив»</div>
+    <div class="pbody">
+      <div class="chat plain">
+        <span class="dot run"></span>
+        <div class="body">
+          <div class="title">Архив чатов — реализация</div>
+          <div class="prev">Волна 1 из 7: макеты, тексты, шаг 0</div>
+        </div>
+        <span class="meta mono">14:32</span>
+      </div>
+      <div class="chat plain">
+        <span class="dot"></span>
+        <div class="body">
+          <div class="title">Фон проекта — правки плотности</div>
+          <div class="prev">Ок, оставляем 0.07 в обеих темах</div>
+        </div>
+        <span class="meta mono">вчера</span>
+      </div>
+      <div class="sechead archive">
+        <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        Архив
+        <span class="count">12</span>
+        <svg class="ic-sm chev open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+      </div>
+      <div class="chat arch">
+        <div class="body">
+          <span class="arch-tag">
+            <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            В архиве с 14 июля
+          </span>
+          <div class="title">Миграция транскриптов</div>
+          <div class="digest">
+            Договорились копировать <code>{csid}.jsonl</code> вместе с папкой сабагентов,
+            имя файла — по белому списку.
+            <span class="src">Сводка · 14 июля</span>
+          </div>
+          <div class="arch-actions" style="flex-direction:column; gap:8px">
+            <button class="btn secondary" style="width:100%; padding:10px 14px">
+              <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+              Вернуть из архива
+            </button>
+            <button class="btn ghost" style="width:100%; padding:10px 14px">
+              <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+              Сохранить в заметки
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="chat arch">
+        <div class="body">
+          <span class="arch-tag">
+            <svg class="ic-sm" style="width:10px;height:10px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            В архиве с 2 июля · правилом
+          </span>
+          <div class="title">Черновик письма в yar.net</div>
+          <div class="prev">Хорошо, тогда звоню им в понедельник после 12</div>
+          <div class="arch-actions" style="flex-direction:column; gap:8px">
+            <button class="btn secondary" style="width:100%; padding:10px 14px">Вернуть из архива</button>
+            <button class="btn ghost" style="width:100%; padding:10px 14px">
+              <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+              Собрать сводку
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="pbar">Черновик письма в yar.net</div>
+    <div class="plabel">Открытый архивный чат</div>
+    <div class="pbody">
+      <div class="banner" style="align-items:flex-start; flex-wrap:wrap">
+        <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        <span class="txt" style="flex-basis:70%">
+          <b>Чат в архиве</b>
+          <span class="hint">Он не показывается в списке. Напишите сюда — и он вернётся сам.</span>
+        </span>
+        <button class="btn sm secondary" style="width:100%; padding:9px 14px; justify-content:center">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+          Вернуть из архива
+        </button>
+      </div>
+      <div style="font-size:13px; color:var(--c-text-secondary); padding:14px 2px">
+        <p style="margin:0 0 10px"><b style="color:var(--c-text-heading)">Вы:</b> Составь письмо провайдеру про скоростной интернет.</p>
+        <p style="margin:0">Готово, черновик ниже. Но, честно говоря, звонок будет быстрее.</p>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; border-top:1px solid var(--c-border-light); padding-top:12px">
+        <div style="flex:1; height:40px; border:1px solid var(--c-border); border-radius:12px; background:var(--c-bg-white); display:flex; align-items:center; padding:0 12px; font-size:14px; color:var(--c-text-muted)">Написать…</div>
+        <button class="btn primary glow" style="padding:10px 14px">→</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="pbar">Архив</div>
+    <div class="plabel">Пустой архив</div>
+    <div class="pbody">
+      <div class="empty">
+        <div class="ico">
+          <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        </div>
+        <h3>Здесь пусто</h3>
+        <p>Сюда попадают чаты, к которым давно не возвращались — они не удаляются и всегда открываются обратно</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="pbar">Настройки проекта</div>
+    <div class="plabel">Автоправило</div>
+    <div class="pbody">
+      <div class="setting">
+        <div class="flagline">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>
+          Экспериментальная функция <span class="fchip">chat-auto-archive</span>
+        </div>
+        <div class="row" style="align-items:flex-start">
+          <span class="label" style="font-size:14px">Убирать в архив чаты без сообщений дольше…</span>
+          <div class="toggle-sw on" style="margin-top:2px"><i></i></div>
+        </div>
+        <div class="select" style="width:100%; justify-content:space-between; margin-top:10px; height:44px">
+          30 дней
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <div class="sub">Закреплённые чаты и чаты с активными задачами остаются на месте</div>
+        <div class="preview" style="flex-wrap:wrap">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <span style="flex:1; min-width:0">Сейчас под правило попадает <b>17 чатов</b></span>
+          <button class="btn sm secondary" style="margin-left:0; width:100%; justify-content:center; padding:10px 14px">Применить сейчас</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="pbar">Чаты</div>
+    <div class="plabel">Меню карточки — шторка</div>
+    <div class="pbody" style="padding:0">
+      <div style="padding:8px 14px 0">
+        <div class="chat plain">
+          <span class="dot"></span>
+          <div class="body">
+            <div class="title">Черновик письма в yar.net</div>
+            <div class="prev">Хорошо, тогда звоню им в понедельник</div>
+          </div>
+        </div>
+      </div>
+      <div class="sheet">
+        <div class="grip"></div>
+        <div class="stitle">Черновик письма в yar.net</div>
+        <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>Переименовать</div>
+        <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>Закрепить</div>
+        <div class="item"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>Срок хранения</div>
+        <div class="item on"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>Убрать в архив</div>
+        <div class="sep"></div>
+        <div class="item danger"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Удалить</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</div>
+
+<script>
+function setTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('tl').classList.toggle('on', t === 'light');
+  document.getElementById('td').classList.toggle('on', t === 'dark');
+}
+</script>
+</body>
+</html>

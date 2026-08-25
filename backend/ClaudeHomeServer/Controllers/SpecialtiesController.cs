@@ -24,10 +24,11 @@ public class SpecialtiesController(
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     // Каталог специальностей: ключ (wire-значение), подпись, описание (для карточек
-    // панели «Инструкции для роли»), семейство исполнителя и эффективный шаблон прав
-    // вызывающего (настройки поверх дефолтов кода). Три исполнительские SpecialtyCatalog
-    // отдаёт с подписями: «Исполнитель (универсальный)», «Исполнитель (бэкенд)»,
-    // «Исполнитель (фронтенд)».
+    // панели «Инструкции для роли»), семейство исполнителя, эффективный шаблон прав
+    // вызывающего (настройки поверх дефолтов кода) и дефолтные значок с цветом из
+    // каталога (только для показа, не настраиваются). Три исполнительские
+    // SpecialtyCatalog отдаёт с подписями: «Исполнитель (универсальный)»,
+    // «Исполнитель (бэкенд)», «Исполнитель (фронтенд)».
     [HttpGet]
     public IActionResult List()
     {
@@ -40,6 +41,8 @@ public class SpecialtiesController(
             template = settings.EffectiveTemplate(UserId, e.Specialty) is { } t
                 ? new { access = t.Access, tools = t.Tools, disallowedTools = t.DisallowedTools }
                 : null,
+            icon = e.Icon,
+            color = e.Color,
         }));
     }
 

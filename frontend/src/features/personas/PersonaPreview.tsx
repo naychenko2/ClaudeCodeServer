@@ -8,7 +8,7 @@ import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
-import { useSpecialtyCatalog } from '../../lib/specialties';
+import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -320,8 +320,7 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
 const specialtyCatalog = useSpecialtyCatalog();
 const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && onOpenSpecialties)
   ? (() => {
-    const label = specialtyCatalog?.find(c => c.key === persona.specialty)?.label
-      ?? String(persona.specialty);
+    const label = specialtyLabel(specialtyCatalog, persona.specialty);
     return (
       <div style={section}>
         <SectionLabel style={{ marginBottom: 8 }}>Специальность</SectionLabel>

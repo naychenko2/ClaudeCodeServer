@@ -115,9 +115,7 @@ export function rulesCounter(rules: PersonaAutomationRule[]): string {
   return `${rules.length} ${rulesPlural(rules.length)}${enabled ? ` · ${enabled} активно` : ''}`;
 }
 
-// Подписи функциональных специальностей (роли оркестрации конвейера + расширенные роли команды)
-export const SPECIALTY_LABEL: Record<string, string> = {
-  analyst: 'Аналитик', planner: 'Планировщик', reviewer: 'Ревьюер', executor: 'Исполнитель',
-  secretary: 'Секретарь', coordinator: 'Координатор', mentor: 'Ментор', designer: 'Дизайнер',
-  consultant: 'Консультант', librarian: 'Библиотекарь', tester: 'Тестировщик',
-};
+// Подписи функциональных специальностей больше не хардкодятся здесь —
+// единый источник lib/specialties.ts (каталог + функция specialtyLabel).
+// Хардкод-карта не знала три профильные роли (backendExecutor / frontendExecutor /
+// devopsExecutor) и называла наставника «Ментор» вместо каталожного «Наставник».

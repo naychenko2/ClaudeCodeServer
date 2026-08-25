@@ -242,7 +242,10 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const openSpecialties = () => {
     if (specialtiesMode) return;
     setSpecialtiesMode(true);
-    setCreating(false); setSelectedId(null); setMobileView('list');
+    // mobileView='card': на мобиле раздел рисуется только в режиме карточки
+    // (см. body ниже), и со списком вкладка «Специальности» переключалась,
+    // а на экране оставался хаб персон.
+    setCreating(false); setSelectedId(null); setMobileView('card');
     setSpecialtyRoleKey(null);
     setSpecialtyViewMode('list');
     pushSpecialtiesUrl(null, 'list');

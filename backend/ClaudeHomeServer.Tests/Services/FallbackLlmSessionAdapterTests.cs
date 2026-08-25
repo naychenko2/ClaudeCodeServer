@@ -1364,6 +1364,117 @@ public class FallbackLlmSessionAdapterTests
         marker.Reason.Should().Be("unreachable");
     }
 
+    // Провайдеры боевой конфигурации инцидента: GLM с 1M-моделью чата, kimi и deepseek —
+    // сторонние шаги цепочки пресета специальности reviewer/strong.
+    private static LlmProviderRegistry BuildIncidentProviders()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:glm:ApiKey"] = "sk-glm",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-5.3[1m]",
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-deepseek",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://deepseek.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+        };
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Боевая конфигурация инцидента 25.08.2026 целиком: пресет специальности reviewer/strong
+    // с цепочкой ["glm-5.3[1m]", "opus[1m]", "kimi-k3", "deepseek-v4-pro"], чат живёт на GLM,
+    // 429 у GLM, «claude» исчерпана, «claude-2» жива, «kimi» в кулдауне. Суть та же, что у
+    // соседних тестов направления «сторонний → нативный»: нативный шаг цепочки принадлежит
+    // ПУЛУ ПОДПИСОК, а не текущему стороннему провайдеру. Отличие от них — модель шага: тир-алиас
+    // с суффиксом окна, и закрепляется ровно это. «opus[1m]» не принимается за модель стороннего
+    // каталога (иначе ключом шага стал бы «glm»); суффикс доезжает до пары НЕИЗМЕНЁННЫМ —
+    // ResolveWindowAlias живёт ниже, в ClaudeSession.ResolveModelForCli и OneShotClaudeRunner,
+    // в адаптере его нет и быть не должно; маршрут идёт в живую подписку пула мимо стороннего
+    // шага. Развилку Supports1M здесь не видно (способная подписка одна) — её закрепляет
+    // соседний тест НативныйШагСОкном1M_УходитНаПодпискуС1M_АНеНаЛюбуюЖивую.
+    [Fact]
+    public async Task БоеваяЦепочкаРевьюера_НативныйШагСОкном1M_УходитНаЖивуюПодпискуПула()
+    {
+        // Обе подписки — max20 с Opus и 1M-окном (способность задаём явно: тест не должен
+        // держаться на дефолте Supports1M=true).
+        var poolCfg = new Dictionary<string, string?>();
+        foreach (var key in new[] { "claude", "claude-2" })
+        {
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = $"token-{key}";
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:Tier"] = "max20";
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:SupportsOpus"] = "true";
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:Supports1M"] = "true";
+        }
+        var pool = new ClaudeSubscriptionPool(
+            new ConfigurationBuilder().AddInMemoryCollection(poolCfg).Build());
+        pool.MarkExhausted("claude");   // как на проде: первая подписка упёрлась в недельный лимит
+
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("kimi");   // шаг 3 в кулдауне — в инциденте он тоже пропускался
+
+        var (sut, inner) = BuildSut(pool, BuildIncidentProviders(),
+            model: "glm-5.3[1m]", provider: "glm",
+            chain: ["glm-5.3[1m]", "opus[1m]", "kimi-k3", "deepseek-v4-pro"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // «Weekly/Monthly Limit Exhausted» у GLM
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // opus[1m] × claude-2 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("claude-2", "opus[1m]"),
+            "нативный шаг с суффиксом окна уходит на живую подписку пула, а не остаётся на «glm»");
+        inner.Attempts.Should().NotContain(p => p.Model == "deepseek-v4-pro",
+            "живой нативный шаг 2 нельзя проскочить ради стороннего шага 4");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Provider.Should().Be("claude-2");
+        marker.Model.Should().Be("opus[1m]");
+        marker.Label.Should().Contain("Цепочка пресета: шаг 2");
+        pool.IsExhausted("claude-2").Should().BeFalse("429 относился к GLM — живую подписку он не банит");
+    }
+
+    // Развилка способности подписки к 1M-окну, вынесенная из теста выше: подписок ТРИ, живых из
+    // них две — выбор определяется способностью, а не единственностью выжившего. «claude»
+    // исчерпана (как в инциденте), «claude-2» жива, но без доступа к 1M-окну, «claude-3» жива и
+    // с ним. Шаг «opus[1m]» обязан уехать на claude-3: Pick отсеивает неспособных через
+    // SupportsModel. Фикстура дискриминирующая — переворот Supports1M у claude-3 (способных
+    // живых не остаётся) уводит шаг на исчерпанную «claude», переворот у claude-2 делает живые
+    // подписки равными, и ничью Pick разрешает случайно.
+    [Fact]
+    public async Task НативныйШагСОкном1M_УходитНаПодпискуС1M_АНеНаЛюбуюЖивую()
+    {
+        var poolCfg = new Dictionary<string, string?>();
+        foreach (var (key, window1M) in new[] { ("claude", true), ("claude-2", false), ("claude-3", true) })
+        {
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = $"token-{key}";
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:Tier"] = "max20";
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:SupportsOpus"] = "true";
+            poolCfg[$"{ClaudeSubscriptionPool.Section}:{key}:Supports1M"] = window1M ? "true" : "false";
+        }
+        var pool = new ClaudeSubscriptionPool(
+            new ConfigurationBuilder().AddInMemoryCollection(poolCfg).Build());
+        pool.MarkExhausted("claude");   // как на проде: первая подписка упёрлась в недельный лимит
+
+        var (sut, inner) = BuildSut(pool, BuildIncidentProviders(),
+            model: "glm-5.3[1m]", provider: "glm",
+            chain: ["glm-5.3[1m]", "opus[1m]", "deepseek-v4-pro"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // лимит у GLM
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // opus[1m] × claude-3 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("claude-3", "opus[1m]"),
+            "шаг с 1M-окном уходит на подписку С доступом к окну, а не на живую, но неспособную «claude-2»");
+        inner.Attempts.Should().NotContain(p => p.Model == "deepseek-v4-pro",
+            "живой нативный шаг 2 нельзя проскочить ради стороннего шага 3");
+    }
+
     // Пул, где тариф решает доступ к Opus (Max с ним, Pro без него). Способность подписки
     // тянуть модель разводит кандидатов однозначно — выбор Pick перестаёт зависеть от
     // случайного разрешения ничьей, и тесты ключей воспроизводимы.

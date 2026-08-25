@@ -1883,7 +1883,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // Дочерние элементы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
     const isSubItem = (it: ChatItem) => !!parentOf(it) && !suppressedByWorkflow.has(it) && !suppressedByAgentParent.has(it);
     // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
-    const nodes: Array<{ node: React.ReactNode; start: number }> = [];
+    const nodes: RenderedNode[] = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
     let i = 0;
     let prevNodeWasBlock = false;
@@ -1919,9 +1919,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       }
       // Служебный шум КР (⚑ staffNote штаба) — гасим, чтобы лента показывала
       // координатора обычными репликами. Индекс при этом не съезжает, data-feed-index
-      // остальных элементов не страдает. Проверка идёт РАНЬШЕ workflow/agentParent —
-      // иначе блок действий мог бы склеиться вокруг подавленного элемента, и
-      // прыжки по data-feed-index поплыли бы
+      // остальных элементов не страдает.
+      // Наборы подавления дизъюнктны по kind: suppressedByTeamNoise — только
+      // user_message со staffNote, suppressedByWorkflow/agentParent — только
+      // элементы с parentToolUseId (childrenByParentId/WorkflowBlockView),
+      // errorGroups — только error/error_group. Поэтому порядок проверок на
+      // корректность склейки блоков не влияет: блок действий собирает
+      // НЕподавленные соседние tool_use, а если подавленный элемент попал
+      // в группу, его пропустит isSubItem/isInvisible/isSuppressed внутри
+      // lookahead-цикла ниже. Гашение здесь нужно только чтобы САМОМУ
+      // подавленному элементу не выделился data-feed-index — иначе баннер
+      // «К карточке» найдёт его в DOM как обычный и прыгнет не туда
       if (suppressedByTeamNoise.has(i)) { i++; continue; }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
@@ -2125,7 +2133,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // «узлов внутри зоны» с «узлами снаружи» ломает обе координаты. То есть
     // renderedItems — единственный источник правды: скрытые узлы, видимые узлы,
     // и перевод itemIdxToNodePos смотрят на один и тот же массив
-    if (!execZone) return nodes as RenderedNode[];
+    if (!execZone) return nodes;
     const result: RenderedNode[] = [];
     let j = 0;
     while (j < nodes.length) {

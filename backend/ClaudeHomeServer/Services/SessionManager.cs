@@ -6838,7 +6838,7 @@ public class SessionManager : IDisposable
         await SendOrEnqueueAsync(sessionId,
             TeamImplementPrompts.EscalationResolvedTurn(escalation, label, comment),
             senderPersonaId: null, silent: true, suppressTasksExecute: true,
-            staffNote: "Ответ на карточку передан координатору");
+            staffNote: TeamStaffNotes.EscalationResolved);
         return true;
     }
 
@@ -7844,7 +7844,7 @@ public class SessionManager : IDisposable
         if (withTurn)
             await SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
                 senderPersonaId: null, silent: true, suppressTasksExecute: true,
-                staffNote: "Возврат в интервью — координатор задаст вопросы");
+                staffNote: TeamStaffNotes.InterviewReturn);
     }
 
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не

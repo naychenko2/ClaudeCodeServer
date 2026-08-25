@@ -1,7 +1,7 @@
 import { memo, useContext, useEffect, useMemo, useState } from 'react';
 import { Bot } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
-import { C, FONT, FS, SHADOW, SP } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, bgEmptyAnswerNote } from '../../lib/agentTail';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
@@ -54,7 +54,7 @@ export function findConsultedPersona(item: ToolUseItem, personas: Persona[], pro
 // (agentRole), остальная структура идентична.
 // Системный хвост CLI в ответе (agentId + <usage>) вырезается и рендерится
 // аккуратной строкой метрик «токены · действия · время».
-export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, aborted, answer, children, badge = 'консультант', emptyAnswerNote }: {
+export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, aborted, answer, children, badge = 'консультант', emptyAnswerNote, statusLine, metrics, runningLabel, collapsed }: {
   persona?: Persona | null;
   agentRole?: string;         // тип/роль обычного агента (не-персоны), если информативна
   question: string;           // полный вопрос (раскрывается кликом)
@@ -70,6 +70,16 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
   // Пометка вместо пустого ответа (напр. «Выдача прервана — ответа нет»);
   // undefined — дефолтная «Ответ передан без текста»
   emptyAnswerNote?: string;
+  // Строка состояния фазы вместо блока «Вопрос» — тот же слот и стиль, но без подписи
+  // и без раскрытия (карточка хода координатора: «Разбирает доклады волны 2»)
+  statusLine?: string;
+  // Явные метрики футера, когда системного хвоста CLI в ответе нет (ход считает вызывающий)
+  metrics?: { tokens?: number; toolUses?: number; durationMs?: number };
+  // Подпись у спиннера в шапке вместо дефолтной «Консультируется…»
+  runningLabel?: string;
+  // Свёрнутый вид: вместо карточки одна строка-кнопка, клик разворачивает.
+  // Состоянием владеет вызывающий — карточка только рисует
+  collapsed?: { summary: string; onToggle: () => void };
 }) {
   const { body: answerBody, tail } = useMemo(() => splitAgentResultTail(answer), [answer]);
 
@@ -86,7 +96,36 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
     ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_AGENT_ACCENT)
     : NEUTRAL_AGENT_ACCENT;
   const title = persona ? personaLabel(persona) : 'Агент';
-  const hasTailMetrics = !!tail && (tail.tokens != null || tail.toolUses != null || tail.durationMs != null);
+  // Метрики футера: явные пропсы приоритетнее хвоста CLI (у хода координатора хвоста нет)
+  const shownMetrics = metrics ?? tail ?? undefined;
+  const hasMetrics = !!shownMetrics
+    && (shownMetrics.tokens != null || shownMetrics.toolUses != null || shownMetrics.durationMs != null);
+
+  // Свёрнутый вид — одна строка-кнопка в рамке карточки (лицо + сводка хода)
+  if (collapsed) {
+    return (
+      <button
+        onClick={collapsed.onToggle}
+        title="Развернуть"
+        style={{
+          display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%',
+          border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${accent}`,
+          borderRadius: R.xl, background: C.bgWhite, boxShadow: SHADOW.card,
+          padding: '7px 10px', cursor: 'pointer', textAlign: 'left', maxWidth: '100%',
+          fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary,
+        }}
+      >
+        <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>▸</span>
+        {persona && <PersonaAvatar persona={persona} size={20} />}
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {collapsed.summary}
+        </span>
+        {running && <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />}
+        {!running && isError && <span style={{ fontSize: FS.xs, color: C.dangerText, flexShrink: 0 }}>ошибка</span>}
+        {!running && !isError && aborted && <span style={{ fontSize: FS.xs, color: C.dangerText, flexShrink: 0 }}>прервано</span>}
+      </button>
+    );
+  }
 
   return (
     <div style={{
@@ -146,7 +185,7 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
         {running && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
             <div className="tool-spinner" />
-            <span style={{ fontSize: 11, color: C.textMuted }}>Консультируется…</span>
+            <span style={{ fontSize: 11, color: C.textMuted }}>{runningLabel ?? 'Консультируется…'}</span>
           </span>
         )}
         {!running && isError && (
@@ -157,8 +196,21 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
         )}
       </div>
 
+      {/* Строка состояния фазы — тот же слот, что вопрос, но без подписи и раскрытия.
+          Длинную усекаем двумя строками: на 360 CSS px фраза фазы легко переползает */}
+      {statusLine ? (
+        <div style={{
+          padding: '8px 12px', fontSize: 12.5, lineHeight: 1.5, color: C.textSecondary,
+          borderBottom: `1px solid ${C.divider}`,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const,
+          overflow: 'hidden', wordBreak: 'break-word',
+        }}>
+          {statusLine}
+        </div>
+      ) : null}
+
       {/* Вопрос: короткое описание + раскрываемый полный prompt */}
-      {(summary || question) && (
+      {!statusLine && (summary || question) && (
         <div
           onClick={questionLong ? () => setQuestionOpen(o => !o) : undefined}
           title={questionLong && !questionOpen ? 'Показать вопрос целиком' : undefined}
@@ -196,9 +248,13 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
 
       {/* Тело: ответ / ошибка / ожидание */}
       {running ? (
-        <div style={{ padding: '10px 12px', fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>
-          {title} изучает материалы и готовит ответ…
-        </div>
+        // Со строкой состояния ожидание уже описано в шапке, а живой прогресс виден
+        // в активности — второй italic-строки про «готовит ответ» там не нужно
+        statusLine ? null : (
+          <div style={{ padding: '10px 12px', fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>
+            {title} изучает материалы и готовит ответ…
+          </div>
+        )
       ) : isError ? (
         <div style={{
           margin: 10, padding: '8px 11px', borderRadius: 8,
@@ -216,17 +272,17 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
             empty={<span style={{ fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>{emptyAnswerNote ?? 'Ответ передан без текста'}</span>}
           />
           {/* Метрики консультации из системного хвоста — вместо сырого текста CLI */}
-          {hasTailMetrics && (
+          {hasMetrics && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap',
               padding: '5px 12px 7px', borderTop: `1px solid ${C.divider}`,
               fontFamily: FONT.sans, fontSize: 11, color: C.textMuted,
             }}>
-              {tail!.tokens != null && <span>{formatTailTokens(tail!.tokens)} токенов</span>}
-              {tail!.tokens != null && (tail!.toolUses != null || tail!.durationMs != null) && <span>·</span>}
-              {tail!.toolUses != null && <span>{tail!.toolUses} {toolWord(tail!.toolUses)}</span>}
-              {tail!.toolUses != null && tail!.durationMs != null && <span>·</span>}
-              {tail!.durationMs != null && <span>{formatTailDuration(tail!.durationMs)}</span>}
+              {shownMetrics!.tokens != null && <span>{formatTailTokens(shownMetrics!.tokens!)} токенов</span>}
+              {shownMetrics!.tokens != null && (shownMetrics!.toolUses != null || shownMetrics!.durationMs != null) && <span>·</span>}
+              {shownMetrics!.toolUses != null && <span>{shownMetrics!.toolUses} {toolWord(shownMetrics!.toolUses!)}</span>}
+              {shownMetrics!.toolUses != null && shownMetrics!.durationMs != null && <span>·</span>}
+              {shownMetrics!.durationMs != null && <span>{formatTailDuration(shownMetrics!.durationMs!)}</span>}
             </div>
           )}
         </>
@@ -323,7 +379,7 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
 // AgentTextBlock (markdown как в чате, в расцветке персоны), thinking — AgentThinkingBlock.
 // Автораскрытие, пока идёт работа (живой прогресс без клика); по завершении сворачивается —
 // ручной клик пользователя приоритетнее автоповедения до следующей смены running.
-function ActivitySection({ activity, running, accent, online, onOpenFile, renderChild }: {
+export function ActivitySection({ activity, running, accent, online, onOpenFile, renderChild }: {
   activity: ActivityEntry[];
   running: boolean;
   accent: string;

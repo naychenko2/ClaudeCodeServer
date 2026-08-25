@@ -24,6 +24,8 @@ import {
   buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
+import { buildCoordinatorTurns, coordinatorCollapsedSummary } from '../lib/coordinatorTurns';
+import { CoordinatorTurnCard } from '../features/team/CoordinatorTurnCard';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
@@ -1783,6 +1785,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return { at, suppressed };
   }, [items]);
 
+  // «Командная реализация»: работа координатора — это ходы САМОГО чата, поэтому в ленту
+  // они падают россыпью (плашка ⚑, голые вызовы инструментов, текст, result). Собираем
+  // их в карточку той же формы, что вызов персоны-субагента. Приём тот же, что у
+  // errorGroups: массив items НЕ схлопывается (индексы — ключ к turnMeta, turnBoundaries,
+  // batchByIndex и execZone), карта «индекс якоря → группа» + набор гашеных индексов.
+  // Вне режима штаба группировки нет вообще — лента обычного чата не меняется.
+  const coordinatorTurns = useMemo(
+    () => buildCoordinatorTurns(items, teamImplementState),
+    [items, teamImplementState],
+  );
+
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
     // Display-лента = сама items: индексы обязаны совпадать с items (по ним ходят
@@ -1837,6 +1850,42 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     let i = 0;
     let prevNodeWasBlock = false;
     while (i < display.length) {
+      // Ход координатора штаба: карточка встаёт на место якоря (плашка ⚑ хода живёт
+      // строкой состояния в её шапке), остальные элементы хода пропускаем — индексы
+      // при этом не съезжают. Карточки для человека (эскалация, план, вопрос, запрос
+      // разрешения, ревью плана) и ошибки в группу не попадают по построению модели
+      // и остаются самостоятельными узлами ленты.
+      if (coordinatorTurns.suppressed.has(i)) { i++; continue; }
+      const coordTurn = coordinatorTurns.at.get(i);
+      if (coordTurn) {
+        const coordPersona = teamImplementState?.coordinatorPersonaId
+          ? getPersonaById(teamImplementState.coordinatorPersonaId) ?? null
+          : null;
+        const answerItem = coordTurn.answerIdx !== null ? display[coordTurn.answerIdx] : null;
+        pushNode(
+          <div key={`coord-${i}`} data-feed-index={i} style={{ marginTop: 3 }}>
+            <CoordinatorTurnCard
+              persona={coordPersona}
+              statusLine={coordTurn.statusRunning}
+              collapsedSummary={coordinatorCollapsedSummary(coordTurn)}
+              answer={answerItem?.kind === 'text' ? answerItem.text : ''}
+              metrics={{
+                tokens: coordTurn.metrics.tokens,
+                toolUses: coordTurn.metrics.tools > 0 ? coordTurn.metrics.tools : undefined,
+                durationMs: coordTurn.metrics.durationMs,
+              }}
+              running={coordTurn.running}
+              isError={coordTurn.isError}
+              activity={coordTurn.activity}
+              renderChild={renderItem}
+              online={online}
+              onOpenFile={onOpenFile}
+            />
+          </div>,
+          i,
+        );
+        i++; prevNodeWasBlock = false; continue;
+      }
       // Ошибки прошлых дней: все ошибки одного дня рисуются одной группой на месте
       // первой из них, остальные пропускаем (индексы при этом не съезжают)
       if (errorGroups.suppressed.has(i)) { i++; continue; }
@@ -2068,7 +2117,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, session.id]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, coordinatorTurns, teamImplementState, session.id]);
 
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге

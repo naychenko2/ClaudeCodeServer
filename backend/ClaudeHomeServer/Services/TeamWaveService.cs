@@ -471,7 +471,7 @@ public class TeamWaveService
 
             // Сводку волны публикует координатор — ему и уходит ход с фактами закрытия
             summaryTurn = TeamImplementPrompts.WaveClosedTurn(wave, current.Count, current.Count, started, nextWave);
-            summaryNote = $"Волна {wave} закрыта — сводка передана координатору";
+            summaryNote = TeamStaffNotes.WaveClosed(wave);
         }
         finally { gate.Release(); }
 

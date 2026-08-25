@@ -1240,6 +1240,192 @@ public class FallbackLlmSessionAdapterTests
             "успешный ход на провайдере снимает кулдаун — прямой сигнал «уже жив» сильнее TTL");
     }
 
+    // --- Направление «сторонний → нативный»: шаг цепочки с claude-моделью (инцидент 25.08.2026) ---
+
+    // Сторонний провайдер и нативная модель в его каталоге отсутствуют оба: чат живёт на GLM,
+    // а следующий шаг цепочки — нативный opus. Ключ такого шага — ПОДПИСКА ПУЛА, а не «glm»,
+    // на котором чат живёт сейчас (иначе CLI стартовал бы с моделью Opus на эндпоинте и в
+    // профиле GLM).
+    private static LlmProviderRegistry BuildGlmKimiProviders()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:glm:ApiKey"] = "sk-glm",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        };
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Ключевой репро инцидента 25.08.2026: чат на GLM, цепочка [glm-5.2, opus], 429 у GLM.
+    // Шаг «opus» обязан уйти на подписку пула Claude. До фикса ProviderKeyFor отдавал для
+    // нативной модели Info.Provider, то есть «glm» — пара получалась ("glm", "opus").
+    [Fact]
+    public async Task СторонийТекущий_НативныйШагЦепочки_УходитНаПодпискуПула()
+    {
+        var providers = BuildGlmKimiProviders();
+        var pool = BuildPool("claude-2");   // единственная живая подписка — выбор Pick детерминирован
+        var (sut, inner) = BuildSut(pool, providers, model: "glm-5.2", provider: "glm",
+            chain: ["glm-5.2", "opus"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // glm-5.2 × glm — лимит
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // opus × claude-2 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("claude-2", "opus"),
+            "нативная модель принадлежит пулу подписок, а не текущему стороннему провайдеру");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Label.Should().Contain("Цепочка пресета: шаг 2");
+        marker.Provider.Should().Be("claude-2");
+        marker.Model.Should().Be("opus");
+        // Смена ТИПА поставщика → finally восстанавливает исходную пару чата (инвариант restore).
+        inner.Info.Model.Should().Be("glm-5.2");
+        inner.Info.Provider.Should().Be("glm");
+    }
+
+    // Кулдаун СТОРОННЕГО провайдера не отменяет нативный шаг: 529 у GLM помечает недоступным
+    // «glm», а шаг «opus» живёт в пуле подписок и к здоровью GLM отношения не имеет. До фикса
+    // ключом шага был «glm» — шаг отсеивался вместе с ним, и ход уезжал сразу на kimi-k3.
+    [Fact]
+    public async Task КулдаунСтороннего_НеСъедаетНативныйШагЦепочки()
+    {
+        var providers = BuildGlmKimiProviders();
+        var pool = BuildPool("claude-2");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "glm-5.2", provider: "glm",
+            chain: ["glm-5.2", "opus", "kimi-k3"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("529")));   // ProviderError → кулдаун «glm»
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // opus × claude-2 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        health.IsUnavailable("glm").Should().BeTrue("529 стороннего — кулдаун эндпоинта");
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("claude-2", "opus"),
+            "кулдаун GLM не относится к нативному шагу — он идёт в пул подписок");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 2");
+    }
+
+    // Обратная сторона того же ключа: пул подписок мёртв (обе исчерпаны) — нативный шаг
+    // «в кулдауне» и пропускается, ход уходит на следующий сторонний шаг, а не тратит попытку
+    // о заведомо мёртвый пул. Здоровье нативного шага ведёт пул (ProviderHealthRegistry
+    // подписок не знает вовсе).
+    [Fact]
+    public async Task НативныйШаг_ПриМёртвомПуле_Пропускается()
+    {
+        var providers = BuildGlmKimiProviders();
+        var pool = BuildPool("claude", "claude-2");
+        pool.MarkExhausted("claude");
+        pool.MarkExhausted("claude-2");
+        var (sut, inner) = BuildSut(pool, providers, model: "glm-5.2", provider: "glm",
+            chain: ["glm-5.2", "opus", "kimi-k3"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // glm-5.2 × glm — лимит
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // kimi-k3 (шаг 3) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("kimi", "kimi-k3"), "шаг 2 (нативный) пропущен — пул мёртв");
+        inner.Attempts.Should().NotContain(p => p.Model == "opus");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 3");
+    }
+
+    // Стартовая подмена по кулдауну в том же направлении: текущий сторонний провайдер в
+    // кулдауне → стартуем сразу с нативного шага цепочки на подписке пула, не тратя попытку
+    // на мёртвый эндпоинт. До фикса кандидат «opus» получал ключ «glm» и отсеивался вместе
+    // с ним — стартовая подмена не находила живого шага вовсе.
+    [Fact]
+    public async Task СтартоваяПодмена_НативныйШаг_СтартуетНаПодпискеПула()
+    {
+        var providers = BuildGlmKimiProviders();
+        var pool = BuildPool("claude-2");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("glm");   // текущий сторонний провайдер в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "glm-5.2", provider: "glm",
+            chain: ["glm-5.2", "opus"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // старт сразу на opus × claude-2
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().ContainSingle();
+        inner.Attempts[0].Should().Be(("claude-2", "opus"),
+            "старт с живого нативного шага, а не с кулдаунного glm");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Provider.Should().Be("claude-2");
+        marker.Reason.Should().Be("unreachable");
+    }
+
+    // Пул, где тариф решает доступ к Opus (Max с ним, Pro без него). Способность подписки
+    // тянуть модель разводит кандидатов однозначно — выбор Pick перестаёт зависеть от
+    // случайного разрешения ничьей, и тесты ключей воспроизводимы.
+    private static ClaudeSubscriptionPool BuildPoolWithOpus(params (string Key, bool Opus)[] subs)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var (key, opus) in subs)
+        {
+            dict[$"ClaudeSubscriptions:{key}:OAuthToken"] = $"token-{key}";
+            dict[$"ClaudeSubscriptions:{key}:SupportsOpus"] = opus ? "true" : "false";
+        }
+        return new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Ключ ТЕКУЩЕЙ пары — «где ход реально идёт», и подписку для него не выбирает пул: чат
+    // живёт на claude-1 (Pro, без Opus), а модель хода — opus. Выбор пула отдал бы здесь
+    // claude-2, и 429 забанил бы ЖИВУЮ подписку на часы для всех чатов инстанса, оставив
+    // упёршуюся в ротации (env хода при этом собирается из Info.Provider — ключ разошёлся
+    // бы с фактом). Major 1 ревью 25.08.2026.
+    [Fact]
+    public async Task Ошибка429_ПометкаИсчерпанияИдётНаПодпискуХода_АНеНаВыбраннуюПулом()
+    {
+        var pool = BuildPoolWithOpus(("claude-1", false), ("claude-2", true));
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus", provider: "claude-1");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // opus × claude-1 — лимит
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // ротация уровня 1 → claude-2
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[0].Should().Be(("claude-1", "opus"), "ход шёл на подписке чата");
+        inner.Attempts[1].Should().Be(("claude-2", "opus"), "уровень 1 увёл на способную подписку");
+        pool.IsExhausted("claude-1").Should().BeTrue("429 помечает ТУ подписку, на которой ход упёрся");
+        pool.IsExhausted("claude-2").Should().BeFalse("живая подписка не банится за чужой лимит");
+    }
+
+    // Ключ нативного шага цепочки не должен указывать на исчерпанную текущую подписку: иначе
+    // StepUnavailable признаёт шаг мёртвым и ход проскакивает мимо живой claude-2 сразу к
+    // стороннему deepseek. Конфигурация: claude-1 (Max) упёрлась на opus, claude-2 (Pro) жива
+    // и тянет sonnet. Major 2 ревью 25.08.2026.
+    [Fact]
+    public async Task ИсчерпаннаяТекущаяПодписка_НативныйШагУходитНаЖивуюПодписку()
+    {
+        var pool = BuildPoolWithOpus(("claude-1", true), ("claude-2", false));
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus", provider: "claude-1",
+            chain: ["opus", "sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // opus × claude-1 — лимит
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // шаг 2: sonnet × claude-2
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        pool.IsExhausted("claude-1").Should().BeTrue();
+        inner.Attempts.Should().HaveCount(2);
+        // Уровня 1 здесь нет: claude-2 не тянет opus — единственный путь лежит через шаг цепочки.
+        inner.Attempts[1].Should().Be(("claude-2", "sonnet"),
+            "шаг «sonnet» полностью жив на claude-2 — пропускать его и уезжать на deepseek нельзя");
+        inner.Attempts.Should().NotContain(p => p.Model == "deepseek-chat");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 2");
+    }
+
     // --- Переполнение контекста (ContextOverflow) ---
     // Репро инцидента 09.08: фолбэк ушёл на шаг цепочки, но ПРИНЯВШАЯ модель не переварила
     // контекст → ход умер с «Prompt is too long». Теперь overflow — шаг по цепочке, а не смерть хода.

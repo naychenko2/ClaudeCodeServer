@@ -323,10 +323,11 @@ export function PropControl({ def, doc, index, saving, onSave, h, expanded }: {
   const value = prop?.value ?? '';
 
   // Плашка остаётся по содержимому и в колонке: растянутая во всю ширину, она читается
-  // как поле ввода, хотя это значение-метка
+  // как поле ввода, хотя это значение-метка. 100% — страховка компактной колонки
+  // открытого файла (224px с padding): жёсткие 220px впритык перелезали рамку
   if (def.kind === 'choice')
     return <DocPropChip def={def} value={value} saving={saving} onSave={onSave}
-      style={{ maxWidth: 220, alignSelf: 'flex-start', ...chipBox(h) }} />;
+      style={{ maxWidth: 'min(220px, 100%)', alignSelf: 'flex-start', ...chipBox(h) }} />;
 
   if (def.kind === 'docLink')
     return <DocRefPicker def={def} value={value} link={prop?.link} index={index}

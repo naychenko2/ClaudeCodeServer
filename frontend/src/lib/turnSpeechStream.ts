@@ -99,6 +99,30 @@ export function extractVoiceDigest(text: string): string | null {
   return body ? body : null;
 }
 
+// Разбор выжимки на «вывод + тезисы» для плашки «Коротко»: первая строка — вывод,
+// строки с дефиса — пункты. Плашка рисует ПРОСТОЙ текст (markdown в ней намеренно нет),
+// а в обычном div переносы схлопываются — без разбора тезисы слиплись бы в одну строку
+// с дефисами посередине.
+//
+// Формат просит промпт (VoicePrompts.LongAnswerSectionText), но полагаться на него нельзя:
+// у ответов в старой истории выжимка сплошным абзацем, а у стиля digest — связная речь,
+// и она такой и остаётся. Пунктов нет — всё уходит в lead, плашка выглядит как раньше.
+export function splitVoiceDigest(text: string): { lead: string; bullets: string[] } {
+  const lead: string[] = [];
+  const bullets: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = /^[-*+•]\s+(.+)$/.exec(line);
+    if (m) { bullets.push(m[1].trim()); continue; }
+    // Строка без маркера ПОСЛЕ пунктов — перенос длинного тезиса, а не новый абзац:
+    // отдельным блоком под списком он бы повис сиротой
+    if (bullets.length) bullets[bullets.length - 1] += ' ' + line;
+    else lead.push(line);
+  }
+  return { lead: lead.join(' '), bullets };
+}
+
 // Какая реплика ленты сейчас звучит: индекс последней text-реплики текущего хода,
 // принадлежащей ГОВОРЯЩЕЙ персоне (её же голосом читается ход). По этому индексу
 // лента подсвечивает аватар — «говорит она».

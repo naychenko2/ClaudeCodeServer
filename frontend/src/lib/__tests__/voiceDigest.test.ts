@@ -2,7 +2,7 @@
 // из текста, который идёт в синтез речи и в ленту.
 
 import { describe, it, expect } from 'vitest';
-import { extractVoiceDigest } from '../turnSpeechStream';
+import { extractVoiceDigest, splitVoiceDigest } from '../turnSpeechStream';
 import { stripVoiceMarker, sanitizeForSpeech } from '../tts';
 import { normalizeVoiceStyle, isVoiceStyle, voiceStyleFor } from '../voiceStyle';
 
@@ -108,5 +108,32 @@ describe('voiceStyleFor', () => {
   it('узкий экран — разговор, широкий — пересказ', () => {
     expect(voiceStyleFor(true)).toBe('talk');
     expect(voiceStyleFor(false)).toBe('digest');
+  });
+});
+
+// Плашка «Коротко» показывает выжимку тезисами (вывод + пункты) — переносы строк в
+// обычном div схлопываются, поэтому разбор делается кодом, а не разметкой
+describe('splitVoiceDigest', () => {
+  it('делит на вывод и тезисы', () => {
+    const { lead, bullets } = splitVoiceDigest('Правку можно катить.\n- собрал бэкенд\n- прогнал тесты');
+    expect(lead).toBe('Правку можно катить.');
+    expect(bullets).toEqual(['собрал бэкенд', 'прогнал тесты']);
+  });
+
+  it('сплошной абзац остаётся выводом — старые ответы и стиль digest', () => {
+    const { lead, bullets } = splitVoiceDigest('Всё готово, ничего делать не надо.');
+    expect(lead).toBe('Всё готово, ничего делать не надо.');
+    expect(bullets).toEqual([]);
+  });
+
+  it('строка без маркера после пунктов — перенос последнего тезиса', () => {
+    const { bullets } = splitVoiceDigest('Итог.\n- первый тезис\n  и его хвост\n- второй');
+    expect(bullets).toEqual(['первый тезис и его хвост', 'второй']);
+  });
+
+  it('понимает звёздочку и буллет как маркер пункта', () => {
+    const { lead, bullets } = splitVoiceDigest('* один\n• два');
+    expect(lead).toBe('');
+    expect(bullets).toEqual(['один', 'два']);
   });
 });

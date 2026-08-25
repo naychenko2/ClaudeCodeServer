@@ -46,6 +46,14 @@ export async function saveArchiveSessionAsNote(sessionId: string): Promise<NoteD
 // запросы отдают 400 «Автоправило архива выключено», фронт гасит настройку
 // не показывая блок.
 export const archiveRuleApi = {
+  // Первоначальное состояние экрана настройки автоправила: личный порог
+  // (User.ArchiveAfterDays; он же дефолт для проектов без своего и правило
+  // чатов вне проекта) и признак первого прохода (производный от
+  // User.ArchiveRuleFirstRunAt — гейта фонового тика). Без гейта по флагу:
+  // чтение ничего не меняет, и раздел «Архив» работает и без тумблера.
+  getSettings: () =>
+    request<{ archiveAfterDays: number | null; hasFirstRun: boolean }>('/chats/archive-settings'),
+
   // Счётчик превью под полем порога: «Под правило подпадёт N чатов». days —
   // текущее значение поля; projectId — проект (null = чаты вне проекта).
   preview: (days: number, projectId: string | null) => {

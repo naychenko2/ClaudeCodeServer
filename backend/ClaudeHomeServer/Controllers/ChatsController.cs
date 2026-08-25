@@ -57,6 +57,19 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // === Автоправило архивации (флаг chat-auto-archive, шаг 6 плана v4) ===
     // Настройка и запуск правила — за флагом; откат пачки и ручной архив — без него.
 
+    // Чтение настройки автоправила — первоначальное состояние экрана настройки:
+    // личный порог (он же дефолт проектов без своего и правило чатов вне проектов)
+    // и признак «первый проход уже был». Проектный порог сюда не входит — его отдаёт
+    // GET /api/projects[/{id}] полем archiveAfterDays. Без гейта по флагу: чтение
+    // ничего не меняет, а раздел «Архив» работает и без флага.
+    [HttpGet("archive-settings")]
+    public IActionResult ArchiveSettings()
+    {
+        var me = users.GetById(UserId);
+        if (me is null) return Unauthorized();
+        return Ok(new { archiveAfterDays = me.ArchiveAfterDays, hasFirstRun = me.ArchiveRuleFirstRunAt is not null });
+    }
+
     // Личный порог правила: он же дефолт для проектов без своего, он же правило для чатов
     // вне проектов. days = null — сброс (для своей сферы правило выключено).
     [HttpPut("archive-days")]

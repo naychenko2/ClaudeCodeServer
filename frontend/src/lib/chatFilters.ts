@@ -207,8 +207,12 @@ export function chatStatusOf(s: Session): ChatStatusChip {
 // плюс мигание на равных таймстемпах (см. docs/architecture/features.md, раздел
 // «Архив чатов»). Узкий type guard: тип Session/HomeSessionInfo сейчас не содержит
 // поля явно (тип обновляется параллельно), читаем без строгой типизации.
+// Сервер отдаёт `isArchived` (см. Session.DTO); на случай старого поля `archived`
+// — пробуем оба. Тип Session расширяется в рантайме: фронт не должен падать, если
+// бэкенд прислал только одно из двух.
 export function isArchivedChat(s: Session): boolean {
-  return Boolean((s as { archived?: unknown }).archived);
+  const x = s as unknown as { archived?: unknown; isArchived?: unknown };
+  return Boolean(x.archived ?? x.isArchived);
 }
 
 // Предикат видимости чата по фильтрам. Возвращается функцией, чтобы один и тот же

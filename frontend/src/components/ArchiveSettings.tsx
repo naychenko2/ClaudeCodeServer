@@ -19,8 +19,8 @@ interface Props {
   // Был ли уже первый проход: если нет, кнопка «Применить сейчас» сразу после
   // сохранения порога — иначе только как повторный запуск.
   hasFirstRun: boolean;
-  // Чьи чаты считаются превью: null = чаты вне проекта (личная сфера).
-  // Проектный скоуп — отдельный эпизод, здесь не учитываем.
+  // Чьи чаты считаются превью: null = чаты вне проекта (личная сфера),
+  // id проекта — чаты этого проекта (принадлежность проверяет бэкенд).
   projectId?: string | null;
 }
 
@@ -36,7 +36,11 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
   // стартуем с дефолтом — пока человек не настроил, пусть видит рабочее значение.
   const [days, setDays] = useState<number>(initialDays ?? DEFAULT_DAYS);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  // Стартовое состояние как у эффекта: при включённом правиле с первого кадра
+  // «Считаю превью…», а не строка с невычисленным счётчиком
+  const [previewLoading, setPreviewLoading] = useState<boolean>(initialDays !== null);
+  // Превью не посчиталось (сеть/сервер) — показываем честную ошибку, а не «0 чатов»
+  const [previewError, setPreviewError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   // Включено ли правило сейчас: false — поле и кнопки погашены. Отдельно от
@@ -59,10 +63,11 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
     }
     let cancelled = false;
     setPreviewLoading(true);
+    setPreviewError(false);
     const t = setTimeout(() => {
       archiveRuleApi.preview(days, projectId)
         .then(r => { if (!cancelled) setPreviewCount(r.count); })
-        .catch(() => { if (!cancelled) setPreviewCount(null); })
+        .catch(() => { if (!cancelled) { setPreviewCount(null); setPreviewError(true); } })
         .finally(() => { if (!cancelled) setPreviewLoading(false); });
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
@@ -181,9 +186,9 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
           }}>
             {previewLoading
               ? 'Считаю превью…'
-              : previewCount === null
-                ? 'Под правило подпадёт N чатов'
-                : `Под правило подпадёт ${previewCount} ${pluralChats(previewCount)}`}
+              : previewError
+                ? 'Не удалось посчитать, сколько чатов подпадёт'
+                : `Под правило подпадёт ${previewCount ?? 0} ${pluralChats(previewCount ?? 0)}`}
           </span>
           <Button
             variant="primary"

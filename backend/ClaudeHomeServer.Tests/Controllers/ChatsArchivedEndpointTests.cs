@@ -203,4 +203,42 @@ public class ChatsArchivedEndpointTests(TestWebApplicationFactory factory)
         var resp = await _client.GetAsync($"/api/chats/archive-preview?days={days}");
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
+
+    // --- Чтение настройки автоправила ---
+
+    // Контракт initialDays/hasFirstRun экрана настройки: личный порог и признак
+    // первого прохода (производный от User.ArchiveRuleFirstRunAt)
+    [Fact]
+    public async Task НастройкаАвтоправила_Чтение_ОтдаётПорогИПризнакПервогоПрохода()
+    {
+        // Исходно правило не настроено и первый проход не запускался
+        var resp = await _client.GetAsync("/api/chats/archive-settings");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("archiveAfterDays").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("hasFirstRun").GetBoolean().Should().BeFalse();
+
+        // Запись порога (за флагом) отражается в чтении
+        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.ChatAutoArchive}",
+            new { enabled = true })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.PutAsJsonAsync("/api/chats/archive-days", new { days = 30 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        resp = await _client.GetAsync("/api/chats/archive-settings");
+        body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("archiveAfterDays").GetInt32().Should().Be(30);
+        body.GetProperty("hasFirstRun").GetBoolean().Should().BeFalse("первый проход ещё не запускался");
+
+        // Признак первого прохода — производный от User.ArchiveRuleFirstRunAt
+        var me = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
+        var userId = me.GetProperty("userId").GetString()!;
+        factory.Services.GetRequiredService<UserStore>()
+            .SetArchiveRuleFirstRunAt(userId, DateTime.UtcNow);
+
+        resp = await _client.GetAsync("/api/chats/archive-settings");
+        body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("archiveAfterDays").GetInt32().Should().Be(30);
+        body.GetProperty("hasFirstRun").GetBoolean().Should().BeTrue();
+    }
 }

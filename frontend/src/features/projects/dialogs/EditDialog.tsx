@@ -20,6 +20,8 @@ import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { DesktopFacetSection } from '../../desktop/DesktopFacetSection';
 import { BackgroundSection } from './BackgroundSection';
 import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
+import { ArchiveSettings } from '../../../components/ArchiveSettings';
+import { archiveRuleApi } from '../../../api/chats';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 // Строка «Руководитель проекта не назначен» (фича default-personas-onboarding, п.5.3):
@@ -238,6 +240,10 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // условием, чтобы не показывать недоступное действие.
   // Грань десктопа за флагом: без него секции нет — включать нечего, сервер откажет
   const desktopEnabled = useFeature(FLAGS.desktopAgent);
+  // Автоправило архива (флаг chat-auto-archive): закрывает ТОЛЬКО настройку правила
+  // и кнопку «Применить сейчас». Ручной архив, раздел «Архив» и сводка карточки
+  // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
+  const autoArchiveEnabled = useFeature(FLAGS.chatAutoArchive);
   const me = useMe();
   const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
@@ -270,6 +276,28 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       .then(r => setPromptParts(r.parts))
       .catch(() => {});
   }, [view, promptParts, project.id]);
+
+  // Настройка автоправила архива: личный порог и признак первого прохода
+  // (User.ArchiveAfterDays и User.ArchiveRuleFirstRunAt — оба per-user, не проект).
+  // Грузим один раз при открытии диалога под флагом: при выключенном флаге блок
+  // не рисуется и запрос слать незачем. Превью счётчика внутри ArchiveSettings
+  // ходит в свой эндпоинт с дебаунсом и сам обновляется при изменении порога.
+  const [archiveDays, setArchiveDays] = useState<number | null>(null);
+  const [archiveHasFirstRun, setArchiveHasFirstRun] = useState<boolean>(false);
+  const [archiveLoaded, setArchiveLoaded] = useState(false);
+  useEffect(() => {
+    if (!autoArchiveEnabled || archiveLoaded) return;
+    let cancelled = false;
+    archiveRuleApi.getSettings()
+      .then(r => {
+        if (cancelled) return;
+        setArchiveDays(r.archiveAfterDays);
+        setArchiveHasFirstRun(r.hasFirstRun);
+        setArchiveLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setArchiveLoaded(true); });
+    return () => { cancelled = true; };
+  }, [autoArchiveEnabled, archiveLoaded]);
 
   const handleConfirm = async () => {
     setError('');
@@ -548,6 +576,18 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         />
       )}
       <ProjectSyncToggle projectId={project.id} online={online} />
+      {/* Настройка автоправила архива (флаг chat-auto-archive). Скоуп превью —
+          чаты этого проекта: проектный ArchiveSettings всё равно опирается на личный
+          порог User.ArchiveAfterDays (он же дефолт для проектов без своего).
+          Рисуем только после загрузки настройки: иначе первоначальный null
+          мелькает состоянием «правило выключено» до прихода ответа. */}
+      {autoArchiveEnabled && archiveLoaded && (
+        <ArchiveSettings
+          initialDays={archiveDays}
+          hasFirstRun={archiveHasFirstRun}
+          projectId={project.id}
+        />
+      )}
     </Modal>
   );
 }

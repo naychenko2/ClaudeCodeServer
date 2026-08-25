@@ -12,11 +12,12 @@ import { joinUser, onMessage } from '../lib/signalr';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveCardText, firstNoteLines } from '../lib/archiveCard';
 import { useOnline } from '../hooks/useOnline';
+import { useIsMobile } from '../lib/breakpoints';
 import { C, FONT, R } from '../lib/design';
 import { showToast } from '../lib/toast';
 import { usePersonasVersion } from '../lib/personas';
 import { ChatCard } from '../components/ChatCard';
-import { Modal, ModalActions, Button, EmptyState, IconButton } from '../components/ui';
+import { Button, EmptyState, IconButton } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import type { AuthState, Session } from '../types';
@@ -39,17 +40,9 @@ async function loadArchivedChats(): Promise<Session[]> {
   return all.filter(isArchivedChat);
 }
 
-// Прокрутить к карточке чата в общем списке (ChatsPage использует свою
-// прокрутку; здесь нужен был общий тригер для возврата из плашки — наружу
-// через колбэк onOpenChat пробрасываем намерение, раздел сам по себе без
-// своего скролла, потому что плоский).
-function scrollToChat(id: string) {
-  const el = document.querySelector(`[data-chat-id="${CSS.escape(id)}"]`);
-  if (el && 'scrollIntoView' in el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
-}
-
 export function ArchivePage({ auth, onHubTab, onOpenChat }: Props) {
   const online = useOnline();
+  const isMobile = useIsMobile();
   const [chats, setChats] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   // Подписка на стор персон — карточки показывают аватары
@@ -143,11 +136,10 @@ export function ArchivePage({ auth, onHubTab, onOpenChat }: Props) {
   }, [refresh]);
 
   // Открыть архивный чат на чтение: даём вызывающей стороне сигнал открыть
-  // чат (ChatsPage его подхватит и поставит в активный), плюс отдельный
-  // скролл — карточка осталась видна после перечитки списка.
+  // чат — App переключит раздел на «Чаты», и ChatsPage подхватит id из
+  // cc_open_chat при монтировании.
   const openArchived = useCallback((chat: Session) => {
     onOpenChat(chat);
-    scrollToChat(chat.id);
   }, [onOpenChat]);
 
   // Заголовок раздела со счётчиком: «Архив · 12». Скрываем цифру, пока грузится,
@@ -203,6 +195,7 @@ export function ArchivePage({ auth, onHubTab, onOpenChat }: Props) {
                 key={chat.id}
                 chat={chat}
                 online={online}
+                isMobile={isMobile}
                 onOpen={() => openArchived(chat)}
                 onRestore={() => void setArchived(chat, false)}
                 onBuildDigest={() => void buildDigest(chat)}
@@ -223,10 +216,11 @@ export function ArchivePage({ auth, onHubTab, onOpenChat }: Props) {
 // lastMessage → «Сообщений нет». Кнопки разделены: «Вернуть из архива» слева,
 // «Собрать сводку» / «Сохранить в заметки» справа.
 function ArchiveCard({
-  chat, online, onOpen, onRestore, onBuildDigest, onSaveAsNote,
+  chat, online, isMobile, onOpen, onRestore, onBuildDigest, onSaveAsNote,
 }: {
   chat: Session;
   online: boolean;
+  isMobile: boolean;
   onOpen: () => void;
   onRestore: () => void;
   onBuildDigest: () => void;
@@ -260,20 +254,18 @@ function ArchiveCard({
         overflow: 'hidden',
       }}>
       {/* Шапка карточки: ChatCard без меню действий (мы тут, не в общем списке).
-          Кликаем по карточке — открываем чат. На тач и без hover кнопки
-          действий в ChatCard не нужны, тут мы сами рисуем свой набор. */}
+          Кликаем по карточке — открываем чат. Кнопки действий в ChatCard не нужны
+          (он их прячет: onArchive/onDelete не заданы), тут мы сами рисуем свой набор. */}
       <div onClick={onOpen} style={{ cursor: 'pointer' }}>
         <ChatCard
           session={chat}
           isActive={false}
-          isMobile={false}
+          isMobile={isMobile}
           fallbackName="Чат без названия"
           online={online}
           hovered={false}
           workflowRunning={false}
           onSelect={onOpen}
-          onHover={() => {}}
-          onDelete={() => {}}
         />
       </div>
 
@@ -333,8 +325,3 @@ function ArchiveCard({
 
 // Приоритет и форматирование текста карточки живут в lib/archiveCard, юниты — там же.
 // Здесь только эффекты (резолв заметки, обновление чата).
-
-// Подавляем неиспользуемый импорт Modal/ModalActions — оставлены на случай,
-// если потребуется подтверждение возврата; сейчас возврат одной кнопкой без
-// модалки (план v4: «возврат одной кнопкой возвращает чат и его транскрипт»).
-void Modal; void ModalActions;

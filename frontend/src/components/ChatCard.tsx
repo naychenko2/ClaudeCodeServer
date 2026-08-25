@@ -125,8 +125,13 @@ interface Props {
   // agentsPresence; проп нужен витрине UI-кита, где стора нет
   agentsRunning?: boolean;
   onSelect: () => void;
-  onHover: (hovered: boolean) => void;
-  onDelete: () => void;
+  // Не задан — карточка не сообщает о наведении (раздел «Архив»: карточка
+  // открывается кликом, hover-действия там намеренно не нужны)
+  onHover?: (hovered: boolean) => void;
+  // Не задан — пункта «Удалить» в меню нет: архив ПРЯЧЕТ чат, а не удаляет,
+  // и канала удаления архивного чата в v4 нет (заглушкой закрывать нельзя —
+  // пункт без действия вводил бы в заблуждение)
+  onDelete?: () => void;
   // Не задан — чат без закрепления (списки проекта)
   onTogglePin?: () => void;
   // Общие теги чата (имя + цвет из реестра) — строка чипов под названием
@@ -235,6 +240,10 @@ export function ChatCard({
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
   // s.name не изменила бы ни строчки на экране
   const canRename = !!onRename && !taskChat;
+  // Пункты меню действий. Когда их нет (карточка архива: действия рисует сама
+  // страница), меню не открывается вовсе — пустой поповер вводил бы в заблуждение
+  const menuHasItems = canRename || !!onTogglePin || !!onAssignTags || !!onAddToWall
+    || canEditChat || !!onArchive || !!onDelete;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
@@ -360,8 +369,8 @@ export function ChatCard({
   return (
     <div
       onClick={() => { if (lpFired.current) { lpFired.current = false; return; } onSelect(); }}
-      onMouseEnter={() => onHover(true)}
-      onMouseLeave={() => onHover(false)}
+      onMouseEnter={() => onHover?.(true)}
+      onMouseLeave={() => onHover?.(false)}
       onTouchStart={beginLongPress}
       onTouchMove={onTpMove}
       onTouchEnd={killLongPress}
@@ -564,7 +573,7 @@ export function ChatCard({
           то же при любом составе карточки. Само меню открывается порталом по rect
           кнопки (anchor-режим Menu): список чатов скроллится, и absolute-меню
           обрезалось бы его overflow */}
-      {showActions && (
+      {showActions && menuHasItems && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
           right: ACTIONS_RIGHT, zIndex: 1, display: 'flex',
@@ -584,10 +593,10 @@ export function ChatCard({
         </div>
       )}
 
-      {menu && !editing && (
+      {menu && !editing && menuHasItems && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
           // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
-          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)
+          maxHeight={((onDelete ? 1 : 0) + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)
             + (onAddToWall ? 1 : 0) + (canEditChat ? (canMute ? 2 : 1) : 0)
             + (onArchive ? 1 : 0)) * 34 + 10}
           gap={4}>
@@ -662,12 +671,14 @@ export function ChatCard({
               />
             );
           })()}
-          <MenuItem
-            icon={<Trash2 size={15} strokeWidth={2} />}
-            label="Удалить"
-            danger
-            onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
-          />
+          {onDelete && (
+            <MenuItem
+              icon={<Trash2 size={15} strokeWidth={2} />}
+              label="Удалить"
+              danger
+              onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
+            />
+          )}
         </Menu>
       )}
 

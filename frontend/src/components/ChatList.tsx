@@ -30,6 +30,9 @@ interface Props {
   onEdited: (updated: Session) => void;
   // Чат удалён — убрать из списка
   onDeleted: (id: string) => void;
+  // Чат убран в архив / возвращён из архива — обновить в списке. archived=true — в архив,
+  // archived=false — из архива. Реализация ловит 409 «в чате идёт ход» и показывает тостом.
+  onArchive: (chat: Session, archived: boolean) => void;
   isMobile?: boolean;
   // Чат с активным workflow — плашка «WF» на его карточке
   workflowRunningFor?: string;
@@ -42,7 +45,7 @@ interface Props {
 // Режимы группировки глобального списка: реестра тегов у него нет — только Дни/Без
 const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
-export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor, bare = false }: Props) {
+export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, onArchive, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
@@ -160,6 +163,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
+      onArchive={online ? archived => onArchive(chat, archived) : undefined}
     />
   );
 

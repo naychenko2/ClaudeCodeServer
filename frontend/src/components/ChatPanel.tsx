@@ -23,7 +23,7 @@ import {
 import {
   buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
-import { teamPlanningIndicatorVisible, resolvePlannerPersonaId, itemIdxToNodePos } from '../lib/teamImplement';
+import { teamPlanningIndicatorVisible, resolvePlannerPersonaId, itemIdxToNodePos, computeJumpHidden } from '../lib/teamImplement';
 import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationStickyBanner';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1554,11 +1554,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // вопрос человеку НЕ считаются открытыми остановками: у них своя логика видимости
   const openEscalations = useMemo(() => findOpenEscalations(items), [items]);
   const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
-  // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
-  // узел за пределами видимой области физически отсутствует в DOM — простой
-  // querySelector+scrollIntoView вернёт null. Callback объявлен ПОСЛЕ renderedItems
-  // (см. ниже), иначе порядок определения нарушается. deps по длине — если items
-  // не менялись, callback стабильный
+  // jumpToEscalation объявлен ниже — после renderedItems, от которого зависит
+  // (порядок определения в JS важен — иначе ReferenceError)
 
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
     setClickedOfferIndices(prev => new Set(prev).add(offerIndex));
@@ -1803,17 +1800,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // автора. Служебный шум (⚑ staffNote штаба) гасится здесь же, набором
   // suppressedByTeamNoise — см. выше.
 
-  // Две системы координат ленты: items[i] — индекс item (то, что в data-feed-index),
-  // nodes[k] — индекс УЗЛА (включая склеенные блоки действий). hiddenCount и
-  // visibleNodes считают именно узлы. Актуальный массив узлов нужен jumpToEscalation
-  // для перевода item→узел, а deps по useMemo не ловят смену содержимого при той же
-  // длине — держим узлы в ref, который обновляется в самом useMemo (после построения
-  // nodes, до любого return)
+  // Окно рендера ленты и перевод item→узел работают на одном массиве: useMemo
+  // ниже возвращает Array<{ node, start }> со склеенными блоками действий И
+  // exec-зоной (каждый склеенный блок — один узел со start = start первого). Скрытые
+  // узлы, видимые узлы, и itemIdxToNodePos(jumpToEscalation) смотрят на этот же
+  // массив — одна координата, рассинхронить нельзя
   type RenderedNode = { node: React.ReactNode; start: number };
-  const renderedNodesRef = useRef<RenderedNode[]>([]);
 
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
-  const renderedItems = useMemo(() => {
+  const renderedItems = useMemo((): RenderedNode[] => {
     // Display-лента = сама items: индексы обязаны совпадать с items (по ним ходят
     // turnMeta, turnBoundaries, batchByIndex, execZone). Ошибки прошлых дней рисуются
     // группой через errorGroups — карту «индекс → error_group» и набор гашеных индексов.
@@ -1859,7 +1854,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // попадают в ленту и должны остаться видимыми, иначе реплей истории после F5
     // даст расхождение (в историю пишется StoredUserMessage БЕЗ auto). systemDirective
     // сюда не входит: цикл «до готово» не относится к КР-механике и в КР-чате не
-    // встречается
+    // встречается.
+    //
+    // Гейт teamImplementState — осознанный: при выключении режима все ранее скрытые
+    // ⚑-плашки возвращаются в ленту обратно. Иначе user_message со staffNote=true
+    // остался бы подавленным и в обычном чате (это не тот вид подавления, что
+    // принадлежит архиву/истории). Эффект «при выключении вернулось» согласован
+    // с поведением других UI-флагов режима — их смена тоже не отзывается задним
+    // числом, потому что они пересобираются через те же команды
     const suppressedByTeamNoise = new Set<number>();
     if (teamImplementState) {
       for (let k = 0; k < display.length; k++) {
@@ -1915,13 +1917,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         );
         i++; prevNodeWasBlock = false; continue;
       }
-      // Служебный шум КР (⚑ staffNote и авто-триггеры штаба) — гасим, чтобы лента
-      // показывала координатора обычными репликами. Индекс при этом не съезжает,
-      // data-feed-index остальных элементов не страдает
+      // Служебный шум КР (⚑ staffNote штаба) — гасим, чтобы лента показывала
+      // координатора обычными репликами. Индекс при этом не съезжает, data-feed-index
+      // остальных элементов не страдает. Проверка идёт РАНЬШЕ workflow/agentParent —
+      // иначе блок действий мог бы склеиться вокруг подавленного элемента, и
+      // прыжки по data-feed-index поплыли бы
       if (suppressedByTeamNoise.has(i)) { i++; continue; }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
-      if (suppressedByTeamNoise.has(i)) { i++; continue; }
       if (suppressedByWorkflow.has(display[i]) || suppressedByAgentParent.has(display[i])) {
         i++; continue;
       }
@@ -2117,11 +2120,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
     // success-коннектор: непрерывные узлы из «зоны реализации» (после одобренного плана)
     // оборачиваем в одну левую зелёную линию — «эти правки реализуют план».
-    // ref обновляется ДО любого return ниже: jumpToEscalation читает актуальный срез,
-    // а useCallback-и могут зваться из эффектов уже на текущем рендере
-    renderedNodesRef.current = nodes;
-    if (!execZone) return nodes.map(n => n.node);
-    const result: React.ReactNode[] = [];
+    // Склейка ОСТАЁТСЯ в виде одного узла со start = start первого узла группы:
+    // jumpToEscalation и окно работают в координатах этого массива, и смешение
+    // «узлов внутри зоны» с «узлами снаружи» ломает обе координаты. То есть
+    // renderedItems — единственный источник правды: скрытые узлы, видимые узлы,
+    // и перевод itemIdxToNodePos смотрят на один и тот же массив
+    if (!execZone) return nodes as RenderedNode[];
+    const result: RenderedNode[] = [];
     let j = 0;
     while (j < nodes.length) {
       const inZone = (n: { start: number }) => n.start >= execZone.start && n.start < execZone.end;
@@ -2129,13 +2134,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         const group: React.ReactNode[] = [];
         const groupStart = nodes[j].start;
         while (j < nodes.length && inZone(nodes[j])) { group.push(nodes[j].node); j++; }
-        result.push(
-          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 3, marginTop: -3 }}>
-            {group}
-          </div>
-        );
+        result.push({
+          start: groupStart,
+          node: (
+            <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 3, marginTop: -3 }}>
+              {group}
+            </div>
+          ),
+        });
       } else {
-        result.push(nodes[j].node); j++;
+        result.push(nodes[j]); j++;
       }
     }
     return result;
@@ -2147,38 +2155,37 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
   // узел за пределами видимой области физически отсутствует в DOM — простой
   // querySelector+scrollIntoView вернёт null. idx — индекс item; сначала переводим
-  // его в позицию узла (см. renderedNodesRef выше), раздвигаем окно, и уже после
-  // ререндера — скроллим и подсвечиваем целевой item по data-feed-index (он
-  // адресует item, не узел — это правильно: scrollIntoView попадает ровно в ту
-  // карточку, к которой прыгаем). Поиск идёт внутри scrollRef, а не document:
-  // у ChatPanel бывает режим embedded, и две ленты в DOM одновременно
+  // его в позицию узла (itemIdxToNodePos), раздвигаем окно, и уже после ререндера —
+  // скроллим и подсвечиваем целевой item по data-feed-index (он адресует item,
+  // не узел — это правильно: scrollIntoView попадает ровно в ту карточку, к которой
+  // прыгаем). Поиск идёт внутри scrollRef, а не document: у ChatPanel бывает режим
+  // embedded, и две ленты в DOM одновременно. deps по renderedItems: ref не нужен,
+  // потому что hiddenCount (set внутри) — отдельный источник, а nodes/idx идут
+  // аргументами. callback стабилен, пока не пересобран useMemo
   const jumpToEscalation = useCallback((idx: number) => {
-    const nodes = renderedNodesRef.current;
-    const nodePos = itemIdxToNodePos(nodes, idx);
-    if (nodePos < 0) return;
-    setHiddenCount((h) => {
-      const cur = h ?? Math.max(0, nodes.length - WINDOW_FIRST);
-      if (nodePos >= cur) return h;
-      // Открываем окно: 3 предыдущих узла остаются как контекст вокруг цели.
-      // Math.max здесь не нужен: nodePos < cur ≤ nodes.length, nodePos >= 0
-      return Math.max(0, nodePos - 3);
-    });
-    // После ререндера — querySelector по data-feed-index={idx} (item-индекс)
-    requestAnimationFrame(() => {
+    const nodePos = itemIdxToNodePos(renderedItems, idx);
+    setHiddenCount((h) => computeJumpHidden(nodePos, h, renderedItems.length, WINDOW_FIRST));
+    // После ререндера — querySelector по data-feed-index={idx} (item-индекс).
+    // Повтор на следующем кадре: если React не успел закоммитить обновлённый срез
+    // к первому rAF (StrictMode, ререндер по другим setState), querySelector вернёт
+    // null и клик снова станет молчаливым no-op. Дешёвая страховка — один повтор
+    const flash = (): boolean => {
       const node = scrollRef.current?.querySelector<HTMLElement>(`[data-feed-index="${idx}"]`);
-      if (!node) return;
+      if (!node) return false;
       node.scrollIntoView({ behavior: 'smooth', block: 'center' });
       node.classList.add('escalation-flash');
       window.setTimeout(() => node.classList.remove('escalation-flash'), 1500);
-    });
-  }, []);
+      return true;
+    };
+    if (!flash()) requestAnimationFrame(flash);
+  }, [renderedItems, scrollRef]);
 
-  // Две системы координат ленты: items[i] — индекс item (то, что в data-feed-index),
-  // renderedNodes[k] — индекс УЗЛА (включая склеенные блоки действий). hiddenCount и
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
-  // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге
+  // число СКРЫТЫХ сверху УЗЛОВ (hiddenCount), а не «сколько показано»: при стриминге
   // новых сообщений хвост растёт сам, а позиция чтения в середине окна не прыгает.
-  // null = «по умолчанию» (показать последние WINDOW_FIRST) — до первого действия
+  // Узел = элемент renderedItems (см. useMemo выше): одиночный item или склеенный
+  // блок действий, или сводка exec-зоны — все они считаются одной записью с одним
+  // start. null = «по умолчанию» (показать последние WINDOW_FIRST) — до первого действия
   // пользователя окно следует за концом ленты.
   const [hiddenCount, setHiddenCount] = useState<number | null>(null);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс окна при смене чата: панель переиспользуется между сессиями (без key), как и mode выше
@@ -2188,7 +2195,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     Math.max(0, renderedItems.length - 1),
   );
   const visibleNodes = useMemo(
-    () => (hidden > 0 ? renderedItems.slice(hidden) : renderedItems),
+    // map в ReactNode[]: всё, что ниже (Provider-цепочка → {visibleNodes}), ждёт
+    // рендер-детей, а не структуру {node, start}. После смены типа renderedItems
+    // единая точка правды: hidden/visibleNodes/jumpToEscalation смотрят на один массив
+    () => (hidden > 0 ? renderedItems.slice(hidden) : renderedItems).map(n => n.node),
     [renderedItems, hidden],
   );
 

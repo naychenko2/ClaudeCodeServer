@@ -475,6 +475,27 @@ export function itemIdxToNodePos(
   return -1;
 }
 
+// Арифметика окна ленты для прыжка «К карточке». Вынесена из ChatPanel, чтобы тест
+// не тянул signalr и весь стор. Принимает уже посчитанную позицию узла и текущее
+// состояние окна; возвращает новое значение hiddenCount (или null, если двигать
+// не нужно — setHiddenCount(null) с тем же значением пропустит ререндер). Идея
+// одна — те же координаты, что режут renderedItems, никакого побочного обхода
+// через nodes/ref. Сравнение на «уже видно» тоже по УЗЛУ, потому что
+// visibleNodes = renderedItems.slice(hidden)
+export function computeJumpHidden(
+  nodePos: number,
+  currentHidden: number | null,
+  totalNodes: number,
+  windowSize: number,
+  contextBefore: number = 3,
+): number | null {
+  if (nodePos < 0) return currentHidden;
+  const defaultHidden = Math.max(0, totalNodes - windowSize);
+  const cur = currentHidden ?? defaultHidden;
+  if (nodePos >= cur) return cur;
+  return Math.max(0, nodePos - contextBefore);
+}
+
 // Склонение числительного (ру) — своя копия, как и в остальных местах проекта
 // (TeamPlanView, ProductHistory, BackupWidget…): маленькая и специфичная, шарить не стоит.
 function pluralRu(n: number, one: string, few: string, many: string): string {

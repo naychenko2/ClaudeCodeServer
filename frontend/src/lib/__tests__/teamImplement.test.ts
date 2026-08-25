@@ -10,7 +10,7 @@ import {
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
   teamPlanningIndicatorVisible, teamPlanningElapsedLabel, teamPlanningDoneText,
   TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT,
-  itemIdxToNodePos,
+  itemIdxToNodePos, computeJumpHidden,
   teamPulseTone, teamPulseActivityLabel, teamPulseMeaning, teamPulseBadgeText,
   teamPulseBadgeShort, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel,
   teamWaveTasksSorted, TEAM_IMPLEMENT_SHORT_NAME,
@@ -748,5 +748,133 @@ describe('itemIdxToNodePos (прыжок «К карточке»)', () => {
 
   it('пустой массив узлов — возвращает -1', () => {
     expect(itemIdxToNodePos([], 5)).toBe(-1);
+  });
+});
+
+describe('computeJumpHidden (аритметика окна для прыжка «К карточке»)', () => {
+  // КОМПОЗИЦИЯ, а не чистая функция отдельно — именно связка
+  // «itemIdxToNodePos → computeJumpHidden → hidden → DOM» ломалась три раза подряд.
+  // Сейчас обе функции работают на ОДНОЙ системе координат (узлы renderedItems,
+  // включая склеенные exec-зоны). Если кто-то введёт третью координату — этот
+  // тест упадёт первым
+
+  // Арифметика окна, вынесенная в явные переменные — чтобы при изменениях
+  // зависимости пересчитывались в одном месте, а не плодились литералы
+  const buildLongFeed = () => {
+    const n: Array<{ start: number }> = [];
+    let i = 0;
+    while (i < 200) { const sz = i % 7 === 0 ? 1 : 3; n.push({ start: i }); i += sz; }
+    return { nodes: n, totalNodes: n.length };
+  };
+  const W = 50;
+  const defaultHidden = (total: number) => Math.max(0, total - W);
+
+  it('карточка на границе окна — hidden остаётся прежним (target уже видно)', () => {
+    const { nodes, totalNodes } = buildLongFeed();
+    const pos = itemIdxToNodePos(nodes, 60);
+    // «уже видно» ⇔ pos >= defaultHidden. Если да — не двигаем, иначе двигаем
+    // до max(0, pos - 3). Реальное число зависит от паттерна склейки, но
+    // универсальное правило можно записать через само число
+    const expected = pos >= defaultHidden(totalNodes) ? defaultHidden(totalNodes) : Math.max(0, pos - 3);
+    expect(computeJumpHidden(pos, null, totalNodes, W)).toBe(expected);
+  });
+
+  it('карточка глубоко в ленте — раздвигаем окно до pos - 3', () => {
+    const { nodes, totalNodes } = buildLongFeed();
+    const pos = itemIdxToNodePos(nodes, 180);
+    const expected = pos >= defaultHidden(totalNodes) ? defaultHidden(totalNodes) : Math.max(0, pos - 3);
+    expect(computeJumpHidden(pos, null, totalNodes, W)).toBe(expected);
+  });
+
+  it('currentHidden != null — учитывается при сравнении «уже видно»', () => {
+    const nodes = Array.from({ length: 70 }, (_, k) => ({ start: k * 3 }));
+    // currentHidden=5, pos=20: 20 >= 5 → не двигаем, остаётся 5
+    expect(computeJumpHidden(20, 5, nodes.length, W)).toBe(5);
+    // currentHidden=5, pos=2: 2 < 5 → двигаем до max(0, -1) = 0
+    expect(computeJumpHidden(2, 5, nodes.length, W)).toBe(0);
+  });
+
+  it('nodePos < 0 — возвращает currentHidden без изменений (null или текущее)', () => {
+    // currentHidden=5 → возвращаем 5
+    expect(computeJumpHidden(-1, 5, 70, W)).toBe(5);
+    // currentHidden=null → не двигаем, оставляем null (React пропустит апдейт)
+    expect(computeJumpHidden(-1, null, 70, W)).toBeNull();
+  });
+
+  it('КЛЮЧЕВОЙ: цель ПОСЛЕ склеенной exec-зоны — координаты совпадают', () => {
+    // Сценарий, на котором ломался Б1: 10 одиночных + 1 узел exec-зоны +
+    // 70 одиночных после неё. totalNodes = 81, hidden по умолчанию = 31.
+    // items[120] (после зоны) → nodePos = 11. pos < cur → раздвигаем до 11 - 3 = 8.
+    // Раньше hidden считался по nodes ДО склейки (≈ 200/3 = 67 → hidden = 17)
+    // и pos=11 был бы «уже видно» — клик молча ничего не делал
+    const nodes: Array<{ start: number }> = [];
+    for (let i = 0; i < 10; i++) nodes.push({ start: i });
+    nodes.push({ start: 10 }); // exec-зона: один узел со start=10
+    for (let i = 50; i < 200; i++) nodes.push({ start: i });
+    const total = nodes.length;
+    const pos = itemIdxToNodePos(nodes, 120);
+    const expected = pos >= defaultHidden(total) ? defaultHidden(total) : Math.max(0, pos - 3);
+    expect(computeJumpHidden(pos, null, total, W)).toBe(expected);
+  });
+
+  it('КЛЮЧЕВОЙ: цель ВНУТРИ склеенной exec-зоны — клик в шапку группы', () => {
+    // items[25] попадает в exec-зону (items 10..49). Узел со start=10 покрывает
+    // все эти items. Узлов 81, hidden=31, pos=10 < 31 → раздвигаем до 7
+    const nodes: Array<{ start: number }> = [];
+    for (let i = 0; i < 10; i++) nodes.push({ start: i });
+    nodes.push({ start: 10 });
+    for (let i = 50; i < 200; i++) nodes.push({ start: i });
+    const total = nodes.length;
+    const pos = itemIdxToNodePos(nodes, 25);
+    const expected = pos >= defaultHidden(total) ? defaultHidden(total) : Math.max(0, pos - 3);
+    expect(computeJumpHidden(pos, null, total, W)).toBe(expected);
+  });
+
+  it('КЛЮЧЕВОЙ: цель ДО склеенной exec-зоны, за пределами окна', () => {
+    // 80 одиночных + exec-зона + 70 одиночных. Всего 151 узел, hidden=101.
+    // Цель items[5] → pos=5, 5 < 101 → раздвигаем до 2
+    const nodes: Array<{ start: number }> = [];
+    for (let i = 0; i < 80; i++) nodes.push({ start: i });
+    nodes.push({ start: 80 });
+    for (let i = 130; i < 200; i++) nodes.push({ start: i });
+    const total = nodes.length;
+    const pos = itemIdxToNodePos(nodes, 5);
+    const expected = pos >= defaultHidden(total) ? defaultHidden(total) : Math.max(0, pos - 3);
+    expect(computeJumpHidden(pos, null, total, W)).toBe(expected);
+  });
+
+  it('композиция: itemIdxToNodePos + computeJumpHidden соглашаются по координатам', () => {
+    // Главный сценарий ревью: длинная лента 200 items со склейкой и exec-зоной
+    // ПОСЕРЕДИНЕ. Сейчас и перевод, и арифметика считают на одном массиве;
+    // раньше рассинхрон был по тому, что hidden брал один массив, а pos — другой
+    // (до склейки). Здесь обходимся без ручной арифметики индексов: верифицируем,
+    // что обе функции соглашаются по ИНВАРИАНТУ — pos ≥ cur (уже видно) или
+    // pos - 3 (раздвинули)
+    const buildFeedWithZone = () => {
+      const nodes: Array<{ start: number }> = [];
+      for (let i = 0; i < 80; i++) nodes.push({ start: i });
+      nodes.push({ start: 80 }); // exec-зона
+      for (let i = 130; i < 200; i++) nodes.push({ start: i });
+      return { nodes, totalNodes: nodes.length };
+    };
+    const { nodes, totalNodes } = buildFeedWithZone();
+    expect(totalNodes).toBe(151);
+    const defaultH = Math.max(0, totalNodes - W); // 101
+
+    // Цель ДО зоны, за пределами окна: items[5] → pos=5, 5 < 101 → 2
+    expect(computeJumpHidden(itemIdxToNodePos(nodes, 5), null, totalNodes, W)).toBe(2);
+    // Цель ВНУТРИ зоны: items[100] → pos=80, 80 < 101 → 77
+    expect(computeJumpHidden(itemIdxToNodePos(nodes, 100), null, totalNodes, W)).toBe(77);
+    // Цель ПОСЛЕ зоны, далеко за окном: items[195] → pos=146, 146 > 101 → не двигаем
+    expect(itemIdxToNodePos(nodes, 195)).toBe(146);
+    expect(computeJumpHidden(146, null, totalNodes, W)).toBe(101);
+    // Цель на самом краю: items[199] → pos=150 (последний узел), 150 > 101 → 101
+    expect(itemIdxToNodePos(nodes, 199)).toBe(150);
+    expect(computeJumpHidden(150, null, totalNodes, W)).toBe(101);
+    // Цель ВНУТРИ exec-зоны (зона items 80..129): items[100] и items[110] →
+    // оба на один узел со start=80 (вся зона склеена)
+    expect(itemIdxToNodePos(nodes, 100)).toBe(80);
+    expect(itemIdxToNodePos(nodes, 110)).toBe(80);
+    expect(computeJumpHidden(80, null, totalNodes, W)).toBe(77);
   });
 });

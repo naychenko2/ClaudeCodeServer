@@ -13,6 +13,51 @@ import type {
   SpecialtyTemplateSettings,
 } from '../types';
 
+declare module '../types' {
+  // Каталог может вернуть icon/color; фронт показывает значок только если оба
+  // пришли с сервера, иначе рисуется хардкодный фолбэк из ICON_COLOR_BY_KEY.
+  interface SpecialtyCatalogEntry {
+    icon?: string | null;
+    color?: string | null;
+  }
+}
+
+// === Значок и цвет роли (дефолт кода до того, как бэк начнёт их отдавать) ===
+//
+// Решение владельца (24.08.2026): значок и цвет роли задаёт продукт и
+// не настраивается. Белый список имён совпадает с backend SpecialtyCatalog.Entry.Icon
+// (14 ролей). Когда бэкенд начнёт отдавать icon/color в /api/specialties — фронт
+// берёт их оттуда, а этот хардкод остаётся фолбэком для бэкендов младше волны.
+const ICON_COLOR_BY_KEY: Record<string, { icon: string; color: string }> = {
+  analyst:          { icon: 'chart',     color: 'blue' },
+  planner:          { icon: 'checks',    color: 'purple' },
+  reviewer:         { icon: 'shield',    color: 'red' },
+  executor:         { icon: 'hammer',    color: 'brown' },
+  secretary:        { icon: 'notebook',  color: 'green' },
+  coordinator:      { icon: 'share',     color: 'cyan' },
+  mentor:           { icon: 'cap',       color: 'yellow' },
+  designer:         { icon: 'palette',   color: 'orange' },
+  consultant:       { icon: 'bulb',      color: 'yellow' },
+  librarian:        { icon: 'book',      color: 'brown' },
+  tester:           { icon: 'flask',     color: 'green' },
+  backendExecutor:  { icon: 'server',    color: 'blue' },
+  frontendExecutor: { icon: 'monitor',   color: 'pink' },
+  devopsExecutor:   { icon: 'box',       color: 'red' },
+};
+
+// Имя lucide-иконки роли. Если в каталоге icon не пришёл — возвращаем хардкод из
+// ICON_COLOR_BY_KEY, иначе 'circle' как последний фолбэк (DynamicIcon его отрисует
+// всегда; неизвестные имена из каталога не ломают UI).
+export function roleIconName(catalog: SpecialtyCatalogEntry | null | undefined, key: string): string {
+  return catalog?.icon || ICON_COLOR_BY_KEY[key]?.icon || 'circle';
+}
+
+// Ключ палитры AGENT_COLORS (см. components/AgentSelector.tsx). Совпадает с
+// SpecialtyCatalog.Entry.Color на бэке — фронт передаёт ключ, AGENT_COLORS даёт hex.
+export function roleColorKey(catalog: SpecialtyCatalogEntry | null | undefined, key: string): string {
+  return catalog?.color || ICON_COLOR_BY_KEY[key]?.color || 'brown';
+}
+
 let _catalog: SpecialtyCatalogEntry[] | null = null;
 let _loading: Promise<void> | null = null;
 const _listeners = new Set<() => void>();

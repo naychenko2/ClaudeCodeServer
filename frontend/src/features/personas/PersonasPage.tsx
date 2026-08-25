@@ -32,6 +32,39 @@ import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { PersonasHub } from './PersonasHub';
 import { PersonasSpecialties } from './PersonasSpecialties';
+
+// Утилита пуша URL для specialties: hash вида
+//   #/personas/specialties
+//   #/personas/specialties/{roleKey}
+//   #/personas/specialties/{roleKey}/edit
+// history.state остаётся валидным NavSnapshot с personaView='specialties' и
+// дополнительными полями specialtyKey/specialtyEdit (расширение NavSnapshot
+// типа для под-адресов раздела). Парсится в PersonasPage.onPop и в consume().
+// Прямая запись через history.pushState: toHash в nav.ts не знает про под-
+// адреса specialties/{roleKey} (его контракт — общий), а здесь нам нужен
+// кастомный URL с двумя сегментами и опциональным /edit.
+function pushSpecialtiesUrl(
+  roleKey: string | null, viewMode: 'list' | 'role' | 'edit' | null,
+): void {
+  let hash = '#/personas/specialties';
+  if (roleKey) hash = `#/personas/specialties/${encodeURIComponent(roleKey)}`;
+  if (viewMode === 'edit' && roleKey) hash = `#/personas/specialties/${encodeURIComponent(roleKey)}/edit`;
+  const state: Record<string, unknown> = { screen: 'personas', personaView: 'specialties' };
+  if (roleKey) state.specialtyKey = roleKey;
+  if (viewMode === 'edit') state.specialtyEdit = true;
+  window.history.pushState(state, '', hash);
+}
+
+// Парсит под-адрес specialties из текущего hash: возвращает роль и viewMode.
+// null — это не под-адрес specialties (другой раздел / старая форма).
+function parseSpecialtiesHash(): { roleKey: string | null; viewMode: 'list' | 'role' | 'edit' } | null {
+  const h = window.location.hash;
+  const m = h.match(/^#\/personas\/specialties(?:\/([^/?]+))?(\/edit)?$/);
+  if (!m) return null;
+  const roleKey = m[1] ? decodeURIComponent(m[1]) : null;
+  const viewMode: 'list' | 'role' | 'edit' = m[2] ? 'edit' : (roleKey ? 'role' : 'list');
+  return { roleKey, viewMode };
+}
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
@@ -66,6 +99,14 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // 'specialties' (настройка специальностей). Не четвёртая ось навигации — вариант
   // содержимого того же центра; рельса слева и список персон остаются на месте.
   const [specialtiesMode, setSpecialtiesMode] = useState(false);
+  // Под-адрес specialties: roleKey + viewMode. Под-адрес — отдельная запись
+  // history.state, чтобы кнопка «Назад» возвращала на уровень выше, а не
+  // выкидывала из раздела. Инициализация — из текущего hash.
+  const initialSpec = parseSpecialtiesHash();
+  const [specialtyRoleKey, setSpecialtyRoleKey] = useState<string | null>(initialSpec?.roleKey ?? null);
+  const [specialtyViewMode, setSpecialtyViewMode] = useState<'list' | 'role' | 'edit'>(
+    initialSpec?.viewMode ?? 'list',
+  );
   // Проекты — чтобы показать имя/зону проектной персоны и открыть её проект в «Поговорить»
   const [projects, setProjects] = useState<Project[]>([]);
   // Идёт создание чата по кнопке «Поговорить»
@@ -142,20 +183,35 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
 
   // Back/forward браузера внутри раздела «Персоны». Восстанавливаем и выбор персоны,
   // и режим «Специальности» — иначе popstate по «#/personas/specialties» гасил бы
-  // состояние specialtiesMode, и кнопка «Назад» возвращала бы не туда.
+  // состояние specialtiesMode, и кнопка «Назад» возвращала бы не туда. Под-адрес
+  // specialties/{roleKey} восстанавливается из history.state (pushSpecialtiesUrl
+  // сохраняет specialtyKey и specialtyEdit в state), с фолбэком на парсинг hash.
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
-      const s = e.state as NavSnapshot | null;
-      if (s?.screen === 'personas') {
-        if (s.personaView === 'specialties') {
-          setSpecialtiesMode(true);
-          setCreating(false); setSelectedId(null);
-          setMobileView('list');
-        } else {
-          setSpecialtiesMode(false);
-          setSelectedId(s.persona ?? null);
-          setMobileView(s.persona ? 'card' : 'list');
-        }
+      const s = e.state as (NavSnapshot & { specialtyKey?: string; specialtyEdit?: boolean }) | null;
+      // Сначала пробуем state: он хранит то, что записал pushSpecialtiesUrl.
+      // Затем — парсим hash напрямую: popstate иногда срабатывает без
+      // восстановленного state, и тогда единственный надёжный источник —
+      // window.location.hash.
+      let roleKey: string | null = s?.specialtyKey ?? null;
+      let edit = !!s?.specialtyEdit;
+      const parsed = parseSpecialtiesHash();
+      if (parsed) {
+        roleKey = parsed.roleKey;
+        edit = parsed.viewMode === 'edit';
+      }
+      if (s?.screen === 'personas' && (s.personaView === 'specialties' || parsed)) {
+        setSpecialtiesMode(true);
+        setCreating(false); setSelectedId(null);
+        setMobileView('list');
+        setSpecialtyRoleKey(roleKey);
+        setSpecialtyViewMode(edit ? 'edit' : (roleKey ? 'role' : 'list'));
+      } else if (s?.screen === 'personas') {
+        setSpecialtiesMode(false);
+        setSpecialtyRoleKey(null);
+        setSpecialtyViewMode('list');
+        setSelectedId(s.persona ?? null);
+        setMobileView(s.persona ? 'card' : 'list');
       }
     };
     window.addEventListener('popstate', onPop);
@@ -187,7 +243,25 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     if (specialtiesMode) return;
     setSpecialtiesMode(true);
     setCreating(false); setSelectedId(null); setMobileView('list');
-    navPush({ screen: 'personas', personaView: 'specialties' });
+    setSpecialtyRoleKey(null);
+    setSpecialtyViewMode('list');
+    pushSpecialtiesUrl(null, 'list');
+  };
+  // Переходы внутри specialties — навигация по под-адресам.
+  const navigateSpecialtiesRole = (key: string) => {
+    setSpecialtyRoleKey(key);
+    setSpecialtyViewMode('role');
+    pushSpecialtiesUrl(key, 'role');
+  };
+  const navigateSpecialtiesEdit = (key: string) => {
+    setSpecialtyRoleKey(key);
+    setSpecialtyViewMode('edit');
+    pushSpecialtiesUrl(key, 'edit');
+  };
+  const navigateSpecialtiesList = () => {
+    setSpecialtyRoleKey(null);
+    setSpecialtyViewMode('list');
+    pushSpecialtiesUrl(null, 'list');
   };
   const closeSpecialties = () => {
     if (!specialtiesMode) return;
@@ -356,7 +430,13 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         hero={!isMobile}
         isMobile={isMobile} />
     : specialtiesMode
-    ? <PersonasSpecialties />
+    ? <PersonasSpecialties
+        roleKey={specialtyRoleKey}
+        viewMode={specialtyViewMode}
+        onNavigateList={navigateSpecialtiesList}
+        onNavigateRole={navigateSpecialtiesRole}
+        onNavigateEdit={navigateSpecialtiesEdit}
+      />
     : <PersonasHub
         personas={personas}
         talking={talking}

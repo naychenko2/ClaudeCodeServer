@@ -1,81 +1,123 @@
-// Экран «Специальности» — центральная зона раздела «Персоны» в режиме specialties.
-// Переехал из вкладки «Правила» модалки «Модели и расход» (24.08.2026): настройка
-// ролей живёт рядом с персонами, а модалка осталась про деньги и маршруты.
+// Экран «Специальности» — центральная зона раздела «Персоны» в режиме specialties
+// (волна 4 «Персонализация специальностей»). Роутер между тремя экранами:
 //
-// Сам экран — тонкая обёртка над SpecialRulesTab: всю инициализацию данных
-// (useProviderData, useModels, useSaveState, useSpecialtySettings) делаем здесь,
-// SpecialRulesTab остаётся переносимым без изменений. Обёртка даёт централизованную
-// точку для будущих правок (например, срез «Кто работает по этой роли» в карточках).
+//   - список ролей (нет roleKey):       SpecialtyListView
+//   - визитка роли (roleKey):            SpecialtyRoleView
+//   - настройка роли (viewMode === 'edit'): SpecialtyEditView
 //
-// Шапку с PillSwitch и подзаголовком рисует PersonasPage — этот компонент несёт
-// только контент: ошибки стора + SpecialRulesTab в белой карточке.
+// Шапку с PillSwitch и подзаголовком рисует PersonasPage — этот компонент
+// несёт только контент: ошибки стора + текущий экран в белой карточке.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { C, R, SHADOW, SP, MODAL_W } from '../../lib/design';
 import { api } from '../../lib/api';
-import { useModels } from '../../lib/models';
 import { useProviderData, type TierKey } from '../../lib/modelProvidersShared';
-import { loadUserLayer, reloadPresetSettings, resetLayer, saveLayer, useSaveState } from '../../lib/presets';
+import {
+  loadUserLayer, saveLayer, useSpecialtySettings, useSaveState,
+} from '../../lib/presets';
 import type { LayerReducer } from '../../lib/presets';
+import { reloadSpecialties, useSpecialtyCatalog } from '../../lib/specialties';
 import { useMe } from '../../lib/defaultPersona';
 import { useIsMobile } from '../../lib/breakpoints';
-import type { ResetResult } from '../../types';
-import { SpecialRulesTab } from '../specialties/SpecialRulesTab';
+import { usePersonas } from '../../lib/personas';
+import type {
+  Persona, SpecialtySettingsLayer, SpecialtySettingsResponse,
+} from '../../types';
+import { SpecialtyListView } from './SpecialtyListView';
+import { SpecialtyRoleView } from './SpecialtyRoleView';
+import { SpecialtyEditView } from './SpecialtyEditView';
+import type { Scope } from './personaSpecialtyShared';
 
-type Scope = 'global' | 'owner' | 'user';
+export interface PersonasSpecialtiesProps {
+  roleKey?: string | null;
+  viewMode?: 'list' | 'role' | 'edit';
+  onNavigateList?: () => void;
+  onNavigateRole?: (key: string) => void;
+  onNavigateEdit?: (key: string) => void;
+}
 
-export function PersonasSpecialties() {
+export function PersonasSpecialties(props: PersonasSpecialtiesProps): React.ReactElement {
   const isMobile = useIsMobile();
   const me = useMe();
   const isAdmin = me.role === 'admin';
 
-  // Роль и контекст уровня «Модели по умолчанию»: null = общие (админ) или свои (не-админ)
-  const [authMe, setAuthMe] = useState<{ userId: string | null } | null>(null);
+  const catalog = useSpecialtyCatalog();
+  const settingsAll = useSpecialtySettings();
+
+  // Слой выбирается один раз: для не-админа — всегда owner; для админа —
+  // стартуем с owner (он живой, на «Для всех» чаще пусто).
+  const [scope, setScope] = useState<Scope | null>(null);
+  const activeScope: Scope = scope ?? 'owner';
+
+  // Чужой слой: для админа на слое «user» нужен выбор пользователя +
+  // отдельный запрос за user-слоем (бэк отдаёт user-слой ВЫЗЫВАЮЩЕГО).
+  const [contextUserId] = useState<string | null>(null);
   useEffect(() => {
+    if (activeScope === 'user' && contextUserId) void loadUserLayer(contextUserId);
+  }, [activeScope, contextUserId]);
+
+  // Полный список персон — единый источник стопок аватаров на owner и
+  // среза в визитке. На global/user персон НЕ показываем (T8: за другого
+  // пользователя список был бы про чужих).
+  const allPersonas = usePersonas();
+  const personasForLayer: Persona[] = activeScope === 'owner' ? allPersonas : [];
+
+  // userLayer: для админа на user-слое подгружаем по требованию через
+  // прямой api.specialties.getUserLayer и кладём в локальный state. Это
+  // обходит хук useUserLayer (он требует синхронного key=userId при маунте,
+  // что неудобно для админских чатов с динамической сменой пользователя).
+  const [userLayersById, setUserLayersById] = useState<Record<string, SpecialtySettingsLayer>>({});
+  useEffect(() => {
+    if (activeScope !== 'user' || !contextUserId) return;
     let cancelled = false;
-    api.auth.me().then(d => { if (!cancelled) setAuthMe({ userId: d.userId ?? null }); }).catch(() => { if (!cancelled) setAuthMe({ userId: null }); });
+    api.specialties.getUserLayer(contextUserId)
+      .then(r => { if (!cancelled) setUserLayersById(prev => ({ ...prev, [contextUserId]: r.user })); })
+      .catch(() => { /* слой не дошёл — баннер покажется из settingsError */ });
     return () => { cancelled = true; };
-  }, []);
-  const meUserId = authMe?.userId ?? me.userId ?? null;
+  }, [activeScope, contextUserId]);
 
-  const [contextUserId, setContextUserId] = useState<string | null>(null);
-  const data = useProviderData(isAdmin, contextUserId);
-  const models = useModels();
-
-  const { savingScope, savingUserId, settingsError, resettingScope } = useSaveState();
-
-  // БЛОКЕР-1: подгружаем чужой user-слой при смене contextUserId. Без этого база для
-  // записи в user-слой — пустой шаблон, и PUT затрёт specialties/presets реального
-  // пользователя одним новым значением. SpecialRulesTab дополнительно ставит gate
-  // hasUserLayer на user-scope и отказывает с сообщением, если слой не дошёл.
-  useEffect(() => {
-    if (contextUserId) void loadUserLayer(contextUserId);
-  }, [contextUserId]);
-
-  // Редьюсерная запись слоя: оборачиваем в стабильный callback, чтобы SpecialRulesTab
-  // не перерисовывался на каждом монтировании. userId для user-scope берём из
-  // локального contextUserId — вызывающий его явно не передаёт.
+  // После записи saveLayer — перечитываем каталог подписей: эффективные
+  // имя/описание зависят от Display, который сейчас пришёл.
   const onSaveLayer = useCallback(
-    (scope: Scope, reducer: LayerReducer): Promise<void> =>
-      saveLayer(scope, reducer, scope === 'user' ? (contextUserId ?? null) : null),
+    async (s: Scope, reducer: LayerReducer): Promise<void> => {
+      const userId = s === 'user' ? (contextUserId ?? null) : null;
+      await saveLayer(s, reducer, userId);
+      reloadSpecialties();
+    },
     [contextUserId],
   );
 
-  const onReset = useCallback(
-    (scope: Scope, key?: string): Promise<ResetResult> =>
-      resetLayer(scope, key, scope === 'user' ? (contextUserId ?? undefined) : undefined),
-    [contextUserId],
-  );
+  // Слой для текущего scope: для owner — settings.owner, для global —
+  // settings.global, для user — локальный userLayer.
+  const layerSettings: SpecialtySettingsLayer | null = activeScope === 'user'
+    ? (contextUserId ? userLayersById[contextUserId] ?? null : null)
+    : settingsAll
+      ? (activeScope === 'global' ? settingsAll.global : settingsAll.owner)
+      : null;
 
-  const onReloadSettings = useCallback((): void => { reloadPresetSettings(); }, []);
-
-  const tierModels = useMemo<Record<TierKey, string>>(() => ({
+  const data = useProviderData(isAdmin, contextUserId);
+  const { settingsError } = useSaveState();
+  // tierModels + data используются в следующих волнах (для подписей моделей).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  void data;
+  // Сейчас вычисления моделей по уровням не нужны — они появятся в этапе
+  // «Матрицы моделей на экране роли». Заглушка, чтобы useMemo остался
+  // доступным для последующих волн.
+  const _tierModels = useMemo<Record<TierKey, string>>(() => ({
     strong: data.effectiveTierModel('strong'),
     medium: data.effectiveTierModel('medium'),
     weak: data.effectiveTierModel('weak'),
   }), [data]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  void _tierModels;
 
-  const ollamaModel = data.info?.model ?? undefined;
+  // === Роутинг viewMode ===
+  const viewMode = props.viewMode ?? 'list';
+  const roleKey = props.roleKey ?? null;
+
+  const goList = useCallback(() => props.onNavigateList?.(), [props]);
+  const goRole = useCallback((key: string) => props.onNavigateRole?.(key), [props]);
+  const goEdit = useCallback((key: string) => props.onNavigateEdit?.(key), [props]);
 
   return (
     <div style={{
@@ -92,22 +134,49 @@ export function PersonasSpecialties() {
         }}>{settingsError}</div>
       )}
 
-      <SpecialRulesTab
-        isAdmin={isAdmin}
-        meUserId={meUserId}
-        data={data}
-        contextUserId={contextUserId}
-        onContextUserId={setContextUserId}
-        models={models}
-        tierModels={tierModels}
-        ollamaModel={ollamaModel}
-        savingScope={savingScope}
-        savingUserId={savingUserId}
-        onSaveLayer={onSaveLayer}
-        onReloadSettings={onReloadSettings}
-        resettingScope={resettingScope}
-        onReset={onReset}
-      />
+      {viewMode === 'list' && (
+        <SpecialtyListView
+          isAdmin={isAdmin}
+          layer={activeScope}
+          onLayerChange={setScope}
+          catalog={catalog}
+          layerSettings={layerSettings}
+          personas={personasForLayer}
+          onOpenRole={(k) => goRole(k)}
+        />
+      )}
+
+      {viewMode === 'role' && roleKey && (
+        <SpecialtyRoleView
+          roleKey={roleKey}
+          catalog={catalog ?? []}
+          layer={activeScope}
+          layerSettings={layerSettings}
+          userLayer={activeScope === 'user' ? layerSettings : null}
+          personas={personasForLayer.filter(p => p.specialty === roleKey)}
+          onBack={goList}
+          onEdit={() => goEdit(roleKey)}
+        />
+      )}
+
+      {viewMode === 'edit' && roleKey && (
+        <SpecialtyEditView
+          roleKey={roleKey}
+          catalog={catalog ?? []}
+          layer={activeScope}
+          layerSettings={layerSettings}
+          userLayer={activeScope === 'user' ? layerSettings : null}
+          personas={personasForLayer.filter(p => p.specialty === roleKey)}
+          contextUserId={contextUserId}
+          onBack={() => goRole(roleKey)}
+          onSave={(reducer) => onSaveLayer(activeScope, reducer)}
+        />
+      )}
     </div>
   );
 }
+
+// SpecialtySettingsResponse — локальный тип для компилятора. Полный набор
+// полей (maxSubstitutions, presets, user, userId) не используется здесь —
+// только owner/global.
+export type { SpecialtySettingsResponse };

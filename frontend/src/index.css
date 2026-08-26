@@ -859,3 +859,14 @@ body {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.55; }
 }
+
+/* === Видимый focus-ring для интерактивов раздела «Специальности» ===
+   Карточка роли, чип «Инструменты», кнопка удаления привязки — кастомные
+   <button> без focus-стилей по умолчанию. Кольцо одно для всех (как у ui-кита),
+   на :focus-visible — иначе мышь кольцо не рисует, как и у других контролов. */
+.cc-role-card:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.cc-tools-row-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.cc-binding-remove:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+@media (prefers-reduced-motion: reduce) {
+  .cc-role-card, .cc-tools-row-btn, .cc-binding-remove { transition: none; }
+}

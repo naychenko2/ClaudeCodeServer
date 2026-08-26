@@ -3,21 +3,15 @@
 // какую роль открыть. Роли в каталоге без служебной «Не задана» (отфильтровано
 // в realRoles локально). Карточка «Любая специальность» НЕ рисуется.
 //
-// Слои (для всех / только для меня / пользователю …): имена ролей приходят из
-// каталога, подпись под строкой — summary правил слоя. Стопка аватаров «кто
-// работает» — только на слое «Только для меня», иначе подмешивали бы чужих
-// персон (принцип T8 — на чужом слое не рассказываем про своих).
+// С переходом на единый глобальный слой (f8e7d0e0) — все настройки ролей
+// общие, аватарки персон показываются всегда.
 
 import { useMemo, useState } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { AGENT_COLORS } from '../../components/AgentSelector';
 import { PersonaAvatar } from './PersonaAvatar';
-import { useIsMobile } from '../../lib/breakpoints';
-import { roleIconName, roleColorKey } from '../../lib/specialties';
+import { RoleAvatar } from '../../components/specialties/RoleAvatar';
+import { Toggle } from '../../components/ui/Toggle';
 import type { Persona, SpecialtyCatalogEntry, SpecialtySettingsLayer } from '../../types';
-import type { Scope } from './personaSpecialtyShared';
-import { LayerSwitch } from './personaSpecialtyShared';
-import { GlyphIcon } from '../../lib/projectGlyphs';
 
 // Каталог без служебной «none» (она живёт на стороне персоны как specialty=undefined).
 // Дубликат catalogRoles из lib/specialties.ts — здесь локально, чтобы не
@@ -39,17 +33,14 @@ function tripleOfLayer(layer: SpecialtySettingsLayer | null, key: string): [stri
 }
 
 // Подпись роли в строке списка: «Правил нет — N персон работают по общим настройкам»
-// (P25) или краткое summary тройки. Число персон — только на owner (см. personasOf
-// в useRolePersonasOf ниже).
+// или краткое summary тройки.
 function rowSubtitle(
   triple: [string, string, string],
   people: Persona[],
-  isOwner: boolean,
 ): string {
   const hasAny = triple.some(v => !!v);
   if (!hasAny) {
-    if (!isOwner) return 'Правил нет';
-    if (people.length === 0) return 'Правил нет, персон по этой роли пока нет';
+    if (people.length === 0) return 'Правил нет';
     const word = people.length === 1 ? 'персона работает' :
       people.length < 5 ? 'персоны работают' : 'персон работают';
     return `Правил нет — ${people.length} ${word} по общим настройкам`;
@@ -58,7 +49,7 @@ function rowSubtitle(
   return filled === 3 ? 'Сильная · Средняя · Слабая заданы' : `Задано ${filled} из 3 уровней`;
 }
 
-// === Список персон роли, только для owner-слоя ===
+// === Список персон роли ===
 //
 // Собственная функция вместо useRoleSlices из SpecialRulesTab: нам нужны ТОЛЬКО id
 // и имя, а не резолв по уровням (на owner-строке списка показываем аватары без
@@ -77,26 +68,15 @@ function useRolePersonasOf(allPersonas: Persona[]): Map<string, Persona[]> {
   }, [allPersonas]);
 }
 
-// === Значок роли в строке списка — DynamicIcon на цветной подложке ===
+// === Значок роли в строке списка — аватарка из assets/specialties/<key>.jpg,
+//     при отсутствии файла — lucide-глиф в круге цвета роли (RoleAvatar). ===
 function RoleIcon({ catalog, roleKey, size }: {
   catalog: SpecialtyCatalogEntry | null; roleKey: string; size: number;
 }): React.ReactElement {
-  const iconName = roleIconName(catalog, roleKey);
-  const colorKey = roleColorKey(catalog, roleKey);
-  const bg = AGENT_COLORS[colorKey] ?? AGENT_COLORS.brown;
-  return (
-    <span title="Значок роли задан продуктом и не настраивается" style={{
-      flex: 'none',
-      width: size, height: size, borderRadius: R.full,
-      background: bg, color: 'white',
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <GlyphIcon name={iconName} fallback={() => null} size={Math.round(size * 0.55)} />
-    </span>
-  );
+  return <RoleAvatar catalog={catalog} roleKey={roleKey} size={size} />;
 }
 
-// === Стопка аватаров (только на owner-слое) ===
+// === Стопка аватаров ===
 function PersonaStack({ people }: { people: Persona[] }): React.ReactElement | null {
   if (people.length === 0) return null;
   const shown = people.slice(0, 3);
@@ -126,14 +106,15 @@ function PersonaStack({ people }: { people: Persona[] }): React.ReactElement | n
   );
 }
 
-// === Карточка роли в плитке ===
+// === Сетка карточек ролей ===
 //
-// Плитка, а не строка: раздел стоит рядом с витриной персон и обязан читаться так же
-// (решение владельца 25.08.2026). Сетка — тот же showcaseGrid, что у витрины персон
-// (PersonasHub.tsx): minmax(150px, 1fr) держит две колонки на 360 CSS.
+// minmax(190px, 1fr) — нижний предел держит карточки читабельными (аватар 40 + имя
+// + подпись + padding), 1fr сжимает треки до фактической ширины контейнера. Шире, чем
+// в витрине персон (`PersonasHub.showcaseGrid` — 150 px): подписи ролей длиннее имён
+// (напр. «Исполнитель», «Координатор»), и при 150 px они рвутся посреди слова.
 const roleGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
   gap: 12,
 };
 
@@ -148,45 +129,66 @@ function clampLines(lines: number): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-function RoleCard({ role, layer, isOwner, people, dimmed, onOpen }: {
+// Карточка роли в стиле AssistantCard (PersonasHub.tsx:282-285): белый фон,
+// рамка C.border, радиус R.xxl, padding 14, без тени; ховер меняет цвет рамки на
+// C.accentMuted. Контент — по образцу: аватар 40, название 13.5/700, подпись
+// 11.5 C.textMuted, описание с клэмпом 2 строки (12, lineHeight 1.5). Доп. поля
+// (PersonaStack, признак «свои правила») — как в постановке задачи.
+function RoleCard({ role, layerSettings, people, dimmed, onOpen }: {
   role: SpecialtyCatalogEntry;
-  layer: SpecialtySettingsLayer | null;
-  isOwner: boolean;
+  layerSettings: SpecialtySettingsLayer | null;
   people: Persona[];
   // Роль без своих правил — приглушаем, но карточку не прячем: она отвечает на вопрос
   // «по каким настройкам работают её персоны», а не «трогали ли её».
   dimmed?: boolean;
   onOpen: () => void;
 }): React.ReactElement {
-  const triple = tripleOfLayer(layer, role.key);
+  const triple = tripleOfLayer(layerSettings, role.key);
+  const [hover, setHover] = useState(false);
   return (
-    <button type="button" onClick={onOpen} title={role.label} style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8,
-      minWidth: 0, padding: '14px 12px',
-      border: `1px solid ${C.border}`, borderRadius: R.xl,
-      background: dimmed ? C.bgSelected : C.bgWhite,
-      textAlign: 'left', cursor: 'pointer',
-      fontFamily: FONT.sans, boxSizing: 'border-box', height: '100%',
-    }}>
-      <RoleIcon catalog={role} roleKey={role.key} size={44} />
-      <span style={{
-        fontSize: FS.sm, fontWeight: 700, color: C.textHeading,
-        minWidth: 0, width: '100%', lineHeight: 1.3, ...clampLines(2),
-      }}>{role.label}</span>
+    <button type="button" onClick={onOpen} title={role.label}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="cc-role-card"
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 9,
+        minWidth: 0, padding: 14,
+        border: `1px solid ${hover ? C.accentMuted : C.border}`, borderRadius: R.xxl,
+        background: C.bgWhite,
+        textAlign: 'left', cursor: 'pointer',
+        fontFamily: FONT.sans, boxSizing: 'border-box', height: '100%',
+        opacity: dimmed ? 0.7 : 1,
+        transition: 'border-color 0.15s',
+        outline: 'none',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, width: '100%' }}>
+        <RoleIcon catalog={role} roleKey={role.key} size={40} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{
+            fontSize: FS.md, fontWeight: 700, color: C.textHeading, lineHeight: 1.3,
+            // overflowWrap: 'break-word' — разрыв слова остаётся страховкой на совсем
+            // узком контейнере, но там, где слово влезает целиком, перенос идёт по
+            // пробелу ('anywhere' рвал бы «Исполнитель», «Координатор» и т.п.).
+            overflowWrap: 'break-word',
+            ...clampLines(2),
+          }}>{role.label}</div>
+          <div style={{
+            fontSize: FS.xs, color: C.textMuted, marginTop: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{rowSubtitle(triple, people)}</div>
+        </div>
+      </div>
       {role.description && (
-        <span style={{
-          fontSize: FS.xs, color: C.textSecondary,
-          minWidth: 0, width: '100%', lineHeight: 1.4, ...clampLines(2),
-        }}>{role.description}</span>
+        <div style={{
+          fontSize: 12, color: C.textMuted, lineHeight: 1.5,
+          minWidth: 0, width: '100%',
+          ...clampLines(2),
+        }}>{role.description}</div>
       )}
-      <span style={{
-        fontSize: FS.xs, color: C.textMuted,
-        minWidth: 0, width: '100%', lineHeight: 1.4, ...clampLines(2),
-      }}>{rowSubtitle(triple, people, isOwner)}</span>
-      {isOwner && people.length > 0 && (
-        <span style={{ marginTop: 'auto', paddingTop: 4 }}>
+      {people.length > 0 && (
+        <div style={{ marginTop: 'auto', paddingTop: 4 }}>
           <PersonaStack people={people} />
-        </span>
+        </div>
       )}
     </button>
   );
@@ -194,25 +196,18 @@ function RoleCard({ role, layer, isOwner, people, dimmed, onOpen }: {
 
 // === Основной экран ===
 export interface SpecialtyListViewProps {
-  isAdmin: boolean;
-  layer: Scope;
-  onLayerChange: (s: Scope) => void;
   catalog: SpecialtyCatalogEntry[] | null;
   layerSettings: SpecialtySettingsLayer | null;
-  // Полный список персон владельца — единый источник для стопок аватаров на
-  // owner-слое. Загрузка делается родителем.
+  // Полный список персон владельца — единый источник для стопок аватаров.
   personas: Persona[];
   onOpenRole: (key: string) => void;
 }
 
 export function SpecialtyListView({
-  isAdmin, layer, onLayerChange, catalog, layerSettings, personas, onOpenRole,
+  catalog, layerSettings, personas, onOpenRole,
 }: SpecialtyListViewProps): React.ReactElement {
-  const isMobile = useIsMobile();
-  // «Показать все роли каталога» — состояние P15, чтобы персонализировать можно
-  // было и роли без персон (например, назвать «Библиотекаря» до первой персоны).
-  // Сбрасывается при смене слоя: иначе после переключения владелец видит чужие
-  // роли без правил (на его слое) — это сбивает с толку (QA B4 «Что 2», 25.08.2026).
+  // Состояние «Показать все роли каталога» (P15): персонализировать можно и роли
+  // без персон (например, назвать «Библиотекаря» до первой персоны).
   const [showAll, setShowAll] = useState(false);
   const personasByRole = useRolePersonasOf(personas);
   const roles = useMemo(() => realRoles(catalog), [catalog]);
@@ -234,50 +229,9 @@ export function SpecialtyListView({
     if (t.some(v => !!v)) return false;
     return (personasByRole.get(r.key)?.length ?? 0) === 0;
   }), [sorted, layerSettings, personasByRole]);
-  const isOwner = layer === 'owner';
-  const covered = withRules.length;
-  const total = roles.length;
-
-  // Слой меняется снаружи — оборачиваем, чтобы сбросить раскрытие «Показать все».
-  const handleLayerChange = (s: Scope) => {
-    setShowAll(false);
-    onLayerChange(s);
-  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-      {/* Переключатель режима центра (P14, дословно из постановки) */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-      }}>
-        <div style={{
-          display: 'flex', gap: 2, background: C.bgSelected, borderRadius: R.pill, padding: 2,
-          width: isMobile ? '100%' : undefined, flexWrap: isMobile ? 'wrap' : undefined,
-        }}>
-          <LayerSwitch
-            scope={layer}
-            onScope={handleLayerChange}
-            isAdmin={isAdmin}
-            isMobile={isMobile}
-          />
-          {/* Бейдж «N вручную» — сколько ролей каталога уже имеют правила на
-              текущем слое. Виден всегда (даже при 0), чтобы на любом слое было
-              видно, сколько ролей настроено (QA B4 «Что 1», 25.08.2026). */}
-          {total > 0 && (
-            <span title="Ролей с правилами на текущем слое" style={{
-              fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700,
-              color: covered > 0 ? C.textHeading : C.textMuted,
-              background: covered > 0 ? C.bgWhite : C.bgSelected,
-              padding: '2px 8px', borderRadius: 12, marginLeft: 8,
-              border: covered > 0 ? `1px solid ${C.borderLight}` : 'none',
-            }}>{covered} вручную</span>
-          )}
-        </div>
-        <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
-          Слой определяет, кого коснётся правило.
-        </span>
-      </div>
-
       {/* Список ролей с правилами */}
       {withRules.length === 0 ? (
         <div style={{
@@ -286,14 +240,14 @@ export function SpecialtyListView({
           color: C.textSecondary, fontSize: FS.sm, lineHeight: 1.55,
         }}>
           <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, marginBottom: 4 }}>
-            {layer === 'global' ? 'Общих правил пока нет' : 'Особых правил пока нет'}
+            Правил пока нет
           </div>
           Откройте роль — и задайте ей модели, пресеты и типовые умения.
         </div>
       ) : (
         <div style={roleGrid}>
           {withRules.map(r => (
-            <RoleCard key={r.key} role={r} layer={layerSettings} isOwner={isOwner}
+            <RoleCard key={r.key} role={r} layerSettings={layerSettings}
               people={personasByRole.get(r.key) ?? []}
               onOpen={() => onOpenRole(r.key)} />
           ))}
@@ -301,8 +255,8 @@ export function SpecialtyListView({
       )}
 
       {/* Секция «Без своих правил» — роли без правил моделей, но с персонами.
-          Только на owner, иначе чужие персоны (T8). На других слоях — пусто. */}
-      {isOwner && noRules.length > 0 && (
+          На общем слое аватарки показываются всегда (нет отдельного owner/user). */}
+      {noRules.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, marginTop: SP.sm }}>
           <div style={{
             fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700,
@@ -312,7 +266,7 @@ export function SpecialtyListView({
           </div>
           <div style={roleGrid}>
           {noRules.map(r => (
-            <RoleCard key={r.key} role={r} layer={layerSettings} isOwner={isOwner} dimmed
+            <RoleCard key={r.key} role={r} layerSettings={layerSettings} dimmed
               people={personasByRole.get(r.key) ?? []}
               onOpen={() => onOpenRole(r.key)} />
           ))}
@@ -320,25 +274,17 @@ export function SpecialtyListView({
         </div>
       )}
 
-      {/* Переключатель «Показать все роли каталога» (P15) */}
-      <label style={{
-        display: 'flex', alignItems: 'center', gap: SP.sm,
-        cursor: 'pointer', marginTop: SP.sm,
+      {/* Переключатель «Показать все роли каталога» (P15) — Toggle из UI-кита,
+          с фокусом и стрелками ←/→ (см. components/ui/Toggle). */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm,
       }}>
-        <span
-          role="switch" aria-checked={showAll}
-          onClick={() => setShowAll(v => !v)}
-          style={{
-            position: 'relative', width: 42, height: 25,
-            borderRadius: 13, background: showAll ? C.accent : C.track,
-            transition: 'background 0.15s', cursor: 'pointer', flexShrink: 0,
-          }}>
-          <span style={{
-            position: 'absolute', top: 2, left: showAll ? 19 : 2,
-            width: 21, height: 21, borderRadius: '50%', background: C.bgWhite,
-            boxShadow: 'var(--shadow-thumb)', transition: 'left 0.15s',
-          }} />
-        </span>
+        <Toggle
+          checked={showAll}
+          onChange={setShowAll}
+          focusable
+          ariaLabel="Показать все роли каталога"
+        />
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
             Показать все роли каталога
@@ -347,12 +293,12 @@ export function SpecialtyListView({
             Роли, по которым пока никто не работает и правил нет — чтобы назвать их заранее.
           </span>
         </div>
-      </label>
+      </div>
 
       {showAll && rest.length > 0 && (
         <div style={roleGrid}>
           {rest.map(r => (
-            <RoleCard key={r.key} role={r} layer={layerSettings} isOwner={isOwner} dimmed
+            <RoleCard key={r.key} role={r} layerSettings={layerSettings} dimmed
               people={personasByRole.get(r.key) ?? []}
               onOpen={() => onOpenRole(r.key)} />
           ))}

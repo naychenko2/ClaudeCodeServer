@@ -66,12 +66,12 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
 
   // Запись слоя: редьюсерная семантика (стор сам считает next из текущего снимка).
   // Обёртка стабильна через useCallback, чтобы вкладки не перерисовывались на каждом
-  // маунте модалки. userId для user-scope берётся из локального contextUserId —
-  // вызывающий его явно не передаёт, чтобы не разъезжаться с UI.
+  // маунте модалки. ADR-012 снял owner/user-слои: userId больше не нужен, запись всегда
+  // идёт в общий слой (PUT /specialties/settings/global, admin-only).
   const onSaveLayer = useCallback(
-    (scope: Scope, reducer: LayerReducer): Promise<void> =>
-      saveLayer(scope, reducer, scope === 'user' ? (contextUserId ?? null) : null),
-    [contextUserId],
+    (_scope: Scope, reducer: LayerReducer): Promise<void> =>
+      saveLayer('global', reducer, null),
+    [],
   );
 
   const onReloadSettings = useCallback((): void => { reloadPresetSettings(); }, []);

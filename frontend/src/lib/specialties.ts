@@ -13,53 +13,50 @@ import type {
   SpecialtyTemplateSettings,
 } from '../types';
 
-declare module '../types' {
-  // Каталог может вернуть icon/color; фронт показывает значок только если оба
-  // пришли с сервера, иначе рисуется хардкодный фолбэк из ICON_COLOR_BY_KEY.
-  interface SpecialtyCatalogEntry {
-    icon?: string | null;
-    color?: string | null;
-  }
-}
-
-// === Значок и цвет роли (дефолт кода до того, как бэк начнёт их отдавать) ===
+// === Значок и цвет роли (приходят с бэка: SpecialtyCatalogEntry.icon / color) ===
 //
-// Решение владельца (24.08.2026): значок и цвет роли задаёт продукт и
-// не настраивается. Белый список имён совпадает с backend SpecialtyCatalog.Entry.Icon
-// (14 ролей). Когда бэкенд начнёт отдавать icon/color в /api/specialties — фронт
-// берёт их оттуда, а этот хардкод остаётся фолбэком для бэкендов младше волны.
-// Имена lucide-иконок — только из белого списка `iconNames` (lucide-react/dynamic).
-// Неверные имена дают «[lucide-react]: Name in Lucide DynamicIcon not found» в консоли
-// и пустой значок (см. QA B1, 25.08.2026). Когда бэк начнёт отдавать icon/color
-// в /api/specialties — фронт берёт их оттуда, а этот хардкод остаётся фолбэком.
-const ICON_COLOR_BY_KEY: Record<string, { icon: string; color: string }> = {
-  analyst:          { icon: 'chart-line',       color: 'blue' },
-  planner:          { icon: 'list-checks',      color: 'purple' },
-  reviewer:         { icon: 'shield',           color: 'red' },
-  executor:         { icon: 'hammer',           color: 'brown' },
-  secretary:        { icon: 'notebook-pen',     color: 'green' },
-  coordinator:      { icon: 'share-2',          color: 'cyan' },
-  mentor:           { icon: 'graduation-cap',   color: 'yellow' },
-  designer:         { icon: 'palette',          color: 'orange' },
-  consultant:       { icon: 'lightbulb',        color: 'yellow' },
-  librarian:        { icon: 'book-open',        color: 'brown' },
-  tester:           { icon: 'flask-conical',    color: 'green' },
-  backendExecutor:  { icon: 'server',           color: 'blue' },
-  frontendExecutor: { icon: 'monitor-smartphone', color: 'pink' },
-  devopsExecutor:   { icon: 'package',          color: 'red' },
-};
-
-// Имя lucide-иконки роли. Если в каталоге icon не пришёл — возвращаем хардкод из
-// ICON_COLOR_BY_KEY, иначе 'circle' как последний фолбэк (DynamicIcon его отрисует
-// всегда; неизвестные имена из каталога не ломают UI).
-export function roleIconName(catalog: SpecialtyCatalogEntry | null | undefined, key: string): string {
-  return catalog?.icon || ICON_COLOR_BY_KEY[key]?.icon || 'circle';
+// Решение владельца (24.08.2026): значок и цвет роли задаёт продукт и не настраивается.
+// Источник — белый список SpecialtyCatalog.Entry.Icon / Color на бэкенде (14 ролей).
+// Бэкенд отдаёт icon/color в /api/specialties, фронт берёт их оттуда; неизвестное/пустое
+// имя — фолбэк на 'circle' (DynamicIcon отрисует его всегда; «мусор» из каталога не
+// ломает UI, см. QA B1 25.08.2026). Имена lucide-иконок — только из белого списка
+// `iconNames` (lucide-react/dynamic), неверные дают «Name in Lucide DynamicIcon not found».
+export function roleIconName(catalog: SpecialtyCatalogEntry | null | undefined, _key: string): string {
+  return catalog?.icon || 'circle';
 }
 
 // Ключ палитры AGENT_COLORS (см. components/AgentSelector.tsx). Совпадает с
 // SpecialtyCatalog.Entry.Color на бэке — фронт передаёт ключ, AGENT_COLORS даёт hex.
-export function roleColorKey(catalog: SpecialtyCatalogEntry | null | undefined, key: string): string {
-  return catalog?.color || ICON_COLOR_BY_KEY[key]?.color || 'brown';
+export function roleColorKey(catalog: SpecialtyCatalogEntry | null | undefined, _key: string): string {
+  return catalog?.color || 'brown';
+}
+
+// === Аватарки ролей (assets/specialties/<roleKey>.jpg) ===
+//
+// Vite собирает все .jpg из assets/specialties статически через import.meta.glob.
+// Отсутствующий файл НЕ ломает сборку и не вызывает ошибку компиляции — он просто
+// не попадает в объект, и hasRoleAvatar вернёт false (раздел обязан жить и без
+// аватарок). URL возвращается строкой-дефолтом из glob-модуля.
+type AvatarGlob = Record<string, { default: string }>;
+const ROLE_AVATAR_MODULES = import.meta.glob<{ default: string }>(
+  '../assets/specialties/*.jpg',
+  { eager: true },
+) as unknown as AvatarGlob;
+
+const ROLE_AVATAR_BY_KEY: Record<string, string> = {};
+for (const path in ROLE_AVATAR_MODULES) {
+  const m = path.match(/\/([^/]+)\.jpg$/);
+  if (m) ROLE_AVATAR_BY_KEY[m[1]] = ROLE_AVATAR_MODULES[path].default;
+}
+
+// Есть ли аватарка для ключа роли (для выбора между img и lucide-фолбэком).
+export function hasRoleAvatar(roleKey: string): boolean {
+  return roleKey in ROLE_AVATAR_BY_KEY;
+}
+
+// URL аватарки роли (строка для <img src=...>), либо undefined если файла нет.
+export function roleAvatarUrl(roleKey: string): string | undefined {
+  return ROLE_AVATAR_BY_KEY[roleKey];
 }
 
 let _catalog: SpecialtyCatalogEntry[] | null = null;

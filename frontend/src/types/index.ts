@@ -2116,14 +2116,19 @@ export interface SpecialtyTemplate {
 }
 
 // Запись каталога специальностей из GET /api/specialties: подписи, описание (для
-// карточек панели «Инструкции для роли») и эффективный шаблон прав вызывающего
-// (настройки поверх дефолтов кода) приходят с бэкенда.
+// карточек панели «Инструкции для роли»), значок/цвет роли (из белого списка
+// SpecialtyCatalog.Entry.Icon/Color на бэке) и эффективный шаблон прав
+// вызывающего (настройки поверх дефолтов кода) приходят с бэкенда. icon/color
+// опциональны: бэкенды младше волны их ещё не отдают, фронт отрисует lucide-глиф
+// в цветном круге как последний фолбэк.
 export interface SpecialtyCatalogEntry {
   key: PersonaSpecialty;
   label: string;
   description?: string;
   executorFamily: boolean;
   template: SpecialtyTemplate | null;
+  icon?: string | null;
+  color?: string | null;
 }
 
 // Именованный пресет — упорядоченная цепочка шагов (ADR-007 §1). Шаг — маршрут
@@ -2227,20 +2232,15 @@ export interface SpecialtySettingsLayer {
   presets: ModelRoutePreset[];
 }
 
-// Ответ GET /api/specialties/settings: глобальный слой, личный слой вызывающего
-// и объединённый список пресетов с признаком слоя. user — только для admin,
-// подтягивается через getUserLayer (см. api.specialties) — здесь не обязателен.
+// Ответ GET /api/specialties/settings: единственный глобальный слой (волна 4 убрала
+// owner/user-слои — запись всегда идёт в global) и объединённый список пресетов
+// с признаком слоя (для UI/диагностики).
 export interface SpecialtySettingsResponse {
   version: number;
   // Эффективный бюджет подмен цепочки хода (per-owner → global → дефолт, кламп 1..5):
   // шаги пресета за пределом бюджета+1 приглушаются как «обычно не используется»
   maxSubstitutions?: number;
   global: SpecialtySettingsLayer;
-  owner: SpecialtySettingsLayer;
-  // User-слой конкретного пользователя (только для admin; не-admin не получает)
-  user?: SpecialtySettingsLayer;
-  // Контекст user-слоя в ответе (admin): чьими настройками заполнено .user
-  userId?: string;
   presets: ScopedPreset[];
 }
 

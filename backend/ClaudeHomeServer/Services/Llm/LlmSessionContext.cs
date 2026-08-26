@@ -259,4 +259,9 @@ public sealed record LlmSessionContext(
     // null — грань чату не положена (не десктопный чат, выключена в проекте, нет флага,
     // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
     // на момент запуска CLI — от свойств хода состав не зависит.
-    DesktopMcpContext? DesktopMcp = null);
+    DesktopMcpContext? DesktopMcp = null,
+    // Живая персона чата: матрицы персоны/специальности участвуют в постройке цепочки
+    // фолбэка (ClaudeSession.EffectiveTurnChain → ModelAssignmentResolver.ResolveChain
+    // с персоной) — старт и хвост хода резолвятся по одним правилам. Перечитывается каждый
+    // ход — правка матриц применяется без пересоздания адаптера. null — сессия без персоны.
+    Func<Persona?>? PersonaProvider = null);

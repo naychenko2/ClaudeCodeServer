@@ -95,14 +95,15 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
             var task = tasks.GetById(taskId);
             if (task is null || task.OwnerId != ownerId)
                 return NotFound(new { error = "Задача не найдена" });
-            var td = TaskPreview(task);
+            var executorPersona = task.PersonaId is null ? null : personas.Get(task.PersonaId, ownerId);
+            var td = TaskPreview(task, executorPersona);
             // Цепочка хода — как у боевой сессии исполнителя: ExecutorModel замораживается
             // в Session.Model, дальше ClaudeSession.EffectiveTurnChain = ResolveChain места
-            // по этой модели (с хвостом тира, ADR-007 §4.1). Битый пресет не дотягиваем —
-            // его показ («пресет удалён») и есть ответ строки-итога.
+            // по этой модели (с хвостом тира, ADR-007 §4.1) С МАТРИЦАМИ персоны-исполнителя.
+            // Битый пресет не дотягиваем — его показ («пресет удалён») и есть ответ строки-итога.
             var chain = td.PresetBroken
                 ? td.Chain
-                : assignments.ResolveChain(LocalActionCatalog.TasksExecutor, td.Model, ownerId);
+                : assignments.ResolveChain(LocalActionCatalog.TasksExecutor, td.Model, ownerId, executorPersona);
             return Ok(PreviewResponse(td with { Chain = chain }, frozen: null, chip: null));
         }
 
@@ -126,17 +127,21 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
             if (session is null || sessions.ResolveOwnerId(session) != ownerId)
                 return NotFound(new { error = "Сессия не найдена" });
             var usageKey = UsageKeyFor(session);
-            var chain = assignments.ResolveChain(usageKey, session.Model, ownerId);
+            // Персона сессии — как в бою (ClaudeSession.EffectiveTurnChain зовёт ResolveChain
+            // с матрицами персоны): без неё превью показывало хвост общего слота владельца,
+            // а не цепочку, которой реально идёт ход (инцидент 2026-08-26).
+            var sessionPersona = session.PersonaId is null ? null : personas.Get(session.PersonaId, ownerId);
+            var chain = assignments.ResolveChain(usageKey, session.Model, ownerId, sessionPersona);
             // Замороженность — свойство сессии: чат с непустой Model не перечитывает
             // настройки (ADR-007 §9.1, смена подложится только новым чатом); с пустой —
             // живёт по назначению места каждым ходом.
             var frozen = !string.IsNullOrWhiteSpace(session.Model);
             var cd = frozen
                 // Замороженная модель — явная для места: источник explicit, уровень — той же
-                // точкой, что достройка хвоста в бою (TierOfModel по слотам владельца)
+                // точкой, что достройка хвоста в бою (TierOfModel с матрицами персоны)
                 ? new ModelAssignmentResolver.ModelSourceDetail(session.Model!.Trim(),
                     ModelAssignmentResolver.ModelSource.ExplicitModel,
-                    assignments.TierOfModel(session.Model, ownerId), null, null, chain)
+                    assignments.TierOfModel(session.Model, ownerId, sessionPersona), null, null, chain)
                 : assignments.Preview(usageKey, null, PersonaSpecialty.None, ownerId, null) with { Chain = chain };
             return Ok(PreviewResponse(cd, frozen, chip: null));
         }
@@ -166,11 +171,11 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     //   уровня нет: модель персоны → её уровень → матрицы (дефолт места tasks-executor);
     //   персоны нет: пустая заглушка — уровень задачи/места разворачивается по слотам,
     //     как в бою (ExecutorModel с пустым списком матриц).
-    // Живой объект персоны не мутируется — снимок с нужными полями.
-    private ModelAssignmentResolver.ModelSourceDetail TaskPreview(TaskItem task)
+    // Живой объект персоны не мутируется — снимок с нужными полями. Персона исполнителя
+    // приходит снаружи — она же передаётся в ResolveChain цепочки (одна точка резолва).
+    private ModelAssignmentResolver.ModelSourceDetail TaskPreview(TaskItem task, Persona? persona)
     {
         var ownerId = task.OwnerId!;
-        var persona = task.PersonaId is null ? null : personas.Get(task.PersonaId, ownerId);
         var effective = persona is null ? new Persona() : new Persona
         {
             Model = task.ModelTier is null ? persona.Model : null,

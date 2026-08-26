@@ -39,9 +39,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
-    // (тесты) — один элемент (эффективная модель), т.е. цепочки нет.
+    // (тесты) — один элемент (эффективная модель), т.е. цепочки нет. Персона передаётся в резолв:
+    // хвост тира строится по её узким матрицам (персона → специальность), а не по общему слоту
+    // владельца — старт и фолбэк идут по одним правилам.
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
+        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
     // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
@@ -533,6 +535,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Провайдер системного промпта персоны — вызывается на каждый ход
     // (свежие контракт/модель/PersonaSwitched без пересоздания адаптера)
     private readonly Func<string?>? _personaPromptProvider;
+    // Живая персона чата — для цепочки фолбэка (EffectiveTurnChain зовёт ResolveChain
+    // с матрицами персоны). Перечитывается на каждый ход: правка матриц персоны/специальности
+    // применяется со следующего хода без пересоздания адаптера (как у _personaPromptProvider).
+    private readonly Func<Persona?>? _personaProvider;
     // MCP-сервер долгой памяти персоны + auto-recall её памяти (текст промпта + манифест F3)
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<RecallBlock?>>? _personaRecallProvider;
@@ -631,6 +637,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _notesMcp = context.NotesMcp;
         _recallProvider = context.RecallProvider;
         _personaPromptProvider = context.PersonaPromptProvider;
+        _personaProvider = context.PersonaProvider;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;

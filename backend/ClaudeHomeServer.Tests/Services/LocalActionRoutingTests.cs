@@ -1308,6 +1308,88 @@ public class LocalActionRoutingTests
         Assert.Null(resolver.TierOfModel(null, ownerId));
     }
 
+    // --- Цепочка хода с матрицами персоны (инцидент 2026-08-26) ---
+    // Дефект: стартовая модель резолвилась по матрицам специальности (замораживалась в
+    // Session.Model), а хвост цепочки брался из общего слота владельца — у персоны со
+    // своим пресетом цепочка обрубалась. Починка: перегрузка ResolveChain с персоной
+    // строит хвост по узким матрицам (персона → специальность → слоты владельца).
+
+    // Обстановка инцидента: общий слот владельца «Мощный» = [opus[1m], glm-5.3[1m], kimi-k3,
+    // deepseek-v4-pro]; специальность designer, TierStrong = preset «Сильный — Кими» =
+    // [kimi-k3, opus[1m], glm-5.3[1m]]. Личных слотов у владельца нет (падают на инстанс).
+    private static (ModelAssignmentResolver Resolver, string OwnerId, Persona Persona) BuildIncidentResolver()
+    {
+        var (resolver, appSettings, users, _, spec, _) = BuildResolverWithSpecialty();
+        appSettings.Save(new AppSettings { ModelTierStrong = "preset:powerful" });
+        spec.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets =
+            {
+                Preset("powerful", "opus[1m]", "glm-5.3[1m]", "kimi-k3", "deepseek-v4-pro"),
+                Preset("strong-kimi", "kimi-k3", "opus[1m]", "glm-5.3[1m]"),
+            },
+            Specialties = { ["designer"] = Tmpl(strong: "preset:strong-kimi") },
+        });
+        var owner = users.Add("u1", "p", "user");
+        return (resolver, owner.Id, new Persona { Specialty = PersonaSpecialty.Designer });
+    }
+
+    [Fact]
+    public void ResolveChain_ПерсонаСоСпециальностью_ЦепочкаИзМатрицыСпециальности()
+    {
+        // Персона со специальностью, чей TierStrong — пресет [A, B, C]; общий слот владельца
+        // другой ([X, Y]). Старт на A → цепочка [A, B, C] из матрицы специальности,
+        // а НЕ хвост общего слота владельца.
+        var (resolver, appSettings, users, _, spec, _) = BuildResolverWithSpecialty();
+        appSettings.Save(new AppSettings { ModelTierStrong = "preset:owner-strong" });
+        spec.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets =
+            {
+                Preset("owner-strong", "owner-x", "owner-y"),
+                Preset("spec-strong", "model-a", "model-b", "model-c"),
+            },
+            Specialties = { ["designer"] = Tmpl(strong: "preset:spec-strong") },
+        });
+        var owner = users.Add("u1", "p", "user");
+        var persona = new Persona { Specialty = PersonaSpecialty.Designer };
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatPersona, "model-a", owner.Id, persona);
+
+        chain.Should().BeEquivalentTo(new[] { "model-a", "model-b", "model-c" },
+            opts => opts.WithStrictOrdering(),
+            "хвост цепочки строится по матрице специальности, а не по общему слоту владельца");
+    }
+
+    [Fact]
+    public void ResolveChain_БезПерсоны_ХвостОбщегоСлотаВладельца()
+    {
+        // Регресс: персоны нет → поведение прежнее, хвост берётся из общего слота
+        // владельца (в обстановке инцидента после kimi-k3 остаётся только deepseek-v4-pro).
+        var (resolver, ownerId, _) = BuildIncidentResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.TasksExecutor, "kimi-k3", ownerId);
+
+        chain.Should().BeEquivalentTo(new[] { "kimi-k3", "deepseek-v4-pro" },
+            opts => opts.WithStrictOrdering(),
+            "без персоны хвост — из общего слота владельца, как до починки");
+    }
+
+    [Fact]
+    public void ResolveChain_СценарийИнцидента_DesignerСПресетомКими()
+    {
+        // Инцидент 2026-08-26: персона Майя (designer), TierStrong = preset «Сильный — Кими».
+        // Старт на kimi-k3 → цепочка обязана продолжиться opus[1m] и glm-5.3[1m] из её
+        // матрицы, а не обрубаться на хвосте общего слота «Мощный».
+        var (resolver, ownerId, persona) = BuildIncidentResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.TasksExecutor, "kimi-k3", ownerId, persona);
+
+        chain.Should().BeEquivalentTo(new[] { "kimi-k3", "opus[1m]", "glm-5.3[1m]" },
+            opts => opts.WithStrictOrdering(),
+            "цепочка строится по матрице специальности дизайнера");
+    }
+
     [Fact]
     public void ExecutorModel_ЗадачаБерётМатрицуПерсоны()
     {

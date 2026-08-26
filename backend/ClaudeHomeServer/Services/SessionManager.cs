@@ -2325,6 +2325,13 @@ public class SessionManager : IDisposable
             .Where(s => ResolveOwnerId(s) == ownerId)
             .ToList();
 
+    // Живая персона чата для цепочки фолбэка (ClaudeSession.EffectiveTurnChain →
+    // ResolveChain с матрицами персоны): перечитывается на каждый ход — правка матриц
+    // персоны/специальности применяется со следующего хода без пересоздания адаптера.
+    // null — у чата нет персоны (или владельца).
+    private Func<Persona?> BuildPersonaProvider(Session session, string? ownerId) =>
+        () => session.PersonaId is { } pid && ownerId is not null ? _personas.Get(pid, ownerId) : null;
+
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
     // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
@@ -3190,6 +3197,7 @@ public class SessionManager : IDisposable
             NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
+            PersonaProvider: BuildPersonaProvider(session, ownerId),
             MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId),
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
@@ -4521,6 +4529,7 @@ public class SessionManager : IDisposable
                 NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
+                PersonaProvider: BuildPersonaProvider(entry.Info, entry.Info.OwnerId),
                 MemoryMcp: persona.Memory,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona, entry.Info),
@@ -4562,6 +4571,7 @@ public class SessionManager : IDisposable
                 NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
+                PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
                 MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id),
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),

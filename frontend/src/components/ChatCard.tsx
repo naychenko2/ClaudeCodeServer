@@ -314,12 +314,13 @@ export function ChatCard({
   const cardActions = CHAT_ACTION_ORDER.filter(k => cardActionAvailable[k]);
   const quickActions = cardActions.filter(k => cardVis.isVisible(k));
   // Вылет свайпа = сколько кнопок реально показано (кнопки по 44px — тач-цель)
-  // Потолок — три кнопки: при восьми зона заняла бы 352px, а нижний ориентир
+  // Потолок — три кнопки, ОБЩИЙ для свайпа и hover-кластера: при восьми зона
+  // заняла бы 352px, а нижний ориентир
   // экрана 360 CSS (Flip 8) — карточка уезжала бы целиком, оставляя под пальцем
   // ряд одинаковых иконок без имени и превью. Остальное достаётся из меню
-  const SWIPE_MAX_BTNS = 3;
-  const swipeButtons = quickActions.slice(0, SWIPE_MAX_BTNS);
-  const swipeOpenW = swipeButtons.length * SWIPE_BTN_W;
+  const MAX_QUICK_BTNS = 3;
+  const quickButtons = quickActions.slice(0, MAX_QUICK_BTNS);
+  const swipeOpenW = quickButtons.length * SWIPE_BTN_W;
   // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
   // (hover-кластер на десктопе, свайп на мобиле), и переключает это по клику.
   // Меню при этом не закрывается — набор выставляется одним заходом
@@ -549,7 +550,7 @@ export function ChatCard({
     >
       {/* Кнопки свайпа (мобила): под карточкой у правого края, видны, когда карточка
           уехала. Высота — вся карточка, ширина — вылет раскрытия */}
-      {swipeCanWork && swipeButtons.length > 0 && (
+      {swipeCanWork && quickButtons.length > 0 && (
         <div style={{
           position: 'absolute', top: 0, bottom: 0, right: 0, width: swipeOpenW,
           display: 'flex', zIndex: 0,
@@ -559,7 +560,7 @@ export function ChatCard({
               пропом ради одного места хуже, чем собрать кнопку тут. Что у примитива
               берём обязательно: имя (aria-label — на таче title не показывается вовсе)
               и видимое кольцо фокуса (класс cc-iconbtn) */}
-          {swipeButtons.map((k, i) => {
+          {quickButtons.map((k, i) => {
             const b = quickButton(k);
             return (
               <button
@@ -791,13 +792,13 @@ export function ChatCard({
           Ghost-класса здесь НЕТ намеренно: кластер и так появляется только по
           наведению (showActions), и приглушать уже проявленные кнопки — значит
           показывать их выключенными */}
-      {showActions && !isMobile && quickActions.length > 0 && (
+      {showActions && !isMobile && quickButtons.length > 0 && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
           right: ACTIONS_RIGHT, zIndex: 2, display: 'flex', alignItems: 'center',
           background: cardBg, borderRadius: R.lg, boxShadow: SHADOW.card,
         }}>
-          {quickActions.map(k => {
+          {quickButtons.map(k => {
             const b = quickButton(k);
             return (
               <IconButton
@@ -807,7 +808,6 @@ export function ChatCard({
                 size="xs"
                 tone={b.danger ? 'danger' : undefined}
                 active={b.active}
-                className={b.active ? 'cc-ghost-live' : undefined}
               >
                 {b.icon}
               </IconButton>
@@ -822,7 +822,7 @@ export function ChatCard({
       {showActions && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-          right: isMobile ? ACTIONS_RIGHT : ACTIONS_RIGHT + quickActions.length * ACTION_BOX,
+          right: isMobile ? ACTIONS_RIGHT : ACTIONS_RIGHT + quickButtons.length * ACTION_BOX,
           zIndex: 1, display: 'flex',
         }}>
           <IconButton

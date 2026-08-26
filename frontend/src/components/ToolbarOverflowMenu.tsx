@@ -97,9 +97,20 @@ export function ToolbarOverflowMenu({
       close();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    // Портал считает координаты один раз, в момент открытия, и сам за якорем не
+    // ходит: прокрутка ленты или списка оставила бы карточку висеть в воздухе.
+    // Закрываем — то же, что ui/Menu просит делать на вызывающей стороне.
+    // capture: true — ловим прокрутку любого внутреннего контейнера, а не только окна
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
     // close стабилен по составу (setOpen/setAnchor) — без него в зависимостях эффект
     // пересоздавался бы каждый рендер
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -279,6 +290,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
   // справа гасит всплытие — основное действие пункта от неё не срабатывает
   return (
     <span
+      role="none"
       style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, borderRadius: R.lg, paddingRight: 4 }}
       onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}

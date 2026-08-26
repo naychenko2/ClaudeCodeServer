@@ -167,6 +167,7 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
   );
   const row = action ? (
     <span
+      role="none"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{

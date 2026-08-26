@@ -417,7 +417,7 @@ public class UserStore
     }
 
     /// <summary>Быстрые фразы композера пользователя в порядке показа; пусто — не заведены.</summary>
-    public IReadOnlyList<string> GetQuickPhrases(string id)
+    public IReadOnlyList<QuickPhrase> GetQuickPhrases(string id)
     {
         lock (_lock)
         {
@@ -430,7 +430,7 @@ public class UserStore
     /// Сохраняет набор быстрых фраз (список приходит отвалидированным: обрезка, дедуп,
     /// потолок). Возвращает false, если пользователь не найден.
     /// </summary>
-    public bool SetQuickPhrases(string id, IReadOnlyList<string> phrases)
+    public bool SetQuickPhrases(string id, IReadOnlyList<QuickPhrase> phrases)
     {
         lock (_lock)
         {

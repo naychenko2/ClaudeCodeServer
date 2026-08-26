@@ -721,8 +721,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // Браузерные уведомления (только когда вкладка не в фокусе) — нужно решение / ход завершён.
   // Заглушённый чат (notificationsMuted) молчит; счётчики при этом ведём как обычно,
-  // иначе снятие мьюта выстрелило бы уведомлением о давно прошедшем событии
-  const muted = session.notificationsMuted === true;
+  // иначе снятие мьюта выстрелило бы уведомлением о давно прошедшем событии.
+  // Архивный чат молчит так же: «убрал с глаз» — значит и не дёргать. Гасим именно
+  // доставку, а не настройку уведомлений чата: она переживает архивацию и вернётся
+  // вместе с чатом (кнопка колокольчика в шапке продолжает показывать своё состояние)
+  const muted = session.notificationsMuted === true || !!session.archivedAt;
   const prevWaitingRef = useRef(false);
   useEffect(() => {
     if (isWaiting && !prevWaitingRef.current && !muted)

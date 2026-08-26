@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, List, ListTree, Check,
+  Plus, Archive, CalendarDays, Tags, List, ListTree, Check,
   ArrowDownWideNarrow, ArrowUpNarrowWide, SlidersHorizontal,
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
-import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader } from './ui';
+import { Button, CountBadge, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FilterBar } from './FilterBar';
 import type { ChatFilters, ChatGroupBy, ChatSortOrder } from '../lib/chatFilters';
@@ -49,6 +49,10 @@ interface ChatListToolbarProps {
   // Доступные режимы группировки. У глобального списка (чаты вне проектов) реестра
   // тегов нет — передавай ['days', 'none']
   groupByOptions?: ChatGroupBy[];
+  // Сколько чатов области лежит в архиве — счёт в подсказке кнопки «Архив».
+  // Кнопка видна всегда, даже при нуле: иначе про архив нельзя узнать, ни разу
+  // им не воспользовавшись
+  archivedCount?: number;
 }
 
 // Заголовок секции в мобильной шторке «Вид»
@@ -65,7 +69,7 @@ function SheetSec({ children }: { children: React.ReactNode }) {
 
 export function ChatListToolbar({
   onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
-  isMobile = false, groupByOptions = ['days', 'tags', 'none'],
+  isMobile = false, groupByOptions = ['days', 'tags', 'none'], archivedCount = 0,
 }: ChatListToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Список живёт в карточке с шапкой — контролы уезжают туда (как у «Задач» и
@@ -85,7 +89,24 @@ export function ChatListToolbar({
   const tier: Tier = width >= 400 ? 'comfort' : width >= 260 ? 'cozy' : 'compact';
   const iconBtnSize = tier === 'comfort' ? 'md' : 'sm';
 
-  const { groupBy, sortOrder, hierarchy } = filters;
+  const { groupBy, sortOrder, hierarchy, archived } = filters;
+  // Подпись кнопки архива: в обычном виде зовёт внутрь и говорит, сколько там лежит,
+  // в архивном — предлагает выход обратно к списку
+  const archiveTitle = archived
+    ? 'Архив: показан — вернуться к списку'
+    : archivedCount > 0 ? `Архив (${archivedCount})` : 'Архив (пусто)';
+  const toggleArchive = () => patch({ archived: !archived });
+  // Кнопка архива со счётчиком: серый кружок в углу иконки, когда в архиве что-то есть.
+  // Серый, а не акцентный: архивные чаты ничего не требуют — число здесь справка, а не
+  // новость (акцент в системе приберегаем главному действию экрана).
+  const archiveButton = (size: 'xs' | 'sm' | 'md' | 'lg', iconSize: number) => (
+    <IconButton size={size} title={archiveTitle} active={archived} onClick={toggleArchive}>
+      <span style={{ position: 'relative', display: 'flex' }}>
+        <Archive size={iconSize} strokeWidth={ICON_STROKE} />
+        {archivedCount > 0 && <CountBadge value={archivedCount} tone="muted" />}
+      </span>
+    </IconButton>
+  );
   // groupBy из хранилища может отсутствовать в groupByOptions (напр. 'tags' у
   // глобального списка после переезда чата) — PillSwitch без активного сегмента
   // не рисует пилюлю, это валидное состояние; первый же выбор всё чинит.
@@ -127,6 +148,7 @@ export function ChatListToolbar({
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} isMobile triggerSize="lg"
         />
+        {archiveButton('lg', ICON_SIZE.sm)}
         <IconButton size="lg" title="Вид: группировка, сортировка, иерархия"
           onClick={() => setViewSheet(true)}>
           <SlidersHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
@@ -223,6 +245,7 @@ export function ChatListToolbar({
         >
           <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
+        {archiveButton('xs', ICON_SIZE.xs)}
       </PanelHeaderSlot>
       {!hideNew && (
         <PanelHeaderSlot pinned>
@@ -328,6 +351,7 @@ export function ChatListToolbar({
       >
         <ListTree size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
+      {archiveButton(iconBtnSize, iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs)}
     </div>
   );
 }

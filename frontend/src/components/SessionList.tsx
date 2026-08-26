@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown, MessageCircle } from 'lucide-react';
+import { Archive, FilterX, ChevronUp, ChevronDown, MessageCircle } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
-import { Modal, ModalActions } from './ui';
+import { Button, ConfirmDialog, Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -19,6 +19,7 @@ import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
+import { ArchiveNotice } from './ArchiveNotice';
 import { groupChats, groupByTags, sortChatsFlat, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
@@ -66,6 +67,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
   const [loaded, setLoaded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  // Подтверждение полной очистки архива проекта
+  const [clearArchiveAsk, setClearArchiveAsk] = useState(false);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // Раскрытая свайпом карточка (мобильная раскладка) — как в глобальном ChatList:
@@ -317,6 +320,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // в localStorage отдельно для каждого проекта (scope = project.id)
   const { filters, patch } = useChatFilters(project.id);
   const { groupBy, sortOrder, hierarchy } = filters;
+  const inArchive = filters.archived;
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
   // Чаты с живыми фоновыми агентами — считаются работающими в счётчике свёрнутой ветки
@@ -341,8 +345,28 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, agentsRunningIds],
   );
+  // Архив проекта: счёт для кнопки в шапке и плашки над списком; бейджи и «скрыто
+  // фильтрами» считаются в пределах ТЕКУЩЕГО вида (архив — не «скрытое фильтром»)
+  const archivedSessions = sessions.filter(s => !!s.archivedAt);
+  const viewTotal = inArchive ? archivedSessions.length : sessions.length - archivedSessions.length;
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = sessions.length - filteredSessions.length;
+  const hiddenCount = viewTotal - filteredSessions.length;
+
+  // Полная очистка архива проекта — тем же эндпоинтом, что «Удалить» у карточки
+  // (массового API нет намеренно: удаление чата уносит и транскрипт claude CLI).
+  // Активный чат мог лежать в архиве — если его снесли, освобождаем центр экрана
+  const clearArchive = async () => {
+    const targets = archivedSessions;
+    const results = await Promise.allSettled(targets.map(t => api.sessions.delete(project.id, t.id)));
+    const removed = new Set(targets.filter((_, i) => results[i].status === 'fulfilled').map(t => t.id));
+    const left = sessions.filter(s => !removed.has(s.id));
+    setSessions(left);
+    setClearArchiveAsk(false);
+    if (activeSession && removed.has(activeSession.id)) {
+      if (left.length > 0) onSelect(left[0], undefined, true);
+      else onCleared?.();
+    }
+  };
 
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
@@ -483,7 +507,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
+        archivedCount={archivedSessions.length}
       />
+
+      {inArchive && (
+        <ArchiveNotice
+          count={archivedSessions.length}
+          isMobile={isMobile}
+          onExit={() => patch({ archived: false })}
+          onClear={online ? () => setClearArchiveAsk(true) : undefined}
+        />
+      )}
 
       {/* Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
           верхний padding у него есть, и вместе с общим набегало 18px пустоты под
@@ -497,29 +531,52 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
             в тулбаре панели сверху, дублировать его в empty незачем. */}
-        {loaded && sessions.length === 0 && (
-          <EmptyState
-            compact
-            icon={<MessageCircle size={20} strokeWidth={2} />}
-            title="Чатов пока нет"
-            subtitle="Начните первый чат по этому проекту."
-          />
+        {inArchive && archivedSessions.length === 0 && (
+          // Центрируем по высоте зоны (как «Проект без git» в рельсе изменений),
+          // иначе empty прилипал к верху и пустая панель выглядела недозагруженной
+          <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+            <EmptyState
+              compact
+              icon={<Archive size={20} strokeWidth={2} />}
+              title="В архиве пусто"
+              subtitle="Убирайте сюда чаты, которые не нужны в списке, но которые жалко удалить."
+              action={
+                <Button variant="ghost" size="sm" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archived: false })}>
+                  Вернуться к списку
+                </Button>
+              }
+            />
+          </div>
         )}
-        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
-          <EmptyState
-            compact
-            icon={<FilterX size={20} strokeWidth={2} />}
-            title="Ничего не нашлось"
-            subtitle={buildHiddenReason(sessions.length, filters.search)}
-            action={
-              <ChatFilterResetActions
-                search={filters.search}
-                hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
-                onResetSearch={() => patch({ search: '' })}
-                onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
-              />
-            }
-          />
+        {!inArchive && loaded && sessions.length === 0 && (
+          // Та же центрирующая обёртка, что у архивного empty — не прижимать
+          // «Чатов пока нет» к верху высокой панели
+          <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+            <EmptyState
+              compact
+              icon={<MessageCircle size={20} strokeWidth={2} />}
+              title="Чатов пока нет"
+              subtitle="Начните первый чат по этому проекту."
+            />
+          </div>
+        )}
+        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && viewTotal > 0 && (
+          <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+            <EmptyState
+              compact
+              icon={<FilterX size={20} strokeWidth={2} />}
+              title="Ничего не нашлось"
+              subtitle={buildHiddenReason(viewTotal, filters.search)}
+              action={
+                <ChatFilterResetActions
+                  search={filters.search}
+                  hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
+                  onResetSearch={() => patch({ search: '' })}
+                  onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
+                />
+              }
+            />
+          </div>
         )}
         {treeSegments ? (
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
@@ -588,6 +645,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       })()}
 
 
+      {clearArchiveAsk && (
+        <ConfirmDialog
+          title="Очистить архив?"
+          confirmLabel="Удалить всё"
+          confirmVariant="danger"
+          subtitle={`${archivedSessions.length} ${chatCountWord(archivedSessions.length)} из архива проекта будут удалены без возможности восстановления.`}
+          onConfirm={clearArchive}
+          onCancel={() => setClearArchiveAsk(false)}
+        />
+      )}
       {deleteTarget && (
         <Modal
           title="Удалить чат?"

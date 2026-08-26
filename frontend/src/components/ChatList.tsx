@@ -1,17 +1,17 @@
 import { useMemo, useState } from 'react';
-import { FilterX, MessageCircle, Plus } from 'lucide-react';
+import { Archive, FilterX, MessageCircle, Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { C, ISLAND, MODAL_W } from '../lib/design';
-import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
+import { ConfirmDialog, Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, type ChatGroupBy } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -19,6 +19,7 @@ import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
+import { ArchiveNotice } from './ArchiveNotice';
 
 interface Props {
   chats: Session[];
@@ -49,6 +50,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // Подписка на стор механик — перерисовать список при запуске новой механики
   useLastMechanicVersion();
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  // Подтверждение полной очистки архива (удаление всех архивных чатов насовсем)
+  const [clearArchiveAsk, setClearArchiveAsk] = useState(false);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // Раскрытая свайпом карточка (мобильная раскладка): максимум одна; открытие
@@ -83,6 +86,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // Применение фильтров (единый предикат — общий с проектным списком чатов)
   const isVisible = matchChatFilter(filters);
   const filteredChats = chats.filter(isVisible);
+  // Архив области: счёт для подсказки кнопки и для плашки над списком. Обе стороны
+  // развилки нужны отдельно — бейдж панели показывает размер ТЕКУЩЕГО вида
+  const archivedChats = chats.filter(c => !!c.archivedAt);
+  const inArchive = filters.archived;
+  const viewTotal = inArchive ? archivedChats.length : chats.length - archivedChats.length;
   // Фильтр применяется ко всем узлам дерева (не только к корням) — множество видимых
   // чатов совпадает с плоским списком. Сборка леса мемоизирована — hover по карточке
   // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
@@ -94,8 +102,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, agentsRunningIds],
   );
-  // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = chats.length - filteredChats.length;
+  // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно.
+  // Считаем в пределах ТЕКУЩЕГО вида: архив — не «скрытые фильтром» чаты, и без этого
+  // бейдж фильтров вечно горел бы числом архивных
+  const hiddenCount = viewTotal - filteredChats.length;
 
   const togglePin = async (chat: Session) => {
     try {
@@ -121,6 +131,16 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     }
     onDeleted(deleteTarget.id);
     setDeleteTarget(null);
+  };
+
+  // Полная очистка архива: удаляем архивные чаты по одному тем же эндпоинтом, что и
+  // «Удалить» у карточки. Отдельного массового API нет намеренно — удаление чата уносит
+  // и транскрипт claude CLI, и дублировать этот каскад пачкой ради одной кнопки незачем.
+  // Упавшие удаления просто останутся в архиве: список обновит только реально удалённые.
+  const clearArchive = async () => {
+    const results = await Promise.allSettled(archivedChats.map(c => api.chats.delete(c.id)));
+    results.forEach((r, i) => { if (r.status === 'fulfilled') onDeleted(archivedChats[i].id); });
+    setClearArchiveAsk(false);
   };
 
   // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
@@ -182,46 +202,82 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       hiddenCount={hiddenCount}
       isMobile={isMobile}
       groupByOptions={GROUP_BY_OPTIONS}
+      archivedCount={archivedChats.length}
     />
   );
+
+  // Плашка архивного вида — над списком, в обоих режимах (bare и PanelShell)
+  const archiveNotice = inArchive ? (
+    <ArchiveNotice
+      count={archivedChats.length}
+      isMobile={isMobile}
+      onExit={() => patch({ archived: false })}
+      onClear={() => setClearArchiveAsk(true)}
+    />
+  ) : null;
 
 
   // Содержимое списка. Пустой список — приглашение создать первый чат; если чаты
   // есть, но фильтры всё скрыли — подсказка со сбросом.
   const listContent = (
     <>
-      {chats.length === 0 && (
-        <EmptyState
-          compact={!isMobile}
-          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-          title="Здесь будут ваши чаты"
-          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
-          action={
-            <Button
-              variant="primary" size="md" loading={creating}
-              onClick={onNew}
-              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-            >
-              Создать первый чат
-            </Button>
-          }
-        />
+      {inArchive && archivedChats.length === 0 && (
+        // Центрируем по высоте доступной зоны (как «Проект без git» в рельсе
+        // изменений): без обёртки EmptyState прилипал к верху панели и пустой
+        // контент выглядел недозагруженным, а не пустым. minHeight держит
+        // центрирование и когда панель ниже контента
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+          <EmptyState
+            compact={!isMobile}
+            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="В архиве пусто"
+            subtitle="Убирайте сюда чаты, которые не нужны в списке, но которые жалко удалить."
+            action={
+              <Button variant="ghost" size="md" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archived: false })}>
+                Вернуться к списку
+              </Button>
+            }
+          />
+        </div>
       )}
-      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
-        <EmptyState
-          compact
-          icon={<FilterX size={20} strokeWidth={2} />}
-          title="Ничего не нашлось"
-          subtitle={buildHiddenReason(chats.length, filters.search)}
-          action={
-            <ChatFilterResetActions
-              search={filters.search}
-              hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
-              onResetSearch={() => patch({ search: '' })}
-              onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
-            />
-          }
-        />
+      {!inArchive && chats.length === 0 && (
+        // Та же центрирующая обёртка, что у архивного empty: без неё «Создать первый
+        // чат» прилипал к верху панели, когда список ещё пуст
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+          <EmptyState
+            compact={!isMobile}
+            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="Здесь будут ваши чаты"
+            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+            action={
+              <Button
+                variant="primary" size="md" loading={creating}
+                onClick={onNew}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+              >
+                Создать первый чат
+              </Button>
+            }
+          />
+        </div>
+      )}
+      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && viewTotal > 0 && (
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+          <EmptyState
+            compact
+            icon={<FilterX size={20} strokeWidth={2} />}
+            title="Ничего не нашлось"
+            subtitle={buildHiddenReason(viewTotal, filters.search)}
+            action={
+              <ChatFilterResetActions
+                search={filters.search}
+                hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
+                onResetSearch={() => patch({ search: '' })}
+                onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
+              />
+            }
+          />
+        </div>
       )}
       {treeSegments ? (
         <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>
@@ -261,6 +317,16 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // (срок хранения и уведомления есть в меню карточки — пункты рисует сам ChatCard)
   const dialogs = (
     <>
+      {clearArchiveAsk && (
+        <ConfirmDialog
+          title="Очистить архив?"
+          confirmLabel="Удалить всё"
+          confirmVariant="danger"
+          subtitle={`${archivedChats.length} ${chatCountWord(archivedChats.length)} из архива будут удалены без возможности восстановления.`}
+          onConfirm={clearArchive}
+          onCancel={() => setClearArchiveAsk(false)}
+        />
+      )}
       {deleteTarget && (
         <Modal
           title="Удалить чат?"
@@ -325,6 +391,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           </div>
         )}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+          {archiveNotice}
           {scrollArea}
         </div>
         {dialogs}
@@ -343,8 +410,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
             style={{ flexShrink: 0 }}
           />
         }
-        title="Чаты"
-        badge={chats.length > 0 ? String(chats.length) : null}
+        title={inArchive ? 'Чаты · архив' : 'Чаты'}
+        badge={viewTotal > 0 ? String(viewTotal) : null}
         // fill=false: панель занимает по контенту, не растягивается на всю
         // высоту сайдбара — если чатов мало, низ остаётся свободным.
         fill={false}
@@ -353,6 +420,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
             уедут порталом сами, и полоса под заголовком не останется пустой.
             Мобильная ступень порталу не подлежит и рисуется здесь же, в теле. */}
         {toolbar}
+        {archiveNotice}
         {scrollArea}
       </PanelShell>
       {dialogs}

@@ -149,15 +149,17 @@ export function hasUnread(updatedAt: string, chatId: string, lastReadAt?: string
 }
 
 // Сколько чатов имеют непрочитанные сообщения — для бейджа на иконке рельсы.
-export function countUnreadChats(chats: { id: string; updatedAt: string; lastReadAt?: string | null }[]): number {
-  return chats.reduce((n, c) => n + (hasUnread(c.updatedAt, c.id, c.lastReadAt) ? 1 : 0), 0);
+// Архивные не считаются: они не видны в списке, и бейдж звал бы туда, куда не пойти
+// (открыть архив — отдельное осознанное действие).
+export function countUnreadChats(chats: { id: string; updatedAt: string; lastReadAt?: string | null; archivedAt?: string | null }[]): number {
+  return chats.reduce((n, c) => n + (!c.archivedAt && hasUnread(c.updatedAt, c.id, c.lastReadAt) ? 1 : 0), 0);
 }
 
 // Реактивный бейдж: подписка гарантирует ререндер при отметке прочтения — без
 // неё markChatRead писал бы мимо React, и число обновлялось бы только случайно,
 // на постороннем ререндере. Сам подсчёт не мемоизируем: он читает Map в памяти,
 // а не localStorage, и стоит дешевле, чем сравнение зависимостей.
-export function useUnreadChatCount(chats: { id: string; updatedAt: string; lastReadAt?: string | null }[]): number {
+export function useUnreadChatCount(chats: { id: string; updatedAt: string; lastReadAt?: string | null; archivedAt?: string | null }[]): number {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return countUnreadChats(chats);
 }

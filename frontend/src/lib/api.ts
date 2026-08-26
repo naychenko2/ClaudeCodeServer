@@ -112,6 +112,12 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(t),
       }),
+    // Срок хранения архива чатов (per-user): days = null или 0 — не удалять никогда
+    setArchiveRetention: (days: number | null) =>
+      request<{ archiveRetentionDays: number | null }>('/auth/archive-retention', {
+        method: 'PUT',
+        body: JSON.stringify({ days }),
+      }),
     // Таймзона устройства (IANA) — серверу для расчёта напоминаний по локальным срокам
     setTimeZone: (timeZone: string) =>
       request<void>('/auth/timezone', {

@@ -25,6 +25,8 @@ export interface ChatFieldsPatch {
   // Стиль озвучки ('talk' | 'digest'). Уходит и БЕЗ voiceMode: стиль принадлежит
   // устройству, и второе устройство выправляет его у чата с уже включённой озвучкой
   voiceStyle?: string;
+  // Архив: true — убрать чат из списка, false — вернуть. Работает у обоих видов чатов
+  archived?: boolean;
 }
 
 export function updateChatFields(session: Session, patch: ChatFieldsPatch): Promise<Session> {
@@ -38,6 +40,7 @@ export function updateChatFields(session: Session, patch: ChatFieldsPatch): Prom
     ...(patch.notificationsMuted !== undefined && { notificationsMuted: patch.notificationsMuted }),
     ...(patch.voiceMode !== undefined && { voiceMode: patch.voiceMode }),
     ...(patch.voiceStyle !== undefined && { voiceStyle: patch.voiceStyle }),
+    ...(patch.archived !== undefined && { archived: patch.archived }),
   };
   return session.projectId
     ? api.sessions.update(session.projectId, session.id, data)

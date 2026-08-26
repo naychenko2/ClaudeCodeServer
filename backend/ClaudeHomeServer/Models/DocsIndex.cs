@@ -71,11 +71,16 @@ public record DocRootFileCandidate(string Name, bool Exists);
 // Types — ключи групп типов («markdown», «pdf», «visio»…), а не расширения: расширений
 // три десятка, выбирают их всё равно группами, и хранить россыпь незачем.
 // Home — документ, который панель показывает «Началом»; null — авто (README в корне).
+// ExcludeFolders — подпапки, вычитаемые из выбранных папок (рабочие артефакты рядом
+// с документацией: workdir спайков, демо-данные). null = «нет исключений»; после
+// NormalizeScope ось всегда список. Явное включение сильнее: запись, совпавшая с
+// элементом Folders или лежащая вне выбранных папок, нормализатором отбрасывается.
 public record DocsScope(
     IReadOnlyList<string> Folders,
     IReadOnlyList<string> RootFiles,
     IReadOnlyList<string> Types,
-    string? Home = null);
+    string? Home = null,
+    IReadOnlyList<string>? ExcludeFolders = null);
 
 // Группа типов файлов для настройки. Расширений три десятка, и списком они не читаются —
 // выбирают группами: «Markdown», «PDF», «Visio», «Аудио»…

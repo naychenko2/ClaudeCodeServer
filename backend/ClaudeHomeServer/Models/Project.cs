@@ -77,10 +77,13 @@ public class Project
     //                    поэтому папкой он не выбирается — только конкретные файлы);
     //   DocsTypes      — группы типов файлов («markdown», «pdf», «visio»…), дефолт markdown;
     //   DocsHome       — документ «Начала» панели; null — авто (README в корне).
+    //   DocsExcludeFolders — подпапки, вычитаемые из выбранных папок (workdir спайков,
+    //                    демо-данные рядом с документацией); null — исключений нет.
     public List<string>? DocsFolders { get; set; }
     public List<string>? DocsRootFiles { get; set; }
     public List<string>? DocsTypes { get; set; }
     public string? DocsHome { get; set; }
+    public List<string>? DocsExcludeFolders { get; set; }
     // Реестр общих тегов проекта (имя, порядок, цвет) — per-owner изоляция
     public List<ProjectTag> TagRegistry { get; set; } = [];
     // Правила авто-разрешений/запретов для permission-запросов (см. PermissionRule)

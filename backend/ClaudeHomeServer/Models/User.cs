@@ -26,6 +26,13 @@ public class User
     public string? ModelTierWeak { get; set; }
     // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
     public ContextThresholds? ContextThresholds { get; set; }
+
+    // Через сколько дней после архивации архивный чат удаляется насовсем.
+    // null или 0 — не удалять никогда (дефолт продукта): человек убирает чат в архив
+    // именно чтобы сохранить его. Настройка ЛИЧНАЯ: архив у каждого свой, и срок
+    // хранения — вопрос привычки владельца, а не машины. Значение по умолчанию для
+    // инстанса можно задать ключом Session:ArchiveRetentionDays — личная настройка его перебивает.
+    public int? ArchiveRetentionDays { get; set; }
     // Глобальный (per-user) промпт AI-генерации сообщения коммита; null/пусто — дефолт.
     // Проект может переопределить своим Project.CommitPromptOverride.
     public string? GitCommitPrompt { get; set; }

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using Microsoft.AspNetCore.Identity;
@@ -514,6 +514,20 @@ public class UserStore
     /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
     /// Возвращает false если пользователь не найден.
     /// </summary>
+    // Срок хранения архива чатов (дни). null/0 — не удалять никогда
+    public bool SetArchiveRetentionDays(string id, int? days)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.ArchiveRetentionDays = days is > 0 ? days : null;
+            Save();
+            return true;
+        }
+    }
+
     public bool SetContextThresholds(string id, ContextThresholds? thresholds)
     {
         lock (_lock)

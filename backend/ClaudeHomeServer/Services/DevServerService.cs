@@ -392,6 +392,25 @@ public sealed class DevServerService : IDisposable
         return list;
     }
 
+    /// <summary>
+    /// Фактический порт ИМЕННО ЭТОГО запущенного сервиса, либо null.
+    ///
+    /// Нужен потому, что конфигурация порта может не знать: сервис стартует с автопортом
+    /// или отдаёт порт в выводе, и в launch.json/манифесте его нет вовсе.
+    ///
+    /// В отличие от GetActivePreviewPort никаких фолбэков здесь нет намеренно: подстановка
+    /// «какого-нибудь запущенного» увела бы внешнюю ссылку на посторонний процесс.
+    /// </summary>
+    public int? GetRunningPort(string projectId, string serviceId, string userId)
+    {
+        if (_servers.TryGetValue(Key(projectId, serviceId), out var inst)
+            && inst.UserId == userId
+            && inst.Status == "started"
+            && inst.Port > 0)
+            return inst.Port;
+        return null;
+    }
+
     /// <summary>Id активного для превью сервиса проекта (для владельца).</summary>
     public string? GetActiveServiceId(string projectId, string userId)
     {

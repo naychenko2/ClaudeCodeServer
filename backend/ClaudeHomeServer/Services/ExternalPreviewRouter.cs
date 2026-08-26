@@ -38,7 +38,8 @@ public sealed class ExternalPreviewRouter(
     JwtService jwt,
     ExternalPreviewStore store,
     ProjectManager projects,
-    ProjectServiceDiscovery discovery)
+    ProjectServiceDiscovery discovery,
+    DevServerService devServer)
 {
     /// <summary>Путь обмена токена на куку. Общий для выдающего эндпоинта и middleware.</summary>
     public const string AuthPath = "/__preview-auth";
@@ -63,6 +64,33 @@ public sealed class ExternalPreviewRouter(
 
     /// <summary>Готовая ссылка для человека.</summary>
     public string BuildLinkUrl(string token) => $"{Options.PublicBaseUrl.TrimEnd('/')}{AuthPath}?t={Uri.EscapeDataString(token)}";
+
+    /// <summary>
+    /// Порт сервиса для внешнего доступа. Источника два, и порядок между ними важен:
+    ///
+    /// 1) фактический порт ЖИВОГО процесса — конфигурация его может не знать вовсе
+    ///    (автопорт, порт выловлен из вывода дев-сервера);
+    /// 2) порт из конфигурации — для сервисов, поднятых вне продукта: своего процесса
+    ///    у них нет, и спросить о порте больше некого.
+    ///
+    /// У составной конфигурации своего порта нет: идём по участникам и берём первого,
+    /// которому есть что показать, — тем же правилом панель считает порт группе.
+    /// </summary>
+    public async Task<int?> ResolveServicePortAsync(Project project, string serviceId, string userId)
+    {
+        var known = await discovery.DiscoverAsync(project);
+        var svc = known.FirstOrDefault(s => s.Id == serviceId);
+        if (svc is null) return null;
+
+        var ids = svc.Members is { Length: > 0 } ? svc.Members : [svc.Id];
+        var byId = known.ToDictionary(s => s.Id);
+        foreach (var id in ids)
+        {
+            if (devServer.GetRunningPort(project.Id, id, userId) is > 0 and var running) return running;
+            if (byId.TryGetValue(id, out var member) && member.SuggestedPort is > 0) return member.SuggestedPort;
+        }
+        return null;
+    }
 
     /// <summary>
     /// Полная проверка запроса на поддомене. Порядок проверок — от самой дешёвой и грубой
@@ -115,7 +143,7 @@ public sealed class ExternalPreviewRouter(
         if (_portMemo.TryGetValue(link.Jti, out var memo) && DateTime.UtcNow - memo.At < PortMemoTtl)
             return memo.Port;
 
-        var port = await discovery.ResolvePortAsync(project, link.ServiceId);
+        var port = await ResolveServicePortAsync(project, link.ServiceId, link.UserId);
         if (port is not > 0) return null;
         _portMemo[link.Jti] = (DateTime.UtcNow, port.Value);
         return port;

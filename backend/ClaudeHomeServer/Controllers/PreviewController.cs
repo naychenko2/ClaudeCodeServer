@@ -318,9 +318,10 @@ public class PreviewController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.ServiceId))
             return BadRequest(new { error = "serviceId не указан" });
 
-        var port = await _discovery.ResolvePortAsync(project, req.ServiceId);
+        // Живой процесс важнее конфигурации: автопорт и порт из вывода в манифестах не значатся
+        var port = await _external.ResolveServicePortAsync(project, req.ServiceId, UserId);
         if (port is not > 0)
-            return BadRequest(new { error = "У сервиса не задан порт — непонятно, где он слушает" });
+            return BadRequest(new { error = "Не удалось определить порт сервиса: он не запущен и порт не задан в конфигурации" });
         if (!await LoopbackResolver.IsListeningAsync(port.Value))
             return BadRequest(new { error = $"На порту {port} никто не слушает" });
 

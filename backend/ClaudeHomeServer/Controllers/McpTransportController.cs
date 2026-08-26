@@ -27,6 +27,15 @@ namespace ClaudeHomeServer.Controllers;
 public sealed class McpTransportController(McpToolsetRegistry registry,
     ILogger<McpTransportController> logger) : ControllerBase
 {
+    // Потолок тела запроса: аргументы инструментов несопоставимо меньше (html виджета ≤64 КБ,
+    // 1 МБ — запас на фазу 2), а дефолт Kestrel в 30 МБ ReadToEndAsync прочитает в память целиком
+    private const long MaxBodyBytes = 1024 * 1024;
+
+    // Потолок элементов батча JSON-RPC: ответ собирается DeepClone'ами схем инструментов,
+    // и батч из сотен тысяч мелких запросов (укладывается в 30 МБ) строил бы гигабайтную
+    // строку ответа — OOM гасит ходы всех пользователей инстанса
+    private const int MaxBatchItems = 100;
+
     /// <summary>
     /// SSE-канал не реализован: клиент пробует GET на транспорт и спокойно живёт с 405
     /// (проверено живым CLI). Экшен нужен ради пометки «это не вызов инструмента» — иначе
@@ -40,6 +49,7 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     }
 
     [HttpPost("{name}")]
+    [RequestSizeLimit(MaxBodyBytes)] // тело читается в память целиком — см. MaxBodyBytes
     public async Task<IActionResult> Handle(string name, CancellationToken ct)
     {
         var toolset = registry.Find(name);
@@ -71,6 +81,11 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
             NameCallForLog(toolset, method: "batch");
             if (batch.Count == 0)
                 return JsonRpc(Error(null, -32600, "Пустой батч JSON-RPC"));
+            // Потолок — ДО входа в цикл: каждый элемент обрабатывается с DeepClone'ом схемы,
+            // и oversized-батч обязан отваливаться сразу, не надувая память ответом
+            if (batch.Count > MaxBatchItems)
+                return JsonRpc(Error(null, -32600,
+                    $"Батч JSON-RPC слишком велик: {batch.Count} элементов (потолок {MaxBatchItems})"));
             var answers = new JsonArray();
             foreach (var item in batch)
             {

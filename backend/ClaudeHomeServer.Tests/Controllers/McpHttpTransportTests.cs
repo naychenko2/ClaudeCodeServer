@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -366,6 +367,48 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
                 Encoding.UTF8, "application/json"));
         notifications.StatusCode.Should().Be(HttpStatusCode.Accepted);
         (await notifications.Content.ReadAsStringAsync()).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Батч без потолка собирал бы ответ DeepClone'ами схем на каждый элемент: массив из
+    /// сотен тысяч мелких запросов укладывается в 30-МБ дефолт Kestrel, а ответ растёт в
+    /// гигабайтную строку — OOM инстанса гасит ходы всех пользователей. Потолок режет
+    /// ДО входа в цикл.
+    /// </summary>
+    [Fact]
+    public async Task БатчСвышеПотолка_Отвечает32600ДоЦикла()
+    {
+        var items = string.Join(",", Enumerable.Range(0, 200)
+            .Select(i => $"{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"tools/list\"}}"));
+        var resp = await _client.PostAsync("/mcp/widgets",
+            new StringContent($"[{items}]", Encoding.UTF8, "application/json"));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "протокольная ошибка едет в теле, не HTTP-кодом");
+        var payload = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32600);
+        payload.GetProperty("error").GetProperty("message").GetString()!
+            .Should().Contain("потолок 100", "в сообщении видно, почему отказ и где предел");
+    }
+
+    /// <summary>
+    /// Потолок тела запроса: TestServer не исполняет IRequestSizePolicy (это фича Kestrel),
+    /// поэтому проверяем атрибут — та же практика, что ПотолокТелаРезультата у DeviceCalls.
+    /// Без предела ReadToEndAsync честно прочитает дефолтные 30 МБ в память.
+    /// </summary>
+    [Fact]
+    public void ПотолокТелаЗапроса_1МБНаЭкшенеПоста()
+    {
+        var attribute = typeof(ClaudeHomeServer.Controllers.McpTransportController)
+            .GetMethod(nameof(ClaudeHomeServer.Controllers.McpTransportController.Handle))!
+            .GetCustomAttributes(typeof(RequestSizeLimitAttribute), false)
+            .Cast<RequestSizeLimitAttribute>()
+            .Should().ContainSingle().Subject;
+
+        // У атрибута нет публичного свойства со значением — его читает конвейер через
+        // IRequestSizeLimitMetadata, оттуда же берём его в проверке
+        ((Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata)attribute).MaxRequestBodySize
+            .Should().Be(1024 * 1024,
+                "аргументы инструментов несопоставимо меньше (html виджета ≤64 КБ), 1 МБ — запас на фазу 2");
     }
 
     // Тулсет-«бомба»: tools/list падает исключением за пределами catch tools/call —

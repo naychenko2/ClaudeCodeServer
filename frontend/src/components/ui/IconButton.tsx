@@ -42,7 +42,7 @@ interface Props {
   title?: string;
   // Имя кнопки БЕЗ нативного тултипа: подсказку рисует кто-то другой (плашка
   // рельсы — RailFlyout), и браузерный title вылезал бы поверх неё вторым
-  // объяснением того же самого. Задан — title не ставится вовсе.
+  // объяснение того же самого. Задан — title не ставится вовсе.
   ariaLabel?: string;
   disabled?: boolean;
   active?: boolean;
@@ -51,11 +51,15 @@ interface Props {
   variant?: IconButtonVariant;   // см. IconButtonVariant
   color?: string;                // переопределить цвет иконки в покое
   style?: CSSProperties;
+  // Дополнительный класс корневой кнопки (склеивается с фокус-классом): нужен
+  // для состояний, которыми управляет родительская зона (cc-ghost-live в
+  // ghost-ряду шапки — «эту кнопку не гасить в покое»)
+  className?: string;
   children: ReactNode;           // svg
 }
 
 export function IconButton({
-  onClick, title, ariaLabel, disabled, active, size = 'md', tone = 'muted', variant = 'ghost', color, style, children,
+  onClick, title, ariaLabel, disabled, active, size = 'md', tone = 'muted', variant = 'ghost', color, style, className, children,
 }: Props) {
   const [hover, setHover] = useState(false);
   const s = SIZE[size];
@@ -77,7 +81,7 @@ export function IconButton({
   const mediaRing = media && active ? `0 0 0 1px ${C.bgMain}, 0 0 0 3px ${C.accent}` : undefined;
   return (
     <button
-      className={FOCUS_CLASS}
+      className={className ? `${FOCUS_CLASS} ${className}` : FOCUS_CLASS}
       onClick={onClick}
       title={ariaLabel ? undefined : title}
       aria-label={ariaLabel ?? title}

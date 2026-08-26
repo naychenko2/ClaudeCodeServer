@@ -19,15 +19,20 @@ export const tbBtnGhost: CSSProperties = {
 };
 
 // === Контейнер тулбара: единая высота, фон, бордер ===
-export function Toolbar({ isMobile, noBorder, bg, children, style }: {
+export function Toolbar({ isMobile, noBorder, bg, children, style, onContextMenu }: {
   isMobile?: boolean;
   noBorder?: boolean;
   bg?: string;
   children: ReactNode;
   style?: CSSProperties;
+  // Правый клик по зоне тулбара — меню действий у курсора (шапка чата); на передаваемый
+  // rect навешивается ui/Menu в anchor-режиме. Приглушение меню при необходимости — на вызывающей стороне
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
-    <div style={{
+    <div
+      onContextMenu={onContextMenu}
+      style={{
       display: 'flex', alignItems: 'center', gap: TB.gap,
       height: isMobile ? TB.heightMobile : TB.heightDesktop,
       padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
@@ -45,7 +50,7 @@ export function Toolbar({ isMobile, noBorder, bg, children, style }: {
 // Сохранена для обратной совместимости API (isMobile → размер тач-таргета).
 // Кнопки рельсы — круглые (borderRadius 32), дефолт задаётся здесь, а не в
 // каждом вызове через style. Если нужен override — передать style (мержится).
-export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, disabled, active, style, children }: {
+export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, disabled, active, style, className, children }: {
   onClick?: (e: MouseEvent) => void;
   title?: string;
   // Имя без нативного тултипа — когда подсказку рисует кто-то другой (см. IconButton)
@@ -55,12 +60,14 @@ export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, 
   disabled?: boolean;
   active?: boolean;
   style?: CSSProperties;
+  // Дополнительный класс корневой кнопки (ghost-ряд шапки: cc-ghost-live)
+  className?: string;
   children: ReactNode;
 }) {
   return (
     <IconButton
       onClick={onClick} title={title} ariaLabel={ariaLabel} disabled={disabled} active={active} color={color}
-      size={isMobile ? 'lg' : 'md'} style={style}
+      size={isMobile ? 'lg' : 'md'} style={style} className={className}
     >
       {children}
     </IconButton>

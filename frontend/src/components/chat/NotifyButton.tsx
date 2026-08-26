@@ -48,6 +48,9 @@ export function NotifyButton({ session, isMobile, onSessionUpdated }: {
       active={on}
       disabled={saving}
       isMobile={isMobile}
+      // Ghost-ряд шапки гасит кнопку в покое; включённые уведомления — состояние,
+      // которое должно читаться всегда (cc-ghost-live снимает заглушку)
+      className={on ? 'cc-ghost-live' : undefined}
       title={on
         ? 'Уведомления по этому чату включены — сигнал, когда нужно решение или ход завершён'
         : 'Уведомления по этому чату выключены'}

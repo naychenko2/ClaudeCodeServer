@@ -21,11 +21,11 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
+import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { BackButton, ChatTopicIcon, Modal, ModalActions, Menu, MenuItem, MenuSep } from '../ui';
+import { BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
@@ -1395,6 +1395,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
   const [renameDialog, setRenameDialog] = useState<string | null>(null);
   const [deleteAsk, setDeleteAsk] = useState(false);
+  // Сохранение имени — одна точка на кнопку «Сохранить» и на Enter в поле
+  const saveRename = () => {
+    const next = (renameDialog ?? '').trim();
+    setRenameDialog(null);
+    if (!next || next === (session.name ?? '')) return;
+    void updateChatFields(session, { name: next })
+      .then(s => onSessionUpdated?.(s))
+      .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
+  };
   const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
     switch (key) {
       case 'rename': setRenameDialog(session.name ?? ''); break;
@@ -1424,20 +1433,26 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const actionMeta = (key: ChatActionKey): { icon: ReactNode; label: string; active?: boolean; danger?: boolean } => {
     switch (key) {
       case 'rename': return { icon: <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Переименовать' };
+      // Состояние тумблеров показываем САМОЙ иконкой (Pin с заливкой, Bell/BellOff),
+      // а не акцентной плашкой: у закреплённого временного чата с уведомлениями
+      // подряд горели четыре оранжевых кнопки — рядом с «WF» и «Отправить» это
+      // спорит за внимание с главным действием экрана (accent-дисциплина гайда).
+      // Акцент оставлен одному индикатору — сроку хранения
       case 'pin': return {
         icon: <Pin size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} fill={session.isPinned ? 'currentColor' : 'none'} />,
-        label: session.isPinned ? 'Открепить' : 'Закрепить', active: !!session.isPinned,
+        label: session.isPinned ? 'Открепить' : 'Закрепить',
       };
       case 'tags': return { icon: <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Теги чата', active: !!tagMenu };
       case 'wall': return { icon: <Columns3 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'На стену' };
       case 'notify': return {
         icon: notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены', active: notifyOn,
+        label: notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены',
       };
+      // Досье НЕ подсвечиваем: акцент в системе читается как «включено», а горело
+      // бы отрицательное состояние («решения не сохраняются»)
       case 'dossier': return {
         icon: <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются',
-        active: !!session.excludeFromDossiers,
       };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
@@ -1488,7 +1503,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
           action: {
             icon: visible ? <Eye size={15} strokeWidth={2} /> : <EyeOff size={15} strokeWidth={2} />,
-            title: visible ? 'Скрыть кнопку из ряда' : 'Показать кнопку в ряду',
+            title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
             onClick: () => headerVis.toggle(k),
           },
         };
@@ -1512,8 +1527,17 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
-    // приглушает ряд в покое, проявляет по наведению
-    : <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>;
+    // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
+    // действиям, и гасить его нельзя
+    : (
+      <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
+        <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
+          {retitleBtn}{extractBtn}{summaryBtn}
+          {visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
+        </div>
+        {headerOverflow}
+      </div>
+    );
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
@@ -1544,7 +1568,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     icon: headerVis.isVisible(key)
       ? <Eye size={14} strokeWidth={2} />
       : <EyeOff size={14} strokeWidth={2} />,
-    title: headerVis.isVisible(key) ? 'Скрыть кнопку из ряда' : 'Показать кнопку в ряду',
+    title: headerVis.isVisible(key) ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
     onClick: () => headerVis.toggle(key),
   });
   const ctxMenuEl = ctxMenu && !isCompact ? (
@@ -1625,62 +1649,49 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     <>
       {renameDialog !== null && (
         <Modal
-          width={420}
+          width={MODAL_W.form}
           title="Переименовать чат"
           onClose={() => setRenameDialog(null)}
           footer={
             <ModalActions
               confirmLabel="Сохранить"
               confirmDisabled={!renameDialog.trim()}
-              onConfirm={() => {
-                const next = renameDialog.trim();
-                setRenameDialog(null);
-                if (!next || next === (session.name ?? '')) return;
-                void updateChatFields(session, { name: next })
-                  .then(s => onSessionUpdated?.(s))
-                  .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
-              }}
+              onConfirm={saveRename}
               onCancel={() => setRenameDialog(null)}
             />
           }
         >
-          <input
+          {/* Enter сохраняет, Esc закрывает — в диалоге с кнопкой «Сохранить»
+              клавиша обязана делать то же, что кнопка */}
+          <TextField
             autoFocus
             value={renameDialog}
-            onChange={e => setRenameDialog(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            aria-label="Название чата"
-            style={{
-              width: '100%', boxSizing: 'border-box', height: 38, padding: '0 10px',
-              fontSize: 14, fontFamily: FONT.sans, color: C.textPrimary,
-              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, outline: 'none',
-            }}
+            onChange={setRenameDialog}
+            onEnter={saveRename}
+            onEscape={() => setRenameDialog(null)}
+            title="Название чата"
           />
         </Modal>
       )}
       {deleteAsk && (
-        <Modal
-          width={420}
+        <ConfirmDialog
           title="Удалить чат?"
           subtitle={<>Чат «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{session.name ?? 'Новый чат'}</strong>» будет удалён без возможности восстановления.</>}
-          onClose={() => setDeleteAsk(false)}
-          footer={
-            <ModalActions
-              confirmLabel="Удалить"
-              confirmVariant="danger"
-              onConfirm={() => {
-                setDeleteAsk(false);
-                const del = session.projectId
-                  ? api.sessions.delete(session.projectId, session.id)
-                  : api.chats.delete(session.id);
-                // Уйти из удалённого чата и обновить список — дело владельца экрана
-                void del
-                  .then(() => onChatDeleted?.(session.id))
-                  .catch(() => showToast('Чат', 'Не удалось удалить чат', 'info'));
-              }}
-              onCancel={() => setDeleteAsk(false)}
-            />
-          }
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          // Промис — чтобы кнопка показывала спиннер, пока идёт запрос: удаление
+          // чата с транскриптом не мгновенное, а гасить диалог раньше ответа значит
+          // врать про результат
+          onConfirm={() => {
+            const del = session.projectId
+              ? api.sessions.delete(session.projectId, session.id)
+              : api.chats.delete(session.id);
+            // Уйти из удалённого чата и обновить список — дело владельца экрана
+            return del
+              .then(() => { setDeleteAsk(false); onChatDeleted?.(session.id); })
+              .catch(() => { setDeleteAsk(false); showToast('Чат', 'Не удалось удалить чат', 'info'); });
+          }}
+          onCancel={() => setDeleteAsk(false)}
         />
       )}
     </>

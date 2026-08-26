@@ -1819,7 +1819,7 @@ export function Composer({
     icon: composerVis.isVisible(key)
       ? <Eye size={15} strokeWidth={2} />
       : <EyeOff size={15} strokeWidth={2} />,
-    title: composerVis.isVisible(key) ? 'Скрыть кнопку из полосы' : 'Показать кнопку в полосе',
+    title: composerVis.isVisible(key) ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
     onClick: () => composerVis.toggle(key),
   });
   // В «⋯» — ВСЕ кнопки ряда: клик по строке выполняет действие, глазик справа решает,

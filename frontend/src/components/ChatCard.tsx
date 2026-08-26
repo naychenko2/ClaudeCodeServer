@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -288,6 +288,8 @@ export function ChatCard({
   // Notification API — глушить там нечего
   const notifyOn = useChatNotifyOn(s);
   const canMute = canEditChat && isNotifySupported();
+  // Чат в архиве — действие и подпись у кнопки зеркалятся («В архив» ⇄ «Вернуть из архива»)
+  const archived = !!s.archivedAt;
   const expiryAt = expiresAt(s);
   // Правка названия прямо в карточке: пункт меню превращает заголовок в поле ввода —
   // ради одного имени открывать форму настроек чата не надо. У чата-исполнителя задачи
@@ -310,6 +312,7 @@ export function ChatCard({
     notify: canMute,
     dossier: canEditChat && !!s.projectId,
     expiry: canEditChat,
+    archive: canEditChat,
     delete: true,
   };
   const cardActions = CHAT_ACTION_ORDER.filter(k => cardActionAvailable[k]);
@@ -319,12 +322,27 @@ export function ChatCard({
   // экрана 360 CSS (Flip 8) — карточка уезжала бы целиком, оставляя под пальцем
   // ряд одинаковых иконок без имени и превью. Остальное достаётся из меню
   const MAX_QUICK_BTNS = 3;
+  // Кандидаты ряда — ВСЕ видимые действия, включая «В архив»: глазик управляет им на
+  // общих основаниях. Исключение archive здесь (была такая правка) ломало инвариант
+  // «глазик показывает "видна" — кнопка есть»: действие исчезало из ряда у обычного
+  // чата при включённом глазике, хотя хранилище говорило обратное
   const quickActions = cardActions.filter(k => cardVis.isVisible(k));
   // Видимых сверх потолка — добираем по каноническому порядку и молча уводим в
   // меню. Так честно и с сохранённой настройкой на 5+ кнопок (снял один — на
   // её место встает следующий по порядку, а не «дырка» в середине)
   const overLimitKeys = quickActions.slice(MAX_QUICK_BTNS).join(',');
-  const quickButtons = quickActions.slice(0, MAX_QUICK_BTNS);
+  const shownActions = quickActions.slice(0, MAX_QUICK_BTNS);
+  // Возврат из архива — единственное действие вне настройки видимости: у архивного чата
+  // оно стоит кнопкой ВСЕГДА, на своём каноническом месте — прямо перед «Удалить».
+  // Иначе человек, спрятавший «В архив» в меню (а оно спрятано по умолчанию), в архивном
+  // списке искал бы выход из архива по одному чату через «⋮».
+  // Добавляется СВЕРХ отрезанного потолка (кандидаты без неё + она сама), а не вместо
+  // одной из трёх: вытеснять ради неё «Удалить» (соседа по смыслу) нельзя, а архивный
+  // список — редкий режим, четвёртая кнопка там ряд не ломает. Дубля нет: если archive
+  // уже в shownActions по глазику, фильтр отдаст её один раз
+  const quickButtons = archived && cardActionAvailable.archive
+    ? CHAT_ACTION_ORDER.filter(k => k === 'archive' || shownActions.includes(k))
+    : shownActions;
   useEffect(() => { if (overLimitKeys) cardVis.hide(overLimitKeys.split(',')); }, [overLimitKeys]);
   const swipeOpenW = quickButtons.length * SWIPE_BTN_W;
   // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
@@ -333,8 +351,11 @@ export function ChatCard({
   // полон (3 кнопки), включить четвёртую нельзя — глазик гаснет с подсказкой:
   // место освобождают, убрав соседнюю кнопку
   const visAction = (key: ChatActionKey) => {
+    // Возврат из архива спрятать нельзя — глазика у строки нет вовсе (иначе он
+    // предлагал бы действие, которое ничего не изменит)
+    if (key === 'archive' && archived) return undefined;
     const shown = cardVis.isVisible(key);
-    const blocked = !shown && quickButtons.length >= MAX_QUICK_BTNS;
+    const blocked = !shown && shownActions.length >= MAX_QUICK_BTNS;
     return {
       icon: shown
         ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -389,6 +410,13 @@ export function ChatCard({
         active: s.expiresAfterMinutes != null,
         onClick: e => { e.stopPropagation(); setExpiryMenu((e.currentTarget as HTMLElement).getBoundingClientRect()); },
       };
+      case 'archive': return {
+        icon: archived
+          ? <ArchiveRestore size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          : <Archive size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        title: archived ? 'Вернуть из архива' : 'В архив',
+        onClick: e => { e.stopPropagation(); void toggleArchive(); },
+      };
       case 'delete': return {
         icon: <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Удалить', danger: true,
         onClick: e => { e.stopPropagation(); onDelete(); },
@@ -441,6 +469,17 @@ export function ChatCard({
       onEdited?.(await updateChatFields(s, { excludeFromDossiers: !s.excludeFromDossiers }));
     } catch {
       showToast('История решений', 'Не удалось изменить настройку чата', 'info');
+    }
+  };
+
+  // Убрать чат в архив / вернуть обратно. Ответ бэкенда отдаём владельцу списка: карточка
+  // сама уйдёт из основного вида (архивные там отфильтрованы) либо вернётся в него
+  const toggleArchive = async () => {
+    try {
+      onEdited?.(await updateChatFields(s, { archived: !archived }));
+      showToast('Архив', archived ? 'Чат вернулся в список' : 'Чат убран в архив', 'info');
+    } catch {
+      showToast('Архив', archived ? 'Не удалось вернуть чат' : 'Не удалось убрать чат в архив', 'info');
     }
   };
 
@@ -506,6 +545,9 @@ export function ChatCard({
   // перебиваем только спокойные состояния, живой working подменять незачем
   const agentsRunningLive = useAgentsRunning(s.id);
   const agentsRunning = agentsRunningProp ?? agentsRunningLive;
+  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
+  const bgCommandRunningLive = useBgCommandRunning(s.id);
+  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
   const visualStatus: VisualStatus = teamWait ? 'waiting'
     : agentsRunning && !STATUS_GLOW[s.status].breath ? 'agents'
       : s.status;
@@ -527,9 +569,6 @@ export function ChatCard({
     // Сила подмешивания в фон: alpha из STATUS_GLOW (45..72) задумана под
     // свечение — для заливки её ужимаем втрое и добавляем 10 п.п. Даёт 25..34%:
     // ниже ~10% подкраска на кремовом фоне уже неразличима
-  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
-  const bgCommandRunningLive = useBgCommandRunning(s.id);
-  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
     '--cc-tint-a': `${Math.round(glow.alpha / 3) + 10}%`,
   } as CSSProperties;
 
@@ -766,6 +805,17 @@ export function ChatCard({
               <Bot size={13} strokeWidth={2.2} />
             </span>
           )}
+          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
+              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
+              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
+              перестают замечать. При работающих агентах не показываем — свечение уже
+              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
+          {bgCommandRunning && !agentsRunning && !workflowRunning && (
+            <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
+              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              <Terminal size={13} strokeWidth={2.2} />
+            </span>
+          )}
           {workflowRunning && (
             <div title="Выполняется Workflow" style={{
               display: 'flex', alignItems: 'center', gap: 3, padding: '1px 5px',
@@ -787,17 +837,6 @@ export function ChatCard({
         ) : (
           <>
             {/* Строка 2: превью последнего сообщения */}
-          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
-              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
-              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
-              перестают замечать. При работающих агентах не показываем — свечение уже
-              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
-          {bgCommandRunning && !agentsRunning && !workflowRunning && (
-            <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
-              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
-              <Terminal size={13} strokeWidth={2.2} />
-            </span>
-          )}
             {s.lastMessage && (
               <div style={{
                 minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
@@ -956,6 +995,17 @@ export function ChatCard({
               // Пикер сроков открывается по тому же якорю, что и это меню: кнопка «⋮»
               // исчезнет вместе с ним, и её rect брать будет неоткуда (приём пункта «Теги»)
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); setExpiryMenu(anchor); }}
+            />
+          )}
+          {canEditChat && (
+            <MenuItem
+              icon={archived
+                ? <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label={archived ? 'Вернуть из архива' : 'В архив'}
+              isMobile={isMobile}
+              action={visAction('archive')}
+              onClick={e => { e.stopPropagation(); setMenu(null); void toggleArchive(); }}
             />
           )}
           <MenuItem

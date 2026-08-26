@@ -50,6 +50,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
     // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
     private readonly ILogger? _log;
+    // Проба выхода в сеть: отличает «эндпоинт вендора недоступен» от «канал наружу лёг».
+    // null (тесты без DI) — прежнее поведение фолбэка.
+    private readonly IEgressProbe? _egress;
+    // Паспорта ходов (data/logs/turn-runs-*.jsonl + память). null (тесты) — не пишем.
+    private readonly TurnRunLog? _turnRuns;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
@@ -59,7 +64,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ProviderHealthRegistry? health = null,
         ContextCapacityRegistry? capacity = null,
         ChatHistoryService? chatHistory = null,
-        ILogger<LlmSessionAdapterFactory>? log = null)
+        ILogger<LlmSessionAdapterFactory>? log = null,
+        IEgressProbe? egress = null,
+        TurnRunLog? turnRuns = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
@@ -68,6 +75,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _capacity = capacity;
         _chatHistory = chatHistory;
         _log = log;
+        _egress = egress;
+        _turnRuns = turnRuns;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
         _glifMcpToken = config["Glif:McpToken"];
@@ -148,7 +157,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             () => claudeSession.EffectiveTurnChain, _health, _log, context.PersistSessions,
             _capacity, BuildContextEstimate(claudeSession),
             context.EnqueueBypass, context.OrchestrationDone,
-            contextSource: BuildContextSource(claudeSession));
+            contextSource: BuildContextSource(claudeSession),
+            egress: _egress, turnRuns: _turnRuns);
         return fallback;
     }
 

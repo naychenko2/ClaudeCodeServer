@@ -8902,23 +8902,19 @@ public class SessionManager : IDisposable
                 }
             }
 
-            if (msg is ResultMessage or ErrorMessage && entry.LoopTurnInFlight)
-            {
-                entry.LoopTurnInFlight = false;
-                if (entry.Info.WorkLoop is not null)
-                    _ = Task.Run(async () =>
-                    {
-                        try { await ContinueWorkLoopAsync(sessionId); }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
-                        }
-                    });
-            }
-
             // Сабагент этого хода оборвался на середине — добиваем его продолжением. Строго по
             // result (ход в процесс уже не идёт): systemDirective-отправка очередь не проходит
-            // и запустила бы второй ход параллельно живому. Ошибочный ход добивать нечем —
+            // и запустила бы второй ход параллельно живому.
+            //
+            // ПОРЯДОК ВАЖЕН: этот блок стоит ПЕРЕД разбором цикла «до готово» ниже. Цикл поднимает
+            // следующий ход из Task.Run, и пометка об обрыве (TruncatedBgNote) обязана лечь раньше —
+            // иначе она опаздывает ровно на один ход, а на последней итерации цикла теряется совсем.
+            // Перенос сделан поведенчески нейтральным: раньше блок стоял ПОСЛЕ сброса
+            // LoopTurnInFlight и потому всегда видел флаг ложным — здесь он ещё взведён, поэтому
+            // в ShouldNudgeSubagent идёт «ход цикла реально продолжится» (флаг И живой WorkLoop),
+            // а не сырой флаг. Иначе снятый посреди хода цикл (WorkLoop=null при взведённом флаге)
+            // потерял бы добивание, которое получал до переноса.
+            // Ошибочный ход добивать нечем —
             // сначала разбирается ошибка, поэтому ErrorMessage только гасит отметку.
             if (msg is ResultMessage or ErrorMessage && entry.TruncatedSubagent is { } cutAgent)
             {
@@ -8927,7 +8923,7 @@ public class SessionManager : IDisposable
                 if (StartsNudgeSeries(entry.NudgeAgentId, cutAgent.AgentId)) entry.SubagentNudges = 0;
                 if (msg is ResultMessage && ShouldNudgeSubagent(entry.SubagentNudges,
                         entry.Info.WorkLoop is not null, entry.Info.TeamImplement is not null,
-                        HasPending(entry), entry.LoopTurnInFlight))
+                        HasPending(entry), entry.LoopTurnInFlight && entry.Info.WorkLoop is not null))
                 {
                     entry.NudgeAgentId = cutAgent.AgentId;
                     var attempt = ++entry.SubagentNudges;
@@ -8940,6 +8936,32 @@ public class SessionManager : IDisposable
                         }
                     });
                 }
+                else
+                {
+                    // Добивать не стали (уступили циклу «до готово»/штабу, очередь непуста, потолок
+                    // исчерпан, ход ошибочный) — но МОЛЧАТЬ об обрыве нельзя: координатор уже принял
+                    // последнюю реплику агента за его итог. Раньше отметка здесь просто гасилась, и в
+                    // чате с активным циклом обрыв не оставлял следа вообще — ни добивания, ни
+                    // предупреждения (инцидент 25.08.2026, чат «Зависание чатов практики»: обрыв
+                    // заметил сам координатор, потому что обрывок случайно не был похож на отчёт).
+                    // Пометка уедет префиксом ближайшего хода — а его цикл и штаб поднимут сами,
+                    // это и есть их «свой протокол продолжения», ради которого им уступает добивание.
+                    entry.TruncatedBgNote = cutAgent;
+                }
+            }
+
+            if (msg is ResultMessage or ErrorMessage && entry.LoopTurnInFlight)
+            {
+                entry.LoopTurnInFlight = false;
+                if (entry.Info.WorkLoop is not null)
+                    _ = Task.Run(async () =>
+                    {
+                        try { await ContinueWorkLoopAsync(sessionId); }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
+                        }
+                    });
             }
 
             // Ход закончился — выпускаем следующее сообщение из очереди (и агентские chats_send,

@@ -223,10 +223,14 @@ function stripLeadingEmoji(title: string): string {
 //   return !!folder && folder !== PINNED_GROUP;
 // }
 
-// Бейдж расширения в строке документа; у начального — домик вместо него
+// Бейдж расширения в строке документа; у начального — домик вместо него.
+// У markdown бейджа нет: в корпусе документации почти всё — md, и плитка перед каждым
+// именем только зашумляет список. Слота под бейдж у md-строк тоже нет — булавка при
+// наведении рисуется поверх текста (DocRow и подпись раздела в FolderSticky)
 function DocBadge({ path, home }: { path: string; home?: boolean }) {
   if (home)
     return <Home size={13} strokeWidth={2.2} style={{ flexShrink: 0, color: C.accent }} />;
+  if (isMarkdown(path)) return null;
   return <FileTypeTile name={path} />;
 }
 
@@ -258,8 +262,8 @@ function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, o
   // только у раздела с вложенными подпапками — иначе прятать сверх своих документов нечего
   onCollapseSubtree?: () => void;
   subtreeCollapsed?: boolean;
-  // Путь файла-страницы раздела: рисуем md-бейдж перед подписью, чтобы раздел в списке
-  // читался как документ — как у остальных строк
+  // Путь файла-страницы раздела: перед подписью рисуем бейдж типа (у markdown его нет,
+  // как и у строк документов) либо булавку — раздел в списке читается как документ
   pagePath?: string;
   // Закрепление страницы раздела — как у документа: бейдж под курсором становится булавкой
   pinned?: boolean;
@@ -302,7 +306,10 @@ function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, o
   // Отступ до заголовка — как у документов (SP.xs), а не общий gap divider'а (8): гасим
   // разницу отрицательным полем, иначе бейдж папки стоит дальше от подписи, чем у файлов
   const badgeGapFix = { marginRight: SP.xs - 8 };
-  const pinBadge = pagePath && (
+  // У markdown-страницы раздела колонки бейджа нет (правило DocBadge): слот в покое
+  // не держится, булавка при наведении ложится поверх заголовка (titleOverlay ниже)
+  const pageIsMd = pagePath ? isMarkdown(pagePath) : false;
+  const pinBadge = pagePath && !pageIsMd && (
     onTogglePin ? (
       <span
         onClick={e => { e.stopPropagation(); onTogglePin(); }}
@@ -356,8 +363,30 @@ function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, o
           onClick={onOpenPage}
           highlightOnHover
           active={active}
-          // md-бейдж/булавка раздела — сразу перед подписью, следом за шевроном
+          // Бейдж типа/булавка раздела — сразу перед подписью, следом за шевроном
           beforeTitle={pinBadge}
+          // У md-страницы раздела слота нет: булавка при наведении/у закреплённой
+          // ложится поверх заголовка плашкой с фоном строки
+          titleOverlay={pageIsMd && onTogglePin && (rowHover || pinned) ? (
+            <span
+              onClick={e => { e.stopPropagation(); onTogglePin(); }}
+              onMouseEnter={() => setPinHover(true)}
+              onMouseLeave={() => setPinHover(false)}
+              title={pinned ? 'Открепить — вернуть в свою папку' : 'Закрепить внизу списка'}
+              style={{
+                position: 'absolute', left: -2, top: -3, bottom: -3, width: 16, zIndex: 1,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                // Фон — подложка заголовка раздела (bgWhite у sticky-плашки): гасит
+                // буквы под булавкой, чтобы иконка читалась на тексте
+                background: active ? C.accentMuted : rowHover ? C.bgSelected : C.bgWhite,
+                borderRadius: R.md, cursor: 'pointer',
+              }}
+            >
+              {pinned && pinHover
+                ? <PinOff size={12} strokeWidth={2.2} style={{ color: C.textSecondary }} />
+                : <Pin size={12} strokeWidth={2.2} style={{ color: pinned ? C.accent : C.textMuted }} />}
+            </span>
+          ) : undefined}
           // Правая линия делает то же, что двойной шеврон: у раздела с поддеревом —
           // глубокое сворачивание, у листового — обычное (прятать нечего сверх документов)
           onLineClick={onCollapseSubtree ?? onToggle}
@@ -502,8 +531,10 @@ function FolderRow({ label, parent, count, current, onJump }: {
 // Строка документа. Отдельным компонентом ради состояния наведения: список длинный,
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
-// в строке нет места, а место иконки всё равно занято состоянием документа
-function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statusTitle, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto, press, pressing = false }: {
+// в строке нет места, а место иконки всё равно занято состоянием документа.
+// У markdown-строк бейджа нет (см. DocBadge): булавка при наведении ложится поверх
+// текста плашкой с фоном строки, в покое — только у закреплённых
+function DocRow({ doc, selected, home, pinned, pinColumn = false, indent, count, statusColor, statusTitle, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto, press, pressing = false }: {
   doc: DocEntry;
   selected: boolean;
   home: boolean;
@@ -535,12 +566,19 @@ function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statu
   // готовыми: таймер один на список, не на строку
   press?: React.DOMAttributes<HTMLDivElement>;
   pressing?: boolean;
+  // Держать булавку в колонке слева, а не поверх текста. Включён в списке закреплённых:
+  // там булавка видна у каждой строки ПОСТОЯННО, колонка ею занята всегда — прятать
+  // её и рисовать поверх названий значило бы перекрывать текст без паузы
+  pinColumn?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const [pinHover, setPinHover] = useState(false);
   const [jumpHover, setJumpHover] = useState(false);
   const [openHover, setOpenHover] = useState(false);
   const showPin = hover || pinned;
+  // Колонка бейджа есть только у не-markdown и начального документа (домик); у md
+  // строки бейджа нет вовсе — булавка рисуется поверх текста, без пустого слота
+  const overlayPin = !pinColumn && !home && isMarkdown(doc.path);
   // Строка с переходом (раздел в виде «Разделы») — это ДВЕ мишени: название открывает
   // страницу раздела, хвост уводит к его документам в дереве. Поэтому подсветка едет
   // не на строку целиком, а на каждую половину своим овалом — иначе одна общая заливка
@@ -575,26 +613,28 @@ function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statu
         opacity: pressing ? 0.6 : 1, transition: 'opacity 0.1s',
       }}
     >
-      <button
-        onClick={onTogglePin}
-        onMouseEnter={() => setPinHover(true)}
-        onMouseLeave={() => setPinHover(false)}
-        title={pinned ? 'Открепить — вернуть в свою папку' : 'Закрепить внизу списка'}
-        style={{
-          width: 16, height: 16, flexShrink: 0, padding: 0, border: 'none',
-          background: 'transparent', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        {/* Иконка показывает, что даст клик: булавка под курсором у обычного документа,
-            перечёркнутая — у закреплённого. В покое у закреплённого булавка остаётся:
-            иначе он ничем не отличается от соседей по группе */}
-        {showPin
-          ? (pinned && pinHover
-            ? <PinOff size={12} strokeWidth={2.2} style={{ color: C.textSecondary }} />
-            : <Pin size={12} strokeWidth={2.2} style={{ color: pinned ? C.accent : C.textMuted }} />)
-          : <DocBadge path={doc.path} home={home} />}
-      </button>
+      {!overlayPin && (
+        <button
+          onClick={onTogglePin}
+          onMouseEnter={() => setPinHover(true)}
+          onMouseLeave={() => setPinHover(false)}
+          title={pinned ? 'Открепить — вернуть в свою папку' : 'Закрепить внизу списка'}
+          style={{
+            width: 16, height: 16, flexShrink: 0, padding: 0, border: 'none',
+            background: 'transparent', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          {/* Иконка показывает, что даст клик: булавка под курсором у обычного документа,
+              перечёркнутая — у закреплённого. В покое у закреплённого булавка остаётся:
+              иначе он ничем не отличается от соседей по группе */}
+          {showPin
+            ? (pinned && pinHover
+              ? <PinOff size={12} strokeWidth={2.2} style={{ color: C.textSecondary }} />
+              : <Pin size={12} strokeWidth={2.2} style={{ color: pinned ? C.accent : C.textMuted }} />)
+            : <DocBadge path={doc.path} home={home} />}
+        </button>
+      )}
       <button
         onClick={onOpen}
         onDoubleClick={onExpand}
@@ -606,6 +646,8 @@ function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statu
         style={{
           ...rowStyle,
           flex: 1, minWidth: 0,
+          // Точка отсчёта для булавки-оверлея md-строк (см. ниже)
+          ...(overlayPin ? { position: 'relative' } : null),
           // Без отступа под вложенность: группу уже обозначает разделитель сверху,
           // а сдвиг ломал общую левую линию списка
           paddingLeft: SP.xs,
@@ -619,6 +661,32 @@ function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statu
           fontWeight: selected ? 600 : 400,
         }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</span>
+        {overlayPin && showPin && (
+          // Булавка md-строки — поверх текста, в начале названия: колонки бейджа нет,
+          // и пустой слот не держим. Плашка с фоном строки гасит буквы под собой,
+          // клик уходит в булавку, а не в открытие документа
+          <span
+            onClick={e => { e.stopPropagation(); onTogglePin(); }}
+            onMouseEnter={() => setPinHover(true)}
+            onMouseLeave={() => setPinHover(false)}
+            title={pinned ? 'Открепить — вернуть в свою папку' : 'Закрепить внизу списка'}
+            style={{
+              position: 'absolute', left: 0, top: 0, bottom: 0, width: 18, zIndex: 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              // Фон повторяет подложку ПОД булавкой (заливка строки либо заголовка в
+              // split-строке), иначе на подсвеченной строке читался бы белый лоскут
+              background: selected ? C.accentMuted
+                : hover && !split ? C.bgSelected
+                : split && openHover ? C.bgSelected
+                : C.bgWhite,
+              borderRadius: R.md, cursor: 'pointer',
+            }}
+          >
+            {pinned && pinHover
+              ? <PinOff size={12} strokeWidth={2.2} style={{ color: C.textSecondary }} />
+              : <Pin size={12} strokeWidth={2.2} style={{ color: pinned ? C.accent : C.textMuted }} />}
+          </span>
+        )}
       </button>
       {/* Метка главного свойства типа — точкой: в строке высотой 22px плашка не помещается,
           а буква соврала бы («Предложено» и «Принято» начинаются одинаково). Стоит перед
@@ -2308,6 +2376,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               selected={isShown(d.path)}
                               home={d.path === homePath}
                               pinned
+                              pinColumn
                               {...statusOf(d)}
                               onOpen={() => handleRowClick(d.path)}
                               onExpand={() => handleRowDoubleClick(d.path)}

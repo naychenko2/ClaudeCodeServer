@@ -31,7 +31,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  */
 export function ListDateDivider({
   title, dense = false, flash = false, onClick, leading, trailing, titleAttr,
-  highlightOnHover = false, active = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle,
+  highlightOnHover = false, active = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle, titleOverlay,
 }: {
   title: string;
   dense?: boolean;
@@ -58,6 +58,10 @@ export function ListDateDivider({
   onLineHover?: (hovering: boolean) => void;
   // Слот между левой линией и заголовком — под бейдж/булавку строки-раздела
   beforeTitle?: ReactNode;
+  // Слот ПОВЕРХ заголовка (absolute): булавка md-страницы раздела, у которой нет
+  // колонки бейджа. Рисуется только при наведении либо у закреплённой — держать
+  // постоянную пустую зону ради неё не нужно
+  titleOverlay?: ReactNode;
 }) {
   const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
@@ -72,10 +76,12 @@ export function ListDateDivider({
       <div style={line} />
       {beforeTitle}
       <span style={{
+        position: 'relative',   // точка отсчёта для titleOverlay (булавка поверх текста)
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
         color: flash ? C.accent : active ? C.textHeading : C.textSecondary,
       }}>
         {title}
+        {titleOverlay}
       </span>
       {onLineClick ? (
         // Зона клика во всю высоту строки, черта в 1px — по центру: попасть по линии

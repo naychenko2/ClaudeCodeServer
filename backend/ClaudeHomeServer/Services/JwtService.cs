@@ -148,6 +148,89 @@ public class JwtService
         catch { return null; }
     }
 
+    // ── Внешний доступ к дев-серверу по поддомену (см. ExternalPreviewOptions) ─────
+
+    /// <summary>Аудитория ссылок внешнего доступа — своя, чтобы обычный токен сюда не подошёл.</summary>
+    public const string PreviewAudience = "ClaudeHomeServer-preview";
+
+    /// <summary>
+    /// Подписанная ссылка на ОДИН сервис ОДНОГО проекта владельца. Форма как у office-токена
+    /// (своя аудитория + привязка к сущности), но с двумя обязательными добавками:
+    ///
+    /// jti — идентификатор ссылки в реестре (ExternalPreviewStore). Именно он даёт мгновенный
+    /// отзыв: подписанный JWT сам по себе не отзывается, и без реестра выданная ссылка жила бы
+    /// до конца срока, что бы владелец ни делал.
+    ///
+    /// tv — версия сессий. У office-токена её нет, здесь она обязательна: ссылка открывает
+    /// машину наружу, и выход из аккаунта обязан закрывать доступ.
+    ///
+    /// Порт в токен НЕ кладём намеренно: он резолвится по serviceId на месте, иначе ссылка
+    /// пережила бы смену конфигурации сервиса и увела на посторонний процесс.
+    /// </summary>
+    public string IssuePreviewToken(string userId, string projectId, string serviceId, string jti, TimeSpan lifetime)
+    {
+        var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, userId),
+            new(JwtRegisteredClaimNames.Jti, jti),
+            new("pv_pid", projectId),
+            new("pv_sid", serviceId),
+        };
+        // Без tv токен не отозвать выходом из аккаунта: IsSessionCurrent такому откажет,
+        // и это правильный исход — доступ наружу без права на отзыв не выдаём
+        var version = _users.GetById(userId)?.TokenVersion;
+        if (version is not null)
+            claims.Add(new Claim(TokenVersionClaim, version.Value.ToString(CultureInfo.InvariantCulture)));
+
+        var jwt = new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: PreviewAudience,
+            claims: claims,
+            expires: DateTime.UtcNow.Add(lifetime),
+            signingCredentials: creds);
+        return new JwtSecurityTokenHandler().WriteToken(jwt);
+    }
+
+    /// <summary>
+    /// Проверяет ссылку внешнего доступа: подпись, срок, аудиторию и версию сессий.
+    /// Возвращает (userId, projectId, serviceId, jti) либо null.
+    ///
+    /// Не отозвана ли ссылка — проверяет вызывающий по jti в реестре: подпись об этом
+    /// не знает ничего.
+    /// </summary>
+    public (string UserId, string ProjectId, string ServiceId, string Jti)? ValidatePreviewToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        try
+        {
+            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = "ClaudeHomeServer",
+                ValidateAudience = true,
+                ValidAudience = PreviewAudience,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = _key,
+                ClockSkew = TimeSpan.Zero,
+                NameClaimType = ClaimTypes.Name,
+                RoleClaimType = ClaimTypes.Role,
+            }, out _);
+
+            if (!IsSessionCurrent(principal)) return null;
+
+            var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+            var projectId = principal.FindFirstValue("pv_pid");
+            var serviceId = principal.FindFirstValue("pv_sid");
+            var jti = principal.FindFirstValue(JwtRegisteredClaimNames.Jti);
+            if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(projectId)
+                || string.IsNullOrEmpty(serviceId) || string.IsNullOrEmpty(jti)) return null;
+            return (userId, projectId, serviceId, jti);
+        }
+        catch { return null; }
+    }
+
     /// <summary>
     /// Жив ли предъявленный токен с точки зрения версии сессий: сервисные пропускаем,
     /// у пользовательских claim tv обязан совпасть с текущей версией в UserStore.

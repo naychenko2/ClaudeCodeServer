@@ -81,6 +81,28 @@ public sealed class ProjectServiceDiscovery
         return result;
     }
 
+    /// <summary>
+    /// Порт, на котором сервис слушает по конфигурации. У составной конфигурации своего порта
+    /// нет — берём первого участника, которому есть что показать (тем же правилом, что
+    /// PreviewController.GroupDto выбирает порт группе).
+    ///
+    /// Единственная точка правила: раньше оно было переписано в двух местах контроллера, и
+    /// третья копия в маршруте внешнего доступа означала бы, что «показать снаружи» и
+    /// «показать в панели» однажды начнут указывать на разные порты.
+    /// </summary>
+    public async Task<int?> ResolvePortAsync(Project project, string serviceId)
+    {
+        var known = await DiscoverAsync(project);
+        var svc = known.FirstOrDefault(s => s.Id == serviceId);
+        if (svc is null) return null;
+        if (svc.Members is not { Length: > 0 }) return svc.SuggestedPort is > 0 ? svc.SuggestedPort : null;
+
+        var byId = known.ToDictionary(s => s.Id);
+        return svc.Members
+            .Select(id => byId.TryGetValue(id, out var m) ? m.SuggestedPort : null)
+            .FirstOrDefault(p => p is > 0);
+    }
+
     /// <summary>Сбросить кэш проекта (после записи launch.json).</summary>
     public void Invalidate(string projectId) => _cache.TryRemove(projectId, out _);
 

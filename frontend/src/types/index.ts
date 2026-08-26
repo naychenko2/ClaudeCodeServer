@@ -1047,6 +1047,25 @@ export interface ProjectService {
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)
+// Выданная ссылка внешнего доступа к дев-серверу (поддомен, а не путь /preview/**).
+export interface ExternalPreviewLink {
+  jti: string;
+  projectId: string;
+  serviceId: string;
+  issuedAt: string;
+  expiresAt: string;
+  // Имя проекта приходит с сервера: список сквозной, и чужой проект надо назвать
+  projectName?: string | null;
+}
+
+export interface ExternalLinkIssued {
+  url: string;
+  jti: string;
+  expiresAt: string;
+  // Вытесненные потолком ссылки — их закрыли, и человек обязан об этом узнать
+  evicted: { jti: string; projectId: string; serviceId: string }[];
+}
+
 export interface LaunchConfigEntry {
   name?: string;
   runtimeExecutable?: string;

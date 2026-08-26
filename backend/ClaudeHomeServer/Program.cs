@@ -402,6 +402,12 @@ builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();
 builder.Services.AddSingleton<LaunchConfigService>();
 builder.Services.AddSingleton<ProjectServiceDiscovery>();
+// Внешний доступ к дев-серверу проекта по отдельному поддомену. По умолчанию ВЫКЛЮЧЕН —
+// см. ExternalPreviewOptions: код уезжает всем, у кого свой инстанс, поэтому защита обязана
+// быть конфигурацией, а не отсутствием кода.
+builder.Services.Configure<ExternalPreviewOptions>(builder.Configuration.GetSection(ExternalPreviewOptions.Section));
+builder.Services.AddSingleton<ExternalPreviewStore>();
+builder.Services.AddSingleton<ExternalPreviewRouter>();
 // "proxy" ходит только к нашим же сервисам: dev-серверы проектов и скачивание готового
 // документа у OnlyOffice в office-callback. Egress-прокси им не нужен — см. WithoutEgressProxy.
 builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
@@ -857,6 +863,87 @@ if (!app.Environment.IsDevelopment())
         }
         await next();
     });
+// Внешний доступ к дев-серверу проекта по отдельному поддомену (ExternalPreviewOptions).
+//
+// Почему сайт нельзя показать под путём /preview/{id}/ и понадобился свой хост: дев-сервер
+// отдаёт абсолютные ссылки от корня («/assets/app.js», «/@vite/client», чанки Module
+// Federation), и под префиксом они уходят в корень ПРОДУКТА, а не к сайту. Здесь префикса нет.
+//
+// Стоит ДО UseRouting не из-за раздачи фронта (она сильно ниже), а из-за перехватчиков между:
+// WebDAV на /projects/*, ModuleGateway и прокси OnlyOffice, который ловит ЛЮБОЙ путь, у
+// которого второй символ — цифра. Ассеты проксируемого сайта попадали бы к ним.
+//
+// Правило перехвата ИНВЕРСНОЕ: хост из конфигурации наш всегда, и всё, что мы не обслужили
+// сами, отбивается здесь же. Иначе выключенная фича отдавала бы со второго имени весь
+// продукт целиком — и /api, и фронт.
+{
+    var extInvoker = new HttpMessageInvoker(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+    });
+
+    app.Use(async (ctx, next) =>
+    {
+        var router = ctx.RequestServices.GetRequiredService<ExternalPreviewRouter>();
+        if (!router.IsOwnHost(ctx.Request.Host.Host)) { await next(); return; }
+
+        // Продление сертификата по HTTP-01 обязано проходить мимо перехвата. Сейчас выпуск
+        // идёт через DNS-01, но смену механизма наш 404 сломал бы молча и через месяцы —
+        // причину искали бы где угодно, только не здесь.
+        if (ctx.Request.Path.StartsWithSegments("/.well-known/acme-challenge"))
+        {
+            await next();
+            return;
+        }
+
+        // Обмен токена на куку. Токен обязан исчезнуть из адресной строки: в URL он осел бы
+        // в истории браузера, в закладках и в логах любого промежуточного узла.
+        if (ctx.Request.Path.Equals(ExternalPreviewRouter.AuthPath, StringComparison.OrdinalIgnoreCase))
+        {
+            var handoff = ctx.Request.Query["t"].ToString();
+            var (authTarget, authDenial) = await router.ResolveAsync(handoff);
+            if (authTarget is null)
+            {
+                await ExternalPreviewResponses.WriteDenialAsync(ctx, authDenial);
+                return;
+            }
+
+            ctx.Response.Cookies.Append(ExternalPreviewRouter.CookieName, handoff, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Lax,
+                Path = "/",
+                // Срок куки = остатку срока ссылки. Сессионная умерла бы вместе с вкладкой
+                // телефона, и это выглядело бы как «ссылка сломалась» на ровном месте.
+                MaxAge = authTarget.Link.ExpiresAt - DateTimeOffset.UtcNow,
+            });
+            ctx.Response.Redirect("/");
+            return;
+        }
+
+        var (target, denial) = await router.ResolveAsync(ctx.Request.Cookies[ExternalPreviewRouter.CookieName]);
+        if (target is null)
+        {
+            await ExternalPreviewResponses.WriteDenialAsync(ctx, denial);
+            return;
+        }
+
+        // Префикс не срезаем и не добавляем: сайт живёт в корне — ровно ради этого здесь
+        // отдельный хост, а не путь.
+        var extForwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
+        var extError = await extForwarder.SendAsync(ctx, target.BaseUrl, extInvoker, ForwarderRequestConfig.Empty,
+            new ExternalPreviewTransformer(target.Port, ctx.Request.Host, ctx.Request.IsHttps));
+        // До назначения не достучались — забываем и порт, и выбранную семью адресов:
+        // сервис мог смениться. Отмены клиентом о живости назначения не говорят ничего.
+        if (extError is ForwarderError.Request or ForwarderError.RequestTimedOut)
+            router.ForgetPort(target.Link.Jti, target.Port);
+    });
+}
+
 app.UseRouting();
 app.UseCors();
 // UseRateLimiter — после UseRouting, иначе эндпоинт-политика [EnableRateLimiting] не видна
@@ -1046,9 +1133,25 @@ app.Use(async (ctx, next) =>
             // поэтому в префиксе пути быть не должно (иначе /preview/{id} уедет на дев-сервер
             // дважды и тот ответит 404). Срезаем свой префикс прямо в запросе.
             ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
+            // Семью loopback-адресов выбирает LoopbackResolver, а не литерал: dev-сервер
+            // на Node 17+ слушает ТОЛЬКО ::1, и прежний 127.0.0.1 до него не доставал —
+            // живой сервис отдавал «соединение отвергнуто» при работающем порте.
+            var previewBase = await LoopbackResolver.ResolveBaseAsync(port.Value);
+            if (previewBase is null)
+            {
+                ctx.Response.StatusCode = 503;
+                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не отвечает\"}");
+                return;
+            }
+
             var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
-            await forwarder.SendAsync(ctx, $"http://127.0.0.1:{port}", previewInvoker,
+            var previewError = await forwarder.SendAsync(ctx, previewBase, previewInvoker,
                 ForwarderRequestConfig.Empty, HttpTransformer.Default);
+            // До назначения не достучались — процесс мог смениться на слушающий по другой
+            // семье, поэтому выбор семьи забываем, а не держим до истечения TTL. Отмены
+            // клиентом сюда не попадают: они ничего не говорят о живости назначения.
+            if (previewError is ForwarderError.Request or ForwarderError.RequestTimedOut)
+                LoopbackResolver.Invalidate(port.Value);
             return;
         }
         await next();

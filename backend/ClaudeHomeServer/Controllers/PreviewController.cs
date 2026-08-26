@@ -14,15 +14,23 @@ public class PreviewController : ControllerBase
     private readonly DevServerService _devServer;
     private readonly ProjectServiceDiscovery _discovery;
     private readonly LaunchConfigService _launch;
+    private readonly ExternalPreviewRouter _external;
+    private readonly ExternalPreviewStore _links;
+    private readonly JwtService _jwt;
     private readonly ILogger<PreviewController> _log;
 
     public PreviewController(ProjectManager projects, DevServerService devServer,
-        ProjectServiceDiscovery discovery, LaunchConfigService launch, ILogger<PreviewController> log)
+        ProjectServiceDiscovery discovery, LaunchConfigService launch,
+        ExternalPreviewRouter external, ExternalPreviewStore links, JwtService jwt,
+        ILogger<PreviewController> log)
     {
         _projects = projects;
         _devServer = devServer;
         _discovery = discovery;
         _launch = launch;
+        _external = external;
+        _links = links;
+        _jwt = jwt;
         _log = log;
     }
 
@@ -133,7 +141,7 @@ public class PreviewController : ControllerBase
         if (candidates.Count == 0) return [];
 
         var results = await Task.WhenAll(candidates.Select(async s =>
-            (s.Id, Listening: await DevServerService.IsPortListeningAsync(s.SuggestedPort!.Value))));
+            (s.Id, Listening: await LoopbackResolver.IsListeningAsync(s.SuggestedPort!.Value))));
         return results.Where(r => r.Listening).Select(r => r.Id).ToHashSet();
     }
 
@@ -156,20 +164,12 @@ public class PreviewController : ControllerBase
         var svc = known.FirstOrDefault(s => s.Id == req.ServiceId);
         if (svc is null) return NotFound(new { error = "Сервис не найден" });
 
-        // У составной конфигурации своего порта нет — берём первого участника, которому
-        // есть что показать (тем же правилом группе считается порт в GroupDto)
-        var port = svc.SuggestedPort;
-        if (svc.Members is { Length: > 0 })
-        {
-            var byId = known.ToDictionary(s => s.Id);
-            port = svc.Members
-                .Select(id => byId.TryGetValue(id, out var m) ? m.SuggestedPort : null)
-                .FirstOrDefault(p => p is > 0);
-        }
+        // Правило выбора порта (в том числе у составной конфигурации) — одно на весь продукт
+        var port = await _discovery.ResolvePortAsync(project, svc.Id);
         if (port is not > 0)
             return BadRequest(new { error = "У сервиса не задан порт — непонятно, где он слушает" });
 
-        if (!await DevServerService.IsPortListeningAsync(port.Value))
+        if (!await LoopbackResolver.IsListeningAsync(port.Value))
             return BadRequest(new { error = $"На порту {port} никто не слушает" });
 
         _devServer.SetActiveExternal(projectId, svc.Id, port.Value);
@@ -220,7 +220,7 @@ public class PreviewController : ControllerBase
             // Участник уже поднят снаружи — запускать нечего, иначе упрёмся в занятый порт
             if (member.SuggestedPort is > 0 &&
                 _devServer.GetRunning(projectId, UserId).All(r => r.ServiceId != id) &&
-                await DevServerService.IsPortListeningAsync(member.SuggestedPort.Value))
+                await LoopbackResolver.IsListeningAsync(member.SuggestedPort.Value))
             {
                 _devServer.SetActiveExternal(projectId, id, member.SuggestedPort.Value);
                 continue;
@@ -296,6 +296,97 @@ public class PreviewController : ControllerBase
         await _launch.WriteAsync(project, req.Configurations ?? []);
         _discovery.Invalidate(projectId);
         return Ok(new { configurations = req.Configurations ?? [] });
+    }
+    // ── Внешний доступ по поддомену (см. ExternalPreviewOptions) ──────────────────
+
+    /// <summary>
+    /// Выдать ссылку внешнего доступа на сервис проекта.
+    ///
+    /// Порт, как и у active-external, выбирает СЕРВЕР по конфигурации сервиса: принимать его
+    /// от клиента нельзя — эндпоинт стал бы туннелем на любой localhost-порт машины, да ещё
+    /// и опубликованным наружу.
+    /// </summary>
+    [HttpPost("/api/projects/{projectId}/preview/external-link")]
+    public async Task<IActionResult> IssueExternalLink(string projectId, [FromBody] PreviewActiveRequest req)
+    {
+        var project = OwnedProject(projectId);
+        if (project is null) return Forbid();
+        // Выключенная фича не должна даже признавать существование эндпоинта
+        if (!_external.Options.Enabled) return NotFound();
+        if (!_external.Options.IsConfigured)
+            return StatusCode(503, new { error = "Внешний доступ не настроен: не задан ExternalPreview:PublicBaseUrl" });
+        if (string.IsNullOrWhiteSpace(req.ServiceId))
+            return BadRequest(new { error = "serviceId не указан" });
+
+        var port = await _discovery.ResolvePortAsync(project, req.ServiceId);
+        if (port is not > 0)
+            return BadRequest(new { error = "У сервиса не задан порт — непонятно, где он слушает" });
+        if (!await LoopbackResolver.IsListeningAsync(port.Value))
+            return BadRequest(new { error = $"На порту {port} никто не слушает" });
+
+        var jti = Guid.NewGuid().ToString("N");
+        // Потолок срока — неделя: ссылка наружу не должна жить дольше памяти о ней
+        var lifetime = TimeSpan.FromHours(Math.Clamp(_external.Options.TokenLifetimeHours, 1, 24 * 7));
+        var now = DateTimeOffset.UtcNow;
+        var token = _jwt.IssuePreviewToken(UserId, projectId, req.ServiceId, jti, lifetime);
+        var evicted = _links.Add(new ExternalPreviewLink(jti, UserId, projectId, req.ServiceId, now, now.Add(lifetime)));
+
+        _log.LogInformation("Проект {ProjectId}: выдана внешняя ссылка на сервис {ServiceId} (:{Port}) до {Until}",
+            projectId, req.ServiceId, port, now.Add(lifetime));
+
+        return Ok(new
+        {
+            url = _external.BuildLinkUrl(token),
+            jti,
+            expiresAt = now.Add(lifetime),
+            // Вытеснение потолком — это тоже отзыв, и человек обязан о нём узнать:
+            // иначе молча умершая ссылка выглядит как поломка продукта
+            evicted = evicted.Select(e => new { e.Jti, e.ProjectId, e.ServiceId }),
+        });
+    }
+
+    /// <summary>
+    /// Живые ссылки владельца — СКВОЗЬ все его проекты, а не только текущий. Панель проектная,
+    /// но забытая открытой витрина в соседнем проекте иначе осталась бы невидимой, а это
+    /// ровно тот случай, ради которого список и нужен.
+    /// </summary>
+    [HttpGet("/api/preview/external-links")]
+    public IActionResult ExternalLinks()
+    {
+        var links = _links.ListFor(UserId).Select(l => new
+        {
+            l.Jti,
+            l.ProjectId,
+            l.ServiceId,
+            l.IssuedAt,
+            l.ExpiresAt,
+            projectName = _projects.GetById(l.ProjectId)?.Name,
+        });
+        // Отсюда фронт узнаёт и про сам рубильник: отдельный флаг заводить незачем,
+        // список всё равно запрашивается панелью
+        return Ok(new
+        {
+            enabled = _external.Options.Enabled && _external.Options.IsConfigured,
+            links,
+        });
+    }
+
+    /// <summary>Отозвать одну ссылку. Доступ умирает на следующем же запросе поддомена.</summary>
+    [HttpDelete("/api/preview/external-links/{jti}")]
+    public IActionResult RevokeExternalLink(string jti)
+    {
+        if (!_links.Revoke(jti, UserId)) return NotFound(new { error = "Ссылка не найдена" });
+        _log.LogInformation("Внешняя ссылка {Jti} отозвана владельцем", jti);
+        return Ok(new { revoked = 1 });
+    }
+
+    /// <summary>Отозвать все свои ссылки разом — «закрыть всё, что торчит наружу».</summary>
+    [HttpDelete("/api/preview/external-links")]
+    public IActionResult RevokeAllExternalLinks()
+    {
+        var count = _links.RevokeAll(UserId);
+        if (count > 0) _log.LogInformation("Отозвано внешних ссылок: {Count}", count);
+        return Ok(new { revoked = count });
     }
 }
 

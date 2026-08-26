@@ -150,7 +150,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _egress = egress;
         _turnRuns = turnRuns;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
-        _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
+        _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
 
     // Ход сейчас под фолбэк-оркестрацией. По этому признаку SessionManager отходит в
@@ -454,7 +454,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // проверка зацикливания пойдёт по эквиваленту — пары разойдутся, и одна мёртвая пара
         // повторится до потолка (инцидент 2026-08-07).
         var currentModel = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
-        var currentKey = ProviderKeyFor(currentModel);
+        // Ключ ТЕКУЩЕЙ пары — «где ход реально идёт», а не «чей это шаг»: по нему идут
+        // MarkExhausted/MarkAuthDead и сборка env хода, а env собирается из Info.Provider.
+        // Поэтому здесь нельзя звать ProviderKeyFor: он для КАНДИДАТОВ и вправе выбрать
+        // подписку пула сам — 429 у claude-1 пометил бы исчерпанной живую claude-2.
+        var currentKey = CurrentProviderKey(currentModel);
 
         // Снимок «модели × провайдера» на старте хода. Подмены внутри хода пишутся в
         // Info.Model/Provider (процесс попытки пересобирается из них), но в finally исходные
@@ -491,15 +495,23 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (_health is not null && chain.Count > 1 && _health.IsUnavailable(currentKey))
             {
                 var stepIdx = -1;
+                // Ключ найденного шага запоминаем сразу: ProviderKeyFor у нативной модели
+                // разруливает ничью подписок через Pick (случайно), и второй вызов для той же
+                // модели мог бы отдать ДРУГУЮ подписку — проверили одну, поехали на другую.
+                string? stepKeyFound = null;
                 for (var i = 1; i < chain.Count; i++)
                 {
                     var sm = chain[i];
-                    if (!_health.IsUnavailable(ProviderKeyFor(sm))) { stepIdx = i; break; }
+                    // Здоровье кандидата — по природе его ключа (StepUnavailable): у стороннего
+                    // из реестра кулдауна, у нативного — из пула подписок. Внешнее условие про
+                    // ТЕКУЩИЙ провайдер остаётся прежним: стартовая подмена задумана для стороннего.
+                    var k = ProviderKeyFor(sm);
+                    if (!StepUnavailable(k)) { stepIdx = i; stepKeyFound = k; break; }
                 }
                 if (stepIdx > 0)
                 {
                     var stepModel = chain[stepIdx];
-                    var stepKey = ProviderKeyFor(stepModel);
+                    var stepKey = stepKeyFound!;
                     var stepRoot = ResolveRootFor(stepKey);
                     // Перенос транскрипта ДО подмены (Major, инвариант ADR-007 §4.1: Provider и свежий
                     // транскрипт — одно место). Профиль исходного провайдера (_profileRoot) → профиль
@@ -1040,6 +1052,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         if (chain.Count > 1)
         {
             var cooledIdx = -1;
+            // Ключ остывшего кандидата — тот самый, по которому его признали остывшим:
+            // ProviderKeyFor у нативной модели решает ничью подписок через Pick, и повторный
+            // вызов увёл бы fail-open на другую подписку, чем ту, что проверяли.
+            string? cooledKey = null;
             var scan = chainIndex;
             while (++scan < chain.Count)
             {
@@ -1054,10 +1070,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 var checkDeclared = cls == FallbackErrorClass.ContextOverflow;
                 if (!WouldFit(stepModel, contextEstimate, checkDeclared)) continue;
                 // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
-                // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open)
-                if (_health?.IsUnavailable(stepKey) is true)
+                // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open).
+                // Здоровье считает StepUnavailable: у нативного шага его ведёт пул подписок.
+                if (StepUnavailable(stepKey))
                 {
-                    if (cooledIdx < 0) cooledIdx = scan;
+                    if (cooledIdx < 0) { cooledIdx = scan; cooledKey = stepKey; }
                     continue;
                 }
                 var dstRoot = ResolveRootFor(stepKey);
@@ -1070,7 +1087,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (cooledIdx > 0)
             {
                 var cm = chain[cooledIdx];
-                var ck = ProviderKeyFor(cm);
+                var ck = cooledKey!;
                 var dstRoot = ResolveRootFor(ck);
                 if (TryMigrateTranscript(dstRoot))
                 {
@@ -1094,15 +1111,44 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             ProfileRoot: dstRoot, IsProviderSwitch: true);
     }
 
-    // Ключ пары для модели шага: провайдер по модели (приоритет), затем Provider сессии —
-    // тот же порядок, что у CurrentProviderKey, но от ЗАДАННОЙ модели шага цепочки, а не Info.Model.
+    // Ключ пары для ЗАДАННОЙ модели («чей это шаг»), а не «где чат живёт сейчас» — вопросы
+    // разные, и их смешение стоило инцидента 25.08.2026: у чата на GLM нативный шаг цепочки
+    // «opus[1m]» получал ключ «glm» (модель не резолвится ни в один сторонний каталог), поэтому
+    // отсеивался вместе с кулдауном GLM, а будучи выбранным — запустил бы Opus на эндпоинте и в
+    // профиле GLM. Порядок:
+    //   — модель есть в каталоге стороннего провайдера → его ключ;
+    //   — нативная claude-модель принадлежит ПУЛУ ПОДПИСОК: остаёмся на текущей подписке, если
+    //     чат уже живёт в пуле, она ЖИВА и тянет модель (её ротацией владеет уровень 1), иначе
+    //     подписку выбирает пул (Pick учитывает исчерпание, auth-dead, тариф и утилизацию);
+    //     живость проверяем именно здесь — иначе шаг цепочки получал бы ключ подписки, только
+    //     что упёршейся в лимит, StepUnavailable признавал бы его мёртвым, и ход проскакивал
+    //     мимо живой второй подписки сразу к стороннему шагу;
+    //   — модель не задана → вопрос действительно о текущей паре (Provider сессии).
     private string ProviderKeyFor(string? model)
     {
-        var byModel = _providers?.ResolveByModel(
-            string.IsNullOrWhiteSpace(model) ? null : model)?.Key;
-        return byModel ?? (string.IsNullOrEmpty(Info.Provider)
-            ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
+        if (string.IsNullOrWhiteSpace(model))
+            return string.IsNullOrEmpty(Info.Provider) ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider;
+
+        var byModel = _providers?.ResolveByModel(model)?.Key;
+        if (byModel is not null) return byModel;
+
+        var current = Info.Provider;
+        if (!string.IsNullOrEmpty(current) && !IsExternalProvider(current)
+            && !_pool.IsExhausted(current) && !_pool.IsAuthDead(current)
+            && _pool.SupportsModel(current, model))
+            return current;
+        var picked = _pool.Pick(model);
+        return string.IsNullOrWhiteSpace(picked) ? ClaudeSubscriptionPool.PrimaryKey : picked;
     }
+
+    // Шаг цепочки «в кулдауне»? Природа ключа решает, кто ведёт его здоровье: у стороннего
+    // провайдера — ProviderHealthRegistry, у подписки пула Claude — сам пул (дублировать
+    // нельзя, инвариант ADR-007 §4.3). Без этой развилки нативный шаг цепочки считался бы
+    // «всегда живым»: реестр кулдауна подписок пула не ведёт вовсе.
+    private bool StepUnavailable(string stepKey) =>
+        IsExternalProvider(stepKey)
+            ? _health?.IsUnavailable(stepKey) is true
+            : _pool.IsExhausted(stepKey) || _pool.IsAuthDead(stepKey);
 
     // Сторонний ли провайдер (есть в реестре LlmProviderRegistry), а не подписка пула Claude.
     // Кулдаун недоступности помечает только сторонние эндпоинты — здоровье подписок пула ведёт
@@ -1200,6 +1246,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
+        // Приёмник совпал с источником: нативный шаг цепочки может резолвиться в ТЕКУЩУЮ
+        // подписку — переносить нечего, а копирование файла в себя же CopyFileShared не умеет
+        // (чтение и запись одного пути → IOException → ретраи до дедлайна 8 с, и кандидат
+        // отсеивается как «не перенеслось»). Пути приходят из разных источников, поэтому
+        // сравниваем без учёта регистра и хвостового разделителя.
+        if (string.Equals(TrimPath(_profileRoot), TrimPath(dstRoot), StringComparison.OrdinalIgnoreCase))
+            return true;
         if (ResolveCwd() is not { } cwd) return false; // папка вне монтирований песочницы
         // Транскрипта нет в источнике ВООБЩЕ: CLI умер до первой записи в .jsonl (мгновенная
         // AuthFailure — основной сценарий фолбэка: 401 приходит за ~100-400мс, CLI не успевает
@@ -1222,6 +1275,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return true;
     }
 
+    // Путь для сравнения «источник и приёмник — одна папка»: без хвостового разделителя
+    // (пути приходят из разных источников — конфиг профилей, сборка песочницы).
+    private static string TrimPath(string path) =>
+        path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
     // Обратный перенос транскрипта в профиль исходного провайдера при restore после смены типа
     // поставщика (IsProviderSwitch). Финальный ответ хода CLI записал только в профиль ПОДМЕНЫ
     // (_profileRoot); restore вернёт Info.Provider в исходный — следующий ход на --resume из
@@ -1232,6 +1290,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
+        // Шаг цепочки мог остаться в ТОЙ ЖЕ подписке — возвращать транскрипт некуда, а копия
+        // файла в себя же уходит в ретраи CopyFileShared до дедлайна (см. TryMigrateTranscript).
+        if (string.Equals(TrimPath(_profileRoot), TrimPath(dstRoot), StringComparison.OrdinalIgnoreCase))
+            return true;
         if (ResolveCwd() is not { } cwd)
         {
             LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: папка вне монтирований песочницы (src={_profileRoot}, dst={dstRoot})");
@@ -1277,12 +1339,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // финале) — своего сохранения у адаптера нет, им владеет SessionManager
     }
 
-    // Текущий ключ пары: провайдер по модели (приоритет), затем Provider сессии —
-    // тот же порядок, что у MigrateProviderAsync при вычислении currentKey
-    private string CurrentProviderKey()
+    // Текущий ключ пары «где чат/ход живёт сейчас»: провайдер по модели (приоритет), затем
+    // Provider сессии — тот же порядок, что у MigrateProviderAsync при вычислении currentKey.
+    // model — модель ТЕКУЩЕЙ пары (Info.Model либо шаг цепочки, с которого стартовал ход);
+    // выбирать подписку пула здесь запрещено (этим занят ProviderKeyFor для кандидатов).
+    private string CurrentProviderKey(string? model)
     {
         var byModel = _providers?.ResolveByModel(
-            string.IsNullOrWhiteSpace(Info.Model) ? null : Info.Model)?.Key;
+            string.IsNullOrWhiteSpace(model) ? null : model)?.Key;
         return byModel ?? (string.IsNullOrEmpty(Info.Provider)
             ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
     }

@@ -339,6 +339,20 @@ body {
   .cc-card-press:active { transform: none; }
 }
 
+/* Мягкая подсветка карточки остановки после клика по закреплённой полосе
+   «Практика ждёт вашего решения»: рамка + лёгкий фон на 1.5с. Outline вместо
+   border, чтобы не дёргать раскладку ленты. Анимация фона — без transform,
+   motion-reduce её глушит, а рамка остаётся как минимум зрительной обратной связью */
+.escalation-flash {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+  background-color: var(--c-accent-soft);
+  transition: background-color 0.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .escalation-flash { transition: none; }
+}
+
 /* Слой перелива поверх фона карточки, но ПОД её содержимым (z-index:0 против
    position:relative у текста и лица). Карточка с overflow:hidden сама обрежет
    его по скруглению — отдельная маска не нужна.

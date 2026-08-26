@@ -346,6 +346,54 @@ public class TurnAccumulatorTests : IDisposable
         changed.External.Should().BeFalse();
     }
 
+    // Правка ИЗВНЕ прилетает асинхронно и застаёт ход посреди поста. Разрезать им ответ
+    // нельзя: живая лента такую строку кладёт ПОД пост (chatReducer.openBlockIndex), и
+    // история обязана повторить тот же порядок — иначе после перезагрузки цельный на
+    // экране ответ распадался бы на два пузыря со строкой посередине.
+    [Fact]
+    public void OnFileChanged_External_ПосредиПоста_НеРежетТекстИВстаётПодНим()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnTextDelta("начало ");
+        acc.OnFileChanged("src/other.cs", 4, 1, external: true);
+        acc.OnTextDelta("и конец");
+        acc.OnToolUse("t1", "Bash", null);
+
+        var all = acc.GetAll();
+        all.OfType<StoredTextMessage>().Single().Text.Should().Be("начало и конец");
+        all.Select(m => m.GetType().Name).Should().Equal(
+            nameof(StoredTextMessage), nameof(StoredFileChangedMessage), nameof(StoredToolUseMessage));
+    }
+
+    // Придержанная строка обязана быть видна и в снимке посреди хода: он же ложится в
+    // history.json и переживает рестарт сервера — иначе правка потерялась бы совсем
+    [Fact]
+    public void OnFileChanged_External_ПосредиПоста_ВидноВСнимкеДоКонцаХода()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnTextDelta("пишу ответ");
+        acc.OnFileChanged("src/other.cs", 4, 1, external: true);
+
+        acc.GetAll().Select(m => m.GetType().Name).Should().Equal(
+            nameof(StoredTextMessage), nameof(StoredFileChangedMessage));
+    }
+
+    // Правка самого хода закрывает пост как и раньше: она следует за своим tool_use,
+    // где текст и так уже разрезан — трогать это поведение фикс не должен
+    [Fact]
+    public void OnFileChanged_СвояПравка_ПоПрежнемуРазрезаетПост()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnTextDelta("начало ");
+        acc.OnFileChanged("src/file.cs", 4, 1);
+        acc.OnTextDelta("и конец");
+        acc.OnToolUse("t1", "Bash", null);
+
+        acc.GetAll().Select(m => m.GetType().Name).Should().Equal(
+            nameof(StoredTextMessage), nameof(StoredFileChangedMessage), nameof(StoredTextMessage),
+            nameof(StoredToolUseMessage));
+    }
+
     // Модель хода приходит только с result, а посты к тому моменту уже созданы —
     // проверяем, что она проставляется им задним числом (подпись модели у поста)
     [Fact]

@@ -15,10 +15,12 @@ public sealed class WidgetsToolset : IMcpToolset
     // Лимит размера html: учит модель ретраиться компактнее. Input уже улетел в историю
     // до валидации — от первого раздутого вызова историю лимит не спасает (фронт имеет
     // свой защитный cap на рендер).
-    private const int MaxHtml = 64 * 1024;
-    private const int MaxTitle = 120;
-    private const int MinHeight = 120;
-    private const int MaxHeight = 1200;
+    // internal для сторожа парности с mcp/widgets-server/index.js (WidgetsToolsetParityTests):
+    // обе ветки живые (рубильник Mcp:HttpTransport), правка здесь обязана ехать парой.
+    internal const int MaxHtml = 64 * 1024;
+    internal const int MaxTitle = 120;
+    internal const int MinHeight = 120;
+    internal const int MaxHeight = 1200;
 
     public string Name => "widgets";
     public string Version => "1.0.0";

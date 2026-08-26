@@ -1,14 +1,17 @@
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
-/// Значение NO_PROXY для хода (ADR-012). С http-транспортом MCP локальный адрес бэкенда
+/// Правило NO_PROXY для хода (ADR-012). С http-транспортом MCP локальный адрес бэкенда
 /// обязан быть исключён из прокси — иначе запрос CLI уедет в HTTP_PROXY и инструмент
-/// пропадёт у модели молча. Унаследованное окружение при этом трогать нельзя: у владельца
-/// там могут быть свои исключения, и затирание сломало бы их.
+/// пропадёт у модели молча.
+///
+/// Правило развязано по среде исполнения (находка консилиума по 3b764c58): Merge — спецификация
+/// ТОЛЬКО local-ветки, песочнице хостовое окружение не доезжает вовсе (иначе exec-переменная
+/// подменяет узкий egress-whitelist контейнера корпоративными исключениями хоста), а выключенный
+/// транспорт не ставит оверрайд вовсе (откат рубильником обязан откатывать и env).
 /// </summary>
 public class LoopbackProxyBypassTests
 {
@@ -20,8 +23,13 @@ public class LoopbackProxyBypassTests
         value.Split(',').Should().BeEquivalentTo("localhost", "127.0.0.1", "::1", "host.docker.internal");
     }
 
+    /// <summary>
+    /// Спецификация local-ветки (Merge): унаследованное сохраняется и дополняется локальными.
+    /// Для local-владельца HTTP_PROXY на машине бывает единственным маршрутом до провайдеров,
+    /// поэтому его исключения затирать нельзя. Песочница сюда не попадает — см. ForTurn-тесты.
+    /// </summary>
     [Fact]
-    public void УнаследованноеСохраняется_АЛокальныеДобавляются()
+    public void Merge_LocalВладелец_УнаследованноеСохраняется_ЛокальныеДобавляются()
     {
         var value = LoopbackProxyBypass.Merge("corp.example.com, 10.0.0.0/8");
 
@@ -51,7 +59,7 @@ public class LoopbackProxyBypassTests
     }
 
     /// <summary>
-    /// Хост берётся из ФАКТИЧЕСКОГО адреса эндпоинта: сопоставление в NO_PROXY идёт по имени,
+    /// Хост берём из ФАКТИЧЕСКОГО адреса эндпоинта: сопоставление в NO_PROXY идёт по имени,
     /// и адрес вида http://ccs-host:5000 не покрывается ни localhost, ни 127.0.0.1.
     /// </summary>
     [Fact]
@@ -78,5 +86,42 @@ public class LoopbackProxyBypassTests
         var second = LoopbackProxyBypass.Merge("corp.example.com", "http://localhost:5000");
 
         second.Should().Be(first);
+    }
+
+    /// <summary>
+    /// БЛОКЕР консилиума №1: container-владелец не получает хостовой NO_PROXY. Хостовая
+    /// переменная (например, корпоративный corp.example.com) через docker exec -e подменила бы
+    /// узкий egress-whitelist песочницы — оверрайд не ставится вовсе, средой владеет контейнер.
+    /// </summary>
+    [Fact]
+    public void ForTurn_Песочница_ХостовойNO_PROXY_НеНаследуетсяНичем()
+    {
+        var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: true,
+            inherited: "corp.example.com,10.0.0.0/8", apiUrl: "http://host.docker.internal:5000");
+
+        value.Should().BeNull("exec-оверрайд затёр бы egress-whitelist песочницы; " +
+            "нужные адреса уже стоят в её собственном NO_PROXY");
+    }
+
+    /// <summary>
+    /// БЛОКЕР консилиума №2: рубильник Mcp:HttpTransport=false возвращает stdio — env-оверрайд
+    /// обязан откатиться вместе с транспортом, иначе «откат без выкатки кода» неполон.
+    /// </summary>
+    [Fact]
+    public void ForTurn_ТранспортНеHttp_ОверрайдаНет()
+    {
+        var value = LoopbackProxyBypass.ForTurn(useHttp: false, isSandboxed: false,
+            inherited: "corp.example.com", apiUrl: "http://localhost:5000");
+
+        value.Should().BeNull("в бэкенд по этому адресу CLI не ходит — переменная не нужна");
+    }
+
+    [Fact]
+    public void ForTurn_LocalВладелец_УнаследованноеДополняетсяАдресомЭндпоинта()
+    {
+        var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: false,
+            inherited: "corp.example.com", apiUrl: "http://ccs-host:5000");
+
+        value.Should().Be("corp.example.com,localhost,127.0.0.1,::1,host.docker.internal,ccs-host");
     }
 }

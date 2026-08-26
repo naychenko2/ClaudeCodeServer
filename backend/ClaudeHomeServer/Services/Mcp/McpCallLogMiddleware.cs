@@ -17,6 +17,9 @@ public static class McpCallLogMiddleware
     /// <summary>Имя вызванного инструмента; ставит MCP-сервер на каждый запрос к бэкенду.</summary>
     public const string ToolHeader = "X-Mcp-Tool";
 
+    /// <summary>Метка «изнутри разворачивается необработанное исключение» — журнал пишет 500.</summary>
+    private const string UnhandledErrorItemKey = "mcp.call.unhandled";
+
     public static IApplicationBuilder UseMcpCallLog(this IApplicationBuilder app) =>
         app.UseWhen(
             ctx => ctx.Request.Headers.ContainsKey(DenyOnDelegatedTurnAttribute.CallerHeader),
@@ -28,6 +31,15 @@ public static class McpCallLogMiddleware
         try
         {
             await next(ctx);
+        }
+        // Необработанное исключение разворачивается сквозь finally ДО того, как хост успел
+        // выставить 500 — журнал увидел бы дефолтный 200 и записал сбой успехом. Помечаем и
+        // роняем дальше: метка превращается в 500 ниже, в finally. Отмена (клиент ушёл) — не
+        // сбой инструмента, её не помечаем.
+        catch (Exception ex) when (ex is not OperationCanceledException || !ctx.RequestAborted.IsCancellationRequested)
+        {
+            ctx.Items[UnhandledErrorItemKey] = true;
+            throw;
         }
         finally
         {
@@ -44,7 +56,9 @@ public static class McpCallLogMiddleware
                 // с GUID пускать нельзя (кардинальность + PII), там своё схлопывание.
                 var tool = ctx.Request.Headers[ToolHeader].FirstOrDefault() is { Length: > 0 } t ? t : null;
                 var sessionId = ctx.Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
-                var status = ctx.Response.StatusCode;
+                var status = ctx.Items.ContainsKey(UnhandledErrorItemKey)
+                    ? Math.Max(ctx.Response.StatusCode, 500)
+                    : ctx.Response.StatusCode;
 
                 ctx.RequestServices.GetService<McpCallLog>()
                     ?.Record(tool, sessionId, ctx.Request.Path, status, sw.ElapsedMilliseconds);

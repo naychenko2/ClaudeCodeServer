@@ -16,13 +16,27 @@ public static class McpHttpTransport
     /// в ERR_TLS_CERT_ALTNAME_INVALID, пряча инструмент от модели молча (разведка фазы 0).
     /// Такой адрес — не ошибка конфигурации, а документированное лечение HTTPS-деплоя
     /// (McpTasksApiUrl), поэтому ход просто едет прежним stdio-сервером.
+    ///
+    /// Строгость к ФОРМЕ сырой строки: <c>Uri.TryCreate</c> молча прощает ведущие пробелы и
+    /// разбирает query, а адрес эндпоинта строится из той же строки — расхождение «гейт
+    /// пропустил, конфиг сломался» снова даёт молчаливую пропажу инструмента. Пробелы по
+    /// краям и ?/# в базовом адресе — тоже fail-closed на stdio.
     /// </summary>
     public static bool Usable(string? apiUrl, bool enabled) =>
         enabled
-        && Uri.TryCreate(apiUrl, UriKind.Absolute, out var uri)
+        && apiUrl is { } url
+        && url == url.Trim()
+        && !url.Contains('?') && !url.Contains('#')
+        && Uri.TryCreate(url, UriKind.Absolute, out var uri)
         && uri.Scheme == Uri.UriSchemeHttp;
 
-    /// <summary>Адрес эндпоинта сервера: базовый URL владельца плюс маршрут контроллера.</summary>
+    /// <summary>
+    /// Адрес эндпоинта сервера: базовый URL владельца плюс маршрут контроллера. Строится из
+    /// РАЗОБРАННОГО адреса, а не конкатенацией сырой строки — гейт судит по нормализованному
+    /// Uri, и адрес в конфиге хода обязан с ним соглашаться.
+    /// </summary>
     public static string EndpointFor(string apiUrl, string server) =>
-        $"{apiUrl.TrimEnd('/')}/mcp/{server}";
+        Uri.TryCreate(apiUrl, UriKind.Absolute, out var uri)
+            ? uri.GetLeftPart(UriPartial.Authority) + uri.AbsolutePath.TrimEnd('/') + "/mcp/" + server
+            : apiUrl.TrimEnd('/') + "/mcp/" + server;
 }

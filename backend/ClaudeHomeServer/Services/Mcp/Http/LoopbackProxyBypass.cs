@@ -7,9 +7,9 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// не покрыт NO_PROXY. У инструмента это выглядит как 503 CLIENT_HTTP_NOT_IMPLEMENTED — то есть
 /// сервер молча исчезает у модели.
 ///
-/// В песочнице NO_PROXY ставится при создании контейнера (SandboxManager.BuildRunArgs), у
-/// local-владельцев переменная наследуется от системы, и гарантии нет никакой. Поэтому значение
-/// задаём на каждый ход сами — унаследованное не затираем, а дополняем.
+/// Оверрайд на каждый ход ставит ClaudeSession по правилу <see cref="ForTurn"/>: local-владельцу
+/// наследованное от системы НЕ гарантировано ничего, поэтому значение собираем сами — с дополнением
+/// унаследованного; песочнице оверрайд не ставим вовсе, средой exec-процесса владеет контейнер.
 /// </summary>
 public static class LoopbackProxyBypass
 {
@@ -45,4 +45,22 @@ public static class LoopbackProxyBypass
         }
         return string.Join(",", items);
     }
+
+    /// <summary>
+    /// Значение NO_PROXY для хода или null — оверрайд не ставить вовсе. Развязывает три случая:
+    /// <list type="bullet">
+    /// <item>транспорт не http (рубильник отката, негодная схема адреса) — в бэкенд по этому
+    /// адресу CLI не ходит, и env-оверрайд обязан откатиться ВМЕСТЕ с транспортом, иначе
+    /// «откат без выкатки кода» неполон;</item>
+    /// <item>песочница (<paramref name="isSandboxed"/>) — хостовое НЕ наследуем: exec-переменная
+    /// сильнее контейнерной и подменила бы узкий egress-whitelist песочницы
+    /// (SandboxManager.BuildRunArgs) корпоративными исключениями хоста, а контейнеру обход
+    /// не нужен — loopback и host.docker.internal уже стоят в его собственном NO_PROXY.
+    /// Слоем среды контейнера по конвенции владеет IProcessLauncher, а не код хода;</item>
+    /// <item>local — <see cref="Merge"/>: унаследованное дополняем локальными адресами,
+    /// HTTP_PROXY на машине бывает единственным маршрутом до провайдеров.</item>
+    /// </list>
+    /// </summary>
+    internal static string? ForTurn(bool useHttp, bool isSandboxed, string? inherited, string? apiUrl) =>
+        !useHttp || isSandboxed ? null : Merge(inherited, apiUrl);
 }

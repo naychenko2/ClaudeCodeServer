@@ -5,7 +5,6 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -144,11 +143,27 @@ public class McpHttpTransportConfigTests : IDisposable
     // Мусор в McpTasksApiUrl — тоже не повод ехать по http
     [InlineData("не-адрес", true, false)]
     [InlineData("", true, false)]
+    // Пробелы по краям и query/fragment: Uri молча прощает их при разборе, а адрес эндпоинта
+    // строится из сырой строки — гейт обязан срезать такие адресы на stdio (находка ревью)
+    [InlineData(" http://localhost:5000", true, false)]
+    [InlineData("http://localhost:5000 ", true, false)]
+    [InlineData("http://localhost:5000?x=1", true, false)]
+    [InlineData("http://localhost:5000#frag", true, false)]
     public void ГейтТранспорта_РешаетСхемаАдресаИРубильник(string url, bool enabled, bool expected) =>
         McpHttpTransport.Usable(url, enabled).Should().Be(expected);
 
     [Fact]
     public void АдресЭндпоинта_КлеитсяБезДвойногоСлеша() =>
         McpHttpTransport.EndpointFor("http://localhost:5000/", "widgets")
+            .Should().Be("http://localhost:5000/mcp/widgets");
+
+    /// <summary>
+    /// Эндпоинт строится из РАЗОБРАННОГО адреса, а не конкатенацией сырой строки: гейт судит
+    /// по нормализованному Uri, и конфиг хода обязан с ним соглашаться (query не прилипает
+    /// к маршруту хвостом «?x=1/mcp/widgets»).
+    /// </summary>
+    [Fact]
+    public void АдресЭндпоинта_СтроитсяИзРазобранногоАдреса() =>
+        McpHttpTransport.EndpointFor("http://localhost:5000?x=1", "widgets")
             .Should().Be("http://localhost:5000/mcp/widgets");
 }

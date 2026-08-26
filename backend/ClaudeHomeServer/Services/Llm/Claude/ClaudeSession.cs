@@ -2517,16 +2517,21 @@ public class ClaudeSession : ILlmSessionAdapter
         // Обход прокси для локального бэкенда — жёсткое требование HTTP-транспорта MCP
         // (ADR-012): по этому адресу теперь ходит САМ CLI, и без NO_PROXY его запрос уедет
         // в HTTP_PROXY, а инструмент молча исчезнет у модели (503 CLIENT_HTTP_NOT_IMPLEMENTED).
-        // В песочнице переменная стоит на контейнере, у local-владельцев наследуется от
-        // системы и гарантии нет — ставим сами на каждый ход, унаследованное ДОПОЛНЯЯ:
-        // HTTP_PROXY на машине бывает единственным маршрутом до провайдеров.
-        // Хост берём из фактического адреса эндпоинта, а не только из списка loopback.
+        // Ставим только при активном http-транспорте (рубильник отката возвращает stdio —
+        // env обязан откатиться вместе с ним) и только local-владельцу: песочнице хостовое
+        // окружение не доезжает вовсе, иначе exec-переменная подменяет узкий egress-whitelist
+        // контейнера. Правило целиком — в LoopbackProxyBypass.ForTurn.
         // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
-        var noProxy = Services.Mcp.Http.LoopbackProxyBypass.Merge(
+        var noProxy = Services.Mcp.Http.LoopbackProxyBypass.ForTurn(
+            _widgetsMcp is { UseHttp: true },
+            _launcher.IsSandboxed,
             Environment.GetEnvironmentVariable("NO_PROXY") ?? Environment.GetEnvironmentVariable("no_proxy"),
             _widgetsMcp?.ApiUrl);
-        envOverrides["NO_PROXY"] = noProxy;
-        envOverrides["no_proxy"] = noProxy;
+        if (noProxy is not null)
+        {
+            envOverrides["NO_PROXY"] = noProxy;
+            envOverrides["no_proxy"] = noProxy;
+        }
 
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.

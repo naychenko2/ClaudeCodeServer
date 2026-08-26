@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Xunit;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -203,5 +203,183 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
             new { jsonrpc = "2.0", id = 1, method = "tools/list" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    /// <summary>
+    /// Промах мимо шаблона mcp/{name} (вложенный путь) — fail-closed 404, а не 200 c
+    /// index.html из SPA-фолбэка: клиент JSON-RPC обязан видеть ошибку, а не HTML-страницу.
+    /// Проверяется и POST, и GET — фолбэк ловит любой метод.
+    /// </summary>
+    [Fact]
+    public async Task ПромахМаршрутаВложенныйПуть_Отдаёт404АНеSPA()
+    {
+        var post = await _client.PostAsJsonAsync("/mcp/a/b",
+            new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+        post.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await post.Content.ReadAsStringAsync()).Should().Contain("mcp_route_not_found",
+            "тело ошибки отличает catch-all маршрут от пустого 404 маршрутизации");
+
+        (await _client.GetAsync("/mcp/a/b")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        // Сам маршрут без имени — тот же промах
+        (await _client.PostAsync("/mcp", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    /// <summary>
+    /// Имя вызова приходит из ТЕЛА JSON-RPC — лимит заголовков Kestrel его больше не режет.
+    /// Строка в 200 000 символов с CRLF не должна становиться ни ключом McpCallLog, ни
+    /// подстановкой в логи: негодное по форме (ASCII, ≤64) схлопывается в «(прочее)».
+    /// </summary>
+    [Fact]
+    public async Task ГигантскоеИмяСCRLF_НеПопадаетВЖурналВызовов()
+    {
+        var evilName = new string('a', 200_000) + "\r\nX-Injected: 1";
+        var evilMethod = new string('b', 200_000) + "\r\n";
+
+        // Журнал пишет только запросы хода (X-Caller-Session-Id лежит в конфиге хода) —
+        // без него проверять нечего: строка из тела до McpCallLog не доходит вовсе
+        using var caller = _factory.CreateAuthenticatedClient();
+        caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", "evil-name-probe");
+
+        var call = await caller.PostAsJsonAsync("/mcp/widgets", new
+        {
+            jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new { name = evilName, arguments = new { html = "<b/>" } },
+        });
+        call.StatusCode.Should().Be(HttpStatusCode.OK, "отказ инструмента — content-ошибка, не протокольная");
+
+        var method = await caller.PostAsJsonAsync("/mcp/widgets", new
+        {
+            jsonrpc = "2.0", id = 2, method = evilMethod,
+        });
+        method.StatusCode.Should().Be(HttpStatusCode.OK, "-32601 — протокольная ошибка в теле, не HTTP-отказ");
+
+        var calls = await _client.GetFromJsonAsync<JsonElement>("/api/mcp/calls");
+        var tools = calls.GetProperty("tools").EnumerateArray()
+            .Select(t => t.GetProperty("tool").GetString()).ToList();
+        tools.Should().NotContain(t => t != null && t.Length > 64,
+            "длинные строки из тела — не ключи журнала");
+        tools.Should().NotContain(t => t != null && (t.Contains('\n') || t.Contains('\r')),
+            "CRLF из тела — не подстановка в логи");
+        tools.Should().Contain("(прочее)", "мусор схлопывается в общую строку переполнения");
+    }
+
+    /// <summary>
+    /// Настоящий внутренний сбой диспетчера (тулсет-«бомба») — протокольная -32603, а не
+    /// голый HTTP 500: клиент MCP, получивший 500, снимает ВЕСЬ набор инструментов сервера
+    /// до конца жизни процесса CLI — молчаливый отказ, против которого здесь fail-closed.
+    /// </summary>
+    [Fact]
+    public async Task ВнутреннийСбойТулсета_Отвечает32603_АНе500()
+    {
+        using var boom = new TestWebApplicationFactory
+        {
+            ExtraServices = services => services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>(
+                new ExplodingToolset()),
+        };
+
+        var client = boom.CreateAuthenticatedClient();
+        var answer = await client.PostAsJsonAsync("/mcp/boom",
+            new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+
+        answer.StatusCode.Should().Be(HttpStatusCode.OK, "протокольная ошибка едет в теле, не HTTP-кодом");
+        var payload = JsonSerializer.Deserialize<JsonElement>(await answer.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32603);
+    }
+
+    /// <summary>
+    /// Находка ревью: позиционные params (массив/скаляр) разрешены спецификацией JSON-RPC,
+    /// а индексатор JsonNode[string] на таком бросает InvalidOperationException — диспетчер
+    /// падал голым HTTP 500. Теперь — протокольная -32602 на любом методе.
+    /// </summary>
+    [Fact]
+    public async Task ParamsМассивИлиСкаляр_ПротокольнаяОшибка32602_АНе500()
+    {
+        var initialize = await _client.PostAsJsonAsync("/mcp/widgets", new
+        {
+            jsonrpc = "2.0", id = 1, method = "initialize", @params = new object[] { 1, 2 },
+        });
+        initialize.StatusCode.Should().Be(HttpStatusCode.OK);
+        var payload = JsonSerializer.Deserialize<JsonElement>(await initialize.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32602,
+            "позиционные params мы не поддерживаем — но это ошибка запроса, не сервера");
+
+        var call = await _client.PostAsJsonAsync("/mcp/widgets", new
+        {
+            jsonrpc = "2.0", id = 2, method = "tools/call", @params = "не объект",
+        });
+        call.StatusCode.Should().Be(HttpStatusCode.OK);
+        payload = JsonSerializer.Deserialize<JsonElement>(await call.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32602);
+    }
+
+    /// <summary>
+    /// Кривое тело: авто-400 [ApiController] раньше отбивал его problem+json ДО контроллера
+    /// (ветка -32700 была недостижима), и этот 400 ложился в журнал MCP отказом инструмента.
+    /// Тело разбираем вручную — клиент получает честный -32700.
+    /// </summary>
+    [Fact]
+    public async Task КривоеТело_Отвечает32700_АНеAutomatic400()
+    {
+        var resp = await _client.PostAsync("/mcp/widgets",
+            new StringContent("""{"jsonrpc": "2.0", "id": 1, "method" """, Encoding.UTF8, "application/json"));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "ошибка разбора — протокольный код, не HTTP 400");
+        resp.Content.Headers.ContentType!.MediaType.Should().Be("application/json",
+            "JSON-RPC-клиенту не нужен problem+json");
+        var payload = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32700);
+
+        var empty = await _client.PostAsync("/mcp/widgets",
+            new StringContent("   ", Encoding.UTF8, "application/json"));
+        empty.StatusCode.Should().Be(HttpStatusCode.OK);
+        payload = JsonSerializer.Deserialize<JsonElement>(await empty.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32600,
+            "пустое тело — Invalid Request, а не Parse error");
+    }
+
+    /// <summary>
+    /// Батч по спецификации JSON-RPC 2.0: пустой массив и невалидные элементы — -32600
+    /// (раньше молча пропускались и клиент не дожидался ответов), батч из одних уведомлений —
+    /// 202 без тела.
+    /// </summary>
+    [Fact]
+    public async Task Батч_ПоСпецификации_ПустойИМусор_32600_Уведомления_202()
+    {
+        var empty = await _client.PostAsync("/mcp/widgets",
+            new StringContent("[]", Encoding.UTF8, "application/json"));
+        empty.StatusCode.Should().Be(HttpStatusCode.OK);
+        var payload = JsonSerializer.Deserialize<JsonElement>(await empty.Content.ReadAsStringAsync());
+        payload.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32600,
+            "пустой батч — единый ответ с ошибкой, не 202");
+
+        var garbage = await _client.PostAsync("/mcp/widgets",
+            new StringContent("[1, 2, 3]", Encoding.UTF8, "application/json"));
+        garbage.StatusCode.Should().Be(HttpStatusCode.OK);
+        payload = JsonSerializer.Deserialize<JsonElement>(await garbage.Content.ReadAsStringAsync());
+        payload.ValueKind.Should().Be(JsonValueKind.Array);
+        payload.GetArrayLength().Should().Be(3, "на каждый невалидный элемент — свой -32600");
+        payload.EnumerateArray().Should().OnlyContain(e =>
+            e.GetProperty("error").GetProperty("code").GetInt32() == -32600);
+
+        var notifications = await _client.PostAsync("/mcp/widgets",
+            new StringContent("""[{"jsonrpc":"2.0","method":"notifications/initialized"}]""",
+                Encoding.UTF8, "application/json"));
+        notifications.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await notifications.Content.ReadAsStringAsync()).Should().BeEmpty();
+    }
+
+    // Тулсет-«бомба»: tools/list падает исключением за пределами catch tools/call —
+    // проверка, что диспетчер превращает внутренний сбой в -32603, а не в HTTP 500
+    private sealed class ExplodingToolset : ClaudeHomeServer.Services.Mcp.Http.IMcpToolset
+    {
+        public string Name => "boom";
+        public string Version => "0.0.1";
+        public IReadOnlyList<ClaudeHomeServer.Services.Mcp.Http.McpToolSchema> Tools =>
+            throw new InvalidOperationException("тестовый взрыв тулсета");
+
+        public Task<ClaudeHomeServer.Services.Mcp.Http.McpToolCallResult> CallAsync(string tool,
+            System.Text.Json.Nodes.JsonObject arguments,
+            ClaudeHomeServer.Services.Mcp.Http.McpToolCallContext context, CancellationToken ct)
+            => throw new InvalidOperationException("тестовый взрыв тулсета");
     }
 }

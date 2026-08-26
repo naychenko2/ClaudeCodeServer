@@ -24,7 +24,12 @@ public sealed class McpCallLog
     // MCP-сервера, а без него — путь запроса с GUID), поэтому без потолка словарь на
     // долгоживущем процессе растёт неограниченно. Всё сверх — в общую строку Overflow.
     private const int MaxTools = 512;
-    private const string Overflow = "(прочее)";
+
+    /// <summary>
+    /// Общая строка переполнения: всё, что превысило потолок ключей или не прошло проверку
+    /// формы на входе (её делает McpTransportController для строк из тела JSON-RPC).
+    /// </summary>
+    public const string Overflow = "(прочее)";
 
     /// <summary>
     /// Ключ в <c>HttpContext.Items</c>: запрос учитывать не надо. Ставится там, где отказ —

@@ -40,7 +40,7 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     }
 
     [HttpPost("{name}")]
-    public async Task<IActionResult> Handle(string name, [FromBody] JsonNode? body, CancellationToken ct)
+    public async Task<IActionResult> Handle(string name, CancellationToken ct)
     {
         var toolset = registry.Find(name);
         if (toolset is null) return NotFound(new { error = "unknown_mcp_server", message = $"Нет MCP-сервера «{name}»" });
@@ -51,17 +51,34 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
         var context = new McpToolCallContext(ownerId,
             Request.Headers.TryGetValue("X-Caller-Session-Id", out var caller) ? caller.ToString() : null);
 
-        if (body is null)
-            return JsonRpc(Error(null, -32700, "Пустое тело запроса"));
+        // Тело разбираем вручную, без [FromBody]: авто-400 [ApiController] на кривом JSON отдавал
+        // problem+json ВМЕСТО кода -32700 и ложился в журнал MCP отказом инструмента, не доходя
+        // до контроллера. Пустое тело — -32600, нераскрываемый JSON — -32700 (JSON-RPC 2.0)
+        string raw;
+        using (var reader = new StreamReader(Request.Body, System.Text.Encoding.UTF8))
+            raw = await reader.ReadToEndAsync(ct);
+        if (string.IsNullOrWhiteSpace(raw))
+            return JsonRpc(Error(null, -32600, "Пустое тело запроса"));
+        JsonNode? body;
+        try { body = JsonNode.Parse(raw); }
+        catch (System.Text.Json.JsonException) { return JsonRpc(Error(null, -32700, "Тело не читается как JSON")); }
 
-        // Батч JSON-RPC: CLI его обычно не шлёт, но спецификация допускает, а тихо
-        // отвечать на первый элемент хуже, чем поддержать десятком строк
+        // Батч JSON-RPC (CLI не шлёт, но спецификация допускает): пустой батч и невалидные
+        // элементы — ошибка -32600, а не молчаливый пропуск. Имя для журнала — одно на батч:
+        // HTTP-запрос один, заголовок один, элемент внутри не отличить
         if (body is JsonArray batch)
         {
+            NameCallForLog(toolset, method: "batch");
+            if (batch.Count == 0)
+                return JsonRpc(Error(null, -32600, "Пустой батч JSON-RPC"));
             var answers = new JsonArray();
             foreach (var item in batch)
             {
-                if (item is not JsonObject msg) continue;
+                if (item is not JsonObject msg)
+                {
+                    answers.Add(Error(null, -32600, "Элемент батча не является объектом JSON-RPC"));
+                    continue;
+                }
                 if (await DispatchAsync(toolset, msg, context, ct) is { } answer) answers.Add(answer);
             }
             // Батч из одних уведомлений — отвечать нечем (спецификация: 202 без тела)
@@ -71,10 +88,26 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
         if (body is not JsonObject request)
             return JsonRpc(Error(null, -32600, "Ожидался объект JSON-RPC"));
 
+        NameCallForLog(toolset, request);
         var result = await DispatchAsync(toolset, request, context, ct);
         // Уведомление (без id) ответа не имеет — CLI шлёт notifications/initialized сразу
         // после рукопожатия и ждёт именно 202, а не тело с null-id
         return result is null ? Accepted() : JsonRpc(result);
+    }
+
+    /// <summary>
+    /// Промах мимо шаблона <c>mcp/{name}</c> — вложенные пути вроде <c>/mcp/a/b</c>. Без этого
+    /// экшена запрос уходит в SPA-фолбэк и получает 200 с index.html: клиент JSON-RPC обязан
+    /// видеть честный 404, а не HTML-страницу. Верб-ограничений нет — фолбэк ловит любой метод.
+    /// Совпадает только то, что не легло в более специфичные шаблоны ({name} предпочтительнее).
+    /// </summary>
+    [Route("{*path}")]
+    public IActionResult RouteMiss()
+    {
+        // Промах маршрута — не вызов инструмента: отказу в таблице GET /api/mcp/calls
+        // и алерту 04-mcp-errors он не место (как у пробы SSE выше)
+        HttpContext.Items[Services.Mcp.McpCallLog.SkipItemKey] = true;
+        return NotFound(new { error = "mcp_route_not_found", message = "Неизвестный маршрут MCP" });
     }
 
     private async Task<JsonObject?> DispatchAsync(IMcpToolset toolset, JsonObject request,
@@ -82,67 +115,88 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     {
         var method = request["method"] is JsonValue m && m.TryGetValue<string>(out var s) ? s : null;
         var id = request["id"]?.DeepClone();
-        NameCallForLog(toolset, request, method);
         if (method is null) return id is null ? null : Error(id, -32600, "Не указан method");
         // Уведомления (id нет) отрабатываем молча: ответ на них — нарушение протокола
         if (id is null) return null;
 
-        switch (method)
+        // Спецификация JSON-RPC допускает ПОЗИЦИОННЫЕ params (массив/скаляр), а индексатор
+        // JsonNode[string] на таком бросает InvalidOperationException. Мы работаем только с
+        // именованными: не-объект — протокольная ошибка -32602, а не упавший диспетчер
+        // (голый 500 на initialize снял бы у клиента MCP ВЕСЬ набор инструментов сервера до
+        // конца жизни процесса CLI — тот самый молчаливый отказ, против которого fail-closed)
+        var rawParms = request["params"];
+        if (rawParms is not null and not JsonObject)
+            return Error(id, -32602, "params должен быть объектом — позиционные аргументы не поддерживаются");
+        var parms = rawParms as JsonObject;
+
+        try
         {
-            case "initialize":
-                return Ok(id, new JsonObject
-                {
-                    // Версию протокола эхом от клиента: свою навязывать нечем, а несовпадение
-                    // строки CLI трактует как несовместимость сервера
-                    ["protocolVersion"] = request["params"]?["protocolVersion"]?.DeepClone()
-                        ?? JsonValue.Create("2025-06-18"),
-                    ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
-                    ["serverInfo"] = new JsonObject
-                    {
-                        ["name"] = toolset.Name,
-                        ["version"] = toolset.Version,
-                    },
-                });
-
-            case "tools/list":
+            switch (method)
             {
-                var tools = new JsonArray();
-                foreach (var tool in toolset.Tools)
-                    tools.Add(new JsonObject
+                case "initialize":
+                    return Ok(id, new JsonObject
                     {
-                        ["name"] = tool.Name,
-                        ["description"] = tool.Description,
-                        ["inputSchema"] = tool.InputSchema.DeepClone(),
+                        // Версию протокола эхом от клиента: свою навязывать нечем, а несовпадение
+                        // строки CLI трактует как несовместимость сервера
+                        ["protocolVersion"] = parms?["protocolVersion"]?.DeepClone()
+                            ?? JsonValue.Create("2025-06-18"),
+                        ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+                        ["serverInfo"] = new JsonObject
+                        {
+                            ["name"] = toolset.Name,
+                            ["version"] = toolset.Version,
+                        },
                     });
-                return Ok(id, new JsonObject { ["tools"] = tools });
-            }
 
-            case "tools/call":
-            {
-                var toolName = request["params"]?["name"] is JsonValue n && n.TryGetValue<string>(out var tn)
-                    ? tn : null;
-                if (toolName is null) return Error(id, -32602, "Не указано имя инструмента");
-                var args = request["params"]?["arguments"]?.DeepClone() as JsonObject ?? [];
-                try
+                case "tools/list":
                 {
-                    var result = await toolset.CallAsync(toolName, args, context, ct);
-                    return Ok(id, ToolContent(result.Text, result.IsError));
+                    var tools = new JsonArray();
+                    foreach (var tool in toolset.Tools)
+                        tools.Add(new JsonObject
+                        {
+                            ["name"] = tool.Name,
+                            ["description"] = tool.Description,
+                            ["inputSchema"] = tool.InputSchema.DeepClone(),
+                        });
+                    return Ok(id, new JsonObject { ["tools"] = tools });
                 }
-                catch (Exception ex)
+
+                case "tools/call":
                 {
-                    // Ошибку вызова отдаём content'ом, а не -32603: у модели должен остаться
-                    // читаемый текст, из которого видно, что делать дальше (так же ведут себя
-                    // stdio-серверы продукта)
-                    logger.LogWarning(ex, "MCP-инструмент {Server}.{Tool} упал", toolset.Name, toolName);
-                    return Ok(id, ToolContent($"Ошибка: {ex.Message}", isError: true));
+                    var toolName = parms?["name"] is JsonValue n && n.TryGetValue<string>(out var tn)
+                        ? tn : null;
+                    if (toolName is null) return Error(id, -32602, "Не указано имя инструмента");
+                    var args = parms?["arguments"]?.DeepClone() as JsonObject ?? [];
+                    try
+                    {
+                        var result = await toolset.CallAsync(toolName, args, context, ct);
+                        return Ok(id, ToolContent(result.Text, result.IsError));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Ошибку вызова отдаём content'ом, а не -32603: у модели должен остаться
+                        // читаемый текст, из которого видно, что делать дальше (так же ведут себя
+                        // stdio-серверы продукта)
+                        logger.LogWarning(ex, "MCP-инструмент {Server}.{Tool} упал", toolset.Name, toolName);
+                        return Ok(id, ToolContent($"Ошибка: {ex.Message}", isError: true));
+                    }
                 }
+
+                case "ping":
+                    return Ok(id, new JsonObject());
+
+                default:
+                    return Error(id, -32601, $"Метод не поддерживается: {method}");
             }
-
-            case "ping":
-                return Ok(id, new JsonObject());
-
-            default:
-                return Error(id, -32601, $"Метод не поддерживается: {method}");
+        }
+        catch (Exception ex)
+        {
+            // Неожиданный сбой диспетчера/тулсета — протокольная ошибка -32603, а не голый
+            // HTTP 500: получив 500 (например, на initialize), клиент MCP снимает весь набор
+            // инструментов сервера до конца жизни процесса CLI. Причину — в лог, ответ
+            // клиенту остаётся JSON-RPC
+            logger.LogWarning(ex, "Сбой диспетчера MCP {Server} ({Method})", toolset.Name, method);
+            return Error(id, -32603, $"Внутренняя ошибка сервера: {ex.Message}");
         }
     }
 
@@ -153,17 +207,41 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     /// входящий заголовок. Запись сделает та же McpCallLogMiddleware (она читает заголовки
     /// уже после контроллера) — второй точки записи заводить не нужно, а без этого журнал по
     /// переехавшим серверам ослеп бы на «(без имени)».
+    ///
+    /// Имя из тела — внешняя строка без лимита заголовков Kestrel, а дальше она становится
+    /// ключом McpCallLog и подстановкой в логи: форму проверяем сами, негодное (мегабайтные
+    /// строки, CRLF, кириллица) схлопываем в общую строку переполнения журнала.
     /// </summary>
-    private void NameCallForLog(IMcpToolset toolset, JsonObject request, string? method)
+    /// <summary>Имя одиночного вызова: инструмент из tools/call либо служебный метод.</summary>
+    private void NameCallForLog(IMcpToolset toolset, JsonObject request)
     {
-        var tool = method == "tools/call"
-            && request["params"]?["name"] is JsonValue name && name.TryGetValue<string>(out var toolName)
-            ? toolName
+        var method = request["method"] is JsonValue m && m.TryGetValue<string>(out var s) ? s : null;
+        string tool;
+        if (method == "tools/call"
+            && request["params"] as JsonObject is { } parms
+            && parms["name"] is JsonValue name && name.TryGetValue<string>(out var toolName))
+        {
+            tool = Telemetry.MetricTagGuard.IsToolShape(toolName) ? toolName : Services.Mcp.McpCallLog.Overflow;
+        }
+        else
+        {
             // Служебные методы протокола показываем отдельными строками: «(без имени) /mcp/…»
             // в таблице диагностики не отличить от чужого клиента с тем же заголовком
-            : $"{toolset.Name}/{method ?? "(без метода)"}";
+            tool = $"{toolset.Name}/{(method is not null && IsMethodShape(method) ? method : Services.Mcp.McpCallLog.Overflow)}";
+        }
         Request.Headers[Services.Mcp.McpCallLogMiddleware.ToolHeader] = tool;
     }
+
+    /// <summary>Имя батча в журнале: HTTP-запрос один, элемент внутри не отличить.</summary>
+    private void NameCallForLog(IMcpToolset toolset, string method) =>
+        Request.Headers[Services.Mcp.McpCallLogMiddleware.ToolHeader] =
+            $"{toolset.Name}/{(IsMethodShape(method) ? method : Services.Mcp.McpCallLog.Overflow)}";
+
+    // Форма имени метода протокола: как IsToolShape, но со слэшем — сегменты методов MCP
+    // соединяются им («tools/list», «notifications/initialized»), и в заголовок слэш
+    // попадает изнутри, а не из тела запроса.
+    private static bool IsMethodShape(string v) =>
+        v.Length <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' or '/');
 
     private static JsonObject ToolContent(string text, bool isError)
     {

@@ -97,7 +97,7 @@ public class FallbackEgressDownTests
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, IEgressProbe egress,
         ProviderHealthRegistry? health = null, TurnRunLog? turnRuns = null,
-        string[]? chain = null)
+        string[]? chain = null, TimeSpan? retryDelay = null)
     {
         var session = new Session { Model = "sonnet", Provider = "acc-a" };
         var inner = new FakeInnerAdapter(session);
@@ -109,8 +109,9 @@ public class FallbackEgressDownTests
             health: health,
             egress: egress,
             turnRuns: turnRuns,
-            // Продовые 5 с в тесте ждать нельзя — важна логика повтора, а не длина паузы
-            egressRetryDelay: TimeSpan.FromMilliseconds(10));
+            // Продовые 5 с в тесте ждать нельзя — важна логика повтора, а не длина паузы.
+            // Тесту про «Стоп» нужна пауза подлиннее: он проверяет попадание ИМЕННО в неё.
+            egressRetryDelay: retryDelay ?? TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -231,19 +232,24 @@ public class FallbackEgressDownTests
         // exited убитого процесса проглатывается, SettleAsync отдаёт пустоту, и чат остаётся
         // Working навсегда (sweep лечит только Active).
         var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true));
+        // Пауза заведомо длиннее, чем время реакции теста: «Стоп» обязан попасть ИМЕННО в неё,
+        // иначе проверялось бы другое окно (и под нагрузкой тест плавал бы)
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true),
+            retryDelay: TimeSpan.FromSeconds(30));
         // Убийство процесса по «Стоп» досылает терминал — как настоящий ClaudeSession
         inner.OnInterrupt = () => inner.Emit(new ExitedMessage());
         inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
-        // Ждём саму паузу повтора: попытка провалилась, оркестратор ушёл спать
+        // Первая попытка провалилась — оркестратор ушёл в паузу перед повтором
         await WaitForAsync(() => inner.Attempts.Count == 1, "первая попытка");
         sut.Interrupt();
 
         await WaitForAsync(() => Downstream().OfType<ExitedMessage>().Any(),
             "терминал хода дошёл наружу");
         inner.Interrupts.Should().Be(1);
+        // Повтора не было: «Стоп» рвёт паузу, а не досматривается до конца (иначе ждали бы 30 с)
+        inner.Attempts.Should().ContainSingle();
     }
 
     [Fact]

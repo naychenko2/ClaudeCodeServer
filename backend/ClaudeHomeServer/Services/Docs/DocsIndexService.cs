@@ -440,7 +440,9 @@ public sealed partial class DocsIndexService(FileService? files = null)
             // Исключения пишем только непустыми: у оси нет непустого дефолта, и пустой
             // ключ отличал бы «осознанно без исключений» от «не задано» там, где разницы
             // никакой — а строка в версионируемом файле была бы шумом в диффе
-            if (normalized.ExcludeFolders.Count > 0)
+            // is-паттерн, а не .Count: ось nullable в типе модели, ненулевой её делает
+            // только NormalizeScope, и компилятору эту гарантию надо показать на месте
+            if (normalized.ExcludeFolders is { Count: > 0 })
                 root["excludeFolders"] = ToJsonArray(normalized.ExcludeFolders);
             else
                 root.Remove("excludeFolders");
@@ -533,7 +535,7 @@ public sealed partial class DocsIndexService(FileService? files = null)
         // Исключения — тоже часть области: смена исключения без правки файлов обязана
         // пересобрать корпус, а отпечаток (ниже) считается уже по собранному списку и
         // правок внутри исключённого не видит — и не должен
-        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}\n{string.Join('|', scope.ExcludeFolders)}";
+        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}\n{string.Join('|', scope.ExcludeFolders ?? [])}";
         var files = CollectFiles(root, scope);
         // Файлы порядка обязаны попасть в отпечаток: правка .order не меняет ни один документ,
         // и без них кеш не инвалидируется — панель показывала бы прежний порядок до перезапуска
@@ -569,7 +571,7 @@ public sealed partial class DocsIndexService(FileService? files = null)
                 if (files.Count >= MaxDocs) break;
                 var dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
                 if (!Directory.Exists(dir)) continue;
-                foreach (var file in EnumerateDocs(dir, folder, ExtensionsOf(scope.Types), scope.ExcludeFolders))
+                foreach (var file in EnumerateDocs(dir, folder, ExtensionsOf(scope.Types), scope.ExcludeFolders ?? []))
                 {
                     if (files.Count >= MaxDocs) break;
                     if (seen.Add(file)) files.Add(file);

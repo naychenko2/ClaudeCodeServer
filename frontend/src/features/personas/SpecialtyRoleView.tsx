@@ -1,117 +1,151 @@
-// Экран «Визитка роли» (волна 4 «Персонализация специальностей», §4.1).
-// Адресуется как #/personas/specialties/{roleKey}. Строго read-only: ни
-// одного поля ввода и ни одного тумблера (спека «Просмотр роли — только
-// чтение»). Единственный вход в правку — кнопка «Настроить», ведущая на
-// экран формы (отдельный под-адрес).
+// Визитка роли (волна 2 «Специальности как у персон»). Адресуется как
+// #/personas/specialties/{roleKey}. С переходом на единый глобальный слой
+// (f8e7d0e0) — read-only для всех, правка только админу. Единственный вход
+// в правку — кнопка «Редактировать» в шапке, ведущая на экран формы.
 //
-// Карточка «Любая специальность» НЕ рисуется (см. docs/product/specialties-
-// personalization §4). Группы одинаковых троек уходят — каждая роль отдельно.
+// Раскладка — по образцу PersonaPreview:
+//   • шапка-тулбар: стрелка «Назад», аватар роли 40, название роли serif 28/500
+//     в цвете роли, подпись, справа кнопка «Редактировать» (только админу);
+//   • под тулбаром акцентная полоса `height:2, background:{accent}55`;
+//   • полотно: свой скроллер, maxWidth isMobile ? 680 : 1020, margin 0 auto,
+//     раскладка display:flex, gap:28, flexWrap:wrap — визитка flex:1 1 380px,
+//     правая колонка flex:1 1 300px;
+//   • hero: аватар 80, название serif 26 (22 на мобиле)/600 в цвете роли,
+//     описание 13.5 C.textSecondary; на мобиле по центру;
+//   • блоки — плоские секции на общем фоне, без белых коробок:
+//     { borderTop:'1px solid C.borderLight', paddingTop:20 }, заголовки через
+//     общий SectionLabel; внутренние чипы фактов — как factChip в PersonaPreview;
+//   • правая колонка — RolePeopleSlice (список персон роли).
+//
+// Карточка «Любая специальность» НЕ рисуется.
 
 import { useMemo } from 'react';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Pencil } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
-import { useIsMobile } from '../../lib/breakpoints';
-import { roleIconName, roleColorKey } from '../../lib/specialties';
+import { roleColorKey } from '../../lib/specialties';
+import { RoleAvatar } from '../../components/specialties/RoleAvatar';
 import { RolePeopleSlice } from '../../components/specialties/RolePeopleSlice';
 import { RolePresetsBlock } from '../../components/specialties/RolePresetsBlock';
+import { SectionLabel } from '../../features/tasks/bits';
+import { useIsMobile } from '../../lib/breakpoints';
+import { Toolbar, ToolbarIconButton, tbBtnGhost } from '../../components/Toolbar';
 import type {
-  Persona, SpecialtyCatalogEntry, SpecialtyPromptSectionsCatalog,
-  SpecialtySettingsLayer,
+  Persona, PersonaAccess, SpecialtyCatalogEntry, SpecialtyDefaultBinding,
+  SpecialtyPromptSectionsCatalog, SpecialtySettingsLayer, ModelRoutePreset,
 } from '../../types';
-import type { Scope } from './personaSpecialtyShared';
-import { LayerSwitch } from './personaSpecialtyShared';
-import { GlyphIcon } from '../../lib/projectGlyphs';
 
-// === Подпись значения ячейки модели ===
+// === Подписи значений чипов «Настройки» ===
+
+// Доступ роли: full | readOnly | custom. Человекочитаемые подписи совпадают
+// с PersonaForm (см. tooltip «Полный / Только чтение / Свой список»).
+const ACCESS_LABEL: Record<PersonaAccess, string> = {
+  full: 'Полный',
+  readOnly: 'Только чтение',
+  custom: 'Свой список',
+};
+
+// Состав возможностей: ключ → имя. Совпадает с PersonaForm.TOOL_OPTIONS.
+const TOOL_LABEL: Record<string, string> = {
+  tasks: 'Задачи',
+  notes: 'Заметки',
+  web: 'Веб',
+};
+
+// === Значок роли (hero + тулбар) — аватарка из assets/specialties/<key>.jpg,
+//     при отсутствии файла — lucide-глиф в круге цвета роли (RoleAvatar). ===
+function RoleIcon({ catalog, roleKey, size }: {
+  catalog: SpecialtyCatalogEntry; roleKey: string; size: number;
+}): React.ReactElement {
+  return <RoleAvatar catalog={catalog} roleKey={roleKey} size={size} />;
+}
+
+// === Плоская секция визитки ===
 //
-// Три уровня (Сильная / Средняя / Слабая) в строке матрицы. Пустая ячейка
-// даёт P24 «Как „Модели по умолчанию"». Заполненная — короткая подпись из
-// presets/presets.ts (routeDisplayLabel). Упрощённо показываем «как есть».
-function cellLabel(value: string | null | undefined): string {
+// Разделитель borderTop + paddingTop; без белой коробки вокруг — секция живёт
+// прямо на фоне полотна, как в PersonaPreview.
+const section: React.CSSProperties = {
+  borderTop: `1px solid ${C.borderLight}`, paddingTop: 20,
+};
+
+// Чип факта: белая плашка, как factChip в PersonaPreview.
+const factChip: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 3,
+  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+  padding: '8px 13px', fontFamily: FONT.sans, minWidth: 0,
+};
+
+// === Подпись значения уровня модели (tierStrong/Medium/Weak) ===
+//
+// «preset:{id}» — это ссылка на пресет, не сама модель. Раскрывать её здесь
+// не нужно: пресеты показаны отдельным блоком «Пресеты» ниже; подпись
+// ограничивается именем пресета, чтобы человек понял, что модель — не прямая.
+function tierLabel(value: string | null | undefined, presets: ModelRoutePreset[]): string {
   if (!value) return '';
+  if (value.startsWith('preset:')) {
+    const id = value.slice('preset:'.length);
+    const preset = presets.find(p => p.id === id);
+    return preset ? `Пресет «${preset.name}»` : `Пресет ${id}`;
+  }
   return value;
 }
 
-// === Значок роли в hero-секции визитки ===
-function RoleHeroIcon({ catalog, roleKey, size }: {
-  catalog: SpecialtyCatalogEntry; roleKey: string; size: number;
-}): React.ReactElement {
-  const iconName = roleIconName(catalog, roleKey);
-  const colorKey = roleColorKey(catalog, roleKey);
-  const bg = AGENT_COLORS[colorKey] ?? AGENT_COLORS.brown;
-  return (
-    <span title="Значок роли задан продуктом и не настраивается" style={{
-      flex: 'none',
-      width: size, height: size, borderRadius: R.full,
-      background: bg, color: 'white',
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <GlyphIcon name={iconName} fallback={() => null} size={Math.round(size * 0.5)} />
-    </span>
-  );
-}
-
-// === Карточка секции (внутренние секции визитки) ===
-function SectionTitle({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <div style={{
-      fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700,
-      color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.07em',
-      marginBottom: SP.sm,
-    }}>{children}</div>
-  );
-}
-
-function FlatSection({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <div style={{
-      paddingTop: SP.md, marginTop: SP.md,
-      borderTop: `1px solid ${C.borderLight}`,
-    }}>{children}</div>
-  );
+// === Список строк умений по умолчанию ===
+//
+// Каждая привязка — тип + условие + режим. Тип переводится в человеческое имя;
+// режим — в «по событию / всегда / выключен». Условие (когда применять)
+// приклеивается следом через « · ». «Навык» дополнительно несёт skillName.
+function defaultBindingLabel(b: SpecialtyDefaultBinding): string {
+  const typeLabel = b.type === 'skill'
+    ? `Навык «${b.skillName ?? '?'}»`
+    : b.type === 'project'
+      ? 'Проект'
+      : b.type === 'projectPath'
+        ? 'Путь проекта'
+        : b.type === 'knowledge'
+          ? 'Знание'
+          : b.type === 'notes'
+            ? 'Заметки'
+            : b.type === 'tool'
+              ? 'Инструмент'
+              : 'Команда проекта';
+  const modeLabel = b.mode === 'auto' ? 'по событию' : b.mode === 'always' ? 'всегда' : 'выключен';
+  const condition = b.condition?.trim();
+  const head = condition ? `${typeLabel} · ${condition}` : typeLabel;
+  return `${head} (${modeLabel})`;
 }
 
 // === Основной экран ===
 export interface SpecialtyRoleViewProps {
   roleKey: string;
   catalog: SpecialtyCatalogEntry[];
-  // Слой текущего выбора; значения имени/описания больше не зависят от слоя,
-  // но его всё ещё использует секция моделей и переключатель.
-  layer: Scope;
   layerSettings: SpecialtySettingsLayer | null;
-  // Глобальный слой (settings.global) — нужен RolePresetsBlock для резолва
-  // effectivePromptSection поверх дефолтов кода.
-  globalLayer: SpecialtySettingsLayer | null;
-  // User-слой конкретного пользователя (только админ на слое «user»). На других
-  // слоях — null.
-  userLayer: SpecialtySettingsLayer | null;
   // Каталог секций промптов (и типовых умений роли); null — ещё не загружен.
-  // Передаётся родителем — RolePeopleSlice использует его для подсчёта нехватки.
   promptSectionsCatalog: SpecialtyPromptSectionsCatalog | null;
-  // Только для owner-слоя: персоны, работающие по роли. На других слоях —
-  // пустой массив (T8: «за другого пользователя список был бы про чужих»).
+  // Персоны, работающие по роли. Аватарки показываются на общем слое всегда.
   personas: Persona[];
   // Колбэк после успешного apply-defaults на срезе персон — перечитывает стор персон.
   onPersonaUpdated?: (persona: Persona) => void;
-  onLayerChange: (s: Scope) => void;
   onBack: () => void;
-  onEdit: () => void;
+  // Колбэк кнопки «Редактировать». На не-админе НЕ вызывается — кнопка просто не рисуется.
+  onEdit?: () => void;
+  isAdmin?: boolean;
 }
 
 export function SpecialtyRoleView({
-  roleKey, catalog, layer, layerSettings, globalLayer, userLayer,
-  promptSectionsCatalog, personas, onPersonaUpdated, onLayerChange, onBack, onEdit,
+  roleKey, catalog, layerSettings, promptSectionsCatalog,
+  personas, onPersonaUpdated, onBack, onEdit, isAdmin,
 }: SpecialtyRoleViewProps): React.ReactElement {
   const isMobile = useIsMobile();
   const role = useMemo(() => catalog.find(r => r.key === roleKey) ?? null, [catalog, roleKey]);
+  const accent = role ? (AGENT_COLORS[roleColorKey(role, roleKey)] ?? C.textHeading) : C.textHeading;
 
   // Без роли (например, roleKey пришёл мусором или ещё не загрузился) —
   // пустое состояние с возвратом.
   if (!role) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: isMobile ? '20px 0 32px' : '26px 0 40px' }}>
         <BackRow onBack={onBack} />
         <div style={{
           border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -126,171 +160,338 @@ export function SpecialtyRoleView({
   const roleName = role.label;
   const roleDescription = role.description;
 
-  // Тройка моделей в слое (effective values — пока смотрим слой как есть;
-  // кросс-слойное наследование для моделей рисует отдельный резолв на бэке,
-  // здесь показываем именно текущий слой, чтобы не врать про источник).
+  // Шаблон прав и инструментов — из каталога: эффективные значения для
+  // вызывающего, обновляются бэкендом поверх дефолтов кода.
+  const template = role.template;
+  const access = template?.access ?? 'full';
+  const tools = template?.tools ?? null;
+  const toolsText = tools === null
+    ? 'Все'
+    : (tools.length === 0
+      ? 'Только чат'
+      : tools.map(t => TOOL_LABEL[t] ?? t).join(' · '));
+
+  // Тройка моделей по уровням — из слоя настроек. Пустая ячейка означает
+  // «наследуется сверху» (правило роли → «Модели по умолчанию»).
   const rec = layerSettings?.specialties?.[roleKey] ?? null;
-  const triple: [string, string, string] = rec
-    ? [rec.tierStrong ?? '', rec.tierMedium ?? '', rec.tierWeak ?? '']
-    : ['', '', ''];
+  const triple: [string | null, string | null, string | null] = rec
+    ? [rec.tierStrong ?? null, rec.tierMedium ?? null, rec.tierWeak ?? null]
+    : [null, null, null];
   const hasAnyRule = triple.some(v => !!v);
 
-  const isOwner = layer === 'owner';
+  // Пресеты (цепочки моделей по уровням) — глобальный список из слоя.
+  const presets = layerSettings?.presets ?? [];
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-      {/* Шапка визитки: «Назад к списку» + кнопка «Настроить» (единственный
-          вход в правку — спека §4.1). */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-        <button type="button" onClick={onBack} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          font: 'inherit', fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
-          color: C.textHeading, background: 'none', border: 'none',
-          padding: 0, cursor: 'pointer',
-        }}>
-          <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          <span>Специальности</span>
-        </button>
-        <span style={{ flex: 1 }} />
-        <button type="button" onClick={onEdit} style={{
-          font: 'inherit', fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
-          color: C.textHeading, background: C.bgWhite,
-          border: `1px solid ${C.border}`, borderRadius: R.md,
-          padding: '6px 12px', cursor: 'pointer',
-        }}>Настроить</button>
-      </div>
+  // Дефолтные привязки роли (типовые умения) — из каталога секций промптов.
+  const defaultBindings = promptSectionsCatalog?.specialties?.[roleKey]?.defaultBindings ?? [];
 
-      {/* Переключатель слоёв — рабочий: переключение делается через onLayerChange
-          (B5). На «Для всех» и «Пользователю …» список персон ниже заменяется
-          строкой-объяснением, чтобы не показывать чужих персон. */}
+  // Подпись заголовка тулбара — у роли нет «имени под именем» как у персоны
+  // (handle/handle), но каталог может нести короткое пояснение; показываем
+  // первую строку описания, иначе — подпись по умолчанию.
+  const subtitle = roleDescription
+    ? (roleDescription.split('\n')[0]?.trim() || '')
+    : '';
+
+  // === Hero визитки ===
+  const hero = (
+    <div style={{
+      display: 'flex', gap: 18, alignItems: 'flex-start',
+      flexDirection: isMobile ? 'column' : 'row',
+    }}>
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        flexShrink: 0,
+        alignSelf: isMobile ? 'center' : 'flex-start',
+      }}>
+        <RoleIcon catalog={role} roleKey={roleKey} size={80} />
+      </div>
+      <div style={{
+        flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined,
+        display: 'flex', flexDirection: 'column', gap: 6,
+        textAlign: isMobile ? 'center' : 'left',
       }}>
         <div style={{
-          display: 'flex', gap: 2, background: C.bgSelected, borderRadius: R.pill, padding: 2,
-          width: isMobile ? '100%' : undefined, flexWrap: isMobile ? 'wrap' : undefined,
+          fontFamily: FONT.serif, fontSize: isMobile ? FS.h2 : FS.h1, fontWeight: 600,
+          color: accent, lineHeight: 1.25, letterSpacing: '-0.01em',
+          overflowWrap: 'break-word',
         }}>
-          <LayerSwitch
-            scope={layer}
-            onScope={onLayerChange}
-            isAdmin={true}
-            isMobile={isMobile}
-          />
+          {roleName}
         </div>
-        <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
-          Слой определяет, кого коснётся правило.
-        </span>
-      </div>
-
-      {/* Hero визитки: значок + имя + описание (read-only).
-          Значок — DynamicIcon, без выбора (решение владельца §2.3). */}
-      <div style={{
-        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-        padding: isMobile ? SP.md : SP.lg, display: 'flex',
-        flexDirection: isMobile ? 'column' : 'row',
-        gap: SP.md, alignItems: isMobile ? 'center' : 'flex-start',
-      }}>
-        <RoleHeroIcon catalog={role} roleKey={roleKey} size={isMobile ? 64 : 80} />
-        <div style={{
-          flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
-          gap: SP.sm,
-          textAlign: isMobile ? 'center' : 'left',
-        }}>
-          <h2 style={{
-            fontFamily: FONT.serif, fontSize: isMobile ? FS.xl : FS.h2, fontWeight: 700,
-            color: AGENT_COLORS[roleColorKey(role, roleKey)] ?? C.textHeading,
-            margin: 0,
-          }}>{roleName}</h2>
+        {roleDescription?.trim() && (
           <div style={{
-            fontSize: FS.md, lineHeight: 1.5, color: C.textSecondary,
-          }}>{roleDescription}</div>
-        </div>
-      </div>
-
-      {/* «Модели по уровням» — три ячейки, плейсхолдер P24 для пустых. */}
-      <FlatSection>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
-          <SectionTitle>Модели по уровням</SectionTitle>
-          <span style={{ flex: 1 }} />
-          {!hasAnyRule && (
-            <span style={{
-              fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-              padding: '2px 8px', borderRadius: R.max,
-              background: C.bgSelected, color: C.textSecondary,
-            }}>Правил нет</span>
-          )}
-        </div>
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-          gap: SP.sm,
-        }}>
-          {([
-            { tier: 'Сильная', value: triple[0] },
-            { tier: 'Средняя', value: triple[1] },
-            { tier: 'Слабая', value: triple[2] },
-          ] as const).map(({ tier, value }) => (
-            <div key={tier} style={{
-              padding: '8px 10px',
-              background: C.bgCard, borderRadius: R.md,
-              border: `1px solid ${C.borderLight}`,
-              fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary,
-            }}>
-              <div style={{ fontWeight: 700, color: C.textHeading, marginBottom: 2 }}>{tier}</div>
-              <div style={{ color: value ? C.textPrimary : C.textMuted }}>
-                {value ? cellLabel(value) : 'Как «Модели по умолчанию»'}
-              </div>
-            </div>
-          ))}
-        </div>
-        {!hasAnyRule && (
-          <div style={{
-            fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm, lineHeight: 1.5,
+            fontSize: FS.base, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
           }}>
-            Правил нет — персоны роли работают по «Моделям по умолчанию».
+            {roleDescription}
           </div>
         )}
-      </FlatSection>
+      </div>
+    </div>
+  );
 
-      {/* Секция «Пресеты для роли» — read-only блок из RolePresetsBlock.
-          Только включённые секции, без кнопок/счётчика. Пусто — строка «Выключено
-          пресетов: N — их видно в настройке роли.» (Баг #3). */}
-      <FlatSection>
-        <RolePresetsBlock
-          roleKey={roleKey}
-          catalog={promptSectionsCatalog}
-          editLayer={layerSettings}
-          globalLayer={globalLayer}
-          userLayer={userLayer}
-          mode="view"
-        />
-      </FlatSection>
+  // === Настройки: доступ · инструменты · модели по уровням ===
+  const settingsSection = (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 12 }}>Настройки</SectionLabel>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10,
+      }}>
+        <div style={factChip}>
+          <span style={{
+            fontSize: FS.xs, fontWeight: 600, letterSpacing: '0.04em',
+            textTransform: 'uppercase', color: C.textMuted,
+          }}>Доступ</span>
+          <span style={{
+            fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+          }}>{ACCESS_LABEL[access]}</span>
+        </div>
+        <div style={factChip}>
+          <span style={{
+            fontSize: FS.xs, fontWeight: 600, letterSpacing: '0.04em',
+            textTransform: 'uppercase', color: C.textMuted,
+          }}>Инструменты</span>
+          <span style={{
+            fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+          }}>{toolsText}</span>
+        </div>
+      </div>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+        gap: 10, marginTop: 10,
+      }}>
+        {([
+          { tier: 'Сильная', value: triple[0] },
+          { tier: 'Средняя', value: triple[1] },
+          { tier: 'Слабая', value: triple[2] },
+        ] as const).map(({ tier, value }) => (
+          <div key={tier} style={factChip}>
+            <span style={{
+              fontSize: FS.xs, fontWeight: 600, letterSpacing: '0.04em',
+              textTransform: 'uppercase', color: C.textMuted,
+            }}>Модель · {tier}</span>
+            <span style={{
+              fontSize: FS.base, fontWeight: 600,
+              color: value ? C.textHeading : C.textMuted,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }} title={value ? tierLabel(value, presets) : 'Наследуется'}>
+              {value ? tierLabel(value, presets) : 'Как «Модели по умолчанию»'}
+            </span>
+          </div>
+        ))}
+      </div>
+      {!hasAnyRule && (
+        <div style={{
+          fontSize: FS.xs, color: C.textMuted, marginTop: 10, lineHeight: 1.5,
+        }}>
+          Правил нет — персоны роли работают по «Моделям по умолчанию».
+        </div>
+      )}
+    </div>
+  );
 
-      {/* Срез «Кто работает по этой роли» — полный блок RolePeopleSlice с пометками
-          и кнопкой «Применить типовые» (B3). Только на owner: на global/user
-          подмешивать своих персон — враньё (T8). */}
-      <FlatSection>
-        {isOwner ? (
-          <RolePeopleSlice
-            roleKey={roleKey}
-            personas={personas}
-            catalog={promptSectionsCatalog}
-            onPersonaUpdated={onPersonaUpdated}
-          />
-        ) : (
-          <>
-            <SectionTitle>Кто работает по этой роли</SectionTitle>
-            <div style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5 }}>
-              Список персон показан только в ваших настройках: за другого пользователя
-              он был бы про ваших персон.
+  // === Секции промпта (RolePresetsBlock в режиме view) ===
+  // Заголовок «Секции промпта» рисует родитель через SectionLabel — блок
+  // внутри показывает только карточки секций.
+  const presetsSection = (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 12 }}>Секции промпта</SectionLabel>
+      <RolePresetsBlock
+        roleKey={roleKey}
+        catalog={promptSectionsCatalog}
+        editLayer={null}
+        globalLayer={layerSettings}
+        userLayer={null}
+        mode="view"
+        showTitle={false}
+      />
+    </div>
+  );
+
+  // === Привязки по умолчанию ===
+  // Типовой профиль умений роли: каждая строка — типовая привязка из каталога
+  // секций промптов. Пусто — короткая подпись «Типовых умений нет».
+  const bindingsSection = (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 12 }}>Привязки по умолчанию</SectionLabel>
+      {defaultBindings.length === 0 ? (
+        <div style={{
+          fontSize: FS.base, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5,
+        }}>
+          Типовых умений нет — персоны роли стартуют с пустым набором привязок.
+        </div>
+      ) : (
+        <ul style={{
+          margin: 0, padding: 0, listStyle: 'none',
+          display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          {defaultBindings.map((b, i) => (
+            <li key={i} style={{
+              fontSize: FS.base, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.5,
+            }}>
+              <span style={{
+                display: 'inline-block', minWidth: 0, flexShrink: 0,
+              }}>{defaultBindingLabel(b)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  // === Пресеты (цепочки моделей) ===
+  const presetListSection = (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 12 }}>Пресеты</SectionLabel>
+      {presets.length === 0 ? (
+        <div style={{
+          fontSize: FS.base, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5,
+        }}>
+          Цепочек моделей нет — ячейки уровней задаются напрямую именем модели.
+        </div>
+      ) : (
+        <ul style={{
+          margin: 0, padding: 0, listStyle: 'none',
+          display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          {presets.map(p => (
+            <li key={p.id} style={{
+              fontSize: FS.base, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.5,
+            }}>
+              <span style={{ fontWeight: 600, color: C.textHeading }}>{p.name}</span>
+              {p.description?.trim() && (
+                <span style={{ color: C.textSecondary }}> · {p.description}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  // === Колонка-визитка (левая на десктопе, на мобиле во всю ширину) ===
+  const mainColumn = (
+    <div style={{
+      flex: '1 1 380px', minWidth: 0,
+      display: 'flex', flexDirection: 'column', gap: 24,
+    }}>
+      {hero}
+      {settingsSection}
+      {presetsSection}
+      {bindingsSection}
+      {presetListSection}
+    </div>
+  );
+
+  // === Правая колонка: список персон роли ===
+  const peopleColumn = (
+    <aside style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10,
+      }}>
+        <SectionLabel>Кто работает по этой роли</SectionLabel>
+        <span style={{
+          fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0,
+        }}>
+          {personas.length === 0
+            ? 'пусто'
+            : `${personas.length} ${pluralPersonas(personas.length)}`}
+        </span>
+      </div>
+      <RolePeopleSlice
+        roleKey={roleKey}
+        personas={personas}
+        catalog={promptSectionsCatalog}
+        onPersonaUpdated={onPersonaUpdated}
+      />
+    </aside>
+  );
+
+  return (
+    // Прокрутка и горизонтальные поля живут у родителя (PersonasSpecialties):
+    // двойные скроллеры съедали место на 360 CSS и резали PillSwitch доступа.
+    // Здесь только вертикальные отступы и центрированное полотно.
+    <div>
+      <div style={{
+        maxWidth: isMobile ? 680 : 1020, margin: '0 auto', boxSizing: 'border-box',
+        padding: isMobile ? '20px 0 32px' : '26px 0 40px',
+      }}>
+        {/* Шапка-тулбар визитки — единый Toolbar из кита с полосой цвета роли
+            слева (как у PersonaToolbar). Заголовок раздела — тулбар, а не hero. */}
+        <Toolbar
+          isMobile={isMobile}
+          noBorder
+          bg="transparent"
+          style={{ borderLeft: `3px solid ${accent}` }}
+        >
+          <ToolbarIconButton onClick={onBack} title="Назад" isMobile={isMobile}>
+            <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+          <RoleIcon catalog={role} roleKey={roleKey} size={isMobile ? 32 : 40} />
+          {/* На мобиле имя роли и подпись уже есть в шапке экрана (PersonasPage);
+              в тулбаре их рисовать не надо — текст сжимается до одной буквы
+              и дублирует шапку. */}
+          {!isMobile && (
+            <div style={{
+              flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1,
+            }}>
+              <div style={{
+                fontFamily: FONT.serif, fontSize: 28, fontWeight: 500,
+                color: accent, letterSpacing: '-0.01em', lineHeight: 1.2,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {roleName}
+              </div>
+              {subtitle && (
+                <div style={{
+                  fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {subtitle}
+                </div>
+              )}
             </div>
-          </>
-        )}
-      </FlatSection>
+          )}
+          {isAdmin && onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              title="Редактировать"
+              style={{
+                ...tbBtnGhost,
+                display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+              }}
+            >
+              <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+              Редактировать
+            </button>
+          )}
+        </Toolbar>
+
+        {/* Тонкая акцентная полоса роли — разделитель шапки и контента, как у
+            персоны (PersonaStudio). Внутри Toolbar полоса уже есть слева, но
+            между тулбаром и контентом нужна отдельная черта на всю ширину. */}
+        <div style={{ flex: 'none', height: 2, background: `${accent}55`, marginTop: 4 }} />
+
+        {/* Контент — две колонки, переносятся сами, когда не помещаются. */}
+        <div style={{
+          display: 'flex', gap: 28, alignItems: 'flex-start', flexWrap: 'wrap',
+          marginTop: 22,
+        }}>
+          {mainColumn}
+          {peopleColumn}
+        </div>
+      </div>
     </div>
   );
 }
 
-// Кнопка «Назад к списку» в пустом состоянии (роль не найдена).
+// Склонение «персон/персоны/персоны» для счётчика строк в правой колонке.
+function pluralPersonas(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'персона';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'персоны';
+  return 'персон';
+}
+
+// Кнопка «Назад» в пустом состоянии (роль не найдена).
 function BackRow({ onBack }: { onBack: () => void }): React.ReactElement {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>

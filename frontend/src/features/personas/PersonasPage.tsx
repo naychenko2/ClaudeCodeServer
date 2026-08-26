@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT, FS, R, SP, PANEL_ANIM, CONTENT_MAX_W, MODAL_W } from '../../lib/design';
+import { C, FONT, FS, R, SP, PANEL_ANIM, CONTENT_MAX_W } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
@@ -32,6 +32,7 @@ import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { PersonasHub } from './PersonasHub';
 import { PersonasSpecialties } from './PersonasSpecialties';
+import { useSpecialtyCatalog } from '../../lib/specialties';
 
 // Утилита пуша URL для specialties: hash вида
 //   #/personas/specialties
@@ -92,13 +93,17 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Вкладка студии, на которую нужно сразу открыться (бэйдж автоматизации в чате) —
   // одноразовая, сбрасывается любым обычным выбором персоны из списка
   const [pendingView, setPendingView] = useState<PersonaView | null>(null);
-  const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
+  // На мобиле раздел «Специальности» рисуется только в режиме карточки (см. body ниже),
+  // поэтому прямой заход/F5 по хешу specialties обязан стартовать с 'card' — иначе
+  // диплинк открывал список персон вместо запрошенного экрана.
+  const [mobileView, setMobileView] = useState<'list' | 'card'>(
+    () => parseSpecialtiesHash() !== null ? 'card' : 'list');
   // Режим создания новой персоны: мастер прямо в контентной зоне
   const [creating, setCreating] = useState(false);
   // Режим центральной зоны: 'hub' (витрина), 'studio' (карточка персоны), 'create' (мастер),
   // 'specialties' (настройка специальностей). Не четвёртая ось навигации — вариант
   // содержимого того же центра; рельса слева и список персон остаются на месте.
-  const [specialtiesMode, setSpecialtiesMode] = useState(false);
+  const [specialtiesMode, setSpecialtiesMode] = useState(() => parseSpecialtiesHash() !== null);
   // Под-адрес specialties: roleKey + viewMode. Под-адрес — отдельная запись
   // history.state, чтобы кнопка «Назад» возвращала на уровень выше, а не
   // выкидывала из раздела. Инициализация — из текущего hash.
@@ -117,11 +122,19 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Живёт над списком, а не внутри PersonaList — список переиспользуется панелью
   // «Команда» проекта, где личное приглашение не к месту.
   const me = useMe();
+  // Прямой хеш .../edit для не-админа режется в PersonasSpecialties (effectiveViewMode)
+  // — он сам даунгрейдит до 'role' при !isAdmin. Здесь эффект НЕ нужен: он бы дал
+  // лишний ре-рендер и переписал URL, а URL-сторона уже валидна.
   const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
   const showMobileInvite = isMobile && me.loaded && me.needsOnboarding && !!defaultPersona;
   // Бейдж охвата «N из M» на переключателе режима — считаем по стартовому слою
   // (см. useSpecialtiesCoverage). На переключателе виден и до открытия экрана.
   const specialtiesCoverage = useSpecialtiesCoverage(me.role === 'admin');
+  // Каталог ролей — для подписи в мобильной шапке экрана при открытой роли.
+  const specialtyCatalog = useSpecialtyCatalog();
+  const mobileSpecialtyLabel = specialtyRoleKey
+    ? specialtyCatalog?.find(r => r.key === specialtyRoleKey)?.label ?? null
+    : null;
   // Отклик на тап «Выбрать другого ассистента» (Д-3): scrollIntoView контейнера здесь
   // бесполезен — прокрутка живёт внутри самого PersonaList, а контейнер и так во вьюпорте,
   // поэтому браузер ничего не делал, и тап выглядел мёртвой кнопкой. Короткая рамка C.accent
@@ -203,7 +216,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       if (s?.screen === 'personas' && (s.personaView === 'specialties' || parsed)) {
         setSpecialtiesMode(true);
         setCreating(false); setSelectedId(null);
-        setMobileView('list');
+        // 'card' — как в openSpecialties: на мобиле раздел живёт только в этом режиме.
+        setMobileView('card');
         setSpecialtyRoleKey(roleKey);
         setSpecialtyViewMode(edit ? 'edit' : (roleKey ? 'role' : 'list'));
       } else if (s?.screen === 'personas') {
@@ -371,13 +385,11 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     ),
   };
 
-  // Шапка центральной зоны: переключатель режима (hub ↔ specialties) и подзаголовок
-  // в режиме specialties. В студии/создании переключатель скрыт — выбрана персона
-  // или идёт мастер, переключаться некуда. Бейдж охвата «N из M» живёт на неактивном
-  // сегменте, чтобы приглашать заглянуть (макет v4: «это и есть точка входа»).
+  // Шапка центральной зоны: переключатель режима (hub ↔ specialties).
+  // В студии/создании переключатель скрыт — выбрана персона или идёт мастер,
+  // переключаться некуда. Бейдж охвата «N из M» живёт на неактивном сегменте,
+  // чтобы приглашать заглянуть (макет v4: «это и есть точка входа»).
   const showModeSwitch = !creating && !selected;
-  // Подзаголовок — дословно из model-presets-and-tiers.md блок 8.1 (T2).
-  const specialtiesSubtitle = 'Роль задаёт, какие модели, доступы и инструкции получит персона по умолчанию.';
 
   const modeSwitcher = showModeSwitch ? (
     <div style={{ marginBottom: SP.lg }}>
@@ -402,12 +414,6 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
           }}>{specialtiesCoverage}</span>
         )}
       </div>
-      {specialtiesMode && (
-        <div style={{
-          marginTop: 6, fontSize: FS.sm, color: C.textSecondary,
-          lineHeight: 1.5, maxWidth: 640,
-        }}>{specialtiesSubtitle}</div>
-      )}
     </div>
   ) : null;
 
@@ -481,8 +487,12 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
               >
                 <span>Назад</span>
               </BackButton>
-              <div style={{ fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 600, color: C.textHeading }}>
-                Специальности
+              <div style={{
+                fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 600,
+                color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap', flex: 1, minWidth: 0,
+              }}>
+                {mobileSpecialtyLabel ?? 'Специальности'}
               </div>
             </div>
           )}
@@ -516,12 +526,6 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
                   }}>{specialtiesCoverage}</span>
                 )}
               </div>
-              {specialtiesMode && (
-                <div style={{
-                  marginTop: 6, fontSize: FS.sm, color: C.textSecondary,
-                  lineHeight: 1.5, maxWidth: 640,
-                }}>Роль задаёт, какие модели, доступы и инструкции получит персона по умолчанию.</div>
-              )}
             </div>
           )}
           {showMobileInvite && defaultPersona && (
@@ -574,9 +578,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       centerBare
       // Компенсация перекоса зон — только для хаба: его сетка ограничена
       // CONTENT_MAX_W и без компенсации съезжает вслед за центром, стоит открыть
-      // пanel с одной стороны. Студия и создание персоны резиновые — им нечего
-      // компенсировать, ширина не передаётся
-      centerContentWidth={hasContent ? undefined : specialtiesMode ? MODAL_W.wide : CONTENT_MAX_W}
+      // панель с одной стороны. Студия, создание персоны и раздел «Специальности»
+      // резиновые — им нечего компенсировать, ширина не передаётся.
+      centerContentWidth={hasContent || specialtiesMode ? undefined : CONTENT_MAX_W}
       center={
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {modeSwitcher}

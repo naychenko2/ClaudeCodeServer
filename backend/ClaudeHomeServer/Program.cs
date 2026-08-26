@@ -376,6 +376,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
 // токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
+// Продуктовые MCP-серверы поверх HTTP (ADR-012): тулсет отдаёт схемы, общий контроллер
+// McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.WidgetsToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync

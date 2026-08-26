@@ -82,9 +82,16 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items, 
 // personaId в создаваемое уведомление (лицо персоны на уведомлении).
 public record NotificationsMcpContext(string ApiUrl, string Token, string? SelfPersonaId = null);
 
-// Контекст MCP-сервера виджетов (widget_show): чистый маркер «сессия с владельцем» —
-// серверу не нужны ни API, ни токен, он только валидирует input; HTML рендерит фронт.
-public sealed record WidgetsMcpContext;
+// Контекст MCP-сервера виджетов (widget_show): адрес API и сервисный токен владельца.
+// Сервер переехал с node-процесса в Kestrel (ADR-012) — ход подключает его по http
+// (POST {ApiUrl}/mcp/widgets), поэтому маркера «сессия с владельцем» уже мало.
+// HTML по-прежнему рендерит фронт, инструмент лишь валидирует input.
+//
+// UseHttp — решение о транспорте, принятое ОДИН раз в SessionManager (рубильник
+// Mcp:HttpTransport + проверка схемы адреса). false — ход объявляет прежний stdio-сервер
+// на node: fail-closed, потому что https по локальному адресу CLI не осилит, а инструмент
+// пропадёт у модели молча.
+public sealed record WidgetsMcpContext(string ApiUrl, string Token, bool UseHttp);
 
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —

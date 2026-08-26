@@ -647,13 +647,37 @@ public class SessionManager : IDisposable
             AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"));
     }
 
-    // Контекст MCP-сервера виджетов чата: чистый маркер «сессия с владельцем» —
-    // серверу не нужны ни API, ни токен, он только валидирует input (HTML рендерит фронт).
+    // Контекст MCP-сервера виджетов чата: адрес API и сервисный токен владельца — сервер
+    // переехал в Kestrel (ADR-012), ход зовёт его по http, а не поднимает процесс node.
+    // Адрес даёт та же ResolveTasksApiUrl, что и остальным серверам: второго правила про
+    // песочницу здесь нет — оно уже внутри резолвера.
     // Фича штатная (без фич-флага), как personas/notifications; персона может выключить
     // сервер Off-привязкой tool:widgets (PersonaBindingsService.ServerToolEnabled).
-    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona) =>
-        ownerId is not null && _bindings.ServerToolEnabled(ownerId, persona, "widgets")
-            ? new WidgetsMcpContext() : null;
+    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona)
+    {
+        if (ownerId is null || !_bindings.ServerToolEnabled(ownerId, persona, "widgets")) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new WidgetsMcpContext(apiUrl, GetServiceToken(ownerId), HttpMcpTransportUsable(apiUrl));
+    }
+
+    // Годится ли адрес бэкенда под MCP-over-HTTP (ADR-012). Два входа, оба fail-closed:
+    // рубильник Mcp:HttpTransport (дефолт включён — откат без выкатки кода) и СХЕМА адреса.
+    // Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся в
+    // ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
+    // ещё и редиректится на https в пайплайне. В этом случае ход объявляет прежний
+    // stdio-сервер, а причина уходит в лог: тихо терять инструмент нельзя.
+    private string? _httpMcpWarnedFor;
+    private bool HttpMcpTransportUsable(string apiUrl)
+    {
+        var enabled = _config.GetValue(Services.Mcp.Http.McpHttpTransport.EnabledKey, true);
+        if (!enabled) return false;
+        var http = Services.Mcp.Http.McpHttpTransport.Usable(apiUrl, enabled);
+        // Предупреждаем один раз на адрес: состояние постоянное, ход идёт каждую минуту
+        if (!http && Interlocked.Exchange(ref _httpMcpWarnedFor, apiUrl) != apiUrl)
+            _log.LogWarning("MCP-over-HTTP выключен: адрес бэкенда «{Url}» не http — "
+                + "продуктовые серверы объявляются ходу по-старому, через stdio", apiUrl);
+        return http;
+    }
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),

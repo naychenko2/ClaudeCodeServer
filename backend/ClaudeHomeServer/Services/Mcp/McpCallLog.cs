@@ -26,6 +26,14 @@ public sealed class McpCallLog
     private const int MaxTools = 512;
     private const string Overflow = "(прочее)";
 
+    /// <summary>
+    /// Ключ в <c>HttpContext.Items</c>: запрос учитывать не надо. Ставится там, где отказ —
+    /// часть штатного протокола, а не сбой инструмента: у MCP-over-HTTP это GET на транспорт
+    /// (клиент пробует SSE-канал, получает 405 и спокойно живёт дальше). Без пропуска каждый
+    /// ход давал бы «отказ MCP» в GET /api/mcp/calls и в алерте 04-mcp-errors.
+    /// </summary>
+    public const string SkipItemKey = "mcp.call.skip";
+
     private readonly ConcurrentDictionary<string, ToolCounters> _byTool = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<McpCallFailure> _failures = new();
 

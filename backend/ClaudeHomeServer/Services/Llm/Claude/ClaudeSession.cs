@@ -711,8 +711,12 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasWorkspace = workspaceServerPath is not null;
         var notificationsServerPath = _notificationsMcp is not null ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
         var hasNotifications = notificationsServerPath is not null;
-        var widgetsServerPath = _widgetsMcp is not null ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
-        var hasWidgets = widgetsServerPath is not null;
+        // Виджеты живут в Kestrel (ADR-012), но путь stdio-сервера всё равно резолвим:
+        // при негодном для http адресе (не http-схема, выключенный рубильник) ход обязан
+        // объявить прежний node-сервер, а не остаться без инструмента
+        var widgetsServerPath = _widgetsMcp is { UseHttp: false }
+            ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
+        var hasWidgets = _widgetsMcp is not null && (_widgetsMcp.UseHttp || widgetsServerPath is not null);
         var codeGraphServerPath = _codeGraphMcp is not null ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
         var hasCodeGraph = codeGraphServerPath is not null;
         var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
@@ -929,15 +933,39 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasWidgets)
             {
-                // Сервер виджетов: без env (API ему не нужен). alwaysLoad — единственный
-                // крохотный инструмент; без него первый вызов в ходе падает «No such tool
-                // available» (claude-code#19282), а ретраить показ виджета модели не свойственно.
-                servers["widgets"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { widgetsServerPath! },
-                    ["alwaysLoad"] = true,
-                };
+                // Сервер виджетов — первый на MCP-over-HTTP (ADR-012): при http процесс node
+                // на ход не поднимается, состав tools/list отдаёт эндпоинт Kestrel.
+                // alwaysLoad стоит в обеих ветках: без него первый вызов в ходе падает
+                // «No such tool available» (claude-code#19282), а ретраить показ виджета
+                // модели не свойственно.
+                servers["widgets"] = _widgetsMcp!.UseHttp
+                    // Токен — сервисный JWT владельца обычным заголовком Authorization (как у
+                    // fal-ai/glif), эндпоинт проверяет его сам ([Authorize], владелец из claim
+                    // sub). X-Caller-Session-Id при http шлёт КЛИЕНТ, а не наш код: сюда его
+                    // кладём статикой — на нём держатся [DenyOnDelegatedTurn] и журнал
+                    // GET /api/mcp/calls, а id чата в рамках сессии постоянен.
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.McpHttpTransport.EndpointFor(_widgetsMcp.ApiUrl, "widgets"),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {_widgetsMcp.Token}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    // Fail-closed: адрес не http или рубильник Mcp:HttpTransport выключен —
+                    // едем прежним stdio-сервером, инструмент у модели остаётся
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { widgetsServerPath! },
+                        ["alwaysLoad"] = true,
+                    };
+                // Транспорт — в сигнатуру запуска: переключение рубильника обязано пробить
+                // живой процесс доживания, иначе применится «когда-нибудь потом»
+                shapes["widgets"] = _widgetsMcp.UseHttp ? "t:http" : "t:stdio";
             }
 
             if (hasMemory)
@@ -2172,7 +2200,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("mcp-notes", "Как работать с заметками", notesHint, group: "mcp");
             }
 
-            // Подсказка про виджеты — только когда widgets-server подключён
+            // Подсказка про виджеты — только когда сервер виджетов подключён ходу
             if (_widgetsMcp is not null)
             {
                 var widgetsHint =
@@ -2485,6 +2513,20 @@ public class ClaudeSession : ILlmSessionAdapter
             // (модель ретраила, но карточка ошибки засоряла ленту).
             ["MCP_TIMEOUT"] = "30000",
         };
+
+        // Обход прокси для локального бэкенда — жёсткое требование HTTP-транспорта MCP
+        // (ADR-012): по этому адресу теперь ходит САМ CLI, и без NO_PROXY его запрос уедет
+        // в HTTP_PROXY, а инструмент молча исчезнет у модели (503 CLIENT_HTTP_NOT_IMPLEMENTED).
+        // В песочнице переменная стоит на контейнере, у local-владельцев наследуется от
+        // системы и гарантии нет — ставим сами на каждый ход, унаследованное ДОПОЛНЯЯ:
+        // HTTP_PROXY на машине бывает единственным маршрутом до провайдеров.
+        // Хост берём из фактического адреса эндпоинта, а не только из списка loopback.
+        // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
+        var noProxy = Services.Mcp.Http.LoopbackProxyBypass.Merge(
+            Environment.GetEnvironmentVariable("NO_PROXY") ?? Environment.GetEnvironmentVariable("no_proxy"),
+            _widgetsMcp?.ApiUrl);
+        envOverrides["NO_PROXY"] = noProxy;
+        envOverrides["no_proxy"] = noProxy;
 
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.

@@ -32,26 +32,32 @@ public static class McpCallLogMiddleware
         finally
         {
             sw.Stop();
-            // Сырое значение заголовка; null означает «инструмент не назвался» (старая версия
-            // сервера в песочнице, чужой клиент с тем же заголовком). Подстановку пути вместо
-            // имени делает McpCallLog — и только для таблицы диагностики: в тег метрики путь
-            // с GUID пускать нельзя (кардинальность + PII), там своё схлопывание.
-            var tool = ctx.Request.Headers[ToolHeader].FirstOrDefault() is { Length: > 0 } t ? t : null;
-            var sessionId = ctx.Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
-            var status = ctx.Response.StatusCode;
+            // Запрос, помеченный как штатный не-вызов (GET на MCP-over-HTTP: клиент пробует
+            // SSE-канал и получает 405), в статистику не идёт — иначе каждый ход давал бы
+            // «отказ инструмента» в таблице диагностики и в алерте 04-mcp-errors.
+            // Ранний return здесь недопустим — это тело finally, отсюда условие вокруг блока.
+            if (!ctx.Items.ContainsKey(McpCallLog.SkipItemKey))
+            {
+                // Сырое значение заголовка; null означает «инструмент не назвался» (старая версия
+                // сервера в песочнице, чужой клиент с тем же заголовком). Подстановку пути вместо
+                // имени делает McpCallLog — и только для таблицы диагностики: в тег метрики путь
+                // с GUID пускать нельзя (кардинальность + PII), там своё схлопывание.
+                var tool = ctx.Request.Headers[ToolHeader].FirstOrDefault() is { Length: > 0 } t ? t : null;
+                var sessionId = ctx.Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+                var status = ctx.Response.StatusCode;
 
-            ctx.RequestServices.GetService<McpCallLog>()
-                ?.Record(tool, sessionId, ctx.Request.Path, status, sw.ElapsedMilliseconds);
+                ctx.RequestServices.GetService<McpCallLog>()
+                    ?.Record(tool, sessionId, ctx.Request.Path, status, sw.ElapsedMilliseconds);
 
-            // Ранний return здесь недопустим — это тело finally
-            var log = ctx.RequestServices.GetService<ILogger<McpCallLog>>();
-            var name = tool ?? "(без имени)";
-            if (log is not null && status >= 400)
-                log.LogWarning("MCP {Tool} → {Status} за {Ms} мс (сессия {Session}, {Method} {Path})",
-                    name, status, sw.ElapsedMilliseconds, sessionId, ctx.Request.Method, ctx.Request.Path);
-            else
-                log?.LogDebug("MCP {Tool} → {Status} за {Ms} мс (сессия {Session})",
-                    name, status, sw.ElapsedMilliseconds, sessionId);
+                var log = ctx.RequestServices.GetService<ILogger<McpCallLog>>();
+                var name = tool ?? "(без имени)";
+                if (log is not null && status >= 400)
+                    log.LogWarning("MCP {Tool} → {Status} за {Ms} мс (сессия {Session}, {Method} {Path})",
+                        name, status, sw.ElapsedMilliseconds, sessionId, ctx.Request.Method, ctx.Request.Path);
+                else
+                    log?.LogDebug("MCP {Tool} → {Status} за {Ms} мс (сессия {Session})",
+                        name, status, sw.ElapsedMilliseconds, sessionId);
+            }
         }
     }
 }

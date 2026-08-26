@@ -165,8 +165,12 @@ fal — `GET /api/fal/account` (баланс USD + расход по модел�
 ## Виджеты в чате
 
 Штатная фича, без флага: модель показывает интерактивные HTML-виджеты (дашборды, графики,
-калькуляторы) через `mcp__widgets__widget_show` — [mcp/widgets-server/index.js](../../mcp/widgets-server/index.js)
-(без зависимостей, в API не ходит: валидирует input, лимит html 64 КБ). Фронт рендерит
+калькуляторы) через `mcp__widgets__widget_show` — сервер живёт **внутри бэкенда** на
+MCP-over-HTTP ([WidgetsToolset](../../backend/ClaudeHomeServer/Services/Mcp/Http/WidgetsToolset.cs),
+[ADR-012](../adr/ADR-012-mcp-over-http-transport.md)): в API не ходит, валидирует input, лимит
+html 64 КБ. Прежний stdio-сервер [mcp/widgets-server/index.js](../../mcp/widgets-server/index.js)
+оставлен как путь отката (рубильник `Mcp:HttpTransport`, автоматический fail-closed на не-http
+адрес бэкенда). Фронт рендерит
 `input.html` в sandbox-iframe ([WidgetView.tsx](../../frontend/src/components/chat/WidgetView.tsx) +
 чистое ядро [lib/widgetHtml.ts](../../frontend/src/lib/widgetHtml.ts)): `sandbox="allow-scripts
 allow-forms allow-modals"` (без same-origin/popups), строгая CSP-мета в обёртке (default-src
@@ -177,8 +181,10 @@ allow-forms allow-modals"` (без same-origin/popups), строгая CSP-ме�
 Подсказка модели — widgetsHint в ClaudeSession (только при подключённом сервере); сервер
 регистрируется в BuildTurnMcpConfig с `alwaysLoad` и работает у всех CLI-провайдеров.
 Дискаверабилити: действие `chat.widget` в AI-палитре (контекстные промпты по разделам) +
-rule-based подсказка в календаре при 5+ активных задачах. Для docker-песочницы сервер
-копируется в образ (`/app/mcp/widgets-server`) — при обновлении нужна пересборка sandbox-образа.
+rule-based подсказка в календаре при 5+ активных задачах. Пересборка sandbox-образа ради
+виджетов больше не нужна: на http-транспорте из песочницы идёт запрос к
+`host.docker.internal`, а не запуск копии сервера в контейнере (копия
+`/app/mcp/widgets-server` в образе осталась ради отката).
 
 ## Голосовой режим чата
 

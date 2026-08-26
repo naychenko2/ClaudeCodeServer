@@ -363,8 +363,8 @@ builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.TurnRunLog.Cre
     sp.GetRequiredService<IConfiguration>()));
 // Жив ли исходящий прокси (HTTP(S)_PROXY): отличает отказ канала наружу от отказа
 // эндпоинта вендора — при первом смена модели не лечит ничего
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IEgressProbe,
-    ClaudeHomeServer.Services.Llm.EgressProbe>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IEgressProbe>(sp =>
+    new ClaudeHomeServer.Services.Llm.EgressProbe(sp.GetRequiredService<IConfiguration>()));
 // Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();

@@ -69,7 +69,10 @@ public class FallbackEgressDownTests
         public void RespondPlan(string requestId, bool approve, string? feedback) { }
         public bool TrySetPermissionModeLive(ClaudeMode mode) => false;
         public bool TrySetModelLive(string model) => false;
-        public void Interrupt() { }
+        public int Interrupts;
+        // Как в проде: Interrupt убивает процесс, и тот досылает свой терминал
+        public Action? OnInterrupt;
+        public void Interrupt() { Interrupts++; OnInterrupt?.Invoke(); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -218,6 +221,61 @@ public class FallbackEgressDownTests
 
         egress.Calls.Should().Be(0, "429 — не сетевой класс");
         inner.Attempts[1].Provider.Should().Be("acc-b");
+    }
+
+    [Fact]
+    public async Task Стоп_ВоВремяПаузыПовтора_ХодЗакрывается_АНеВиснет()
+    {
+        // Блокер ревью: пауза перед повтором длится секунды, и это ровно тот момент, когда
+        // человек жмёт «Стоп» — ход стоит, ошибка задержана. Если заглушить терминалы ДО паузы,
+        // exited убитого процесса проглатывается, SettleAsync отдаёт пустоту, и чат остаётся
+        // Working навсегда (sweep лечит только Active).
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true));
+        // Убийство процесса по «Стоп» досылает терминал — как настоящий ClaudeSession
+        inner.OnInterrupt = () => inner.Emit(new ExitedMessage());
+        inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        // Ждём саму паузу повтора: попытка провалилась, оркестратор ушёл спать
+        await WaitForAsync(() => inner.Attempts.Count == 1, "первая попытка");
+        sut.Interrupt();
+
+        await WaitForAsync(() => Downstream().OfType<ExitedMessage>().Any(),
+            "терминал хода дошёл наружу");
+        inner.Interrupts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ФиналОтказаКанала_НесётПаруОшибкаResult_ИСохраняетДанныеПопытки()
+    {
+        // ExpectResultFollows: по этой паре SessionManager разбирает конец хода штаба РОВНО ОДИН
+        // раз — без флага командный чат получил бы две карточки эскалации на один ход.
+        // Usage/стоимость реального result попытки при этом теряться не должны: отказной запрос
+        // мог потратить токены (тот же довод, что в FailClosedAsync).
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true));
+        for (var i = 0; i < 3; i++)
+            inner.Scripts.Enqueue(() =>
+            {
+                inner.Emit(new ErrorMessage("API Error: Connection refused (ECONNREFUSED)",
+                    ExpectResultFollows: true));
+                inner.Emit(new ResultMessage("error", 4242, 7, null, 0.5, ApiErrorStatus: "process_exit"));
+            });
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        var error = Downstream().OfType<ErrorMessage>().Should().ContainSingle().Subject;
+        error.Text.Should().Be(TurnFailureText.EgressDown);
+        error.ExpectResultFollows.Should().BeTrue("пара «ошибка → result» — часть контракта конца хода");
+        error.Details.Should().Contain("ECONNREFUSED", "сырой текст живёт в «Подробностях»");
+
+        var result = Downstream().OfType<ResultMessage>().Should().ContainSingle().Subject;
+        result.Subtype.Should().Be("error");
+        result.DurationMs.Should().Be(4242, "данные реальной попытки не теряются");
+        result.NumTurns.Should().Be(7);
+        result.TotalCostUsd.Should().Be(0.5);
     }
 
     [Fact]

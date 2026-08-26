@@ -55,6 +55,16 @@ public sealed class EgressProbe : IEgressProbe
 
     public EgressProbe() : this(ReadProxyFromEnv()) { }
 
+    /// <summary>
+    /// Боевой конструктор. Источников два, и это не дублирование: у `local`-владельцев CLI
+    /// наследует окружение сервера (там и живут *_PROXY), а у `container`-владельцев прокси
+    /// песочницы задаётся конфигом `Sandbox:Proxy` и раздаётся контейнеру отдельно — в env
+    /// бэкенда на Windows-хосте его нет вовсе. Без второго источника ветка отказа канала была
+    /// бы мертва ровно в той топологии, где она нужнее всего.
+    /// </summary>
+    public EgressProbe(IConfiguration config)
+        : this(ReadProxyFromEnv() ?? ReadProxyFromConfig(config)) { }
+
     internal EgressProbe((string Host, int Port)? proxy, TimeSpan? timeout = null, TimeSpan? cacheFor = null)
     {
         _proxy = proxy;
@@ -108,6 +118,10 @@ public sealed class EgressProbe : IEgressProbe
                 return parsed;
         return null;
     }
+
+    // Прокси песочницы (тот же ключ читает SandboxManager, раздавая его контейнеру)
+    internal static (string Host, int Port)? ReadProxyFromConfig(IConfiguration config) =>
+        TryParseProxy(config["Sandbox:Proxy"], out var parsed) ? parsed : null;
 
     /// <summary>
     /// Разбор значения *_PROXY. Схему допускаем любую (http/https/socks5), а её отсутствие

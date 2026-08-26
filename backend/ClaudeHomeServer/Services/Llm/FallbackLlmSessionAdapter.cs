@@ -193,6 +193,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // соединений), поэтому ждать долго незачем, а бить сразу — бессмысленно.
     internal static readonly TimeSpan EgressRetryDelay = TimeSpan.FromSeconds(5);
 
+    // Адрес канала для лога: без него «выход в сеть недоступен» не отличить от «прокси не тот».
+    // Секретов не несёт — TryParseProxy оставляет только Host:Port, креденшалы URL отбрасывает.
+    private string EgressAddress() => (_egress as EgressProbe)?.ProxyAddress ?? "канал";
+
     // Проба канала не имеет права уронить ход: её отказ читается как «не знаем» → ведём себя
     // как раньше (обычный Unreachable с кулдауном и цепочкой).
     private async Task<bool> IsEgressDownAsync()
@@ -233,6 +237,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         // Остановка пользователем — не ошибка доставки: фолбэк на этом ходу запрещён
         _userInterrupted = true;
+        // Разбудить ожидание повтора при лежащем канале (Cancel по уже освобождённому CTS
+        // законен только до Dispose — его мы не зовём, ход живёт до конца оркестрации)
+        FallbackTurn? turn;
+        lock (_gate) turn = _turn;
+        try { turn?.Interrupted.Cancel(); }
+        catch (ObjectDisposedException) { /* ход уже свернулся — будить некого */ }
         _inner.Interrupt();
     }
 
@@ -612,22 +622,30 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (cls == FallbackErrorClass.Unreachable && _egress is not null
                     && await IsEgressDownAsync())
                 {
-                    // Терминалы провальной попытки наружу не идут: ход либо повторится, либо
-                    // получит свой финал ниже. Приём тот же, что перед подменой.
-                    lock (turn.Sync)
-                    {
-                        turn.Held.Clear();
-                        turn.SwallowCleanup = true;
-                    }
-
                     if (egressRetries < MaxEgressRetries)
                     {
                         egressRetries++;
-                        LogWarn($"Выход в сеть недоступен ({Info.Id}): повтор {egressRetries}/{MaxEgressRetries} той же пары "
+                        LogWarn($"Выход в сеть недоступен ({EgressAddress()}, {Info.Id}): повтор {egressRetries}/{MaxEgressRetries} той же пары "
                             + $"«{currentModel}» × «{currentKey}» через {_egressRetryDelay.TotalSeconds:0.#} с — шаги цепочки не тратим, "
                             + "кулдаун провайдеру не ставим (канал общий, вендор ни при чём)");
-                        try { await Task.Delay(_egressRetryDelay, _cts.Token); }
-                        catch (OperationCanceledException) { return; } // сессию закрыли, пока ждали
+                        // Паузу рвёт и закрытие сессии, и «Стоп» пользователя: пять секунд —
+                        // это ровно тот момент, когда человек жмёт «Стоп» (ход стоит, ошибка
+                        // задержана), и заставлять его досматривать паузу незачем.
+                        using (var wait = CancellationTokenSource.CreateLinkedTokenSource(
+                                   _cts.Token, turn.Interrupted.Token))
+                        {
+                            try { await Task.Delay(_egressRetryDelay, wait.Token); }
+                            catch (OperationCanceledException) { /* решает проверка наверху цикла */ }
+                        }
+
+                        // SwallowCleanup здесь НЕ выставляем — в отличие от пути подмены. Он
+                        // глотает терминалы, а прерывание в этом окне тогда хоронит ход: exited
+                        // убитого процесса пропадает, выход по _userInterrupted отдаёт SettleAsync
+                        // ПУСТОЙ held, наружу не уходит ни result, ни exited — и чат остаётся
+                        // Working навсегда (sweep лечит только Active). Глушить нечего: терминалы
+                        // копятся в held и будут выброшены BeginAttempt следующей попытки, а при
+                        // прерывании — выпущены наружу и закроют ход штатно.
+                        //
                         // Пара та же: attempted не растёт (HashSet), цепочка не двигается,
                         // substitutions не тратится — это повтор, а не подмена.
                         continue;
@@ -635,7 +653,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                     // Канал не поднялся за паузу — идти по цепочке бессмысленно: она ведёт наружу
                     // тем же путём. Честный финал вместо перебора мёртвых шагов.
-                    LogWarn($"Выход в сеть недоступен ({Info.Id}): повторы исчерпаны ({egressRetries}), "
+                    LogWarn($"Выход в сеть недоступен ({EgressAddress()}, {Info.Id}): повторы исчерпаны ({egressRetries}), "
                         + "цепочку не перебираем — все её шаги идут через тот же канал");
                     turnOutcome = "egress_down";
                     await FailEgressAsync(turn, end);
@@ -901,7 +919,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         Attempts: attempted.Count + egressRetries,
                         Substitutions: substitutions,
                         EgressRetries: egressRetries,
-                        Chain: chain,
+                        Chain: [.. chain],
                         LastErrorClass: lastClass is { } c ? TurnErrorClassifier.WireName(c) : null,
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
@@ -1346,8 +1364,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             turn.Settled = true;
         }
 
+        // ExpectResultFollows: true — не украшение, а часть контракта конца хода: по этой паре
+        // «ошибка → result» SessionManager взводит SkipNextTeamTurnEnd и разбирает конец хода
+        // штаба РОВНО ОДИН раз. Без флага командный чат получил бы две карточки эскалации и два
+        // push'а на один ход — тот самый дефект, ради которого флаг и заводился.
         var raw = end.ErrorText ?? HeldErrorDetails(held);
-        await _downstream(new ErrorMessage(TurnFailureText.EgressDown, Details: raw));
+        await _downstream(new ErrorMessage(TurnFailureText.EgressDown, ExpectResultFollows: true, Details: raw));
 
         // Финальный result — ошибочный: ход не состоялся, и статус чата обязан это показать
         // (иначе провал маскируется штатным finished — та же половина P29, что у FailClosed).
@@ -1529,6 +1551,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         public List<ServerMessage> Held = [];
         public string? ErrorText;
         public string? RateLimitResetsAt;
+        // Прерывание хода («Стоп» / interrupt ради очереди). Живёт ровно ход, поэтому лежит
+        // здесь, а не в поле адаптера: тот переживает много ходов, а CTS одноразовый.
+        // Нужен, чтобы паузу перед повтором при лежащем канале рвал сам «Стоп».
+        public readonly CancellationTokenSource Interrupted = new();
 
         public static TaskCompletionSource<AttemptEnd> NewTcs() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);

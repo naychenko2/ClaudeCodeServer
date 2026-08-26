@@ -1,5 +1,8 @@
+using System.Net;
+using System.Net.Sockets;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -46,6 +49,22 @@ public class EgressProbeTests
     }
 
     [Fact]
+    public void АдресБерётсяИзКонфигаПесочницы_КогдаВОкруженииПроксиНет()
+    {
+        // У container-владельцев прокси задаётся Sandbox:Proxy и раздаётся контейнеру, а в env
+        // бэкенда на хосте его нет вовсе — без второго источника ветка отказа канала была бы
+        // мертва ровно в той топологии, где она нужнее всего.
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Sandbox:Proxy"] = "http://192.168.7.208:2080",
+            }).Build();
+
+        EgressProbe.ReadProxyFromConfig(config).Should().Be(("192.168.7.208", 2080));
+        EgressProbe.ReadProxyFromConfig(new ConfigurationBuilder().Build()).Should().BeNull();
+    }
+
+    [Fact]
     public async Task ПортНеСлушает_КаналЛежит()
     {
         // Порт 1 на loopback не слушает никто ни на Windows, ни на Linux-раннере CI:
@@ -59,15 +78,26 @@ public class EgressProbeTests
     [Fact]
     public async Task РезультатКешируется_ПачкаШаговЦепочкиНеДолбитКанал()
     {
-        // Кеш нужен, чтобы шаги цепочки, идущие секунда в секунду, не превращались
-        // в очередь TCP-коннектов; на паузу перед повтором (5 с) он заведомо короче
-        var probe = new EgressProbe(("127.0.0.1", 1),
-            timeout: TimeSpan.FromMilliseconds(400), cacheFor: TimeSpan.FromSeconds(30));
+        // Кеш нужен, чтобы шаги цепочки, идущие секунда в секунду, не превращались в очередь
+        // TCP-коннектов. Доказательство — смена состояния канала МЕЖДУ вызовами: пока кеш жив,
+        // вердикт не меняется, а проба без кеша тот же канал видит уже мёртвым.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        try
+        {
+            var cached = new EgressProbe(("127.0.0.1", port), cacheFor: TimeSpan.FromMinutes(5));
+            (await cached.IsDownAsync()).Should().BeFalse("порт слушает — канал жив");
 
-        var first = await probe.IsDownAsync();
-        var second = await probe.IsDownAsync();
+            listener.Stop();
 
-        first.Should().BeTrue();
-        second.Should().Be(first);
+            (await cached.IsDownAsync()).Should().BeFalse("кеш держит прежний вердикт");
+            var fresh = new EgressProbe(("127.0.0.1", port), cacheFor: TimeSpan.Zero);
+            (await fresh.IsDownAsync()).Should().BeTrue("без кеша виден реальный отказ");
+        }
+        finally
+        {
+            try { listener.Stop(); } catch (SocketException) { /* уже остановлен */ }
+        }
     }
 }

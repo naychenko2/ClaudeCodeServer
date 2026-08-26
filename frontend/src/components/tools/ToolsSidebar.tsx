@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X } from 'lucide-react'
 import { C, R, FONT, FS, SP, SHADOW, Z } from '../../lib/design'
@@ -246,7 +246,13 @@ export function PreviewServiceList({
   // Старый режим (вкладки этого сайдбара) шапки не имеет: там они остаются в теле.
   const inHeader = useHasPanelHeader()
   // Составные конфигурации показывают состав по именам, а приходят по id
-  const nameById = new Map(groups.flatMap(([, items]) => items).map(s => [s.id, s.name]))
+  const allServices = groups.flatMap(([, items]) => items)
+  const nameById = new Map(allServices.map(s => [s.id, s.name]))
+  const serviceById = new Map(allServices.map(s => [s.id, s]))
+  // Кто входит в состав хоть одной составной конфигурации: такие строки рисуются под
+  // своей группой, а не отдельно — иначе «All» и три его участника лежат в списке
+  // вперемешку, и связь между ними видна только в подсказке
+  const memberIds = new Set(allServices.flatMap(s => s.members ?? []))
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.sm}px ${SP.sm}px ${SP.md}px` }}>
@@ -361,25 +367,48 @@ export function PreviewServiceList({
                   : undefined}
               />
             </div>
-            {!isCollapsed && items.map(svc => (
-              <ServiceRow
-                key={svc.id}
-                svc={svc}
-                memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
-                active={activePreviewId === svc.id}
-                onStart={() => onStartService(svc)}
-                onStop={() => onStopService(svc.id)}
-                onSelect={() => onSelectPreview(svc.id)}
-                shared={sharedHere.has(svc.id)}
-                onShare={extEnabled ? () => void share(svc) : undefined}
-                onUnshare={() => {
-                  const jti = sharedHere.get(svc.id)
-                  if (!jti) return
-                  clearExternalUrl(projectId, svc.id)
-                  void revoke(jti)
-                }}
-              />
-            ))}
+            {!isCollapsed && items.filter(svc => !memberIds.has(svc.id)).map(svc => {
+              const members = svc.members?.map(id => serviceById.get(id)).filter(m => m !== undefined) ?? []
+              return (
+                <Fragment key={svc.id}>
+                  <ServiceRow
+                    svc={svc}
+                    memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
+                    active={activePreviewId === svc.id}
+                    onStart={() => onStartService(svc)}
+                    onStop={() => onStopService(svc.id)}
+                    onSelect={() => onSelectPreview(svc.id)}
+                    shared={sharedHere.has(svc.id)}
+                    onShare={extEnabled ? () => void share(svc) : undefined}
+                    onUnshare={() => {
+                      const jti = sharedHere.get(svc.id)
+                      if (!jti) return
+                      clearExternalUrl(projectId, svc.id)
+                      void revoke(jti)
+                    }}
+                  />
+                  {members.map(member => (
+                    <ServiceRow
+                      key={member.id}
+                      svc={member}
+                      nested
+                      active={activePreviewId === member.id}
+                      onStart={() => onStartService(member)}
+                      onStop={() => onStopService(member.id)}
+                      onSelect={() => onSelectPreview(member.id)}
+                      shared={sharedHere.has(member.id)}
+                      onShare={extEnabled ? () => void share(member) : undefined}
+                      onUnshare={() => {
+                        const jti = sharedHere.get(member.id)
+                        if (!jti) return
+                        clearExternalUrl(projectId, member.id)
+                        void revoke(jti)
+                      }}
+                    />
+                  ))}
+                </Fragment>
+              )
+            })}
           </div>
         )
       })}
@@ -425,9 +454,11 @@ const saveCollapsed = (projectId: string, value: Set<string>) => {
   try { localStorage.setItem(collapsedKey(projectId), JSON.stringify([...value])) } catch { /* ignore */ }
 }
 
-function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare }: {
+function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare, nested }: {
   svc: ProjectService
   memberNames?: string[]
+  // Строка — участник составной конфигурации: рисуется под ней со сдвигом и направляющей
+  nested?: boolean
   active: boolean
   onStart: () => void
   onStop: () => void
@@ -472,9 +503,15 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%',
+        display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.xxs}px ${SP.sm}px`,
-        borderRadius: R.md, border: 'none',
+        borderRadius: R.md,
+        border: 'none',
+        // Участник смещён и подпёрт направляющей: одного отступа мало, чтобы вложенность
+        // читалась с первого взгляда, а линия делает её однозначной
+        marginLeft: nested ? SP.md : 0,
+        width: nested ? `calc(100% - ${SP.md}px)` : '100%',
+        borderLeft: nested ? `1px solid ${C.borderLight}` : undefined,
         cursor: running || external || partial ? 'pointer' : 'default',
         background: active ? C.bgSelected : hover ? C.bgInset : 'transparent',
       }}

@@ -29,6 +29,11 @@ type Tab = 'preview' | 'logs'
 
 export function PreviewView({ service, projectId, onStop, onClose, services }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  // Наведение на шапку: по нему точка статуса уступает место крестику. На тач-экранах
+  // наведения не бывает вовсе, поэтому там крестик показывается всегда — иначе окно
+  // нечем было бы закрыть
+  const [headerHover, setHeaderHover] = useState(false)
+  const noHover = typeof window !== 'undefined' && window.matchMedia?.('(hover: none)').matches
   const started = service.status === 'started'
   const starting = service.status === 'starting'
   // Процесс поднят снаружи (Rider, терминал): проксировать порт можем, а останавливать
@@ -71,12 +76,32 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Тулбар */}
-      <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
-        padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
-        background: C.bgPanel,
-      }}>
-        <StatusDot status={service.status} />
+      <div
+        onMouseEnter={() => setHeaderHover(true)}
+        onMouseLeave={() => setHeaderHover(false)}
+        style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
+          background: C.bgPanel,
+        }}
+      >
+        {/* Закрыть — на месте точки статуса, а не отдельной кнопкой справа: пока окно
+            не трогают, шапка занята делом (статус, имя, адрес), а действие всплывает
+            ровно тогда, когда к нему тянутся */}
+        {/* Место фиксированной ширины — под размер кнопки xs: иначе подмена точки (8px)
+            кнопкой (24px) сдвигала бы всю шапку под курсором */}
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 24, height: 24, flexShrink: 0,
+        }}>
+          {onClose && (headerHover || noHover) ? (
+            <IconButton size="xs" variant="soft" onClick={onClose} title="Закрыть окно сервиса">
+              <X size={13} />
+            </IconButton>
+          ) : (
+            <StatusDot status={service.status} />
+          )}
+        </span>
         <span style={{ fontSize: 12, fontWeight: 600, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {service.name}
         </span>
@@ -143,11 +168,6 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
             <Square size={12} strokeWidth={2.5} style={{ marginRight: 4 }} />
             Стоп
           </Button>
-        )}
-        {onClose && (
-          <IconButton size="xs" variant="soft" onClick={onClose} title="Закрыть окно сервиса">
-            <X size={13} />
-          </IconButton>
         )}
       </div>
 

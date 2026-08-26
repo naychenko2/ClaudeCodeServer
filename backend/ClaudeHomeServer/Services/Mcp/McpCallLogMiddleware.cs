@@ -60,11 +60,13 @@ public static class McpCallLogMiddleware
                     ? Math.Max(ctx.Response.StatusCode, 500)
                     : ctx.Response.StatusCode;
 
-                ctx.RequestServices.GetService<McpCallLog>()
+                var display = ctx.RequestServices.GetService<McpCallLog>()
                     ?.Record(tool, sessionId, ctx.Request.Path, status, sw.ElapsedMilliseconds);
 
                 var log = ctx.RequestServices.GetService<ILogger<McpCallLog>>();
-                var name = tool ?? "(без имени)";
+                // В лог — имя из Record, ПРОШЕДШЕЕ форму (сырой заголовок до ~30 КБ с CRLF
+                // логировался бы дословно — тот же CWE-117, что у лога контроллера)
+                var name = display ?? tool ?? "(без имени)";
                 if (log is not null && status >= 400)
                     log.LogWarning("MCP {Tool} → {Status} за {Ms} мс (сессия {Session}, {Method} {Path})",
                         name, status, sw.ElapsedMilliseconds, sessionId, ctx.Request.Method, ctx.Request.Path);

@@ -70,6 +70,31 @@ public class McpCallsControllerTests : IClassFixture<TestWebApplicationFactory>
             .Should().NotContain(f => f.GetProperty("path").GetString()!.Contains("нет-такого-2"));
     }
 
+    /// <summary>
+    /// Второй путь записи в журнал — сырой заголовок X-Mcp-Tool (лимит заголовков Kestrel
+    /// допускает десятки КБ): форму ключа проверяет сам McpCallLog.Record, а не вызывающий
+    /// путь, поэтому чужой заголовок не может раздуть GET /api/mcp/calls мегабайтными строками.
+    /// </summary>
+    [Fact]
+    public async Task ГигантскийЗаголовокИнструмента_СхлопываетсяВТаблицеВызовов()
+    {
+        var client = _factory.CreateAuthenticatedClient();
+
+        var req = new HttpRequestMessage(HttpMethod.Get, "/api/projects/нет-такого-3/tasks");
+        req.Headers.Add(DenyOnDelegatedTurnAttribute.CallerHeader, "sess-evil-header");
+        // CRLF в заголовок не положит и сам HttpClient (FormatException на Add) — реальный
+        // вектор заголовка это длина: 30 КБ валидных символов в пределах лимита заголовков Kestrel
+        req.Headers.Add(McpCallLogMiddleware.ToolHeader, new string('z', 30_000));
+        (await client.SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        var stats = await client.GetFromJsonAsync<JsonElement>("/api/mcp/calls");
+        var tools = stats.GetProperty("tools").EnumerateArray()
+            .Select(t => t.GetProperty("tool").GetString()).ToList();
+        tools.Should().NotContain(t => t != null && t.Length > 64,
+            "30-КБ заголовок — не ключ словаря журнала");
+        tools.Should().Contain(McpCallLog.Overflow, "мусор схлопывается в общую строку переполнения");
+    }
+
     [Fact]
     public async Task Статистика_ТолькоАдмину()
     {

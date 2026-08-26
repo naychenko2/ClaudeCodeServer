@@ -27,7 +27,9 @@ public sealed class McpCallLog
 
     /// <summary>
     /// Общая строка переполнения: всё, что превысило потолок ключей или не прошло проверку
-    /// формы на входе (её делает McpTransportController для строк из тела JSON-RPC).
+    /// формы на входе в <see cref="Record"/> (строки из тела JSON-RPC кладёт в заголовок
+    /// McpTransportController, но защита живёт у владельца словаря — новый путь записи
+    /// не сможет её обойти).
     /// </summary>
     public const string Overflow = "(прочее)";
 
@@ -52,13 +54,14 @@ public sealed class McpCallLog
     /// <summary>
     /// Учесть вызов. <paramref name="tool"/> — значение заголовка <c>X-Mcp-Tool</c>;
     /// null/пусто означает, что инструмент не назвался (старая версия сервера в песочнице,
-    /// чужой клиент с тем же заголовком).
+    /// чужой клиент с тем же заголовком). Возвращает имя, под которым вызов учтён в таблице,
+    /// — уже проверенное по форме, годное для подстановки в логи.
     /// </summary>
-    public void Record(string? tool, string? sessionId, string path, int statusCode, long elapsedMs)
+    public string Record(string? tool, string? sessionId, string path, int statusCode, long elapsedMs)
     {
         // Имя для таблицы диагностики: безымянный вызов показываем вместе с путём —
         // иначе непонятно, какой эндпоинт дёргают без имени инструмента.
-        var display = string.IsNullOrEmpty(tool) ? $"(без имени) {path}" : tool;
+        var display = string.IsNullOrEmpty(tool) ? $"(без имени) {path}" : IsKeyShape(tool) ? tool : Overflow;
         if (!_byTool.ContainsKey(display) && _byTool.Count >= MaxTools) display = Overflow;
 
         var counters = _byTool.GetOrAdd(display, _ => new ToolCounters());
@@ -79,13 +82,23 @@ public sealed class McpCallLog
         if (statusCode >= 400)
             ServerMetrics.RecordMcpError(metricTool, "http_" + statusCode);
 
-        if (statusCode < 400) return;
+        if (statusCode < 400) return display;
 
         Interlocked.Increment(ref counters.Failures);
         _failures.Enqueue(new McpCallFailure(DateTime.UtcNow, display, sessionId, path, statusCode, elapsedMs));
         // Кольцо: держим только хвост
         while (_failures.Count > MaxFailures && _failures.TryDequeue(out _)) { }
+        return display;
     }
+
+    // Форма ключа таблицы: имя инструмента (tasks_list) либо составное «сервер/метод»,
+    // которое кладёт McpTransportController для служебных вызовов MCP-over-HTTP
+    // (widgets/initialize) — слэш разрешён ради второго, из внешнего ввода он путь с
+    // GUID не спасает (длина и остальной алфавит режут). Заголовок — внешний ввод без
+    // лимита длины (Kestrel допускает десятки КБ), и проверку держит сам Record:
+    // «не раздувай таблицу» — инвариант владельца словаря, а не каждого пути записи.
+    private static bool IsKeyShape(string v) =>
+        v.Length <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' or '/');
 
     /// <summary>Сводка по инструментам, самые проблемные — первыми.</summary>
     public IReadOnlyList<McpToolStat> Stats() =>

@@ -6,6 +6,7 @@ using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -409,6 +410,67 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
         ((Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata)attribute).MaxRequestBodySize
             .Should().Be(1024 * 1024,
                 "аргументы инструментов несопоставимо меньше (html виджета ≤64 КБ), 1 МБ — запас на фазу 2");
+    }
+
+    /// <summary>
+    /// Санитизация имени обязана держаться и в ЛОГЕ, не только в таблице вызовов:
+    /// TimestampedConsoleWriter ставит настоящий UTC-таймстемп после каждого \n, и
+    /// CRLF-вброс визуально неотличим от подлинных записей бэкенда (CWE-117). Имя печатает
+    /// и контроллер (Warning об упавшем инструменте), и McpCallLogMiddleware (Debug/Warning
+    /// по каждому запросу хода).
+    /// </summary>
+    [Fact]
+    public async Task ГигантскоеИмяСCRLF_НеПопадаетВЛогБэкенда()
+    {
+        var sink = new CollectingLogSink();
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = services => services.AddSingleton<ILoggerProvider>(sink),
+        };
+
+        using var caller = factory.CreateAuthenticatedClient();
+        caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", "evil-log-probe");
+        var call = await caller.PostAsJsonAsync("/mcp/widgets", new
+        {
+            jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new
+            {
+                name = new string('a', 200_000) + "\r\nX-Injected: 1",
+                arguments = new { html = "<b/>" },
+            },
+        });
+        call.StatusCode.Should().Be(HttpStatusCode.OK, "отказ инструмента — content-ошибка, не протокольная");
+
+        var entries = sink.Entries.Where(e => e.Text.Contains("MCP")).ToList();
+        entries.Should().NotBeEmpty("упавший инструмент обязан оставить след в логе");
+        entries.Should().NotContain(e => e.Text.Contains("X-Injected"),
+            "CRLF-вброс не должен попадать в записи лога");
+        entries.Should().OnlyContain(e => e.Text.Length <= 2_000,
+            "имя в сотни КБ не должно раздувать записи лога");
+    }
+
+    // Сборщик записей лога: у TestServer нет консольного вывода, а проверить нужно сам текст,
+    // который поедет в TimestampedConsoleWriter (переносы внутри записи там рисуют
+    // поддельные строки с настоящими таймстемпами)
+    private sealed class CollectingLogSink : ILoggerProvider
+    {
+        public List<(LogLevel Level, string Text)> Entries { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new Logger(this);
+
+        public void Dispose() { }
+
+        private sealed class Logger(CollectingLogSink sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                lock (sink.Entries) sink.Entries.Add((logLevel, formatter(state, exception)));
+            }
+        }
     }
 
     // Тулсет-«бомба»: tools/list падает исключением за пределами catch tools/call —

@@ -86,4 +86,28 @@ public class McpCallLogMiddlewareTests
 
         log.RecentFailures().Should().BeEmpty("клиент ушёл — это не сбой инструмента");
     }
+
+    /// <summary>
+    /// Форму ключа проверяет сам McpCallLog.Record (владелец словаря), а не вызывающий путь:
+    /// заголовок X-Mcp-Tool — внешний ввод без лимита длины, лимит заголовков Kestrel
+    /// допускает десятки КБ, и GET /api/mcp/calls не должен раздуваться чужими строками.
+    /// Составные ключи MCP-over-HTTP («widgets/initialize») обязаны выжить.
+    /// </summary>
+    [Fact]
+    public void Record_ПроверяетФормуКлюча_НоНеТрогаетСоставныеИменаМетодов()
+    {
+        var log = new McpCallLog();
+
+        // Составное имя «сервер/метод» из NameCallForLog — легитимный ключ таблицы
+        var served = log.Record("widgets/initialize", "s1", "/mcp/widgets", 200, 1);
+        served.Should().Be("widgets/initialize");
+
+        // 30-КБ имя с CRLF из чужого заголовка — общая строка переполнения
+        var evil = log.Record(new string('z', 30_000) + "\r\nX-Injected: 1", "s2", "/p", 200, 1);
+        evil.Should().Be(McpCallLog.Overflow, "негодное по форме не становится ключом словаря");
+
+        var tools = log.Stats().Select(s => s.Tool).ToList();
+        tools.Should().Contain("widgets/initialize");
+        tools.Should().NotContain(t => t.Length > 64);
+    }
 }

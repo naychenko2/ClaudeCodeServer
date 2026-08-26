@@ -2555,6 +2555,58 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task ОбрывСинхронногоСабагента_ЦиклДоГотовоАктивен_ОставляетПометкуВместоМолчания()
+    {
+        // Инцидент 25.08.2026 (чат «Зависание чатов практики»): синхронный Task вернул координатору
+        // обрывок вместо отчёта, добивание уступило активному циклу «до готово» — и отметка просто
+        // гасилась. Обрыв не оставлял следа ВООБЩЕ: ни директивы, ни предупреждения.
+        var session = await MkBusySessionAsync("cut-loop-note", SessionStatus.Working);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        // finishedBy=tool_result — синхронный Task: NoteTruncatedBgAgent не зовётся,
+        // отметка ждёт result хода координатора
+        SubagentSink(session.Id)(CutBgPassport(session.Id, finishedBy: "tool_result"));
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().NotBeNull();
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().BeNull();
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(0,
+            "добивание уступает циклу — у него свой протокол продолжения");
+    }
+
+    [Fact]
+    public async Task ОбрывСинхронногоСабагента_ЦиклПоднимаетСледующийХод_ПометкаУезжаетСНим()
+    {
+        // Сквозной путь: пометка обязана лечь ДО того, как цикл поднимет следующий ход,
+        // иначе опоздает ровно на ход (а на последней итерации потеряется совсем) — ради
+        // этого блок разбора обрыва стоит перед разбором цикла в OnMessageAsync
+        var session = await MkBusySessionAsync("cut-loop-carry", SessionStatus.Working);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id, finishedBy: "tool_result"));
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(5));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("обрывок") && t.Contains("НЕ итог")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
     public async Task ДобиваниеСабагента_ОбрывОпровергнутПокаПланировалось_ДирективаНеУходит()
     {
         var session = await MkBusySessionAsync("bg-cut-late-final", SessionStatus.Active);

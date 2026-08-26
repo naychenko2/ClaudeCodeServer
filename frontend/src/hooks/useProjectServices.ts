@@ -18,8 +18,17 @@ export function useProjectServices(projectId: string, opts?: { onStarted?: (svc:
     try {
       const r = await api.projects.services(projectId);
       setServices(r.services);
-      if (r.activeServiceId) setActivePreviewId(r.activeServiceId);
+      // Активный сервис с сервера окно НЕ открывает. Он там живёт для прокси (на чей порт
+      // смотреть) и переживает перезагрузку, а раньше подставлялся сюда — и переключение
+      // проектов само распахивало центральную панель с чужим сервисом, которого никто не
+      // просил. Окно открывается только явным действием: запуском или «Показать страницу».
     } catch { /* офлайн — оставляем как есть */ }
+  }, [projectId]);
+
+  // Смена проекта закрывает открытое окно: сервис в нём принадлежал прошлому проекту,
+  // и оставлять его на экране — врать про то, что показано
+  useEffect(() => {
+    setActivePreviewId(null);
   }, [projectId]);
 
   const start = useCallback(async (svc: ProjectService) => {

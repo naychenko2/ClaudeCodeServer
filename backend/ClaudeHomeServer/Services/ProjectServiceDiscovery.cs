@@ -54,11 +54,16 @@ public sealed class ProjectServiceDiscovery
         var root = project.RootPath;
         var result = new List<ProjectServiceInfo>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Занятые Id — отдельно от сигнатур. Дедупликация схлопывает ОДИН И ТОТ ЖЕ запуск,
+        // а здесь ловится обратное: разные запуски, которым Slug выдал одинаковый Id.
+        // Слаг оставляет только латиницу и цифры, поэтому «Витрина: панель хостов» и
+        // «Витрина: панель сессий» без латинского хвоста в имени — это один Id на двоих.
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // 1) Сохранённые из launch.json — приоритет.
         foreach (var saved in await ReadSavedAsync(project))
         {
-            if (seen.Add(Signature(saved))) result.Add(saved);
+            AddUnique(saved);
         }
 
         // 2) Инференс из манифестов; дубли (по сигнатуре) отбрасываем в пользу saved.
@@ -73,12 +78,46 @@ public sealed class ProjectServiceDiscovery
                 .Concat(SafeParse(() => ParseProcfile(root), "Procfile"))
                 .Concat(SafeParse(() => ParseMakefile(root), "Makefile")))
             {
-                if (seen.Add(Signature(svc))) result.Add(svc);
+                AddUnique(svc);
             }
         }
 
         _cache[project.Id] = (DateTime.UtcNow, result);
         return result;
+
+        // Добавить сервис, сохранив ДВА инварианта списка: одна сигнатура — одна запись,
+        // один Id — одна запись. Второй появился не для красоты: Id это ключ сервиса во
+        // всём API (запуск, остановка, реестр запущенных, превью), и дубль означал не
+        // просто спорный список, а 500 на панели «Сервисы» — ToDictionary по Id падал
+        // с ArgumentException, унося весь запрос.
+        //
+        // Коллизию не отбрасываем: за одинаковым слагом стоят РАЗНЫЕ запуски, и потеря
+        // одного из них выглядела бы как пропавшая кнопка. Вместо этого добавляем суффикс
+        // от сигнатуры — он стабилен между вызовами, пока не изменилась сама команда,
+        // поэтому запущенный процесс не осиротеет (его ключ — Id).
+        //
+        // Известное ограничение: участник составной конфигурации, которому сменили Id,
+        // выпадет из своей группы (Members ссылаются на исходные Id). Случай редкий —
+        // группы Rider перечисляют участников по именам конфигураций, а коллизия слага
+        // означает, что имена и так неразличимы.
+        void AddUnique(ProjectServiceInfo svc)
+        {
+            var signature = Signature(svc);
+            if (!seen.Add(signature)) return;
+
+            if (!ids.Add(svc.Id))
+            {
+                var unique = $"{svc.Id}-{ShortHash(signature)}";
+                _log.LogWarning(
+                    "Сервисы проекта {Project}: идентификатор {Id} занят другим запуском, "
+                    + "выдан {NewId} (имена конфигураций различаются только вне латиницы)",
+                    project.Id, svc.Id, unique);
+                ids.Add(unique);
+                svc = svc with { Id = unique };
+            }
+
+            result.Add(svc);
+        }
     }
 
     /// <summary>
@@ -754,6 +793,12 @@ public sealed class ProjectServiceDiscovery
         s.Members is { Length: > 0 }
             ? "group:" + string.Join(',', s.Members)
             : $"{s.Command} {string.Join(' ', s.Args)}@{s.Cwd ?? ""}";
+
+    /// <summary>Короткий детерминированный суффикс — различить сервисы с одинаковым слагом.</summary>
+    private static string ShortHash(string value)
+        => Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)))[..6]
+            .ToLowerInvariant();
 
     private static string Slug(string s)
     {

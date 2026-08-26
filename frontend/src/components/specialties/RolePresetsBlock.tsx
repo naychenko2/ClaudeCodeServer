@@ -42,11 +42,14 @@ import type {
 const TEXT_LIMIT = 1024;
 
 // === Бейдж источника (слои: code / global / user / owner) ===
+// После перехода на единый общий слой (ADR-012) «owner» больше не значит «личное»:
+// в edit-режиме это ПРАВИМЫЙ слой, а он теперь общий. Поэтому подписи owner и global
+// совпадают — личной пометки в однослойной модели быть не должно.
 const SRC_LABEL: Record<PromptSectionSource, string> = {
   code:   'Из кода',
   global: 'Общее',
   user:   'Пользователя',
-  owner:  'Ваше',
+  owner:  'Общее',
 };
 
 // Подпись «Сейчас пойдёт» под текстом секции: чьё значение применится в промпте.
@@ -54,7 +57,7 @@ const SRC_NOTE: Record<PromptSectionSource, string> = {
   code:   'Сейчас пойдёт: текст из кода (дефолт)',
   global: 'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
   user:   'Сейчас пойдёт: текст из слоя пользователя (выбранного администратором)',
-  owner:  'Сейчас пойдёт: ваш текст',
+  owner:  'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
 };
 
 // Цвет счётчика 1024: нейтральный → жёлтый (80%) → красный (95%). Те же пороги,
@@ -82,6 +85,7 @@ function SourceBadge({ src }: { src: PromptSectionSource }): React.ReactElement 
 }
 
 // Подзаголовок секции «Пресеты для роли» — единый для обоих режимов.
+// Скрывается, если родитель сам рисует SectionLabel снаружи блока (визитка роли).
 function SectionTitle({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
     <div style={{
@@ -104,11 +108,13 @@ function OverrideBadge({ isOverride }: { isOverride: boolean }): React.ReactElem
 }
 
 // === Карточка секции в режиме просмотра ===
+// Признака «своё/типовое» здесь нет: визитку роли видит любой пользователь, а слой
+// теперь один общий — «Свой текст» врал бы про чужие настройки. Всё нужное несёт
+// бейдж источника: «Из кода» либо «Общее».
 function PresetCardView({ meta, eff }: {
   meta: SpecialtyPromptSectionMeta;
   eff: EffectivePromptSection;
 }): React.ReactElement {
-  const isOverride = eff.textSource === 'owner' || eff.enabledSource === 'owner';
   return (
     <div style={{
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
@@ -122,8 +128,7 @@ function PresetCardView({ meta, eff }: {
           fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700,
           color: C.textHeading,
         }}>{meta.label}</span>
-        <OverrideBadge isOverride={isOverride} />
-        <SourceBadge src={isOverride ? 'owner' : eff.enabledSource} />
+        <SourceBadge src={eff.enabledSource} />
       </div>
       <div style={{
         fontSize: FS.sm, color: C.textPrimary, lineHeight: 1.5,
@@ -131,7 +136,7 @@ function PresetCardView({ meta, eff }: {
       }}>{eff.text || '—'}</div>
       <div style={{
         fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, marginTop: 2,
-      }}>{SRC_NOTE[isOverride ? 'owner' : eff.textSource]}</div>
+      }}>{SRC_NOTE[eff.textSource]}</div>
     </div>
   );
 }
@@ -248,10 +253,13 @@ export interface RolePresetsBlockProps {
   // Только для edit: запись слоя через редьюсер. Тип совпадает с контрактом
   // saveLayer в lib/presets.ts (см. SpecialtyEditView.ModelsSection).
   onSave?: (reducer: LayerReducer) => Promise<void>;
+  // Не рисовать собственный SectionTitle — родитель сам вешает SectionLabel
+  // снаружи блока (визитка роли, плоские секции без белых коробок).
+  showTitle?: boolean;
 }
 
 export function RolePresetsBlock({
-  roleKey, catalog, editLayer, globalLayer, userLayer, mode, onSave,
+  roleKey, catalog, editLayer, globalLayer, userLayer, mode, onSave, showTitle = true,
 }: RolePresetsBlockProps): React.ReactElement {
   const isMobile = useIsMobile();
   const isView = mode === 'view';
@@ -320,7 +328,7 @@ export function RolePresetsBlock({
     if (enabledCount === 0) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-          <SectionTitle>Пресеты для роли</SectionTitle>
+          {showTitle && <SectionTitle>Пресеты для роли</SectionTitle>}
           <div style={{
             fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5,
           }}>

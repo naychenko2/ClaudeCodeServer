@@ -7,11 +7,11 @@ import { ListDateDivider } from '../ListDateDivider'
 import { ICON_STROKE } from '../ui/icons'
 import { statusColor } from '../preview/PreviewView'
 import { AddServiceDialog } from '../preview/AddServiceDialog'
-import { ExternalAccessDialog } from '../preview/ExternalAccessDialog'
 import { useExternalPreviewLinks } from '../../hooks/useExternalPreviewLinks'
 import { api } from '../../lib/api'
+import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
 import type * as ts from '../../lib/terminalSignalr'
-import type { ProjectService, ExternalLinkIssued } from '../../types'
+import type { ProjectService } from '../../types'
 
 type ToolsTab = 'terminal' | 'preview'
 
@@ -200,18 +200,34 @@ export function PreviewServiceList({
   // Ссылки внешнего доступа: список сквозной по проектам владельца, поэтому живёт здесь,
   // а не в состоянии проекта
   const { enabled: extEnabled, links: extLinks, refresh: refreshLinks, revoke, revokeAll } = useExternalPreviewLinks()
-  const [issued, setIssued] = useState<{ result: ExternalLinkIssued; serviceName: string } | null>(null)
   const [shareError, setShareError] = useState<string | null>(null)
+  const [shareNote, setShareNote] = useState<string | null>(null)
   // Открытые ссылки ЭТОГО проекта — по ним у строк появляется значок и «закрыть»
   const sharedHere = new Map(extLinks.filter(l => l.projectId === projectId).map(l => [l.serviceId, l.jti]))
 
   const share = useCallback(async (svc: ProjectService) => {
     setShareError(null)
+    setShareNote(null)
+    // Вкладку открываем СРАЗУ по клику, пустой: после await браузер считает открытие
+    // непрошеным и режет его блокировщиком попапов
+    const tab = window.open('about:blank', '_blank')
     try {
       const r = await api.projects.previewExternalLink(projectId, svc.id)
-      setIssued({ result: r, serviceName: svc.name })
+      // Адрес нужен центральной панели — сервер его не помнит, повторно не выдать
+      saveExternalUrl(projectId, svc.id, r.url)
+      if (tab) {
+        tab.opener = null
+        tab.location.href = r.url
+      }
+      // Ссылку кладём в буфер молча: показать её второй раз негде — токен живёт в самой
+      // ссылке и на сервере не хранится, а на телефон её как-то передать надо
+      void navigator.clipboard?.writeText(r.url).catch(() => { /* буфер запрещён — не беда */ })
+      if (r.evicted.length > 0) {
+        setShareNote('Открытых ссылок стало слишком много — самая старая закрыта.')
+      }
       void refreshLinks()
     } catch (e) {
+      tab?.close()
       setShareError(e instanceof Error ? e.message : 'Не удалось открыть доступ')
     }
   }, [projectId, refreshLinks])
@@ -246,7 +262,7 @@ export function PreviewServiceList({
             <span style={{ flex: 1, fontSize: FS.xs, fontWeight: 600, color: C.warningText }}>
               Открыто наружу
             </span>
-            <Button size="xs" variant="ghost" onClick={() => void revokeAll()}>Закрыть все</Button>
+            <Button size="xs" variant="ghost" onClick={() => { clearAllExternalUrls(); void revokeAll() }}>Закрыть все</Button>
           </div>
           {extLinks.map(l => (
             <div key={l.jti} style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: '2px 0' }}>
@@ -259,7 +275,7 @@ export function PreviewServiceList({
                   <span style={{ color: C.textMuted }}> — {l.projectName ?? 'другой проект'}</span>
                 )}
               </span>
-              <IconButton size="xs" variant="soft" onClick={() => void revoke(l.jti)} title="Закрыть доступ">
+              <IconButton size="xs" variant="soft" onClick={() => { clearExternalUrl(l.projectId, l.serviceId); void revoke(l.jti) }} title="Закрыть доступ">
                 <X size={10} />
               </IconButton>
             </div>
@@ -356,7 +372,12 @@ export function PreviewServiceList({
                 onSelect={() => onSelectPreview(svc.id)}
                 shared={sharedHere.has(svc.id)}
                 onShare={extEnabled ? () => void share(svc) : undefined}
-                onUnshare={() => { const jti = sharedHere.get(svc.id); if (jti) void revoke(jti) }}
+                onUnshare={() => {
+                  const jti = sharedHere.get(svc.id)
+                  if (!jti) return
+                  clearExternalUrl(projectId, svc.id)
+                  void revoke(jti)
+                }}
               />
             ))}
           </div>
@@ -372,12 +393,13 @@ export function PreviewServiceList({
         </div>
       )}
 
-      {issued && (
-        <ExternalAccessDialog
-          result={issued.result}
-          serviceName={issued.serviceName}
-          onClose={() => setIssued(null)}
-        />
+      {shareNote && (
+        <div style={{
+          marginBottom: SP.sm, padding: SP.sm, borderRadius: R.sm,
+          background: C.warningBg, color: C.warningText, fontSize: FS.xs, lineHeight: 1.4,
+        }}>
+          {shareNote}
+        </div>
       )}
 
       {adding && (

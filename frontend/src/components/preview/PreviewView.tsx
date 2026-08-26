@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCcw, Square, Monitor, ExternalLink, ScrollText, X } from 'lucide-react'
+import { RotateCcw, Square, Monitor, ExternalLink, ScrollText, X, Globe } from 'lucide-react'
 import { C, FONT } from '../../lib/design'
 import { IconButton, Button, PillSwitch } from '../ui'
 import { PreviewLogView, type LogSource } from './PreviewLogView'
 import type { ProjectService } from '../../types'
+import { getExternalUrl } from '../../lib/externalPreviewUrls'
 
 interface Props {
   service: ProjectService
@@ -58,8 +59,13 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
     ? live.map(s => ({ id: s.id, name: s.name }))
     : own
 
-  if (started || external) ensurePreviewCookie()
-  const previewUrl = started || external ? `/preview/${projectId}/` : null
+  // Открыт доступ снаружи — показываем ИМЕННО его: там сайт живёт в корне, и всё, что
+  // ссылается на «/» (ассеты, чанки Module Federation), наконец грузится. Через префикс
+  // /preview/{id}/ такие сайты разъезжаются, и панель для них бесполезна.
+  const externalUrl = getExternalUrl(projectId, service.id)
+  // Кука cc_preview нужна только своему прокси; у поддомена своя, её ставит /__preview-auth
+  if (!externalUrl && (started || external)) ensurePreviewCookie()
+  const previewUrl = externalUrl ?? (started || external ? `/preview/${projectId}/` : null)
   const port = service.runningPort ?? service.suggestedPort
 
   return (
@@ -81,6 +87,15 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
         )}
         {external && (
           <span style={{ fontSize: 12, color: C.info }}>запущен снаружи</span>
+        )}
+        {/* Панель показывает не свой прокси, а поддомен — об этом надо сказать прямо:
+            иначе непонятно, почему «localhost:порт» выше и открытый наружу сайт ниже */}
+        {externalUrl && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: C.warning }}
+                title="Страница открыта через внешний доступ (поддомен)">
+            <Globe size={12} />
+            доступ снаружи
+          </span>
         )}
         <div style={{ flex: 1 }} />
         {hasLogs && (
@@ -108,7 +123,14 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
         )}
         {previewUrl && activeTab === 'preview' && (
           <>
-            <IconButton size="xs" variant="soft" onClick={() => iframeRef.current?.contentWindow?.location.reload()} title="Обновить">
+            <IconButton size="xs" variant="soft" onClick={() => {
+              const frame = iframeRef.current
+              if (!frame) return
+              // У поддомена другой origin: contentWindow.location браузер трогать запретит,
+              // поэтому перезагружаем присваиванием src
+              if (externalUrl) frame.src = frame.src
+              else frame.contentWindow?.location.reload()
+            }} title="Обновить">
               <RotateCcw size={13} />
             </IconButton>
             <IconButton size="xs" variant="soft" onClick={() => window.open(previewUrl, '_blank', 'noopener')} title="Открыть в новой вкладке">

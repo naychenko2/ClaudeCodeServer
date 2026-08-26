@@ -357,6 +357,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
 // иначе уносит с собой всю серию прогонов, по которой и ведётся разбор обрывов
 builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog.Create(
     sp.GetRequiredService<IConfiguration>()));
+// Паспорта ходов: чем кончился каждый ход и какой ценой. Тот же приём, что у сабагентов —
+// память для API, диск для разбора «что ломалось за сутки» после рестарта инстанса
+builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.TurnRunLog.Create(
+    sp.GetRequiredService<IConfiguration>()));
+// Жив ли исходящий прокси (HTTP(S)_PROXY): отличает отказ канала наружу от отказа
+// эндпоинта вендора — при первом смена модели не лечит ничего
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IEgressProbe,
+    ClaudeHomeServer.Services.Llm.EgressProbe>();
 // Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();

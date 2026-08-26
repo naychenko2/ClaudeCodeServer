@@ -168,7 +168,9 @@ public class FallbackLlmSessionAdapterTests
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
         Action<string>? orchestrationDone = null,
         Func<string>? contextSource = null,
-        ILogger? log = null)
+        ILogger? log = null,
+        IEgressProbe? egress = null,
+        TurnRunLog? turnRuns = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -199,7 +201,11 @@ public class FallbackLlmSessionAdapterTests
             lastContextTokens: lastContextTokens,
             enqueueBypass: enqueueBypass,
             orchestrationDone: orchestrationDone,
-            contextSource: contextSource);
+            contextSource: contextSource,
+            egress: egress,
+            turnRuns: turnRuns,
+            // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
+            egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }

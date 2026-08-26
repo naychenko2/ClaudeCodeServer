@@ -68,6 +68,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Раскрытая свайпом карточка (мобильная раскладка) — как в глобальном ChatList:
+  // одна максимум, закрывается скроллом/открытием другой
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
@@ -398,6 +401,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
         onEdited={handleSessionUpdated}
+        swipeOpen={openSwipeId === s.id}
+        onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
       />
     );
     // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
@@ -485,7 +490,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           верхний padding у него есть, и вместе с общим набегало 18px пустоты под
           шапкой. Без группировки список начинается сразу карточкой — ей нужен
           обычный отступ, иначе она липнет к заголовку. */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+      <div
+        // Скролл закрывает раскрытую свайпом карточку (механика ChatList)
+        onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
+        style={{ flex: 1, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
         {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт

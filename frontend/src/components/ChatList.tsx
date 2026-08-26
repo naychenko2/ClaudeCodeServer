@@ -51,6 +51,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Раскрытая свайпом карточка (мобильная раскладка): максимум одна; открытие
+  // другой закрывает предыдущую. null — все закрыты
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
 
   // === Фильтры и оси списка чатов ===
   // Фильтры + оси вида (groupBy/sortOrder/hierarchy) — единый state, персистится
@@ -154,12 +157,14 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       online={online}
       hovered={hoveredId === chat.id}
       workflowRunning={workflowRunningFor === chat.id}
-      onSelect={() => onSelect(chat)}
+      onSelect={() => { setOpenSwipeId(null); onSelect(chat); }}
       onHover={h => setHoveredId(h ? chat.id : null)}
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
+      swipeOpen={openSwipeId === chat.id}
+      onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}
     />
   );
 
@@ -289,7 +294,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     // верхний padding у него есть, и вместе с общим набегало 18px пустоты под
     // шапкой. Без группировки список начинается сразу карточкой — ей нужен
     // обычный отступ, иначе она липнет к заголовку.
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+    <div
+      // Скролл списка закрывает раскрытую свайпом карточку: жест и прокрутка —
+      // разные намерения, держать раскрытие во время прокрутки мешает обзору
+      onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
+      style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
       {listContent}
     </div>
   );

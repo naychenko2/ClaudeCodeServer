@@ -1,11 +1,13 @@
-import { useState, useRef, useEffect, type CSSProperties } from 'react';
-import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, Hourglass, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
+import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning } from '../lib/agentsPresence';
+import { useActionVisibility } from '../hooks/useActionVisibility';
+import { CHAT_ACTION_ORDER, CHAT_ACTION_LABELS, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
@@ -148,6 +150,13 @@ interface Props {
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
   // абсолютно и на месте остаются.
   leadingInset?: number;
+  // === Свайп-действия (мобильная раскладка) ===
+  // Эта карточка раскрыта свайпом (список держит ОДНУ раскрытую — открытие другой
+  // закрывает предыдущую). Не задан/undefined — свайп-механика выключена
+  swipeOpen?: boolean;
+  // Смена раскрытия: true — карточку раскрыли жестом, false — закрыли (тап мимо
+  // кнопок, открытие другой карточки, скролл списка)
+  onSwipeToggle?: (open: boolean) => void;
 }
 
 /**
@@ -161,7 +170,7 @@ export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
-  onEdited, leadingInset = 0,
+  onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -185,6 +194,8 @@ export function ChatCard({
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
 
+  // Быстрые действия карточки объявлены ниже — им нужны canRename/canMute/canEditChat
+
   // Long-press на мобиле открывает меню действий карточки — аналог кнопки «⋮»,
   // который на тач-экране виден только у активного чата. Долгий тап работает на
   // любой карточке, не выбирая её: флаг longPressFired гасит клик, чтобы menu
@@ -192,11 +203,38 @@ export function ChatCard({
   const lpTimer = useRef<number | null>(null);
   const lpFired = useRef(false);
   const lpStart = useRef<{ x: number; y: number } | null>(null);
+
+  // === Свайп-действия (мобильная раскладка) ===
+  // Свайп влево тянет карточку вслед за пальцем, под ней открываются три кнопки
+  // (закрепить/теги/удалить). Ось фиксируется на первых SWIPE_AXIS px: горизонталь
+  // забирает свайп (long-press гасится немедленно), вертикаль отдаётся скроллу
+  // списка — preventDefault по вертикали не зовём никогда.
+  // Текущий сдвиг: 0 = закрыто, отрицательное = влево. Стейт живёт только на время
+  // жеста; «раскрытое» состояние держит родитель (swipeOpen), мы лишь анимируем к нему
+  const SWIPE_AXIS = 10;        // px от старта, на которых решается ось жеста
+  // Ширина зоны кнопок = число видимых быстрых действий × 44px (тач-цель); она же
+  // вылет раскрытия. Считается по факту: пользователь сам решает, сколько их
+  const SWIPE_BTN_W = 44;
+  // editing объявлен ниже; его состояние важно только в момент жеста, поэтому в
+  // гейт здесь не включаем (beginLongPress уже проверяет editing на месте)
+  const swipeCanWork = isMobile && online && !!onSwipeToggle;
+  const [swipeDx, setSwipeDx] = useState(0);
+  const swipeActive = useRef(false);   // ось зафиксирована как горизонталь
+  const swipeStartX = useRef(0);
+  // Свайп стартует только из закрытого состояния: из раскрытого тап по карточке
+  // закрывает её (см. onClick), встречный свайп вправо не делаем (упрощение плана)
+  const swipeBase = useRef(0);         // трансформ-база на старте жеста (всегда 0)
+  const swipeMoved = useRef(false);    // был ли горизонтальный сдвиг — глушит клик
+
   const beginLongPress = (e: React.TouchEvent) => {
-    if (!isMobile || !online || editing) return;
+    if (!isMobile || !online || editing) return;   // editing здесь уже объявлен ниже по коду, но вызов идёт по событию — безопасно
     const t = e.touches[0];
     lpStart.current = { x: t.clientX, y: t.clientY };
     lpFired.current = false;
+    swipeActive.current = false;
+    swipeMoved.current = false;
+    swipeStartX.current = t.clientX;
+    if (swipeCanWork && !swipeOpen) swipeBase.current = 0;
     lpTimer.current = window.setTimeout(() => {
       lpFired.current = true;
       // Якорь — правый край карточки, там же где «⋮»: меню встанет как от кнопки
@@ -210,7 +248,35 @@ export function ChatCard({
   const onTpMove = (e: React.TouchEvent) => {
     if (!lpStart.current) return;
     const t = e.touches[0];
-    if (Math.abs(t.clientX - lpStart.current.x) > 10 || Math.abs(t.clientY - lpStart.current.y) > 10) killLongPress();
+    const dx = t.clientX - lpStart.current.x;
+    const dy = t.clientY - lpStart.current.y;
+    // Ось ещё не решена: гасим long-press при любом движении >10px (как раньше),
+    // а для свайпа дополнительно требуем преобладание горизонтали
+    if (!swipeActive.current) {
+      if (Math.abs(dx) > SWIPE_AXIS || Math.abs(dy) > SWIPE_AXIS) {
+        killLongPress();
+        if (swipeCanWork && Math.abs(dx) > dy && dx < 0) {
+          // Горизонтальный свайп влево: перехват жеста у скролла
+          swipeActive.current = true;
+          swipeMoved.current = true;
+        }
+      }
+      return;
+    }
+    // Горизонталь зафиксирована: карточка следует за пальцем (только влево,
+    // вправо от базы не тянет — раскрытие закрывается тапом, а не обратным жестом)
+    const next = Math.max(-swipeOpenW, Math.min(0, swipeBase.current + dx));
+    setSwipeDx(next);
+  };
+  const onSwipeEnd = () => {
+    killLongPress();
+    if (swipeActive.current) {
+      // Дальше половины вылета — считаем открытым, иначе пружинка назад
+      const opened = swipeDx <= -swipeOpenW / 2;
+      setSwipeDx(0);
+      if (opened) onSwipeToggle?.(true);
+      swipeActive.current = false;
+    }
   };
   // Выбор срока хранения — второе меню по тому же якорю (приём пункта «Теги»):
   // пикер сроков не пункт списка, поэтому живёт в своём поповере
@@ -227,6 +293,89 @@ export function ChatCard({
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
   // s.name не изменила бы ни строчки на экране
   const canRename = !!onRename && !taskChat;
+
+  // Быстрые действия карточки (hover-кластер на desktop, кнопки свайпа на мобиле).
+  // Набор — общий каталог действий чата (тот же, что в шапке открытого чата); какие
+  // из них стоят кнопками рядом с «⋮», решает пользователь глазиком в меню.
+  // Скрыто всё — кластера нет вовсе, но каждое действие доступно из самого меню
+  const cardVis = useActionVisibility('chat-card', CARD_ACTIONS_HIDDEN_BY_DEFAULT);
+  // Доступность действия в ЭТОМ списке: нет колбэка (или контекста) — действия нет
+  // ни кнопкой, ни строкой меню. Порядок — канонический из каталога
+  const cardActionAvailable: Record<ChatActionKey, boolean> = {
+    rename: canRename,
+    pin: !!onTogglePin,
+    tags: !!onAssignTags,
+    wall: !!onAddToWall,
+    notify: canMute,
+    dossier: canEditChat && !!s.projectId,
+    expiry: canEditChat,
+    delete: true,
+  };
+  const cardActions = CHAT_ACTION_ORDER.filter(k => cardActionAvailable[k]);
+  const quickActions = cardActions.filter(k => cardVis.isVisible(k));
+  // Вылет свайпа = сколько кнопок реально показано (кнопки по 44px — тач-цель)
+  const swipeOpenW = quickActions.length * SWIPE_BTN_W;
+  // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
+  // (hover-кластер на десктопе, свайп на мобиле), и переключает это по клику.
+  // Меню при этом не закрывается — набор выставляется одним заходом
+  const visAction = (key: ChatActionKey) => ({
+    icon: cardVis.isVisible(key)
+      ? <Eye size={14} strokeWidth={2} />
+      : <EyeOff size={14} strokeWidth={2} />,
+    title: cardVis.isVisible(key)
+      ? `${CHAT_ACTION_LABELS[key]} — убрать из быстрых кнопок`
+      : `${CHAT_ACTION_LABELS[key]} — сделать быстрой кнопкой`,
+    onClick: () => cardVis.toggle(key),
+  });
+  // Описание быстрой кнопки по ключу — одна таблица на hover-кластер и свайп-зону,
+  // чтобы жест и наведение всегда делали ровно одно и то же. Клики гасят всплытие:
+  // иначе любое действие заодно открывало бы чат (onClick карточки)
+  const quickButton = (key: ChatActionKey): {
+    icon: ReactNode; title: string; danger?: boolean; active?: boolean;
+    onClick: (e: React.MouseEvent<Element>) => void;
+  } => {
+    switch (key) {
+      case 'rename': return {
+        icon: <Pencil size={14} strokeWidth={2} />, title: 'Переименовать',
+        onClick: e => { e.stopPropagation(); startRename(); },
+      };
+      case 'pin': return {
+        icon: <Pin size={14} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />,
+        title: s.isPinned ? 'Открепить' : 'Закрепить', active: s.isPinned,
+        onClick: e => { e.stopPropagation(); onTogglePin?.(); },
+      };
+      case 'tags': return {
+        icon: <Tags size={14} strokeWidth={2} />, title: 'Теги',
+        onClick: e => { e.stopPropagation(); onAssignTags?.((e.currentTarget as HTMLElement).getBoundingClientRect()); },
+      };
+      case 'wall': return {
+        icon: <Columns3 size={14} strokeWidth={2} />, title: 'На стену',
+        onClick: e => { e.stopPropagation(); onAddToWall?.(); },
+      };
+      case 'notify': return {
+        icon: notifyOn ? <Bell size={14} strokeWidth={2} /> : <BellOff size={14} strokeWidth={2} />,
+        title: notifyOn ? 'Заглушить' : 'Включить уведомления', active: notifyOn,
+        onClick: e => { e.stopPropagation(); void toggleNotify(); },
+      };
+      case 'dossier': return {
+        icon: <History size={14} strokeWidth={2} />,
+        title: s.excludeFromDossiers ? 'Решения не сохраняются' : 'Решения сохраняются',
+        active: !!s.excludeFromDossiers,
+        onClick: e => { e.stopPropagation(); void toggleDossier(); },
+      };
+      case 'expiry': return {
+        icon: <Hourglass size={14} strokeWidth={2} />,
+        title: s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения',
+        active: s.expiresAfterMinutes != null,
+        onClick: e => { e.stopPropagation(); setExpiryMenu((e.currentTarget as HTMLElement).getBoundingClientRect()); },
+      };
+      case 'delete': return {
+        icon: <Trash2 size={14} strokeWidth={2} />, title: 'Удалить', danger: true,
+        onClick: e => { e.stopPropagation(); onDelete(); },
+      };
+    }
+  };
+
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
@@ -265,6 +414,16 @@ export function ChatCard({
 
   // Заглушить/включить уведомления по чату. Включение может дёрнуть запрос разрешения
   // браузера — поэтому идёт прямо из обработчика клика, без промежуточных эффектов
+  // Opt-out «не сохранять решения из этого чата» (ADR-004 §6) — тот же тумблер, что
+  // в шапке открытого чата. Только у проектных чатов: у чата вне проекта досье нет
+  const toggleDossier = async () => {
+    try {
+      onEdited?.(await updateChatFields(s, { excludeFromDossiers: !s.excludeFromDossiers }));
+    } catch {
+      showToast('История решений', 'Не удалось изменить настройку чата', 'info');
+    }
+  };
+
   const toggleNotify = async () => {
     try {
       const res = await setChatNotifyEnabled(s, !notifyOn);
@@ -351,48 +510,109 @@ export function ChatCard({
 
   return (
     <div
-      onClick={() => { if (lpFired.current) { lpFired.current = false; return; } onSelect(); }}
+      onClick={() => {
+        // Свайп-жест прошёл (даже без открытия) — клик не открывает чат
+        if (swipeMoved.current) { swipeMoved.current = false; return; }
+        if (lpFired.current) { lpFired.current = false; return; }
+        // Раскрытая свайпом карточка: тап закрывает раскрытие, а не открывает чат
+        if (swipeOpen) { onSwipeToggle?.(false); return; }
+        onSelect();
+      }}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
+      // Правый клик — меню действий прямо у курсора (desktop): тот же состав, что у
+      // «⋮» и long-press, без прицеливания в мелкую кнопку. Якорь — точка курсора
+      // (zero-size rect), ui/Menu в anchor-режиме раскроется под ней
+      onContextMenu={online && !editing ? e => {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenu(new DOMRect(e.clientX, e.clientY, 0, 0));
+      } : undefined}
       onTouchStart={beginLongPress}
       onTouchMove={onTpMove}
-      onTouchEnd={killLongPress}
-      onTouchCancel={killLongPress}
-      // cc-card-press — прожатие под нажатием (index.css). В режиме правки названия
-      // его нет: там внутри поле ввода, и вдавливать карточку при постановке
-      // курсора незачем
-      className={'cc-card-shadow' + (editing ? '' : ' cc-card-press') + glowClass + unreadClass}
+      onTouchEnd={onSwipeEnd}
+      onTouchCancel={onSwipeEnd}
+      // Обёртка свайп-бутерброда: держит отступ списка, срезает уголки кнопок под
+      // карточкой её же скруглением. Вся визуальная карточка (фон/бордер/тень/glow)
+      // — на внутреннем слое, который и уезжает влево при свайпе
       style={{
         position: 'relative',
-        // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left
-        paddingTop: padV,
-        paddingBottom: padV,
-        paddingRight: isMobile ? 16 : 12,
-        // Отступ слева одинаковый в любом состоянии: акцентная полоса активного чата
-        // лежит absolute поверх карточки и всего 4px шириной, а текст начинается с
-        // 12/16px — наехать она не может. Прежняя прибавка «под полосу» только толкала
-        // название и превью вправо в момент выделения.
-        // leadingInset — отступ под контрол ветки в дереве чатов
-        paddingLeft: (isMobile ? 16 : 12) + leadingInset,
-        borderRadius: isMobile ? 16 : R.xl,
         marginBottom: 5,
-        cursor: 'pointer',
+        borderRadius: isMobile ? 16 : R.xl,
         overflow: 'hidden',
-        background: cardBg,
-        border: '1px solid ' + (isActive ? accent : C.borderLight),
-        // box-shadow задаётся классом cc-card-shadow; цвет и сила ауры — переменными
-        // (statusVars), их читают и steady box-shadow, и слой-аура в обёртке
-        '--cc-card-shadow': isActive ? SHADOW.button : SHADOW.card,
-        ...statusVars,
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        gap: 3,
-        // единая высота карточек в списке: короткий чат не выше длинного
-        minHeight,
-        boxSizing: 'border-box',
-      } as CSSProperties}
+        cursor: 'pointer',
+      }}
     >
+      {/* Кнопки свайпа (мобила): под карточкой у правого края, видны, когда карточка
+          уехала. Высота — вся карточка, ширина — вылет раскрытия */}
+      {swipeCanWork && quickActions.length > 0 && (
+        <div style={{
+          position: 'absolute', top: 0, bottom: 0, right: 0, width: swipeOpenW,
+          display: 'flex', zIndex: 0,
+        }}>
+          {quickActions.map((k, i) => {
+            const b = quickButton(k);
+            return (
+              <button
+                key={k}
+                type="button"
+                // Раскрытие закрываем ПЕРЕД действием: пикер тегов/срока встаёт по rect
+                // кнопки, а сама кнопка уедет вместе с закрытием — rect берём заранее
+                onClick={e => { onSwipeToggle?.(false); b.onClick(e); }}
+                title={b.title}
+                style={{
+                  flex: 1, border: 'none', cursor: 'pointer', display: 'grid', placeItems: 'center',
+                  borderLeft: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
+                  background: b.danger ? C.dangerBg : b.active ? C.accentLight : C.bgWhite,
+                  color: b.danger ? C.danger : b.active ? C.accent : C.textSecondary,
+                }}
+              >
+                {b.icon}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Внутренний слой — сама карточка: уезжает влево при свайпе (раскрытие
+          держит swipeOpen родителя; во время жеста — swipeDx) */}
+      <div
+        // cc-card-press — прожатие под нажатием (index.css). В режиме правки названия
+        // его нет: там внутри поле ввода, и вдавливать карточку при постановке
+        // курсора незачем
+        className={'cc-card-shadow' + (editing ? '' : ' cc-card-press') + glowClass + unreadClass}
+        style={{
+          position: 'relative', zIndex: 1,
+          transform: swipeOpen ? `translateX(${-swipeOpenW}px)` : swipeDx ? `translateX(${swipeDx}px)` : undefined,
+          // Пружинка на отпускании/раскрытии; во время слежения за пальцем — без неё
+          transition: swipeActive.current ? 'none' : 'transform 0.18s ease',
+          // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left
+          paddingTop: padV,
+          paddingBottom: padV,
+          paddingRight: isMobile ? 16 : 12,
+          // Отступ слева одинаковый в любом состоянии: акцентная полоса активного чата
+          // лежит absolute поверх карточки и всего 4px шириной, а текст начинается с
+          // 12/16px — наехать она не может. Прежняя прибавка «под полосу» только толкала
+          // название и превью вправо в момент выделения.
+          // leadingInset — отступ под контрол ветки в дереве чатов
+          paddingLeft: (isMobile ? 16 : 12) + leadingInset,
+          borderRadius: isMobile ? 16 : R.xl,
+          cursor: 'pointer',
+          background: cardBg,
+          border: '1px solid ' + (isActive ? accent : C.borderLight),
+          // box-shadow задаётся классом cc-card-shadow; цвет и сила ауры — переменными
+          // (statusVars), их читают и steady box-shadow, и слой-аура в обёртке
+          '--cc-card-shadow': isActive ? SHADOW.button : SHADOW.card,
+          ...statusVars,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          gap: 3,
+          // единая высота карточек в списке: короткий чат не выше длинного
+          minHeight,
+          boxSizing: 'border-box',
+        } as CSSProperties}
+      >
       {/* Собеседник — в правом углу; в группе лицо даёт ведущая.
           Рисуется до акцентной полосы, иначе накрыла бы её собой */}
       {backdropPersona && (
@@ -552,14 +772,43 @@ export function ChatCard({
         )}
       </div>
 
-      {/* Действия — одной кнопкой «⋮» у правого края по центру высоты, место одно и
-          то же при любом составе карточки. Само меню открывается порталом по rect
-          кнопки (anchor-режим Menu): список чатов скроллится, и absolute-меню
-          обрезалось бы его overflow */}
+      {/* Действия по наведению (desktop): кластер быстрых кнопок Закр·Теги·Удл
+          ПОВЕРХ контента у правого края — место в layout не занимают, до «⋯» можно
+          не тянуться. Удаление — тот же onDelete, что в меню (с подтверждением
+          списка). Кнопки полупрозрачны (ghost), наведение на карточку проявляет их */}
+      {showActions && !isMobile && quickActions.length > 0 && (
+        <div className="cc-ghost-actions" style={{
+          position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+          right: ACTIONS_RIGHT, zIndex: 2, display: 'flex', alignItems: 'center',
+          background: cardBg, borderRadius: R.lg, boxShadow: SHADOW.card,
+        }}>
+          {quickActions.map(k => {
+            const b = quickButton(k);
+            return (
+              <IconButton
+                key={k}
+                onClick={b.onClick}
+                title={b.title}
+                size="xs"
+                tone={b.danger ? 'danger' : undefined}
+                active={b.active}
+                className={b.active ? 'cc-ghost-live' : undefined}
+              >
+                {b.icon}
+              </IconButton>
+            );
+          })}
+        </div>
+      )}
+      {/* Кнопка «⋮» — постоянное место действий чата (полный состав: переименовать,
+          на стену, мьют, срок + тумблеры «что показывать в кластере»). На мобиле
+          рисуется как раньше (у активного чата), на desktop — при наведении.
+          Отступ вправо считаем по ФАКТУ видимых кнопок кластера */}
       {showActions && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-          right: ACTIONS_RIGHT, zIndex: 1, display: 'flex',
+          right: isMobile ? ACTIONS_RIGHT : ACTIONS_RIGHT + quickActions.length * ACTION_BOX,
+          zIndex: 1, display: 'flex',
         }}>
           <IconButton
             onClick={e => {
@@ -575,17 +824,23 @@ export function ChatCard({
           </IconButton>
         </div>
       )}
+      {/* --- конец внутреннего слоя (уезжающего при свайпе); меню ниже живут в
+          обёртке, чтобы не смещаться вместе с карточкой --- */}
+      </div>
 
       {menu && !editing && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
           // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
-          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)
-            + (onAddToWall ? 1 : 0) + (canEditChat ? (canMute ? 2 : 1) : 0)) * 34 + 10}
+          // Высота меню решает, куда его раскрыть; в счёт входят и строки-тумблеры
+          // видимости быстрых кнопок (cardActions) с разделителем перед ними
+          // Меню = ровно доступные действия каталога, по строке на каждое
+          maxHeight={cardActions.length * 34 + 20}
           gap={4}>
           {canRename && (
             <MenuItem
               icon={<Pencil size={15} strokeWidth={2} />}
               label="Переименовать"
+              action={visAction('rename')}
               onClick={e => { e.stopPropagation(); setMenu(null); startRename(); }}
             />
           )}
@@ -593,6 +848,7 @@ export function ChatCard({
             <MenuItem
               icon={<Pin size={15} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />}
               label={s.isPinned ? 'Открепить' : 'Закрепить'}
+              action={visAction('pin')}
               onClick={e => { e.stopPropagation(); setMenu(null); onTogglePin(); }}
             />
           )}
@@ -600,6 +856,7 @@ export function ChatCard({
             <MenuItem
               icon={<Tags size={15} strokeWidth={2} />}
               label="Теги"
+              action={visAction('tags')}
               // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
               // исчезнет вместе с этим меню, и её rect брать будет неоткуда
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); onAssignTags(anchor); }}
@@ -609,6 +866,7 @@ export function ChatCard({
             <MenuItem
               icon={<Columns3 size={15} strokeWidth={2} />}
               label="На стену"
+              action={visAction('wall')}
               onClick={e => { e.stopPropagation(); setMenu(null); onAddToWall(); }}
             />
           )}
@@ -619,13 +877,25 @@ export function ChatCard({
             <MenuItem
               icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
               label={notifyOn ? 'Заглушить' : 'Уведомления'}
+              action={visAction('notify')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleNotify(); }}
+            />
+          )}
+          {/* Досье решений (ADR-004 §6) — тот же тумблер, что в шапке открытого чата;
+              только у проектных чатов: у чата вне проекта досье не ведётся */}
+          {canEditChat && !!s.projectId && (
+            <MenuItem
+              icon={<History size={15} strokeWidth={2} />}
+              label={s.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+              action={visAction('dossier')}
+              onClick={e => { e.stopPropagation(); setMenu(null); void toggleDossier(); }}
             />
           )}
           {canEditChat && (
             <MenuItem
               icon={<Hourglass size={15} strokeWidth={2} />}
               label={s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения'}
+              action={visAction('expiry')}
               // Пикер сроков открывается по тому же якорю, что и это меню: кнопка «⋮»
               // исчезнет вместе с ним, и её rect брать будет неоткуда (приём пункта «Теги»)
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); setExpiryMenu(anchor); }}
@@ -635,6 +905,7 @@ export function ChatCard({
             icon={<Trash2 size={15} strokeWidth={2} />}
             label="Удалить"
             danger
+            action={visAction('delete')}
             onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
           />
         </Menu>

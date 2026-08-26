@@ -111,7 +111,7 @@ export function MenuSep() {
 }
 
 // Единый пункт выпадающего меню.
-export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, action }: {
+export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, action, isMobile }: {
   icon?: ReactNode;
   label: ReactNode;
   onClick?: (e: MouseEvent) => void;
@@ -126,6 +126,10 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
   // пункта: <button> в <button> вложить нельзя, поэтому строка становится
   // flex-обёрткой, а подсветка наведения переезжает на неё.
   action?: { icon: ReactNode; title: string; onClick: () => void };
+  // Тач-раскладка: кнопка-спутник растёт до 40px. Меню карточки чата открывается
+  // long-press'ом, строка там 44 высотой, и 24-пиксельная цель вплотную к
+  // «Удалить» ловилась пальцем мимо (чек-лист гайда: тач-цель не меньше 40)
+  isMobile?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const color = disabled ? C.textMuted : (danger ? C.danger : C.textPrimary);
@@ -172,7 +176,7 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
       }}
     >
       {item}
-      <IconButton size="xs" title={action.title} onClick={e => { e.stopPropagation(); action.onClick(); }}>
+      <IconButton size={isMobile ? 'lg' : 'xs'} title={action.title} onClick={e => { e.stopPropagation(); action.onClick(); }}>
         {action.icon}
       </IconButton>
     </span>

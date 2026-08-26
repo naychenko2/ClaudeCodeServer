@@ -75,10 +75,13 @@ export function ToolbarOverflowMenu({
   // уходило за экран целиком (на мобиле беды нет — там боттом-шит). Считаем в
   // момент открытия по rect триггера: вверх, если снизу места меньше, чем сверху.
   const [drop, setDrop] = useState<{ up: boolean; maxH: number }>({ up: false, maxH: 0 });
-  // Якорь внешнего открытия (right-click): пока задан, десктоп-дропдаун рендерится
-  // fixed-порталом по точке курсора; закрытие меню сбрасывает якорь
-  const [extAnchor, setExtAnchor] = useState<DOMRect | null>(null);
+  // Якорь открытия: rect кнопки «⋯» либо точка курсора при внешнем открытии.
+  // Десктопное меню ВСЕГДА рисуется fixed-порталом по этому якорю, а не absolute
+  // от корня: тулбар живёт и в узких колонках (стена, боковые панели), где
+  // absolute-карточка шире контейнера обрезалась его overflow и уезжала за кромку.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const triggerElRef = useRef<HTMLElement | null>(null);
   const labelId = useId();
 
@@ -86,32 +89,37 @@ export function ToolbarOverflowMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
+      const t = e.target as Node;
+      // Карточка меню живёт ПОРТАЛОМ в body, то есть вне rootRef: без её проверки
+      // mousedown по пункту считался бы кликом «вне», меню закрывалось бы до
+      // события click, и само действие пункта не срабатывало бы вовсе
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
-    // close стабилен по составу (setOpen/setExtAnchor) — без него в зависимостях эффект
+    // close стабилен по составу (setOpen/setAnchor) — без него в зависимостях эффект
     // пересоздавался бы каждый рендер
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const close = () => { setOpen(false); setExtAnchor(null); };
+  const close = () => { setOpen(false); setAnchor(null); };
   // Расчёт направления дропдауна по rect якоря (кнопка «⋯» или точка курсора при
   // внешнем открытии) — общая часть toggle и openTrigger-эффекта
   const openNear = (anchorRect: DOMRect | null | undefined) => {
     const h = items ? items.length * ROW_H + (title ? TITLE_H : 0) + PAD_H : CHILDREN_H;
     // Внешний якорь приоритетнее rect корневого блока: right-click открывает меню
     // к точке курсора, а не под кнопкой «⋯»
-    const r = anchorRect ?? rootRef.current?.getBoundingClientRect();
+    const r = anchorRect ?? rootRef.current?.getBoundingClientRect() ?? null;
     if (r && !isMobile) {
       const below = window.innerHeight - r.bottom - GAP - EDGE;
       const above = r.top - GAP - EDGE;
       const up = h > below && above > below;
       setDrop({ up, maxH: Math.max(MIN_H, Math.floor(up ? above : below)) });
     }
-    setExtAnchor(anchorRect ?? null);
+    setAnchor(r);
     setOpen(true);
   };
   const toggle = () => {
@@ -186,16 +194,16 @@ export function ToolbarOverflowMenu({
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
       {trigger}
 
-      {open && !isMobile && !extAnchor && (
-        <div role="menu" aria-labelledby={title ? labelId : undefined} style={dropdownStyle(align, drop)}>
-          {title && <div id={labelId} style={sectionTitle}>{title}</div>}
-          {content}
-        </div>
-      )}
-      {/* Внешний якорь (right-click): fixed-портал в body по точке курсора —
-          absolute-дропдаун от корня не доехал бы до курсора на другом краю полосы */}
-      {open && !isMobile && extAnchor && createPortal(
-        <div role="menu" aria-labelledby={title ? labelId : undefined} style={fixedDropdownStyle(extAnchor, drop)}>
+      {/* Десктопное меню — всегда fixed-портал по якорю: карточка шире узкой
+          колонки (стена, боковые панели) обрезалась бы их overflow, а у правого
+          клика якорь вообще на другом краю полосы. Портал вне контекста наложения
+          зоны, поэтому и слой выше модалок — как в anchor-режиме ui/Menu */}
+      {open && !isMobile && anchor && createPortal(
+        <div
+          ref={menuRef}
+          role="menu" aria-labelledby={title ? labelId : undefined}
+          style={fixedDropdownStyle(anchor, drop, align)}
+        >
           {title && <div id={labelId} style={sectionTitle}>{title}</div>}
           {content}
         </div>,
@@ -279,6 +287,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
       <ToolbarIconButton
         onClick={e => { e.stopPropagation(); item.action!.onClick(); }}
         title={item.action.title}
+        isMobile={isMobile}
       >
         {item.action.icon}
       </ToolbarIconButton>
@@ -297,29 +306,27 @@ const CHILDREN_H = 320;
 const GAP = 6;
 const EDGE = 8;
 const MIN_H = 140;
-
-function dropdownStyle(align: 'left' | 'right', drop: { up: boolean; maxH: number }): CSSProperties {
-  return {
-    position: 'absolute',
-    ...(drop.up ? { bottom: `calc(100% + ${GAP}px)` } : { top: `calc(100% + ${GAP}px)` }),
-    left: align === 'left' ? 0 : undefined, right: align === 'right' ? 0 : undefined,
-    minWidth: 240, maxWidth: 320,
-    // Потолок по свободному месту: даже развёрнутое в нужную сторону длинное меню
-    // не должно вылезать за кромку — остаток прокручивается внутри
-    ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: 'auto' as const } : null),
-    background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
-    boxShadow: SHADOW.dropdown, padding: 6, zIndex: Z.dropdown,
-  };
-}
-// Fixed-дропдаун по внешнему якорю (right-click): координаты viewport-ные, портал в
-// body — расчёт направления (вверх/вниз) общий с absolute-режимом через openNear
-function fixedDropdownStyle(anchor: DOMRect, drop: { up: boolean; maxH: number }): CSSProperties {
-  const left = Math.max(EDGE, Math.min(anchor.left, window.innerWidth - 240 - EDGE));
+const MIN_W = 240;   // минимальная ширина карточки меню
+// Fixed-дропдаун по якорю (кнопка «⋯» либо точка курсора): координаты
+// viewport-ные, портал в body. Направление вверх/вниз посчитано в openNear,
+// здесь — привязка к нужной кромке якоря и кламп в окно.
+function fixedDropdownStyle(anchor: DOMRect, drop: { up: boolean; maxH: number }, align: 'left' | 'right'): CSSProperties {
+  // Ширина карточки заранее не известна (240..320 по содержимому), поэтому
+  // выравнивание вправо задаём через right — иначе пришлось бы угадывать ширину
+  const horizontal: CSSProperties = align === 'right'
+    ? { right: Math.max(EDGE, window.innerWidth - anchor.right) }
+    : { left: Math.max(EDGE, Math.min(anchor.left, window.innerWidth - MIN_W - EDGE)) };
   return {
     position: 'fixed',
-    top: anchor.bottom + GAP,
-    left,
-    minWidth: 240, maxWidth: 320,
+    // Вверх — от верхней кромки якоря, вниз — от нижней; в обоих случаях зазор GAP
+    ...(drop.up
+      ? { bottom: Math.max(EDGE, window.innerHeight - anchor.top + GAP) }
+      : { top: anchor.bottom + GAP }),
+    ...horizontal,
+    minWidth: MIN_W,
+    // Потолок ширины — по месту до кромки окна: в узкой колонке карточка не должна
+    // вылезать за экран, а расти ей есть куда только вправо/влево от якоря
+    maxWidth: Math.min(320, window.innerWidth - 2 * EDGE),
     ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: 'auto' as const } : null),
     background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
     boxShadow: SHADOW.dropdown, padding: 6,

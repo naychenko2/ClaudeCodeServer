@@ -133,7 +133,6 @@ interface Props {
   // Общие теги чата (имя + цвет из реестра) — строка чипов под названием
   tags?: { name: string; color?: string }[];
   // Снять тег с чата (hover-крестик на чипе; на тач удаление — через меню маркировки)
-  onRemoveTag?: (name: string) => void;
   // Открыть меню маркировки тегами (кнопка в действиях; якорь — rect кнопки для fixed-позиции)
   onAssignTags?: (anchor: DOMRect) => void;
   // Переименование чата прямо в карточке (пункт меню «Переименовать»). Не задан —
@@ -169,7 +168,7 @@ interface Props {
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp,
-  onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
+  onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
   onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
@@ -312,27 +311,41 @@ export function ChatCard({
     delete: true,
   };
   const cardActions = CHAT_ACTION_ORDER.filter(k => cardActionAvailable[k]);
-  const quickActions = cardActions.filter(k => cardVis.isVisible(k));
   // Вылет свайпа = сколько кнопок реально показано (кнопки по 44px — тач-цель)
   // Потолок — три кнопки, ОБЩИЙ для свайпа и hover-кластера: при восьми зона
   // заняла бы 352px, а нижний ориентир
   // экрана 360 CSS (Flip 8) — карточка уезжала бы целиком, оставляя под пальцем
   // ряд одинаковых иконок без имени и превью. Остальное достаётся из меню
   const MAX_QUICK_BTNS = 3;
+  const quickActions = cardActions.filter(k => cardVis.isVisible(k));
+  // Видимых сверх потолка — добираем по каноническому порядку и молча уводим в
+  // меню. Так честно и с сохранённой настройкой на 5+ кнопок (снял один — на
+  // её место встает следующий по порядку, а не «дырка» в середине)
+  const overLimitKeys = quickActions.slice(MAX_QUICK_BTNS).join(',');
   const quickButtons = quickActions.slice(0, MAX_QUICK_BTNS);
+  useEffect(() => { if (overLimitKeys) cardVis.hide(overLimitKeys.split(',')); }, [overLimitKeys]);
   const swipeOpenW = quickButtons.length * SWIPE_BTN_W;
   // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
   // (hover-кластер на десктопе, свайп на мобиле), и переключает это по клику.
-  // Меню при этом не закрывается — набор выставляется одним заходом
-  const visAction = (key: ChatActionKey) => ({
-    icon: cardVis.isVisible(key)
-      ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-    title: cardVis.isVisible(key)
-      ? 'Убрать в меню'
-      : 'Показывать кнопкой в ряду',
-    onClick: () => cardVis.toggle(key),
-  });
+  // Меню при этом не закрывается — набор выставляется одним заходом. Пока ряд
+  // полон (3 кнопки), включить четвёртую нельзя — глазик гаснет с подсказкой:
+  // место освобождают, убрав соседнюю кнопку
+  const visAction = (key: ChatActionKey) => {
+    const shown = cardVis.isVisible(key);
+    const blocked = !shown && quickButtons.length >= MAX_QUICK_BTNS;
+    return {
+      icon: shown
+        ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      title: shown
+        ? 'Убрать в меню'
+        : blocked
+          ? 'Ряд полон — сначала уберите другую кнопку'
+          : 'Показывать кнопкой в ряду',
+      disabled: blocked,
+      onClick: () => cardVis.toggle(key),
+    };
+  };
   // Описание быстрой кнопки по ключу — одна таблица на hover-кластер и свайп-зону,
   // чтобы жест и наведение всегда делали ровно одно и то же. Клики гасят всплытие:
   // иначе любое действие заодно открывало бы чат (onClick карточки)
@@ -747,13 +760,12 @@ export function ChatCard({
           )}
         </div>
 
-        {/* Строка общих тегов (макет chat-tags-switch): чипы под названием. Крестик
-            снятия — только там, где есть hover; на тач снятие идёт через меню маркировки */}
+        {/* Строка общих тегов (макет chat-tags-switch): чипы под названием. Снять тег
+            отсюда нельзя — только через меню маркировки: крестик ловил клики по плитке */}
         {tags && tags.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', minWidth: 0 }}>
             {tags.map(t => (
-              <TagChip key={t.name} name={t.name} color={t.color}
-                onRemove={onRemoveTag && CAN_HOVER ? () => onRemoveTag(t.name) : undefined} />
+              <TagChip key={t.name} name={t.name} color={t.color} />
             ))}
           </div>
         )}

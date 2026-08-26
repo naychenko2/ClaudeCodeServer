@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 // Видимость элементов в рядах действий (шапка чата, губа композера, плитка чата).
 // Кнопка «⋯» стоит в ряду ВСЕГДА, а пользователь сам решает, что показывать
@@ -11,6 +11,13 @@ import { useCallback, useState } from 'react';
 // Хранение — localStorage per-surface: настройка чисто локальная (у другого
 // устройства свои привычки и другая ширина экрана), та же природа, что у
 // cc_chat_view / cc_proj_board_*. Формат общий — JSON-массив строк.
+//
+// Поверхность в одном экране живёт во МНОГИХ экземплярах (каждая плитка списка
+// держит свой хук), а localStorage — один на всех. Нативный storage-евент
+// стреляет только в чужих вкладках, поэтому свои экземпляры оповещаем сами:
+// после записи диспатчим window-событие, и каждый подписчик перечитывает стор.
+// Без этого глазик в одной плитке менял ряд только в ней — соседние узнавали
+// о настройке после перезагрузки страницы.
 
 export type ActionSurface = 'chat-header' | 'chat-wall' | 'composer' | 'chat-card';
 
@@ -21,6 +28,8 @@ const KEYS: Record<ActionSurface, string> = {
   'composer': 'cc_composer_hidden',
   'chat-card': 'cc_chat_card_hidden',
 };
+
+const CHANGE_EVENT = 'cc-action-visibility-change';
 
 // null — настройки нет вовсе (в т.ч. когда localStorage недоступен): вызывающий
 // возьмёт дефолт. Массив — сохранённый набор, пустой в нём тоже значим («показать всё»)
@@ -50,13 +59,46 @@ export function useActionVisibility(surface: ActionSurface, defaultHidden: strin
   const toggle = useCallback((key: string) => {
     setHidden(prev => {
       const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
-      try { localStorage.setItem(KEYS[surface], JSON.stringify(next)); } catch { /* приватный режим — живём без сохранения */ }
+      try {
+        localStorage.setItem(KEYS[surface], JSON.stringify(next));
+        // Свои экземпляры той же поверхности (соседние плитки, колонки стены)
+        // перечитают стор по событию — см. подписку ниже
+        window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { surface } }));
+      } catch { /* приватный режим — живём без сохранения */ }
       return next;
     });
+  }, [surface]);
+
+  // Скрыть ключи разом (не переключая): нормализация сверхлимитного набора,
+  // считанного из старого localStorage. Идемпотентно
+  const hide = useCallback((keys: string[]) => {
+    if (keys.length === 0) return;
+    setHidden(prev => {
+      const next = [...prev, ...keys.filter(k => !prev.includes(k))];
+      try {
+        localStorage.setItem(KEYS[surface], JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { surface } }));
+      } catch { /* приватный режим — живём без сохранения */ }
+      return next;
+    });
+  }, [surface]);
+
+  // Чужая запись в стор (глазик в другой плитке) — перечитать и подхватить.
+  // Событие приходит после записи, так что readHidden вернёт свежий набор;
+  // null не бывает (запись только что сделали), на всякий случай — дефолт
+  const defaultRef = useRef(defaultHidden);
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      const detail = (e as CustomEvent<{ surface: ActionSurface }>).detail;
+      if (!detail || detail.surface !== surface) return;
+      setHidden(readHidden(surface) ?? defaultRef.current);
+    };
+    window.addEventListener(CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(CHANGE_EVENT, onChange);
   }, [surface]);
 
   const isHidden = useCallback((key: string) => hidden.includes(key), [hidden]);
   const isVisible = useCallback((key: string) => !hidden.includes(key), [hidden]);
 
-  return { hidden, toggle, isHidden, isVisible };
+  return { hidden, toggle, hide, isHidden, isVisible };
 }

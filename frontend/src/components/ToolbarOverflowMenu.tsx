@@ -35,7 +35,7 @@ export type OverflowItem = {
   // основное действие и НЕ закрывает меню — набор выставляется одним заходом.
   // Отдельной кнопкой, а не иконкой ВНУТРИ пункта: <button> в <button> вложить
   // нельзя, поэтому строка становится flex-обёрткой (тот же приём, что в ui/Menu)
-  action?: { icon: ReactNode; title: string; onClick: () => void };
+  action?: { icon: ReactNode; title: string; onClick: () => void; disabled?: boolean };
   // Клик по строке не закрывает меню. Нужен строкам-настройкам (пилюли шапки):
   // там основной клик и есть переключение видимости, и набор выставляется одним
   // заходом — как у строк-переключателей, но без второго контрола рядом с глазиком
@@ -360,8 +360,9 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
       >
         {row}
         <ToolbarIconButton
-          onClick={e => { e.stopPropagation(); item.action!.onClick(); }}
+          onClick={e => { e.stopPropagation(); if (!item.action!.disabled) item.action!.onClick(); }}
           title={item.action.title}
+          disabled={item.action.disabled}
           isMobile={isMobile}
         >
           {item.action.icon}

@@ -11,7 +11,6 @@ import { ChainStepsEditor } from '../../components/ChainStepsEditor';
 import {
   chainSummary, isPresetRoute, presetIdOf, presetRoute,
   presetValueLabel, usePresets, useSpecialtySettings, invalidateEffectiveLines,
-  loadUserLayer, getUserLayer,
 } from '../../lib/presets';
 import type { LayerReducer } from '../../lib/presets';
 import { api, type ModelTiers } from '../../lib/api';
@@ -19,7 +18,7 @@ import { cloneLayer, newPresetId } from '../../lib/specialties';
 import { loadModels, modelLabel, providerLabel, modelProvider, type ModelOption } from '../../lib/models';
 import { C, FS, R, SP } from '../../lib/design';
 import { showToast } from '../../lib/toast';
-import type { AppSettings, SpecialtySettingsLayer } from '../../types';
+import type { AppSettings } from '../../types';
 import { EffectiveLine } from '../../components/EffectiveLine';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
 
@@ -114,13 +113,9 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, models
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraft]);
 
-  // Каждая поверхность, разрешающая запись в user-слой (SlotCard через ChainEditor →
-  // commitSavePreset), сама отвечает за его загрузку: без этого base для правки
-  // user-scope пресета — settings.user (undefined либо устаревший слой другого user'а),
-  // и правка через PUT затрёт specialties/presets реального пользователя
-  useEffect(() => {
-    if (contextUserId) void loadUserLayer(contextUserId);
-  }, [contextUserId]);
+  // ADR-012 снял owner/user-слои специальностей: GET /specialties/settings/user/{id}
+  // на бэкенде больше нет, и прежняя подгрузка user-слоя давала 404 на каждый выбор
+  // пользователя в модалке. Пресеты живут только в общем слое — догружать нечего.
 
   // Сохранение слота: личный/пользовательский — через свои эндпоинты, общий — через /api/settings.
   function saveTier(t: TierKey, model: string) {
@@ -558,28 +553,19 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   // Самоссылка: шаг «уровень T» внутри пресета, разворачивающегося из этого же слота
   const selfRef = preset ? preset.steps.some(s => routeTier(s) === t) : false;
 
-  // Сохранить: записать обновлённые шаги в пресет (если он свой/админ правит общий)
-  const canSavePreset = preset != null && (preset.scope === 'owner' || isAdmin);
+  // Сохранить: записать обновлённые шаги в пресет. После ADR-012 пресеты живут только
+  // в общем слое, писать в него может лишь админ — личных цепочек больше нет.
+  const canSavePreset = preset != null && isAdmin;
   // Правка общей цепочки админом — с подтверждением: изменение увидят все пользователи
   const [confirmSharedEdit, setConfirmSharedEdit] = useState(false);
   // Собственно запись шагов в слой — вынесено, чтобы диалог подтверждения мог его вызвать
   const commitSavePreset = () => {
     if (!preset) return;
     if (draft.length === 0) return; // пустую цепочку бэкенд отклонит
-    const scope = preset.scope;
-    // user-слой берём из модульного стора userLayers (эффект в SlotsTab грузит его
-    // по contextUserId), не из settings.user — иначе правка чужого слоя поверх
-    // устаревшего/пустого шаблона затирает specialties/presets реального пользователя.
-    const baseLayer: SpecialtySettingsLayer | null = scope === 'user'
-      ? (contextUserId ? getUserLayer(contextUserId) : null)
-      : settings?.[scope] ?? null;
-    // baseLayer === null для user-scope: либо contextUserId не задан, либо слой ещё не
-    // доехал. Тихо молчать нельзя — пользователь бы не понял, почему «Сохранить» не
-    // работает; пусть банер из onSaveLayer (или уже показанная ошибка) объяснит.
-    if (!baseLayer) return;
+    if (!settings?.global) return;
     // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
     // только чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
-    void onSaveLayer(scope, (cur) => {
+    void onSaveLayer('global', (cur) => {
       const next = cloneLayer(cur);
       const p = next.presets.find(x => x.id === preset.id);
       if (p) p.steps = draft;
@@ -589,12 +575,8 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   const savePreset = () => {
     if (!preset || !dirty || !canSavePreset) return;
     if (draft.length === 0) return;
-    // Админ и общая цепочка — сначала диалог «Сохранить для всех», иначе сразу запись
-    if (isAdmin && preset.scope === 'global') {
-      setConfirmSharedEdit(true);
-      return;
-    }
-    commitSavePreset();
+    // Цепочка общая всегда — сначала диалог «Сохранить для всех», потом запись
+    setConfirmSharedEdit(true);
   };
 
   // Сохранить как пресет: новый пресет из черновика + перепривязка слота на него. Слой —
@@ -603,13 +585,12 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   // общем слоте, ни тем более в слоте другого пользователя (MAJOR 2, ревью d23231bd)
   const saveAsPreset = () => {
     if (!settings || draft.length === 0) return;
-    const targetScope: 'global' | 'owner' | 'user' = isAdmin ? 'global' : 'owner';
     const copy = { id: newPresetId(), name: `${preset?.name ?? 'Цепочка'} (копия)`,
       description: preset?.description ?? null, steps: draft };
     // Перепривязка слота — только после записи слоя. Иначе PUT тира уходит параллельно и,
     // в отличие от мест, ссылку на пресет не валидирует вовсе: упавшая запись слоя оставила
     // бы слот указывающим на несуществующий пресет — молча, у всех (MAJOR 1, ревью 03607845)
-    void onSaveLayer(targetScope, (cur) => {
+    void onSaveLayer('global', (cur) => {
       const next = cloneLayer(cur);
       next.presets.push(copy);
       return next;
@@ -673,11 +654,10 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           tierModels={tierModels}
           ollamaModel={ollamaModel}
           showPresets
-          // 'global' у админа (и для общего слота, и для чужого контекста пользователя) —
-          // личный пресет админа не годится ни туда: свой слот у остальных пользователей
-          // читает Global.Presets, а чужой личный слот резолвится в ЕГО owner-пресетах,
-          // где созданного админом пресета тоже нет (MAJOR 2, ревью d23231bd)
-          presetScope={isAdmin ? 'global' : undefined}
+          // Пресеты после ADR-012 живут только в общем слое — и список выбора, и слой
+          // inline-созданной цепочки всегда 'global'. Прежний `undefined` у не-админа
+          // отправлял черновик в снятый owner-слой → PUT /settings/global → 403 молча.
+          presetScope="global"
           presetCreation={presetCreationCtx}
           busy={savingScope !== null}
           placeholder="не задана — выберет Claude Code сам"

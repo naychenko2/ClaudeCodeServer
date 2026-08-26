@@ -328,7 +328,12 @@ body {
 .cc-card-press {
   transition: transform 190ms cubic-bezier(.34, 1.4, .64, 1), box-shadow 190ms ease;
 }
-.cc-card-press:active {
+/* Прожатие — отклик на нажатие САМОЙ карточки (тап открывает чат). Нажатие
+   вложенной кнопки — «⋮», быстрое действие, крестик тега — карточку не двигает:
+   у него своя цель и свой отклик, а вдавливание всей плитки читалось бы как
+   «сейчас откроется чат». :active ставится и на предках нажатого элемента,
+   поэтому исключаем случай, когда внутри есть нажатая кнопка (:has). */
+.cc-card-press:active:not(:has(button:active)) {
   transform: scale(0.985);
   box-shadow: var(--shadow-press);
   transition: transform 90ms ease-out, box-shadow 90ms ease-out;
@@ -597,7 +602,10 @@ body {
    .cc-ghost-live вешает САМА кнопка с активным состоянием (тумблер включён,
    danger, спиннер) — такое нельзя гасить даже в покое ряда. */
 @media (hover: hover) and (pointer: fine) {
-  .cc-ghost-actions { opacity: 0.45; transition: opacity 0.15s ease; }
+  /* 0.6, а не ниже: на 0.45 приглушённая иконка давала около 1.4:1 к фону —
+     для интерактивного элемента мало (ориентир 3:1), на матрице под углом ряд
+     просто пропадал. На 0.6 «тихий ряд» ещё читается как тихий, но виден */
+  .cc-ghost-actions { opacity: 0.6; transition: opacity 0.15s ease; }
   .cc-ghost-actions:hover, .cc-ghost-actions:focus-within,
   .cc-ghost-zone:hover .cc-ghost-actions { opacity: 1; }
   .cc-ghost-actions .cc-ghost-live { opacity: 1; }

@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
-import { FilterX, MessageCircle, Plus } from 'lucide-react';
+import { Archive, FilterX, MessageCircle, Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
+import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
+import { showToast } from '../lib/toast';
 import { useOnline } from '../hooks/useOnline';
 import { C, ISLAND, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
@@ -11,7 +13,7 @@ import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, type ChatGroupBy } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -94,8 +96,13 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, agentsRunningIds],
   );
+  // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
+  // По этому подмножеству считаются и «скрыто фильтрами», и пустые состояния:
+  // иначе в режиме архива бейдж мерил бы весь список, а в обычном записывал в
+  // «скрытые фильтрами» убранные в архив чаты, которых сброс фильтров не вернёт.
+  const scoped = chats.filter(c => isArchivedChat(c) === filters.archivedOnly);
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = chats.length - filteredChats.length;
+  const hiddenCount = scoped.length - filteredChats.length;
 
   const togglePin = async (chat: Session) => {
     try {
@@ -109,6 +116,36 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const renameChat = async (chat: Session, name: string) => {
     const updated = await api.chats.update(chat.id, { name });
     onEdited(updated);
+  };
+
+  // === Действия архивной карточки (режим «Архивные» этого же списка) ===
+  // Сам архив/возврат идёт каналом onArchive владельца (ChatsPage.handleArchive) —
+  // второго пути к эндпоинту не заводим. Здесь — только сводка и заметка.
+
+  // Сводка (место chat-digest): первая сборка зовёт модель, дальше отдаётся из
+  // кэша. Ответ — обновлённый чат, отдаём владельцу тем же onEdited, что и
+  // переименование. 409 «сводка уже собирается» и 502 «модель упала» приходят
+  // человеческим текстом — своего сообщения поверх не сочиняем.
+  const buildDigest = async (chat: Session) => {
+    try {
+      onEdited(await archiveApi.buildDigest(chat.id));
+    } catch (e) {
+      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
+    }
+  };
+
+  // «Сохранить в заметки» — существующий POST /api/sessions/{id}/summary. В ответе
+  // заметка, а SummaryNoteId сервер проставляет чату: перечитываем его, иначе
+  // карточка покажет первые строки заметки только после ближайшего обновления списка.
+  const saveAsNote = async (chat: Session) => {
+    try {
+      await saveArchiveSessionAsNote(chat.id);
+      showToast('Сохранение в заметки', 'Заметка создана', 'info');
+      const fresh = await api.chats.get(chat.id).catch(() => null);
+      if (fresh) onEdited(fresh);
+    } catch (e) {
+      showToast('Сохранение в заметки', e instanceof Error ? e.message : 'Не удалось сохранить в заметки', 'info');
+    }
   };
 
   const handleDelete = async () => {
@@ -163,7 +200,12 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
+      // Архив и его действия — только онлайн: офлайн-кэш вернул бы «успех» на
+      // запрос, который до сервера не доехал. Сводку и заметку карточка рисует
+      // подвалом только у архивного чата (см. ChatCard) — обычной ничего не меняет
       onArchive={online ? archived => onArchive(chat, archived) : undefined}
+      onBuildDigest={online ? () => buildDigest(chat) : undefined}
+      onSaveAsNote={online ? () => saveAsNote(chat) : undefined}
     />
   );
 
@@ -189,29 +231,44 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // есть, но фильтры всё скрыли — подсказка со сбросом.
   const listContent = (
     <>
-      {chats.length === 0 && (
-        <EmptyState
-          compact={!isMobile}
-          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-          title="Здесь будут ваши чаты"
-          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
-          action={
-            <Button
-              variant="primary" size="md" loading={creating}
-              onClick={onNew}
-              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-            >
-              Создать первый чат
-            </Button>
-          }
-        />
+      {scoped.length === 0 && (
+        filters.archivedOnly ? (
+          // Режим архива, а убранных чатов нет вовсе — рассказываем, откуда они
+          // берутся и что архив ничего не теряет. Кнопки создания тут нет: новый
+          // чат в архиве не появится
+          <EmptyState
+            compact={!isMobile}
+            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title={ARCHIVE_EMPTY_TITLE}
+            subtitle={ARCHIVE_EMPTY_SUBTITLE}
+          />
+        ) : (
+          <EmptyState
+            compact={!isMobile}
+            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="Здесь будут ваши чаты"
+            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+            action={
+              <Button
+                variant="primary" size="md" loading={creating}
+                onClick={onNew}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+              >
+                Создать первый чат
+              </Button>
+            }
+          />
+        )
       )}
-      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
+      {/* Чаты этой оси есть, но их скрыли фильтры. Типовой случай режима архива:
+          архивный чат выполненной задачи (taskDone) не проходит дефолтный набор
+          статусов — чип «Завершён» выключен, и архив кажется пустым */}
+      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && scoped.length > 0 && (
         <EmptyState
           compact
           icon={<FilterX size={20} strokeWidth={2} />}
           title="Ничего не нашлось"
-          subtitle={buildHiddenReason(chats.length, filters.search)}
+          subtitle={buildHiddenReason(scoped.length, filters.search)}
           action={
             <ChatFilterResetActions
               search={filters.search}
@@ -339,7 +396,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           />
         }
         title="Чаты"
-        badge={chats.length > 0 ? String(chats.length) : null}
+        badge={scoped.length > 0 ? String(scoped.length) : null}
         // fill=false: панель занимает по контенту, не растягивается на всю
         // высоту сайдбара — если чатов мало, низ остаётся свободным.
         fill={false}

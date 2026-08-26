@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Activity, Archive, Bell, ChevronRight, ExternalLink, House, Settings, Share2, Users } from 'lucide-react';
+import { Activity, Bell, ChevronRight, ExternalLink, House, Settings, Share2, Users } from 'lucide-react';
 import type { AuthState, Project } from '../types';
 import { C, FONT, R, TB, SHADOW } from '../lib/design';
 import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
@@ -218,11 +218,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     { key: 'home', icon: <House size={18} strokeWidth={2} />, label: 'Домой', onClick: () => onTab('home'), active: !historyActive && value === 'home' },
     { key: 'notes', icon: <Share2 size={18} strokeWidth={2} />, label: 'Заметки', onClick: () => onTab('notes'), active: !historyActive && value === 'notes' },
     { key: 'personas', icon: <Users size={18} strokeWidth={2} />, label: 'Персоны', onClick: () => onTab('personas'), active: !historyActive && value === 'personas' },
-    // Раздел «Архив» (план архива чатов v4, шаг 5): помимо вкладки в таббаре
-    // (DEFAULT_TABS) дублируем в «Разделах» — как «Заметки» и «Персоны», чтобы
-    // вход был и в откатной ветке узких экранов. Архив ПРЯЧЕТ чат, а не удаляет
-    // (см. ArchivePage); возврат — кнопка «Вернуть из архива» в карточке.
-    { key: 'archive', icon: <Archive size={18} strokeWidth={2} />, label: 'Архив', onClick: () => onTab('archive'), active: !historyActive && value === 'archive' },
   ];
 
   // «Утренний бриф» и «Единый поиск» убраны из шапки — доступны через AI-палитру (⌘/Ctrl+K).

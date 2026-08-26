@@ -120,8 +120,9 @@ public class ChatArchiveService(
         return (batch.Count, batchId);
     }
 
-    // Одно агрегированное уведомление на проход (пре-мортем №2) со ссылкой в раздел
-    // «Архив». Откат пачки — по batchId (POST /api/chats/archive-batch/{batchId}/restore);
+    // Одно агрегированное уведомление на проход (пре-мортем №2) со ссылкой в список
+    // чатов: отдельного раздела «Архив» больше нет, архив — режим списка (переключатель
+    // «Архивные» в тулбаре), поэтому и текст зовёт туда. Откат пачки — по batchId (POST /api/chats/archive-batch/{batchId}/restore);
     // фронт берёт batchId из карточек архивных чатов. Без push: уборка списка — не пожар.
     private async Task NotifyOwnerAsync(string ownerId, int count)
     {
@@ -133,7 +134,7 @@ public class ChatArchiveService(
                 Type = "chat_auto_archive",
                 Title = "Автоправило архива чатов",
                 Body = $"Без активности дольше порога в архив убрано {PluralChats(count)}. " +
-                       "Вернуть их можно в разделе «Архив».",
+                       "Вернуть их можно в списке чатов — переключатель «Архивные».",
                 Url = "#/chats",
                 Tag = "Архив",
                 Source = "Автоправило",

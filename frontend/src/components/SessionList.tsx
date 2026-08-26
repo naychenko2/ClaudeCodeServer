@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown, MessageCircle } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
+import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
@@ -13,7 +14,7 @@ import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -307,6 +308,45 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     if (activeSession?.id === updated.id) onSessionUpdated?.(updated);
   };
 
+  // === Архив чата (режим «Архивные» этого же списка) ===
+  // Чат ПРЯЧЕТСЯ, а не удаляется: история и claudeSessionId целы. Признак архива
+  // производный (ArchivedAt/UpdatedAt) — на клиенте его не вычисляем, кладём в
+  // список ответ сервера как есть. 409 «в чате идёт ход» показываем ровно тем
+  // текстом, что прислал бэкенд: он называет причину точнее нашей обёртки.
+  const handleArchive = async (s: Session, archived: boolean) => {
+    try {
+      handleSessionUpdated(await archiveApi.setArchived(s.id, archived));
+    } catch (e) {
+      showToast('Архив', e instanceof Error ? e.message : 'Не удалось изменить архив', 'info');
+    }
+  };
+
+  // Сводка карточки архива (место chat-digest): первая сборка зовёт модель,
+  // последующие отдаются из кэша. Ответ — обновлённая сессия с ArchiveSummary.
+  // Ошибку рисует список, а не подвал карточки: 409 «сводка уже собирается» и
+  // 502 «модель упала» приходят человеческим текстом.
+  const handleBuildDigest = async (s: Session) => {
+    try {
+      handleSessionUpdated(await archiveApi.buildDigest(s.id));
+    } catch (e) {
+      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
+    }
+  };
+
+  // «Сохранить в заметки» — существующий POST /api/sessions/{id}/summary. В ответе
+  // приходит заметка, а SummaryNoteId сервер проставляет самой сессии: перечитываем
+  // чат, иначе карточка покажет первые строки заметки только после поллинга (5с).
+  const handleSaveAsNote = async (s: Session) => {
+    try {
+      await saveArchiveSessionAsNote(s.id);
+      showToast('Сохранение в заметки', 'Заметка создана', 'info');
+      const fresh = await api.chats.get(s.id).catch(() => null);
+      if (fresh) handleSessionUpdated(fresh);
+    } catch (e) {
+      showToast('Сохранение в заметки', e instanceof Error ? e.message : 'Не удалось сохранить в заметки', 'info');
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     // Кнопка удаления скрыта офлайн, но сеть могла упасть между показом и кликом —
@@ -360,8 +400,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, agentsRunningIds],
   );
+  // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
+  // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
+  // подмножеству: в режиме архива бейдж иначе врал бы на весь список проекта,
+  // а в обычном — записывал в «скрытые фильтрами» убранные в архив чаты, которые
+  // сбросом фильтров не возвращаются.
+  const scoped = sessions.filter(s => isArchivedChat(s) === filters.archivedOnly);
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = sessions.length - filteredSessions.length;
+  const hiddenCount = scoped.length - filteredSessions.length;
 
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
@@ -420,6 +466,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
         onEdited={handleSessionUpdated}
+        // Архив и его действия — только онлайн: офлайн-кэш отдал бы «успех» на
+        // запрос, который до сервера не доехал. Сводка и заметка рисуются подвалом
+        // карточки лишь у архивного чата (см. ChatCard), обычной карточке они
+        // ничего не меняют
+        onArchive={online ? archived => { void handleArchive(s, archived); } : undefined}
+        onBuildDigest={online ? () => handleBuildDigest(s) : undefined}
+        onSaveAsNote={online ? () => handleSaveAsNote(s) : undefined}
       />
     );
     // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
@@ -519,20 +572,34 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
             в тулбаре панели сверху, дублировать его в empty незачем. */}
-        {loaded && sessions.length === 0 && (
-          <EmptyState
-            compact
-            icon={<MessageCircle size={20} strokeWidth={2} />}
-            title="Чатов пока нет"
-            subtitle="Начните первый чат по этому проекту."
-          />
+        {loaded && scoped.length === 0 && (
+          filters.archivedOnly ? (
+            // Режим архива, а убранных чатов нет вовсе — рассказываем, откуда они
+            // берутся и что архив ничего не теряет
+            <EmptyState
+              compact
+              icon={<Archive size={20} strokeWidth={2} />}
+              title={ARCHIVE_EMPTY_TITLE}
+              subtitle={ARCHIVE_EMPTY_SUBTITLE}
+            />
+          ) : (
+            <EmptyState
+              compact
+              icon={<MessageCircle size={20} strokeWidth={2} />}
+              title="Чатов пока нет"
+              subtitle="Начните первый чат по этому проекту."
+            />
+          )
         )}
-        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
+        {/* Чаты этой оси есть, но их скрыли фильтры. Типовой случай режима архива:
+            архивный чат выполненной задачи (taskDone) не проходит дефолтный набор
+            статусов — чип «Завершён» выключен, и список пуст при полном архиве */}
+        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && scoped.length > 0 && (
           <EmptyState
             compact
             icon={<FilterX size={20} strokeWidth={2} />}
             title="Ничего не нашлось"
-            subtitle={buildHiddenReason(sessions.length, filters.search)}
+            subtitle={buildHiddenReason(scoped.length, filters.search)}
             action={
               <ChatFilterResetActions
                 search={filters.search}

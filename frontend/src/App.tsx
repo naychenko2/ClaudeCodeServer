@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
-import type { Project, AuthState, Session } from './types'
+import type { Project, AuthState } from './types'
 import { C } from './lib/design'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
-import { ArchivePage } from './pages/ArchivePage'
 import type { HubTabValue } from './components/HubTabs'
 import { moduleIdOf } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
@@ -149,8 +148,6 @@ export default function App() {
     if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
-    // 'archive' явно не в NavSnapshot['screen'] (тип не наш) — каст через as string
-    if ((initialHash?.screen as string) === 'archive') return 'archive'
     if (initialHash?.screen === 'wall') return 'wall'
     if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'personas') return 'personas'
@@ -307,8 +304,8 @@ export default function App() {
 
   // Форк чата от лица другой персоны (кнопка «Сменить персону» в чате) для глобальной
   // персоны: переключаемся в раздел «Чаты», где ChatsPage откроет новый чат по id.
-  // Канал общий с архивом (ArchivePage.onOpenChat) и уведомлениями проактивных персон
-  // (#/chats/{id}) — все они зовут openChatById с одним и тем же контрактом.
+  // Канал общий с уведомлениями проактивных персон (#/chats/{id}) — все они зовут
+  // openChatById с одним и тем же контрактом.
   useEffect(() => {
     const open = (e: Event) => {
       const chatId = (e as CustomEvent<{ chatId?: string }>).detail?.chatId
@@ -530,10 +527,6 @@ export default function App() {
       } else if (s?.screen === 'chats') {
         // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
         if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
-      } else if ((s?.screen as string) === 'archive') {
-        // Раздел «Архив» — проект «спит». 'archive' явно не в NavSnapshot['screen'],
-        // записан кастом из в source: сравниваем через as string.
-        if (hubTab !== 'archive') { localStorage.setItem(HUB_TAB_KEY, 'archive'); setHubTab('archive') }
       } else if (s?.screen === 'wall') {
         // «Стена» — проект «спит», как в остальных разделах хаба
         if (hubTab !== 'wall') { localStorage.setItem(HUB_TAB_KEY, 'wall'); setHubTab('wall') }
@@ -704,9 +697,7 @@ export default function App() {
         if (hubTab !== 'projects' || project) switchHubTab('projects')
         return
       }
-      // Маппинг экранов хаба → HubTabValue. 'archive' сюда не попадает:
-      // parseHash не выдаёт такой screen (тип NavSnapshot не наш), раздел открывается
-      // только кодом из HubTabs/App — пользовательский ввод URL его не активирует.
+      // Маппинг экранов хаба → HubTabValue.
       let next: HubTabValue | null = null
       switch (target.screen) {
         case 'home': next = 'home'; break
@@ -873,7 +864,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'archive' ? 'archive' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
+      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -1093,17 +1084,13 @@ export default function App() {
   }
   // Открытие внепроектного чата по id: переключаем раздел на «Чаты» и кладём id в
   // cc_open_chat — ChatsPage подхватит при монтировании. Канал общий с форком чата
-  // (cc-open-chat) и ArchivePage.onOpenChat: архивный чат — это тот же внепроектный,
-  // раздел «Чаты» показывает его без отдельной ветки рельса.
+  // (cc-open-chat) и уведомлениями проактивных персон.
   const openChatById = (chatId: string) => {
     localStorage.setItem('cc_open_chat', chatId)
     localStorage.setItem(HUB_TAB_KEY, 'chats')
     setHubTab('chats')
     navToSection({ screen: 'chats', chatId })
   }
-  // Открыть архивный чат из ArchivePage — обёртка над openChatById, чтобы скрыть
-  // деталь хранения от страницы архива.
-  const openArchivedChat = (chat: Session) => openChatById(chat.id)
   // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
   // Listener ставится один раз; свежее замыкание openNotificationUrl — через ref.
@@ -1185,11 +1172,6 @@ export default function App() {
             ? <HomePage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenProject={openProjectFromHome} />
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
-          : effectiveHubTab === 'archive'
-            // Раздел «Архив» живёт в условной вкладке хаба: открывается через onHubTab('archive')
-            // (HubTabs вставит вкладку в таббар, пока раздел активен). Клик по карточке архивного
-            // чата идёт в openArchivedChat — общий канал с форком чата и уведомлениями.
-            ? <ArchivePage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenChat={openArchivedChat} />
           : effectiveHubTab === 'wall'
             ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onExitWall={exitWall} />
             : effectiveHubTab === 'calendar'

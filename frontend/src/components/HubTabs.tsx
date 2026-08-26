@@ -1,12 +1,9 @@
 import type { ReactNode } from 'react';
-import { Activity, Archive, Book, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
+import { Activity, Book, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 
-// Раздел «Архив» (план архива чатов v4, шаг 5): полноценная вкладка наравне с
-// «Чатами» (см. DEFAULT_TABS) — архив прячет чаты, а не удаляет, и пользователю
-// нужен постоянный явный вход в раздел. В TABLESS его нет: вход живёт в таббаре.
-export type HubTab = 'home' | 'chats' | 'archive' | 'wall' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
+export type HubTab = 'home' | 'chats' | 'wall' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
 
 // Значение таба хаба: фиксированный раздел ЛИБО внешний модуль (`module:{id}`, ТЗ R6).
 // Модульные табы приходят из реестра (GET /api/modules) и генерятся динамически.
@@ -26,7 +23,6 @@ export function moduleIdOf(v: HubTabValue): string | null {
 export const TAB_ICONS: Record<HubTab, ReactNode> = {
   home: <House size={18} strokeWidth={2} />,
   chats: <MessageCircle size={18} strokeWidth={2} />,
-  archive: <Archive size={18} strokeWidth={2} />,
   wall: <Columns3 size={18} strokeWidth={2} />,
   projects: <Folder size={18} strokeWidth={2} />,
   calendar: <Calendar size={18} strokeWidth={2} />,
@@ -40,7 +36,7 @@ export const TAB_ICONS: Record<HubTab, ReactNode> = {
 
 // Подписи разделов (единый источник для таббара и overflow-меню «Разделы»)
 export const TAB_LABELS: Record<HubTab, string> = {
-  home: 'Домой', chats: 'Чаты', archive: 'Архив', wall: 'Стена', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
+  home: 'Домой', chats: 'Чаты', wall: 'Стена', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
   personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления', spend: 'Аналитика',
   telemetry: 'Телеметрия',
 };
@@ -48,10 +44,7 @@ export const TAB_LABELS: Record<HubTab, string> = {
 // он строит скрытый компактный эталон именно этого набора и меряет «все 5
 // табов рядом», а не то, что сейчас отрисовано — иначе в откатной ветке (3 таба)
 // эталон бы заведомо влезал и цикл переключал ветки туда-обратно.
-// «Архив» (план архива чатов v4, шаг 5): чат ПРЯЧЕТСЯ, не удаляется (см.
-// ArchivePage), и пользователю нужен явный вход в раздел. Делаем его табом по
-// умолчанию — глубокая ветка без кнопки в шапке стала бы недоступной.
-export const DEFAULT_TABS: HubTab[] = ['chats', 'archive', 'projects', 'calendar', 'notes', 'personas'];
+export const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'personas'];
 // Разделы, которые НЕ получают вкладку даже когда активны: вход к ним живёт
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
 // аватара «Знания» и «Аналитика токенов». Всплывающая только внутри раздела

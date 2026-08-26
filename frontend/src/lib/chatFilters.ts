@@ -36,6 +36,12 @@ export interface ChatFilters {
   sortOrder: ChatSortOrder;
   // Дерево по parentSessionId: группировка применяется к корням, дети — под корнём
   hierarchy: boolean;
+  // Режим архива: список показывает ТОЛЬКО архивные чаты (обычные скрыты).
+  // Это ОСЬ РЕЖИМА, а не значение в only[]: там OR-семантика «показать только»
+  // среди обычных чатов, и архив подмешался бы к ним. Триггер фильтров ось не
+  // красит (isDefaultFilters её не учитывает — как groupBy/sortOrder/hierarchy),
+  // а «Сбросить всё» из режима архива не выкидывает.
+  archivedOnly: boolean;
 }
 
 const KEY_PREFIX = 'cc_chat_filters:';
@@ -59,6 +65,7 @@ function defaults(): ChatFilters {
     groupBy: 'days',
     sortOrder: 'newest',
     hierarchy: false,
+    archivedOnly: false,
   };
 }
 
@@ -119,6 +126,8 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     groupBy,
     sortOrder: p.sortOrder === 'oldest' || p.sortOrder === 'newest' ? p.sortOrder : 'newest',
     hierarchy: typeof p.hierarchy === 'boolean' ? p.hierarchy : legacyAxes.hierarchy ?? false,
+    // Запись старого формата (до режима архива) — начинаем с обычного списка
+    archivedOnly: typeof p.archivedOnly === 'boolean' ? p.archivedOnly : false,
   };
 }
 
@@ -221,10 +230,17 @@ export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
   const q = filters.search.trim().toLowerCase();
   const onlySet = filters.only;
   return (s) => {
-    // Архив скрывается из обычных списков. Дочерние чаты архивного родителя
-    // «всплывают» через прокол в buildChatTreeRows (filterForest) — то же множество,
-    // что в плоском списке, и hiddenCount не зависит от вида.
-    if (isArchivedChat(s)) return false;
+    // Ось режима: обычный список прячет архивные чаты, режим архива — обычные.
+    // Смешения нет ни в одну сторону. Дочерние чаты архивного родителя «всплывают»
+    // через прокол в buildChatTreeRows (filterForest) — то же множество, что в
+    // плоском списке, и hiddenCount не зависит от вида.
+    if (isArchivedChat(s) !== filters.archivedOnly) return false;
+    // ЛОВУШКА: остальные фильтры в режиме архива продолжают работать, а дефолтный
+    // набор статусов НЕ содержит 'done' — архивный чат выполненной задачи (taskDone)
+    // остаётся скрыт, пока чип «Завершён» не включён. Это не баг фильтра: список
+    // архива подчиняется тем же чипам, что обычный. Пустой экран в этом случае —
+    // повод для отдельной ветки empty-state («скрыты фильтрами»), а не для проверки
+    // архива вперёд статусов.
     if (!filters.origins.includes(s.origin)) return false;
     if (!filters.statuses.includes(chatStatusOf(s))) return false;
     if (filters.personaId && s.personaId !== filters.personaId) return false;
@@ -249,6 +265,8 @@ export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
 // Фильтр в дефолтном состоянии — сводка на триггере нейтральна.
 // Оси вида (groupBy/sortOrder/hierarchy) намерено НЕ учитываются: они не скрывают
 // чаты, а перестраивают список — активная ось не должна красить триггер фильтров.
+// archivedOnly — тоже ось (у неё свой видимый переключатель «Архивные»), поэтому
+// режим архива не красит триггер и не считается «включённым фильтром».
 export function isDefaultFilters(f: ChatFilters): boolean {
   return f.origins.length === ALL_ORIGINS.length && ALL_ORIGINS.every(o => f.origins.includes(o))
     && f.statuses.length === DEFAULT_STATUSES.length && DEFAULT_STATUSES.every(s => f.statuses.includes(s))
@@ -263,10 +281,23 @@ export function defaultChatFilters(): ChatFilters {
 }
 
 // Сброс только фильтрующих полей, оси вида сохраняются — «Сбросить всё» в поповере
-// фильтров не должен неожиданно перестраивать список (группировка/порядок/иерархия).
+// фильтров не должен неожиданно перестраивать список (группировка/порядок/иерархия)
+// и уж тем более выкидывать из режима архива: выйти из него — дело переключателя.
 export function defaultChatFiltersKeepingView(f: ChatFilters): ChatFilters {
-  return { ...defaults(), groupBy: f.groupBy, sortOrder: f.sortOrder, hierarchy: f.hierarchy };
+  return {
+    ...defaults(),
+    groupBy: f.groupBy,
+    sortOrder: f.sortOrder,
+    hierarchy: f.hierarchy,
+    archivedOnly: f.archivedOnly,
+  };
 }
+
+// === Тексты режима архива (единый источник для обоих списков) ===
+
+export const ARCHIVE_EMPTY_TITLE = 'Архивных чатов нет';
+export const ARCHIVE_EMPTY_SUBTITLE =
+  'Уберите чат в архив из его меню — он спрячется из списка, но останется целым: история и контекст на месте';
 
 // === Empty state списка чатов (макет варианта А, сцена 3) ===
 
@@ -280,9 +311,13 @@ export function chatCountWord(n: number): string {
 }
 
 // Описание причины пустого списка: сколько чатов скрыто и поиском ли. Под empty-state.
+// Число согласовано с глаголом: 1 — «Единственный чат скрыт», 3 — «Все 3 чата скрыты»,
+// 12 — «Все 12 чатов скрыты», 21 — «Все 21 чат скрыт».
 export function buildHiddenReason(total: number, search: string): string {
   const q = search.trim();
-  const who = `${total} ${chatCountWord(total)}`;
-  const tail = 'Ослабьте условия или сбросьте их целиком.';
-  return q ? `Все ${who} скрыты фильтрами и поиском «${q}». ${tail}` : `Все ${who} скрыты фильтрами. ${tail}`;
+  const word = chatCountWord(total);
+  const subject = total === 1 ? 'Единственный чат' : `Все ${total} ${word}`;
+  const verb = word === 'чат' ? 'скрыт' : 'скрыты';
+  const by = q ? `фильтрами и поиском «${q}»` : 'фильтрами';
+  return `${subject} ${verb} ${by}. Ослабьте условия или сбросьте их целиком.`;
 }

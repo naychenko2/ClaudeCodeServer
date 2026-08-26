@@ -25,6 +25,7 @@ import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { isArchivedChat } from '../lib/chatFilters';
+import { ChatArchiveActions } from './ChatArchiveActions';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -156,6 +157,16 @@ interface Props {
   // 409 от сервера (живой ход/фоновые агенты) ловится вызывающей стороной и
   // показывается тостом с человеческим текстом «в чате идёт ход».
   onArchive?: (archived: boolean) => void;
+  // Действия архива в подвале карточки (режим «Архивные» в списке чатов): собрать
+  // сводку и сохранить чат в заметки. Оба необязательны и работают только парой —
+  // подвал рисуется, лишь когда чат архивный И заданы ОБА обработчика (плюс
+  // onArchive, которым идёт возврат: кнопка без канала была бы мёртвой).
+  // Обычные списки их не передают, и раскладка неархивной карточки не меняется.
+  // Сеть — на стороне списка (archiveApi.buildDigest / saveArchiveSessionAsNote):
+  // он держит состояние сессий и рисует тосты, карточка ошибки не глотает и не
+  // показывает — только крутит локальный индикатор на время промиса.
+  onBuildDigest?: () => Promise<unknown>;
+  onSaveAsNote?: () => Promise<unknown>;
   // Доп. отступ содержимого слева (px). В дереве чатов контрол ветки садится в шов
   // на левый край карточки — под ним нужно освободить место, иначе он ляжет на
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
@@ -174,7 +185,7 @@ export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
-  onEdited, onArchive, leadingInset = 0,
+  onEdited, onArchive, onBuildDigest, onSaveAsNote, leadingInset = 0,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -365,6 +376,12 @@ export function ChatCard({
   const backdropPersona = group.length > 1 ? group[0] : persona;
   const padV = isMobile ? 14 : 11;
   const minHeight = Math.max(padV * 2 + TWO_LINES, ACTION_BOX + 8);
+  // Подвал действий архива — только у архивного чата и только когда список дал
+  // весь набор каналов. Без обработчиков подвала нет вовсе: обычный список чатов
+  // и витрина UI-кита их не передают, и карточка там прежняя
+  const archiveActions = isArchivedChat(s) && onArchive && onBuildDigest && onSaveAsNote
+    ? { onArchive, onBuildDigest, onSaveAsNote }
+    : null;
 
   return (
     <div
@@ -568,6 +585,18 @@ export function ChatCard({
           </>
         )}
       </div>
+
+      {/* Подвал архивной карточки: текст по канону архива + «Вернуть из архива»,
+          «Собрать сводку», «Сохранить в заметки». Возврат идёт тем же onArchive,
+          что и одноимённый пункт меню — второго канала к эндпоинту нет */}
+      {archiveActions && (
+        <ChatArchiveActions
+          chat={s}
+          onRestore={() => archiveActions.onArchive(false)}
+          onBuildDigest={archiveActions.onBuildDigest}
+          onSaveAsNote={archiveActions.onSaveAsNote}
+        />
+      )}
 
       {/* Действия — одной кнопкой «⋮» у правого края по центру высоты, место одно и
           то же при любом составе карточки. Само меню открывается порталом по rect

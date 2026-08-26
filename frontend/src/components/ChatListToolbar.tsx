@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Plus, CalendarDays, Tags, List, ListTree, Check, MonitorSmartphone,
-  ArrowDownWideNarrow, ArrowUpNarrowWide, SlidersHorizontal,
+  ArrowDownWideNarrow, ArrowUpNarrowWide, SlidersHorizontal, Archive,
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
@@ -12,7 +12,9 @@ import type { ChatFilters, ChatGroupBy, ChatSortOrder } from '../lib/chatFilters
 
 // === Однострочный тулбар списка чатов (макет chat-unified-view, вариант А) ===
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
-// иерархия. Поиска здесь нет — он первой секцией поповера фильтров.
+// иерархия → архив. Поиска здесь нет — он первой секцией поповера фильтров.
+// «Архивные» — не фильтр, а РЕЖИМ списка (ось filters.archivedOnly): включён — видно
+// только архивные чаты, поэтому переключатель стоит рядом с осями вида, а не в поповере.
 // Ступени по ширине панели (ResizeObserver):
 //   comfort ≥400: «+ Новый» текстом, IconButton md
 //   cozy 260–399: «+» квадрат 32, IconButton sm
@@ -89,7 +91,7 @@ export function ChatListToolbar({
   const tier: Tier = width >= 400 ? 'comfort' : width >= 260 ? 'cozy' : 'compact';
   const iconBtnSize = tier === 'comfort' ? 'md' : 'sm';
 
-  const { groupBy, sortOrder, hierarchy } = filters;
+  const { groupBy, sortOrder, hierarchy, archivedOnly } = filters;
   // groupBy из хранилища может отсутствовать в groupByOptions (напр. 'tags' у
   // глобального списка после переезда чата) — PillSwitch без активного сегмента
   // не рисует пилюлю, это валидное состояние; первый же выбор всё чинит.
@@ -140,7 +142,7 @@ export function ChatListToolbar({
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} isMobile triggerSize="lg"
         />
-        <IconButton size="lg" title="Вид: группировка, сортировка, иерархия"
+        <IconButton size="lg" title="Вид: группировка, сортировка, иерархия, архивные"
           onClick={() => setViewSheet(true)}>
           <SlidersHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </IconButton>
@@ -187,13 +189,24 @@ export function ChatListToolbar({
               <Toggle checked={hierarchy} onChange={v => patch({ hierarchy: v })}
                 ariaLabel="Иерархия (вложенные чаты)" />
             </div>
+            <SheetSec>Архив</SheetSec>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              minHeight: 48, gap: SP.sm,
+            }}>
+              <span style={{ fontSize: FS.md, color: C.textPrimary, fontFamily: FONT.sans }}>
+                Архивные
+              </span>
+              <Toggle checked={archivedOnly} onChange={v => patch({ archivedOnly: v })}
+                ariaLabel="Архивные" />
+            </div>
           </Modal>
         )}
       </div>
     );
   }
 
-  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [+ Чат] ===
+  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [архив] [+ Чат] ===
   // Ряд нейтральных иконок 24px, главное действие последним и залитым — общий
   // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает и
   // уехала секцией в поповер фильтров: из трёх осей вида она самая редкая, а
@@ -235,6 +248,14 @@ export function ChatListToolbar({
           onClick={() => patch({ hierarchy: !hierarchy })}
         >
           <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        <IconButton
+          size="xs"
+          active={archivedOnly}
+          title="Архивные"
+          onClick={() => patch({ archivedOnly: !archivedOnly })}
+        >
+          <Archive size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
       </PanelHeaderSlot>
       {!hideNew && (
@@ -343,6 +364,14 @@ export function ChatListToolbar({
         onClick={() => patch({ hierarchy: !hierarchy })}
       >
         <ListTree size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      <IconButton
+        size={iconBtnSize}
+        active={archivedOnly}
+        title="Архивные"
+        onClick={() => patch({ archivedOnly: !archivedOnly })}
+      >
+        <Archive size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
     </div>
   );

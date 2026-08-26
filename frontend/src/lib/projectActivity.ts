@@ -78,11 +78,16 @@ const _filterPreds = new Map<string, (s: HomeSessionInfo) => boolean>();
 // сам (см. isArchivedChat в chatFilters): это и есть «ветка unread точки
 // активности проекта» из шага 4 — точка у проекта не светится из-за скрытого
 // архивного чата.
+// Ось archivedOnly здесь ВСЕГДА false: режим архива — состояние конкретного
+// списка, а не проекта. Оставленный включённым переключатель «Архивные» иначе
+// заставил бы точку активности считать только архивные чаты и погасил бы её на
+// живых и непрочитанных.
 function visibleInProjectFilter(s: HomeSessionInfo): boolean {
   if (!s.projectId) return true;
   let pred = _filterPreds.get(s.projectId);
   if (!pred) {
-    pred = matchChatFilter(loadChatFilters(s.projectId)) as (x: HomeSessionInfo) => boolean;
+    const f = { ...loadChatFilters(s.projectId), archivedOnly: false };
+    pred = matchChatFilter(f) as (x: HomeSessionInfo) => boolean;
     _filterPreds.set(s.projectId, pred);
   }
   return pred(s);

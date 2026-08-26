@@ -21,6 +21,7 @@ import { teamImplementModeLocked, TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP } from '../
 import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
+import { QuickPhrasesDialog, QuickPhrasesIcon, QuickPhrasesMenu } from './QuickPhrases';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { showToast } from '../lib/toast';
@@ -584,6 +585,9 @@ export function Composer({
   // Пояснение залоченного селектора: десктоп — статичный каллаут в потоке (Майя ловила
   // перекрытие композера всплывающим пузырём), мобила — нижняя шторка (hover недоступен)
   const [lockInfoOpen, setLockInfoOpen] = useState(false);
+  // Быстрые фразы: rect кнопки-триггера (открытый попап) и модалка правки набора
+  const [phrasesAnchor, setPhrasesAnchor] = useState<DOMRect | null>(null);
+  const [phrasesEditOpen, setPhrasesEditOpen] = useState(false);
   // Autocomplete скиллов
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
@@ -1580,6 +1584,27 @@ export function Composer({
     </div>
   );
 
+  // Быстрые фразы: попап у кнопки слева от микрофона. Якорь — rect самой кнопки
+  // (Menu развернёт карточку вверх, композер стоит у нижней кромки)
+  const phrasesButton = (
+    <button
+      type="button"
+      onClick={e => setPhrasesAnchor(e.currentTarget.getBoundingClientRect())}
+      onContextMenu={(e) => e.preventDefault()}
+      title="Быстрые фразы: готовое сообщение уходит одним нажатием"
+      aria-label="Быстрые фразы"
+      style={{
+        ...iconBtnGuard,
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        background: 'none', cursor: 'pointer', color: C.textMuted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        transition: 'color 0.15s, background 0.15s',
+      }}
+    >
+      <QuickPhrasesIcon />
+    </button>
+  );
+
   const micButton = hasSpeech ? (
     <button
       type="button"
@@ -2043,7 +2068,7 @@ export function Composer({
             ? talkStopButton
             : isListening
               ? <>{cancelRecBtn}{confirmRecBtn}</>
-              : <>{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
+              : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
       </div>
@@ -2128,6 +2153,19 @@ export function Composer({
 
     {/* Десктоп-только: на мобиле пояснение лока уходит в шторку (Modal внутри modeButton) */}
     {!isMobile && lockInfoCallout}
+
+    {/* Быстрые фразы: попап списка (клик по фразе = обычная отправка мимо поля ввода,
+        черновик в поле остаётся нетронутым) и модалка правки набора */}
+    {phrasesAnchor && (
+      <QuickPhrasesMenu
+        anchor={phrasesAnchor}
+        onClose={() => setPhrasesAnchor(null)}
+        onPick={text => void handleSend(text)}
+        onEdit={() => setPhrasesEditOpen(true)}
+      />
+    )}
+
+    {phrasesEditOpen && <QuickPhrasesDialog onClose={() => setPhrasesEditOpen(false)} />}
 
     {pendingMode && (
       <DangerModeConfirm

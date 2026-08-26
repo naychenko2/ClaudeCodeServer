@@ -1138,6 +1138,15 @@ export const api = {
     candidates: () => request<Session[]>('/me/wall/candidates'),
   },
 
+  // Быстрые фразы композера: готовые сообщения, уходящие одним нажатием.
+  // Ресурс бэка — /api/me/quick-phrases (MyQuickPhrasesController)
+  quickPhrases: {
+    get: () => request<{ phrases: string[] }>('/me/quick-phrases'),
+    // Полная замена набора; ответ — итог после серверной чистки (пустые/дубли/потолок)
+    put: (phrases: string[]) =>
+      request<{ phrases: string[] }>('/me/quick-phrases', { method: 'PUT', body: JSON.stringify({ phrases }) }),
+  },
+
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),

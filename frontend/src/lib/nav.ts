@@ -31,6 +31,9 @@ function toHash(s: NavSnapshot): string {
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': {
       if (s.personaView === 'specialties') return '#/personas/specialties';
+      // Вкладка «Проактивность» симметрична разбору в parseHash (parts[2] === 'automation'):
+      // требует заданной персоны, без неё automation уходит в центральный экран.
+      if (s.personaView === 'automation' && s.persona) return `#/personas/${encodeURIComponent(s.persona)}/automation`;
       return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
     }
     case 'knowledge': return s.knowledge ? `#/knowledge/${encodeURIComponent(s.knowledge)}` : '#/knowledge';

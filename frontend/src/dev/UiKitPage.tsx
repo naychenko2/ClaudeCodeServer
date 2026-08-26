@@ -2697,6 +2697,38 @@ function PanelsSection() {
           </p>
         </SubBlock>
 
+        {/* Фоновая команда — единственная фоновая работа БЕЗ ореола: Bash с
+            run_in_background (дев-сервер, watch) живёт часами и о завершении не
+            сообщает, поэтому светиться ей нельзя, а молчать — значит скрывать
+            причину, по которой чат держит живой процесс CLI. */}
+        <SubBlock label="ChatCard — в фоне работает команда (без ореола)">
+          <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
+            <div style={{ padding: SP.md, maxWidth: 320 }}>
+              <ChatCard
+                session={{ ...DEMO_SESSIONS[1], id: 'demo-bg-command', status: 'active', isPinned: false }}
+                bgCommandRunning={true}
+                isActive={false}
+                isMobile={false}
+                fallbackName="Новый чат"
+                online={true}
+                hovered={false}
+                workflowRunning={false}
+                onSelect={() => {}}
+                onHover={() => {}}
+                onDelete={() => {}}
+              />
+            </div>
+          </Island>
+
+          <p style={{ margin: `${SP.sm}px 0 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
+            Значок терминала на <code>C.textMuted</code> — приглушённый намеренно: акцент,
+            горящий часами, перестают замечать. Робота (<code>C.accent</code>) и ореол
+            «агенты работают» команда не получает, статус карточки остаётся «активна».
+            При живых агентах значок команды не показываем — свечение уже объясняет,
+            почему чат жив, а два значка подряд сливаются в шум.
+          </p>
+        </SubBlock>
+
         {/* Карточка лимита подписки из ленты чата: секция аккаунтов пула (та же
             модель, своя предоплата) идёт перед сторонними провайдерами; когда
             здоровых аккаунтов нет — карточка выглядит как раньше. onMigrate не

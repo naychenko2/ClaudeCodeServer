@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
-import { useAgentsRunning } from '../lib/agentsPresence';
+import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
 import { ExpiryBadge } from './ExpiryBadge';
@@ -125,6 +125,8 @@ interface Props {
   // Переопределение «в чате работают фоновые агенты». Не задано — берём из стора
   // agentsPresence; проп нужен витрине UI-кита, где стора нет
   agentsRunning?: boolean;
+  // То же для фоновой команды (Bash в фоне) — тихий значок терминала
+  bgCommandRunning?: boolean;
   onSelect: () => void;
   onHover: (hovered: boolean) => void;
   onDelete: () => void;
@@ -167,7 +169,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  agentsRunning: agentsRunningProp,
+  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
   onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
@@ -525,6 +527,9 @@ export function ChatCard({
     // Сила подмешивания в фон: alpha из STATUS_GLOW (45..72) задумана под
     // свечение — для заливки её ужимаем втрое и добавляем 10 п.п. Даёт 25..34%:
     // ниже ~10% подкраска на кремовом фоне уже неразличима
+  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
+  const bgCommandRunningLive = useBgCommandRunning(s.id);
+  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
     '--cc-tint-a': `${Math.round(glow.alpha / 3) + 10}%`,
   } as CSSProperties;
 
@@ -782,6 +787,17 @@ export function ChatCard({
         ) : (
           <>
             {/* Строка 2: превью последнего сообщения */}
+          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
+              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
+              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
+              перестают замечать. При работающих агентах не показываем — свечение уже
+              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
+          {bgCommandRunning && !agentsRunning && !workflowRunning && (
+            <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
+              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              <Terminal size={13} strokeWidth={2.2} />
+            </span>
+          )}
             {s.lastMessage && (
               <div style={{
                 minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,

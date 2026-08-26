@@ -3,11 +3,11 @@ import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
-import { ICON_STROKE } from './ui/icons';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning } from '../lib/agentsPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
-import { CHAT_ACTION_ORDER, CHAT_ACTION_LABELS, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
+import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
@@ -314,17 +314,22 @@ export function ChatCard({
   const cardActions = CHAT_ACTION_ORDER.filter(k => cardActionAvailable[k]);
   const quickActions = cardActions.filter(k => cardVis.isVisible(k));
   // Вылет свайпа = сколько кнопок реально показано (кнопки по 44px — тач-цель)
-  const swipeOpenW = quickActions.length * SWIPE_BTN_W;
+  // Потолок — три кнопки: при восьми зона заняла бы 352px, а нижний ориентир
+  // экрана 360 CSS (Flip 8) — карточка уезжала бы целиком, оставляя под пальцем
+  // ряд одинаковых иконок без имени и превью. Остальное достаётся из меню
+  const SWIPE_MAX_BTNS = 3;
+  const swipeButtons = quickActions.slice(0, SWIPE_MAX_BTNS);
+  const swipeOpenW = swipeButtons.length * SWIPE_BTN_W;
   // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
   // (hover-кластер на десктопе, свайп на мобиле), и переключает это по клику.
   // Меню при этом не закрывается — набор выставляется одним заходом
   const visAction = (key: ChatActionKey) => ({
     icon: cardVis.isVisible(key)
-      ? <Eye size={14} strokeWidth={2} />
-      : <EyeOff size={14} strokeWidth={2} />,
+      ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
     title: cardVis.isVisible(key)
-      ? `${CHAT_ACTION_LABELS[key]} — убрать из быстрых кнопок`
-      : `${CHAT_ACTION_LABELS[key]} — сделать быстрой кнопкой`,
+      ? 'Убрать в меню'
+      : 'Показывать кнопкой в ряду',
     onClick: () => cardVis.toggle(key),
   });
   // Описание быстрой кнопки по ключу — одна таблица на hover-кластер и свайп-зону,
@@ -336,41 +341,40 @@ export function ChatCard({
   } => {
     switch (key) {
       case 'rename': return {
-        icon: <Pencil size={14} strokeWidth={2} />, title: 'Переименовать',
+        icon: <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Переименовать',
         onClick: e => { e.stopPropagation(); startRename(); },
       };
       case 'pin': return {
-        icon: <Pin size={14} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />,
-        title: s.isPinned ? 'Открепить' : 'Закрепить', active: s.isPinned,
+        icon: <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} fill={s.isPinned ? 'currentColor' : 'none'} />,
+        title: s.isPinned ? 'Открепить' : 'Закрепить',
         onClick: e => { e.stopPropagation(); onTogglePin?.(); },
       };
       case 'tags': return {
-        icon: <Tags size={14} strokeWidth={2} />, title: 'Теги',
+        icon: <Tags size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Теги',
         onClick: e => { e.stopPropagation(); onAssignTags?.((e.currentTarget as HTMLElement).getBoundingClientRect()); },
       };
       case 'wall': return {
-        icon: <Columns3 size={14} strokeWidth={2} />, title: 'На стену',
+        icon: <Columns3 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'На стену',
         onClick: e => { e.stopPropagation(); onAddToWall?.(); },
       };
       case 'notify': return {
-        icon: notifyOn ? <Bell size={14} strokeWidth={2} /> : <BellOff size={14} strokeWidth={2} />,
-        title: notifyOn ? 'Заглушить' : 'Включить уведомления', active: notifyOn,
+        icon: notifyOn ? <Bell size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        title: notifyOn ? 'Заглушить' : 'Включить уведомления',
         onClick: e => { e.stopPropagation(); void toggleNotify(); },
       };
       case 'dossier': return {
-        icon: <History size={14} strokeWidth={2} />,
+        icon: <History size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
         title: s.excludeFromDossiers ? 'Решения не сохраняются' : 'Решения сохраняются',
-        active: !!s.excludeFromDossiers,
         onClick: e => { e.stopPropagation(); void toggleDossier(); },
       };
       case 'expiry': return {
-        icon: <Hourglass size={14} strokeWidth={2} />,
+        icon: <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
         title: s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения',
         active: s.expiresAfterMinutes != null,
         onClick: e => { e.stopPropagation(); setExpiryMenu((e.currentTarget as HTMLElement).getBoundingClientRect()); },
       };
       case 'delete': return {
-        icon: <Trash2 size={14} strokeWidth={2} />, title: 'Удалить', danger: true,
+        icon: <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Удалить', danger: true,
         onClick: e => { e.stopPropagation(); onDelete(); },
       };
     }
@@ -545,26 +549,35 @@ export function ChatCard({
     >
       {/* Кнопки свайпа (мобила): под карточкой у правого края, видны, когда карточка
           уехала. Высота — вся карточка, ширина — вылет раскрытия */}
-      {swipeCanWork && quickActions.length > 0 && (
+      {swipeCanWork && swipeButtons.length > 0 && (
         <div style={{
           position: 'absolute', top: 0, bottom: 0, right: 0, width: swipeOpenW,
           display: 'flex', zIndex: 0,
         }}>
-          {quickActions.map((k, i) => {
+          {/* Осознанное отклонение от ui/IconButton: здесь нужны ячейки во всю высоту
+              карточки, а примитив — квадрат фиксированного размера, и растягивать его
+              пропом ради одного места хуже, чем собрать кнопку тут. Что у примитива
+              берём обязательно: имя (aria-label — на таче title не показывается вовсе)
+              и видимое кольцо фокуса (класс cc-iconbtn) */}
+          {swipeButtons.map((k, i) => {
             const b = quickButton(k);
             return (
               <button
                 key={k}
                 type="button"
+                className="cc-iconbtn"
                 // Раскрытие закрываем ПЕРЕД действием: пикер тегов/срока встаёт по rect
                 // кнопки, а сама кнопка уедет вместе с закрытием — rect берём заранее
                 onClick={e => { onSwipeToggle?.(false); b.onClick(e); }}
                 title={b.title}
+                aria-label={b.title}
                 style={{
                   flex: 1, border: 'none', cursor: 'pointer', display: 'grid', placeItems: 'center',
                   borderLeft: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
-                  background: b.danger ? C.dangerBg : b.active ? C.accentLight : C.bgWhite,
-                  color: b.danger ? C.danger : b.active ? C.accent : C.textSecondary,
+                  // Подложка — bgInset, а не bgWhite: у карточки тот же тон, и слой
+                  // «под» ней не читался бы ни в светлой теме, ни в тёмной
+                  background: b.danger ? C.dangerBg : C.bgInset,
+                  color: b.danger ? C.danger : C.textSecondary,
                 }}
               >
                 {b.icon}
@@ -772,12 +785,14 @@ export function ChatCard({
         )}
       </div>
 
-      {/* Действия по наведению (desktop): кластер быстрых кнопок Закр·Теги·Удл
-          ПОВЕРХ контента у правого края — место в layout не занимают, до «⋯» можно
-          не тянуться. Удаление — тот же onDelete, что в меню (с подтверждением
-          списка). Кнопки полупрозрачны (ghost), наведение на карточку проявляет их */}
+      {/* Действия по наведению (desktop): кластер быстрых кнопок ПОВЕРХ контента
+          у правого края — места в layout не занимают, до «⋮» можно не тянуться.
+          Удаление — тот же onDelete, что в меню (с подтверждением списка).
+          Ghost-класса здесь НЕТ намеренно: кластер и так появляется только по
+          наведению (showActions), и приглушать уже проявленные кнопки — значит
+          показывать их выключенными */}
       {showActions && !isMobile && quickActions.length > 0 && (
-        <div className="cc-ghost-actions" style={{
+        <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
           right: ACTIONS_RIGHT, zIndex: 2, display: 'flex', alignItems: 'center',
           background: cardBg, borderRadius: R.lg, boxShadow: SHADOW.card,
@@ -820,7 +835,7 @@ export function ChatCard({
             size="xs"
             active={!!menu}
           >
-            <MoreVertical size={14} strokeWidth={2} />
+            <MoreVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         </div>
       )}
@@ -838,25 +853,28 @@ export function ChatCard({
           gap={4}>
           {canRename && (
             <MenuItem
-              icon={<Pencil size={15} strokeWidth={2} />}
+              icon={<Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Переименовать"
-              action={visAction('rename')}
+              isMobile={isMobile}
+            action={visAction('rename')}
               onClick={e => { e.stopPropagation(); setMenu(null); startRename(); }}
             />
           )}
           {onTogglePin && (
             <MenuItem
-              icon={<Pin size={15} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />}
+              icon={<Pin size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} fill={s.isPinned ? 'currentColor' : 'none'} />}
               label={s.isPinned ? 'Открепить' : 'Закрепить'}
-              action={visAction('pin')}
+              isMobile={isMobile}
+            action={visAction('pin')}
               onClick={e => { e.stopPropagation(); setMenu(null); onTogglePin(); }}
             />
           )}
           {onAssignTags && (
             <MenuItem
-              icon={<Tags size={15} strokeWidth={2} />}
+              icon={<Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Теги"
-              action={visAction('tags')}
+              isMobile={isMobile}
+            action={visAction('tags')}
               // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
               // исчезнет вместе с этим меню, и её rect брать будет неоткуда
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); onAssignTags(anchor); }}
@@ -864,9 +882,10 @@ export function ChatCard({
           )}
           {onAddToWall && (
             <MenuItem
-              icon={<Columns3 size={15} strokeWidth={2} />}
+              icon={<Columns3 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="На стену"
-              action={visAction('wall')}
+              isMobile={isMobile}
+            action={visAction('wall')}
               onClick={e => { e.stopPropagation(); setMenu(null); onAddToWall(); }}
             />
           )}
@@ -875,9 +894,10 @@ export function ChatCard({
               бэкенд намеренно не обновляет UpdatedAt на этих правках */}
           {canMute && (
             <MenuItem
-              icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
+              icon={notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={notifyOn ? 'Заглушить' : 'Уведомления'}
-              action={visAction('notify')}
+              isMobile={isMobile}
+            action={visAction('notify')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleNotify(); }}
             />
           )}
@@ -885,26 +905,29 @@ export function ChatCard({
               только у проектных чатов: у чата вне проекта досье не ведётся */}
           {canEditChat && !!s.projectId && (
             <MenuItem
-              icon={<History size={15} strokeWidth={2} />}
+              icon={<History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={s.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
-              action={visAction('dossier')}
+              isMobile={isMobile}
+            action={visAction('dossier')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleDossier(); }}
             />
           )}
           {canEditChat && (
             <MenuItem
-              icon={<Hourglass size={15} strokeWidth={2} />}
+              icon={<Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения'}
-              action={visAction('expiry')}
+              isMobile={isMobile}
+            action={visAction('expiry')}
               // Пикер сроков открывается по тому же якорю, что и это меню: кнопка «⋮»
               // исчезнет вместе с ним, и её rect брать будет неоткуда (приём пункта «Теги»)
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); setExpiryMenu(anchor); }}
             />
           )}
           <MenuItem
-            icon={<Trash2 size={15} strokeWidth={2} />}
+            icon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             label="Удалить"
             danger
+            isMobile={isMobile}
             action={visAction('delete')}
             onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
           />

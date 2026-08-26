@@ -59,7 +59,10 @@ export function DossierOptOutButton({ session, isMobile, onSessionUpdated }: {
           fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
           // Дефолт — тот же цвет, что у icon-кнопок шапки; исключён — иконка accent,
           // режим считывается с места, не открывая поповер
-          color: excluded ? C.accent : TB.iconColor,
+          // Тон нейтральный: акцент читается как «включено», а горело бы
+          // отрицательное состояние («решения не сохраняются»). Режим виден
+          // обводкой и подписью — как у ExpiryButton
+          color: TB.iconColor,
           opacity: saving ? 0.6 : 1,
         }}
       >

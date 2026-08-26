@@ -39,7 +39,7 @@ import { resolveChatOrigin } from '../../lib/chatOrigin';
 import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
-import { CHAT_ACTION_ORDER, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../../lib/chatActions';
+import { CHAT_ACTION_ORDER, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../../lib/chatActions';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -1014,7 +1014,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const [ctxMenu, setCtxMenu] = useState<DOMRect | null>(null);
   // Пины шапки: пока список пуст — ряд дефолтный (все действия видны); первый пин
   // включает ручной режим (pinned в ряду, остальные в «⋯»)
-  const headerVis = useActionVisibility('chat-header', HEADER_ACTIONS_HIDDEN_BY_DEFAULT);
+  const headerVis = useActionVisibility('chat-header', isCompact ? HEADER_COMPACT_HIDDEN_BY_DEFAULT : HEADER_ACTIONS_HIDDEN_BY_DEFAULT);
   // Пикер срока по якорю из right-click меню (паттерн expiryMenu из ChatCard)
   const [expiryMenu, setExpiryMenu] = useState<DOMRect | null>(null);
   // При смене чата попапы тулбара закрываются: данные привязаны к сессии, и
@@ -1502,7 +1502,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           // вместе с меню, и её rect брать было бы неоткуда
           onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
           action: {
-            icon: visible ? <Eye size={15} strokeWidth={2} /> : <EyeOff size={15} strokeWidth={2} />,
+            icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
             title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
             onClick: () => headerVis.toggle(k),
           },
@@ -1566,8 +1566,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // внутри MenuItem.action) — весь набор выставляется одним заходом
   const visAction = (key: string) => ({
     icon: headerVis.isVisible(key)
-      ? <Eye size={14} strokeWidth={2} />
-      : <EyeOff size={14} strokeWidth={2} />,
+      ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
     title: headerVis.isVisible(key) ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
     onClick: () => headerVis.toggle(key),
   });

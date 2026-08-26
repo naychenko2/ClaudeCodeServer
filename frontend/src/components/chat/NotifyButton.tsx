@@ -45,7 +45,9 @@ export function NotifyButton({ session, isMobile, onSessionUpdated }: {
   return (
     <ToolbarIconButton
       onClick={toggle}
-      active={on}
+      // Акцентная плашка снята: в ряду шапки такие кнопки стоят подряд, и
+      // оранжевый переставал означать главное действие. Состояние показывает
+      // сама иконка — Bell против BellOff (образец тона — ExpiryButton)
       disabled={saving}
       isMobile={isMobile}
       // Ghost-ряд шапки гасит кнопку в покое; включённые уведомления — состояние,

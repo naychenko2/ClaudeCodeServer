@@ -1817,8 +1817,8 @@ export function Composer({
   // это по клику (меню не закрывается — набор выставляется одним заходом)
   const visAction = (key: string) => ({
     icon: composerVis.isVisible(key)
-      ? <Eye size={15} strokeWidth={2} />
-      : <EyeOff size={15} strokeWidth={2} />,
+      ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
     title: composerVis.isVisible(key) ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
     onClick: () => composerVis.toggle(key),
   });

@@ -44,3 +44,10 @@ export const CARD_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 export const HEADER_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
   'rename', 'pin', 'wall', 'notify', 'dossier', 'delete',
 ];
+
+// Мобильная шапка: ряд там не переносится, и каждая кнопка отъедает у названия
+// чата. Наружу оставляем только срок хранения — он же индикатор временного чата;
+// остальное достаётся из «⋯», которое на мобиле раскрывается боттом-шитом
+export const HEADER_COMPACT_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
+  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'delete',
+];

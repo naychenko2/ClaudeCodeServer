@@ -96,6 +96,15 @@ if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(OAuthTokenVar))
     Console.WriteLine($"[Claude] Токен подписки взят из конфига Claude:OAuthToken ({oauthToken.Length} симв.)");
 }
 
+// Последний рубеж пайплайна: исключение, не пойманное по дороге, логируется структурно
+// (маршрут, тип, точка броска) и превращается в 500 ProblemDetails — см.
+// Services/Http/UnhandledExceptionHandler.cs. AddProblemDetails() нужен самому middleware:
+// без зарегистрированного IProblemDetailsService оно отказывается стартовать. На готовые
+// ответы контроллеров это не влияет — тело problem+json пишут только StatusCodePages и
+// обработчик исключений, а StatusCodePages здесь не подключён.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExceptionHandler>();
+
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
@@ -846,6 +855,10 @@ app.Services.GetRequiredService<WorkspaceKnowledgeStore>()
     .MigrateFromProjects(app.Services.GetRequiredService<ProjectManager>().GetAll());
 
 app.UseForwardedHeaders();
+
+// Ставится сразу за ForwardedHeaders — раньше любого перехватчика, чтобы падение в них
+// тоже попало в структурный лог, а не в безымянное сообщение Kestrel.
+app.UseExceptionHandler();
 
 
 // Принудительный HTTPS только для публичного домена naychenko.me;

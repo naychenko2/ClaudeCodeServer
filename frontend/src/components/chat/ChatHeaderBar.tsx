@@ -39,7 +39,7 @@ import { resolveChatOrigin } from '../../lib/chatOrigin';
 import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
-import { CHAT_ACTION_ORDER, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../../lib/chatActions';
+import { CHAT_ACTION_ORDER, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../../lib/chatActions';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -1014,7 +1014,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const [ctxMenu, setCtxMenu] = useState<DOMRect | null>(null);
   // Пины шапки: пока список пуст — ряд дефолтный (все действия видны); первый пин
   // включает ручной режим (pinned в ряду, остальные в «⋯»)
-  const headerVis = useActionVisibility('chat-header', isCompact ? HEADER_COMPACT_HIDDEN_BY_DEFAULT : HEADER_ACTIONS_HIDDEN_BY_DEFAULT);
+  // Стена настраивается отдельно и разом для всех своих колонок; обычная шапка —
+  // своим набором, у мобильной он ýже (ряд не переносится, место дорогое)
+  const headerVis = useActionVisibility(
+    compact ? 'chat-wall' : 'chat-header',
+    compact ? WALL_ACTIONS_HIDDEN_BY_DEFAULT
+      : isCompact ? HEADER_COMPACT_HIDDEN_BY_DEFAULT : HEADER_ACTIONS_HIDDEN_BY_DEFAULT,
+  );
   // Пикер срока по якорю из right-click меню (паттерн expiryMenu из ChatCard)
   const [expiryMenu, setExpiryMenu] = useState<DOMRect | null>(null);
   // При смене чата попапы тулбара закрываются: данные привязаны к сессии, и
@@ -1359,7 +1365,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
   // живёт в разделе «Уведомления»
-  const notifyBtn = online && !compact
+  const notifyBtn = online
     ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
@@ -1376,13 +1382,17 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Доступность решает контекст: закрепление живёт только у чатов вне проекта
   // (у проектных сессий его нет в API), досье — только у проектных, стена и
   // удаление — только там, где владелец экрана дал колбэк
+  // Гейта по compact здесь больше нет: в узкой колонке «Стены» действия раньше
+  // просто отключались, потому что ряд не вмещал их все. Теперь состав ряда
+  // выбирает пользователь глазиком (по умолчанию наружу выведен только срок),
+  // а «⋯» на месте всегда — значит прятать сами действия незачем
   const headerActionAvailable: Record<ChatActionKey, boolean> = {
-    rename: online && !compact,
-    pin: online && !compact && !session.projectId,
-    tags: canTag && !compact,
-    wall: !!onAddToWall && !compact,
-    notify: online && !compact && isNotifySupported(),
-    dossier: !!project && online && !compact,
+    rename: online,
+    pin: online && !session.projectId,
+    tags: canTag,
+    wall: !!onAddToWall,
+    notify: online && isNotifySupported(),
+    dossier: !!project && online,
     expiry: online,
     delete: !!onChatDeleted && online && !compact,
   };

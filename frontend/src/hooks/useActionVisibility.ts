@@ -12,10 +12,12 @@ import { useCallback, useState } from 'react';
 // устройства свои привычки и другая ширина экрана), та же природа, что у
 // cc_chat_view / cc_proj_board_*. Формат общий — JSON-массив строк.
 
-export type ActionSurface = 'chat-header' | 'composer' | 'chat-card';
+export type ActionSurface = 'chat-header' | 'chat-wall' | 'composer' | 'chat-card';
 
 const KEYS: Record<ActionSurface, string> = {
   'chat-header': 'cc_chat_header_hidden',
+  // Стена — своя настройка на все её колонки сразу (см. chatActions)
+  'chat-wall': 'cc_chat_wall_hidden',
   'composer': 'cc_composer_hidden',
   'chat-card': 'cc_chat_card_hidden',
 };

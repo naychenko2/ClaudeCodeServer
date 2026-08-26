@@ -51,3 +51,11 @@ export const HEADER_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 export const HEADER_COMPACT_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
   'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'delete',
 ];
+
+// Колонка «Стены»: там своя настройка видимости, ОБЩАЯ для всех чатов на стене —
+// колонки узкие и одинаковые, и держать набор кнопок отдельно у каждого чата
+// значило бы настраивать одно и то же по многу раз. Наружу по умолчанию только
+// срок хранения (он же индикатор временного чата), остальное — из «⋯»
+export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
+  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'delete',
+];

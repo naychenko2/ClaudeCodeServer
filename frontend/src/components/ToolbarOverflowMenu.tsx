@@ -36,6 +36,10 @@ export type OverflowItem = {
   // Отдельной кнопкой, а не иконкой ВНУТРИ пункта: <button> в <button> вложить
   // нельзя, поэтому строка становится flex-обёрткой (тот же приём, что в ui/Menu)
   action?: { icon: ReactNode; title: string; onClick: () => void };
+  // Клик по строке не закрывает меню. Нужен строкам-настройкам (пилюли шапки):
+  // там основной клик и есть переключение видимости, и набор выставляется одним
+  // заходом — как у строк-переключателей, но без второго контрола рядом с глазиком
+  keepOpen?: boolean;
 };
 
 type TriggerRenderer = (p: { open: boolean; toggle: () => void; ref: (el: HTMLElement | null) => void }) => ReactNode;
@@ -98,17 +102,26 @@ export function ToolbarOverflowMenu({
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
     // Портал считает координаты один раз, в момент открытия, и сам за якорем не
-    // ходит: прокрутка ленты или списка оставила бы карточку висеть в воздухе.
-    // Закрываем — то же, что ui/Menu просит делать на вызывающей стороне.
-    // capture: true — ловим прокрутку любого внутреннего контейнера, а не только окна
+    // ходит: прокрутка увезла бы кнопку из-под карточки. Закрываем — то же, что
+    // ui/Menu просит делать на вызывающей стороне.
+    //
+    // Слушаем ТОЛЬКО прокручиваемых предков триггера, а не все события с capture:
+    // глобальный слушатель ловил и чужие прокрутки — лента чата доскроливается
+    // до низа сама при каждом рендере, и меню в шапке закрывалось в тот же кадр,
+    // то есть не открывалось вовсе.
+    const scrollParents: (HTMLElement | Window)[] = [window];
+    for (let el = rootRef.current?.parentElement; el; el = el.parentElement) {
+      const oy = getComputedStyle(el).overflowY;
+      if (oy === 'auto' || oy === 'scroll') scrollParents.push(el);
+    }
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
+    scrollParents.forEach(t => t.addEventListener('scroll', close));
     window.addEventListener('resize', close);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      scrollParents.forEach(t => t.removeEventListener('scroll', close));
       window.removeEventListener('resize', close);
     };
     // close стабилен по составу (setOpen/setAnchor) — без него в зависимостях эффект
@@ -245,7 +258,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
   const handle = () => {
     if (item.disabled) return;
     item.onClick?.();
-    if (!isToggle) onDone();   // переключатель оставляет меню открытым
+    if (!isToggle && !item.keepOpen) onDone();   // переключатель и строка-настройка оставляют меню открытым
   };
   const row = (
     <button

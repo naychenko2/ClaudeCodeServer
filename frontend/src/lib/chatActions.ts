@@ -59,3 +59,29 @@ export const HEADER_COMPACT_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
   'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'delete',
 ];
+
+// === Пилюли шапки чата (индикаторы, не действия) ===
+// Контекст, деньги, расход, механика команды, прогресс workflow. Управляются тем
+// же глазиком в «⋯», что и кнопки действий: у кого-то на экране важны деньги, у
+// кого-то только контекст, а у третьего шапка должна быть пустой.
+//
+// Только в ОБЫЧНОЙ шапке: в колонке «Стены» пилюль нет вовсе (там узко), а на
+// мобиле они склеены в один объединённый чип — прятать в нём нечего по частям.
+export type ChatBadgeKey = 'mechanic' | 'workflow' | 'context' | 'cost' | 'fal' | 'glif' | 'spend';
+
+export const CHAT_BADGE_ORDER: ChatBadgeKey[] = [
+  'mechanic', 'workflow', 'context', 'cost', 'fal', 'glif', 'spend',
+];
+
+export const CHAT_BADGE_LABELS: Record<ChatBadgeKey, string> = {
+  mechanic: 'Механика команды',
+  workflow: 'Прогресс workflow',
+  context: 'Контекст сессии',
+  cost: 'Стоимость модели',
+  fal: 'Траты fal.ai',
+  glif: 'Генерации glif',
+  spend: 'Расход токенов',
+};
+
+// Пилюли по умолчанию показаны все — они и есть сводка состояния чата;
+// прятать их имеет смысл только осознанно (в HIDDEN-наборах их нет)

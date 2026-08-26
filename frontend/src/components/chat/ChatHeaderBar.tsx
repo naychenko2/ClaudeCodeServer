@@ -39,7 +39,7 @@ import { resolveChatOrigin } from '../../lib/chatOrigin';
 import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
-import { CHAT_ACTION_ORDER, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../../lib/chatActions';
+import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -1293,6 +1293,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
   // Бейдж последней запущенной механики команды (только на десктопе)
+  // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
+  // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе, на мобиле они склеены в
+  // один чип. По умолчанию показаны все — они и есть сводка состояния чата
+  const badgeVisible = (key: ChatBadgeKey) => !compact && headerVis.isVisible(key);
   const mechanicBadge = lastMechanic && !isCompact ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
   // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
@@ -1353,12 +1357,14 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {spendBadge}
     </>
   ) : (
+    // Десктопная шапка: пилюли по отдельности, и каждую можно убрать глазиком.
+    // На мобиле они склеены в один чип, прятать там по частям нечего
     <>
-      {ctxBadge}
-      {providerCostBadge}
-      <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />
-      <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />
-      {spendBadge}
+      {badgeVisible('context') && ctxBadge}
+      {badgeVisible('cost') && providerCostBadge}
+      {badgeVisible('fal') && <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />}
+      {badgeVisible('glif') && <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />}
+      {badgeVisible('spend') && spendBadge}
     </>
   );
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
@@ -1498,9 +1504,44 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Меню «⋯» — постоянная кнопка ряда (не появляется и не исчезает по обстоятельствам).
   // Внутри — ВСЕ действия чата: клик по строке выполняет действие, глазик справа
   // показывает, стоит ли эта кнопка в самом ряду, и переключает её видимость
+  // Строки пилюль в том же меню: у них нет «действия», клик по строке и есть
+  // переключение видимости (keepOpen — меню не закрывается). Только в обычной
+  // шапке: на стене пилюль нет, на мобиле они склеены в один чип
+  // В меню попадают только те пилюли, которым в ЭТОМ чате есть что показать:
+  // сами они рисуются условно (механика — если команда работала, workflow — пока
+  // идёт прогон, fal/glif — если были генерации), и полный каталог в списке врал
+  // бы про состав шапки. Скрытая глазиком пилюля из списка не исчезает — её
+  // доступность считается по данным, а не по видимости
+  const badgeAvailable: Record<ChatBadgeKey, boolean> = {
+    mechanic: !!lastMechanic,
+    workflow: !!activeWorkflow,
+    context: hasContextInfo(ctxEstimate),
+    cost: isCliProvider ? hasProviderCostInfo(cost, provBalance) : hasClaudeCostInfo(cost, rateWindows),
+    fal: falCost.total > 0,
+    glif: glifCost.count > 0,
+    // У расхода собственный источник (SpendBadge грузит его сам), снаружи виден
+    // только факт, что ходы в чате были
+    spend: cost.results > 0,
+  };
+  const badgeItems: OverflowItem[] = compact || isCompact ? [] : CHAT_BADGE_ORDER.filter(k => badgeAvailable[k]).map(k => {
+    const visible = headerVis.isVisible(k);
+    return {
+      key: `badge-${k}`,
+      // Иконки слева нет намеренно: у пилюль своей иконки-действия не бывает, а
+      // глазик уже стоит справа — второй такой же слева был бы дублем
+      label: CHAT_BADGE_LABELS[k],
+      keepOpen: true,
+      onClick: () => headerVis.toggle(k),
+      action: {
+        icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        title: visible ? 'Скрыть пилюлю' : 'Показать пилюлю',
+        onClick: () => headerVis.toggle(k),
+      },
+    };
+  });
   const headerOverflow = headerActions.length > 0 ? (
-    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact} items={
-      headerActions.map(k => {
+    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact} items={[
+      ...headerActions.map(k => {
         const m = actionMeta(k);
         const visible = headerVis.isVisible(k);
         return {
@@ -1517,7 +1558,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             onClick: () => headerVis.toggle(k),
           },
         };
-      }) as OverflowItem[]}
+      }),
+      ...badgeItems,
+    ] as OverflowItem[]}
       // Триггер-обёртка фиксирует свой rect в ref: теги/срок из меню откроются
       // по нему (кнопка «⋯» скроется вместе с меню, rect из события был бы пуст)
       renderTrigger={({ toggle, ref }) => (
@@ -1558,7 +1601,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
       ...(isCompact ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
-      {mechanicBadge}{workflowBadge}{costBadges}{actionBtns}
+      {badgeVisible('mechanic') && mechanicBadge}{badgeVisible('workflow') && workflowBadge}{costBadges}{actionBtns}
     </div>
   );
 

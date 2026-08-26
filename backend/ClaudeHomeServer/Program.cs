@@ -468,7 +468,12 @@ builder.Services.AddSingleton<LaunchConfigService>();
 builder.Services.AddSingleton<ProjectServiceDiscovery>();
 // "proxy" ходит только к нашим же сервисам: dev-серверы проектов и скачивание готового
 // документа у OnlyOffice в office-callback. Egress-прокси им не нужен — см. WithoutEgressProxy.
+// Медиа-прокси /api/proxy на этом клиенте НЕ сидит — он живёт на отдельном "media-proxy" ниже:
+// прямой канал наружу душится DPI, поэтому внешние CDN обязаны идти через системный egress.
 builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
+// Внешние CDN медиа (/api/proxy): прямой канал к ним душится DPI —
+// эти запросы ОБЯЗАНЫ идти через системный egress-прокси.
+builder.Services.AddHttpClient("media-proxy");
 // Загрузка произвольных пользовательских URL (save-from-url): без авто-редиректов,
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")

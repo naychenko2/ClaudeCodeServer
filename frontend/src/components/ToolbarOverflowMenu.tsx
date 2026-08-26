@@ -274,7 +274,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
   const row = (
     <Tag
       {...(item.preview != null
-        ? { role: 'none' as const }
+        ? { role: 'none' as const, onClick: handle }
         : {
             type: 'button' as const, onClick: handle, disabled: item.disabled,
             role: isToggle ? 'menuitemcheckbox' : 'menuitem',

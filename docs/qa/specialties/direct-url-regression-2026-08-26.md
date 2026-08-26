@@ -232,3 +232,115 @@ App.tsx:485 пробрасывает `initialHash.personaView` в seed
   Рекомендация для фикса: расширить `toHash` в `lib/nav.ts:32-35`, чтобы
   `personaView === 'automation'` возвращал `#/personas/{id}/automation`,
   и зеркально — `parseHash` уже это умеет.
+
+## Подтверждающий прогон v2 (27.08.2026, после коммита `95f5f5a7`, Вера)
+
+Задача `f4cd77ef-7c82-40ab-ae32-a4666811c030` (волна 2 из 2). Стенд:
+`master` HEAD `95f5f5a7` (`fix(nav): добавить ветку automation в toHash`),
+Vite dev `:5173`, бэкенд `:5000` (PID 32088, не гасить). Прогон через
+`mcp__plugin_playwright_playwright__*` в чистой вкладке и после `F5`.
+
+### TL;DR
+
+Все семь пунктов прошли. Карточки `8344b598-e6f6-47a9-93dc-95d7d1697acc`
+(«Прямой URL ролей специальностей сбрасывает на общий раздел персон») и
+`b74ff206-6188-4bda-9bec-edca5a9624de` («Экран настройки роли /edit не
+показывает форму редактирования») закрываю: коммиты `6870579d`
+(`fix(specialties): не терять personaView при первом монтировании`,
+задача 1) и `95f5f5a7` (`fix(nav): добавить ветку automation в toHash`,
+задача 2) покрывают обе первопричины.
+
+### 1. `#/personas/specialties/executor` (admin) — ✅
+
+| Шаг | Ожидание | Факт |
+|-----|----------|------|
+| Чистая вкладка `goto(...)` | Визитка «Исполнитель (универсальный)» | URL сохранился, визитка с настройками, секциями промпта, привязками, кнопкой «Редактировать», 2 персоны в блоке «Кто работает по этой роли» |
+| `location.reload()` | URL + визитка | URL `#/personas/specialties/executor`, state `{screen:'personas', personaView:'specialties'}` сохранился |
+
+Скриншоты: `.cc-attachments/specialties-recheck-v2/01-direct-executor.png`,
+`.cc-attachments/specialties-recheck-v2/01b-f5-executor.png`.
+
+### 2. `#/personas/specialties/coordinator` (admin) — ✅
+
+| Шаг | Ожидание | Факт |
+|-----|----------|------|
+| Чистая вкладка `goto(...)` | Визитка «Координатор» | URL сохранился, визитка |
+| `location.reload()` | URL + визитка | URL сохранился |
+
+Скриншоты: `.cc-attachments/specialties-recheck-v2/02-coordinator.png`,
+`.cc-attachments/specialties-recheck-v2/02b-f5-coordinator.png`.
+
+### 3. `#/personas/specialties/executor/edit` (admin) — ✅
+
+Полная форма SpecialtyEditView с кнопками «Отмена»/«Сохранить» (disabled,
+пока правок нет), секции Доступ / Инструменты / Секции промпта / Привязки /
+Модели по уровням / Уровень по умолчанию / Пресеты. URL сохранился и после
+`location.reload()`.
+Скриншоты: `.cc-attachments/specialties-recheck-v2/03-admin-edit.png`,
+`.cc-attachments/specialties-recheck-v2/03b-f5-admin-edit.png`.
+
+### 4. `#/personas/specialties/executor/edit` (sandboxer, role=user) — ✅
+
+Даунгрейд viewMode `'edit' → 'role'` сработал (`PersonasSpecialties.tsx:95-96`).
+Визитка «Исполнитель (универсальный)» в read-only, кнопок
+«Редактировать»/«Сохранить»/«Отмена» нет, URL
+`#/personas/specialties/executor/edit` сохранился и после F5, падения нет.
+Блок «Кто работает по этой роли» пуст — у sandboxer нет доступа к тем же
+персонам, что и у admin.
+Скриншот: `.cc-attachments/specialties-recheck-v2/04-nonadmin-edit.png`.
+
+Дополнительно проверила:
+- `#/personas/specialties/executor` под sandboxer → визитка «Исполнитель»
+  в read-only (скриншот `04a-nonadmin-executor.png`).
+- `#/personas/specialties/coordinator/edit` под sandboxer → визитка
+  «Координатор» в read-only (скриншот `04b-nonadmin-coordinator-edit.png`).
+
+### 5. `#/personas/specialties` без роли — ✅
+
+Под sandboxer: список ролей с переключателем «Показать все роли каталога»,
+видны роли «Исполнитель» и «Координатор». URL сохранился и после F5.
+Скриншоты: `.cc-attachments/specialties-recheck-v2/05-list-roles.png`,
+`.cc-attachments/specialties-recheck-v2/05b-f5-list-roles.png`.
+
+### 6. `#/personas/{id}/automation` (admin) — ✅
+
+| Шаг | Ожидание | Факт |
+|-----|----------|------|
+| Чистая вкладка `goto("#/personas/b40886f0-c732-438e-8b05-fd53e6c6556e/automation")` | Визитка персоны «Тестировщик» с активной вкладкой «Проактивность» | URL сохранился, в шапке вкладок видна «Проактивность», контент: «нет правил» + «Подключи первое правило» + кнопки «Создать правило»/«✨ Подобрать автоматически»/«✨ Создать по промпту» |
+| `location.reload()` | URL + вкладка «Проактивность» активна | URL `#/personas/b40886f0-.../automation`, state `{screen:'personas', persona:'b40886f0-...', personaView:'automation'}` сохранился, вкладка «Проактивность» активна, контент тот же |
+
+Скриншоты: `.cc-attachments/specialties-recheck-v2/06-automation-clean.png`,
+`.cc-attachments/specialties-recheck-v2/06b-final-f5-automation.png`.
+
+Также `#/personas/{id}` без `/automation` под admin → визитка персоны
+«Тестировщик» со вкладкой «Профиль» (скриншот
+`specialties-recheck-v2/06a-persona-card.png`).
+
+### 7. Мобильная раскладка 360 CSS — ✅
+
+| Адрес | Результат |
+|-------|-----------|
+| `#/personas/specialties/executor` (admin) | Визитка с кнопкой «Редактировать», все секции на месте, URL сохранился |
+| `#/personas/specialties/executor/edit` (admin) | SpecialtyEditView с «Отмена»/«Сохранить», Доступ / Инструменты / Секции промпта / Привязки / Модели по уровням / Уровень по умолчанию / Пресеты, URL сохранился |
+
+Скриншоты: `.cc-attachments/specialties-recheck-v2/07a-mobile-executor.png`,
+`.cc-attachments/specialties-recheck-v2/07a-f5-mobile-executor.png`,
+`.cc-attachments/specialties-recheck-v2/07b-mobile-edit.png`,
+`.cc-attachments/specialties-recheck-v2/07b-f5-mobile-edit.png`.
+
+### Состояние среды (известное)
+
+`dotnet build` в основной копии падает не по коду, а по блокировке
+`ClaudeHomeServer.dll` живым инстансом продукта (PID 32088, запущен из
+`backend\ClaudeHomeServer\bin\Debug\net10.0\`). Процесс не гасить —
+Vite dev на :5173 и бэкенд :5000 обслуживают страницу с актуальным
+HEAD `95f5f5a7`. Это блокирует запуск `dotnet build`/`dotnet test`,
+но не влияет на UI-прогон через Playwright.
+
+### Заключение
+
+- Семь из семи пунктов прошли, регресс автоматизации (пункт 6) закрыт
+  коммитом `95f5f5a7`.
+- Карточки `8344b598-e6f6-47a9-93dc-95d7d1697acc` и
+  `b74ff206-6188-4bda-9bec-edca5a9624de` **закрываю**: оба дефекта
+  описаны коммитами `6870579d` и `95f5f5a7`.

@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
@@ -1704,7 +1704,7 @@ public class SessionManagerTests : IDisposable
     {
         var config = GlmMigrationConfig();
         return new GlmModelAliasMigration(_sut,
-            new SpecialtySettingsStore(config, NullLogger<SpecialtySettingsStore>.Instance),
+            ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config),
             config, NullLogger<GlmModelAliasMigration>.Instance);
     }
 

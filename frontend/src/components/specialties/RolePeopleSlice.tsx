@@ -1,35 +1,32 @@
-// Срез «Кто работает по этой роли» (карточка роли, волна 4
-// «Персонализация специальностей»). Только owner-слой: на global/user список
+// Срез «Кто работает по этой роли» (карточка роли, волна 2
+// «Специальности как у персон»). Только owner-слой: на global/user список
 // персон был бы про чужих людей (принцип T8).
 //
-// Строка персоны:
-//   • аватар + имя
-//   • пометки в одну строку через « · » в порядке «модель, умения»:
-//       «модель задана вручную» (T5 — задаётся снаружи через manualByPersona)
-//       «не хватает типовых умений: N» (вычисляется: дефолтные умения роли из
-//        каталога секций промптов сравниваются с личными привязками персоны
-//        по (type, condition, mode); цели (target, path) игнорируются — их
-//        подбирает AI при материализации)
-//   • кнопка «Применить типовые» (единственное исключение из read-only на
-//     экране просмотра): добавляет недостающее, ничего не перезаписывает.
-//     Состояния:
-//       idle          → «Применить типовые»
-//       applying      → «Применяю…»
-//       success(N)    → «Добавлено умений: N» (сбрасывается через 3 с)
-//       error         → «Не удалось применить — попробуйте позже»
-//     Перед вызовом — ConfirmDialog P13:
-//     «Добавить персоне {имя} недостающие типовые умения этой роли?
-//      Уже настроенные умения останутся как есть.»
+// Оформление — по образцу «Недавние разговоры» из PersonaPreview: единый
+// белый блок R.xl overflow:hidden, строки padding '11px 14px', разделители
+// borderTop C.borderLight, ховер C.bgSelected. Строка = PersonaAvatar 32 +
+// имя персоны, клик открывает персону. Справа в строке — кнопка
+// «Применить типовые», когда у персоны есть недостающие умения роли; она
+// выключена и показывает счётчик успеха/ошибки, состояния:
+//   idle          → «Применить типовые»
+//   applying      → «Применяю…»
+//   success(N)    → «Добавлено умений: N» (сбрасывается через 3 с)
+//   error         → «Не удалось применить — попробуйте позже».
+// Перед вызовом — ConfirmDialog P13. Колбэк после успешного apply-defaults:
+// parent получает обновлённую персону и обновит свой список/стор.
 //
-// Вызывающий передаёт уже отфильтрованный список персон роли; компонент не
-// сортирует и не фильтрует по specialty, только по имени (ru).
+// Пустое состояние списка — «Пока никто не работает по этой роли».
+//
+// Заголовок секции («Кто работает по этой роли») и счётчик строк рисует
+// РОДИТЕЛЬ через SectionLabel — здесь только белый блок и подпись пустоты,
+// чтобы блок встал в правую колонку визитки как у недавних чатов.
 //
 // Файлы SpecialtyRoleView/SpecialtyEditView правят другие исполнители волны —
 // этот блок принимает готовые personas и catalog снаружи. Стили только из
 // lib/design.ts, контролы из ui-кита, без Tailwind и CSS-модулей.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R } from '../../lib/design';
 import { Button, ConfirmDialog } from '../ui';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { api } from '../../lib/api';
@@ -71,23 +68,12 @@ type ApplyState =
   | { kind: 'error' };
 
 // Через сколько миллисекунд состояние success/error сбрасывается обратно в idle.
-// 3 секунды — достаточно, чтобы человек прочитал «Добавлено умений: N», и
-// не слишком долго, чтобы кнопка не висела «мёртвой» после реального действия.
 const RESET_AFTER_MS = 3000;
 
-// === Заголовок секции (общий с SpecialtyRoleView / SpecialtyEditView) ===
-function SectionTitle({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <div style={{
-      fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700,
-      color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.07em',
-    }}>{children}</div>
-  );
-}
-
-// Строка пометок в одну линию через « · » — порядок «модель, умения».
-// Склеиваются ТОЛЬКО те, что есть: «модель задана вручную» идёт первой
-// (про модель), «не хватает типовых умений: N» — второй (про умения).
+// === Подпись персоны: имя + строка пометок через « · » ===
+//
+// «модель задана вручную» (T5 — задаётся снаружи через manualByPersona) идёт
+// первой (про модель), «не хватает типовых умений: N» — второй (про умения).
 function NotesLine({ notes }: { notes: string[] }): React.ReactElement | null {
   if (notes.length === 0) return null;
   return (
@@ -131,33 +117,74 @@ function ApplyStateButton({ state, onClick }: {
   }
 }
 
-// Строка персоны с аватаром, именем, пометками и кнопкой «Применить типовые».
-function RichPersonaRow({ persona, notes, applyState, onApply }: {
+// Навигация на персону — общий канал приложения (App.tsx ловит pending id +
+// событие 'cc-open-persona' и переключает hubTab на «Персоны»).
+// Здесь, а не пропсом сверху: PersonasSpecialties onOpenPersonaView не передаёт,
+// а клик должен работать из любой точки визитки.
+function openPersonaCard(persona: Persona): void {
+  if (!persona?.id) return;
+  try {
+    sessionStorage.setItem('cc_pending_persona_id', persona.id);
+    sessionStorage.removeItem('cc_pending_persona_view');
+  } catch {
+    // sessionStorage может быть недоступен (SSR/приватный режим) — клин клика
+    // всё равно полезен: диспатч события разбудит App.tsx, если id уже там.
+  }
+  window.dispatchEvent(new Event('cc-open-persona'));
+}
+
+// Строка персоны по образцу «Недавние разговоры»: вся левая часть кликабельна
+// (открывает персону), справа — отдельная кнопка «Применить типовые», если
+// у персоны есть недостающие умения. Кнопка не показывается, когда применять
+// нечего: «Применить типовые» появляется только при наличии нехватки.
+function RichPersonaRow({
+  persona, notes, applyState, onApply, onOpen,
+}: {
   persona: Persona;
   notes: string[];
   applyState: ApplyState;
   onApply: () => void;
+  onOpen: (persona: Persona) => void;
 }): React.ReactElement {
+  const canApply = notes.some(n => n.startsWith('не хватает'));
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm,
-      padding: '7px 10px',
-      border: `1px solid ${C.borderLight}`, borderRadius: R.md,
-      background: C.bgWhite, fontFamily: FONT.sans, fontSize: FS.xs,
-      color: C.textPrimary, boxSizing: 'border-box',
-      flexWrap: 'wrap',
-    }}>
-      <PersonaAvatar persona={persona} size={26} />
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(persona)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(persona);
+        }
+      }}
+      title="Открыть персону"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '11px 14px',
+        background: C.bgWhite, cursor: 'pointer',
+        fontFamily: FONT.sans, fontSize: FS.xs,
+        color: C.textPrimary, boxSizing: 'border-box',
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = C.bgSelected; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = C.bgWhite; }}
+    >
+      <PersonaAvatar persona={persona} size={32} />
       <div style={{
         flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
       }}>
         <span style={{
-          fontWeight: 600, color: C.textHeading,
+          fontWeight: 600, fontSize: 13.5, color: C.textHeading,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{persona.name}</span>
         <NotesLine notes={notes} />
       </div>
-      <ApplyStateButton state={applyState} onClick={onApply} />
+      {canApply && (
+        // stopPropagation: клик по кнопке не должен открывать персону.
+        <span onClick={(e) => e.stopPropagation()}>
+          <ApplyStateButton state={applyState} onClick={onApply} />
+        </span>
+      )}
     </div>
   );
 }
@@ -255,25 +282,28 @@ export function RolePeopleSlice({
     }
   };
 
+  // Пустой список — отдельная короткая подпись без белого блока.
   if (sorted.length === 0) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <SectionTitle>Кто работает по этой роли</SectionTitle>
-        <div style={{
-          fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5,
-        }}>
-          По этой роли пока никто не работает. Назначьте специальность персоне в её
-          карточке — она получит эти модели и доступы автоматически.
-        </div>
+      <div style={{
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+        padding: '16px 14px',
+        fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
+      }}>
+        Пока никто не работает по этой роли
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      <SectionTitle>Кто работает по этой роли</SectionTitle>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        {sorted.map(persona => {
+    <>
+      {/* Единый белый блок-список по образцу «Недавние разговоры»:
+          общий контейнер, строки отделены borderTop C.borderLight */}
+      <div style={{
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+        overflow: 'hidden',
+      }}>
+        {sorted.map((persona, i) => {
           // Берём override (после успешного apply-defaults), иначе prop.
           const effective = overrides[persona.id] ?? persona;
           const missing = missingDefaults(defaults, effective);
@@ -285,13 +315,17 @@ export function RolePeopleSlice({
           }
           const applyState = applyStates[persona.id] ?? { kind: 'idle' };
           return (
-            <RichPersonaRow
-              key={persona.id}
-              persona={effective}
-              notes={notes}
-              applyState={applyState}
-              onApply={() => handleApplyClick(effective)}
-            />
+            <div key={persona.id} style={{
+              borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
+            }}>
+              <RichPersonaRow
+                persona={effective}
+                notes={notes}
+                applyState={applyState}
+                onApply={() => handleApplyClick(effective)}
+                onOpen={openPersonaCard}
+              />
+            </div>
           );
         })}
       </div>
@@ -304,7 +338,6 @@ export function RolePeopleSlice({
           onCancel={() => setConfirmFor(null)}
         />
       )}
-    </div>
+    </>
   );
 }
-

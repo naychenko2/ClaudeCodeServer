@@ -79,6 +79,9 @@ Thumbs.db
 !frontend/public/apple-touch-icon-*.png
 !docs/assets/screenshots/*.png
 *.jpg
+# Аватарки ролей раздела «Специальности» — комплект лежит в репозитории,
+# без него RoleAvatar уходит в фолбэк с глифом
+!frontend/src/assets/specialties/*.jpg
 *.log
 onlyoffice/local.json
 

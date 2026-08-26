@@ -9,6 +9,10 @@ jobs:
   backend:
     name: Backend (build + test)
     runs-on: ubuntu-latest
+    # История: тесты на Linux-раннере зависали насмерть (прогоны умирали на дефолтном
+    # 6-часовом таймауте). Потолок джобы — страховка от сгоревших часов; виновника
+    # зависания ищет blame-режим шага Test ниже.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -25,8 +29,15 @@ jobs:
       # сети и внешних advisory), — в свойстве WarningsNotAsErrors там же, в props.
       - name: Build
         run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
+      # Blame-режим: тестовый процесс молчит дольше 15 минут — VSTest снимает мини-дамп,
+      # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. Без этого
+      # зависание на раннере выглядит как 39 минут тишины и «canceled» без виновника
+      # (локально, на Windows, набор проходит за ~3 минуты — ловить нечего).
       - name: Test
-        run: dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
+        run: >
+          dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
+          --blame-hang-timeout 15m --blame-hang-dump-type mini --diagnostic
+          --diagnostic-filelogger-synchronous-output
 
   frontend:
     name: Frontend (lint + typecheck + build)

@@ -473,6 +473,18 @@ export function ChatCard({
   // сохранено. Уходит вся кнопка, а не только меню — раскладку она не двигает (absolute)
   const showActions = online && !editing && (CAN_HOVER ? hovered : isActive);
 
+  // Строка общих тегов (макет chat-tags-switch): чипы идут ТРЕТЬЕЙ строкой — под
+  // превью или статусом задачи, а не сразу под названием, чтобы метки не разрывали
+  // связку «имя чата → о чём он». Снять тег отсюда нельзя — только через меню
+  // маркировки: крестик ловил клики по плитке
+  const tagsRow = tags && tags.length > 0 ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', minWidth: 0 }}>
+      {tags.map(t => (
+        <TagChip key={t.name} name={t.name} color={t.color} />
+      ))}
+    </div>
+  ) : null;
+
   // Статус несёт перелив ФОНА карточки (.cc-tint): по фону слева направо идёт
   // еле заметная волна статусного цвета. Ауры вокруг и цветного бордюра нет.
   // У живых (breath) волна движется, у error — ровная подкраска. Цвет и силу
@@ -760,20 +772,13 @@ export function ChatCard({
           )}
         </div>
 
-        {/* Строка общих тегов (макет chat-tags-switch): чипы под названием. Снять тег
-            отсюда нельзя — только через меню маркировки: крестик ловил клики по плитке */}
-        {tags && tags.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', minWidth: 0 }}>
-            {tags.map(t => (
-              <TagChip key={t.name} name={t.name} color={t.color} />
-            ))}
-          </div>
-        )}
-
         {/* Чат-задача: одна строка статуса выполнения вместо превью-промпта и
             плашки-дубля. Обычный чат — превью + плашка происхождения как раньше */}
         {taskChat ? (
-          <TaskStatusLine info={taskChat} />
+          <>
+            <TaskStatusLine info={taskChat} />
+            {tagsRow}
+          </>
         ) : (
           <>
             {/* Строка 2: превью последнего сообщения */}
@@ -785,6 +790,8 @@ export function ChatCard({
                 {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
               </div>
             )}
+
+            {tagsRow}
 
             {/* Под описанием: происхождение и механика — иконка с подписью, прижаты
                 влево (собеседник ушёл в подложку) */}

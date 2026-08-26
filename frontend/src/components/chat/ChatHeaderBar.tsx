@@ -1,13 +1,17 @@
-import { useState, useEffect, type ReactNode } from 'react';
-import { Plus, Menu, Tags } from 'lucide-react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
+import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutButton } from './DossierOptOutButton';
 import { NotifyButton } from './NotifyButton';
+import { updateChatFields } from '../../lib/chatUpdate';
+import { isNotifySupported, useChatNotifyOn } from '../../lib/notify';
+import { expiresAt, formatTimeLeft, formatExpiryDate } from '../../lib/expiry';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { PersonaFace } from '../../features/personas/PersonaFace';
 import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
@@ -20,7 +24,8 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
-import { BackButton, ChatTopicIcon, Modal, ModalActions } from '../ui';
+import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
+import { BackButton, ChatTopicIcon, Modal, ModalActions, Menu, MenuItem, MenuSep } from '../ui';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
@@ -33,6 +38,8 @@ import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
 import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
+import { useActionVisibility } from '../../hooks/useActionVisibility';
+import { CHAT_ACTION_ORDER, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../../lib/chatActions';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -803,6 +810,11 @@ interface ChatHeaderBarProps {
   participants?: Persona[] | null;
   // Состав группы изменён через поповер участников — родитель обновляет session
   onSessionUpdated?: (s: Session) => void;
+  // «На стену» — набор стены живёт в воркспейсе; не задан — действия нет
+  onAddToWall?: () => void;
+  // Чат удалён из шапки: уйти из него и обновить список должен владелец экрана.
+  // Не задан — действия «Удалить» в шапке нет вовсе
+  onChatDeleted?: (sessionId: string) => void;
   // Шапка живёт в собственном острове (Islands): фон и нижнюю границу даёт
   // карточка-остров, тулбар рисуется прозрачным и без borderBottom
   island?: boolean;
@@ -942,7 +954,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact }: ChatHeaderBarProps) {
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -996,10 +1008,19 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  // Right-click меню шапки: якорь — точка курсора (desktop). Состав — действия чата,
+  // которые в ряду живут по отдельности (теги/уведомления/досье/срок) + AI-действия.
+  // Здесь же живут тумблеры пинирования: «⋯» при активных пинах открывает это же меню
+  const [ctxMenu, setCtxMenu] = useState<DOMRect | null>(null);
+  // Пины шапки: пока список пуст — ряд дефолтный (все действия видны); первый пин
+  // включает ручной режим (pinned в ряду, остальные в «⋯»)
+  const headerVis = useActionVisibility('chat-header', HEADER_ACTIONS_HIDDEN_BY_DEFAULT);
+  // Пикер срока по якорю из right-click меню (паттерн expiryMenu из ChatCard)
+  const [expiryMenu, setExpiryMenu] = useState<DOMRect | null>(null);
   // При смене чата попапы тулбара закрываются: данные привязаны к сессии, и
   // показывать стейт предыдущего чата в новом — дефект UX
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс стейтов попапов тулбара при смене чата
-  useEffect(() => { setTagMenu(null); setParticipantsOpen(false); }, [session.id]);
+  useEffect(() => { setTagMenu(null); setParticipantsOpen(false); setCtxMenu(null); setExpiryMenu(null); }, [session.id]);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
   // проекта (вкладка «Команда», #/project/{id}/persona/{pid}), в глобальном — раздел «Персоны».
   // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
@@ -1259,7 +1280,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Элементы шапки — выносим, чтобы отрендерить в двух раскладках (с центр. переключателем и без)
   const openBtn = onOpenSidebar && !isCompact ? (
     <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isCompact}>
-      <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      <MenuIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </ToolbarIconButton>
   ) : null;
   const titleEl = isMobile && onBack
@@ -1341,29 +1362,158 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const notifyBtn = online && !compact
     ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
-  // Теги чата — тот же TagAssignMenu, что в меню карточки списка. Только для проектных
-  // чатов: теги живут в реестре проекта, у чата вне проекта их нет
-  const tagsBtn = canTag && !compact ? (
-    <ToolbarIconButton
-      onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setTagMenu(r); }}
-      active={!!tagMenu}
-      isMobile={isCompact}
-      title="Теги чата"
-    >
-      <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-    </ToolbarIconButton>
-  ) : null;
-
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} />;
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
+
+  // === Видимость ряда действий ===
+  // «⋯» стоит в ряду ВСЕГДА, а тумблеры внутри решают, что показывать рядом с ним.
+  // По умолчанию скрытых нет — ряд выглядит как раньше, плюс постоянная кнопка меню
+  const notifyOn = useChatNotifyOn(session);
+  // Набор действий — общий каталог чата (тот же, что у карточки в списке).
+  // Доступность решает контекст: закрепление живёт только у чатов вне проекта
+  // (у проектных сессий его нет в API), досье — только у проектных, стена и
+  // удаление — только там, где владелец экрана дал колбэк
+  const headerActionAvailable: Record<ChatActionKey, boolean> = {
+    rename: online && !compact,
+    pin: online && !compact && !session.projectId,
+    tags: canTag && !compact,
+    wall: !!onAddToWall && !compact,
+    notify: online && !compact && isNotifySupported(),
+    dossier: !!project && online && !compact,
+    expiry: online,
+    delete: !!onChatDeleted && online && !compact,
+  };
+  const headerActions = CHAT_ACTION_ORDER.filter(k => headerActionAvailable[k]);
+  // Порядок ряда — канонический: набор скрытых фильтрует ряд, сохраняя привычную
+  // расстановку оставшихся действий относительно друг друга
+  const visibleActions = headerActions.filter(k => headerVis.isVisible(k));
+
+  // Исполнение действий шапки. Часть уже живёт готовыми кнопками (у них свои
+  // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
+  const [renameDialog, setRenameDialog] = useState<string | null>(null);
+  const [deleteAsk, setDeleteAsk] = useState(false);
+  const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
+    switch (key) {
+      case 'rename': setRenameDialog(session.name ?? ''); break;
+      case 'pin':
+        void api.chats.update(session.id, { pinned: !session.isPinned })
+          .then(s => onSessionUpdated?.(s))
+          .catch(() => showToast('Чат', 'Не удалось изменить закрепление', 'info'));
+        break;
+      case 'tags': if (anchor) setTagMenu(anchor); break;
+      case 'wall': onAddToWall?.(); break;
+      case 'notify':
+        void updateChatFields(session, { notificationsMuted: notifyOn })
+          .then(s => onSessionUpdated?.(s))
+          .catch(() => showToast('Уведомления', 'Не удалось изменить уведомления чата', 'info'));
+        break;
+      case 'dossier':
+        void updateChatFields(session, { excludeFromDossiers: !session.excludeFromDossiers })
+          .then(s => onSessionUpdated?.(s))
+          .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+        break;
+      case 'expiry': if (anchor) setExpiryMenu(anchor); break;
+      case 'delete': setDeleteAsk(true); break;
+    }
+  };
+  // Подпись и иконка действия — с текущим состоянием (мьют, срок, закрепление):
+  // одна точка на ряд, «⋯» и меню правого клика
+  const actionMeta = (key: ChatActionKey): { icon: ReactNode; label: string; active?: boolean; danger?: boolean } => {
+    switch (key) {
+      case 'rename': return { icon: <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Переименовать' };
+      case 'pin': return {
+        icon: <Pin size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} fill={session.isPinned ? 'currentColor' : 'none'} />,
+        label: session.isPinned ? 'Открепить' : 'Закрепить', active: !!session.isPinned,
+      };
+      case 'tags': return { icon: <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Теги чата', active: !!tagMenu };
+      case 'wall': return { icon: <Columns3 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'На стену' };
+      case 'notify': return {
+        icon: notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены', active: notifyOn,
+      };
+      case 'dossier': return {
+        icon: <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: session.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются',
+        active: !!session.excludeFromDossiers,
+      };
+      case 'expiry': return {
+        icon: <Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: session.expiresAfterMinutes != null ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения',
+        active: session.expiresAfterMinutes != null,
+      };
+      case 'delete': return { icon: <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Удалить чат', danger: true };
+    }
+  };
+  // Узел кнопки ряда: у досье и срока свои готовые компоненты (у них внутри
+  // поповеры и собственная разметка), остальные — обычная icon-кнопка тулбара
+  const rowNode = (key: ChatActionKey): ReactNode => {
+    if (key === 'dossier') return dossierBtn;
+    if (key === 'expiry') return expiryBadge;
+    if (key === 'notify') return notifyBtn;
+    const m = actionMeta(key);
+    return (
+      <ToolbarIconButton
+        onClick={e => runAction(key, (e.currentTarget as HTMLElement).getBoundingClientRect())}
+        title={m.label}
+        isMobile={isCompact}
+        active={m.active}
+        color={m.danger ? C.danger : undefined}
+        className={m.active ? 'cc-ghost-live' : undefined}
+      >
+        {m.icon}
+      </ToolbarIconButton>
+    );
+  };
+  // Якорь для поповеров, открываемых из «⋯» (теги/срок): rect триггера «⋯»,
+  // обновляется при каждом рендере — в onClick он ещё живой
+  const overflowAnchorRef = useRef<DOMRect | null>(null);
+  // Меню «⋯» — постоянная кнопка ряда (не появляется и не исчезает по обстоятельствам).
+  // Внутри — ВСЕ действия чата: клик по строке выполняет действие, глазик справа
+  // показывает, стоит ли эта кнопка в самом ряду, и переключает её видимость
+  const headerOverflow = headerActions.length > 0 ? (
+    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact} items={
+      headerActions.map(k => {
+        const m = actionMeta(k);
+        const visible = headerVis.isVisible(k);
+        return {
+          key: k,
+          icon: m.icon,
+          label: m.label,
+          danger: m.danger,
+          // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
+          // вместе с меню, и её rect брать было бы неоткуда
+          onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
+          action: {
+            icon: visible ? <Eye size={15} strokeWidth={2} /> : <EyeOff size={15} strokeWidth={2} />,
+            title: visible ? 'Скрыть кнопку из ряда' : 'Показать кнопку в ряду',
+            onClick: () => headerVis.toggle(k),
+          },
+        };
+      }) as OverflowItem[]}
+      // Триггер-обёртка фиксирует свой rect в ref: теги/срок из меню откроются
+      // по нему (кнопка «⋯» скроется вместе с меню, rect из события был бы пуст)
+      renderTrigger={({ toggle, ref }) => (
+        <span ref={el => {
+          ref(el);
+          if (el) overflowAnchorRef.current = el.getBoundingClientRect();
+        }}>
+          <ToolbarIconButton onClick={toggle} title="Ещё действия">
+            <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        </span>
+      )} />
+  ) : null;
+  // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
+  // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
-    // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
+    // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
+    // приглушает ряд в покое, проявляет по наведению
+    : <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
@@ -1377,6 +1527,186 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {mechanicBadge}{workflowBadge}{costBadges}{actionBtns}
     </div>
   );
+
+  // === Right-click меню шапки (desktop) ===
+  // Якорь — точка курсора; состав повторяет ряд действий + AI-действия из палитры.
+  // На компакте/таче не вешаем: там нет правой кнопки, а long-press в шапке не нужен
+  // (ряд и так весь на экране). Гейт по online — как у кнопок ряда
+  const dossierExcluded = !!session.excludeFromDossiers;
+  const chatTemporary = session.expiresAfterMinutes != null;
+  // AI-действия из палитры: слушатели уже смонтированы в шапке (cc-ai-run)
+  const runAi = (action: string) =>
+    window.dispatchEvent(new CustomEvent('cc-ai-run', { detail: { action } }));
+  // Глазик-спутник строки: показывает, стоит ли эта кнопка в самом ряду шапки,
+  // и переключает её видимость. Меню при этом не закрывается (клик гасит всплытие
+  // внутри MenuItem.action) — весь набор выставляется одним заходом
+  const visAction = (key: string) => ({
+    icon: headerVis.isVisible(key)
+      ? <Eye size={14} strokeWidth={2} />
+      : <EyeOff size={14} strokeWidth={2} />,
+    title: headerVis.isVisible(key) ? 'Скрыть кнопку из ряда' : 'Показать кнопку в ряду',
+    onClick: () => headerVis.toggle(key),
+  });
+  const ctxMenuEl = ctxMenu && !isCompact ? (
+    <Menu anchor={ctxMenu} onClose={() => setCtxMenu(null)} minWidth={240} maxHeight={340}>
+      {canTag && (
+        <MenuItem
+          icon={<Tags size={15} strokeWidth={2} />}
+          label="Теги чата"
+          action={visAction('tags')}
+          // Меню тегов открывается по тому же якорю: это меню уже закрылось бы,
+          // и rect взять неоткуда — фиксируем якорь до закрытия (приём ChatCard)
+          onClick={() => { const a = ctxMenu; setCtxMenu(null); setTagMenu(a); }}
+        />
+      )}
+      {isNotifySupported() && (
+        <MenuItem
+          icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
+          label={notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены'}
+          action={visAction('notify')}
+          onClick={() => {
+            setCtxMenu(null);
+            void updateChatFields(session, { notificationsMuted: notifyOn })
+              .then(s => onSessionUpdated?.(s))
+              .catch(() => showToast('Уведомления', 'Не удалось изменить уведомления чата', 'info'));
+          }}
+        />
+      )}
+      {project && (
+        <MenuItem
+          icon={<History size={15} strokeWidth={2} />}
+          label={dossierExcluded ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+          action={visAction('dossier')}
+          onClick={() => {
+            setCtxMenu(null);
+            void updateChatFields(session, { excludeFromDossiers: !dossierExcluded })
+              .then(s => onSessionUpdated?.(s))
+              .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+          }}
+        />
+      )}
+      <MenuItem
+        icon={<Hourglass size={15} strokeWidth={2} />}
+        label={chatTemporary ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения…'}
+        action={visAction('expiry')}
+        onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
+      />
+      {online && hasMessages && (
+        <>
+          <MenuSep />
+          <div style={{ padding: '4px 10px', fontFamily: FONT.mono, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.6, color: C.textMuted }}>
+            AI
+          </div>
+          <MenuItem
+            icon={<Pencil size={15} strokeWidth={2} />}
+            label="Переименовать по переписке"
+            onClick={() => { setCtxMenu(null); runAi('chat.retitle'); }}
+          />
+          <MenuItem
+            icon={<ListChecks size={15} strokeWidth={2} />}
+            label="Задачи из чата"
+            onClick={() => { setCtxMenu(null); runAi('chat.extract'); }}
+          />
+          <MenuItem
+            icon={<NotebookPen size={15} strokeWidth={2} />}
+            label="Итог сессии в заметку"
+            onClick={() => { setCtxMenu(null); runAi('chat.summary'); }}
+          />
+        </>
+      )}
+    </Menu>
+  ) : null;
+  // Пикер срока из right-click меню — по сохранённому якорю (тот же паттерн, что
+  // ExpiryButton, но якорь приходит из ctx-меню, а не с собственной кнопки)
+  const expiryAt = expiresAt(session);
+  // Диалоги действий шапки: ручное переименование и подтверждение удаления.
+  // Удаление необратимо, поэтому спрашиваем всегда — как в списке чатов
+  const actionDialogsEl = (
+    <>
+      {renameDialog !== null && (
+        <Modal
+          width={420}
+          title="Переименовать чат"
+          onClose={() => setRenameDialog(null)}
+          footer={
+            <ModalActions
+              confirmLabel="Сохранить"
+              confirmDisabled={!renameDialog.trim()}
+              onConfirm={() => {
+                const next = renameDialog.trim();
+                setRenameDialog(null);
+                if (!next || next === (session.name ?? '')) return;
+                void updateChatFields(session, { name: next })
+                  .then(s => onSessionUpdated?.(s))
+                  .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
+              }}
+              onCancel={() => setRenameDialog(null)}
+            />
+          }
+        >
+          <input
+            autoFocus
+            value={renameDialog}
+            onChange={e => setRenameDialog(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            aria-label="Название чата"
+            style={{
+              width: '100%', boxSizing: 'border-box', height: 38, padding: '0 10px',
+              fontSize: 14, fontFamily: FONT.sans, color: C.textPrimary,
+              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, outline: 'none',
+            }}
+          />
+        </Modal>
+      )}
+      {deleteAsk && (
+        <Modal
+          width={420}
+          title="Удалить чат?"
+          subtitle={<>Чат «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{session.name ?? 'Новый чат'}</strong>» будет удалён без возможности восстановления.</>}
+          onClose={() => setDeleteAsk(false)}
+          footer={
+            <ModalActions
+              confirmLabel="Удалить"
+              confirmVariant="danger"
+              onConfirm={() => {
+                setDeleteAsk(false);
+                const del = session.projectId
+                  ? api.sessions.delete(session.projectId, session.id)
+                  : api.chats.delete(session.id);
+                // Уйти из удалённого чата и обновить список — дело владельца экрана
+                void del
+                  .then(() => onChatDeleted?.(session.id))
+                  .catch(() => showToast('Чат', 'Не удалось удалить чат', 'info'));
+              }}
+              onCancel={() => setDeleteAsk(false)}
+            />
+          }
+        />
+      )}
+    </>
+  );
+  const ctxExpiryMenuEl = expiryMenu && !isCompact ? (
+    <Menu anchor={expiryMenu} onClose={() => setExpiryMenu(null)} minWidth={300} maxHeight={190}>
+      <div style={{ padding: '6px 8px 8px' }}>
+        <ExpiryPicker
+          value={session.expiresAfterMinutes}
+          columns={3}
+          onChange={minutes => {
+            setExpiryMenu(null);
+            if (minutes === (session.expiresAfterMinutes ?? null)) return;
+            void updateChatFields(session, { expiresAfterMinutes: minutes })
+              .then(s => onSessionUpdated?.(s))
+              .catch(() => showToast('Время жизни', 'Не удалось изменить срок жизни чата', 'info'));
+          }}
+        />
+        {expiryAt && (
+          <p style={{ margin: '8px 0 0', fontSize: 11.5, color: C.textMuted, lineHeight: 1.4 }}>
+            Удалится ~{formatExpiryDate(expiryAt)}, если не будет активности.
+          </p>
+        )}
+      </div>
+    </Menu>
+  ) : null;
 
   // Hero-шапка (Islands, десктоп): не тулбар в коробке, а заголовок раздела прямо
   // на холсте — как шапка «Календаря». У персоны слева фото скруглённым квадратом
@@ -1394,12 +1724,20 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // openBtn обязателен: без него свёрнутый сайдбар не вернуть при открытом чате
       <div style={{ position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box', borderBottom: `1px solid ${C.border}` }}>
         {/* flexWrap: при узком окне правый кластер уходит второй строкой — остров подрастает */}
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: TB.gap, padding: '12px 18px 10px' }}>
+        <div
+          onContextMenu={e => {
+            e.preventDefault();
+            setCtxMenu(new DOMRect(e.clientX, e.clientY, 0, 0));
+          }}
+          style={{ position: 'relative', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: TB.gap, padding: '12px 18px 10px' }}>
           {openBtn}
           {heroTitle}
           {rightCluster}
         </div>
         {tagMenuEl}
+        {ctxMenuEl}
+        {ctxExpiryMenuEl}
+      {actionDialogsEl}
       </div>
     );
   }
@@ -1408,6 +1746,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
     <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
+      // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
+      onContextMenu={isCompact ? undefined : e => {
+        e.preventDefault();
+        setCtxMenu(new DOMRect(e.clientX, e.clientY, 0, 0));
+      }}
       style={{
         ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
@@ -1415,6 +1758,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       }}>
       {openBtn}{titleEl}{rightCluster}
       {tagMenuEl}
+      {ctxMenuEl}
+      {ctxExpiryMenuEl}
+      {actionDialogsEl}
     </Toolbar>
   );
 }

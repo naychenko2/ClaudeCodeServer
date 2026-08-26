@@ -258,6 +258,10 @@ export function DesktopWorkspace(p: Props) {
       skills={p.skills} agents={p.agents}
       attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange}
       headerIsland={headerIsland}
+      // Действия чата из шапки, которыми владеет экран: набор стены и уход из
+      // удалённого чата (тот же колбэк, что чистит выбор после удаления в списке)
+      onAddToWall={wallOn ? () => handleAddToWall(p.activeSession!) : undefined}
+      onChatDeleted={p.onClearSession}
     />
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

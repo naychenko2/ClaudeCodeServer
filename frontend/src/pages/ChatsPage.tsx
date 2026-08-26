@@ -252,6 +252,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               <ChatPanel
                 key={activeChat.id}
                 session={activeChat}
+                onChatDeleted={handleChatDeleted}
                 isMobile
                 onBack={backToList}
                 skills={skills}
@@ -317,6 +318,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             <ChatPanel
               key={activeChat.id}
               session={activeChat}
+              onChatDeleted={handleChatDeleted}
               headerIsland
               skills={skills}
               attachedFiles={attachedFiles}

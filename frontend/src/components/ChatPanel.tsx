@@ -93,6 +93,13 @@ interface Props {
   onBack?: () => void;
   onWorkflowRunning?: (active: boolean, sessionId: string) => void;
   onOpenSidebar?: () => void;
+  // Действия чата, которые умеет только владелец экрана (шапка их показывает
+  // в общем наборе действий — том же, что у карточки чата в списке):
+  // «На стену» — набор стены живёт в воркспейсе; не задан — действия нет.
+  onAddToWall?: () => void;
+  // «Удалить» — сам чат удалить может и шапка, но уйти из удалённого чата и
+  // обновить список должен владелец. Не задан — действия нет
+  onChatDeleted?: (sessionId: string) => void;
   skills?: SkillInfo[];
   // .md-агенты Claude проекта — для единого селектора собеседника и индикации в шапке
   agents?: AgentInfo[];
@@ -187,7 +194,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -2054,6 +2061,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       agent={persona ? null : chatAgent}
       participants={isGroupChat ? participantPersonas : null}
       onSessionUpdated={onSessionUpdated}
+      onAddToWall={onAddToWall}
+      onChatDeleted={onChatDeleted}
     />
   );
 

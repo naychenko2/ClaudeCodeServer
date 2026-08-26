@@ -977,7 +977,7 @@ export type ServerMessage = { sessionId: string } & (
   // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
   // start=false — закончил: success=true → subtaskCount/waveCount/elapsedMs, success=false →
   // failure (готовый текст причины, тот же, что уйдёт в title карточки отказа следом)
-  | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number }
+  | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number; personaId?: string | null }
   // Пульс волны командной реализации (Э2 КР-наблюдаемости). Эфемерное: в ленту НЕ
   // попадает и в историю НЕ пишется, состояние держится в ChatState.teamWavePulse.
   // Список задач приходит отдельным REST-снапшотом (/chats/{id}/team-wave-snapshot) при

@@ -426,12 +426,74 @@ export const TEAM_PLANNING_TEXT = 'Изучает задачу и собирае
 export function teamPlanningIndicatorVisible(
   state: SessionTeamImplement | null | undefined,
   items: ChatItem[],
-  live?: { startedAt: number } | null,
+  live?: { startedAt: number; personaId?: string | null } | null,
 ): boolean {
   if (!state || state.stopped) return false;
   if (live === null) return false;
   if (state.stage !== 'planning' && !live) return false;
   return !items.some(it => it.kind === 'team_escalation' && !it.escalation.resolved);
+}
+
+// Резолв персоны для карточки «Готовит план…». Приоритет:
+//  1) live.personaId из события team_planning (бэкенд прокидывает ResolvePlanner).
+//     Это самый свежий ответ и совпадает с тем, кто реально строит план.
+//  2) state.plannerPersonaId — фиксируется в режиме при включении КР, переживает
+//     перезагрузку и старые события без personaId.
+//  3) state.coordinatorPersonaId — координатор как запасной кандидат.
+//  4) session.personaId — персона самого чата. Без всего этого карточка деградирует
+//     до безличной плашки; безымянного «Планировщика» рисовать нельзя — та же болезнь,
+//     что лечили для координатора
+//
+// live принимает любой объект с опциональным personaId — структурная типизация: и старые
+// события без поля (тогда liveId === null и резолв идёт по state), и новые с ним
+export function resolvePlannerPersonaId(
+  state: SessionTeamImplement | null | undefined,
+  livePersonaId: string | null | undefined,
+  chatPersonaId?: string | null,
+): string | null {
+  if (livePersonaId) return livePersonaId;
+  if (state?.plannerPersonaId) return state.plannerPersonaId;
+  if (state?.coordinatorPersonaId) return state.coordinatorPersonaId;
+  return chatPersonaId ?? null;
+}
+
+// Перевод item-индекса в позицию узла ленты. Лента режется окном (WINDOW_FIRST=50) по
+// УЗЛАМ, а data-feed-index на элементах — это item-индекс. Без перевода прыжок «К
+// карточке» врал бы дважды: «уже видно» (item-индекс >= числа узлов) и перелёт
+// (item-индекс как hiddenCount). Чистая функция — чтобы тест не тянул весь ChatPanel
+// и signalr. Устойчивый перевод: для одиночной карточки берём узел с start === idx,
+// для цели внутри склеенного блока действий — самый поздний узел с start <= idx
+// (клик «К карточке» попадает в шапку блока, а не в рандомный tool_use внутри)
+export function itemIdxToNodePos(
+  nodes: ReadonlyArray<{ start: number }>,
+  idx: number,
+): number {
+  if (nodes.length === 0 || idx < 0) return -1;
+  for (let k = nodes.length - 1; k >= 0; k--) {
+    if (nodes[k].start <= idx) return k;
+  }
+  return -1;
+}
+
+// Арифметика окна ленты для прыжка «К карточке». Вынесена из ChatPanel, чтобы тест
+// не тянул signalr и весь стор. Принимает уже посчитанную позицию узла и текущее
+// состояние окна; возвращает новое значение hiddenCount (или null, если двигать
+// не нужно — setHiddenCount(null) с тем же значением пропустит ререндер). Идея
+// одна — те же координаты, что режут renderedItems, никакого побочного обхода
+// через nodes/ref. Сравнение на «уже видно» тоже по УЗЛУ, потому что
+// visibleNodes = renderedItems.slice(hidden)
+export function computeJumpHidden(
+  nodePos: number,
+  currentHidden: number | null,
+  totalNodes: number,
+  windowSize: number,
+  contextBefore: number = 3,
+): number | null {
+  if (nodePos < 0) return currentHidden;
+  const defaultHidden = Math.max(0, totalNodes - windowSize);
+  const cur = currentHidden ?? defaultHidden;
+  if (nodePos >= cur) return cur;
+  return Math.max(0, nodePos - contextBefore);
 }
 
 // Склонение числительного (ру) — своя копия, как и в остальных местах проекта

@@ -373,6 +373,11 @@ public record TeamPlanningMessage(
         // «Планировщик не уместил план в лимит вывода», «Планировщик вернул неразборчивый план».
         // null у Start=true и у Success=true.
         string? Failure,
+        // Персона-планировщик, чьим именем рисуется карточка «Готовит план…» в ленте:
+        // спец. может быть null (ResolvePlanner ничего не нашёл) — тогда фронт гасит
+        // карточку до безличной плашки. Default=null ради обратной совместимости со
+        // старыми событиями в истории/журнале
+        string? PersonaId = null,
         int PromptChars = 0,
         int ResponseChars = 0)
     : ServerMessage("team_planning");

@@ -20,13 +20,18 @@ public sealed class ExternalPreviewTransformer(int port, HostString publicHost, 
     {
         await base.TransformRequestAsync(ctx, request, destinationPrefix, cancellationToken);
 
-        // Заголовок Host в сторону дев-сервера остаётся хостом НАЗНАЧЕНИЯ (так делает база
-        // YARP, и мы этого не меняем): Vite (server.allowedHosts) и webpack-dev-server
-        // валидируют Host и на чужое имя отвечают «Blocked request. This host is not allowed».
-        // Диагностируется это скверно — выглядит как поломка прокси, а не как настройка сайта.
+        // Host ОБЯЗАН стать хостом назначения, и добиться этого нужно явно: база YARP
+        // копирует заголовок исходного запроса, то есть дев-сервер увидел бы публичное имя
+        // поддомена. Vite (server.allowedHosts) и webpack-dev-server такой Host не пускают —
+        // «Blocked request. This host is not allowed», — и выглядит это как поломка прокси,
+        // хотя дело в проверке хоста у самого дев-сервера.
+        //
+        // null означает «подставь хост из адреса назначения» — то есть 127.0.0.1 или [::1],
+        // а такие имена дев-серверы разрешают по умолчанию.
         //
         // Публичное имя уходит в X-Forwarded-*: фреймворки, которым надо построить внешний
         // адрес, берут его оттуда.
+        request.Headers.Host = null;
         request.Headers.Remove(ForwardedHost);
         request.Headers.TryAddWithoutValidation(ForwardedHost, publicHost.Value);
         request.Headers.Remove(ForwardedProto);

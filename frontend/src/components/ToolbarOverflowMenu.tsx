@@ -30,6 +30,12 @@ export type OverflowItem = {
   active?: boolean;     // текущий раздел — подсвечивается accent-цветом
   danger?: boolean;
   disabled?: boolean;
+  // Второе действие строки — кнопка-иконка справа (у пункта есть и основной клик,
+  // и побочная команда: глазик видимости кнопки в ряду). Клик по ней НЕ выполняет
+  // основное действие и НЕ закрывает меню — набор выставляется одним заходом.
+  // Отдельной кнопкой, а не иконкой ВНУТРИ пункта: <button> в <button> вложить
+  // нельзя, поэтому строка становится flex-обёрткой (тот же приём, что в ui/Menu)
+  action?: { icon: ReactNode; title: string; onClick: () => void };
 };
 
 type TriggerRenderer = (p: { open: boolean; toggle: () => void; ref: (el: HTMLElement | null) => void }) => ReactNode;
@@ -45,6 +51,7 @@ export function ToolbarOverflowMenu({
   indicator,
   align = 'right',
   renderTrigger,
+  openTrigger,
 }: {
   isMobile?: boolean;
   items?: OverflowItem[];
@@ -57,6 +64,10 @@ export function ToolbarOverflowMenu({
   indicator?: number | boolean | ReactNode;
   align?: 'left' | 'right';
   renderTrigger?: TriggerRenderer;
+  // Внешнее открытие меню (right-click по зоне тулбара): при изменении counter
+  // меню открывается по anchor (если задан; без anchor — под триггером «⋯»).
+  // Якорь с нулевым размером ставит дропдаун прямо к точке курсора
+  openTrigger?: { counter: number; anchor?: DOMRect | null };
 }) {
   const [open, setOpen] = useState(false);
   // Куда раскрывать десктопный дропдаун и сколько ему позволено занять по высоте.
@@ -64,6 +75,9 @@ export function ToolbarOverflowMenu({
   // уходило за экран целиком (на мобиле беды нет — там боттом-шит). Считаем в
   // момент открытия по rect триггера: вверх, если снизу места меньше, чем сверху.
   const [drop, setDrop] = useState<{ up: boolean; maxH: number }>({ up: false, maxH: 0 });
+  // Якорь внешнего открытия (right-click): пока задан, десктоп-дропдаун рендерится
+  // fixed-порталом по точке курсора; закрытие меню сбрасывает якорь
+  const [extAnchor, setExtAnchor] = useState<DOMRect | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerElRef = useRef<HTMLElement | null>(null);
   const labelId = useId();
@@ -72,31 +86,53 @@ export function ToolbarOverflowMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+    // close стабилен по составу (setOpen/setExtAnchor) — без него в зависимостях эффект
+    // пересоздавался бы каждый рендер
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const close = () => setOpen(false);
-  const toggle = () => {
-    if (open) { setOpen(false); return; }
-    // Высоту меряем оценкой, а не по факту: реальная высота известна только у уже
-    // отрисованного меню, а измерять его в layout-эффекте — значит дёргать setState
-    // из эффекта ради того же ответа. Строк у списка мы знаем, произвольному
-    // содержимому (children) даём типовой максимум.
+  const close = () => { setOpen(false); setExtAnchor(null); };
+  // Расчёт направления дропдауна по rect якоря (кнопка «⋯» или точка курсора при
+  // внешнем открытии) — общая часть toggle и openTrigger-эффекта
+  const openNear = (anchorRect: DOMRect | null | undefined) => {
     const h = items ? items.length * ROW_H + (title ? TITLE_H : 0) + PAD_H : CHILDREN_H;
-    const r = rootRef.current?.getBoundingClientRect();
+    // Внешний якорь приоритетнее rect корневого блока: right-click открывает меню
+    // к точке курсора, а не под кнопкой «⋯»
+    const r = anchorRect ?? rootRef.current?.getBoundingClientRect();
     if (r && !isMobile) {
       const below = window.innerHeight - r.bottom - GAP - EDGE;
       const above = r.top - GAP - EDGE;
       const up = h > below && above > below;
       setDrop({ up, maxH: Math.max(MIN_H, Math.floor(up ? above : below)) });
     }
+    setExtAnchor(anchorRect ?? null);
     setOpen(true);
   };
+  const toggle = () => {
+    if (open) { close(); return; }
+    // Высоту меряем оценкой, а не по факту: реальная высота известна только у уже
+    // отрисованного меню, а измерять его в layout-эффекте — значит дёргать setState
+    // из эффекта ради того же ответа. Строк у списка мы знаем, произвольному
+    // содержимому (children) даём типовой максимум.
+    openNear(undefined);
+  };
+
+  // Внешнее открытие (right-click по зоне): counter меняется — открываем по якорю
+  const prevTrigger = useRef(0);
+  useEffect(() => {
+    if (!openTrigger || openTrigger.counter === prevTrigger.current) return;
+    prevTrigger.current = openTrigger.counter;
+    openNear(openTrigger.anchor);
+    // openNear намеренно не в зависимостях: она замкнута на текущие items/title,
+    // а эффект должен срабатывать только по счётчику
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTrigger]);
 
   const content = children ?? (items ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -150,11 +186,20 @@ export function ToolbarOverflowMenu({
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
       {trigger}
 
-      {open && !isMobile && (
+      {open && !isMobile && !extAnchor && (
         <div role="menu" aria-labelledby={title ? labelId : undefined} style={dropdownStyle(align, drop)}>
           {title && <div id={labelId} style={sectionTitle}>{title}</div>}
           {content}
         </div>
+      )}
+      {/* Внешний якорь (right-click): fixed-портал в body по точке курсора —
+          absolute-дропдаун от корня не доехал бы до курсора на другом краю полосы */}
+      {open && !isMobile && extAnchor && createPortal(
+        <div role="menu" aria-labelledby={title ? labelId : undefined} style={fixedDropdownStyle(extAnchor, drop)}>
+          {title && <div id={labelId} style={sectionTitle}>{title}</div>}
+          {content}
+        </div>,
+        document.body,
       )}
 
       {open && isMobile && createPortal(
@@ -183,7 +228,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
     item.onClick?.();
     if (!isToggle) onDone();   // переключатель оставляет меню открытым
   };
-  return (
+  const row = (
     <button
       type="button" onClick={handle} disabled={item.disabled}
       role={isToggle ? 'menuitemcheckbox' : 'menuitem'} aria-checked={isToggle ? item.toggle : undefined}
@@ -194,9 +239,12 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         minHeight: isMobile ? 44 : undefined, fontFamily: FONT.sans,
         color: item.danger ? C.dangerText : item.active ? C.accent : C.textHeading,
         opacity: item.disabled ? 0.5 : 1,
+        // При действии-спутнике фон и скругление рисует обёртка, иначе подсветка
+        // обрывалась бы ровно перед кнопкой справа
+        ...(item.action ? { flex: 1, minWidth: 0, paddingRight: 4 } : null),
       }}
-      onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.background = C.bgInset; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      onMouseEnter={e => { if (!item.disabled && !item.action) e.currentTarget.style.background = C.bgInset; }}
+      onMouseLeave={e => { if (!item.action) e.currentTarget.style.background = 'transparent'; }}
     >
       {item.icon != null && (
         <span style={{
@@ -217,6 +265,24 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
       )}
       {!isToggle && item.dot && <span style={dotBadgeStatic} />}
     </button>
+  );
+  if (!item.action) return row;
+  // Строка с действием-спутником: подсветку наведения держит обёртка, кнопка
+  // справа гасит всплытие — основное действие пункта от неё не срабатывает
+  return (
+    <span
+      style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, borderRadius: R.lg, paddingRight: 4 }}
+      onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      {row}
+      <ToolbarIconButton
+        onClick={e => { e.stopPropagation(); item.action!.onClick(); }}
+        title={item.action.title}
+      >
+        {item.action.icon}
+      </ToolbarIconButton>
+    </span>
   );
 }
 
@@ -243,6 +309,23 @@ function dropdownStyle(align: 'left' | 'right', drop: { up: boolean; maxH: numbe
     ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: 'auto' as const } : null),
     background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
     boxShadow: SHADOW.dropdown, padding: 6, zIndex: Z.dropdown,
+  };
+}
+// Fixed-дропдаун по внешнему якорю (right-click): координаты viewport-ные, портал в
+// body — расчёт направления (вверх/вниз) общий с absolute-режимом через openNear
+function fixedDropdownStyle(anchor: DOMRect, drop: { up: boolean; maxH: number }): CSSProperties {
+  const left = Math.max(EDGE, Math.min(anchor.left, window.innerWidth - 240 - EDGE));
+  return {
+    position: 'fixed',
+    top: anchor.bottom + GAP,
+    left,
+    minWidth: 240, maxWidth: 320,
+    ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: 'auto' as const } : null),
+    background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
+    boxShadow: SHADOW.dropdown, padding: 6,
+    // Портал в body — вне контекста наложения исходной зоны, слой выше модалок
+    // (как у anchor-режима ui/Menu)
+    zIndex: Z.modal + 1,
   };
 }
 const sheetOverlay: CSSProperties = {

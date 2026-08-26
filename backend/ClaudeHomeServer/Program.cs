@@ -1092,7 +1092,13 @@ app.Use(async (ctx, next) =>
             // либо из access_token / Bearer (прямое открытие в новой вкладке). Затем сверяем
             // владельца проекта — иначе любой мог бы проксироваться на чужой dev-сервер.
             var jwtSvc = ctx.RequestServices.GetRequiredService<JwtService>();
-            var previewToken = ctx.Request.Cookies["cc_preview"];
+            // Куку принимаем только со СВОЕГО адреса. SameSite=Strict тут не защита: поддомен
+            // внешнего доступа — тот же site, и браузер приложил бы куку к запросу со страницы
+            // проксируемого дев-сайта (см. SecFetchSiteGuard). Отвергнутая кука роняет запрос
+            // на access_token/Bearer ниже — их автоматически никто не подставляет.
+            var previewToken = SecFetchSiteGuard.CookieAuthAllowed(ctx.Request)
+                ? ctx.Request.Cookies["cc_preview"]
+                : null;
             if (string.IsNullOrEmpty(previewToken))
             {
                 var q = ctx.Request.Query["access_token"].ToString();
@@ -1194,7 +1200,10 @@ app.Use(async (ctx, next) =>
             // cookie cc_telemetry (её ставит фронт перед загрузкой iframe — уходит и с
             // сабресурсами SigNoz), либо из access_token / Bearer (прямое открытие в новой вкладке).
             var jwtSvc = ctx.RequestServices.GetRequiredService<JwtService>();
-            var token = ctx.Request.Cookies["cc_telemetry"];
+            // Тот же гейт, что у preview: кука действует только со своего адреса
+            var token = SecFetchSiteGuard.CookieAuthAllowed(ctx.Request)
+                ? ctx.Request.Cookies["cc_telemetry"]
+                : null;
             if (string.IsNullOrEmpty(token))
             {
                 var q = ctx.Request.Query["access_token"].ToString();

@@ -286,9 +286,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     }
     const cellOfRec = (r: { tierStrong?: string | null; tierMedium?: string | null; tierWeak?: string | null } | null | undefined) =>
       (t === 'strong' ? r?.tierStrong : t === 'medium' ? r?.tierMedium : r?.tierWeak) || '';
+    // Волна 4 убрала owner/user-слои — действующая запись специальности живёт
+    // в одном global-слое; defaultSpecialty — на нём же. effectiveSpecialtyRecord
+    // оставлен ради совместимости сигнатуры в lib/specialties.ts, второй аргумент
+    // передаём тем же слоем (owner-цепочка → global).
     const rec = specialty !== 'none' && specSettings
-      ? effectiveSpecialtyRecord(specSettings.global, specSettings.owner, specialty) : null;
-    const defRec = specSettings?.owner.defaultSpecialty ?? specSettings?.global.defaultSpecialty ?? null;
+      ? effectiveSpecialtyRecord(specSettings.global, specSettings.global, specialty) : null;
+    const defRec = specSettings?.global.defaultSpecialty ?? null;
     const fromSpec = cellOfRec(rec) || cellOfRec(defRec);
     if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
     return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';

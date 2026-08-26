@@ -252,15 +252,16 @@ function setResettingScope(scope: WriteScope | null): void {
   if (_resettingScope !== scope) { _resettingScope = scope; writeEmit(); }
 }
 
-// Слить свежий ответ сервера в стейт-стор (для global/owner): эффект идентичен старой
-// mergeSavedLayer из модалки, но не требует settingsRef и не путает, откуда брать базу.
+// Слить свежий ответ сервера в стейт-стор: волна 4 убрала owner/user-слои, остался
+// один global; в нём же живёт и список пресетов. Скоуп записи по-прежнему трекаем
+// через preset.scope (теперь всегда 'global'), чтобы UI подписи не сломались.
+// Параметр scope сохранён в сигнатуре ради обратной совместимости с write-каналом,
+// но не используется — запись теперь всегда идёт в global.
 function mergeSavedLayer(base: SpecialtySettingsResponse,
-  scope: WriteScope, saved: SpecialtySettingsLayer): SpecialtySettingsResponse {
-  const merged = { ...base, [scope]: saved };
+  _scope: WriteScope, saved: SpecialtySettingsLayer): SpecialtySettingsResponse {
+  const merged: SpecialtySettingsResponse = { ...base, global: saved };
   merged.presets = [
-    ...(merged.owner?.presets ?? []).map(p => ({ ...p, scope: 'owner' as const })),
     ...(merged.global?.presets ?? []).map(p => ({ ...p, scope: 'global' as const })),
-    ...(merged.user?.presets ?? []).map(p => ({ ...p, scope: 'user' as const })),
   ];
   return merged;
 }
@@ -274,43 +275,41 @@ function emptyLayer(): SpecialtySettingsLayer {
 // Запись слоя: оптимистично применяем reducer к текущему снимку, шлём PUT, по ответу
 // фиксируем сохранённый снимок. Параллельные вызовы на одном ключе выстраиваются
 // в очередь — редьюсеры накладываются последовательно.
-function doSave(key: string, scope: WriteScope, reducer: LayerReducer,
+//
+// С переходом на единый глобальный слой (f8e7d0e0) — запись всегда идёт в global,
+// независимо от переданного scope. Scope/userId сохранены в сигнатуре ради обратной
+// совместимости с другими волнами (ModelsSpend/SpecialRulesTab); когда они перейдут
+// на «один слой», аргументы станут неактуальными.
+//
+// ВАЖНО: коллапс на global фиксируется во ВСЕХ трёх точках — applyLocal, applySaved
+// и rollbackLocal. Иначе при входном scope='owner' ответ ложился бы в _settings.owner,
+// а mergeSavedLayer удваивал бы список пресетов в UI; при scope='user' откат дёргал бы
+// удалённый GET /settings/user/{id}.
+async function doSave(key: string, scope: WriteScope, reducer: LayerReducer,
   userId: string | null | undefined): Promise<void> {
+  void scope;
   const seq = ++_writeSeq[key];
-  // БЛОКЕР-1: запись в user-слой без загруженной базы = затирание чужих specialty/presets
-  // (редьюсер применится к emptyLayer, и PUT зальёт шаблон + один новый пресет).
-  // Гейт единый — в сторе, чтобы UI не дублировал проверку.
-  if (scope === 'user' && userId && !hasUserLayer(userId)) {
-    setSettingsError('Слой пользователя ещё не загружен — повторите через секунду.');
-    return Promise.resolve();
-  }
-  const base: SpecialtySettingsLayer = scope === 'user'
-    ? (userId ? getUserLayer(userId) ?? emptyLayer() : emptyLayer())
-    : _settings
-      ? (_settings[scope] as SpecialtySettingsLayer)
-      : emptyLayer();
+  const base: SpecialtySettingsLayer = _settings
+    ? (_settings.global as SpecialtySettingsLayer)
+    : emptyLayer();
   const nextLayer = reducer(base);
-  applyLocal(scope, nextLayer, userId);
+  applyLocal('global', nextLayer, userId);
   setSaving(key);
   setSettingsError(null);
-  const req = scope === 'user'
-    ? api.specialties.saveUserLayer(userId!, nextLayer).then(res => res.user)
-    : scope === 'global'
-      ? api.specialties.saveGlobalLayer(nextLayer).then(res => res.global)
-      : api.specialties.saveOwnerLayer(nextLayer).then(res => res.owner);
-  return req.then(saved => {
+  const req = api.specialties.saveGlobalLayer(nextLayer).then(res => res.global);
+  try {
+    const saved = await req;
     if (_writeSeq[key] !== seq) return; // устаревший ответ
-    applySaved(scope, saved, userId);
-  }).catch(e => {
+    applySaved('global', saved, userId);
+  } catch (e) {
     if (_writeSeq[key] !== seq) return;
     setSettingsError(e instanceof Error ? e.message : 'Не удалось сохранить');
-    // Откатить оптимистичное обновление: для global/owner перечитываем серверный
-    // снимок; для user — перечитать отдельно. Оба пути неразрушающие: пикеры не
-    // показывают «Цепочка удалена» посреди отката.
-    rollbackLocal(scope, userId);
-  }).finally(() => {
+    // Откатить оптимистичное обновление: перечитываем серверный снимок общего слоя.
+    // Путь неразрушающий — пикеры не показывают «Цепочка удалена» посреди отката.
+    rollbackLocal('global', userId);
+  } finally {
     if (_writeSeq[key] === seq) setSaving(null);
-  });
+  }
 }
 
 function applyLocal(scope: WriteScope, layer: SpecialtySettingsLayer,
@@ -342,14 +341,9 @@ function applySaved(scope: WriteScope, saved: SpecialtySettingsLayer,
 }
 
 function rollbackLocal(scope: WriteScope, userId: string | null | undefined): void {
-  // Для global/owner — дотягиваем серверный снимок без обнуления read-стора:
+  // Слой один: дотягиваем серверный снимок без обнуления read-стора —
   // reloadPresetSettings внутри делает то же самое, плюс чистит ошибку.
-  if (scope === 'user' && userId) {
-    api.specialties.getUserLayer(userId)
-      .then(r => commitUserLayer(userId, r.user))
-      .catch(() => { /* ошибка уже показана */ });
-    return;
-  }
+  void scope; void userId;
   void api.specialties.getSettings()
     .then(s => updateSpecialtySettings(s))
     .catch(() => { /* ошибка уже показана */ });
@@ -376,21 +370,17 @@ export function saveLayer(scope: WriteScope, reducer: LayerReducer,
   return next;
 }
 
-// Серверный сброс слоя (POST /specialties/settings/reset/{scope}). После успешного
-// ответа — перечитываем и настройки, и user-слой (для scope === 'user'), чтобы
-// пикеры и подписи пресетов обновились свежим снимком. Перечитка неразрушающая.
-export function resetLayer(scope: WriteScope, key?: string, userId?: string):
+// Серверный сброс слоя (POST /specialties/settings/reset/{scope}). После ADR-012 живут
+// только 'global' (общий слой) и 'owner' (персоны вызывающего) — reset/user удалён.
+// После успешного ответа перечитываем настройки, чтобы пикеры и подписи пресетов
+// обновились свежим снимком. Перечитка неразрушающая.
+export function resetLayer(scope: 'owner' | 'global', key?: string):
   Promise<ResetResult> {
   setResettingScope(scope);
-  return api.specialties.reset(scope, key, userId)
+  return api.specialties.reset(scope, key)
     .then(res => {
       void api.specialties.getSettings().then(s => updateSpecialtySettings(s))
         .catch(e => { setSettingsError(e instanceof Error ? e.message : 'Не удалось перечитать'); });
-      if (scope === 'user' && userId) {
-        api.specialties.getUserLayer(userId)
-          .then(r => commitUserLayer(userId, r.user))
-          .catch(() => { /* ошибка уже показана в баннере */ });
-      }
       return res;
     })
     .finally(() => { setResettingScope(null); });
@@ -432,16 +422,17 @@ export function useSaveState(): SaveStateSnapshot {
   return useSyncExternalStore(subscribeWriteQueue, getSaveStateSnapshot, getSaveStateSnapshot);
 }
 
-// --- Стор user-слоёв (admin-only) ---
+// --- Стор user-слоёв (МЁРТВЫЙ КАНАЛ после ADR-012) ---
 //
-// Каждый user-слой живёт ОТДЕЛЬНО от основного settings (SpecialtySettingsResponse.user
-// опционален и не обязан совпадать с выбранным contextUserId — он отдаёт слой самого
-// вызывающего). База для записи в чужой слой берётся ТОЛЬКО отсюда: если её брать из
-// settings.user поверх пустого fallback'а, PUT затирает specialties и presets реального
-// пользователя. Каждая поверхность, разрешающая запись в user-слой (ChainsTab, SlotsTab,
-// PresetOptions), зовёт loadUserLayer эффектом на contextUserId — иначе сценарий «выбрал
-// пользователя в „Моделях“ → создал ему цепочку в „Цепочках“» сломан: handleCreate упал бы
-// на пустой базе, и PUT залил бы в user-слой пустой шаблон с одним новым пресетом.
+// Слоёв больше нет: GET /specialties/settings/user/{id} удалён с бэкенда, и ни один экран
+// сюда больше не заходит (ChainsTab/SlotsTab/PresetOptions переведены на общий слой).
+// Канал оставлен только потому, что на нём висят собственные юнит-тесты
+// (__tests__/userLayers, presets, presets-user-gate, presets-queue) — он уезжает хвостовой
+// чисткой вместе с ними. НОВЫХ вызовов не добавлять: loadUserLayer сходит в 404.
+//
+// Историческая мотивация (зачем слой грузился отдельно): база для записи в чужой слой
+// бралась ТОЛЬКО отсюда — из settings.user поверх пустого fallback'а PUT затирал
+// specialties и presets реального пользователя.
 
 const _userLayers: Record<string, SpecialtySettingsLayer> = {};
 const _userLayersInflight = new Map<string, Promise<void>>();
@@ -624,7 +615,11 @@ function queryKey(q: PreviewQuery): string {
 // opts.tierText — готовая подпись уровня вместо разбора tierOrigin: в ячейке
 // специальности уровень — это сама строка, а не «задан задачей» (overrideTier
 // эндпоинта), поэтому там tierOrigin не показываем.
-export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?: string }): string | null {
+// opts.prefix — префикс перед строкой. По умолчанию «Сейчас пойдёт: ». Для случаев,
+// когда префикс должен отличаться (например, «Наследуется: » при пустой ячейке),
+// передают явно. Битый пресет всегда идёт под «Сейчас пойдёт: », это его семантика.
+export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?: string; prefix?: string }): string | null {
+  const prefix = opts?.prefix ?? 'Сейчас пойдёт: ';
   if (d.preset?.broken) {
     return `Сейчас пойдёт: модель по умолчанию — цепочка${d.preset.name ? ` «${d.preset.name}»` : ''} удалена`;
   }
@@ -649,7 +644,7 @@ export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?:
   };
   if (d.source && source[d.source]) parts.push(source[d.source]);
   const suffix = parts.length > 0 ? ` · ${parts.join(', ')}` : '';
-  return `Сейчас пойдёт: ${modelLabel(d.model)}${suffix}`;
+  return `${prefix}${modelLabel(d.model)}${suffix}`;
 }
 
 // Кэш сырых ответов превью: значение null — запрос завершился ошибкой

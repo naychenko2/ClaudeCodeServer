@@ -380,6 +380,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 // McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WidgetsToolset>();
+// Память персоны/команды (фаза 2, волна 1): один тулсет на все ключи memory и pmem_<handle> —
+// персона и проект едут хвостом маршрута /mcp/memory/{personaId}/{projectId}
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.MemoryToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();

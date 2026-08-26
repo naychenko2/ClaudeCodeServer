@@ -90,6 +90,9 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
             PermissionRules: null,
             TasksMcp: null,
             WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", "tok", UseHttp: useHttp),
+            // Как в SessionManager: сводный признак http-серверов хода решается там по
+            // UseHttp-контекстам (HttpMcpActive) — здесь эмулируем его тем же значением
+            HttpMcpActive: useHttp,
             Launcher: launcher);
         var session = new ClaudeSession(new Session(), context);
 

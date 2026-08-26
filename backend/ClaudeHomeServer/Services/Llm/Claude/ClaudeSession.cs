@@ -569,6 +569,10 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ModulesMcpContext? _modulesMcp;
     // MCP-сервер виджетов чата (widget_show): null — сессия без владельца
     private readonly WidgetsMcpContext? _widgetsMcp;
+    // Сводный признак «в сессии есть продуктовые MCP-серверы на http-транспорте» (widgets/
+    // memory на момент сборки контекста): решён SessionManager на едином гейте
+    // HttpMcpTransportUsable, сюда приезжает готовым (pmem-консультанты уточняют на ходу)
+    private readonly bool _httpMcpActive;
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер десктопной грани (ADR-008): null — грань чату не доставляется
@@ -652,6 +656,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _notificationsMcp = context.NotificationsMcp;
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
+        _httpMcpActive = context.HttpMcpActive;
         _codeGraphMcp = context.CodeGraphMcp;
         _desktopMcp = context.DesktopMcp;
         _dossierTrailerHint = context.DossierTrailerHint;
@@ -702,9 +707,14 @@ public class ClaudeSession : ILlmSessionAdapter
         var notesServerPath = _notesMcp is not null ? MapMcpPath(NotesServerLocator.FindNotesServerPath()) : null;
         var hasNotes = notesServerPath is not null;
         var hasConsultants = personaAgents is { MemoryServers.Count: > 0 };
+        // Память живёт в Kestrel (ADR-012, фаза 2), но путь stdio-сервера всё равно нужен
+        // отложившимся на stdio: сам сервер чата при UseHttp=false И любой pmem-консультант
+        // без http обязаны получить node-файл, а не остаться без инструмента
+        var hasStdioMemory = _memoryMcp is { UseHttp: false }
+            || personaAgents?.MemoryServers.Any(s => !s.UseHttp) == true;
         var memoryServerPath = _memoryMcp is not null || hasConsultants
-            ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null;
-        var hasMemory = _memoryMcp is not null && memoryServerPath is not null;
+            ? (hasStdioMemory ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null) : null;
+        var hasMemory = _memoryMcp is not null && (_memoryMcp.UseHttp || memoryServerPath is not null);
         var personasServerPath = _personasMcp is not null ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
         var hasPersonas = personasServerPath is not null;
         var workspaceServerPath = _workspaceMcp is not null ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
@@ -733,7 +743,8 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal
-            && !(hasConsultants && memoryServerPath is not null)) return (null, "", []);
+            && !(hasConsultants && (memoryServerPath is not null
+                || personaAgents!.MemoryServers.Any(s => s.UseHttp)))) return (null, "", []);
 
         try
         {
@@ -944,10 +955,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     // sub). X-Caller-Session-Id при http шлёт КЛИЕНТ, а не наш код: сюда его
                     // кладём статикой — на нём держатся [DenyOnDelegatedTurn] и журнал
                     // GET /api/mcp/calls, а id чата в рамках сессии постоянен.
+                    // URL — из ServerName тулсета: литерал имени не дублируется строкой.
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.McpHttpTransport.EndpointFor(_widgetsMcp.ApiUrl, "widgets"),
+                        ["url"] = Services.Mcp.Http.McpHttpTransport.EndpointFor(
+                            _widgetsMcp.ApiUrl, Services.Mcp.Http.WidgetsToolset.ServerName),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {_widgetsMcp.Token}",
@@ -975,26 +988,50 @@ public class ClaudeSession : ILlmSessionAdapter
                 // человеком из меню редко), от свойств хода не зависит. Флаг входит в
                 // отпечаток состава: переключение корректно перезапустит процесс CLI.
                 var memoryDossierTools = _memoryMcp!.DossierToolsEnabled ? "1" : "0";
-                servers["memory"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
-                    // MCP подключается лениво (claude-code#19282): без alwaysLoad первый вызов
-                    // инструмента в ходе падает «No such tool available». Память/персон модель
-                    // зовёт первым же действием — ждём подключения до старта хода.
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждый ход: контекст живёт столько же, сколько адаптер,
+                // а захваченный строкой JWT у долгоживущего чата истекал, и инструменты
+                // памяти пропадали молча (урок фазы 1, ADR-012)
+                var memoryToken = _memoryMcp.TokenFactory();
+                servers["memory"] = _memoryMcp.UseHttp
+                    // HTTP-ветка (ADR-012, фаза 2): персона и проект чата едят хвостом URL,
+                    // состава от env больше нет — их резолвит тулсет в Kestrel по хвосту
+                    // и владельцу токена. alwaysLoad как у stdio-ветки: память модель зовёт
+                    // первым же действием, ленивое подключение роняет первый вызов.
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["MEMORY_API_URL"] = _memoryMcp.ApiUrl,
-                        ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
-                        ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
-                        // ③-3.4: проектная персона получает team_memory_* — общая память команды
-                        ["MEMORY_PROJECT_ID"] = _memoryMcp.ProjectId ?? "",
-                        ["MEMORY_DOSSIER_TOOLS"] = memoryDossierTools,
-                    },
-                };
-                // Состав инструментов памяти зависит от секции паспортов — в сигнатуру запуска
-                shapes["memory"] = $"d{memoryDossierTools}";
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.MemoryToolset.EndpointFor(
+                            _memoryMcp.ApiUrl, _memoryMcp.PersonaId, _memoryMcp.ProjectId),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {memoryToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    // Fail-closed (не-http адрес, рубильник Mcp:HttpTransport) — прежний
+                    // stdio-сервер на node: инструмент у модели остаётся
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
+                        // MCP подключается лениво (claude-code#19282): без alwaysLoad первый вызов
+                        // инструмента в ходе падает «No such tool available». Память/персон модель
+                        // зовёт первым же действием — ждём подключения до старта хода.
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["MEMORY_API_URL"] = _memoryMcp.ApiUrl,
+                            ["MEMORY_API_TOKEN"] = memoryToken,
+                            ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
+                            // ③-3.4: проектная персона получает team_memory_* — общая память команды
+                            ["MEMORY_PROJECT_ID"] = _memoryMcp.ProjectId ?? "",
+                            ["MEMORY_DOSSIER_TOOLS"] = memoryDossierTools,
+                        },
+                    };
+                // Состав инструментов памяти зависит от секции паспортов и транспорта —
+                // оба в сигнатуру запуска (переключение рубильника обязано пробить доживание)
+                shapes["memory"] = $"d{memoryDossierTools}:t:{(_memoryMcp.UseHttp ? "http" : "stdio")}";
             }
 
             // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст
@@ -1177,33 +1214,53 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
             // pmem-серверы персон-консультантов (файловые сабагенты):
-            // тот же memory-server под уникальным ключом pmem_<handle> с env КОНСУЛЬТАНТА —
-            // файл агента ссылается на него по имени (mcpServers: [pmem_<handle>]), токен
-            // живёт только в этом временном конфиге. Ретрай «No such tool available» вшит
-            // в тело файла агента.
+            // тот же memory-сервер под уникальным ключом pmem_<handle> с контекстом
+            // КОНСУЛЬТАНТА — файл агента ссылается на него по имени (mcpServers:
+            // [pmem_<handle>]), токен живёт только в этом временном конфиге. Ретрай
+            // «No such tool available» вшит в тело файла агента.
             //
-            // alwaysLoad здесь НЕ ставится, но экономии процессов это не даёт: CLI поднимает
-            // ВСЕ stdio-серверы конфига на старте, а флаг управляет лишь видимостью их
-            // инструментов в tools/list (проверено 15.08.2026 на CLI 2.1.229 отдельным стендом,
-            // см. docs/architecture/mcp-servers.md). Поэтому сколько персон объявлено ходу,
-            // столько и процессов node: на боевом 14 персон ≈ 610 МБ на каждый ход. Цена
-            // осознанно принята; уменьшить её можно только числом объявленных серверов.
-            if (hasConsultants && memoryServerPath is not null)
+            // На http-транспорте (ADR-012, фаза 2) все pmem_* — это ОДИН тулсет в Kestrel:
+            // записей серверов в конфиге столько же (файлы агентов ссылаются по имени),
+            // но ни одного процесса node — персона консультанта едет хвостом URL.
+            // На stdio было иначе: CLI поднимает ВСЕ серверы конфига на старте (alwaysLoad
+            // управляет лишь видимостью — проверено 15.08.2026 на CLI 2.1.229), то есть
+            // по процессу на каждую персону: на боевом 14 персон ≈ 610 МБ на каждый ход.
+            //
+            // alwaysLoad здесь НЕ ставится в обеих ветках: с ним главная сессия увидела бы
+            // инструменты чужой памяти (mcp__pmem_*), сегодня они видимы только сабагенту.
+            if (hasConsultants)
             {
                 foreach (var c in personaAgents!.MemoryServers)
                 {
-                    servers[c.ServerKey] = new System.Text.Json.Nodes.JsonObject
-                    {
-                        ["command"] = "node",
-                        ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath },
-                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                    // stdio-ветке нужен файл сервера (в песочнице может не резолвиться);
+                    // http-запись едет и без него — процесса node нет
+                    if (!c.UseHttp && memoryServerPath is null) continue;
+                    servers[c.ServerKey] = c.UseHttp
+                        ? new System.Text.Json.Nodes.JsonObject
                         {
-                            ["MEMORY_API_URL"] = c.ApiUrl,
-                            ["MEMORY_API_TOKEN"] = c.Token,
-                            ["MEMORY_PERSONA_ID"] = c.PersonaId,
-                            ["MEMORY_PROJECT_ID"] = c.ProjectId ?? "",
-                        },
-                    };
+                            ["type"] = "http",
+                            ["url"] = Services.Mcp.Http.MemoryToolset.EndpointFor(
+                                c.ApiUrl, c.PersonaId, c.ProjectId),
+                            ["headers"] = new System.Text.Json.Nodes.JsonObject
+                            {
+                                ["Authorization"] = $"Bearer {c.TokenFactory()}",
+                                [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            },
+                        }
+                        : new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["command"] = "node",
+                            ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath },
+                            ["env"] = new System.Text.Json.Nodes.JsonObject
+                            {
+                                ["MEMORY_API_URL"] = c.ApiUrl,
+                                ["MEMORY_API_TOKEN"] = c.TokenFactory(),
+                                ["MEMORY_PERSONA_ID"] = c.PersonaId,
+                                ["MEMORY_PROJECT_ID"] = c.ProjectId ?? "",
+                            },
+                        };
+                    // Транспорт — в отпечаток: откат рубильника обязан пробить доживание
+                    shapes[c.ServerKey] = c.UseHttp ? "t:http" : "t:stdio";
                 }
             }
 
@@ -2517,16 +2574,20 @@ public class ClaudeSession : ILlmSessionAdapter
         // Обход прокси для локального бэкенда — жёсткое требование HTTP-транспорта MCP
         // (ADR-012): по этому адресу теперь ходит САМ CLI, и без NO_PROXY его запрос уедет
         // в HTTP_PROXY, а инструмент молча исчезнет у модели (503 CLIENT_HTTP_NOT_IMPLEMENTED).
+        // Признак «в ходу есть http-сервер» — сводный: контекстный флаг (widgets/memory,
+        // решён SessionManager на едином гейте) ИЛИ pmem-консультанты этого хода на http.
         // Ставим только при активном http-транспорте (рубильник отката возвращает stdio —
         // env обязан откатиться вместе с ним) и только local-владельцу: песочнице хостовое
         // окружение не доезжает вовсе, иначе exec-переменная подменяет узкий egress-whitelist
         // контейнера. Правило целиком — в LoopbackProxyBypass.ForTurn.
         // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
+        var httpMcpActive = _httpMcpActive
+            || (personaAgents?.MemoryServers.Any(s => s.UseHttp) ?? false);
         var noProxy = Services.Mcp.Http.LoopbackProxyBypass.ForTurn(
-            _widgetsMcp is { UseHttp: true },
+            httpMcpActive,
             _launcher.IsSandboxed,
             Environment.GetEnvironmentVariable("NO_PROXY") ?? Environment.GetEnvironmentVariable("no_proxy"),
-            _widgetsMcp?.ApiUrl);
+            _widgetsMcp?.ApiUrl ?? _memoryMcp?.ApiUrl);
         if (noProxy is not null)
         {
             envOverrides["NO_PROXY"] = noProxy;

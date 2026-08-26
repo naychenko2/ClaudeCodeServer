@@ -208,9 +208,12 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     }
 
     /// <summary>
-    /// Промах мимо шаблона mcp/{name} (вложенный путь) — fail-closed 404, а не 200 c
-    /// index.html из SPA-фолбэка: клиент JSON-RPC обязан видеть ошибку, а не HTML-страницу.
-    /// Проверяется и POST, и GET — фолбэк ловит любой метод.
+    /// Промах мимо шаблона mcp/{name} — fail-closed 404, а не 200 c index.html из
+    /// SPA-фолбэка: клиент JSON-RPC обязан видеть ошибку, а не HTML-страницу. Вложенные
+    /// пути разбирает шаблон {name}/{**route} (ADR-012, фаза 2: хвост параметризованных
+    /// тулсетов) — неизвестное имя честно называет себя unknown_mcp_server; маршрут вовсе
+    /// без имени — catch-all RouteMiss. GET-проба на вложенном пути — тот же NoSse-405,
+    /// что и на одно-сегментном (шаблон GET ловит хвост тоже).
     /// </summary>
     [Fact]
     public async Task ПромахМаршрутаВложенныйПуть_Отдаёт404АНеSPA()
@@ -218,12 +221,20 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
         var post = await _client.PostAsJsonAsync("/mcp/a/b",
             new { jsonrpc = "2.0", id = 1, method = "tools/list" });
         post.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await post.Content.ReadAsStringAsync()).Should().Contain("mcp_route_not_found",
-            "тело ошибки отличает catch-all маршрут от пустого 404 маршрутизации");
+        (await post.Content.ReadAsStringAsync()).Should().Contain("unknown_mcp_server",
+            "вложенный путь разбирает шаблон {name}/{**route} — честный 404 с телом, не SPA-HTML");
 
-        (await _client.GetAsync("/mcp/a/b")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var deeper = await _client.PostAsJsonAsync("/mcp/a/b/c",
+            new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+        deeper.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "catch-all-хвост не выпускает промах в SPA-фолбэк");
+
+        (await _client.GetAsync("/mcp/a/b")).StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed,
+            "GET-проба на вложенном пути — тот же NoSse, что и на одно-сегментном");
         // Сам маршрут без имени — тот же промах
-        (await _client.PostAsync("/mcp", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var bare = await _client.PostAsync("/mcp", null);
+        bare.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await bare.Content.ReadAsStringAsync()).Should().Contain("mcp_route_not_found");
     }
 
     /// <summary>

@@ -95,7 +95,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             // Эмулирует SessionManager.BuildPersonaLayer: PersonaPromptBuilder дописывает
             // оговорку voice-mode последним куском текста персоны при voiceMode=true
             PersonaPromptProvider: () => "МАРКЕР_ПЕРСОНЫ Ты — Тестовая Персона.\n\n" + VoicePrompts.PersonaOverride,
-            MemoryMcp: new MemoryMcpContext("http://memory.invalid", "tok", "persona-1"),
+            MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
             PersonaRecallProvider: _ => Task.FromResult<RecallBlock?>(
                 new RecallBlock("МАРКЕР_RECALL_MEMORY текст памяти", [], "МАРКЕР_DOSSIER_RECALL текст досье")),
             BindingsProvider: _ => Task.FromResult<string?>("МАРКЕР_PERSONA_BINDINGS текст привязок"),

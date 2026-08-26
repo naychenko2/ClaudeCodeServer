@@ -33,7 +33,8 @@ public class McpHttpTransportConfigTests : IDisposable
     }
 
     // Настоящий BuildTurnMcpConfig сессии: путь temp-конфига + строка сигнатуры серверов
-    private (JsonObject Servers, string ServerKeys) BuildConfig(WidgetsMcpContext widgets)
+    private (JsonObject Servers, string ServerKeys) BuildConfig(WidgetsMcpContext? widgets = null,
+        MemoryMcpContext? memory = null, PersonaAgentsContext? personaAgents = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -41,12 +42,14 @@ public class McpHttpTransportConfigTests : IDisposable
             RawSystemPrompt: null,
             PermissionRules: null,
             TasksMcp: null,
-            WidgetsMcp: widgets);
+            WidgetsMcp: widgets,
+            MemoryMcp: memory,
+            PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents);
         var session = new ClaudeSession(new Session(), context);
 
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [null, null])!;
+        var result = method.Invoke(session, [null, personaAgents])!;
         var type = result.GetType();
         // У ValueTuple элементы — ПОЛЯ, а не свойства
         var path = (string?)type.GetField("Item1")!.GetValue(result);
@@ -166,4 +169,132 @@ public class McpHttpTransportConfigTests : IDisposable
     public void АдресЭндпоинта_СтроитсяИзРазобранногоАдреса() =>
         McpHttpTransport.EndpointFor("http://localhost:5000?x=1", "widgets")
             .Should().Be("http://localhost:5000/mcp/widgets");
+
+    // --- memory и pmem_* (фаза 2, волна 1): HTTP-ветка и откат ---
+
+    /// <summary>
+    /// Память на годном http-адресе: узел без command (процесса node нет), персона и проект
+    /// чата — хвостом URL, токен — из ФАБРИКИ (вызывается на каждый ход, а не захватывается
+    /// строкой при создании адаптера — урок фазы 1 про молчаливые 401 у старых чатов).
+    /// </summary>
+    [Fact]
+    public void Memory_ГодныйАдрес_HttpЭндпоинтСТокеномИХвостом()
+    {
+        var issued = new[] { "tok-first", "tok-second" };
+        var index = 0;
+        var (servers, keys) = BuildConfig(memory: new MemoryMcpContext(
+            "http://localhost:5000", () => issued[Math.Min(index++, 1)], "persona-1", "proj-1",
+            DossierToolsEnabled: true, UseHttp: true));
+
+        var memory = servers["memory"]!.AsObject();
+        memory["type"]!.GetValue<string>().Should().Be("http");
+        memory["url"]!.GetValue<string>()
+            .Should().Be("http://localhost:5000/mcp/memory/persona-1/proj-1",
+                "персона и проект едут в ПУТИ — конфиг хода наш, тело контролирует модель");
+        memory.ContainsKey("command").Should().BeFalse("процесса node ради памяти быть не должно");
+        memory["alwaysLoad"]!.GetValue<bool>().Should().BeTrue("модель зовёт память первым действием");
+        var headers = memory["headers"]!.AsObject();
+        headers["Authorization"]!.GetValue<string>().Should().Be("Bearer tok-first");
+        headers.ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+        keys.Should().Contain("memory:d1:t:http", "dossier-флаг и транспорт — в сигнатуре запуска");
+    }
+
+    /// <summary>Фабрика токена живая: повторная сборка конфига берёт свежий токен.</summary>
+    [Fact]
+    public void Memory_ТокенФабрикой_АНеЗахваченСтрокой()
+    {
+        var issued = 0;
+        string Factory() => $"tok-{++issued}";
+        BuildConfig(memory: new MemoryMcpContext("http://localhost:5000", Factory, "p", null, UseHttp: true));
+        BuildConfig(memory: new MemoryMcpContext("http://localhost:5000", Factory, "p", null, UseHttp: true));
+
+        issued.Should().Be(2, "каждая сборка конфига хода зовёт фабрику — иначе старый чат умирает на 401");
+    }
+
+    /// <summary>
+    /// Откат (не-http адрес, рубильник): memory объявляется прежним stdio-сервером с env —
+    /// инструмент у модели остаётся, mcp/memory-server/index.js для того и заморожен.
+    /// </summary>
+    [Fact]
+    public void Memory_Откат_StdioСерверомСEnv()
+    {
+        var (servers, keys) = BuildConfig(memory: new MemoryMcpContext(
+            "https://naychenko.me", () => "tok", "persona-1", "proj-1", UseHttp: false));
+
+        if (servers["memory"] is { } node)
+        {
+            var memory = node.AsObject();
+            memory.ContainsKey("type").Should().BeFalse();
+            memory["command"]!.GetValue<string>().Should().Be("node");
+            memory["args"]![0]!.GetValue<string>().Should().EndWith("index.js");
+            var env = memory["env"]!.AsObject();
+            env["MEMORY_PERSONA_ID"]!.GetValue<string>().Should().Be("persona-1");
+            env["MEMORY_PROJECT_ID"]!.GetValue<string>().Should().Be("proj-1");
+            env["MEMORY_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            keys.Should().Contain("memory:d0:t:stdio");
+        }
+        else
+        {
+            // Сборка вне дерева репозитория: index.js не найден — но http-узла точно нет
+            keys.Should().NotContain("memory:t:http");
+        }
+    }
+
+    /// <summary>
+    /// ПРИЁМКА-ЗАМЕР в терминах конфига хода: сессия с N консультантами + персона чата на
+    /// http-транспорте — ни одного stdio-узла памяти (command: node). При stdio каждый
+    /// консультант и сам сервер поднимали по процессу (N+1); здесь — ноль, «−N−1».
+    /// </summary>
+    [Fact]
+    public void Pmem_КонсультантыНаХttp_НиОдногоПроцессаNode()
+    {
+        var consultants = new PersonaAgentsContext([],
+        [
+            new ConsultantMemoryServer("pmem_alex", "http://localhost:5000", () => "tok", "p-alex", "proj-1", UseHttp: true),
+            new ConsultantMemoryServer("pmem_kira", "http://localhost:5000", () => "tok", "p-kira", "proj-1", UseHttp: true),
+        ], ["alex", "kira"]);
+        var (servers, keys) = BuildConfig(
+            memory: new MemoryMcpContext("http://localhost:5000", () => "tok", "p-chat", "proj-1", UseHttp: true),
+            personaAgents: consultants);
+
+        servers["pmem_alex"]!.AsObject()["url"]!.GetValue<string>()
+            .Should().Be("http://localhost:5000/mcp/memory/p-alex/proj-1",
+                "каждый pmem — свой URL с персоной консультанта, ключ прежний (frontmatter агента)");
+        servers["pmem_kira"]!.AsObject()["url"]!.GetValue<string>()
+            .Should().Be("http://localhost:5000/mcp/memory/p-kira/proj-1");
+        // Замер «−N−1»: ни у одного узла памяти нет запуска процесса
+        foreach (var key in new[] { "memory", "pmem_alex", "pmem_kira" })
+        {
+            var node = servers[key]!.AsObject();
+            node.ContainsKey("command").Should().BeFalse(
+                $"узел {key} обязан быть http — процессов node больше нет");
+        }
+        // alwaysLoad: у сервера чата стоит (модель зовёт память первым действием), у pmem —
+        // нет и на stdio: с ним главная сессия видела бы инструменты чужой памяти
+        servers["memory"]!.AsObject()["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+        servers["pmem_alex"]!.AsObject().ContainsKey("alwaysLoad").Should().BeFalse();
+        servers["pmem_kira"]!.AsObject().ContainsKey("alwaysLoad").Should().BeFalse();
+        keys.Should().Contain("pmem_alex:t:http").And.Contain("pmem_kira:t:http");
+    }
+
+    /// <summary>Смешанный откат: любой stdio-pmem получает node-файл и env, http-сосед — нет.</summary>
+    [Fact]
+    public void Pmem_ОткатПоодиночке_StdioСерверомСEnv()
+    {
+        var consultants = new PersonaAgentsContext([],
+        [
+            new ConsultantMemoryServer("pmem_http", "http://localhost:5000", () => "tok", "p-1", null, UseHttp: true),
+            new ConsultantMemoryServer("pmem_stdio", "http://localhost:5000", () => "tok", "p-2", null, UseHttp: false),
+        ], ["http", "stdio"]);
+        var (servers, keys) = BuildConfig(personaAgents: consultants);
+
+        servers["pmem_http"]!.AsObject().ContainsKey("command").Should().BeFalse();
+        if (servers["pmem_stdio"] is { } stdio)
+        {
+            stdio["command"]!.GetValue<string>().Should().Be("node");
+            stdio["env"]!.AsObject()["MEMORY_PERSONA_ID"]!.GetValue<string>().Should().Be("p-2");
+            keys.Should().Contain("pmem_stdio:t:stdio");
+        }
+        keys.Should().Contain("pmem_http:t:http");
+    }
 }

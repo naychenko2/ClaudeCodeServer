@@ -46,5 +46,31 @@ public sealed record McpToolCallResult(string Text, bool IsError = false);
 /// Кто зовёт: владелец из сервисного JWT (заголовок Authorization) и чат-вызыватель из
 /// <c>X-Caller-Session-Id</c>, если сервер его прислал. Изоляция данных строится на
 /// OwnerId — заголовку чата верить как источнику прав нельзя (он подставляется конфигом хода).
+/// RouteTail — хвост маршрута после имени сервера (<c>POST /mcp/{name}/{tail}</c>),
+/// null у одно-сегментных серверов; параметризованный тулсет достаёт из него свои
+/// параметры (например, id персоны). Хвост виден модели в конфиге хода, поэтому
+/// источником прав он может быть только вместе с проверкой по OwnerId.
 /// </summary>
-public sealed record McpToolCallContext(string OwnerId, string? CallerSessionId);
+public sealed record McpToolCallContext(string OwnerId, string? CallerSessionId, string? RouteTail = null);
+
+/// <summary>
+/// Тулсет с параметром в маршруте: <c>POST /mcp/{name}/{хвост}</c> вместо одно-сегментного
+/// <c>/mcp/{name}</c>. Нужен, когда одну и ту же реализацию объявляют в конфиге хода под
+/// разными ключами с разным окружением (memory и все pmem_&lt;handle&gt; — один код, разные
+/// персоны), а параметры обязаны ехать в ПУТИ, а не в теле: тело контролирует модель,
+/// путь — наш конфиг хода.
+///
+/// ИНВАРИАНТ тот же, что у <see cref="IMcpToolset.Tools"/>: состав на фиксированном хвосте
+/// и владельце не зависит от свойств хода. Хвост закрепляется конфигом хода на жизнь
+/// адаптера и меняется только вместе с ним.
+/// </summary>
+public interface IMcpParameterizedToolset : IMcpToolset
+{
+    /// <summary>
+    /// Состав инструментов на хвосте маршрута из <paramref name="context"/>. Невалидный
+    /// для владельца хвост (чужая персона, чужой проект) — пустой состав: fail-closed,
+    /// сервер без инструментов не выдаёт ничего. Вызов вовсе без хвоста
+    /// (<c>/mcp/{name}</c>) — 404 контроллера.
+    /// </summary>
+    IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context);
+}

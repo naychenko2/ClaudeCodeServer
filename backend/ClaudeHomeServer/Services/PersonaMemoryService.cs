@@ -33,6 +33,8 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     private readonly PersonaManager _personas;
     private readonly UserStore _users;
     private readonly TeamMemoryService? _teamMemory;
+    // Заметки — для выноса записи памяти в общий vault (③-3.3); null в юнит-тестах
+    private readonly NotesService? _notes;
     // Recall паспортов изменений (этап 2, ADR-004 §5); null в юнит-тестах и без флага
     private readonly Dossiers.DossierRecallService? _dossierRecall;
     // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
@@ -58,7 +60,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
         TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null,
-        Dossiers.DossierRecallService? dossierRecall = null)
+        Dossiers.DossierRecallService? dossierRecall = null, NotesService? notes = null)
     {
         _knowledge = knowledge;
         _personas = personas;
@@ -66,6 +68,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         _teamMemory = teamMemory;
         _dossierRecall = dossierRecall;
         _resolver = resolver;
+        _notes = notes;
         _logger = logger;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
@@ -598,6 +601,45 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
             JsonFileStore.Save(_storePath, _store, JsonOpts);
         }
         return true;
+    }
+
+    // --- Вынос памяти в заметки (③-3.3): единая точка для REST и MCP memory_to_note/from_note ---
+
+    // Превратить запись памяти в заметку: инсайт выходит из личного датасета персоны в общий
+    // vault — виден/доступен всей команде и вне чата с персоной. null — запись/персона не
+    // найдены или заметки не сконфигурированы (юнит-тесты).
+    public (string NoteId, string NoteTitle)? MemoryToNote(string ownerId, string personaId, string entryId)
+    {
+        if (_notes is null) return null;
+        var persona = _personas.Get(personaId, ownerId);
+        if (persona is null) return null;
+        var entry = List(ownerId, personaId, null).FirstOrDefault(e => e.Id == entryId);
+        if (entry is null) return null;
+        var title = TitleFromText(entry.Text, "Из памяти персоны");
+        var body = entry.Text.Trim() + $"\n\n— _из памяти персоны «{PersonaManager.PersonaLabel(persona)}»_";
+        var note = _notes.Create(ownerId, new CreateNoteRequest(Title: title, Content: body));
+        return (note.Id, note.Title);
+    }
+
+    // Закрепить заметку в памяти персоны: важное подчёркивается, попадает в recall с высоким
+    // salience (1.0) как semantic-факт. false — заметка/персона не найдены.
+    public async Task<bool> NoteToMemoryAsync(string ownerId, string personaId, string noteId)
+    {
+        if (_notes is null || _personas.Get(personaId, ownerId) is null) return false;
+        var note = _notes.GetDetail(ownerId, noteId);
+        if (note is null) return false;
+        var text = string.IsNullOrWhiteSpace(note.Content) ? note.Title : note.Content;
+        await RememberAsync(ownerId, personaId, PersonaMemoryType.Semantic, text, null, null, 1.0);
+        EnforceCap(ownerId, personaId);
+        return true;
+    }
+
+    // Первая непустая строка текста (до ~60 символов) — как заголовок заметки из памяти
+    private static string TitleFromText(string text, string fallback)
+    {
+        var first = text.Replace("\r", "").Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l))?.Trim();
+        if (string.IsNullOrEmpty(first)) return fallback;
+        return first.Length <= 60 ? first : first[..60].TrimEnd() + "…";
     }
 
     // --- Консолидация (P4): применение операций merge/drop под save-lock ---

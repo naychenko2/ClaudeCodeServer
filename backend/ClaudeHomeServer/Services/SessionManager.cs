@@ -679,6 +679,15 @@ public class SessionManager : IDisposable
         return http;
     }
 
+    // Сводный признак «у сессии есть продуктовые MCP-серверы на http-транспорте» (ADR-012):
+    // от него зависит NO_PROXY хода — обход прокси нужен ЛЮБОМУ http-серверу, а не только
+    // виджетам. Решение стоит на едином гейте HttpMcpTransportUsable (каждый Build*Context
+    // уже прогнал через него свой UseHttp) — отдельного условия «виджеты на http» больше нет,
+    // с переездом memory http-серверов у сессии их минимум два. pmem-консультанты приезжают
+    // списком на каждый ход и уточняют признак на стороне ClaudeSession.
+    private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory) =>
+        widgets is { UseHttp: true } || memory is { UseHttp: true };
+
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
     // как git/kb; чат без персоны получает браузер как раньше — ручную проверку страницы
@@ -755,19 +764,22 @@ public class SessionManager : IDisposable
             "Не убирай и не меняй значение при amend/squash.";
     }
 
-    // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
+    // Контекст MCP-сервера памяти персоны (та же фабрика сервисного токена, что у tasks/notes).
     // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
     // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
-    // пишет ли она в команду реально — решает бэкенд-гейт (ProjectsController.TeamMemoryWriteAllowed).
+    // пишет ли она в команду реально — решает бэкенд-гейт (TeamMemoryService.WriteDeniedFor).
     // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): гейт по
     // флагу ВЛАДЕЛЬЦА change-dossiers-recall. Решение стабильно в рамках сессии (флаг меняется
     // человеком из меню редко) и входит в отпечаток состава сервера (shapes memory) — от
     // СВОЙСТВ ХОДА состав tools/list не зависит (инвариант McpToolsetStabilityTests).
+    // UseHttp — сервер памяти переехал в Kestrel (ADR-012, фаза 2): ход зовёт его по http
+    // (personaId/projectId едут хвостом URL), процесса node нет; false — откат на stdio.
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
-        var token = GetServiceToken(ownerId);
-        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), token, personaId, projectId,
-            DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall));
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
+            DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall),
+            UseHttp: HttpMcpTransportUsable(apiUrl));
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -2662,22 +2674,26 @@ public class SessionManager : IDisposable
                 var addDirs = _agentSync.GetAddDirs(ownerId, session.Model, projectId);
                 // pmem — для ВСЕХ видимых персон с памятью (включая персону самого чата):
                 // файлы в add-dir видны все, а Task(agentType=handle) может позвать любую.
-                // Объявление НЕ бесплатное: каждый сервер — отдельный процесс node на ход
-                // (CLI поднимает все stdio-серверы конфига на старте, alwaysLoad на это не
-                // влияет — см. docs/architecture/mcp-servers.md). Сузишь этот список —
-                // сузишь и круг персон, которых можно позвать сабагентом.
+                // С stdio объявление стоило процессом node на каждого консультанта (CLI
+                // поднимает все stdio-серверы конфига на старте, alwaysLoad на это не
+                // влияет — см. docs/architecture/mcp-servers.md); на http-транспорте
+                // (ADR-012, фаза 2) все pmem_* живут в Kestrel одним тулсетом — процессов
+                // нет, сколько бы персон ни было смонтировано. Сузишь список — сузишь и
+                // круг персон, которых можно позвать сабагентом.
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
-                var token = GetServiceToken(ownerId);
+                var apiUrl = ResolveTasksApiUrl(ownerId);
+                var tokenFactory = () => GetServiceToken(ownerId);
+                var useHttp = HttpMcpTransportUsable(apiUrl);
                 // ProjectId консультанта — проект ТЕКУЩЕГО чата (как у BuildPersonaLayer выше), не
                 // scope самого консультанта: приглашённая в проектный workflow глобальная персона
                 // тоже должна видеть team_memory_list/search этого проекта (read-only — пишет только
-                // персона САМОГО проекта, гейт в ProjectsController.TeamMemoryWriteAllowed).
+                // персона САМОГО проекта, гейт в TeamMemoryService.WriteDeniedFor).
                 var servers = subagents
                     .Where(p => p.MemoryEnabled)
                     .Select(p => new ConsultantMemoryServer(
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
-                        ResolveTasksApiUrl(ownerId), token, p.Id, projectId))
+                        apiUrl, tokenFactory, p.Id, projectId, useHttp))
                     .ToList();
                 var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
                 return new PersonaAgentsContext(addDirs, servers, handles);
@@ -3214,6 +3230,8 @@ public class SessionManager : IDisposable
         // прогона от позднего exited доживающего (см. SessionEntry.DrainOnExitedRun)
         var runId = Interlocked.Increment(ref _runSeq);
 
+        var widgetsMcp = BuildWidgetsContext(ownerId, persona.Persona);
+        var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
@@ -3222,7 +3240,7 @@ public class SessionManager : IDisposable
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
             PersonaProvider: BuildPersonaProvider(session, ownerId),
-            MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId),
+            MemoryMcp: memoryMcp,
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona),
@@ -3234,7 +3252,7 @@ public class SessionManager : IDisposable
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
-            WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
+            WidgetsMcp: widgetsMcp,
             CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
             DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
@@ -3246,7 +3264,8 @@ public class SessionManager : IDisposable
             DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
-            OrchestrationDone: BuildOrchestrationDone(session.Id)));
+            OrchestrationDone: BuildOrchestrationDone(session.Id),
+            HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4546,6 +4565,7 @@ public class SessionManager : IDisposable
                 ?? throw new InvalidOperationException("У чата не задан владелец"));
             var persona = BuildPersonaLayer(entry.Info, entry.Info.OwnerId);
             var workspace = BuildWorkspaceContext(entry.Info.OwnerId, null, entry.Info.Id, persona.Persona);
+            var widgetsMcp = BuildWidgetsContext(entry.Info.OwnerId, persona.Persona);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
@@ -4566,7 +4586,7 @@ public class SessionManager : IDisposable
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId, persona.Persona),
+                WidgetsMcp: widgetsMcp,
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
                 CodeGraphMcp: null,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
@@ -4577,7 +4597,8 @@ public class SessionManager : IDisposable
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
+                HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory));
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4587,6 +4608,8 @@ public class SessionManager : IDisposable
             var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
             var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
             var rootPath = EffectiveRoot(entry.Info, project.RootPath);
+            var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
+            var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
@@ -4596,7 +4619,7 @@ public class SessionManager : IDisposable
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
-                MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id),
+                MemoryMcp: memoryMcp,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona),
@@ -4608,7 +4631,7 @@ public class SessionManager : IDisposable
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
+                WidgetsMcp: widgetsMcp,
                 CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
                 DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
@@ -4620,7 +4643,8 @@ public class SessionManager : IDisposable
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
+                HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

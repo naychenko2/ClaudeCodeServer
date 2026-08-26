@@ -19,19 +19,23 @@ public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId,
 public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId,
     bool AnnotationsEnabled = true);
 
-// Контекст MCP-сервера памяти персоны: адрес API, сервисный токен владельца, id персоны,
-// чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект ТЕКУЩЕГО
-// ЧАТА (③-3.4: даёт доступ к team_memory_* — общей памяти команды; null — чат вне проекта,
-// командной памяти нет). ProjectId — от чата, не от scope персоны: глобальная персона и
+// Контекст MCP-сервера памяти персоны: адрес API, фабрика сервисного токена владельца, id
+// персоны, чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект
+// ТЕКУЩЕГО ЧАТА (③-3.4: даёт доступ к team_memory_* — общей памяти команды; null — чат вне
+// проекта, командной памяти нет). ProjectId — от чата, не от scope персоны: глобальная персона и
 // консультант другого проекта тоже получают team_memory_list/search (read-only) внутри
-// проектного чата — пишет ли персона в команду, решает бэкенд (ProjectsController.
-// TeamMemoryWriteAllowed: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
+// проектного чата — пишет ли персона в команду, решает бэкенд (TeamMemoryService.
+// WriteDeniedFor: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
 // состав MCP-инструментов от этого не зависит (диета памяти команды, ч.3).
 // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включается
 // по флагу ВЛАДЕЛЬЦА change-dossiers-recall (не по свойствам хода — инвариант стабильности
-// состава tools/list); сама секция требует ещё и проектный чат (MEMORY_PROJECT_ID).
-public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId, string? ProjectId = null,
-    bool DossierToolsEnabled = false);
+// состава tools/list); сама секция требует ещё и проектный чат.
+// TokenFactory, а не строка: контекст живёт столько же, сколько адаптер, а у чата старше
+// срока жизни сервисного JWT эндпоинт начал бы отвечать 401, и инструменты памяти пропали
+// бы молча (ADR-012, урок фазы 1). UseHttp — транспорт, решённый HttpMcpTransportUsable:
+// false — ход объявляет прежний stdio-сервер на node (путь отката).
+public record MemoryMcpContext(string ApiUrl, Func<string> TokenFactory, string PersonaId,
+    string? ProjectId = null, bool DossierToolsEnabled = false, bool UseHttp = false);
 
 // Контекст MCP-сервера рабочего пространства: доступ сессии ко всем проектам владельца
 // (список, файлы, базы знаний, единый поиск). Sections — включённые секции инструментов
@@ -138,11 +142,13 @@ public sealed record ExternalMcpServer(string Key, string Transport,
 public sealed record ExternalMcpContext(IReadOnlyList<ExternalMcpServer> Servers);
 
 // Выделенный memory-сервер персоны-консультанта (файлового сабагента): ключ сервера
-// в MCP-конфиге хода ("pmem_<handle>") + env memory-server ЭТОЙ персоны. Файл агента
-// ссылается на сервер по имени (mcpServers: [pmem_<handle>]), а определение с токеном
-// живёт только во временном конфиге хода — секреты не попадают в персистентные файлы.
-public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, string Token,
-    string PersonaId, string? ProjectId = null);
+// в MCP-конфиге хода ("pmem_<handle>") + контекст memory-server ЭТОЙ персоны (personaId/
+// projectId чата едут хвостом URL, ADR-012 фаза 2). Файл агента ссылается на сервер по
+// имени (mcpServers: [pmem_<handle>]), а токен живёт только во временном конфиге хода —
+// фабрика выдаёт свежий на каждый ход, секреты не попадают в персистентные файлы.
+// UseHttp=false — откат на stdio-процесс node (рубильник Mcp:HttpTransport).
+public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, Func<string> TokenFactory,
+    string PersonaId, string? ProjectId = null, bool UseHttp = false);
 
 // Файловые сабагенты-персоны: папки для --add-dir хода
 // (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон
@@ -267,6 +273,13 @@ public sealed record LlmSessionContext(
     // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
     // на момент запуска CLI — от свойств хода состав не зависит.
     DesktopMcpContext? DesktopMcp = null,
+    // Сводный признак «у сессии есть продуктовые MCP-серверы на http-транспорте»
+    // (widgets/memory на момент сборки контекста): от него ClaudeSession ставит NO_PROXY
+    // хода (ADR-012) — обход прокси нужен ЛЮБОМУ http-серверу, а не одному виджету.
+    // Решение принимает SessionManager на базе единого гейта HttpMcpTransportUsable;
+    // pmem-консультанты приезжают списком на каждый ход и уточняют признак на месте
+    // (UseHttp в ConsultantMemoryServer).
+    bool HttpMcpActive = false,
     // Живая персона чата: матрицы персоны/специальности участвуют в постройке цепочки
     // фолбэка (ClaudeSession.EffectiveTurnChain → ModelAssignmentResolver.ResolveChain
     // с персоной) — старт и хвост хода резолвятся по одним правилам. Перечитывается каждый

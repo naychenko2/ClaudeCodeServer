@@ -39,27 +39,41 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     /// <summary>
     /// SSE-канал не реализован: клиент пробует GET на транспорт и спокойно живёт с 405
     /// (проверено живым CLI). Экшен нужен ради пометки «это не вызов инструмента» — иначе
-    /// штатная проба на каждом ходу оседала бы отказом в GET /api/mcp/calls.
+    /// штатная проба на каждом ходу оседала бы отказом в GET /api/mcp/calls. Хвост маршрута
+    /// (параметризованные тулсеты вроде /mcp/memory/{…}) ловим тем же шаблоном: проба идёт
+    /// на фактический адрес сервера из конфига хода.
     /// </summary>
     [HttpGet("{name}")]
+    [HttpGet("{name}/{**route}")]
     public IActionResult NoSse(string name)
     {
         HttpContext.Items[Services.Mcp.McpCallLog.SkipItemKey] = true;
         return StatusCode(StatusCodes.Status405MethodNotAllowed);
     }
 
-    [HttpPost("{name}")]
+    // Хвост маршрута после имени сервера: пустой у простых тулсетов (widgets), сегменты —
+    // у параметризованных (memory: {personaId}/{projectId}). Один экшен на обе формы: два
+    // шаблона «{name}» и «{name}/{**route}» дали бы перекрытие — catch-all сегмент
+    // допускает пустое значение, и роутинг выбирал бы между дублями.
+    [HttpPost("{name}/{**route}")]
     [RequestSizeLimit(MaxBodyBytes)] // тело читается в память целиком — см. MaxBodyBytes
-    public async Task<IActionResult> Handle(string name, CancellationToken ct)
+    public async Task<IActionResult> Handle(string name, string? route, CancellationToken ct)
     {
         var toolset = registry.Find(name);
         if (toolset is null) return NotFound(new { error = "unknown_mcp_server", message = $"Нет MCP-сервера «{name}»" });
+
+        // Параметризованный тулсет без хвоста и простой с хвостом — не его маршрут: честный
+        // 404 вместо «сервер без инструментов» (параметризованный) или игнорируемого хвоста
+        var parameterized = toolset is IMcpParameterizedToolset;
+        if (parameterized ? string.IsNullOrWhiteSpace(route) : !string.IsNullOrWhiteSpace(route))
+            return NotFound(new { error = "mcp_route_not_found", message = "Неизвестный маршрут MCP" });
 
         // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
         var ownerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
         if (string.IsNullOrEmpty(ownerId)) return Unauthorized();
         var context = new McpToolCallContext(ownerId,
-            Request.Headers.TryGetValue("X-Caller-Session-Id", out var caller) ? caller.ToString() : null);
+            Request.Headers.TryGetValue("X-Caller-Session-Id", out var caller) ? caller.ToString() : null,
+            route);
 
         // Тело разбираем вручную, без [FromBody]: авто-400 [ApiController] на кривом JSON отдавал
         // problem+json ВМЕСТО кода -32700 и ложился в журнал MCP отказом инструмента, не доходя
@@ -165,8 +179,12 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
 
                 case "tools/list":
                 {
+                    // Параметризованный тулсет считает состав по хвосту маршрута (memory);
+                    // простые отдают статический Tools (widgets)
+                    var schemas = toolset is IMcpParameterizedToolset parameterized
+                        ? parameterized.ToolsFor(context) : toolset.Tools;
                     var tools = new JsonArray();
-                    foreach (var tool in toolset.Tools)
+                    foreach (var tool in schemas)
                         tools.Add(new JsonObject
                         {
                             ["name"] = tool.Name,

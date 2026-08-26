@@ -99,24 +99,6 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // === Память команды проекта (③-3.4) === — общие факты/договорённости, которые recall'ят
     // все персоны команды проекта наравне с личной памятью.
 
-    // Гейт длины записи командной памяти: в recall она всё равно обрежется (RecallTextLimit),
-    // а простыня на 2-3 КБ засоряет общий стор и Dify. Ошибка объясняет, что делать дальше.
-    // current — длина уже сохранённого текста (0 при создании): запрет срабатывает только на
-    // РОСТ сверх лимита, чтобы уже раздутую запись можно было пересохранить без изменений или
-    // сократить (как PersonaManager.ExceedsContractLimit для контракта персоны) — иначе её
-    // вообще нельзя было бы привести в порядок.
-    private static bool TooLongTeamMemory(string text, int current, out object error)
-    {
-        var length = text.Trim().Length;
-        error = new
-        {
-            error = $"Запись памяти команды длиннее {TeamMemoryService.MaxTextLength} символов "
-                + $"(сейчас {length}). Одна запись — одна мысль: разбей на несколько коротких "
-                + "или сократи до сути; подробности держи в заметке или документе проекта.",
-        };
-        return length > TeamMemoryService.MaxTextLength && length > current;
-    }
-
     // Персона-вызыватель MCP-инструмента (mcp/memory-server отдаёт свой MEMORY_PERSONA_ID
     // заголовком на каждый запрос) — пусто у обычного чата проекта без персоны и у фронта
     // (UI «Командного центра» этот заголовок не шлёт вовсе, поэтому ручное управление всегда
@@ -124,26 +106,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // персона — не сессия, а MEMORY_PERSONA_ID у сессии меняется (смена спикера в группе).
     private const string CallerPersonaHeader = "X-Caller-Persona-Id";
 
-    // Гейт записи в память команды проекта (③-3.4, диета памяти команды, часть 3): пишет либо
-    // «свой» вызов без персоны (обычный проектный чат, ручное редактирование через UI), либо
-    // персона ЭТОГО ЖЕ проекта. Глобальные персоны и консультанты других проектов — read-only
-    // (team_memory_list/search остаются доступны, состав tools/list не меняем). Персона, которую
-    // не удалось резолвить (удалена/чужой owner) — тоже отказ, а не молчаливое разрешение.
+    // Гейт записи в память команды: правило и текст отказа — в TeamMemoryService.WriteDeniedFor
+    // (единая точка с http-тулсетом памяти), здесь только резолв вызывающей персоны из заголовка.
     private bool TeamMemoryWriteAllowed(string projectId, out object? error)
     {
-        error = null;
         var callerPersonaId = Request.Headers[CallerPersonaHeader].FirstOrDefault();
-        if (string.IsNullOrEmpty(callerPersonaId)) return true;
-        var caller = personas.Get(callerPersonaId, UserId);
-        if (caller is { Scope: PersonaScope.Project } && caller.ProjectId == projectId) return true;
-        error = new
-        {
-            error = "Запись в память команды доступна только персоне ЭТОГО проекта. Ты — "
-                + "глобальная персона или консультант другого проекта: можешь читать общую память "
-                + "(team_memory_list/team_memory_search), но не менять её. Попроси персону проекта "
-                + "записать это или предложи пользователю.",
-        };
-        return false;
+        var denied = callerPersonaId is null || callerPersonaId.Length == 0
+            ? null // «свой» вызов без персоны (UI, обычный проектный чат)
+            : TeamMemoryService.WriteDeniedFor(personas.Get(callerPersonaId, UserId), projectId);
+        error = denied is null ? null : new { error = denied };
+        return denied is null;
     }
 
     [HttpGet("{id}/team-memory")]
@@ -161,7 +133,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (p is null || p.OwnerId != UserId) return NotFound();
         if (!TeamMemoryWriteAllowed(id, out var denied)) return StatusCode(403, denied);
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
-        if (TooLongTeamMemory(req.Text, 0, out var tooLong)) return BadRequest(tooLong);
+        if (TeamMemoryService.LengthViolation(req.Text, 0) is { } tooLong) return BadRequest(new { error = tooLong });
         var entry = teamMemory.Add(UserId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
         await BroadcastTeamMemory("added", id, entry.Id);
         return Ok(entry);
@@ -176,7 +148,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var existing = teamMemory.List(UserId, id).FirstOrDefault(e => e.Id == entryId);
         if (existing is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
-        if (TooLongTeamMemory(req.Text, existing.Text.Trim().Length, out var tooLong)) return BadRequest(tooLong);
+        if (TeamMemoryService.LengthViolation(req.Text, existing.Text.Trim().Length) is { } tooLong)
+            return BadRequest(new { error = tooLong });
         var entry = teamMemory.Update(UserId, id, entryId, req.Text);
         if (entry is null) return NotFound();
         await BroadcastTeamMemory("updated", id, entryId);

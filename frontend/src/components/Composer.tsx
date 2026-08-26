@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, VolumeX, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Eye, EyeOff, Mic, Paperclip, Plus, RefreshCw, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -7,6 +7,7 @@ import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
+import { useActionVisibility } from '../hooks/useActionVisibility';
 import { ComposerModelPicker } from './ComposerModelPicker';
 import { USAGE } from '../lib/models';
 import { ComposerEffortPicker } from './ComposerEffortPicker';
@@ -1335,6 +1336,9 @@ export function Composer({
       onClick={worktreeToggleDisabled ? undefined : onToggleWorktree}
       disabled={worktreeToggleDisabled}
       title={worktreeButtonTitle}
+      // Активное дерево — состояние, которое должно читаться и в заглушенном
+      // ghost-ряду (cc-ghost-live снимает заглушку зоны, см. index.css)
+      className={worktreeActive ? 'cc-ghost-live' : undefined}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
         background: worktreeActive ? C.accentLight : 'none',
@@ -1749,9 +1753,19 @@ export function Composer({
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
 
+  // === Видимость кнопок губы ===
+  // «⋯» стоит в полосе ВСЕГДА, тумблеры внутри решают, что показывать рядом с ним.
+  // Скрытые пользователем в ряд не встают и в подсчёте ширины не участвуют — они
+  // живут пунктами меню; показанные сворачиваются по ширине, как раньше
+  // По умолчанию снаружи — «Прикрепить» и «Обсудить с командой»; скилл, цикл и
+  // отдельное дерево живут в «⋯» (у режимов и так есть пилюли состояния)
+  const composerVis = useActionVisibility('composer', ['slash', 'loop', 'worktree']);
+  const shownCollapsible = collapsible.filter(c => composerVis.isVisible(c.key));
+
   const visibleCount = useToolbarOverflow({
     stripRef, fixedLeftRef, badgesRef, rightRef,
-    count: collapsible.length,
+    // Считаем только показанные: скрытых в ряду нет вовсе
+    count: shownCollapsible.length,
     // Всегда включено (как в шапке FileViewer): решает замер полосы, а не ширина окна.
     // Гейт по isMobile оставлял планшет и телефон в ландшафте вовсе без сворачивания —
     // кнопки с flexShrink:0 выдавливали строку за край губы
@@ -1790,7 +1804,7 @@ export function Composer({
   // isMobile: полоса жмётся и на планшете. Дерева здесь нет: его кнопка-тумблер живёт
   // в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль не нужен,
   // а значение ветки показывает git-бар
-  const collapsedAny = visibleCount < collapsible.length;
+  const collapsedAny = visibleCount < shownCollapsible.length;
   const activeModeItems = ([
     badgesOverflowed && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
       sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
@@ -1799,7 +1813,29 @@ export function Composer({
       sublabel: `Включено · ${teamMechMeta.name}`, toggle: true,
       onClick: () => setTeamMech(null) },
   ].filter(Boolean) as OverflowItem[]);
-  const hiddenItems = [...collapsible.slice(visibleCount).map(c => c.item), ...activeModeItems];
+  // Глазик-спутник строки: показывает, стоит ли кнопка в самой полосе, и переключает
+  // это по клику (меню не закрывается — набор выставляется одним заходом)
+  const visAction = (key: string) => ({
+    icon: composerVis.isVisible(key)
+      ? <Eye size={15} strokeWidth={2} />
+      : <EyeOff size={15} strokeWidth={2} />,
+    title: composerVis.isVisible(key) ? 'Скрыть кнопку из полосы' : 'Показать кнопку в полосе',
+    onClick: () => composerVis.toggle(key),
+  });
+  // В «⋯» — ВСЕ кнопки ряда: клик по строке выполняет действие, глазик справа решает,
+  // стоит ли кнопка в самой полосе. Не влезшие по ширине и скрытые пользователем
+  // отличаются только состоянием глаза — отдельных секций не нужно
+  const hiddenItems: OverflowItem[] = [
+    ...collapsible.map(c => ({ ...c.item, action: visAction(c.key) })),
+    ...activeModeItems,
+  ];
+
+  // Right-click по губе (desktop) открывает то же «Ещё» — но ВСЕГДА в полном составе,
+  // независимо от того, что реально спрятано шириной: жест должен быть путём ко всем
+  // кнопкам, а не только к тем, что не влезли. Счётчик counter отличает открытия
+  const [ctxOpen, setCtxOpen] = useState(0);
+  const ctxAnchorRef = useRef<DOMRect | null>(null);
+  const fullMenuItems: OverflowItem[] = hiddenItems;
 
   // Офлайн: заглушка вместо полей. Компонент остаётся смонтированным, поэтому
   // набранный текст (text) сохраняется до возврата в онлайн. Ранний return строго
@@ -2023,7 +2059,12 @@ export function Composer({
         zIndex тут ЗАПРЕЩЁН: стокинг-контекст запер бы попапы губы (Z.dropdown)
         под карточкой — «композер над попапами». Губа и так ниже карточки: она
         стоит в DOM раньше и обе позиционированы в одном контексте обёртки */}
-    <div ref={stripRef} style={{
+    <div ref={stripRef} className={isMobile ? undefined : 'cc-ghost-zone'} onContextMenu={isMobile ? undefined : e => {
+      // Правый клик по губе (desktop) — полное меню всех кнопок ряда у курсора
+      e.preventDefault();
+      ctxAnchorRef.current = new DOMRect(e.clientX, e.clientY, 0, 0);
+      setCtxOpen(c => c + 1);
+    }} style={{
       position: 'relative',
       display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4,
       flexWrap: 'nowrap', minWidth: 0,
@@ -2041,10 +2082,22 @@ export function Composer({
       <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
         {modeButton}
       </div>
-      {collapsible.slice(0, visibleCount).map(c => <span key={c.key} style={{ display: 'flex', flexShrink: 0 }}>{c.node}</span>)}
-      {hiddenItems.length > 0 && (
-        <ToolbarOverflowMenu isMobile={isMobile} items={hiddenItems} title="Ещё"
-          indicator={hiddenItems.some(i => i.toggle)} />
+      {/* Ghost-заглушение сворачиваемого ряда (только десктоп — класс гасится вне
+          hover-media): спан-обёртки кнопок остаются «своими» для арифметики
+          useToolbarOverflow (она меряет соседей по refs), заглушку несёт каждая.
+          Pinned-кнопки всегда в ряду, unpinned — по visibleCount */}
+      {shownCollapsible.slice(0, visibleCount).map(c => (
+        <span key={c.key} className={isMobile ? undefined : 'cc-ghost-actions'} style={{ display: 'flex', flexShrink: 0 }}>{c.node}</span>
+      ))}
+      {/* «⋯» — постоянная кнопка полосы: и путь к скрытому, и место настройки ряда */}
+      <ToolbarOverflowMenu isMobile={isMobile} items={hiddenItems} title="Ещё" />
+      {/* Скрытое ctx-меню правого клика: без триггера, открывается внешним сигналом.
+          Живёт отдельно от «⋯» широты: тот показывает только непоместившееся, а жест
+          должен давать доступ ко ВСЕМ кнопкам ряда */}
+      {!isMobile && fullMenuItems.length > 0 && (
+        <ToolbarOverflowMenu items={fullMenuItems} title="Все действия"
+          renderTrigger={() => null}
+          openTrigger={{ counter: ctxOpen, anchor: ctxAnchorRef.current }} />
       )}
       <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, minWidth: 0, overflow: 'hidden' }}>
         {loopPill}

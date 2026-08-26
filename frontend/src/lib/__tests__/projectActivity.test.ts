@@ -12,7 +12,7 @@ vi.mock('../signalr', () => ({
 vi.mock('../api', () => ({
   api: {
     home: { summary: vi.fn() },
-    chats: { agentsPresence: vi.fn(() => Promise.resolve([] as string[])) },
+    chats: { agentsPresence: vi.fn(() => Promise.resolve({ agents: [] as string[], commands: [] as string[] })) },
   },
 }));
 
@@ -42,7 +42,7 @@ function summary(active: HomeSessionInfo[], recent: HomeSessionInfo[]) {
 beforeEach(() => {
   __resetProjectActivity();
   __resetAgentsPresence();
-  vi.mocked(api.chats.agentsPresence).mockResolvedValue([]);
+  vi.mocked(api.chats.agentsPresence).mockResolvedValue({ agents: [], commands: [] });
 });
 
 afterEach(() => {
@@ -53,7 +53,7 @@ afterEach(() => {
 describe('projectActivity: живые фоновые агенты', () => {
   it('чат из recent с живым фоном зажигает точку проекта', async () => {
     summary([], [chat('c1', 'active')]);
-    vi.mocked(api.chats.agentsPresence).mockResolvedValue(['c1']);
+    vi.mocked(api.chats.agentsPresence).mockResolvedValue({ agents: ['c1'], commands: [] });
 
     __subscribeActivity(() => {});
     await vi.waitFor(() => expect(__projectAggSnapshot().get('p1')?.status).toBe('working'));
@@ -61,7 +61,7 @@ describe('projectActivity: живые фоновые агенты', () => {
 
   it('чат из recent с живым фоном даёт номерок «работает» в доке стены', async () => {
     summary([], [chat('c1', 'active')]);
-    vi.mocked(api.chats.agentsPresence).mockResolvedValue(['c1']);
+    vi.mocked(api.chats.agentsPresence).mockResolvedValue({ agents: ['c1'], commands: [] });
 
     __subscribeActivity(() => {});
     await vi.waitFor(() => expect(__chatAggSnapshot().get('c1')).toBe('working'));
@@ -82,7 +82,7 @@ describe('projectActivity: живые фоновые агенты', () => {
   it('ожидание человека важнее работающего фона', async () => {
     // waiting — «брось дело, нужен ответ»: фон работает сам и перебивать не должен
     summary([chat('c2', 'waiting')], [chat('c1', 'active')]);
-    vi.mocked(api.chats.agentsPresence).mockResolvedValue(['c1']);
+    vi.mocked(api.chats.agentsPresence).mockResolvedValue({ agents: ['c1'], commands: [] });
 
     __subscribeActivity(() => {});
     await vi.waitFor(() => expect(__projectAggSnapshot().get('p1')?.status).toBe('waiting'));

@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -1141,25 +1141,26 @@ export const api = {
   // Быстрые фразы композера: готовые сообщения, уходящие одним нажатием.
   // Ресурс бэка — /api/me/quick-phrases (MyQuickPhrasesController)
   quickPhrases: {
-    get: () => request<{ phrases: string[] }>('/me/quick-phrases'),
+    get: () => request<{ phrases: QuickPhrase[] }>('/me/quick-phrases'),
     // Полная замена набора; ответ — итог после серверной чистки (пустые/дубли/потолок)
-    put: (phrases: string[]) =>
-      request<{ phrases: string[] }>('/me/quick-phrases', { method: 'PUT', body: JSON.stringify({ phrases }) }),
+    put: (phrases: QuickPhrase[]) =>
+      request<{ phrases: QuickPhrase[] }>('/me/quick-phrases', { method: 'PUT', body: JSON.stringify({ phrases }) }),
   },
 
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
-    // id чатов (в т.ч. проектных), где прямо сейчас работают фоновые агенты. Снимок нужен
-    // потому, что событие bg_agents_presence приходит только на переходе 0↔N
-    agentsPresence: () => request<string[]>('/chats/agents-presence'),
+    // id чатов (в т.ч. проектных) с живой фоновой работой: отдельно агенты, отдельно фоновые
+    // команды Bash. Снимок нужен потому, что событие bg_agents_presence приходит только на
+    // смене состояния — открывший список позже старта иначе о нём не узнает
+    agentsPresence: () => request<{ agents: string[]; commands: string[] }>('/chats/agents-presence'),
     get: (id: string) => request<Session>(`/chats/${id}`),
     create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
       }),
-    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string; archived?: boolean }) =>
       request<Session>(`/chats/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),

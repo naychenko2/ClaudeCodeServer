@@ -8,6 +8,8 @@ client/**/obj/
 *.user
 .vs/
 data/
+# Отчёты dotnet test (--logger trx и т.п.) — локальный прогон, не артефакт репозитория
+TestResults/
 
 # Артефакты публикации и TLS-сертификаты
 publish/

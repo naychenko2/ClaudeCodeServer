@@ -1,8 +1,10 @@
 // Чип общего тега на карточке чата + меню маркировки (мультивыбор чекбоксами).
 // Визуал — по макету docs/design/mockups/chat-tags-switch.html: тонированный фон от цвета
-// тега (цвет без реестра → accent), точка-индикатор, крестик удаления по hover.
+// тега (цвет без реестра → accent), точка-индикатор. Снять тег с чипа нельзя: крестик убран,
+// потому что попадал под палец при обычном клике по плитке чата — снятие идёт через меню
+// маркировки.
 import { useEffect, useState } from 'react';
-import { Check, Plus, X } from 'lucide-react';
+import { Check, Plus } from 'lucide-react';
 import type { ProjectTag } from '../types';
 import { C, R, FONT, FS, SP } from '../lib/design';
 import { Button, Menu, TextField } from './ui';
@@ -23,20 +25,16 @@ function tint(color: string, alpha: number): string {
 }
 
 // === Чип тега ===
-export function TagChip({ name, color, onRemove, title }: {
+export function TagChip({ name, color, title }: {
   name: string;
   color?: string;      // из реестра; без него — accent
-  onRemove?: () => void; // задан — крестик по hover (на тач hover нет: удаление через меню)
   title?: string;
 }) {
-  const [hover, setHover] = useState(false);
   const ink = color ?? C.accent;
   const bg = color ? tint(color, 0.15) : C.accentLight;
   return (
     <span
       title={title ?? name}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onClick={e => e.stopPropagation()}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -48,21 +46,6 @@ export function TagChip({ name, color, onRemove, title }: {
     >
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: ink, flexShrink: 0 }} />
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      {onRemove && (
-        <button
-          onClick={e => { e.stopPropagation(); onRemove(); }}
-          aria-label={`Снять тег «${name}»`}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: 16, height: 16, marginRight: -2,
-            border: 'none', borderRadius: R.sm, cursor: 'pointer',
-            background: 'transparent', color: 'inherit', padding: 0,
-            opacity: hover ? 1 : 0, transition: 'opacity 0.15s',
-          }}
-        >
-          <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </button>
-      )}
     </span>
   );
 }

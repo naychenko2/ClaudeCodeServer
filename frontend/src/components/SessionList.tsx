@@ -396,7 +396,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onHover={h => setHoveredId(h ? s.id : null)}
         onDelete={() => setDeleteTarget(s)}
         tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
-        onRemoveTag={online ? name => toggleTag(s, name) : undefined}
         onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}

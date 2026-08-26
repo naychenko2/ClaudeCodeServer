@@ -40,10 +40,10 @@ export type OverflowItem = {
   // там основной клик и есть переключение видимости, и набор выставляется одним
   // заходом — как у строк-переключателей, но без второго контрола рядом с глазиком
   keepOpen?: boolean;
-  // Строка показывает САМ элемент, а не его название: настройка видимости пилюль
-  // шапки — про внешний вид, и узнать пилюлю по картинке быстрее, чем по подписи.
-  // Превью неинтерактивно (pointer-events отключены): свои поповеры пилюль внутри
-  // меню открываться не должны, для этого есть сама шапка
+  // Образец САМОГО элемента под подписью строки: настройка видимости пилюль шапки —
+  // про внешний вид, и узнать пилюлю по картинке быстрее, чем по названию. Образец
+  // живой (клик открывает её собственный поповер) и не всплывает в строку, поэтому
+  // посмотреть содержимое скрытой пилюли можно не возвращая её в шапку
   preview?: ReactNode;
   // Разделитель перед строкой — отбивает секцию (действия | пилюли)
   separator?: boolean;
@@ -91,6 +91,11 @@ export function ToolbarOverflowMenu({
   // от корня: тулбар живёт и в узких колонках (стена, боковые панели), где
   // absolute-карточка шире контейнера обрезалась его overflow и уезжала за кромку.
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Режет ли карточка своё содержимое. Прокрутка нужна только когда список выше
+  // отведённой высоты; в остальных случаях overflow обязан быть видимым, иначе
+  // карточка срезает поповеры, которые пилюли-образцы раскрывают ИЗ строки меню.
+  // Считаем по факту после рендера, до замера безопаснее резать
+  const [clip, setClip] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerElRef = useRef<HTMLElement | null>(null);
@@ -135,6 +140,18 @@ export function ToolbarOverflowMenu({
     // пересоздавался бы каждый рендер
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Замер после открытия: список влез — снимаем прокрутку, чтобы поповер образца
+  // мог выйти за карточку (иначе он срезается её кромкой и виден полоской)
+  useEffect(() => {
+    if (!open || isMobile) { setClip(true); return; }
+    const el = menuRef.current;
+    if (el) setClip(el.scrollHeight > el.clientHeight + 1);
+  // Длина списка, а не сам массив: он пересоздаётся каждым рендером, и эффект бежал
+  // бы снова уже с раскрытым поповером — тот увеличивает scrollHeight, прокрутка
+  // возвращалась бы ровно в момент, ради которого её и снимали
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isMobile, items?.length]);
 
   const close = () => { setOpen(false); setAnchor(null); };
   // Расчёт направления дропдауна по rect якоря (кнопка «⋯» или точка курсора при
@@ -233,7 +250,7 @@ export function ToolbarOverflowMenu({
         <div
           ref={menuRef}
           role="menu" aria-labelledby={title ? labelId : undefined}
-          style={fixedDropdownStyle(anchor, drop, align)}
+          style={fixedDropdownStyle(anchor, drop, align, clip)}
         >
           {title && <div id={labelId} style={sectionTitle}>{title}</div>}
           {content}
@@ -268,8 +285,8 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
     if (!isToggle && !item.keepOpen) onDone();   // переключатель и строка-настройка оставляют меню открытым
   };
   // Строка-превью не может быть <button>: внутри неё живёт сама пилюля, а она
-  // тоже кнопка — вложенная кнопка невалидна и ломает разметку. Рисуем span,
-  // управление такой строкой целиком на глазике справа
+  // тоже кнопка — вложенная кнопка невалидна и ломает разметку. Рисуем span
+  // с тем же кликом: строка остаётся управляемой, а вложенность честной
   const Tag = (item.preview != null ? 'span' : 'button') as 'span';
   const row = (
     <Tag
@@ -303,14 +320,17 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         </span>
       )}
       <span style={{ flex: 1, minWidth: 0 }}>
-        {item.preview != null ? (
-          // Сам элемент вместо подписи. Клики внутрь не пускаем: пилюля здесь —
-          // образец, а не рабочая кнопка (её поповер живёт в шапке)
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, pointerEvents: 'none' }}>
+        <span style={{ display: 'block', fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
+        {item.preview != null && (
+          // Сам элемент под подписью: название говорит, что это, образец — как оно
+          // выглядит. Пилюля остаётся рабочей (её поповер открывается и отсюда),
+          // поэтому клик по ней не всплывает в строку и видимость не переключает
+          <span
+            style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 4 }}
+            onClick={e => e.stopPropagation()}
+          >
             {item.preview}
           </span>
-        ) : (
-          <span style={{ display: 'block', fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
         )}
         {item.sublabel && <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, fontWeight: 400 }}>{item.sublabel}</span>}
       </span>
@@ -366,7 +386,7 @@ const MIN_W = 240;   // минимальная ширина карточки м�
 // Fixed-дропдаун по якорю (кнопка «⋯» либо точка курсора): координаты
 // viewport-ные, портал в body. Направление вверх/вниз посчитано в openNear,
 // здесь — привязка к нужной кромке якоря и кламп в окно.
-function fixedDropdownStyle(anchor: DOMRect, drop: { up: boolean; maxH: number }, align: 'left' | 'right'): CSSProperties {
+function fixedDropdownStyle(anchor: DOMRect, drop: { up: boolean; maxH: number }, align: 'left' | 'right', clip: boolean): CSSProperties {
   // Ширина карточки заранее не известна (240..320 по содержимому), поэтому
   // выравнивание вправо задаём через right — иначе пришлось бы угадывать ширину
   const horizontal: CSSProperties = align === 'right'
@@ -383,7 +403,7 @@ function fixedDropdownStyle(anchor: DOMRect, drop: { up: boolean; maxH: number }
     // Потолок ширины — по месту до кромки окна: в узкой колонке карточка не должна
     // вылезать за экран, а расти ей есть куда только вправо/влево от якоря
     maxWidth: Math.min(320, window.innerWidth - 2 * EDGE),
-    ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: 'auto' as const } : null),
+    ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: clip ? ('auto' as const) : ('visible' as const) } : null),
     background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
     boxShadow: SHADOW.dropdown, padding: 6,
     // Портал в body — вне контекста наложения исходной зоны, слой выше модалок

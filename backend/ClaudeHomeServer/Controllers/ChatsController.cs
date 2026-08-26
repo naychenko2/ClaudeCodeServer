@@ -29,12 +29,17 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
     [HttpGet]
     public IActionResult GetAll() => Ok(sessions.GetProjectlessChats(UserId));
 
-    // Снимок «у каких чатов прямо сейчас работают фоновые агенты»: id сессий владельца,
-    // включая проектные — карточки чатов проекта рисует тот же стор. Нужен потому, что
-    // событие bg_agents_presence приходит только на переходе 0↔N: открывший список позже
-    // старта агентов иначе не узнал бы о них до самого их завершения.
+    // Снимок «у каких чатов прямо сейчас идёт фоновая работа»: id сессий владельца, включая
+    // проектные — карточки чатов проекта рисует тот же стор. Нужен потому, что событие
+    // bg_agents_presence приходит только на СМЕНЕ состояния: открывший список позже старта
+    // иначе не узнал бы о нём до самого завершения. Два списка, а не один: агенты светятся,
+    // фоновые команды (Bash с run_in_background) помечаются тихо, и наборы пересекаются.
     [HttpGet("agents-presence")]
-    public IActionResult AgentsPresence() => Ok(sessions.GetSessionsWithLiveAgents(UserId));
+    public IActionResult AgentsPresence() => Ok(new
+    {
+        agents = sessions.GetSessionsWithLiveAgents(UserId),
+        commands = sessions.GetSessionsWithLiveBgCommands(UserId),
+    });
 
     // Получить сессию по ID независимо от типа (проектная / чат вне проекта).
     // Используется для ссылки «Связанная сессия» в карточке задачи без проекта.

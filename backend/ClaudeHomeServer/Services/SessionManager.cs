@@ -1047,6 +1047,15 @@ public class SessionManager : IDisposable
             .Select(e => e.Info.Id)
             .ToList();
 
+    // Та же выборка для фоновых КОМАНД (Bash с run_in_background): у них свой, тихий значок в
+    // списке чатов. Отдельный метод, а не флаг в предыдущем: наборы пересекаются (в чате может
+    // идти и агент, и дев-сервер), и клиенту нужны оба списка целиком.
+    public IReadOnlyList<string> GetSessionsWithLiveBgCommands(string ownerId) =>
+        _sessions.Values
+            .Where(e => e.Process is { HasTrackedCommandBg: true } && ResolveOwnerId(e.Info) == ownerId)
+            .Select(e => e.Info.Id)
+            .ToList();
+
     // Число сессий проекта — для карточки проекта (без аллокации списка)
     public int CountByProject(string projectId) =>
         _sessions.Values.Count(e => e.Info.ProjectId == projectId);

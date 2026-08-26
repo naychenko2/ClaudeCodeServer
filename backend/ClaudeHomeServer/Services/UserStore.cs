@@ -416,6 +416,36 @@ public class UserStore
         }
     }
 
+    /// <summary>Быстрые фразы композера пользователя в порядке показа; пусто — не заведены.</summary>
+    public IReadOnlyList<string> GetQuickPhrases(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            return user?.QuickPhrases ?? [];
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет набор быстрых фраз (список приходит отвалидированным: обрезка, дедуп,
+    /// потолок). Возвращает false, если пользователь не найден.
+    /// </summary>
+    public bool SetQuickPhrases(string id, IReadOnlyList<string> phrases)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            // null и пустой список — одно «фраз нет»: без ?? [] чистка пустого набора
+            // переписывала бы users.json на каждый PUT
+            if ((user.QuickPhrases ?? []).SequenceEqual(phrases)) return true;
+
+            user.QuickPhrases = phrases.Count > 0 ? [.. phrases] : null;
+            Save();
+            return true;
+        }
+    }
+
     /// <summary>
     /// Личная дефолт-персона пользователя (фича default-personas-onboarding); null — сброс.
     /// Возвращает false если пользователь не найден.

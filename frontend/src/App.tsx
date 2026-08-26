@@ -480,6 +480,19 @@ export default function App() {
     if (seed.screen === 'personas' && initialHash?.screen === 'personas') seed.persona = initialHash.personaId ?? null
     // Диплинк #/knowledge/{id}: сохраняем базу знаний в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'knowledge' && initialHash?.screen === 'knowledge') seed.knowledge = initialHash.knowledgeId ?? null
+    // Диплинк #/personas/specialties[/{roleKey}]: сохраняем personaView, иначе сид затрёт
+    // под-адрес specialties и F5/прямой URL сбросит адрес на #/personas
+    if (seed.screen === 'personas' && initialHash?.screen === 'personas' && initialHash.personaView) seed.personaView = initialHash.personaView
+    // Диплинк #/personas/specialties/{roleKey}[/edit] — toHash в nav.ts не умеет в под-адреса
+    // (контракт общего NavSnapshot), и обычный navReplace ниже обрезал бы URL до #/personas/specialties.
+    // Прямая запись через history.replaceState с текущим hash сохраняет и URL, и state;
+    // ровно так же поступает pushSpecialtiesUrl в PersonasPage при навигации по под-адресам.
+    const specialtiesSubHash = window.location.hash.match(/^#\/personas\/specialties\/[^/?]+(\/edit)?$/)
+    if (specialtiesSubHash && !initialHash?.history) {
+      window.history.replaceState(seed, '', specialtiesSubHash[0])
+      window.dispatchEvent(new Event('cc-nav-change'))
+      return
+    }
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
     // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL

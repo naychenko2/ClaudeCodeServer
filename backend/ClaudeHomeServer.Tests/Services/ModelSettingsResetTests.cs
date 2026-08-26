@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -36,7 +36,7 @@ public class ModelSettingsResetTests : IDisposable
         }).Build();
 
     private SpecialtySettingsStore NewStore() =>
-        new(Config(), NullLogger<SpecialtySettingsStore>.Instance);
+        ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(Config());
 
     private PersonaManager NewPersonas() => new(Config());
 
@@ -69,41 +69,18 @@ public class ModelSettingsResetTests : IDisposable
     // --- Предикат «запись ничего своего не несёт» ---
 
     [Fact]
-    public void Сброс_ПраваКакУНижнегоСлоя_ЗаписьУдаленаВместеСDefaultTier()
+    public void Сброс_ПраваКакУДефолтаКода_ЗаписьУдаленаВместеСDefaultTier()
     {
         var store = NewStore();
         store.SetGlobal(Layer(new()
         {
-            ["analyst"] = Tmpl(PersonaAccess.ReadOnly, tools: ["web"]),
-        }));
-        store.SetOwner(Owner, Layer(new()
-        {
-            // Права те же, что у глобальной записи, — своего запись не несёт
-            ["analyst"] = Tmpl(PersonaAccess.ReadOnly, tools: ["web"],
-                strong: "gpt-5", defaultTier: ModelTier.Weak),
-        }));
-
-        var result = store.ResetModelSettings(Owner, key: null, apply: true);
-
-        result.Changed.Should().Be(1);
-        result.Shadowed.Should().BeEmpty();
-        store.Snapshot.Owners.Should().NotContainKey(Owner, "пустой слой убирается из файла");
-        store.Snapshot.Global.Specialties.Should().ContainKey("analyst", "нижний слой не тронут");
-    }
-
-    [Fact]
-    public void СбросГлобального_НижнейЗаписиНет_КаталожныйДефолтNull_ЗаписьУдалена()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(new()
-        {
-            // У аналитика каталожного шаблона нет: Full без инструментов = «ничего своего»
+            // У аналитика каталожного шаблона нет: Full без ограничений = «ничего своего»
             ["analyst"] = Tmpl(medium: "gpt-5"),
             // У исполнителя каталожный дефолт есть и он ровно такой же
             ["backendExecutor"] = Tmpl(strong: "opus", defaultTier: ModelTier.Strong),
         }));
 
-        var result = store.ResetModelSettings(ownerId: null, key: null, apply: true);
+        var result = store.ResetModelSettings(key: null, apply: true);
 
         result.Changed.Should().Be(2);
         result.Shadowed.Should().BeEmpty();
@@ -114,7 +91,7 @@ public class ModelSettingsResetTests : IDisposable
     public void Сброс_ПраваРасходятся_УровниСнятыПраваЦелыКлючВShadowed()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(
+        store.SetGlobal(Layer(
             new()
             {
                 ["analyst"] = Tmpl(PersonaAccess.Custom, tools: ["web"], disallowed: ["Bash"],
@@ -122,13 +99,13 @@ public class ModelSettingsResetTests : IDisposable
             },
             presets: [new ModelRoutePreset { Name = "Дешёвый фон", Steps = ["tier:weak"] }]));
 
-        var result = store.ResetModelSettings(Owner, key: null, apply: true);
+        var result = store.ResetModelSettings(key: null, apply: true);
 
         result.Changed.Should().Be(1);
         result.Shadowed.Should().Equal("analyst");
 
-        var owner = store.Snapshot.Owners[Owner];
-        var rec = owner.Specialties["analyst"];
+        var layer = store.Snapshot.Global;
+        var rec = layer.Specialties["analyst"];
         rec.Access.Should().Be(PersonaAccess.Custom, "права сохранены");
         rec.Tools.Should().Equal("web");
         rec.DisallowedTools.Should().Equal("Bash");
@@ -137,7 +114,7 @@ public class ModelSettingsResetTests : IDisposable
         rec.TierWeak.Should().BeNull();
         rec.DefaultTier.Should().BeNull("DefaultTier снимается вместе с уровнями");
 
-        owner.Presets.Should().ContainSingle().Which.Name.Should().Be("Дешёвый фон");
+        layer.Presets.Should().ContainSingle().Which.Name.Should().Be("Дешёвый фон");
 
         using var doc = JsonDocument.Parse(File.ReadAllText(StorePath));
         doc.RootElement.GetProperty("Version").GetInt32()
@@ -145,34 +122,33 @@ public class ModelSettingsResetTests : IDisposable
     }
 
     [Fact]
-    public void Сброс_ПослеУдаленияЗаписи_УровеньСпециальностиИзНижнегоСлоя()
+    public void Сброс_ПослеУдаленияЗаписи_УровеньБерётсяИзDefaultSpecialty()
     {
         var store = NewStore();
-        store.SetGlobal(Layer(new() { ["analyst"] = Tmpl(defaultTier: ModelTier.Strong) }));
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = Tmpl(defaultTier: ModelTier.Weak) }));
+        store.SetGlobal(Layer(
+            new() { ["analyst"] = Tmpl(defaultTier: ModelTier.Weak) },
+            defaultSpecialty: Tmpl(PersonaAccess.ReadOnly, defaultTier: ModelTier.Strong)));
         store.SpecialtyDefaultTier(Owner, PersonaSpecialty.Analyst).Should().Be(ModelTier.Weak);
 
-        store.ResetModelSettings(Owner, key: null, apply: true).Changed.Should().Be(1);
+        store.ResetModelSettings(key: "analyst", apply: true).Changed.Should().Be(1);
 
         store.SpecialtyDefaultTier(Owner, PersonaSpecialty.Analyst)
-            .Should().Be(ModelTier.Strong, "личная запись удалена — уровень берётся из нижнего слоя");
+            .Should().Be(ModelTier.Strong, "запись специальности удалена — уровень берётся у «любой»");
     }
 
     [Fact]
     public void Сброс_ОставшаясяРадиПравЗапись_БольшеНеАдресуетУровень()
     {
         var store = NewStore();
-        store.SetGlobal(Layer(new() { ["analyst"] = Tmpl(defaultTier: ModelTier.Strong) }));
-        store.SetOwner(Owner, Layer(new()
+        store.SetGlobal(Layer(new()
         {
             ["analyst"] = Tmpl(PersonaAccess.ReadOnly, defaultTier: ModelTier.Weak),
         }));
 
-        var result = store.ResetModelSettings(Owner, key: null, apply: true);
+        var result = store.ResetModelSettings(key: null, apply: true);
 
         result.Shadowed.Should().Equal("analyst");
-        // Запись осталась ради прав и по-прежнему затеняет нижний слой целиком,
-        // но модель больше не адресует — прежний собственный уровень не возвращается
+        // Запись осталась ради прав, но модель больше не адресует — прежний уровень не вернётся
         store.SpecialtyDefaultTier(Owner, PersonaSpecialty.Analyst).Should().BeNull();
     }
 
@@ -180,54 +156,53 @@ public class ModelSettingsResetTests : IDisposable
     public void Сброс_ПраваИзМиграцииV1_НенормализованныеСчитаютсяЭквивалентными()
     {
         // Миграция v1 кладёт шаблоны БЕЗ нормализации: полный набор инструментов остаётся
-        // списком, тогда как нижний слой хранит его как null
+        // списком, тогда как дефолт кода означает то же самое через null
         File.WriteAllText(StorePath, """
         {
-          "Version": 2,
-          "Global": { "Specialties": {}, "Presets": [] },
-          "Owners": {
-            "owner-1": {
-              "Specialties": {
-                "analyst": {
-                  "Access": "full",
-                  "Tools": ["web", "notes", "tasks"],
-                  "TierStrong": "opus",
-                  "DefaultTier": "weak"
-                }
-              },
-              "Presets": []
-            }
-          }
+          "Version": 5,
+          "Global": {
+            "Specialties": {
+              "analyst": {
+                "Access": "full",
+                "Tools": ["web", "notes", "tasks"],
+                "TierStrong": "opus",
+                "DefaultTier": "weak"
+              }
+            },
+            "Presets": []
+          },
+          "Owners": {},
+          "Users": {}
         }
         """);
         var store = NewStore();
-        store.Snapshot.Owners[Owner].Specialties["analyst"].Tools.Should().HaveCount(3);
+        store.Snapshot.Global.Specialties["analyst"].Tools.Should().HaveCount(3);
 
-        var result = store.ResetModelSettings(Owner, key: null, apply: true);
+        var result = store.ResetModelSettings(key: null, apply: true);
 
         result.Changed.Should().Be(1);
         result.Shadowed.Should().BeEmpty("полный набор инструментов эквивалентен «все возможности»");
-        store.Snapshot.Owners.Should().NotContainKey(Owner);
+        store.Snapshot.Global.Specialties.Should().BeEmpty();
     }
 
     [Fact]
     public void Сброс_DefaultSpecialty_ТемЖеПредикатом()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(defaultSpecialty: Tmpl(weak: "haiku", defaultTier: ModelTier.Weak)));
+        store.SetGlobal(Layer(defaultSpecialty: Tmpl(weak: "haiku", defaultTier: ModelTier.Weak)));
 
-        var deleted = store.ResetModelSettings(Owner, key: null, apply: true);
+        var deleted = store.ResetModelSettings(key: null, apply: true);
         deleted.Changed.Should().Be(1);
         deleted.Shadowed.Should().BeEmpty();
-        store.Snapshot.Owners.Should().NotContainKey(Owner);
+        store.Snapshot.Global.DefaultSpecialty.Should().BeNull();
 
         // Своими правами «любая специальность» держится в слое — как обычная запись
-        store.SetOwner(Owner, Layer(defaultSpecialty: Tmpl(PersonaAccess.ReadOnly, weak: "haiku")));
-        var kept = store.ResetModelSettings(Owner, key: null, apply: true);
+        store.SetGlobal(Layer(defaultSpecialty: Tmpl(PersonaAccess.ReadOnly, weak: "haiku")));
+        var kept = store.ResetModelSettings(key: null, apply: true);
         kept.Changed.Should().Be(1);
         kept.Shadowed.Should().Equal(SpecialtyCatalog.AnySpecialtyKey);
-        store.Snapshot.Owners[Owner].DefaultSpecialty!.TierWeak.Should().BeNull();
-        store.Snapshot.Owners[Owner].DefaultSpecialty!.Access.Should().Be(PersonaAccess.ReadOnly);
+        store.Snapshot.Global.DefaultSpecialty!.TierWeak.Should().BeNull();
+        store.Snapshot.Global.DefaultSpecialty!.Access.Should().Be(PersonaAccess.ReadOnly);
     }
 
     // --- Точечный сброс по ключу ---
@@ -236,7 +211,7 @@ public class ModelSettingsResetTests : IDisposable
     public void СбросПоКлючу_ТрогаетОднуСтроку_СоседниеЦелы()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(
+        store.SetGlobal(Layer(
             new()
             {
                 ["analyst"] = Tmpl(strong: "a"),
@@ -244,19 +219,19 @@ public class ModelSettingsResetTests : IDisposable
             },
             defaultSpecialty: Tmpl(weak: "c")));
 
-        var result = store.ResetModelSettings(Owner, key: "analyst", apply: true);
+        var result = store.ResetModelSettings(key: "analyst", apply: true);
 
         result.Changed.Should().Be(1);
-        var owner = store.Snapshot.Owners[Owner];
-        owner.Specialties.Should().NotContainKey("analyst");
-        owner.Specialties["planner"].TierStrong.Should().Be("b");
-        owner.DefaultSpecialty!.TierWeak.Should().Be("c");
+        var layer = store.Snapshot.Global;
+        layer.Specialties.Should().NotContainKey("analyst");
+        layer.Specialties["planner"].TierStrong.Should().Be("b");
+        layer.DefaultSpecialty!.TierWeak.Should().Be("c");
 
         // «Любая специальность» сбрасывается своим ключом
-        store.ResetModelSettings(Owner, key: SpecialtyCatalog.AnySpecialtyKey, apply: true)
+        store.ResetModelSettings(key: SpecialtyCatalog.AnySpecialtyKey, apply: true)
             .Changed.Should().Be(1);
-        store.Snapshot.Owners[Owner].DefaultSpecialty.Should().BeNull();
-        store.Snapshot.Owners[Owner].Specialties["planner"].TierStrong.Should().Be("b");
+        store.Snapshot.Global.DefaultSpecialty.Should().BeNull();
+        store.Snapshot.Global.Specialties["planner"].TierStrong.Should().Be("b");
     }
 
     // --- Предпросмотр и идемпотентность ---
@@ -265,25 +240,25 @@ public class ModelSettingsResetTests : IDisposable
     public void Предпросмотр_СчитаетТакЖе_НичегоНеМеняет_ПовторныйСбросИдемпотентен()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(new()
+        store.SetGlobal(Layer(new()
         {
             ["analyst"] = Tmpl(strong: "a"),
             ["planner"] = Tmpl(PersonaAccess.ReadOnly, medium: "b"),
         }));
         var before = File.ReadAllText(StorePath);
 
-        var preview = store.ResetModelSettings(Owner, key: null, apply: false);
+        var preview = store.ResetModelSettings(key: null, apply: false);
         preview.Changed.Should().Be(2);
         preview.Shadowed.Should().Equal("planner");
         File.ReadAllText(StorePath).Should().Be(before, "предпросмотр ничего не пишет");
-        store.Snapshot.Owners[Owner].Specialties["analyst"].TierStrong.Should().Be("a");
+        store.Snapshot.Global.Specialties["analyst"].TierStrong.Should().Be("a");
 
-        var applied = store.ResetModelSettings(Owner, key: null, apply: true);
+        var applied = store.ResetModelSettings(key: null, apply: true);
         applied.Changed.Should().Be(preview.Changed);
         applied.Shadowed.Should().Equal(preview.Shadowed);
 
         var afterFirst = File.ReadAllText(StorePath);
-        var again = store.ResetModelSettings(Owner, key: null, apply: true);
+        var again = store.ResetModelSettings(key: null, apply: true);
         again.Changed.Should().Be(0, "сбрасывать больше нечего");
         // shadowed — состояние слоя, а не дельта вызова
         again.Shadowed.Should().Equal(["planner"]);

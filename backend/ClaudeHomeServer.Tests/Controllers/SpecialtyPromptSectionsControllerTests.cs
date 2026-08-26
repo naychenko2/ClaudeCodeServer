@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
@@ -118,11 +118,11 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
     }
 
     [Fact]
-    public async Task Catalog_ПрофильУмений_ЭффективныйДляВызывающего()
+    public async Task Catalog_ПрофильУмений_Эффективный()
     {
-        // Профиль умений в каталоге — ЭФФЕКТИВНЫЙ (слои поверх дефолтов кода): фронт
-        // сверяет с ним счётчик «не хватает типовых умений» и не резолвит слои сам.
-        // Без этого перечитывание каталога после сохранения роли не видит новый профиль.
+        // Профиль умений в каталоге — ЭФФЕКТИВНЫЙ (настройка инстанса поверх дефолтов
+        // кода): фронт сверяет с ним счётчик «не хватает типовых умений» и не резолвит
+        // сам. Без этого перечитывание каталога после сохранения роли не видит профиль.
         (await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
@@ -146,8 +146,15 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
         adminProfile.Should().HaveCount(1);
         adminProfile.Single().GetProperty("condition").GetString().Should().Be("общий профиль");
 
-        // Личный профиль владельца перекрывает глобальный; у админа остаётся глобальный
-        (await _user.PutAsJsonAsync("/api/specialties/settings", new
+        // Профиль общий: не-админ видит ровно тот же, и записать свой не может
+        var userCatalog = await (await _user.GetAsync("/api/specialties/prompt-sections"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var userProfile = userCatalog.GetProperty("specialties").GetProperty("analyst")
+            .GetProperty("defaultBindings").EnumerateArray().ToList();
+        userProfile.Should().HaveCount(1);
+        userProfile.Single().GetProperty("condition").GetString().Should().Be("общий профиль");
+
+        (await _user.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -160,43 +167,22 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
                 },
             },
             presets = Array.Empty<object>(),
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var userCatalog = await (await _user.GetAsync("/api/specialties/prompt-sections"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        var userProfile = userCatalog.GetProperty("specialties").GetProperty("analyst")
-            .GetProperty("defaultBindings").EnumerateArray().ToList();
-        userProfile.Should().HaveCount(1);
-        userProfile.Single().GetProperty("condition").GetString().Should().Be("свой профиль");
-        userProfile.Single().GetProperty("mode").GetString().Should().Be("always");
-
-        var adminAgain = await (await _admin.GetAsync("/api/specialties/prompt-sections"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        adminAgain.GetProperty("specialties").GetProperty("analyst")
-            .GetProperty("defaultBindings").EnumerateArray().Single()
-            .GetProperty("condition").GetString().Should().Be("общий профиль");
+        })).StatusCode.Should().Be(HttpStatusCode.Forbidden, "профиль роли — общий, правит админ");
 
         // Уборка
         await _admin.PutAsJsonAsync("/api/specialties/settings/global", EmptyLayer);
-        await _user.PutAsJsonAsync("/api/specialties/settings", EmptyLayer);
     }
 
     [Fact]
-    public async Task SettingsPut_ЯвныйOffВладельцаПерекрываетOnАдмина()
+    public async Task SettingsPut_ЯвныйOff_ПерекрываетДефолтКода()
     {
+        // roleRules у аналитика включён дефолтом кода — явный off настройки его снимает,
+        // и снимает для всех: слой один (ADR-012)
         await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
-                ["analyst"] = new { promptSections = new object[] { new { id = "roleRules", enabled = true } } },
-            },
-            presets = Array.Empty<object>(),
-        });
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
-        {
-            specialties = new Dictionary<string, object>
-            {
-                ["analyst"] = new { promptSections = new object[] { new { id = "ruleRules", enabled = false } } },
+                ["analyst"] = new { promptSections = new object[] { new { id = "roleRules", enabled = false } } },
             },
             presets = Array.Empty<object>(),
         });
@@ -204,12 +190,11 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
         var userId = SecondUserId();
         _factory.Services.GetRequiredService<SpecialtySettingsStore>()
             .EffectivePromptSections(userId, PersonaSpecialty.Analyst)
-            .Should().NotContain(s => s.Id == "ruleRules",
-                "заданный off владельца перекрывает on админа");
+            .Should().NotContain(s => s.Id == "roleRules",
+                "заданное значение сильнее дефолта кода");
 
         // Уборка
         await _admin.PutAsJsonAsync("/api/specialties/settings/global", EmptyLayer);
-        await _user.PutAsJsonAsync("/api/specialties/settings", EmptyLayer);
     }
 
     [Fact]
@@ -225,7 +210,7 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
         });
         badSection.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
-        var badSkill = await _user.PutAsJsonAsync("/api/specialties/settings", new
+        var badSkill = await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -237,7 +222,7 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
             presets = Array.Empty<object>(),
         });
         badSkill.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        await _user.PutAsJsonAsync("/api/specialties/settings", EmptyLayer);
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", EmptyLayer);
     }
 
     // --- Материализация типовых умений ---
@@ -279,7 +264,7 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
             .GetAll().Single(u => u.Username == TestWebApplicationFactory.SecondUsername).Id;
 
         var admin = factory.CreateAuthenticatedClient();
-        (await admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", new
+        (await admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -322,7 +307,7 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
             .GetAll().Single(u => u.Username == TestWebApplicationFactory.SecondUsername).Id;
 
         var admin = factory.CreateAuthenticatedClient();
-        (await admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", new
+        (await admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {

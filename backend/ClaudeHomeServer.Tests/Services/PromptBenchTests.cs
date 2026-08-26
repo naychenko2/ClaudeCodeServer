@@ -35,12 +35,16 @@ public class PromptBenchTests
     private static string BaselinePath =>
         Path.Combine(RepoRoot(), "backend", "ClaudeHomeServer.Tests", "Fixtures", "prompt-baseline.json");
 
-    // Корень репозитория от каталога сборки: bin/Debug/net10.0 → вверх до папки с .git.
+    // Корень репозитория от каталога сборки: bin/Debug/net10.0 → вверх до .git.
     // Путь строится Path.Combine без хардкода разделителей — тесты гоняются и на Linux (CI).
+    // .git ищем и как ФАЙЛ: в git worktree это файл-указатель на служебный каталог, и
+    // проверка «только папка» роняла тест на «корень не найден» при прогоне из worktree.
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".git")))
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git")))
             dir = dir.Parent;
         return dir?.FullName ?? throw new InvalidOperationException("Корень репозитория не найден");
     }

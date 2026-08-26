@@ -1,16 +1,18 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Стор настроек специальностей и пресетов-цепочек: слои (глобальный + per-owner),
+// Стор настроек специальностей и пресетов-цепочек: ОДИН слой (общий для инстанса, ADR-012),
 // матрицы моделей по уровням + DefaultTier, DefaultSpecialty, пресеты-цепочки Steps,
-// ExpandChain (preset:{id}), валидация, миграция v1→v2, персистентность, версия формата.
+// ExpandChain (preset:{id}), валидация, миграции (v1→v2 и v4→v5 — снятие слоёв),
+// персистентность, версия формата.
 public class SpecialtySettingsStoreTests : IDisposable
 {
     private const string Owner = "owner-1";
@@ -29,13 +31,15 @@ public class SpecialtySettingsStoreTests : IDisposable
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
-    private SpecialtySettingsStore NewStore() => new(
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_dir, "projects.json"),
-            }).Build(),
-        NullLogger<SpecialtySettingsStore>.Instance);
+    private IConfiguration Config() => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dir, "projects.json"),
+        }).Build();
+
+    private SpecialtySettingsStore NewStore(UserStore? users = null) =>
+        new(Config(), users ?? TestSpecialtyStore.Users(Config()),
+            NullLogger<SpecialtySettingsStore>.Instance);
 
     private static SpecialtySettingsLayer Layer(
         Dictionary<string, SpecialtyTemplateSettings>? specialties = null,
@@ -75,126 +79,57 @@ public class SpecialtySettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void EffectiveTemplate_ЛичнаяНастройка_СильнееГлобальной()
+    public void EffectiveTemplate_ГлобальнаяНастройка_ПоверхДефолтаКода()
     {
         var store = NewStore();
-        store.SetGlobal(Layer(new() { ["backendExecutor"] = new SpecialtyTemplateSettings { Access = PersonaAccess.ReadOnly } }));
-        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = new SpecialtyTemplateSettings { Access = PersonaAccess.Custom, DisallowedTools = ["Bash"] } }));
-        var own = store.EffectiveTemplate(Owner, PersonaSpecialty.BackendExecutor)!;
-        own.Access.Should().Be(PersonaAccess.Custom);
-        own.DisallowedTools.Should().BeEquivalentTo("Bash");
+        store.SetGlobal(Layer(new()
+        {
+            ["backendExecutor"] = new SpecialtyTemplateSettings
+            {
+                Access = PersonaAccess.Custom,
+                DisallowedTools = ["Bash"],
+            },
+        }));
+        var template = store.EffectiveTemplate(Owner, PersonaSpecialty.BackendExecutor)!;
+        template.Access.Should().Be(PersonaAccess.Custom);
+        template.DisallowedTools.Should().BeEquivalentTo("Bash");
     }
 
-    // --- Матрицы специальности (ADR-007 §2) ---
+    // --- Один слой: настройки одинаковы для всех владельцев (ADR-012) ---
 
     [Fact]
-    public void SpecialtyMatrices_ЛичныйСлойСильнееГлобального()
+    public void Настройки_ОбщиеДляВсехВладельцев()
     {
         var store = NewStore();
-        store.SetGlobal(Layer(new() { ["backendExecutor"] = Tmpl(strong: "global-opus") }));
-        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(strong: "owner-opus") }));
+        store.SetGlobal(Layer(
+            specialties: new() { ["backendExecutor"] = Tmpl(strong: "global-opus") },
+            presets: [Preset("Общий", "glm-5.2")],
+            defaultSpecialty: Tmpl(weak: "global-haiku")));
 
-        // Личная запись (целиком) раньше глобальной
-        var matrices = store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor);
-        matrices.Should().ContainSingle();
-        matrices[0].Strong.Should().Be("owner-opus");
-        // Чужой владелец — глобальная
-        store.SpecialtyMatrices(Other, PersonaSpecialty.BackendExecutor).Single().Strong.Should().Be("global-opus");
-    }
-
-    // --- Слой «пользователь» (B9): приоритет owner → user → global ---
-
-    [Fact]
-    public void СлойПользователь_ПриоритетЛичныйПользовательскийГлобальный()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(new() { ["backendExecutor"] = Tmpl(strong: "global-opus") }));
-
-        // 1) Назначение пользователю бьёт глобальный
-        store.SetUser(Owner, Layer(new() { ["backendExecutor"] = Tmpl(strong: "user-opus") }));
-        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
-            .Should().Be("user-opus", "слой пользователя сильнее глобального");
-        // Изоляция: другому владельцу назначение не видно — он на глобальном
-        store.SpecialtyMatrices(Other, PersonaSpecialty.BackendExecutor).Single().Strong
-            .Should().Be("global-opus", "назначение действует только на своего пользователя");
-
-        // 2) Личный слой бьёт назначение пользователя
-        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(strong: "owner-opus") }));
-        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
-            .Should().Be("owner-opus", "личный слой сильнее назначения пользователя");
-
-        // 3) Снятие личного слоя (пустой) возвращает назначение пользователя
-        store.SetOwner(Owner, Layer());
-        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
-            .Should().Be("user-opus", "без личного слоя снова видно назначение пользователя");
-
-        // 4) Снятие назначения (пустой слой) возвращает глобальный
-        store.SetUser(Owner, Layer());
-        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
-            .Should().Be("global-opus", "без назначения снова глобальный");
+        foreach (var who in new[] { Owner, Other })
+        {
+            store.SpecialtyMatrices(who, PersonaSpecialty.BackendExecutor)[0].Strong
+                .Should().Be("global-opus", "специальность — контракт инстанса, а не личная настройка");
+            store.TemplateSettings(who, PersonaSpecialty.BackendExecutor)!.TierStrong.Should().Be("global-opus");
+            store.SpecialtyMatrices(who, PersonaSpecialty.Analyst).Single().Weak.Should().Be("global-haiku");
+            store.EffectivePresets(who).Single().Name.Should().Be("Общий");
+        }
     }
 
     [Fact]
-    public void СлойПользователь_ИзоляцияДанныхМеждуПользователями()
+    public void Пресеты_ВсеИзГлобальногоСлоя_ScopeGlobal()
     {
         var store = NewStore();
-        store.SetUser(Owner, Layer(
-            specialties: new() { ["backendExecutor"] = Tmpl(strong: "user-opus") },
-            presets: [Preset("Назначенный", "glm-5.2")],
-            defaultSpecialty: Tmpl(weak: "user-haiku")));
+        store.SetGlobal(Layer(presets:
+        [
+            new ModelRoutePreset { Id = "p1", Name = "Первый", Steps = ["global-step"] },
+            Preset("Второй", "local"),
+        ]));
 
-        // У своего пользователя назначение видно: запись + DefaultSpecialty + пресеты
-        store.SpecialtyMatrices(Owner, PersonaSpecialty.Analyst).Single().Weak.Should().Be("user-haiku");
-        store.EffectivePresets(Owner).Single().Name.Should().Be("Назначенный");
-        store.TemplateSettings(Owner, PersonaSpecialty.BackendExecutor)!.TierStrong.Should().Be("user-opus");
-        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().BeNull();
-
-        // У чужого — ничего от назначения
-        store.SpecialtyMatrices(Other, PersonaSpecialty.Analyst).Should().BeEmpty();
-        store.EffectivePresets(Other).Should().BeEmpty();
-        store.TemplateSettings(Other, PersonaSpecialty.BackendExecutor).Should().BeNull();
-    }
-
-    [Fact]
-    public void СлойПользователь_DefaultTierЦепочкаСлоёв()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(defaultSpecialty: Tmpl(defaultTier: ModelTier.Weak)));
-        store.SetUser(Owner, Layer(new() { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Medium) }));
-
-        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Medium,
-            "запись пользователя бьёт глобальный DefaultSpecialty");
-        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.Analyst).Should().Be(ModelTier.Weak,
-            "без записи пользователя — глобальный DefaultSpecialty");
-
-        // Личная запись бьёт запись пользователя
-        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Strong) }));
-        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Strong);
-    }
-
-    [Fact]
-    public void СлойПользователь_Пресеты_ЛичныйРаньшеПользовательскогоРаньшеГлобального()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "Г", Steps = ["global-step"] }]));
-        store.SetUser(Owner, Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "П", Steps = ["user-step"] }]));
-        store.SetOwner(Owner, Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "Л", Steps = ["owner-step"] }]));
-
-        // Поиск по id: личный раньше назначения, назначение раньше глобального
-        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "owner-step" });
-        store.SetOwner(Owner, Layer());
-        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "user-step" });
-        store.SetUser(Owner, Layer());
-        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "global-step" });
-
-        // WithScope отдаёт три слоя с признаками в порядке резолва
-        store.SetUser(Owner, Layer(presets: [Preset("Назначенный", "local")]));
-        store.SetOwner(Owner, Layer(presets: [Preset("Личный", "claude")]));
+        store.ExpandChain("preset:p1", Owner).Should().BeEquivalentTo(new[] { "global-step" });
         var merged = store.EffectivePresetsWithScope(Owner);
-        merged.Should().HaveCount(3);
-        merged[0].Scope.Should().Be(PresetScope.Owner);
-        merged[1].Scope.Should().Be(PresetScope.User);
-        merged[2].Scope.Should().Be(PresetScope.Global);
+        merged.Should().HaveCount(2);
+        merged.Should().OnlyContain(e => e.Scope == PresetScope.Global);
     }
 
     [Fact]
@@ -213,16 +148,18 @@ public class SpecialtySettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void SpecialtyDefaultTier_Личный_Затем_Глобальный_Затем_DefaultSpecialty()
+    public void SpecialtyDefaultTier_ЗаписьСпециальности_Затем_DefaultSpecialty()
     {
         var store = NewStore();
         store.SetGlobal(Layer(defaultSpecialty: Tmpl(defaultTier: ModelTier.Weak)));
         store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Weak,
             "у специальности нет своей записи — берётся DefaultSpecialty");
 
-        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Strong) }));
+        store.SetGlobal(Layer(
+            specialties: new() { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Strong) },
+            defaultSpecialty: Tmpl(defaultTier: ModelTier.Weak)));
         store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Strong,
-            "личная запись специальности перебивает DefaultSpecialty");
+            "запись специальности перебивает DefaultSpecialty");
     }
 
     // --- ExpandChain (preset:{id}) ---
@@ -239,7 +176,7 @@ public class SpecialtySettingsStoreTests : IDisposable
     public void ExpandChain_Pресет_ВозвращаетШаги()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(presets:
+        store.SetGlobal(Layer(presets:
         [
             new ModelRoutePreset { Id = "p1", Name = "Рабочая", Steps = ["opus", "glm-5.2", "deepseek"] },
         ]));
@@ -256,52 +193,19 @@ public class SpecialtySettingsStoreTests : IDisposable
         store.ExpandChain("preset:no-such", Owner).Should().BeEmpty();
     }
 
-    [Fact]
-    public void ExpandChain_ЛичныйПресетРаньшеГлобального()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "Г", Steps = ["global-step"] }]));
-        store.SetOwner(Owner, Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "Л", Steps = ["owner-step"] }]));
-        // Личный и глобальный живут рядом; поиск по id — личный раньше
-        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "owner-step" });
-    }
-
     // --- Пресеты-цепочки ---
 
     [Fact]
-    public void EffectivePresets_ЛичныеРядомСГлобальными_БезПереопределенияПоId()
+    public void EffectivePresets_ПорядокСпискаСохраняется()
     {
         var store = NewStore();
-        var globalId = "g1";
         store.SetGlobal(Layer(presets:
         [
-            new ModelRoutePreset { Id = globalId, Name = "Глобальный", Steps = ["tier:weak"] },
-            Preset("Ещё глобальный", "claude"),
-        ]));
-        store.SetOwner(Owner, Layer(presets:
-        [
-            new ModelRoutePreset { Id = globalId, Name = "Личная версия", Steps = ["tier:strong"] },
+            new ModelRoutePreset { Id = "g1", Name = "Первый", Steps = ["tier:weak"] },
+            Preset("Второй", "claude"),
         ]));
 
-        var effective = store.EffectivePresets(Owner);
-        effective.Should().HaveCount(3);
-        effective[0].Name.Should().Be("Личная версия");
-        effective[1].Name.Should().Be("Глобальный");
-        effective[2].Name.Should().Be("Ещё глобальный");
-    }
-
-    [Fact]
-    public void EffectivePresetsWithScope_ОбъединённыйСписокСПризнакомСлоя()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(presets: [Preset("Общий", "tier:weak")]));
-        store.SetOwner(Owner, Layer(presets: [Preset("Мой", "local")]));
-
-        var merged = store.EffectivePresetsWithScope(Owner);
-        merged.Should().HaveCount(2);
-        merged[0].Scope.Should().Be(PresetScope.Owner);
-        merged[0].Preset.Name.Should().Be("Мой");
-        merged[1].Scope.Should().Be(PresetScope.Global);
+        store.EffectivePresets(Owner).Select(p => p.Name).Should().Equal("Первый", "Второй");
     }
 
     // --- Валидация ---
@@ -315,52 +219,52 @@ public class SpecialtySettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void SetOwner_ПустоеИмяПресета_Ошибка()
+    public void SetGlobal_ПустоеИмяПресета_Ошибка()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(presets: [Preset("", "claude")])).Should().Contain("пустое имя");
+        store.SetGlobal(Layer(presets: [Preset("", "claude")])).Should().Contain("пустое имя");
     }
 
     [Fact]
-    public void SetOwner_ПустойШаг_Ошибка()
+    public void SetGlobal_ПустойШаг_Ошибка()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(presets: [Preset("П", "opus", "  ")])).Should().Contain("пустой шаг");
+        store.SetGlobal(Layer(presets: [Preset("П", "opus", "  ")])).Should().Contain("пустой шаг");
     }
 
     [Fact]
-    public void SetOwner_ВложенныйПресет_Запрещён()
+    public void SetGlobal_ВложенныйПресет_Запрещён()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(presets: [Preset("П", "opus", "preset:other")]))
+        store.SetGlobal(Layer(presets: [Preset("П", "opus", "preset:other")]))
             .Should().Contain("не может быть ссылкой на другой пресет");
     }
 
     [Fact]
-    public void SetOwner_TierВЯчейкеМатрицы_Запрещён()
+    public void SetGlobal_TierВЯчейкеМатрицы_Запрещён()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(strong: "tier:medium") }))
+        store.SetGlobal(Layer(new() { ["backendExecutor"] = Tmpl(strong: "tier:medium") }))
             .Should().Contain("не может быть tier:*");
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(6)]
-    public void SetOwner_ДлинаЦепочкиВнеДиапазона_Ошибка(int count)
+    public void SetGlobal_ДлинаЦепочкиВнеДиапазона_Ошибка(int count)
     {
         var store = NewStore();
         var steps = Enumerable.Range(0, count).Select(i => $"m{i}").ToArray();
-        store.SetOwner(Owner, Layer(presets: [Preset("П", steps)]))
+        store.SetGlobal(Layer(presets: [Preset("П", steps)]))
             .Should().Contain("1..5");
     }
 
     [Fact]
-    public void SetOwner_ДубликатIdПресета_Ошибка()
+    public void SetGlobal_ДубликатIdПресета_Ошибка()
     {
         var store = NewStore();
         var id = "dup-id";
-        var error = store.SetOwner(Owner, Layer(presets:
+        var error = store.SetGlobal(Layer(presets:
         [
             new ModelRoutePreset { Id = id, Name = "А", Steps = ["claude"] },
             new ModelRoutePreset { Id = id, Name = "Б", Steps = ["local"] },
@@ -408,7 +312,8 @@ public class SpecialtySettingsStoreTests : IDisposable
     public void Migration_V1Файл_ПравилаРносятсяПоМатрицам()
     {
         File.WriteAllText(Path.Combine(_dir, "specialty-settings.json"), V1Json);
-        var store = NewStore();
+        // owner-1 — админ: иначе его слой не переживёт миграцию v5 (слои сняты)
+        var store = NewStore(TestSpecialtyStore.UsersFile(Config(), (Owner, "admin")));
 
         // tier:strong-правило backendExecutor → DefaultTier=Strong (матрица специальности пуста → слоты)
         store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Strong);
@@ -421,8 +326,8 @@ public class SpecialtySettingsStoreTests : IDisposable
         matrices.Should().ContainSingle("у Analyst нет своей записи — только DefaultSpecialty")
             .Which.Medium.Should().Be("glm-5.2");
 
-        // Личное правило frontendExecutor → opus → все три ячейки личной записи (первая матрица —
-        // запись специальности, за ней DefaultSpecialty как более широкий fallback)
+        // Правило админа frontendExecutor → opus → все три ячейки записи, влитой миграцией v5
+        // в общий слой (первая матрица — запись специальности, за ней DefaultSpecialty)
         store.SpecialtyMatrices(Owner, PersonaSpecialty.FrontendExecutor).First().Strong.Should().Be("opus");
 
         // Пресеты v1 удалены (цепочек из v1-правил не строим)
@@ -460,6 +365,222 @@ public class SpecialtySettingsStoreTests : IDisposable
             .Should().Be("first-model", "второе правило для той же специальности в v1 было мертво");
     }
 
+    // --- Миграция v4 → v5: снятие слоёв (ADR-012) ---
+
+    // Файл v4 со всеми тремя слоями. Владельцы: Owner (роль назначается тестом), Other.
+    private void WriteV4File(object global, object owners, object? users = null)
+    {
+        File.WriteAllText(Path.Combine(_dir, "specialty-settings.json"), JsonSerializer.Serialize(new
+        {
+            version = 4,
+            global,
+            owners,
+            users = users ?? new Dictionary<string, object>(),
+        }));
+    }
+
+    [Fact]
+    public void MigrationV5_СлойАдмина_ВлитВГлобальный_ПриКонфликтеВыигрываетOwner()
+    {
+        WriteV4File(
+            global: new
+            {
+                specialties = new Dictionary<string, object>
+                {
+                    ["backendExecutor"] = new { tierStrong = "global-opus" },
+                    ["analyst"] = new { tierMedium = "global-glm" },
+                },
+                presets = new object[] { new { id = "g1", name = "Общий", steps = new[] { "claude" } } },
+                defaultSpecialty = new { tierWeak = "global-haiku" },
+            },
+            owners: new Dictionary<string, object>
+            {
+                [Owner] = new
+                {
+                    specialties = new Dictionary<string, object>
+                    {
+                        ["backendExecutor"] = new { tierStrong = "owner-opus" },
+                    },
+                    presets = new object[] { new { id = "o1", name = "Личный", steps = new[] { "local" } } },
+                    defaultSpecialty = new { tierWeak = "owner-haiku" },
+                },
+            });
+
+        var store = NewStore(TestSpecialtyStore.UsersFile(Config(), (Owner, "admin")));
+
+        var global = store.Snapshot.Global;
+        global.Specialties["backendExecutor"].TierStrong.Should().Be("owner-opus",
+            "при конфликте ключа выигрывает значение из слоя админа — оно и работало у него");
+        global.Specialties["analyst"].TierMedium.Should().Be("global-glm",
+            "запись, которой у админа не было, остаётся из глобального слоя");
+        global.DefaultSpecialty!.TierWeak.Should().Be("owner-haiku");
+        // Пресеты живут рядом: личные впереди общих, дублей по id нет
+        global.Presets.Select(p => p.Id).Should().Equal("o1", "g1");
+    }
+
+    [Fact]
+    public void MigrationV5_СекцииПромптов_ВливаютсяПосекционно()
+    {
+        WriteV4File(
+            global: new
+            {
+                specialties = new Dictionary<string, object>
+                {
+                    ["planner"] = new
+                    {
+                        promptSections = new object[]
+                        {
+                            new { id = "history", enabled = true, text = "глобальная история" },
+                            new { id = "roleRules", enabled = true, text = "глобальные правила" },
+                        },
+                    },
+                },
+                presets = Array.Empty<object>(),
+            },
+            owners: new Dictionary<string, object>
+            {
+                [Owner] = new
+                {
+                    specialties = new Dictionary<string, object>
+                    {
+                        // Владелец задал ТОЛЬКО roleRules — и только enabled у codeGraph
+                        ["planner"] = new
+                        {
+                            promptSections = new object[]
+                            {
+                                new { id = "roleRules", enabled = true, text = "личные правила" },
+                                new { id = "codeGraph", enabled = true, text = (string?)null },
+                            },
+                        },
+                    },
+                    presets = Array.Empty<object>(),
+                },
+            });
+
+        var store = NewStore(TestSpecialtyStore.UsersFile(Config(), (Owner, "admin")));
+
+        var states = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Planner)
+            .ToDictionary(s => s.Id);
+        states["roleRules"].Text.Should().Be("личные правила", "секция владельца сильнее");
+        states["history"].Text.Should().Be("глобальная история",
+            "замена записи целиком снесла бы секции, заданные глобально");
+        states["codeGraph"].Enabled.Should().BeTrue("владелец задал только enabled");
+        states["codeGraph"].TextSource.Should().Be(SpecialtySettingsStore.SectionSource.Code,
+            "текста владелец не задавал — остаётся дефолт кода");
+    }
+
+    [Fact]
+    public void MigrationV5_НесколькоАдминов_РаннийВыигрывает_ЧужиеСлоиОтброшены()
+    {
+        const string SecondAdmin = "owner-3";
+        WriteV4File(
+            global: new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() },
+            owners: new Dictionary<string, object>
+            {
+                [Owner] = new
+                {
+                    specialties = new Dictionary<string, object>
+                    {
+                        ["analyst"] = new { tierStrong = "первый-админ" },
+                    },
+                    presets = Array.Empty<object>(),
+                },
+                [SecondAdmin] = new
+                {
+                    specialties = new Dictionary<string, object>
+                    {
+                        ["analyst"] = new { tierStrong = "второй-админ" },
+                        ["planner"] = new { tierStrong = "только-у-второго" },
+                    },
+                    presets = Array.Empty<object>(),
+                },
+                // Не админ — его слой не должен доехать до общего
+                [Other] = new
+                {
+                    specialties = new Dictionary<string, object>
+                    {
+                        ["reviewer"] = new { tierStrong = "чужой" },
+                    },
+                    presets = Array.Empty<object>(),
+                },
+            },
+            users: new Dictionary<string, object>
+            {
+                [Other] = new
+                {
+                    specialties = new Dictionary<string, object>
+                    {
+                        ["tester"] = new { tierStrong = "назначенный" },
+                    },
+                    presets = Array.Empty<object>(),
+                },
+            });
+
+        // Порядок users.json: Owner раньше SecondAdmin
+        var store = NewStore(TestSpecialtyStore.UsersFile(Config(),
+            (Owner, "admin"), (SecondAdmin, "admin"), (Other, "user")));
+
+        var global = store.Snapshot.Global;
+        global.Specialties["analyst"].TierStrong.Should().Be("первый-админ",
+            "при конфликте ключа выигрывает более ранний админ в users.json");
+        global.Specialties["planner"].TierStrong.Should().Be("только-у-второго",
+            "непересекающиеся записи второго админа доезжают");
+        global.Specialties.Should().NotContainKey("reviewer", "слой не-админа отброшен");
+        global.Specialties.Should().NotContainKey("tester", "слой «пользователь» (B9) отброшен");
+    }
+
+    [Fact]
+    public void MigrationV5_СловариСлоёвПусты_ВерсияПять_ФайлПереписан()
+    {
+        WriteV4File(
+            global: new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() },
+            owners: new Dictionary<string, object>
+            {
+                [Owner] = new
+                {
+                    specialties = new Dictionary<string, object> { ["analyst"] = new { tierStrong = "opus" } },
+                    presets = Array.Empty<object>(),
+                },
+            });
+
+        var store = NewStore(TestSpecialtyStore.UsersFile(Config(), (Owner, "admin")));
+
+        store.Snapshot.Owners.Should().BeEmpty();
+        store.Snapshot.Users.Should().BeEmpty();
+        store.Snapshot.Version.Should().Be(5);
+
+        // Файл на диске переписан: следующий старт видит уже v5 и мигрировать нечего
+        var onDisk = JsonDocument.Parse(File.ReadAllText(Path.Combine(_dir, "specialty-settings.json")));
+        onDisk.RootElement.GetProperty("Version").GetInt32().Should().Be(5);
+        onDisk.RootElement.GetProperty("Owners").EnumerateObject().Should().BeEmpty();
+        onDisk.RootElement.GetProperty("Users").EnumerateObject().Should().BeEmpty();
+
+        // Значение админа доехало и переживает перезапуск
+        NewStore().Snapshot.Global.Specialties["analyst"].TierStrong.Should().Be("opus");
+    }
+
+    [Fact]
+    public void MigrationV5_КопияИсходногоФайла_ЛожитсяРядом()
+    {
+        WriteV4File(
+            global: new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() },
+            owners: new Dictionary<string, object>
+            {
+                [Owner] = new
+                {
+                    specialties = new Dictionary<string, object> { ["analyst"] = new { tierStrong = "opus" } },
+                    presets = Array.Empty<object>(),
+                },
+            });
+
+        NewStore(TestSpecialtyStore.UsersFile(Config(), (Owner, "admin")));
+
+        // Owners/Users в файле не остаются — без копии разбирать «куда делась настройка» нечем
+        var backup = Path.Combine(_dir, "specialty-settings.v4.bak");
+        File.Exists(backup).Should().BeTrue();
+        File.ReadAllText(backup).Should().Contain("owner-1").And.Contain("opus");
+    }
+
     // --- Персистентность и версия формата ---
 
     [Fact]
@@ -468,10 +589,7 @@ public class SpecialtySettingsStoreTests : IDisposable
         var store = NewStore();
         store.SetGlobal(Layer(
             specialties: new() { ["backendExecutor"] = Tmpl(strong: "opus", defaultTier: ModelTier.Strong) },
-            presets: [Preset("Глобальный", "tier:medium", "glm-5.2")]));
-        store.SetUser(Owner, Layer(
-            specialties: new() { ["analyst"] = Tmpl(medium: "glm-user") }));
-        store.SetOwner(Owner, Layer(
+            presets: [Preset("Глобальный", "tier:medium", "glm-5.2")],
             defaultSpecialty: Tmpl(weak: "haiku")));
 
         var reloaded = NewStore();
@@ -479,9 +597,9 @@ public class SpecialtySettingsStoreTests : IDisposable
         global.TierStrong.Should().Be("opus");
         global.DefaultTier.Should().Be(ModelTier.Strong);
         reloaded.Snapshot.Global.Presets.Single().Steps.Should().BeEquivalentTo(new[] { "tier:medium", "glm-5.2" });
-        reloaded.Snapshot.Users[Owner].Specialties["analyst"].TierMedium.Should().Be("glm-user",
-            "слой пользователя переживает перезапуск");
-        reloaded.Snapshot.Owners[Owner].DefaultSpecialty!.TierWeak.Should().Be("haiku");
+        reloaded.Snapshot.Global.DefaultSpecialty!.TierWeak.Should().Be("haiku");
+        reloaded.Snapshot.Owners.Should().BeEmpty("слоёв больше нет — файл их не хранит");
+        reloaded.Snapshot.Users.Should().BeEmpty();
     }
 
     [Fact]
@@ -514,26 +632,27 @@ public class SpecialtySettingsStoreTests : IDisposable
     };
 
     [Fact]
-    public void RemapModels_ПерепиcываетШагиЦепочекИЯчейкиВоВсехСлоях()
+    public void RemapModels_ПерепиcываетШагиЦепочекИЯчейкиСлоя()
     {
         var store = NewStore();
         store.SetGlobal(Layer(
-            specialties: new() { ["backendExecutor"] = Tmpl(strong: "glm-5.2[1m]", weak: "glm-4.5-air") },
+            specialties: new()
+            {
+                ["backendExecutor"] = Tmpl(strong: "glm-5.2[1m]", weak: "glm-4.5-air"),
+                ["frontendExecutor"] = Tmpl(medium: "glm-5.2"),
+            },
             presets: [Preset("Каскад", "glm-5.2[1m]", "tier:medium", "glm-4.5-air")],
             defaultSpecialty: Tmpl(medium: "glm-5.2")));
-        store.SetOwner(Owner, Layer(specialties: new() { ["frontendExecutor"] = Tmpl(medium: "glm-5.2") }));
-        store.SetUser("user-1", Layer(presets: [Preset("Пользовательский", "glm-4.5-air")]));
 
-        // 4 ячейки (strong+weak+default medium+owner medium) + 3 шага цепочек
-        store.RemapModels(GlmMap).Should().Be(7);
+        // 4 ячейки (backend strong+weak, frontend medium, default medium) + 2 шага цепочки
+        store.RemapModels(GlmMap).Should().Be(6);
 
         var global = store.Snapshot.Global;
         global.Specialties["backendExecutor"].TierStrong.Should().Be("glm-5.3[1m]");
         global.Specialties["backendExecutor"].TierWeak.Should().Be("glm-4.7");
+        global.Specialties["frontendExecutor"].TierMedium.Should().Be("glm-5.3");
         global.DefaultSpecialty!.TierMedium.Should().Be("glm-5.3");
         global.Presets[0].Steps.Should().Equal("glm-5.3[1m]", "tier:medium", "glm-4.7");
-        store.Snapshot.Owners[Owner].Specialties["frontendExecutor"].TierMedium.Should().Be("glm-5.3");
-        store.Snapshot.Users["user-1"].Presets[0].Steps.Should().Equal("glm-4.7");
 
         // Значение доехало до диска — иначе миграция не пережила бы рестарт
         NewStore().Snapshot.Global.Presets[0].Steps.Should().Equal("glm-5.3[1m]", "tier:medium", "glm-4.7");
@@ -607,82 +726,58 @@ public class SpecialtySettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void Секции_ЯвныйOffВладельцаПерекрываетOnАдмина()
+    public void Секции_ЯвныйOff_ПерекрываетДефолтКода()
     {
         var store = NewStore();
-        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "админский текст")) }));
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", false)) }));
+        // history у аналитика включён дефолтом кода — явный off настройки его снимает
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", false)) }));
 
-        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Should().NotContain(s => s.Id == "history",
-            "заданное значение владельца (off), а не отсутствие записи");
-        // Чужой владелец — на on админа
-        store.EffectivePromptSections(Other, PersonaSpecialty.Analyst)
-            .Should().Contain(s => s.Id == "history");
+        foreach (var who in new[] { Owner, Other })
+            store.EffectivePromptSections(who, PersonaSpecialty.Analyst)
+                .Should().NotContain(s => s.Id == "history",
+                    "заданное значение (off) сильнее дефолта кода, и оно одно на инстанс");
     }
 
     [Fact]
-    public void Секции_ТочечноеПерекрытиеНеТрогаетСоседние()
+    public void Секции_ТочечнаяНастройкаНеТрогаетСоседние()
     {
         var store = NewStore();
         store.SetGlobal(Layer(new()
         {
             ["planner"] = TmplWithSections(
-                Section("history", true, "админ: история"),
-                Section("roleRules", true, "админ: правила")),
-        }));
-        // Владелец переопределяет ТОЛЬКО roleRules — история админа должна уцелеть
-        store.SetOwner(Owner, Layer(new()
-        {
-            ["planner"] = TmplWithSections(Section("roleRules", true, "владелец: правила")),
+                Section("history", true, "свой: история"),
+                Section("roleRules", true, "свой: правила")),
         }));
 
         var effective = store.EffectivePromptSections(Owner, PersonaSpecialty.Planner)
             .ToDictionary(s => s.Id);
-        effective["history"].Text.Should().Be("админ: история",
-            "переопределение одной секции не сносит соседние");
-        effective["roleRules"].Text.Should().Be("владелец: правила");
+        effective["history"].Text.Should().Be("свой: история");
+        effective["roleRules"].Text.Should().Be("свой: правила");
+        // Секция, которую настройка не трогает, осталась на дефолте кода
+        var states = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Planner);
+        states.Single(s => s.Id == "codeGraph").TextSource
+            .Should().Be(SpecialtySettingsStore.SectionSource.Code);
     }
 
     [Fact]
-    public void Секции_EnabledИТекстНаследуютсяНезависимо()
+    public void Секции_EnabledИТекстБерутсяКаждыйСвоимПараметром()
     {
         var store = NewStore();
-        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", false, "текст админа")) }));
-        // Владелец задаёт только enabled (text = null): текст падает вниз к админу
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true)) }));
+        // Настройка задаёт только enabled (text = null) — текст остаётся дефолтом кода
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("codeGraph", true)) }));
 
         var state = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Analyst)
-            .Single(s => s.Id == "history");
-        state.Enabled.Should().BeTrue();
-        state.EnabledSource.Should().Be(SpecialtySettingsStore.SectionSource.Owner);
-        state.Text.Should().Be("текст админа");
-        state.TextSource.Should().Be(SpecialtySettingsStore.SectionSource.Global);
-    }
-
-    [Fact]
-    public void Секции_ЦепочкаСлоёвOwnerUserGlobal()
-    {
-        var store = NewStore();
-        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "глобальный")) }));
-        store.SetUser(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "пользователя")) }));
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, "личный")) }));
-
-        var byOwner = store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Single(s => s.Id == "history");
-        byOwner.Text.Should().Be("личный", "личный слой сильнее назначения пользователя");
-
-        store.SetOwner(Owner, Layer());
-        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Single(s => s.Id == "history").Text
-            .Should().Be("пользователя", "без личного слоя видно назначение пользователя");
-
-        store.SetUser(Owner, Layer());
-        store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Single(s => s.Id == "history").Text
-            .Should().Be("глобальный", "без назначения — глобальный");
+            .Single(s => s.Id == "codeGraph");
+        state.Enabled.Should().BeTrue("дефолт кода у аналитика — off, настройка его включила");
+        state.EnabledSource.Should().Be(SpecialtySettingsStore.SectionSource.Global);
+        state.Text.Should().Be(SpecialtyPromptPresets.DefaultText("codeGraph", PersonaSpecialty.Analyst));
+        state.TextSource.Should().Be(SpecialtySettingsStore.SectionSource.Code);
     }
 
     // --- Типовой профиль умений ---
 
     [Fact]
-    public void DefaultBindings_ВерхнийЗаданныйСлой_ИначеДефолтКода()
+    public void DefaultBindings_ЗаданныйПрофиль_ИначеДефолтКода()
     {
         var store = NewStore();
         var custom = new List<SpecialtyDefaultBinding>
@@ -690,13 +785,14 @@ public class SpecialtySettingsStoreTests : IDisposable
             new() { Type = PersonaBindingType.Knowledge, Condition = "когда базы знаний" },
         };
         store.SetGlobal(Layer(new() { ["librarian"] = new SpecialtyTemplateSettings { DefaultBindings = custom } }));
+        store.EffectiveDefaultBindings(Owner, PersonaSpecialty.Librarian).Should().BeEquivalentTo(custom);
 
-        // У владельца ЕСТЬ запись (модели), но профиля в ней нет — профиль падает к глобальному
-        store.SetOwner(Owner, Layer(new() { ["librarian"] = Tmpl(strong: "glm-5.3") }));
-        store.EffectiveDefaultBindings(Owner, PersonaSpecialty.Librarian).Should().BeEquivalentTo(custom,
-            "профиль наследуется полем, а не «записью целиком» — override моделей его не сносит");
+        // В записи есть модели, но профиля нет — профиль падает к дефолту кода, а не пустеет
+        store.SetGlobal(Layer(new() { ["librarian"] = Tmpl(strong: "glm-5.3") }));
+        store.EffectiveDefaultBindings(Owner, PersonaSpecialty.Librarian)
+            .Should().NotBeEmpty("профиль наследуется полем, а не «записью целиком»");
 
-        // И глобального нет — дефолт кода
+        // Настройки нет вовсе — дефолт кода
         store.SetGlobal(Layer());
         var codeProfile = SpecialtyPromptPresets.DefaultBindingsProfile(PersonaSpecialty.Librarian);
         store.EffectiveDefaultBindings(Owner, PersonaSpecialty.Librarian).Select(b => b.Type)
@@ -708,46 +804,46 @@ public class SpecialtySettingsStoreTests : IDisposable
     // --- Валидация секций и профиля ---
 
     [Fact]
-    public void SetOwner_НеизвестнаяСекция_Ошибка()
+    public void SetGlobal_НеизвестнаяСекция_Ошибка()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("no-such", true)) }))
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("no-such", true)) }))
             .Should().Contain("неизвестная секция");
     }
 
     [Fact]
-    public void SetOwner_ДубльСекции_Ошибка()
+    public void SetGlobal_ДубльСекции_Ошибка()
     {
         var store = NewStore();
-        store.SetOwner(Owner, Layer(new()
+        store.SetGlobal(Layer(new()
         {
             ["analyst"] = TmplWithSections(Section("history", true), Section(" history ", false)),
         })).Should().Contain("дважды");
     }
 
     [Fact]
-    public void SetOwner_ТекстСекцииНадЛимитом_Ошибка()
+    public void SetGlobal_ТекстСекцииНадЛимитом_Ошибка()
     {
         var store = NewStore();
         var tooLong = new string('а', SpecialtyPromptPresets.SectionTextLimit + 1);
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, tooLong)) }))
+        store.SetGlobal(Layer(new() { ["analyst"] = TmplWithSections(Section("history", true, tooLong)) }))
             .Should().Contain("длиннее");
     }
 
     [Fact]
-    public void SetOwner_НавыкБезИмени_Ошибка()
+    public void SetGlobal_НавыкБезИмени_Ошибка()
     {
         var store = NewStore();
         var profile = new SpecialtyTemplateSettings
         {
             DefaultBindings = [new SpecialtyDefaultBinding { Type = PersonaBindingType.Skill }],
         };
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = profile }))
+        store.SetGlobal(Layer(new() { ["analyst"] = profile }))
             .Should().Contain("не указано имя скилла");
     }
 
     [Fact]
-    public void SetOwner_ИмяСкиллаНеУНавыка_Ошибка()
+    public void SetGlobal_ИмяСкиллаНеУНавыка_Ошибка()
     {
         var store = NewStore();
         var profile = new SpecialtyTemplateSettings
@@ -757,12 +853,12 @@ public class SpecialtySettingsStoreTests : IDisposable
                 new SpecialtyDefaultBinding { Type = PersonaBindingType.Notes, SkillName = "чужой скилл" },
             ],
         };
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = profile }))
+        store.SetGlobal(Layer(new() { ["analyst"] = profile }))
             .Should().Contain("только у типового умения типа «Навык»");
     }
 
     [Fact]
-    public void SetOwner_НавыкСИменем_ПроходитИНормализуется()
+    public void SetGlobal_НавыкСИменем_ПроходитИНормализуется()
     {
         var store = NewStore();
         var profile = new SpecialtyTemplateSettings
@@ -778,9 +874,9 @@ public class SpecialtySettingsStoreTests : IDisposable
                 },
             ],
         };
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = profile })).Should().BeNull();
+        store.SetGlobal(Layer(new() { ["analyst"] = profile })).Should().BeNull();
 
-        var saved = store.Snapshot.Owners[Owner].Specialties["analyst"].DefaultBindings!.Single();
+        var saved = store.Snapshot.Global.Specialties["analyst"].DefaultBindings!.Single();
         saved.SkillName.Should().Be("my-skill");
         saved.Condition.Should().Be("по сценарию");
         saved.Mode.Should().Be(PersonaBindingMode.Always);
@@ -840,15 +936,15 @@ public class SpecialtySettingsStoreTests : IDisposable
     public void ResetModelSettings_ЗаписьТолькоССекциями_НеУдаляется()
     {
         var store = NewStore();
-        // Права эквивалентны нижнему слою (совпадают с дефолтом), но запись несёт секции
-        store.SetOwner(Owner, Layer(new()
+        // Права эквивалентны дефолту кода, но запись несёт секции
+        store.SetGlobal(Layer(new()
         {
             ["analyst"] = TmplWithSections(Section("history", true, "ценное")),
         }));
 
-        var result = store.ResetModelSettings(Owner, "analyst", apply: true);
+        var result = store.ResetModelSettings("analyst", apply: true);
         result.Changed.Should().Be(0, "снимать нечего — уровней в записи не было");
-        store.Snapshot.Owners[Owner].Specialties["analyst"].PromptSections!.Single().Text
+        store.Snapshot.Global.Specialties["analyst"].PromptSections!.Single().Text
             .Should().Be("ценное", "сброс МОДЕЛЕЙ не трогает секции промптов");
 
         // Запись с уровнями И секциями: уровни снимаются, секции остаются
@@ -857,9 +953,9 @@ public class SpecialtySettingsStoreTests : IDisposable
             TierStrong = "glm-5.3",
             PromptSections = [Section("history", true, "тоже ценное")],
         };
-        store.SetOwner(Owner, Layer(new() { ["analyst"] = mixed }));
-        store.ResetModelSettings(Owner, "analyst", apply: true).Changed.Should().Be(1);
-        var after = store.Snapshot.Owners[Owner].Specialties["analyst"];
+        store.SetGlobal(Layer(new() { ["analyst"] = mixed }));
+        store.ResetModelSettings("analyst", apply: true).Changed.Should().Be(1);
+        var after = store.Snapshot.Global.Specialties["analyst"];
         after.TierStrong.Should().BeNull();
         after.PromptSections!.Single().Text.Should().Be("тоже ценное");
     }
@@ -870,14 +966,14 @@ public class SpecialtySettingsStoreTests : IDisposable
     public void EffectivePromptSectionStates_Бенчмарк_УкладываетсяВПорог()
     {
         var store = NewStore();
-        // Слой с переопределениями по всем 14 специальностям — резолв идёт по полному пути
-        // (owner → user → global) на каждый вызов, не по короткому «слоя нет вовсе»
+        // Слой с настройками по всем 14 специальностям — резолв идёт по записи на каждый
+        // вызов, а не по короткому «настроек нет вовсе»
         var specialties = new Dictionary<string, SpecialtyTemplateSettings>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in SpecialtyCatalog.All.Where(e => e.Specialty != PersonaSpecialty.None))
             specialties[entry.Key] = TmplWithSections(
                 Section("history", true, "переопределённый текст истории"),
                 Section("codeGraph", true, "переопределённый текст графа"));
-        store.SetOwner(Owner, Layer(specialties));
+        store.SetGlobal(Layer(specialties));
 
         // Прогрев (JIT) — не считаем в замер
         foreach (var e in SpecialtyCatalog.All) store.EffectivePromptSectionStates(Owner, e.Specialty);

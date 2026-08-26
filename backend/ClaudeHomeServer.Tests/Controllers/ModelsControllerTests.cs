@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
@@ -335,12 +335,12 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
     // --- Переименование и удаление пресетов (спец. блок 6) ---
 
     [Fact]
-    public async Task Пресет_ПереименованиеИУдалениеЛичногоПресета()
+    public async Task Пресет_ПереименованиеИУдалениеСМестамиИспользования()
     {
         var admin = _factory.CreateAuthenticatedClient();
         var presetId = "own-" + Guid.NewGuid().ToString("N");
-        // Личный пресет — слой вызывающего
-        (await admin.PutAsJsonAsync("/api/specialties/settings/owner", new
+        // Пресет один — общий для инстанса (ADR-012), правит его админ
+        (await admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>(),
             presets = new[] { new { id = presetId, name = "Черновик", steps = new[] { "opus" } } },
@@ -365,7 +365,7 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         del.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await del.Content.ReadAsStringAsync());
         body.GetProperty("preset").GetProperty("name").GetString().Should().Be("Рабочая цепочка");
-        body.GetProperty("scope").GetString().Should().Be("owner");
+        body.GetProperty("scope").GetString().Should().Be("global");
         body.GetProperty("count").GetInt32().Should().BeGreaterThanOrEqualTo(1);
         body.GetProperty("usages").EnumerateArray()
             .Any(u => u.GetProperty("kind").GetString() == "owner-slot").Should().BeTrue();
@@ -435,71 +435,6 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         d.GetProperty("model").GetString().Should().BeNull();
     }
 
-    // --- Слой «пользователь» (B9) в точечном API пресетов (дефект M1 ревью 15.08) ---
-
-    [Fact]
-    public async Task Пресет_НазначенныйАдмином_ПользовательНеТрогает()
-    {
-        var admin = _factory.CreateAuthenticatedClient();
-        var user = _factory.CreateAuthenticatedClient(
-            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        var userId = GetSecondUserId();
-        var presetId = "asg-" + Guid.NewGuid().ToString("N");
-
-        // Админ назначает seconduser user-слой с пресетом (B9)
-        (await admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = new[] { new { id = presetId, name = "Назначенная цепочка", steps = new[] { "opus" } } },
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        // Пресет виден пользователю (в его эффективном списке), но назначение админское:
-        // ни переименовать, ни удалить (раньше удаление «пройдя» молча no-op-илось в личном слое)
-        (await user.PutAsJsonAsync($"/api/models/presets/{presetId}/name", new { name = "Взлом" }))
-            .StatusCode.Should().Be(HttpStatusCode.Forbidden, "назначенное админом не-админ не переименовывает");
-        (await user.DeleteAsync($"/api/models/presets/{presetId}"))
-            .StatusCode.Should().Be(HttpStatusCode.Forbidden, "назначенное админом не-админ не удаляет");
-
-        // Назначение уцелело
-        var layer = D(await admin.GetAsync($"/api/specialties/settings/user/{userId}"));
-        layer.GetProperty("user").GetProperty("presets").EnumerateArray().Single().GetProperty("id").GetString()
-            .Should().Be(presetId);
-
-        // Уборка
-        await admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = Array.Empty<object>(),
-        });
-    }
-
-    [Fact]
-    public async Task Пресет_НазначенныйСебе_АдминПравитВUserСлое()
-    {
-        // Админ может править user-пресеты: мутация обязана уйти в user-слой, а не в личный
-        var admin = _factory.CreateAuthenticatedClient();
-        var adminId = GetAdminUserId();
-        var presetId = "ownu-" + Guid.NewGuid().ToString("N");
-        (await admin.PutAsJsonAsync($"/api/specialties/settings/user/{adminId}", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = new[] { new { id = presetId, name = "Назначено мне", steps = new[] { "opus" } } },
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        // Переименование меняет имя в user-слое
-        (await admin.PutAsJsonAsync($"/api/models/presets/{presetId}/name", new { name = "Переименовано" }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
-        var layer = D(await admin.GetAsync($"/api/specialties/settings/user/{adminId}"));
-        layer.GetProperty("user").GetProperty("presets").EnumerateArray().Single().GetProperty("name").GetString()
-            .Should().Be("Переименовано");
-
-        // Удаление отдаёт scope=user и снимает назначение (слой без пресетов пуст)
-        var del = D(await admin.DeleteAsync($"/api/models/presets/{presetId}"));
-        del.GetProperty("scope").GetString().Should().Be("user");
-        var after = D(await admin.GetAsync($"/api/specialties/settings/user/{adminId}"));
-        after.GetProperty("user").GetProperty("presets").GetArrayLength().Should().Be(0);
-    }
-
     // --- Изоляция usage-эндпоинта (дефект M2 ревью 15.08) ---
 
     [Fact]
@@ -558,7 +493,7 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task PresetUsage_ЧужойЛичныйПресет_404()
+    public async Task PresetUsage_НесуществующийПресет_404()
     {
         // Usage по невидимому пресету не отдаётся вовсе: иначе угадыванием id можно было
         // прозондировать чужие настройки (M2)
@@ -566,17 +501,25 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var user = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         var presetId = "alien-" + Guid.NewGuid().ToString("N");
-        (await admin.PutAsJsonAsync("/api/specialties/settings/owner", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = new[] { new { id = presetId, name = "Личный админа", steps = new[] { "opus" } } },
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         (await user.GetAsync($"/api/models/presets/{presetId}/usage")).StatusCode
-            .Should().Be(HttpStatusCode.NotFound, "чужой личный пресет невиден — usage отдаёт 404");
-        // Сам владелец свой пресет видит
+            .Should().Be(HttpStatusCode.NotFound, "неизвестный пресет невиден — usage отдаёт 404");
+
+        // Заведённый общий пресет виден всем — и владельцу инстанса, и рядовому
+        (await admin.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object>(),
+            presets = new[] { new { id = presetId, name = "Общий", steps = new[] { "opus" } } },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await admin.GetAsync($"/api/models/presets/{presetId}/usage")).StatusCode
             .Should().Be(HttpStatusCode.OK);
+        (await user.GetAsync($"/api/models/presets/{presetId}/usage")).StatusCode
+            .Should().Be(HttpStatusCode.OK, "общий пресет виден всем");
+        await admin.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object>(),
+            presets = Array.Empty<object>(),
+        });
     }
 
     // --- Минор ревью: единая проверка владельца сессии у ветки subagentChip превью ---

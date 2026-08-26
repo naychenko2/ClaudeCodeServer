@@ -8,18 +8,18 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
-// Специальности персон и настройки к ним: каталог специальностей с подписями
-// и эффективными шаблонами прав, стор настроек (глобальные значения, назначения
-// пользователям B9 и per-owner переопределение) и именованные пресеты правил
-// выбора модели.
+// Специальности персон и настройки к ним: каталог специальностей с подписями и
+// шаблонами прав плюс настройки инстанса (один слой) с именованными пресетами правил
+// выбора модели. Специальности — общие для всех пользователей: читать их может любой,
+// менять — только админ ([Authorize(Roles = "admin")] на каждой записи). Слоёв
+// «пользователь» и «личный» больше нет (v5 стора).
 [ApiController]
 [Authorize]
 [Route("api/specialties")]
 public class SpecialtiesController(
     SpecialtySettingsStore settings,
     FallbackSettingsStore fallback,
-    PersonaManager personas,
-    UserStore users) : ControllerBase
+    PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -91,20 +91,17 @@ public class SpecialtiesController(
         });
     }
 
-    // Настройки специальностей и пресетов-цепочек: глобальный слой, назначенный
-    // вызывающему слой «пользователь» (B9) и личный слой вызывающего (фронт рендерит
-    // уровни; эффективное значение — см. List/шаблоны) плюс объединённый список пресетов
-    // с признаком слоя: набор один, различие — в поле scope (личные впереди, в порядке
-    // резолва: owner → user → global).
+    // Настройки специальностей и пресетов-цепочек: ОДИН слой (общий для инстанса) плюс
+    // список пресетов. Поле scope у пресета сохранено ради контракта фронта, значение
+    // теперь всегда global.
     //
     // Контракт v2 (ADR-007): пресет хранит упорядоченную цепочку steps (не rules);
     // у специальности — матрица моделей по уровням (tierStrong/Medium/Weak) + defaultTier;
-    // у слоя — defaultSpecialty («любая специальность»). Слои сериализуются как есть
+    // у слоя — defaultSpecialty («любая специальность»). Слой сериализуется как есть
     // (SpecialtySettingsLayer), пресеты разворачиваются в плоский список со steps.
     [HttpGet("settings")]
     public IActionResult GetSettings()
     {
-        var file = settings.Snapshot;
         return Ok(new
         {
             version = SpecialtySettingsStore.FormatVersion,
@@ -113,9 +110,7 @@ public class SpecialtiesController(
             // Фронт приглушает шаги пресета за этим пределом как «обычно не используется» —
             // без этого числа UI хардкодил дефолт и считал приглушение от неверного потолка.
             maxSubstitutions = fallback.ResolveMaxSubstitutions(UserId),
-            global = file.Global,
-            user = file.Users.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer(),
-            owner = file.Owners.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer(),
+            global = settings.Snapshot.Global,
             presets = settings.EffectivePresetsWithScope(UserId).Select(e => new
             {
                 id = e.Preset.Id,
@@ -137,59 +132,17 @@ public class SpecialtiesController(
         return Ok(new { global = settings.Snapshot.Global });
     }
 
-    // Замена личного слоя вызывающего. Пустой слой снимает переопределения
-    // (владелец возвращается к глобальным значениям). Маршрут без суффикса — для
-    // обратной совместимости с фронтом, который уже пишет сюда: см. api.ts saveOwnerLayer.
-    [HttpPut("settings")]
-    public IActionResult SetOwnerSettings([FromBody] SpecialtySettingsLayer layer) => SetOwnerLayer(layer);
-
-    // Явный маршрут per-owner слоя (settings/owner), симметричный settings/global:
-    // QA при попытке «прибрать owner-пресет backendExecutor → kimi-k3» стучался сюда
-    // и получал 404 — теперь маршрут есть. Per-owner изоляция: UserId берётся из JWT,
-    // подменить чужой слой нельзя. Семантика идентична короткому маршруту.
-    [HttpPut("settings/owner")]
-    public IActionResult SetOwnerLayer([FromBody] SpecialtySettingsLayer layer)
-    {
-        if (layer is null) return BadRequest(new { error = "Не задан слой настроек" });
-        if (settings.SetOwner(UserId, layer) is { } error) return BadRequest(new { error });
-        return Ok(new { owner = settings.Snapshot.Owners.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer() });
-    }
-
-    // --- Слой «пользователь» (B9): назначение настроек конкретному пользователю ---
-    //
-    // Между глобальным и личным: админ задаёт специальности модель конкретному
-    // пользователю. Приоритет слоёв зафиксирован: личный (owner) → пользовательский
-    // (user) → глобальный (global). Только админ: назначение влияет на чужие ходы.
-
-    // Слой, назначенный пользователю. user = вызов от себя даёт своё назначение;
-    // админ читает любой userId (проверка по UserStore).
-    [HttpGet("settings/user/{userId}")]
-    public IActionResult GetUserLayer(string userId)
-    {
-        if (users.GetById(userId) is null) return NotFound(new { error = "Пользователь не найден" });
-        if (!User.IsInRole("admin") && userId != UserId)
-            return Forbid();
-        return Ok(new { user = settings.Snapshot.Users.GetValueOrDefault(userId) ?? new SpecialtySettingsLayer() });
-    }
-
-    // Замена назначенного пользователю слоя. Пустой слой снимает назначение
-    // (пользователь возвращается к личным значениям поверх глобальных).
-    [HttpPut("settings/user/{userId}")]
-    [Authorize(Roles = "admin")]
-    public IActionResult SetUserLayer(string userId, [FromBody] SpecialtySettingsLayer layer)
-    {
-        if (layer is null) return BadRequest(new { error = "Не задан слой настроек" });
-        if (users.GetById(userId) is null) return NotFound(new { error = "Пользователь не найден" });
-        if (settings.SetUser(userId, layer) is { } error) return BadRequest(new { error });
-        return Ok(new { user = settings.Snapshot.Users.GetValueOrDefault(userId) ?? new SpecialtySettingsLayer() });
-    }
+    // Короткого маршрута PUT /settings больше нет: он был синонимом записи личного слоя,
+    // и оставленный «для совместимости с фронтом» стал бы единственной незакрытой ролью
+    // точкой записи per-owner (ADR-012). Запись — только settings/global.
 
     // --- Бюджет подмен цепочки хода (MaxSubstitutions) ---
     //
     // Раньше был только GET (поле maxSubstitutions в settings) — теперь и запись.
-    // Scope в пути, не в теле: атрибут роли на значение тела не повесить (тот же
-    // приём, что у reset). Значение клампится в 1..HardMaxSubstitutions стором;
-    // null = снять настройку слоя (наследование нижнего).
+    // Значение клампится в 1..HardMaxSubstitutions стором; null = снять настройку.
+    // Личный бюджет подмен снят вместе со слоями специальностей: осталось общее
+    // значение инстанса (сам FallbackSettingsStore слои поддерживает — они нужны
+    // другим местам, здесь мы их просто не выставляем).
 
     public class FallbackMaxRequest
     {
@@ -205,20 +158,10 @@ public class SpecialtiesController(
         return Ok(new { maxSubstitutions = fallback.Snapshot.Global.MaxSubstitutions });
     }
 
-    // Личный бюджет подмен вызывающего. Per-owner изоляция: UserId из JWT, чужой
-    // слой не доступен. null — снять личный потолок (наследование глобального).
-    [HttpPut("settings/fallback/owner")]
-    public IActionResult SetOwnerMaxSubstitutions([FromBody] FallbackMaxRequest? body)
-    {
-        if (fallback.SetOwner(UserId, body?.MaxSubstitutions) is { } error) return BadRequest(new { error });
-        return Ok(new { maxSubstitutions = fallback.Snapshot.Owners.GetValueOrDefault(UserId)?.MaxSubstitutions });
-    }
-
-    // --- Сброс настроек моделей к наследованию (scope — в ПУТИ) ---
+    // --- Сброс настроек моделей к дефолтам кода ---
     //
-    // Scope нельзя брать из тела: атрибут роли на значение тела не повесить, а глобальный
-    // слой правит только админ. Предпросмотр глобального scope НЕ гейтится ролью осознанно —
-    // GetSettings и так отдаёт весь global любому, секретом счёт по нему не является.
+    // Слой один, поэтому сброс один. Предпросмотр НЕ гейтится ролью осознанно —
+    // GetSettings и так отдаёт весь слой любому, секретом счёт по нему не является.
     // key — ключ одной специальности («any» — «Любая специальность»); не задан — весь слой.
 
     public class SpecialtyResetRequest
@@ -226,40 +169,50 @@ public class SpecialtiesController(
         public string? Key { get; set; }
     }
 
-    [HttpGet("settings/reset/owner/preview")]
-    public IActionResult PreviewResetOwner([FromQuery] string? key) => Reset(UserId, key, apply: false);
-
-    [HttpPost("settings/reset/owner")]
-    public IActionResult ResetOwner([FromBody] SpecialtyResetRequest? body = null) =>
-        Reset(UserId, body?.Key, apply: true);
-
     [HttpGet("settings/reset/global/preview")]
-    public IActionResult PreviewResetGlobal([FromQuery] string? key) => Reset(null, key, apply: false);
+    public IActionResult PreviewResetGlobal([FromQuery] string? key) => Reset(key, apply: false);
 
     [HttpPost("settings/reset/global")]
     [Authorize(Roles = "admin")]
     public IActionResult ResetGlobal([FromBody] SpecialtyResetRequest? body = null) =>
-        Reset(null, body?.Key, apply: true);
+        Reset(body?.Key, apply: true);
+
+    // --- Сброс уровней у своих персон ---
+    //
+    // Маршрут reset/owner пережил снятие слоёв, но сузился: специальностей он больше не
+    // касается вовсе (общий слой чистит только админ через reset/global), а вторая его
+    // половина — «сбросить уровни у МОИХ персон» — к слоям отношения не имела и осталась:
+    // персона была и остаётся per-owner сущностью (ADR-012, открытый вопрос — решение
+    // архитектора). Ответ вырожден в персон.
+
+    [HttpGet("settings/reset/owner/preview")]
+    public IActionResult PreviewResetPersonaTiers() => ResetPersonaTiers(apply: false);
+
+    [HttpPost("settings/reset/owner")]
+    public IActionResult ResetOwner() => ResetPersonaTiers(apply: true);
+
+    private IActionResult ResetPersonaTiers(bool apply)
+    {
+        var touched = personas.ResetTierMatrices(UserId, apply);
+        return Ok(new
+        {
+            personas = touched.Count,
+            personaNames = touched.Select(p => p.Name),
+        });
+    }
 
     // Общий счёт предпросмотра и сброса: одна и та же ветка, apply решает, писать ли.
-    // Персоны — сущность per-owner, «общих» персон нет: их уровни чистятся только у scope=owner.
-    private IActionResult Reset(string? ownerId, string? key, bool apply)
+    private IActionResult Reset(string? key, bool apply)
     {
         string? resolvedKey = null;
         if (key is not null && !TryNormalizeKey(key, out resolvedKey))
             return BadRequest(new { error = $"Неизвестная специальность: {key}" });
 
-        var result = settings.ResetModelSettings(ownerId, resolvedKey, apply);
-        // Точечный сброс одной специальности персон не касается — он про строку матрицы
-        IReadOnlyList<Persona> touched = ownerId is not null && key is null
-            ? personas.ResetTierMatrices(ownerId, apply)
-            : [];
+        var result = settings.ResetModelSettings(resolvedKey, apply);
         return Ok(new
         {
             specialties = result.Changed,
             shadowed = result.Shadowed,
-            personas = touched.Count,
-            personaNames = touched.Select(p => p.Name),
         });
     }
 

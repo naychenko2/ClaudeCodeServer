@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -76,7 +76,7 @@ public class SessionManagerPromptSectionsProviderTests : IDisposable
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
         var launchers = new LauncherFactory(userStore, sandbox);
-        var specialtySettings = new SpecialtySettingsStore(config);
+        var specialtySettings = ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config);
 
         var sut = new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,

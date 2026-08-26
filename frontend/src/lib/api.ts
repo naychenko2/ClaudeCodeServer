@@ -1280,6 +1280,8 @@ export const api = {
           types: scope.types ?? null,
           // undefined — не трогать выбор «Начала»; '' — вернуть авто-README
           home: scope.home === undefined ? null : scope.home,
+          // undefined — не трогать исключения (старый бандл их не знает); [] — убрать все
+          excludeFolders: scope.excludeFolders ?? null,
         }),
       }),
     // Вынести текущую область в файл .docs репозитория: дальше она версионируется и

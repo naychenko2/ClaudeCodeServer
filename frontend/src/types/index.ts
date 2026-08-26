@@ -220,6 +220,7 @@ export interface DocsScope {
   rootFiles: string[];       // имена файлов в корне проекта, без путей
   types: string[];           // ключи групп типов: "markdown", "pdf", "visio"…
   home?: string | null;      // документ «Начала»; null — авто (README корня)
+  excludeFolders?: string[] | null;  // подпапки, вычитаемые из выбранных папок; null — исключений нет
 }
 
 // Документ области как вариант выбора начального

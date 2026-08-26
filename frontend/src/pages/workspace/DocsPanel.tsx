@@ -1135,9 +1135,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     // и порядок в панели оставался бы прежним, хотя на диске он уже другой
     if (lower === '.docs' || lower.endsWith('/.order') || lower === '.order') return true;
     if (scopeInfo) {
-      const { folders, rootFiles, types } = scopeInfo.selected;
+      const { folders, rootFiles, types, excludeFolders } = scopeInfo.selected;
       // Файл корня — только поимённо: там же лежит код, и расширение ни о чём не говорит
       if (!p.includes('/')) return rootFiles.some(f => f.toLowerCase() === lower);
+      // Внутри исключённой подпапки документа нет — как и в невыбранной папке
+      const inExcluded = (excludeFolders ?? []).some(e =>
+        lower.startsWith(`${e.toLowerCase()}/`) || lower === e.toLowerCase());
+      if (inExcluded) return false;
       const exts = scopeInfo.typeGroups.filter(g => types.includes(g.key)).flatMap(g => g.extensions);
       return exts.some(e => lower.endsWith(e))
         && folders.some(f => lower.startsWith(`${f.toLowerCase()}/`));

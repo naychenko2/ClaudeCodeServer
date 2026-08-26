@@ -40,6 +40,13 @@ export type OverflowItem = {
   // там основной клик и есть переключение видимости, и набор выставляется одним
   // заходом — как у строк-переключателей, но без второго контрола рядом с глазиком
   keepOpen?: boolean;
+  // Строка показывает САМ элемент, а не его название: настройка видимости пилюль
+  // шапки — про внешний вид, и узнать пилюлю по картинке быстрее, чем по подписи.
+  // Превью неинтерактивно (pointer-events отключены): свои поповеры пилюль внутри
+  // меню открываться не должны, для этого есть сама шапка
+  preview?: ReactNode;
+  // Разделитель перед строкой — отбивает секцию (действия | пилюли)
+  separator?: boolean;
 };
 
 type TriggerRenderer = (p: { open: boolean; toggle: () => void; ref: (el: HTMLElement | null) => void }) => ReactNode;
@@ -260,10 +267,19 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
     item.onClick?.();
     if (!isToggle && !item.keepOpen) onDone();   // переключатель и строка-настройка оставляют меню открытым
   };
+  // Строка-превью не может быть <button>: внутри неё живёт сама пилюля, а она
+  // тоже кнопка — вложенная кнопка невалидна и ломает разметку. Рисуем span,
+  // управление такой строкой целиком на глазике справа
+  const Tag = (item.preview != null ? 'span' : 'button') as 'span';
   const row = (
-    <button
-      type="button" onClick={handle} disabled={item.disabled}
-      role={isToggle ? 'menuitemcheckbox' : 'menuitem'} aria-checked={isToggle ? item.toggle : undefined}
+    <Tag
+      {...(item.preview != null
+        ? { role: 'none' as const }
+        : {
+            type: 'button' as const, onClick: handle, disabled: item.disabled,
+            role: isToggle ? 'menuitemcheckbox' : 'menuitem',
+            'aria-checked': isToggle ? item.toggle : undefined,
+          })}
       style={{
         display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
         border: 'none', background: 'transparent', cursor: item.disabled ? 'default' : 'pointer',
@@ -287,7 +303,15 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         </span>
       )}
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
+        {item.preview != null ? (
+          // Сам элемент вместо подписи. Клики внутрь не пускаем: пилюля здесь —
+          // образец, а не рабочая кнопка (её поповер живёт в шапке)
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, pointerEvents: 'none' }}>
+            {item.preview}
+          </span>
+        ) : (
+          <span style={{ display: 'block', fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
+        )}
         {item.sublabel && <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, fontWeight: 400 }}>{item.sublabel}</span>}
       </span>
       {isToggle && (
@@ -296,27 +320,34 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         </span>
       )}
       {!isToggle && item.dot && <span style={dotBadgeStatic} />}
-    </button>
+    </Tag>
   );
-  if (!item.action) return row;
+  // Разделитель перед строкой — отбивка секции (действия | пилюли)
+  const sep = item.separator
+    ? <div style={{ height: 1, background: C.borderLight, margin: '5px 8px 4px' }} />
+    : null;
+  if (!item.action) return sep ? <>{sep}{row}</> : row;
   // Строка с действием-спутником: подсветку наведения держит обёртка, кнопка
   // справа гасит всплытие — основное действие пункта от неё не срабатывает
   return (
-    <span
-      role="none"
-      style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, borderRadius: R.lg, paddingRight: 4 }}
-      onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-    >
-      {row}
-      <ToolbarIconButton
-        onClick={e => { e.stopPropagation(); item.action!.onClick(); }}
-        title={item.action.title}
-        isMobile={isMobile}
+    <>
+      {sep}
+      <span
+        role="none"
+        style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, borderRadius: R.lg, paddingRight: 4 }}
+        onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
       >
-        {item.action.icon}
-      </ToolbarIconButton>
-    </span>
+        {row}
+        <ToolbarIconButton
+          onClick={e => { e.stopPropagation(); item.action!.onClick(); }}
+          title={item.action.title}
+          isMobile={isMobile}
+        >
+          {item.action.icon}
+        </ToolbarIconButton>
+      </span>
+    </>
   );
 }
 

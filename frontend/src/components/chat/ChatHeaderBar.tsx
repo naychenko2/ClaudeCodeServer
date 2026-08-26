@@ -1523,13 +1523,32 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // только факт, что ходы в чате были
     spend: cost.results > 0,
   };
-  const badgeItems: OverflowItem[] = compact || isCompact ? [] : CHAT_BADGE_ORDER.filter(k => badgeAvailable[k]).map(k => {
+  // Превью строки — САМА пилюля в том виде, в каком она стоит в шапке: узнать её
+  // по картинке быстрее, чем по названию. Внутри меню превью неинтерактивно
+  // (ItemRow гасит указатель), свои поповеры пилюли открывают только из шапки
+  const badgePreview = (k: ChatBadgeKey): ReactNode => {
+    switch (k) {
+      case 'mechanic': return mechanicBadge;
+      case 'workflow': return workflowBadge;
+      case 'context': return ctxBadge;
+      case 'cost': return providerCostBadge;
+      case 'fal': return <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />;
+      case 'glif': return <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />;
+      case 'spend': return spendBadge;
+    }
+  };
+  const availableBadges = compact || isCompact ? [] : CHAT_BADGE_ORDER.filter(k => badgeAvailable[k]);
+  const badgeItems: OverflowItem[] = availableBadges.map((k, i) => {
     const visible = headerVis.isVisible(k);
     return {
       key: `badge-${k}`,
-      // Иконки слева нет намеренно: у пилюль своей иконки-действия не бывает, а
-      // глазик уже стоит справа — второй такой же слева был бы дублем
+      // Подпись остаётся именем пилюли — она читается скринридером и служит
+      // запасным вариантом, если превью почему-то пустое
       label: CHAT_BADGE_LABELS[k],
+      preview: badgePreview(k),
+      // Линия перед первой пилюлей отбивает их от действий: выше — что чат умеет,
+      // ниже — что показывать в шапке
+      separator: i === 0,
       keepOpen: true,
       onClick: () => headerVis.toggle(k),
       action: {

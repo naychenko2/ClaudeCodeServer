@@ -8,6 +8,8 @@ import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { PlanRemarks } from '../../features/plan/PlanRemarks';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
 function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size?: number; color?: string; strokeWidth?: number }) {
@@ -93,6 +95,10 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   const [feedback, setFeedback] = useState('');
   const asstName = useAssistantName();
   const project = useContext(ChatProjectContext);
+  // Фича «Визуальный разворот плана»: контекстные замечания к разделам.
+  // Под флагом — кнопка "Отклонить" заменяется на раздел замечаний: счётчик,
+  // список заметок, отправка через тот же onRespond(requestId, false, feedback)
+  const visualPlanEnabled = useFeature(FLAGS.visualPlan);
   // В тексте плана пути показываем относительно корня проекта
   const plan = stripRoot(item.plan, project?.rootPath);
   const planBodyRef = useRef<HTMLDivElement>(null);
@@ -211,6 +217,21 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
 
       {!online ? (
         <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+      ) : visualPlanEnabled ? (
+        // Под флагом visualPlan — единственная primary-кнопка одобрения; отправка
+        // на доработку идёт через слой замечаний (PlanRemarks) ниже, отправляющий
+        // тот же onRespond(requestId, false, feedback). Старый путь с textarea
+        // оставлен для отката, когда флаг выключен.
+        <button onClick={() => onRespond(item.requestId, true)}
+          style={{
+            width: '100%', minHeight: 42, background: C.plan, color: C.onAccent, borderRadius: R.lg,
+            padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
+            boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          }}>
+          <Check size={16} color={C.onAccent} strokeWidth={2.6} style={{ flexShrink: 0 }} />
+          Одобрить и выполнить
+        </button>
       ) : rejecting ? (
         <div>
           <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 7 }}>
@@ -252,6 +273,17 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             Отклонить
           </button>
         </div>
+      )}
+      {/* Слой замечаний: рендерится ВСЕГДА у pending-плана, чтобы кнопки у
+          заголовков жили вне ленточной прокрутки; сам по себе компонент ничего
+          не рисует, если status!='pending' или флаг выключен */}
+      {visualPlanEnabled && (
+        <PlanRemarks
+          contentRef={planBodyRef}
+          planText={plan}
+          status="pending"
+          onSubmit={feedback => onRespond(item.requestId, false, feedback || undefined)}
+        />
       )}
     </div>
   );

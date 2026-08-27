@@ -9,6 +9,8 @@ import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadi
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { PlanRemarks } from '../../features/plan/PlanRemarks';
 
 // Единый стиль кнопок-чипов в навигаторе плана («последний», «оглавление») —
 // утопленный фон (не белый), одинаковые размеры/типографика.
@@ -80,8 +82,14 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
 
   // Оглавление текущего плана + поповер
   const [tocOpen, setTocOpen] = useState(false);
+  const [copiedHint, setCopiedHint] = useState(false);
   const planContentRef = useRef<HTMLDivElement>(null);
   const headings = useHeadings(planContentRef, curPlan?.plan);
+  // Фича «Визуальный разворот плана»: в панели `requestId` не хранится
+  // (PlanArtifact — проекция истории), отправлять через respondPlan нельзя.
+  // Слой замечаний работает на сбор: копирует текст обратной связи в буфер
+  // обмена, дальше пользователь открывает план в чате и вставляет его туда.
+  const visualPlanEnabled = useFeature(FLAGS.visualPlan);
 
   const goToHeading = (h: Heading) => {
     scrollToHeading(planContentRef.current, h);
@@ -169,9 +177,40 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
         )}
       </div>
 
-      {/* Текст плана (скроллится) */}
-      <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
-        <MarkdownViewer content={curPlan.plan} />
+      {/* Текст плана (скроллится) + слой замечаний под флагом visual-plan */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+          <MarkdownViewer content={curPlan.plan} />
+        </div>
+        {visualPlanEnabled && (
+          <PlanRemarks
+            contentRef={planContentRef}
+            planText={curPlan.plan}
+            status={curPlan.status === 'pending' ? 'pending' : 'resolved'}
+            onSubmit={feedback => {
+              // requestId в PlanArtifact нет — отправлять в панели некуда.
+              // Сборка текста всё равно полезна: копируем в буфер, дальше
+              // пользователь открывает план в чате и отвечает там
+              // (onRespond живёт только в PlanReviewView)
+              if (navigator.clipboard) {
+                navigator.clipboard.writeText(feedback).catch(() => {});
+              }
+              setCopiedHint(true);
+              window.setTimeout(() => setCopiedHint(false), 4000);
+            }}
+          />
+        )}
+        {copiedHint && (
+          <div style={{
+            position: 'absolute', bottom: 18, left: 14, right: 14,
+            padding: '8px 12px', background: C.bgCard, color: C.textHeading,
+            border: `1px solid ${C.success}`, borderRadius: R.md,
+            fontSize: 12, fontFamily: FONT.sans, fontWeight: 600,
+            boxShadow: SHADOW.dropdown, zIndex: 10,
+          }}>
+            Замечания скопированы в буфер. Откройте план в чате, чтобы отправить их планировщику.
+          </div>
+        )}
       </div>
     </>
   );

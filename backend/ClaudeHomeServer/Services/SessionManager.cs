@@ -423,6 +423,10 @@ public class SessionManager : IDisposable
     // Кеш якорей «файлы предыдущего хода» для recall паспортов: sessionId → (отпечаток истории,
     // файлы). Пересбор — только когда файл истории сменился (LastWriteUtc), не на каждый ход.
     private readonly Dictionary<string, (DateTime? Stamp, List<string> Files)> _dossierAnchorCache = new();
+    // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
+    // потребление тут — проверка настроенности и строки stdio-ветки отката; вся работа с
+    // Dify — в KnowledgeService со своей копией IOptions
+    private readonly Models.DifyOptions _dify = new();
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -542,6 +546,7 @@ public class SessionManager : IDisposable
         // без зависимостей, создаём напрямую — точки вызова (SetArchived/DeleteAsync) живут
         // здесь, отдельная регистрация в Program.cs ничего не добавляет.
         _archivedTranscripts = new ArchivedTranscriptStore(config);
+        config.GetSection(Models.DifyOptions.Section).Bind(_dify);
         // Sweep-terminus grace (P12/P15): потолок ожидания exited после result до принудительного
         // Active→Finished. <=0 — выключить sweep (только для тестов/отладки).
         _stuckActiveGraceSeconds = int.TryParse(config["Session:StuckActiveGraceSeconds"], out var grace)
@@ -691,16 +696,16 @@ public class SessionManager : IDisposable
     // виджетам. Решение стоит на едином гейте HttpMcpTransportUsable (каждый Build*Context
     // уже прогнал через него свой UseHttp) — отдельного условия «виджеты на http» больше нет;
     // во волне 2 к widgets/memory добавились tasks/notes/personas, в волне 3 —
-    // wsp/notifications/codegraph. pmem-консультанты приезжают списком на каждый ход
-    // и уточняют признак на стороне ClaudeSession.
+    // wsp/notifications/codegraph, в волне 4 — dify. pmem-консультанты приезжают списком
+    // на каждый ход и уточняют признак на стороне ClaudeSession.
     private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
-        CodeGraphMcpContext? codeGraph = null) =>
+        CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
-        || codeGraph is { UseHttp: true };
+        || codeGraph is { UseHttp: true } || dify is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -710,6 +715,21 @@ public class SessionManager : IDisposable
     private bool BrowserEnabled(string? ownerId, Persona? persona) =>
         persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
 
+
+    // Контекст MCP-сервера баз знаний Dify (ADR-012, волна 4 — последний продуктовый
+    // сервер фазы 2). Подключается при настроенной секции Dify (ApiUrl/ApiKey — источник
+    // правды ключа с волны 4: внешний dify-узел базового конфига им перекрывается).
+    // Проект/дефолтный датасет в контекст не входят: тулсет резолвит их живьём из
+    // сессии-вызывателя (датасет появляется у проекта в середине жизни чата).
+    // DifyUrl/DifyKey — только stdio-ветке отката (env узла mcp-dify/dist).
+    private DifyMcpContext? BuildDifyContext(string? ownerId)
+    {
+        if (ownerId is null) return null;
+        if (string.IsNullOrEmpty(_dify.ApiUrl) || string.IsNullOrEmpty(_dify.ApiKey)) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new DifyMcpContext(apiUrl, _dify.ApiUrl.TrimEnd('/'), _dify.ApiKey,
+            () => GetServiceToken(ownerId), UseHttp: HttpMcpTransportUsable(apiUrl));
+    }
 
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
@@ -1735,7 +1755,9 @@ public class SessionManager : IDisposable
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
-    private static string EffectiveRoot(Session session, string fallbackRoot) =>
+    // internal — той же формулой DifyToolset резолвит дефолтный датасет проекта чата
+    // (волна 4): расхождение формул означало бы разный состав tools/list и shape.
+    internal static string EffectiveRoot(Session session, string fallbackRoot) =>
         session.WorktreePath ?? fallbackRoot;
 
     // Корень, куда «Командная реализация» пишет файл полного плана (Э8-доп., 2026-08-02):
@@ -3289,6 +3311,7 @@ public class SessionManager : IDisposable
         var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
         var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
         var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
+        var difyMcp = BuildDifyContext(ownerId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
@@ -3311,6 +3334,7 @@ public class SessionManager : IDisposable
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: widgetsMcp,
             CodeGraphMcp: codeGraphMcp,
+            DifyMcp: difyMcp,
             DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
@@ -3323,7 +3347,7 @@ public class SessionManager : IDisposable
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp)));
+                workspace, notificationsMcp, codeGraphMcp, difyMcp)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4630,6 +4654,7 @@ public class SessionManager : IDisposable
                 ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var personasMcp = BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona);
             var notificationsMcp = BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona);
+            var difyMcp = BuildDifyContext(entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
@@ -4653,6 +4678,7 @@ public class SessionManager : IDisposable
                 WidgetsMcp: widgetsMcp,
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
                 CodeGraphMcp: null,
+                DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
@@ -4663,7 +4689,7 @@ public class SessionManager : IDisposable
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp));
+                    workspace, notificationsMcp, dify: difyMcp));
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4682,6 +4708,7 @@ public class SessionManager : IDisposable
             var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
             var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
             var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
+            var difyMcp = BuildDifyContext(project.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
@@ -4705,6 +4732,7 @@ public class SessionManager : IDisposable
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: widgetsMcp,
                 CodeGraphMcp: codeGraphMcp,
+                DifyMcp: difyMcp,
                 DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
@@ -4717,7 +4745,7 @@ public class SessionManager : IDisposable
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp));
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

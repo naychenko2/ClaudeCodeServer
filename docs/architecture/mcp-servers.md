@@ -3,20 +3,24 @@
 > Подробная документация. Выжимка и общий механизм подключения — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «MCP-серверы». Читать перед правками в `mcp/*/index.js` и `BuildTurnMcpConfig`.
 
-Транспорта два. Часть серверов — по одному файлу `mcp/{имя}-server/index.js`: чистый
-Node (stdio JSON-RPC, **без зависимостей**, npm install не нужен), CLI поднимает их процессом
-на каждый ход. С августа 2026 идёт переезд на **MCP-over-HTTP внутри Kestrel**
-([ADR-012](../adr/ADR-012-mcp-over-http-transport.md)): такой сервер живёт тулсетом в
-`Services/Mcp/Http`, отвечает по `POST /mcp/{name}` и процесса не требует вовсе. Переехали
-`widgets` (фаза 1), `memory` вместе со всеми `pmem_*` (фаза 2, волна 1 — параметризованный
-маршрут `/mcp/memory/{personaId}/{projectId}`) и `tasks`/`notes`/`personas` (фаза 2, волна 2 —
-хвост маршрута `/mcp/{name}/{sessionId}`); на stdio остаются `wsp`, `notifications`,
-`codegraph`, `desktop` (волна 3) и внешние модули. stdio-файлы переехавших заморожены как ветки
-отката (`Mcp:HttpTransport=false`).
+Транспорта два. Исторически серверы были файлами `mcp/{имя}-server/index.js` (чистый Node,
+stdio JSON-RPC, **без зависимостей**), CLI поднимал их процессом на каждый ход. Переезд на
+**MCP-over-HTTP внутри Kestrel** ([ADR-012](../adr/ADR-012-mcp-over-http-transport.md))
+завершён (фаза 2, 2026-08): такой сервер живёт тулсетом в `Services/Mcp/Http`, отвечает по
+`POST /mcp/{name}[/{хвост}]` и процесса не требует вовсе. Переехали все девять продуктовых:
+`widgets` (фаза 1), `memory` вместе со всеми `pmem_*` (волна 1 — параметризованный маршрут
+`/mcp/memory/{personaId}/{projectId}`), `tasks`/`notes`/`personas` (волна 2 — хвост маршрута
+`/mcp/{name}/{sessionId}`), `wsp`/`codegraph`/`notifications` (волна 3) и `dify` (волна 4 —
+его объявление перенесено в код из внешнего конфига `McpConfigPath`: ключ и адрес берутся из
+секции `Dify` appsettings, тулсет ходит во внешний Dify напрямую через `KnowledgeService`,
+ключ не покидает бэкенд). На stdio остался только `desktop` (capability-токен, отдельный
+канал — ADR-008) и внешние модули. stdio-файлы переехавших (`mcp/*-server/index.js` и
+`mcp-dify/src`) заморожены как ветки отката (`Mcp:HttpTransport=false` возвращает всё на
+stdio прежним env).
 
 Подключение per-ход общее: `ClaudeSession.BuildTurnMcpConfig` каждый ход собирает временный
-MCP-конфиг (серверы из `McpConfigPath` + продуктовые) и передаёт env с адресом API и сервисным
-JWT владельца — а http-серверу тот же токен уезжает заголовком `Authorization`. Серверы других
+MCP-конфиг (продуктовые http-узлы с сервисным JWT владельца в `Authorization`; при откате —
+прежние stdio-узлы с env; сторонние серверы из `McpConfigPath` едут как есть). Серверы других
 подсистем описаны в своих доках: notes/memory/personas — [personas.md](personas.md) и
 [knowledge.md](knowledge.md), widgets — [features.md](features.md).
 

@@ -105,6 +105,19 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items, 
 public record NotificationsMcpContext(string ApiUrl, Func<string> TokenFactory,
     string? SelfPersonaId = null, bool UseHttp = false);
 
+// Контекст MCP-сервера баз знаний Dify (ADR-012, фаза 2 волна 4). Отличие от всех прочих:
+// у dify НЕТ своего прокси-слоя — тулсет в Kestrel ходит во внешний Dify API напрямую тем же
+// KnowledgeService, что REST/заметки/память. ApiUrl — адрес НАШЕГО бэкенда (эндпоинт
+// /mcp/dify/{sessionId}, как у волн 2–3), DifyUrl/DifyKey — внешний API Dify из секции
+// конфига Dify; они нужны ТОЛЬКО stdio-ветке отката (env DIFY_API_URL/DIFY_API_KEY узла
+// mcp-dify/dist/index.js). На http-ветке ключ наружу не уезжает вовсе — ни в env процесса,
+// ни в конфиг хода (улучшение волны 4, зафиксировано в ADR-012).
+// Проект/дефолтный датасет в контексте НЕ живут: тулсет резолвит их живьём из
+// сессии-вызывателя на каждый tools/list и вызов (датасет может появиться у проекта
+// в середине жизни чата). TokenFactory/UseHttp — тот же идиом, что у tasks/notes.
+public sealed record DifyMcpContext(string ApiUrl, string DifyUrl, string DifyKey,
+    Func<string> TokenFactory, bool UseHttp = false);
+
 // Контекст MCP-сервера виджетов (widget_show): адрес API и фабрика сервисного токена
 // владельца. Сервер переехал с node-процесса в Kestrel (ADR-012) — ход подключает его
 // по http (POST {ApiUrl}/mcp/widgets), поэтому маркера «сессия с владельцем» уже мало.
@@ -248,6 +261,9 @@ public sealed record LlmSessionContext(
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): навигация агента по структуре
     // проекта. null — чат вне проекта или нет владельца.
     CodeGraphMcpContext? CodeGraphMcp = null,
+    // MCP-сервер баз знаний Dify (dify: search_knowledge и CRUD датасетов/документов).
+    // null — нет владельца или Dify не настроен (секция Dify: ApiUrl/ApiKey).
+    DifyMcpContext? DifyMcp = null,
     // Браузер (плагин playwright, 24 browser_*-инструмента): false — плагин гасится на
     // запуске CLI (ClaudeRuntimeSettings). Решение принимается по персоне, не по ходу —
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:

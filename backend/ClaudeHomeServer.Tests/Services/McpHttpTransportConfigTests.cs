@@ -37,7 +37,8 @@ public class McpHttpTransportConfigTests : IDisposable
         MemoryMcpContext? memory = null, PersonaAgentsContext? personaAgents = null,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
-        CodeGraphMcpContext? codeGraph = null)
+        CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
+        string? difyDatasetId = null, string? mcpConfigPath = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -52,12 +53,13 @@ public class McpHttpTransportConfigTests : IDisposable
             WorkspaceMcp: workspace,
             NotificationsMcp: notifications,
             CodeGraphMcp: codeGraph,
+            DifyMcp: dify,
             PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents);
-        var session = new ClaudeSession(new Session(), context);
+        var session = new ClaudeSession(new Session(), context, mcpConfigPath);
 
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [null, personaAgents])!;
+        var result = method.Invoke(session, [difyDatasetId, personaAgents])!;
         var type = result.GetType();
         // У ValueTuple элементы — ПОЛЯ, а не свойства
         var path = (string?)type.GetField("Item1")!.GetValue(result);
@@ -505,8 +507,8 @@ public class McpHttpTransportConfigTests : IDisposable
     }
 
     /// <summary>
-    /// ЗАМЕР процессов node (приёмка волны 3): при http-транспорте полный набор продуктовых
-    /// серверов всех трёх волн не поднимает НИ ОДНОГО процесса — в конфиге хода нет ни одного
+    /// ЗАМЕР процессов node (приёмка волны 3+4): при http-транспорте полный набор продуктовых
+    /// серверов всех волн фазы 2 не поднимает НИ ОДНОГО процесса — в конфиге хода нет ни одного
     /// узла с «command». Это и есть цель ADR-012, зафиксированная тестом, а не разовым
     /// наблюдением: узел с command вернулся бы молча.
     /// </summary>
@@ -526,11 +528,14 @@ public class McpHttpTransportConfigTests : IDisposable
             notifications: new NotificationsMcpContext("http://localhost:5000", () => "tok",
                 "persona-1", UseHttp: true),
             codeGraph: new CodeGraphMcpContext("http://localhost:5000", () => "tok", "proj-1",
-                UseHttp: true));
+                UseHttp: true),
+            dify: new DifyMcpContext("http://localhost:5000", "http://dify.local", "key-dify",
+                () => "tok", UseHttp: true));
 
         var productServers = new[]
         {
             "widgets", "memory", "tasks", "notes", "personas", "wsp", "notifications", "codegraph",
+            "dify",
         };
         foreach (var key in productServers)
         {
@@ -542,5 +547,142 @@ public class McpHttpTransportConfigTests : IDisposable
 
         servers.Count(kv => kv.Value?.AsObject().ContainsKey("command") == true)
             .Should().Be(0, "продуктовых node-процессов на ход не остаётся вовсе");
+    }
+
+    // --- dify (фаза 2, волна 4): HTTP-ветка, откат и перекрытие внешнего узла ---
+
+    /// <summary>
+    /// dify на годном http-адресе: узел без command, сессия-вызыватель хвостом URL, токен —
+    /// из ФАБРИКИ, ключ Dify в узел НЕ попадает (живёт только на бэкенде — улучшение волны 4).
+    /// Отпечаток s0 — у чата нет дефолтного датасета (полный состав из 12 инструментов).
+    /// </summary>
+    [Fact]
+    public void Волна4_ГодныйАдрес_DifyНаНttpБезКлючаВУзле()
+    {
+        var (servers, keys) = BuildConfig(
+            dify: new DifyMcpContext("http://localhost:5000", "http://dify.local", "secret-key",
+                () => "tok-d", UseHttp: true));
+
+        var dify = servers["dify"]!.AsObject();
+        dify["type"]!.GetValue<string>().Should().Be("http");
+        dify["url"]!.GetValue<string>().Should()
+            .Match("http://localhost:5000/mcp/dify/*",
+                "сессия-вызыватель едет в ПУТИ — по ней тулсет резолвит проект и дефолтный датасет")
+            .And.NotBe("http://localhost:5000/mcp/dify/", "хвост обязан быть непустым id сессии");
+        dify.ContainsKey("command").Should().BeFalse("процесса node ради dify больше нет");
+        dify.ContainsKey("env").Should().BeFalse("ключ Dify не уезжает в конфиг хода ни в каком виде");
+        dify["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+        var headers = dify["headers"]!.AsObject();
+        headers["Authorization"]!.GetValue<string>().Should().Be("Bearer tok-d");
+        headers.ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+        keys.Should().Contain("dify:s0:t:http", "s-бит — есть ли дефолтный датасет, + транспорт");
+    }
+
+    /// <summary>
+    /// s-бит живой: датасет проекта появился — отпечаток меняется (s1), и доживающий процесс
+    /// перезапускается. Состав при этом реально сужается до search-only — это не холостой
+    /// перезапуск, а смена состава (12 → 4).
+    /// </summary>
+    [Fact]
+    public void Волна4_ДатасетПроектаМеняетОтпечаток()
+    {
+        var ctx = new DifyMcpContext("http://localhost:5000", "http://dify.local", "k", () => "tok",
+            UseHttp: true);
+        var (_, noDataset) = BuildConfig(dify: ctx);
+        var (_, withDataset) = BuildConfig(dify: ctx, difyDatasetId: "ds-1");
+
+        noDataset.Should().Contain("dify:s0:t:http");
+        withDataset.Should().Contain("dify:s1:t:http",
+            "появление датасета у проекта меняет состав tools/list (search-only) и обязано пробить доживание");
+        withDataset.Should().NotBe(noDataset);
+    }
+
+    /// <summary>Фабрика токена живая: повторная сборка конфига зовёт фабрику.</summary>
+    [Fact]
+    public void Волна4_ТокенФабрикой_АНеЗахваченСтрокой()
+    {
+        var issued = 0;
+        string Factory() => $"tok-{++issued}";
+        var ctx = new DifyMcpContext("http://localhost:5000", "http://dify.local", "k", Factory, UseHttp: true);
+        BuildConfig(dify: ctx);
+        BuildConfig(dify: ctx);
+
+        issued.Should().Be(2, "каждая сборка зовёт фабрику — иначе старый чат умирает на 401");
+    }
+
+    /// <summary>
+    /// Откат (рубильник, не-http адрес): dify объявляется прежним stdio-сервером mcp-dify/dist
+    /// с env из секции Dify. dist не живёт в git — вне дерева с собранным mcp-dify узла нет,
+    /// и это всё равно НЕ выход по http (ключ не уезжает в http-узел негодного адреса).
+    /// </summary>
+    [Fact]
+    public void Волна4_Откат_StdioСерверомСEnvИзСекцииDify()
+    {
+        var (servers, keys) = BuildConfig(
+            dify: new DifyMcpContext("https://naychenko.me", "http://dify.local:81", "secret-key",
+                () => "tok", UseHttp: false));
+
+        if (servers["dify"] is { } node)
+        {
+            var dify = node.AsObject();
+            dify.ContainsKey("type").Should().BeFalse("http-узла быть не должно");
+            dify["command"]!.GetValue<string>().Should().Be("node",
+                "инструмент обязан остаться у модели: тихая потеря недопустима");
+            dify["args"]![0]!.GetValue<string>().Should().EndWith("mcp-dify" + Path.DirectorySeparatorChar
+                + "dist" + Path.DirectorySeparatorChar + "index.js");
+            dify["alwaysLoad"]!.GetValue<bool>().Should().BeTrue(
+                "внешний узел alwaysLoad не имел — выравниваем, ленивый сервер прячет инструменты");
+            var env = dify["env"]!.AsObject();
+            env["DIFY_API_URL"]!.GetValue<string>().Should().Be("http://dify.local:81",
+                "адрес внешнего Dify — только stdio-ветке отката");
+            env["DIFY_API_KEY"]!.GetValue<string>().Should().Be("secret-key");
+            env["DIFY_DEFAULT_DATASET_ID"]!.GetValue<string>().Should().Be("");
+            env["DIFY_SEARCH_ONLY"]!.GetValue<string>().Should().Be("");
+            keys.Should().Contain("dify:s0:t:stdio");
+        }
+        else
+        {
+            // Сборка без dist (CI): сервера в конфиге нет вовсе — но точно не http-узел
+            keys.Should().NotContain("dify:s0:t:http");
+        }
+    }
+
+    /// <summary>
+    /// Перекрытие внешнего узла (развилка волны 4): при настроенной секции Dify запись dify
+    /// из внешнего базового конфига больше не действует — продуктовый узел ставится позже и
+    /// перекрывает её; чужой ключ из внешнего конфига в итоговом файле не встречается.
+    /// Без секции (dify: null) внешний узел продолжает работать как раньше, включая инжекцию
+    /// dataset id — чужие инстансы не ломаются.
+    /// </summary>
+    [Fact]
+    public void Волна4_ВнешнийУзел_ПерекрываетсяПриНастроеннойСекции()
+    {
+        var external = Path.Combine(_root, "base-mcp.json");
+        File.WriteAllText(external, """
+            {"mcpServers":{"dify":{"command":"node","args":["C:/external/mcp-dify/dist/index.js"],
+              "env":{"DIFY_API_URL":"http://foreign-dify","DIFY_API_KEY":"foreign-secret"}}}}
+            """);
+        _configs.Add(external);
+
+        // Секция настроена + http: внешний узел перекрыт, его ключ не протёк
+        var (overridden, _) = BuildConfig(
+            dify: new DifyMcpContext("http://localhost:5000", "http://dify.local", "own-key",
+                () => "tok", UseHttp: true),
+            mcpConfigPath: external);
+        overridden["dify"]!["type"]!.GetValue<string>().Should().Be("http");
+        overridden["dify"]!.AsObject().ContainsKey("env").Should().BeFalse();
+        File.ReadAllText(_configs.First(p => p != external))
+            .Should().NotContain("foreign-secret", "ключ внешнего конфига перекрыт и в файл не попал");
+
+        // Секции нет: внешний узел работает как раньше, датасет инжектится в его env
+        var (legacy, legacyKeys) = BuildConfig(difyDatasetId: "ds-1", mcpConfigPath: external);
+        var legacyNode = legacy["dify"]!.AsObject();
+        legacyNode["command"]!.GetValue<string>().Should().Be("node",
+            "без секции Dify внешний узел продолжает работать — чужие инстансы не ломаются");
+        var legacyEnv = legacyNode["env"]!.AsObject();
+        legacyEnv["DIFY_API_KEY"]!.GetValue<string>().Should().Be("foreign-secret");
+        legacyEnv["DIFY_DEFAULT_DATASET_ID"]!.GetValue<string>().Should().Be("ds-1");
+        legacyEnv["DIFY_SEARCH_ONLY"]!.GetValue<string>().Should().Be("true");
+        legacyKeys.Should().Contain("dify", "внешний узел — без отпечатка состава, как до волны 4");
     }
 }

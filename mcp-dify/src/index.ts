@@ -1,3 +1,21 @@
+// MCP-сервер баз знаний Dify: TypeScript со сборкой tsc, единственный наш сервер
+// с внешней зависимостью (@modelcontextprotocol/sdk); ходит во внешний Dify API
+// (DIFY_API_URL/DIFY_API_KEY), а не в наш бэкенд.
+//
+// ЗАМОРОЖЕН (ветка отката, ADR-012 фаза 2 волна 4): источник контракта —
+// backend/ClaudeHomeServer/Services/Mcp/Http/DifyToolset.cs; правки схем/поведения
+// обязаны ехать парой с http-веткой (сторож — DifyToolsetParityTests).
+// Файл не удалять: Mcp:HttpTransport=false возвращает dify на stdio с этим env
+// (узел собирает ClaudeSession из секции Dify appsettings; объявление больше
+// не требует записи в внешнем базовом конфиге McpConfigPath — она перекрывается).
+//
+// Окружение (задаёт ClaudeSession при запуске claude):
+//   DIFY_API_URL            — адрес внешнего Dify API
+//   DIFY_API_KEY            — ключ Dify (секция Dify appsettings; на http-ветке
+//                             ключ не покидает бэкенд вовсе)
+//   DIFY_DEFAULT_DATASET_ID — датасет проекта чата (поиск по умолчанию)
+//   DIFY_SEARCH_ONLY        — "true": у проекта есть база → только поиск (4 инструмента)
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from './config.js';

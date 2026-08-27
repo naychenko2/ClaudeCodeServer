@@ -575,6 +575,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly bool _httpMcpActive;
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
+    // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
+    // не настроена (тогда dify продолжает ехать записью внешнего базового конфига)
+    private readonly DifyMcpContext? _difyMcp;
     // MCP-сервер десктопной грани (ADR-008): null — грань чату не доставляется
     private readonly DesktopMcpContext? _desktopMcp;
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004): null — флаг выключен/вне проекта
@@ -658,6 +661,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _widgetsMcp = context.WidgetsMcp;
         _httpMcpActive = context.HttpMcpActive;
         _codeGraphMcp = context.CodeGraphMcp;
+        _difyMcp = context.DifyMcp;
         _desktopMcp = context.DesktopMcp;
         _dossierTrailerHint = context.DossierTrailerHint;
         _personaAgentsProvider = context.PersonaAgentsProvider;
@@ -688,8 +692,9 @@ public class ClaudeSession : ILlmSessionAdapter
             fileChangeAttributor, info.Id);
     }
 
-    // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
-    // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
+    // Объединённый MCP-конфиг хода: серверы из базового конфига (dify — только пока секция
+    // Dify не настроена: с волны 4 ADR-012 он объявляется продуктовым узлом ниже, а внешний
+    // dify-узел перекрывается) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
     // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     // Возвращает путь temp-конфига и отсортированный набор ключей серверов — ключи входят
@@ -740,6 +745,12 @@ public class ClaudeSession : ILlmSessionAdapter
         var codeGraphServerPath = _codeGraphMcp is { UseHttp: false }
             ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
         var hasCodeGraph = _codeGraphMcp is not null && (_codeGraphMcp.UseHttp || codeGraphServerPath is not null);
+        // dify живёт в Kestrel (ADR-012, волна 4), но путь его stdio-ветки (mcp-dify/dist,
+        // сборка tsc — в git не живёт) всё равно нужен откатившимся: без dist откат
+        // деградирует до записи внешнего базового конфига, а не теряет инструмент
+        var difyServerPath = _difyMcp is { UseHttp: false }
+            ? MapMcpPath(DifyServerLocator.FindDifyServerPath()) : null;
+        var hasDify = _difyMcp is not null && (_difyMcp.UseHttp || difyServerPath is not null);
         var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
         var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
@@ -752,7 +763,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var externalMcp = _externalMcpProvider?.Invoke();
         var hasExternal = externalMcp is { Servers.Count: > 0 };
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
+            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(s => s.UseHttp)))) return (null, "", []);
@@ -776,7 +787,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     if (val?.DeepClone() is { } clone && AdaptServerForRuntime(key, clone))
                         servers[key] = clone;
 
-            // Серверы из базового конфига (+ dataset id в env Dify)
+            // Серверы из базового конфига. dify — историческое исключение: пока секция Dify
+            // не настроена, он живёт только здесь (с инжекцией dataset id ниже); настроена —
+            // продуктовый узел волны 4 ниже его перекрывает, и запись здесь пропускается
+            // с логом, чтобы хозяин инстанса видел, что внешний узел больше не действует
             if (!string.IsNullOrEmpty(_mcpConfigPath) && File.Exists(_mcpConfigPath))
             {
                 var baseDoc = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_mcpConfigPath));
@@ -786,10 +800,19 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         var clone = val?.DeepClone();
                         if (clone is null || !AdaptServerForRuntime(key, clone)) continue;
-                        if (key == "dify" && hasDataset && clone["env"] is { } env)
+                        if (key == "dify")
                         {
-                            env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
-                            env["DIFY_SEARCH_ONLY"] = "true";
+                            if (hasDify)
+                            {
+                                Console.Error.WriteLine("[ClaudeSession] Запись dify базового конфига перекрыта "
+                                    + "продуктовым сервером (ADR-012, волна 4): ключ и адрес — секция Dify appsettings");
+                                continue;
+                            }
+                            if (hasDataset && clone["env"] is { } env)
+                            {
+                                env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
+                                env["DIFY_SEARCH_ONLY"] = "true";
+                            }
                         }
                         servers[key] = clone;
                     }
@@ -1335,6 +1358,49 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Состав графа постоянный (3 чтения), в сигнатуру — только транспорт
                 shapes["codegraph"] = $"t:{(_codeGraphMcp.UseHttp ? "http" : "stdio")}";
+            }
+
+            if (hasDify && _difyMcp is not null)
+            {
+                // Базы знаний Dify (ADR-012, волна 4 — последний продуктовый сервер фазы 2):
+                // тулсет в Kestrel ходит во внешний Dify сам, DIFY_API_KEY наружу не уезжает
+                // вовсе. Отпечаток состава: s-бит — есть ли у проекта чата свой датасет
+                // (search-only состав из 4 инструментов; считается ЖИВЬЁМ на каждую сборку
+                // конфига — датасет может появиться в середине жизни чата, и появление
+                // обязано пробить доживание: состав реально меняется). Формула та же, что у
+                // DifyToolset.ToolsFor (EffectiveRoot → WorkspaceKnowledgeStore) — расхождение
+                // означало бы холостой перезапуск CLI.
+                var difyToken = _difyMcp.TokenFactory();
+                var difySearchOnly = hasDataset ? "1" : "0";
+                servers["dify"] = _difyMcp.UseHttp
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.DifyToolset.EndpointFor(_difyMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {difyToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { difyServerPath! },
+                        // alwaysLoad ставим и на stdio (внешний узел его не имел): в режиме
+                        // deferred-tools ленивый сервер прячет инструменты от модели
+                        ["alwaysLoad"] = true,
+                        // env — только у откатившихся: на http-ветке ключ не покидает бэкенд
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["DIFY_API_URL"] = _difyMcp.DifyUrl,
+                            ["DIFY_API_KEY"] = _difyMcp.DifyKey,
+                            ["DIFY_DEFAULT_DATASET_ID"] = datasetId ?? "",
+                            ["DIFY_SEARCH_ONLY"] = difySearchOnly == "1" ? "true" : "",
+                        },
+                    };
+                shapes["dify"] = $"s{difySearchOnly}:t:{(_difyMcp.UseHttp ? "http" : "stdio")}";
             }
 
             if (hasDesktop && _desktopMcp is not null)

@@ -690,12 +690,17 @@ public class SessionManager : IDisposable
     // от него зависит NO_PROXY хода — обход прокси нужен ЛЮБОМУ http-серверу, а не только
     // виджетам. Решение стоит на едином гейте HttpMcpTransportUsable (каждый Build*Context
     // уже прогнал через него свой UseHttp) — отдельного условия «виджеты на http» больше нет;
-    // во волне 2 к widgets/memory добавились tasks/notes/personas. pmem-консультанты
-    // приезжают списком на каждый ход и уточняют признак на стороне ClaudeSession.
+    // во волне 2 к widgets/memory добавились tasks/notes/personas, в волне 3 —
+    // wsp/notifications/codegraph. pmem-консультанты приезжают списком на каждый ход
+    // и уточняют признак на стороне ClaudeSession.
     private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
-        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null) =>
+        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
+        WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
+        CodeGraphMcpContext? codeGraph = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
-        || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true };
+        || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
+        || workspace is { UseHttp: true } || notifications is { UseHttp: true }
+        || codeGraph is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -718,8 +723,9 @@ public class SessionManager : IDisposable
     {
         if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
-        var token = GetServiceToken(ownerId);
-        return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new CodeGraphMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, sessionId, rootPath,
+            UseHttp: HttpMcpTransportUsable(apiUrl));
     }
 
     // Право чата на десктопную грань по СУЩНОСТИ чата — единая точка правды (ADR-008:
@@ -2838,7 +2844,26 @@ public class SessionManager : IDisposable
         string? selfSessionId, Persona? persona)
     {
         if (ownerId is null) return null;
+        var plan = BuildWorkspacePlan(ownerId, projectId, persona);
+        if (plan is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new WorkspaceMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
+            plan.Sections, plan.AllowedProjectIds, selfSessionId,
+            UseHttp: HttpMcpTransportUsable(apiUrl));
+    }
 
+    /// <summary>
+    /// План сервера рабочего пространства: секции инструментов и зона проектов.
+    /// ЕДИНАЯ формула состава (ADR-012, волна 3): её зовёт и BuildWorkspaceContext (конфиг
+    /// хода и отпечаток shapes), и WorkspaceToolset (живой tools/list по сессии из хвоста
+    /// маршрута). Состав и его отпечаток, посчитанные двумя формулами, расходятся — блокер
+    /// приёмки волны 2 у personas. null — сервер не подключается (все секции выключены).
+    /// </summary>
+    internal sealed record WorkspaceMcpPlan(IReadOnlyList<string> Sections,
+        IReadOnlyList<string>? AllowedProjectIds);
+
+    internal WorkspaceMcpPlan? BuildWorkspacePlan(string ownerId, string? projectId, Persona? persona)
+    {
         var sections = new List<string>();
         foreach (var key in new[] { "projects", "files", "knowledge" })
             if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
@@ -2909,9 +2934,7 @@ public class SessionManager : IDisposable
             allowedIds = set.ToList();
         }
 
-        var token = GetServiceToken(ownerId);
-        return new WorkspaceMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            sections, allowedIds, selfSessionId);
+        return new WorkspaceMcpPlan(sections, allowedIds);
     }
 
     // Контекст MCP-серверов внешних модулей (контракт §6, ТЗ R7): по каждому модулю
@@ -3048,8 +3071,9 @@ public class SessionManager : IDisposable
     {
         if (ownerId is null) return null;
         if (!_bindings.NotificationsEnabled(ownerId, persona)) return null;
-        var token = GetServiceToken(ownerId);
-        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token, personaId);
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new NotificationsMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId,
+            UseHttp: HttpMcpTransportUsable(apiUrl));
     }
 
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
@@ -3252,6 +3276,8 @@ public class SessionManager : IDisposable
         var notesMcp = _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes")
             ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null;
         var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
+        var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
+        var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
@@ -3264,7 +3290,7 @@ public class SessionManager : IDisposable
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
             PersonasMcp: personasMcp,
-            NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona),
+            NotificationsMcp: notificationsMcp,
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             CodeGraphProvider: BuildCodeGraphProvider(ownerId, persona.Persona, rootPath, projectRoot),
@@ -3273,7 +3299,7 @@ public class SessionManager : IDisposable
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: widgetsMcp,
-            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
+            CodeGraphMcp: codeGraphMcp,
             DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
@@ -3285,7 +3311,8 @@ public class SessionManager : IDisposable
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
-            HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp)));
+            HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
+                workspace, notificationsMcp, codeGraphMcp)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4591,6 +4618,7 @@ public class SessionManager : IDisposable
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
                 ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var personasMcp = BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona);
+            var notificationsMcp = BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
@@ -4603,7 +4631,7 @@ public class SessionManager : IDisposable
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: personasMcp,
-                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona),
+                NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(entry.Info.OwnerId, persona.Persona, rootPath),
@@ -4623,7 +4651,8 @@ public class SessionManager : IDisposable
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
-                HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp));
+                HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
+                    workspace, notificationsMcp));
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4640,6 +4669,8 @@ public class SessionManager : IDisposable
             var notesMcp = _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes")
                 ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null;
             var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
+            var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
+            var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
@@ -4653,7 +4684,7 @@ public class SessionManager : IDisposable
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: personasMcp,
-                NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona),
+                NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(project.OwnerId, persona.Persona, rootPath, project.RootPath),
@@ -4662,7 +4693,7 @@ public class SessionManager : IDisposable
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: widgetsMcp,
-                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
+                CodeGraphMcp: codeGraphMcp,
                 DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
@@ -4674,7 +4705,8 @@ public class SessionManager : IDisposable
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
-                HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp));
+                HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
+                    workspace, notificationsMcp, codeGraphMcp));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

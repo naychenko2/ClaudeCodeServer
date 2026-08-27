@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // B5: гашение дублирующего chats_report_up после того, как доклад о завершении задачи
 // постановщику уже доставлен сервером (TaskExecutionService). Гейт вынесен статическим
-// предикатом SessionMessagesController.IsCompletionAlreadyReported — проверяем его вместе
+// предикатом SessionMessagingService.IsCompletionAlreadyReported — проверяем его вместе
 // с резолвом задачи по сессии, без поднятия приложения.
 public class ReportUpCompletionGateTests : IDisposable
 {
@@ -40,7 +40,7 @@ public class ReportUpCompletionGateTests : IDisposable
         _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
         _tasks.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
 
-        SessionMessagesController.IsCompletionAlreadyReported(_tasks.GetBySession("sess-1"), blocker: false)
+        SessionMessagingService.IsCompletionAlreadyReported(_tasks.GetBySession("sess-1"), blocker: false)
             .Should().BeTrue("второе сообщение об одном факте в ленту постановщика не идёт");
     }
 
@@ -54,7 +54,7 @@ public class ReportUpCompletionGateTests : IDisposable
         _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
         _tasks.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
 
-        SessionMessagesController.IsCompletionAlreadyReported(_tasks.GetBySession("sess-1"), blocker: true)
+        SessionMessagingService.IsCompletionAlreadyReported(_tasks.GetBySession("sess-1"), blocker: true)
             .Should().BeFalse("доклад о блокере проходит всегда — гейт про финальный доклад");
     }
 
@@ -64,7 +64,7 @@ public class ReportUpCompletionGateTests : IDisposable
         var task = _tasks.Create(null, "u", new CreateTaskRequest("t"));
         _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
 
-        SessionMessagesController.IsCompletionAlreadyReported(_tasks.GetBySession("sess-1"), blocker: false)
+        SessionMessagingService.IsCompletionAlreadyReported(_tasks.GetBySession("sess-1"), blocker: false)
             .Should().BeFalse("промежуточный отчёт по ходу работы гасить нечем");
     }
 
@@ -76,8 +76,8 @@ public class ReportUpCompletionGateTests : IDisposable
         _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
         _tasks.TryMarkCompletionDelivered(task.Id);
 
-        SessionMessagesController.IsCompletionAlreadyReported(_tasks.GetBySession("chat-42"), blocker: false)
+        SessionMessagingService.IsCompletionAlreadyReported(_tasks.GetBySession("chat-42"), blocker: false)
             .Should().BeFalse();
-        SessionMessagesController.IsCompletionAlreadyReported(null, blocker: false).Should().BeFalse();
+        SessionMessagingService.IsCompletionAlreadyReported(null, blocker: false).Should().BeFalse();
     }
 }

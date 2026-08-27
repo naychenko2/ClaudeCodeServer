@@ -393,8 +393,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Персоны (фаза 2, волна 2): тяжёлая оркестрация CRUD — в PersonasCrudService (общий с REST),
 // тулсет — тонкий JSON-фасад над ним и сервисами; хвост маршрута — та же сессия-вызыватель
 builder.Services.AddSingleton<ClaudeHomeServer.Services.PersonasCrudService>();
+// Чаты (фаза 2, волна 3): оркестрация chats_send/chats_report_up — общая для REST и wsp-тулсета
+builder.Services.AddSingleton<ClaudeHomeServer.Services.SessionMessagingService>();
+// Знания (фаза 2, волна 3): каталог баз Dify под пользователя — общий для REST и wsp-тулсета
+builder.Services.AddSingleton<ClaudeHomeServer.Services.KnowledgeBaseCatalogService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.PersonasToolset>();
+// Волна 3 (ADR-012): рабочее пространство, граф кода и уведомления
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.WorkspaceToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.CodeGraphToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.NotificationsToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();

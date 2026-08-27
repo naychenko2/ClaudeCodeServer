@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/knowledge")]
 public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub, UserStore userStore,
-    Services.Llm.ICheapTextRunner cheap) : ControllerBase
+    Services.Llm.ICheapTextRunner cheap, KnowledgeBaseCatalogService catalog) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(ClaimTypes.Name) ?? UserId;
@@ -36,18 +36,10 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpGet]
     public async Task<IActionResult> List()
     {
-        if (!knowledge.IsConfigured)
-            return Ok(new { configured = false, items = Array.Empty<KnowledgeBaseSummary>() });
         try
         {
-            var all = await knowledge.ListDatasetsAsync();
-            var others = OtherUsers();
-            var items = all.Select(d => Classify(d, others))
-                .Where(x => x is not null)
-                .Cast<KnowledgeBaseSummary>()
-                .OrderByDescending(x => x.CreatedAt ?? DateTime.MinValue)
-                .ToList();
-            return Ok(new { configured = true, items });
+            var (configured, items) = await catalog.ListForUserAsync(Username);
+            return Ok(new { configured, items });
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
     }
@@ -56,15 +48,10 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpGet("{id}")]
     public async Task<IActionResult> Get(string id)
     {
-        var d = await ResolveReadableAsync(id);
-        if (d is null) return NotFound();
-        var c = Classify(d, OtherUsers())!;
         try
         {
-            var docs = await knowledge.ListAllDocumentsAsync(id);
-            return Ok(new KnowledgeBaseDetail(
-                c.Id, c.Title, c.Type, c.Visibility, c.DocumentCount, c.CreatedAt, c.Deletable, c.Description,
-                docs.Data.Select(x => new KnowledgeDocumentDto(x.Id, x.Name, x.IndexingStatus, x.Error)).ToList()));
+            var detail = await catalog.GetDetailForUserAsync(Username, id);
+            return detail is null ? NotFound() : Ok(detail);
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
     }
@@ -74,14 +61,14 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpPost("{id}/ai/describe")]
     public async Task<IActionResult> Describe(string id, CancellationToken ct)
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
         try
         {
             var docs = await knowledge.ListAllDocumentsAsync(id);
             var names = docs.Data.Select(x => x.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Take(50).ToList();
             if (names.Count == 0) return BadRequest(new { error = "В базе нет документов для описания" });
-            var c = Classify(d, OtherUsers())!;
+            var c = catalog.Classify(d, Username, catalog.OtherUsers(Username))!;
             var prompt = $"База знаний «{c.Title}» содержит документы:\n" +
                 string.Join("\n", names.Select(n => "- " + n)) +
                 "\n\nСоставь короткое описание (1-2 предложения, по-русски), о чём эта база знаний и что в ней искать. " +
@@ -133,9 +120,9 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
-        if (!IsDeletable(d, OtherUsers())) return StatusCode(403, new { error = "Удаление этой базы недоступно: она привязана к другому разделу, либо для публичной базы нужны права администратора" });
+        if (!catalog.IsDeletable(d, Username, IsAdmin)) return StatusCode(403, new { error = "Удаление этой базы недоступно: она привязана к другому разделу, либо для публичной базы нужны права администратора" });
         try { await knowledge.DeleteDatasetAsync(id); }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
         await Broadcast("deleted", id);
@@ -146,7 +133,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpPost("{id}/documents")]
     public async Task<IActionResult> AddDocumentText(string id, [FromBody] AddDocumentTextRequest req)
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
         var name = (req?.Name ?? "").Trim();
         var text = req?.Text ?? "";
@@ -165,7 +152,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpPost("{id}/documents/file")]
     public async Task<IActionResult> AddDocumentFile(string id, IFormFile? file, [FromForm] string? name)
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
         if (file is null || file.Length == 0) return BadRequest(new { error = "Файл не передан" });
         var fileName = string.IsNullOrWhiteSpace(name) ? file.FileName : name!;
@@ -184,7 +171,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpDelete("{id}/documents/{docId}")]
     public async Task<IActionResult> DeleteDocument(string id, string docId)
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
         try { await knowledge.DeleteDocumentAsync(id, docId); }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
@@ -196,7 +183,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpGet("{id}/documents/{docId}")]
     public async Task<IActionResult> GetDocument(string id, string docId)
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
         try
         {
@@ -216,7 +203,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     [HttpGet("{id}/search")]
     public async Task<IActionResult> Search(string id, [FromQuery] string q, [FromQuery] int topK = 8, [FromQuery] string method = "semantic")
     {
-        var d = await ResolveReadableAsync(id);
+        var d = await catalog.ResolveReadableAsync(Username, id);
         if (d is null) return NotFound();
         if (string.IsNullOrWhiteSpace(q)) return Ok(new { items = Array.Empty<KnowledgeSearchHit>() });
         // semantic → чисто по смыслу; fulltext → точные совпадения. Гибрид здесь не нужен:
@@ -231,77 +218,8 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
     }
 
-    // --- Классификация датасетов Dify под пользователя ---
-    // Модель: «помеченные» (с префиксом {username}:) — личные; «без префикса» —
-    // публичные/глобальные (видны всем). Личные делятся по префиксу: {user}:notes /
-    // {user}:kb:{Title} / {user}:{project}; {user}:persona:{handle} — память персоны,
-    // внутренняя (скрыта из раздела, удаляется вместе с персоной). Чужие личные
-    // ({otheruser}:…) — скрыты (изоляция per-owner). Permission Dify здесь ни при чём:
-    // «публичность» определяется отсутствием префикса, а не all_team_members.
-
-    // Имена других пользователей — чтобы отличить «без префикса = глобальная»
-    // от «чужая {otheruser}:…» (иначе чужие утекли бы в публичные).
-    private HashSet<string> OtherUsers() =>
-        userStore.GetAll()
-            .Select(u => u.Username)
-            .Where(u => u.Length > 0 && !u.Equals(Username, StringComparison.OrdinalIgnoreCase))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-    // Владелец датасета по префиксу имени ({username}:), или null — глобальная (без префикса).
-    private static string? OwnerOf(string name, string username, HashSet<string> others)
-        => KnowledgeAccess.OwnerOf(name, username, others);
-
-    // Резолв датасета по id с проверкой доступности (relevant): своя или глобальная —
-    // доступна; чужая помеченная — нет. Обязательно с общим Dify-ключом: иначе по
-    // произвольному id можно читать/менять чужую базу.
-    private async Task<DifyDatasetListItem?> ResolveReadableAsync(string id)
-    {
-        if (!knowledge.IsConfigured || string.IsNullOrEmpty(id)) return null;
-        try
-        {
-            var others = OtherUsers();
-            return (await knowledge.ListDatasetsAsync()).FirstOrDefault(d => d.Id == id)
-                is { } found && IsRelevant(found, others) ? found : null;
-        }
-        catch (HttpRequestException) { return null; }
-    }
-
-    private bool IsRelevant(DifyDatasetListItem d, HashSet<string> others)
-        => KnowledgeAccess.IsRelevant(d.Name ?? "", Username, others);
-
-    private bool IsDeletable(DifyDatasetListItem d, HashSet<string> others)
-        => KnowledgeAccess.IsDeletable(d.Name ?? "", Username, others, IsAdmin);
-
-    // Сводка с производными полями или null, если датасет чужой (скрытый).
-    private KnowledgeBaseSummary? Classify(DifyDatasetListItem d, HashSet<string> others)
-    {
-        var name = d.Name ?? "";
-        var owner = OwnerOf(name, Username, others);
-        if (owner is not null && !owner.Equals(Username, StringComparison.OrdinalIgnoreCase))
-            return null; // чужая помеченная — не показываем
-
-        string type; string title; bool deletable; string visibility;
-        if (owner is null)
-        {
-            type = "Публичная"; title = name; deletable = true; visibility = "public";
-        }
-        else
-        {
-            var rest = name[(Username.Length + 1)..];
-            if (rest == "notes") { type = "Заметки"; title = "Заметки"; deletable = false; }
-            else if (rest.StartsWith("persona:", StringComparison.Ordinal)) return null; // память персоны — внутренняя, скрыта
-            else if (rest.StartsWith("team:", StringComparison.Ordinal)) return null;     // память команды — внутренняя, скрыта
-            else if (rest.StartsWith("kb:", StringComparison.Ordinal)) { type = "Самостоятельная"; title = rest["kb:".Length..]; deletable = true; }
-            else { type = "Проект"; title = rest; deletable = false; } // {username}:{projectName}
-            visibility = "personal";
-        }
-
-        return new KnowledgeBaseSummary(d.Id, title, type, visibility,
-            d.DocumentCount, ToDate(d.CreatedAt), deletable, d.Description);
-    }
-
-    private static DateTime? ToDate(double? ts) =>
-        ts is { } v && v > 0 ? DateTimeOffset.FromUnixTimeSeconds((long)v).UtcDateTime : null;
+    // Классификация датасетов под пользователя (личные/публичные/чужие) — в
+    // KnowledgeBaseCatalogService: та же точка обслуживает WorkspaceToolset (ADR-012, волна 3).
 }
 
 // --- DTO ---

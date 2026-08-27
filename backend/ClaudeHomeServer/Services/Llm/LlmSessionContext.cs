@@ -51,9 +51,11 @@ public record MemoryMcpContext(string ApiUrl, Func<string> TokenFactory, string 
 // до перечисленных проектов (null — все проекты владельца). SelfSessionId — id самой сессии
 // (запрет self-send/self-delete), AgentDepth — глубина делегирования (анти-рекурсия:
 // на агентных ходах секции chats/destructive срезаются). Не Claude-специфичен.
-public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId,
+// TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012,
+// волна 3): захваченный строкой JWT у чата старше ServiceTokenLifetime отдавал бы 401.
+public record WorkspaceMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
     IReadOnlyList<string> Sections, IReadOnlyList<string>? AllowedProjectIds = null,
-    string? SelfSessionId = null, int AgentDepth = 0);
+    string? SelfSessionId = null, int AgentDepth = 0, bool UseHttp = false);
 
 // Контекст MCP-сервера персон: адрес API, сервисный токен владельца и проект сессии
 // (дефолтный projectId для создания проектных персон; null — глобальный контекст).
@@ -93,7 +95,10 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items, 
 // создавать уведомления через инструмент notifications_create.
 // SelfPersonaId — персона текущей сессии: notifications-server проставит её как
 // personaId в создаваемое уведомление (лицо персоны на уведомлении).
-public record NotificationsMcpContext(string ApiUrl, string Token, string? SelfPersonaId = null);
+// TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012,
+// волна 3).
+public record NotificationsMcpContext(string ApiUrl, Func<string> TokenFactory,
+    string? SelfPersonaId = null, bool UseHttp = false);
 
 // Контекст MCP-сервера виджетов (widget_show): адрес API и фабрика сервисного токена
 // владельца. Сервер переехал с node-процесса в Kestrel (ADR-012) — ход подключает его
@@ -116,8 +121,11 @@ public sealed record WidgetsMcpContext(string ApiUrl, Func<string> TokenFactory,
 // SessionId уезжает в X-Caller-Session-Id (наблюдаемость GET /api/mcp/calls).
 // RootPath — рабочее дерево сессии: у чата с отдельным worktree свой граф (ADR-003);
 // null/пусто — граф корня проекта.
-public sealed record CodeGraphMcpContext(string ApiUrl, string Token, string ProjectId,
-    string? SessionId = null, string? RootPath = null);
+// TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012,
+// волна 3). На http-ветке RootPath в маршрут не кладётся: тулсет резолвит дерево живьём
+// из сессии-вызывателя (хвост), поэтому состав и адрес от worktree не зависят.
+public sealed record CodeGraphMcpContext(string ApiUrl, Func<string> TokenFactory, string ProjectId,
+    string? SessionId = null, string? RootPath = null, bool UseHttp = false);
 
 // Контекст MCP-сервера десктопной грани (ADR-008): адрес API, capability-токен хода
 // и id чата. Токен отдельный — сервисный JWT владельца эндпоинты /api/devices/* не

@@ -723,18 +723,23 @@ public class ClaudeSession : ILlmSessionAdapter
         var personasServerPath = _personasMcp is { UseHttp: false }
             ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
         var hasPersonas = _personasMcp is not null && (_personasMcp.UseHttp || personasServerPath is not null);
-        var workspaceServerPath = _workspaceMcp is not null ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
-        var hasWorkspace = workspaceServerPath is not null;
-        var notificationsServerPath = _notificationsMcp is not null ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
-        var hasNotifications = notificationsServerPath is not null;
+        // wsp/notifications/codegraph живут в Kestrel (ADR-012, фаза 2 волна 3), но пути их
+        // stdio-серверов резолвим у откатившихся (UseHttp=false) — как у tasks/notes/personas
+        var workspaceServerPath = _workspaceMcp is { UseHttp: false }
+            ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
+        var hasWorkspace = _workspaceMcp is not null && (_workspaceMcp.UseHttp || workspaceServerPath is not null);
+        var notificationsServerPath = _notificationsMcp is { UseHttp: false }
+            ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
+        var hasNotifications = _notificationsMcp is not null && (_notificationsMcp.UseHttp || notificationsServerPath is not null);
         // Виджеты живут в Kestrel (ADR-012), но путь stdio-сервера всё равно резолвим:
         // при негодном для http адресе (не http-схема, выключенный рубильник) ход обязан
         // объявить прежний node-сервер, а не остаться без инструмента
         var widgetsServerPath = _widgetsMcp is { UseHttp: false }
             ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
         var hasWidgets = _widgetsMcp is not null && (_widgetsMcp.UseHttp || widgetsServerPath is not null);
-        var codeGraphServerPath = _codeGraphMcp is not null ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
-        var hasCodeGraph = codeGraphServerPath is not null;
+        var codeGraphServerPath = _codeGraphMcp is { UseHttp: false }
+            ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
+        var hasCodeGraph = _codeGraphMcp is not null && (_codeGraphMcp.UseHttp || codeGraphServerPath is not null);
         var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
         var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
@@ -1187,19 +1192,40 @@ public class ClaudeSession : ILlmSessionAdapter
                 // между ходами → MCP-сервер перезапускался («Stream closed»). Write-инструменты
                 // (files_write, projects_create, git_commit, knowledge_index) доступны всегда,
                 // safety-уровень — право доступа персоны (Persona.Tools / ExtraDisallowedTools).
-                var workspaceWrite = "1";
+                const string workspaceWrite = "1";
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как tasks/notes):
+                // захваченный строкой JWT у долгоживущего чата истекал, и инструменты
+                // пропадали у модели молча
+                var wspToken = _workspaceMcp.TokenFactory();
                 // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
                 // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
                 // (сервер не стартует, инструменты не появляются). Отсюда же префикс
                 // инструментов mcp__wsp__* в подсказках ниже и в PersonaBindingsService.
-                servers["wsp"] = new System.Text.Json.Nodes.JsonObject
+                servers["wsp"] = _workspaceMcp.UseHttp
+                    // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL —
+                    // по ней тулсет живьём резолвит секции, зону проектов и персону (роль
+                    // env WORKSPACE_SECTIONS/WORKSPACE_PROJECT_IDS). Права (зона, владение,
+                    // секции) проверяются на КАЖДЫЙ вызов в тулсете, не при построении
+                    // контекста. alwaysLoad как у stdio-ветки.
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.WorkspaceToolset.EndpointFor(_workspaceMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {wspToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { workspaceServerPath! },
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["WORKSPACE_API_URL"] = _workspaceMcp!.ApiUrl,
-                        ["WORKSPACE_API_TOKEN"] = _workspaceMcp.Token,
+                        ["WORKSPACE_API_TOKEN"] = wspToken,
                         ["WORKSPACE_PROJECT_ID"] = _workspaceMcp.ProjectId ?? "",
                         ["WORKSPACE_SECTIONS"] = sectionsJoined,
                         ["WORKSPACE_PROJECT_IDS"] = _workspaceMcp.AllowedProjectIds is { Count: > 0 } allowed
@@ -1222,48 +1248,90 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
                 };
-                // Состав wsp-инструментов зависит от write-режима и набора секций — в сигнатуру
-                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}";
+                // Состав wsp-инструментов зависит от write-режима, набора секций и транспорта —
+                // в сигнатуру. Секции и их отпечаток считает ОДНА формула (SessionManager.
+                // BuildWorkspacePlan): её же на каждый tools/list зовёт WorkspaceToolset
+                // (блокер приёмки волны 2 — состав и shape по разным формулам расходятся)
+                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}:t:{(_workspaceMcp.UseHttp ? "http" : "stdio")}";
             }
 
             if (hasNotifications)
             {
-                servers["notifications"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
-                    // alwaysLoad — по той же причине, что у tasks (см. выше)
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как wsp)
+                var notificationsToken = _notificationsMcp!.TokenFactory();
+                servers["notifications"] = _notificationsMcp.UseHttp
+                    // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL,
+                    // персона (лицо уведомления) резолвится тулсетом живьём из сессии
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
-                        ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
-                        ["NOTIFICATIONS_SELF_PERSONA_ID"] = _notificationsMcp.SelfPersonaId ?? "",
-                    },
-                };
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.NotificationsToolset.EndpointFor(_notificationsMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {notificationsToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
+                        // alwaysLoad — по той же причине, что у tasks (см. выше)
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["NOTIFICATIONS_API_URL"] = _notificationsMcp.ApiUrl,
+                            ["NOTIFICATIONS_API_TOKEN"] = notificationsToken,
+                            ["NOTIFICATIONS_SELF_PERSONA_ID"] = _notificationsMcp.SelfPersonaId ?? "",
+                        },
+                    };
+                // Состав уведомлений постоянный (4 инструмента), в сигнатуру — только транспорт
+                shapes["notifications"] = $"t:{(_notificationsMcp.UseHttp ? "http" : "stdio")}";
             }
 
             if (hasCodeGraph && _codeGraphMcp is not null)
             {
                 // Граф кода проекта: поиск типа, связи узла, хабы по связности. Состав
                 // инструментов постоянный (три чтения), per-owner изоляция — токеном
-                // владельца и проверкой владельца проекта в CodeGraphController.
-                servers["codegraph"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { codeGraphServerPath! },
-                    // alwaysLoad — по той же причине, что у tasks (см. выше)
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // владельца и проверкой владельца проекта в CodeGraphController (REST)
+                // и в CodeGraphToolset (http, ADR-012 волна 3).
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как wsp)
+                var codeGraphToken = _codeGraphMcp.TokenFactory();
+                servers["codegraph"] = _codeGraphMcp.UseHttp
+                    // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL.
+                    // Рабочее дерево (worktree) в маршрут НЕ кладётся: тулсет резолвит его
+                    // живьём из сессии на каждый вызов — адрес и состав от дерева не зависят,
+                    // а смена worktree mid-session подхватывается без перезапуска CLI.
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["CODEGRAPH_API_URL"] = _codeGraphMcp.ApiUrl,
-                        ["CODEGRAPH_API_TOKEN"] = _codeGraphMcp.Token,
-                        ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
-                        ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
-                        // Рабочее дерево хода: отдельное worktree чата имеет свой граф
-                        ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
-                    },
-                };
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.CodeGraphToolset.EndpointFor(_codeGraphMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {codeGraphToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { codeGraphServerPath! },
+                        // alwaysLoad — по той же причине, что у tasks (см. выше)
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["CODEGRAPH_API_URL"] = _codeGraphMcp.ApiUrl,
+                            ["CODEGRAPH_API_TOKEN"] = codeGraphToken,
+                            ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
+                            ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
+                            // Рабочее дерево хода: отдельное worktree чата имеет свой граф
+                            ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
+                        },
+                    };
+                // Состав графа постоянный (3 чтения), в сигнатуру — только транспорт
+                shapes["codegraph"] = $"t:{(_codeGraphMcp.UseHttp ? "http" : "stdio")}";
             }
 
             if (hasDesktop && _desktopMcp is not null)
@@ -2673,6 +2741,9 @@ public class ClaudeSession : ILlmSessionAdapter
             _tasksMcp is { UseHttp: true } tasks ? tasks.ApiUrl : null,
             _notesMcp is { UseHttp: true } notes ? notes.ApiUrl : null,
             _personasMcp is { UseHttp: true } personas ? personas.ApiUrl : null,
+            _workspaceMcp is { UseHttp: true } wsp ? wsp.ApiUrl : null,
+            _notificationsMcp is { UseHttp: true } ntf ? ntf.ApiUrl : null,
+            _codeGraphMcp is { UseHttp: true } cg ? cg.ApiUrl : null,
         };
         httpApiUrls.AddRange(personaAgents?.MemoryServers
             .Where(s => s.UseHttp).Select(s => s.ApiUrl) ?? []);

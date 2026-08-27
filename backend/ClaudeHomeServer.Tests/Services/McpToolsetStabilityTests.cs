@@ -233,7 +233,10 @@ public class McpToolsetStabilityTests
     /// инструментов у каждой, поэтому зависимость от хода тут так же смертельна.
     /// </summary>
     [SkippableTheory]
-    [InlineData("private WorkspaceMcpContext? BuildWorkspaceContext", "git", "kb")]
+    // Волна 3 (ADR-012): формула секций вынесена в BuildWorkspacePlan — ЕДИНУЮ точку
+    // состава для конфига хода и живого tools/list тулсета wsp. Сторож смотрит на неё,
+    // а не на обёртку BuildWorkspaceContext: иначе он бы молча проверял пустое место
+    [InlineData("internal WorkspaceMcpPlan? BuildWorkspacePlan", "git", "kb")]
     [InlineData("private PersonasMcpContext? BuildPersonasContext", "personas-manage", "personas-automation")]
     public void СекцииПоРоли_ГейтятсяТолькоПоПерсоне(string signature, string first, string second)
     {

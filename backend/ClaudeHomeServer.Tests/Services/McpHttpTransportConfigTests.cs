@@ -35,7 +35,9 @@ public class McpHttpTransportConfigTests : IDisposable
     // Настоящий BuildTurnMcpConfig сессии: путь temp-конфига + строка сигнатуры серверов
     private (JsonObject Servers, string ServerKeys) BuildConfig(WidgetsMcpContext? widgets = null,
         MemoryMcpContext? memory = null, PersonaAgentsContext? personaAgents = null,
-        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null)
+        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
+        WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
+        CodeGraphMcpContext? codeGraph = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -47,6 +49,9 @@ public class McpHttpTransportConfigTests : IDisposable
             WidgetsMcp: widgets,
             MemoryMcp: memory,
             PersonasMcp: personas,
+            WorkspaceMcp: workspace,
+            NotificationsMcp: notifications,
+            CodeGraphMcp: codeGraph,
             PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents);
         var session = new ClaudeSession(new Session(), context);
 
@@ -394,5 +399,148 @@ public class McpHttpTransportConfigTests : IDisposable
             keys.Should().Contain("personas:t:stdio");
         }
         else keys.Should().NotContain("personas:t:http");
+    }
+
+    /// <summary>
+    /// Волна 3 (wsp/notifications/codegraph): три сервера объявляются http-эндпоинтом с
+    /// хвостом-сессией, без единого процесса node, а транспорт входит в сигнатуру запуска.
+    /// </summary>
+    [Fact]
+    public void Волна3_ГодныйАдрес_ТриСервераНаНttpСХвостомСессии()
+    {
+        var (servers, keys) = BuildConfig(
+            workspace: new WorkspaceMcpContext("http://localhost:5000", () => "tok-w", "proj-1",
+                ["projects", "files", "knowledge", "search"], UseHttp: true),
+            notifications: new NotificationsMcpContext("http://localhost:5000", () => "tok-n",
+                "persona-1", UseHttp: true),
+            codeGraph: new CodeGraphMcpContext("http://localhost:5000", () => "tok-c", "proj-1",
+                UseHttp: true));
+
+        foreach (var key in new[] { "wsp", "notifications", "codegraph" })
+        {
+            var node = servers[key]!.AsObject();
+            node["type"]!.GetValue<string>().Should().Be("http");
+            node["url"]!.GetValue<string>().Should()
+                .Match($"http://localhost:5000/mcp/{key}/*",
+                    "сессия-вызыватель едет в ПУТИ — по ней тулсет резолвит контекст чата")
+                .And.NotBe($"http://localhost:5000/mcp/{key}/",
+                    "хвост обязан быть непустым id сессии");
+            node.ContainsKey("command").Should().BeFalse($"процессов node ради {key} больше нет");
+            node["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+            var headers = node["headers"]!.AsObject();
+            headers["Authorization"]!.GetValue<string>().Should().Match("Bearer tok-*");
+            headers.ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+            // Отпечаток wsp сам содержит запятые (список секций) — сегмент ключа целиком
+            // регуляркой без запятых не выделить, поэтому ищем пару «ключ … t:http»
+            keys.Should().MatchRegex($"{key}:.*t:http", "транспорт — в сигнатуре запуска");
+        }
+
+        // Рабочее дерево (worktree) в адрес НЕ попадает: тулсет резолвит его живьём из
+        // сессии, иначе смена дерева меняла бы сигнатуру и перезапускала CLI (ADR-012)
+        servers["codegraph"]!["url"]!.GetValue<string>()
+            .Should().NotContain("rootPath").And.NotContain("worktree");
+    }
+
+    /// <summary>Фабрика токена живая у всех трёх серверов волны 3.</summary>
+    [Fact]
+    public void Волна3_ТокенФабрикой_АНеЗахваченСтрокой()
+    {
+        var issued = 0;
+        string Factory() => $"tok-{++issued}";
+        var workspace = new WorkspaceMcpContext("http://localhost:5000", Factory, null,
+            ["projects", "files", "search"], UseHttp: true);
+        var notifications = new NotificationsMcpContext("http://localhost:5000", Factory, null, UseHttp: true);
+        var codeGraph = new CodeGraphMcpContext("http://localhost:5000", Factory, "proj-1", UseHttp: true);
+        BuildConfig(workspace: workspace, notifications: notifications, codeGraph: codeGraph);
+        BuildConfig(workspace: workspace, notifications: notifications, codeGraph: codeGraph);
+
+        issued.Should().Be(6, "каждая сборка зовёт все три фабрики — старый чат не умирает на 401");
+    }
+
+    /// <summary>
+    /// Откат (рубильник Mcp:HttpTransport, не-http адрес): все три волны 3 объявляются
+    /// прежними stdio-серверами с env — инструменты у модели остаются.
+    /// </summary>
+    [Fact]
+    public void Волна3_Откат_ТриСервераНаStdioСEnv()
+    {
+        var (servers, keys) = BuildConfig(
+            workspace: new WorkspaceMcpContext("https://naychenko.me", () => "tok", "proj-1",
+                ["projects", "files", "knowledge", "search"], UseHttp: false),
+            notifications: new NotificationsMcpContext("https://naychenko.me", () => "tok",
+                "persona-1", UseHttp: false),
+            codeGraph: new CodeGraphMcpContext("https://naychenko.me", () => "tok", "proj-1",
+                RootPath: "C:/worktrees/chat-1", UseHttp: false));
+
+        if (servers["wsp"] is { } wspNode)
+        {
+            var env = wspNode["env"]!.AsObject();
+            env["WORKSPACE_PROJECT_ID"]!.GetValue<string>().Should().Be("proj-1");
+            env["WORKSPACE_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            env["WORKSPACE_WRITE"]!.GetValue<string>().Should().Be("1");
+            env["WORKSPACE_SECTIONS"]!.GetValue<string>().Should().Be("projects,files,knowledge,search");
+            keys.Should().Contain("t:stdio");
+        }
+        else keys.Should().NotContain("wsp:w1:projects,files,knowledge,search:t:http");
+
+        if (servers["notifications"] is { } ntfNode)
+        {
+            var env = ntfNode["env"]!.AsObject();
+            env["NOTIFICATIONS_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            env["NOTIFICATIONS_SELF_PERSONA_ID"]!.GetValue<string>().Should().Be("persona-1");
+            keys.Should().Contain("notifications:t:stdio");
+        }
+        else keys.Should().NotContain("notifications:t:http");
+
+        if (servers["codegraph"] is { } cgNode)
+        {
+            var env = cgNode["env"]!.AsObject();
+            env["CODEGRAPH_PROJECT_ID"]!.GetValue<string>().Should().Be("proj-1");
+            env["CODEGRAPH_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            // На stdio рабочее дерево по-прежнему едет env — там его резолвить некому
+            env["CODEGRAPH_ROOT_PATH"]!.GetValue<string>().Should().Be("C:/worktrees/chat-1");
+            keys.Should().Contain("codegraph:t:stdio");
+        }
+        else keys.Should().NotContain("codegraph:t:http");
+    }
+
+    /// <summary>
+    /// ЗАМЕР процессов node (приёмка волны 3): при http-транспорте полный набор продуктовых
+    /// серверов всех трёх волн не поднимает НИ ОДНОГО процесса — в конфиге хода нет ни одного
+    /// узла с «command». Это и есть цель ADR-012, зафиксированная тестом, а не разовым
+    /// наблюдением: узел с command вернулся бы молча.
+    /// </summary>
+    [Fact]
+    public void Замер_ПолныйНаборНаHttp_НиОдногоПроцессаNode()
+    {
+        var (servers, _) = BuildConfig(
+            widgets: new WidgetsMcpContext("http://localhost:5000", () => "tok", UseHttp: true),
+            memory: new MemoryMcpContext("http://localhost:5000", () => "tok", "persona-1",
+                UseHttp: true),
+            tasks: new TasksMcpContext("http://localhost:5000", () => "tok", "proj-1", UseHttp: true),
+            notes: new NotesMcpContext("http://localhost:5000", () => "tok", "proj-1", UseHttp: true),
+            personas: new PersonasMcpContext("http://localhost:5000", () => "tok", "proj-1", UseHttp: true),
+            workspace: new WorkspaceMcpContext("http://localhost:5000", () => "tok", "proj-1",
+                ["projects", "files", "knowledge", "search", "chats", "git", "knowledge_bases"],
+                UseHttp: true),
+            notifications: new NotificationsMcpContext("http://localhost:5000", () => "tok",
+                "persona-1", UseHttp: true),
+            codeGraph: new CodeGraphMcpContext("http://localhost:5000", () => "tok", "proj-1",
+                UseHttp: true));
+
+        var productServers = new[]
+        {
+            "widgets", "memory", "tasks", "notes", "personas", "wsp", "notifications", "codegraph",
+        };
+        foreach (var key in productServers)
+        {
+            servers.ContainsKey(key).Should().BeTrue($"{key} обязан быть объявлен ходу");
+            servers[key]!.AsObject().ContainsKey("command")
+                .Should().BeFalse($"{key} на http не поднимает процесс node");
+            servers[key]!["type"]!.GetValue<string>().Should().Be("http");
+        }
+
+        servers.Count(kv => kv.Value?.AsObject().ContainsKey("command") == true)
+            .Should().Be(0, "продуктовых node-процессов на ход не остаётся вовсе");
     }
 }

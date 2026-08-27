@@ -1,6 +1,11 @@
 // MCP-сервер уведомлений ClaudeHomeServer: stdio, JSON-RPC (newline-delimited),
 // без внешних зависимостей.
 //
+// ЗАМОРОЖЕН (ветка отката, ADR-012 фаза 2 волна 3): источник контракта —
+// backend/ClaudeHomeServer/Services/Mcp/Http/NotificationsToolset.cs; правки схем/поведения
+// обязаны ехать парой с http-веткой (сторож — CodeGraphNotificationsToolsetParityTests).
+// Файл не удалять: Mcp:HttpTransport=false возвращает notifications на stdio с этим env.
+//
 // Окружение (задаёт ClaudeSession при запуске claude):
 //   NOTIFICATIONS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   NOTIFICATIONS_API_TOKEN  — сервисный JWT владельца сессии

@@ -120,7 +120,7 @@ public static class FeatureFlagCatalog
         // контрактом onRespond. Часть B (разворот схемой) появится позже под тем же флагом.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.VisualPlan,
-            Title: "Визуальный разворот плана",
+            Title: "Замечания к плану и разворот схемой",
             Description: "Замечания к плану оставляются прямо на разделе и уходят планировщику с его адресом — больше не нужно угадывать, какое место имеется в виду.",
             Default: false,
             Stage: "dev"),

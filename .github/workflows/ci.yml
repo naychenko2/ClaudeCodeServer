@@ -29,16 +29,17 @@ jobs:
       # сети и внешних advisory), — в свойстве WarningsNotAsErrors там же, в props.
       - name: Build
         run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
-      # Blame-режим: тестовый процесс молчит дольше 15 минут — VSTest снимает мини-дамп,
-      # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. Без этого
-      # зависание на раннере выглядит как 39 минут тишины и «canceled» без виновника
-      # (локально, на Windows, набор проходит за ~3 минуты — ловить нечего).
+      # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
+      # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
+      # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.
+      # Порог 5 минут: обычный тест живёт <1 с, пять минут тишины — гарантированный труп,
+      # а итерация диагностики втрое быстрее, чем с 15 минутами.
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
       - name: Test
         run: >
           dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
-          --blame-hang-timeout 15m --blame-hang-dump-type mini
+          --blame-hang-timeout 5m --blame-hang-dump-type full
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
       # иначе они умирают вместе с раннером
       - name: Upload hang dumps

@@ -439,6 +439,37 @@ builder.Services.AddHttpClient(ReaderService.HttpClientName, client =>
 .ConfigurePrimaryHttpMessageHandler(ReaderHttpHandlerFactory.Create);
 builder.Services.AddSingleton<ReaderQuotaService>();
 builder.Services.AddSingleton<ReaderService>();
+// Раздел «Видео»: эфиры телеканалов (СМОТРИМ) и лента подписок YouTube.
+// Кеш — платформенный MemoryCache: сроки жизни у ответов разные (минута у программы
+// передач, полчаса у ленты), а вытеснение по TTL из коробки дешевле своего велосипеда.
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton(ClaudeHomeServer.Services.Video.VideoOptions.FromConfig(builder.Configuration));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Video.YouTubeOAuthService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Video.IVideoProvider,
+    ClaudeHomeServer.Services.Video.SmotrimProvider>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Video.IVideoProvider,
+    ClaudeHomeServer.Services.Video.YouTubeProvider>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Video.VideoProviderRegistry>();
+// СМОТРИМ — РОССИЙСКИЙ сервис: egress-прокси ему противопоказан (по умолчанию клиенты
+// ходят через него — см. WithoutEgressProxy у dify/onlyoffice). Опциональная зависимость:
+// чужое API лежит штатно, консоли не нужны стектрейсы на каждую карточку канала.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Video.SmotrimProvider.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Video.Smotrim",
+        Subject: "сервисом СМОТРИМ",
+        Consequence: "Программа передач и признак доступности каналов не обновятся."))
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10))
+    .WithoutEgressProxy();
+// YouTube, наоборот, ЧЕРЕЗ egress-прокси (WithoutEgressProxy тут не звать): из России
+// его API недоступен напрямую. Едут только метаданные — сам видеопоток идёт из браузера.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Video.YouTubeOAuthService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Video.YouTube",
+        Subject: "YouTube Data API",
+        Consequence: "Лента подписок не обновится; на эфиры телеканалов это не влияет."))
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(15));
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

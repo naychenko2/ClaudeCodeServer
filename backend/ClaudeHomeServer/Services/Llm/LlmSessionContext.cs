@@ -71,12 +71,17 @@ public record WorkspaceMcpContext(string ApiUrl, Func<string> TokenFactory, stri
 // ai_team), AutomationEnabled — модуль automation (personas_automation_*): секции сервера
 // за отдельными tool-ключами personas-manage/personas-automation с дефолтом по роли персоны.
 // Ядро сервера (personas_list/get, привязки, persona_ask) от них не зависит.
+// MentionsToolsEnabled — «в составе ли persona_ask»: ЕДИНАЯ формула SessionManager.
+// MentionsToolsEnabled (не «MentionsHint != null» — подсказка гаснет и при единственной
+// персоне владельца, а инструмент остаётся); поле входит в отпечаток сигнатуры запуска
+// (shape), и расхождение с tools/list — холостой перезапуск процесса CLI (волна 2.1).
 // TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012).
 // Не Claude-специфичен, как и остальные контексты.
 public record PersonasMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false,
     IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraPersonaIds = null,
-    bool ManageEnabled = true, bool AutomationEnabled = true, bool UseHttp = false);
+    bool ManageEnabled = true, bool AutomationEnabled = true, bool UseHttp = false,
+    bool MentionsToolsEnabled = true);
 
 // Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
 // атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team|

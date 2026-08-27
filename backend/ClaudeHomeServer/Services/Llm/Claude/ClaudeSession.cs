@@ -1167,12 +1167,15 @@ public class ClaudeSession : ILlmSessionAdapter
                         },
                     };
                 // Область персон зависит от mentions/bindings/модулей/extra-скоупов и транспорта —
-                // всё в сигнатуру. Для http mentions берём без условия сабагентов хода (состав
-                // от свойств хода не зависит): mHttp — то, что реально отдаст tools/list.
-                // Остальные постоянны в рамках сессии (состав персон, привязки, роль), поэтому
-                // процесс от них не «мерцает»; write в сигнатуре больше нет — он всегда включён.
+                // всё в сигнатуру. Для http mentions — MentionsToolsEnabled (единая формула
+                // SessionManager, тот же метод зовёт tools/list тулсета): то, что реально
+                // отдаст состав. НЕ MentionsHint: подсказка гаснет при единственной персоне
+                // владельца, а инструмент остаётся — старая формула расходилась с составом
+                // (блокер приёмки волны 2.1). Остальные постоянны в рамках сессии
+                // (состав персон, привязки, роль), поэтому процесс от них не «мерцает»;
+                // write в сигнатуре больше нет — он всегда включён.
                 var mentionsForShape = _personasMcp.UseHttp
-                    ? (_personasMcp.MentionsHint is not null ? "1" : "0")
+                    ? (_personasMcp.MentionsToolsEnabled ? "1" : "0")
                     : personaMentions;
                 shapes["personas"] = $"m{mentionsForShape}b{(_personasMcp.BindingsEnabled ? "1" : "0")}"
                     + $"g{personaManage}a{personaAutomation}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}"

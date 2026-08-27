@@ -20,7 +20,8 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// принадлежать владельцу токена (GetOwned) — чужая это отказ и пустой tools/list.
 ///
 /// СОСТАВ зависит только от свойств СЕССИИ: ядро — всегда; модули manage/automation — по живой
-/// привязке персоны (SectionEnabled), persona_ask — по ConsultantsEnabled. В отличие от
+/// привязке персоны (SectionEnabled), persona_ask — по MentionsToolsEnabled (единая формула
+/// SessionManager, её же читает отпечаток сигнатуры запуска). В отличие от
 /// stdio-ветки, mentions НЕ зависит от наличия файловых сабагентов в ходе: это свойство ХОДА,
 /// и из состава оно убрано (ADR-012, таблица разбора per-turn флагов).
 ///
@@ -65,7 +66,10 @@ public sealed partial class PersonasToolset(
     {
         if (!TryResolve(context, out var session, out var persona, out _)) return [];
         var manage = ManageEnabled(context.OwnerId, session, persona);
-        var mentions = sessions.ConsultantsEnabled(context.OwnerId, session, persona);
+        // Единая формула mentions (SessionManager.MentionsToolsEnabled) — её же читает
+        // отпечаток сигнатуры запуска (shape): две формулы расходились при единственной
+        // персоне владельца (блокер приёмки волны 2.1)
+        var mentions = sessions.MentionsToolsEnabled(context.OwnerId, session, persona);
         var automationOn = bindings.SectionEnabled(context.OwnerId, persona, "personas-automation");
         var inProject = session.ProjectId is not null;
         // Порядок групп — как в stdio-ветке (index.js): ядро, manage-create/update,
@@ -91,13 +95,18 @@ public sealed partial class PersonasToolset(
         var projectId = session.ProjectId;
         var selfPersonaId = session.PersonaId;
         var manage = ManageEnabled(ownerId, session, persona);
+        var mentions = sessions.MentionsToolsEnabled(ownerId, session, persona);
         var automationOn = bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
         // Defense-in-depth, как у stdio: выключенный модуль не отрабатывает и при ошибке
-        // экспозиции состава
+        // экспозиции состава. Для mentions это не косметика: без проверки вызов persona_ask
+        // при выключенном tool:consultants запускал бы ПЛАТНЫЙ one-shot ход другой персоны
         if (!manage && ManageToolNames.Contains(tool))
             return Deny("Инструмент управления персонами недоступен этой персоне (модуль manage выключен). "
                 + "Попроси пользователя включить его привязкой tool:personas-manage.");
+        if (!mentions && MentionsToolNames.Contains(tool))
+            return Deny("Инструмент persona_ask недоступен этой персоне (привязка tool:consultants выключена). "
+                + "Попроси пользователя включить её.");
         if (!automationOn && AutomationToolNames.Contains(tool))
             return Deny("Инструменты правил проактивности недоступны этой персоне (модуль automation выключен). "
                 + "Попроси пользователя включить его привязкой tool:personas-automation.");
@@ -152,7 +161,10 @@ public sealed partial class PersonasToolset(
             case "personas_set_default":
             {
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на REST-паре;
-                // онбординг-гейт (только сессия знакомства) проверяет crud по callerSessionId
+                // онбординг-гейт (только сессия знакомства) проверяет crud по callerSessionId.
+                // failOpenWhenUnknown: false формально недостижим (сессия резолвится выше
+                // TryResolve и сюда попадает только непустой id) — fail-closed защита на
+                // будущее, если гейт вынесут из-под резолва
                 var gate = DelegatedTurnGate.Decide(sessions, ownerId, session.Id,
                     "Назначение дефолт-персоны",
                     alsoWhenExecutorSuppressed: false,
@@ -371,6 +383,8 @@ public sealed partial class PersonasToolset(
             case "persona_ask":
             {
                 // Анти-рекурсия: с делегированного хода персону не переспрашивают
+                // (failOpenWhenUnknown: false — недостижимая сейчас, но дешёвая страховка,
+                // см. комментарий у personas_set_default)
                 var gate = DelegatedTurnGate.Decide(sessions, ownerId, session.Id,
                     "Вопрос другой персоне",
                     alsoWhenExecutorSuppressed: false,

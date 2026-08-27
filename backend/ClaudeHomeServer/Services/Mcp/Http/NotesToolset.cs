@@ -137,7 +137,9 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 var req = new UpdateNoteRequest(
                     Title: OptionalArg(arguments, "title"),
-                    Content: OptionalArg(arguments, "content"));
+                    // Пустая строка = очистить содержимое, null = не менять: OptionalArg
+                    // глотал очистку молча (блокер приёмки волны 2.1, паритет со stdio)
+                    Content: arguments.ContainsKey("content") ? StringArg(arguments, "content") : null);
                 try
                 {
                     var updated = notes.Update(context.OwnerId, id, req);

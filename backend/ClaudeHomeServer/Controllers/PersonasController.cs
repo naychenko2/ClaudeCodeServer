@@ -9,7 +9,6 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Tts;
-using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -603,7 +602,7 @@ public class PersonasController(
         var persona = _personas.Get(id, UserId);
         if (persona is null) return NotFound();
 
-        var (binding, parseError) = ParseBinding(req);
+        var (binding, parseError) = PersonasCrudService.ParseBinding(req);
         if (binding is null) return BadRequest(new { error = parseError });
         var err = await _bindings.ValidateAsync(UserId, binding, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
@@ -615,6 +614,14 @@ public class PersonasController(
     }
 
     // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
+    [HttpPut("{id}/bindings")]
+    public Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
+        [FromBody] PersonaBindingsSetRequest req) =>
+        // Единая точка с http-тулсетом (personas_bindings_set): дословная копия тела здесь
+        // уже однажды разошлась бы с сервисом — рассинхрон, ради устранения которого
+        // PersonasCrudService и заводили
+        _crud.SetBindingsAsync(UserId, id, req.Bindings);
+
     // Голос персоны в голосовом режиме. Пустое тело (или объект без единого заполненного
     // поля) снимает голос — персона возвращается к голосу инстанса.
     //
@@ -651,27 +658,6 @@ public class PersonasController(
         return Ok(persona);
     }
 
-    [HttpPut("{id}/bindings")]
-    public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
-        [FromBody] PersonaBindingsSetRequest req)
-    {
-        var persona = _personas.Get(id, UserId);
-        if (persona is null) return NotFound();
-
-        var list = new List<PersonaBinding>();
-        foreach (var b in req.Bindings ?? [])
-        {
-            var (binding, parseError) = ParseBinding(b);
-            if (binding is null) return BadRequest(new { error = parseError });
-            var err = await _bindings.ValidateAsync(UserId, binding, list, persona);
-            if (err is not null) return BadRequest(new { error = err });
-            list.Add(binding);
-        }
-        var updated = _personas.UpdateBindings(id, UserId, list);
-        await Broadcast("updated", id);
-        return Ok(updated.Bindings ?? []);
-    }
-
     // Изменить одну привязку
     [HttpPut("{id}/bindings/{bindingId}")]
     public async Task<ActionResult<PersonaBinding>> UpdateBinding(string id, string bindingId,
@@ -682,7 +668,7 @@ public class PersonasController(
         var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
         if (current is null) return NotFound(new { error = "Привязка не найдена" });
 
-        var (parsed, parseError) = ParseBinding(req);
+        var (parsed, parseError) = PersonasCrudService.ParseBinding(req);
         if (parsed is null) return BadRequest(new { error = parseError });
 
         // Валидируем копию с Id исходной привязки (сама себя дубликатом не считается)
@@ -1382,23 +1368,8 @@ public class PersonasController(
         }
     }
 
-    // Разбор DTO привязки: строковые type/mode → enum'ы, path нормализуется в валидации
-    private static (PersonaBinding? Binding, string? Error) ParseBinding(PersonaBindingRequest req)
-    {
-        if (!Enum.TryParse<PersonaBindingType>(req.Type?.Trim(), true, out var type))
-            return (null, $"Неизвестный тип привязки: {req.Type}");
-        var mode = PersonaBindingMode.Auto;
-        if (!string.IsNullOrWhiteSpace(req.Mode) && !Enum.TryParse(req.Mode.Trim(), true, out mode))
-            return (null, $"Неизвестный режим привязки: {req.Mode}");
-        return (new PersonaBinding
-        {
-            Type = type,
-            Target = req.Target?.Trim() ?? "",
-            Path = string.IsNullOrWhiteSpace(req.Path) ? null : req.Path.Trim(),
-            Condition = req.Condition?.Trim() ?? "",
-            Mode = mode,
-        }, null);
-    }
+    // Разбор DTO привязки — общая точка PersonasCrudService.ParseBinding (internal):
+    // дословные копии здесь и в сервисе расходились бы молча (приёмка волны 2.1, пункт A)
 
     // Превью содержимого источника для ai-condition (2-4 КБ: имена файлов/документов/заметок)
     private async Task<string?> BuildSourcePreviewAsync(string type, string target, string? path)
@@ -1661,43 +1632,15 @@ public class PersonasController(
         }
     }
 
-    // Парс профиля доступа из запроса: null/пусто → «не менять» (out null),
-    // валидная строка → значение, мусор → false (400 у вызывающего)
-    private static bool TryParseAccess(string? raw, out PersonaAccess? access)
-    {
-        access = null;
-        if (string.IsNullOrWhiteSpace(raw)) return true;
-        if (!Enum.TryParse<PersonaAccess>(raw, ignoreCase: true, out var parsed)) return false;
-        access = parsed;
-        return true;
-    }
-
-    // Валидация ячейки матрицы уровней персоны (ADR-007 §2): пусто — годится, иначе id модели
-    // или "preset:{id}". tier:* в ячейке запрещён (ячейка уже адресована уровнем). Наличие
-    // пресета не проверяем — как у Model, ссылка становится битой только при удалении пресета.
-    private static bool IsValidTierCell(string? cell)
-    {
-        if (string.IsNullOrWhiteSpace(cell)) return true;
-        var v = cell.Trim();
-        if (Services.Llm.LocalActionOverridesStore.IsPresetRoute(v))
-            return Services.Llm.LocalActionOverridesStore.ParsePresetRoute(v) is not null;
-        // tier:* запрещён в ячейке; прочее трактуется как id модели
-        return Services.Llm.LocalActionOverridesStore.ParseTierRoute(v) is null;
-    }
-
     // Разбор CSV-параметра запроса (extraProjectIds/extraPersonaIds) в список id
     private static List<string> SplitCsv(string? csv) =>
         string.IsNullOrWhiteSpace(csv)
             ? []
             : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    // Проект существует и принадлежит владельцу
-    private bool ValidProject(string? projectId)
-    {
-        if (string.IsNullOrWhiteSpace(projectId)) return false;
-        var project = _projects.GetById(projectId);
-        return project is not null && project.OwnerId == UserId;
-    }
+    // Парс профиля доступа и валидация ячейки матрицы уровней — общие точки
+    // PersonasCrudService.TryParseAccess / IsValidTierCell / ValidProject (internal):
+    // бывшие приватные копии оставались мёртвыми дублями (приёмка волны 2.1, пункт A)
 }
 
 public record CreatePersonaRequest(

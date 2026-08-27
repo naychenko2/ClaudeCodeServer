@@ -314,6 +314,96 @@ public class McpToolsetStabilityTests
         body.Should().Contain("ConsultantsEnabled(");
     }
 
+    /// <summary>
+    /// Механический сторож для http-тулсетов (ADR-012, волна 2.1 пункт B): тела ToolsFor
+    /// не читают состояние хода. McpHttpTransportTests законно разрешил SessionManager в
+    /// КОНСТРУКТОРАХ тулсетов (GetOwned и гейт в CallAsync — свойства сессии), но если
+    /// SessionManager попадёт в состав ToolsFor и оттуда дернуть GetActiveTurnDelegation,
+    /// состав tools/list начнёт мерцать между ходами — то же, что инвариант выше, только
+    /// на новой поверхности. Волна 3 пишется копированием: сторож ставится ДО неё.
+    /// </summary>
+    [SkippableFact]
+    public void СоставToolsFor_Тулсетов_НеЧитаетСостояниеХода()
+    {
+        var dir = FindDir("Services", "Mcp", "Http");
+        Skip.If(dir is null, "Services/Mcp/Http не найден (сборка вне дерева репозитория)");
+
+        var checkedAny = false;
+        foreach (var file in Directory.GetFiles(dir!.FullName, "*.cs"))
+        {
+            var source = File.ReadAllText(file);
+            // Только РЕАЛИЗАЦИИ (public-члены классов): декларация интерфейса в
+            // IMcpToolset.cs следующего члена не имеет и в проверке не нуждается
+            var decl = source.Split('\n')
+                .Select((line, i) => (Line: line, Index: (int?)i))
+                .FirstOrDefault(l => l.Line.Contains("ToolsFor(McpToolCallContext", StringComparison.Ordinal)
+                    && l.Line.Contains("public", StringComparison.Ordinal));
+            if (decl.Line is null) continue;
+            checkedAny = true;
+            var start = source.IndexOf(decl.Line, StringComparison.Ordinal);
+
+            // Тело метода — до ближайшего следующего члена класса (отступ-4 модификатор);
+            // ToolsFor у тулсетов короткий, за ним сразу CallAsync или хелпер
+            var end = new[]
+            {
+                source.IndexOf("\n    public ", start, StringComparison.Ordinal),
+                source.IndexOf("\n    private ", start, StringComparison.Ordinal),
+                source.IndexOf("\n    internal ", start, StringComparison.Ordinal),
+            }.Where(b => b > start).DefaultIfEmpty(-1).Min();
+            end.Should().BeGreaterThan(start, $"за ToolsFor в {Path.GetFileName(file)} обязан идти следующий член");
+
+            var body = string.Join('\n', source[start..end].Split('\n')
+                .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+            var name = Path.GetFileName(file);
+            body.Should().NotContain("GetActiveTurnDelegation",
+                $"{name}: глубина делегирования — свойство ХОДА, состав tools/list обязан жить без него");
+            body.Should().NotContain("TurnDelegation",
+                $"{name}: гейт делегирования живёт в CallAsync, не в составе");
+            body.Should().NotContain("_currentTurn",
+                $"{name}: состояние хода не должно влиять на состав инструментов");
+        }
+        checkedAny.Should().BeTrue("хотя бы один тулсет с ToolsFor обязан существовать");
+    }
+
+    /// <summary>
+    /// Единая формула mentions для http-ветки (блокер приёмки волны 2.1): и tools/list
+    /// тулсета, и отпечаток сигнатуры запуска (mentionsForShape в ClaudeSession) обязаны
+    /// читать MentionsToolsEnabled — «MentionsHint is not null» расходился с составом при
+    /// единственной персоне владельца (подсказка гаснет, инструмент остаётся).
+    /// </summary>
+    [SkippableFact]
+    public void ShapeПерсон_ЧитаетЕдинуюФормулуMentions()
+    {
+        var path = FindSource();
+        Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
+
+        var source = File.ReadAllText(path!);
+        var start = source.IndexOf("mentionsForShape", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, "построение mentions-бита shape обязано существовать");
+        // Оператор многострочный (тернарник) — берём его целиком до точки с запятой
+        var end = source.IndexOf(';', start);
+        var statement = end > start ? source[start..end] : "";
+        statement.Should().Contain("MentionsToolsEnabled",
+            "shape читает ту же формулу, что и tools/list (SessionManager.MentionsToolsEnabled "
+            + "через PersonasMcpContext), — иначе холостой перезапуск процесса CLI");
+        statement.Should().NotContain("MentionsHint",
+            "MentionsHint — про текст промпта, а не про состав: гаснет при единственной "
+            + "персоне владельца, тогда как persona_ask остаётся");
+    }
+
+    // Каталог по пути от корня репозитория (FindSource ищет файл — этот ищет папку)
+    private static DirectoryInfo? FindDir(params string[] relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, "backend", "ClaudeHomeServer", .. relative]);
+            if (Directory.Exists(candidate)) return new DirectoryInfo(candidate);
+            dir = dir.Parent;
+        }
+        return null;
+    }
+
     // --- personas-server: personas_set_default безусловно в tools/list ---
 
     private static string? FindMcpServer(string server)

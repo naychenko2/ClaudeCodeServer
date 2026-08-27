@@ -2676,6 +2676,16 @@ public class SessionManager : IDisposable
         session.Participants is { Count: > 1 }
         || _bindings.ServerToolEnabled(ownerId, persona, "personas");
 
+    // Решение «в составе ли mentions-группа (persona_ask)» — ЕДИНАЯ формула для tools/list
+    // тулсета (живой резолв по сессии-вызывателю) и отпечатка сигнатуры запуска CLI (shape
+    // через PersonasMcpContext.MentionsToolsEnabled). Две формулы расходились при единственной
+    // персоне владельца: MentionsHint обнулялся (спрашивать некого), а инструмент оставался —
+    // shape говорил m0, tools/list отдавал persona_ask, и любой из переходов бил по запуску
+    // (блокер приёмки волны 2.1). НЕ «MentionsHint != null»: подсказка — про текст промпта,
+    // инструмент — про состав, у них разные условия.
+    internal bool MentionsToolsEnabled(string? ownerId, Session session, Persona? persona) =>
+        PersonasEnabled(ownerId, session, persona) && ConsultantsEnabled(ownerId, session, persona);
+
     // План файловых сабагентов-персон на ход: папки для --add-dir + pmem-серверы памяти
     // видимых персон. Замыкание вычисляется на каждый ход (актуальные персоны и модель
     // сессии); внутри — троттлёный reconcile файлов. Ошибки → null (ход идёт без
@@ -2828,7 +2838,8 @@ public class SessionManager : IDisposable
             extraProjectIds.Count > 0 ? extraProjectIds : null,
             extraPersonaIds.Count > 0 ? extraPersonaIds : null,
             ManageEnabled: manage, AutomationEnabled: automation,
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpMcpTransportUsable(apiUrl),
+            MentionsToolsEnabled: MentionsToolsEnabled(ownerId, session, persona));
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца

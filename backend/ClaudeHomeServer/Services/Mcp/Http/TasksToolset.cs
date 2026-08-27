@@ -187,7 +187,7 @@ public sealed class TasksToolset(
                 var targetProjectId = OptionalArg(arguments, "projectId") ?? projectId;
                 if (targetProjectId is not null && targetProjectId != projectId)
                 {
-                    var denied = WriteDenied(extraReadOnly, targetProjectId);
+                    var denied = WriteDenied(projectId, allowed, extraReadOnly, targetProjectId);
                     if (denied is not null) return Deny(denied);
                 }
 
@@ -200,8 +200,12 @@ public sealed class TasksToolset(
                 var columnId = StringArg(arguments, "columnId");
                 var cat = BoardColumnHelper.Category(project, columnId);
                 var personaId = StringArg(arguments, "personaId");
+                // Скоупы у валидатора — НАЗНАЧАЕМОЙ персоны (как REST Create), а не вызывателя:
+                // правило «проектная персона — только задачи своего проекта» обходилось бы
+                // чужой привязкой вызывателя (блокер приёмки волны 2.1)
                 if (personaId.Length > 0
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId, extraScopes) is { } personaError)
+                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
+                        AssignedPersonaScopes(context.OwnerId, personaId)) is { } personaError)
                     return Deny(personaError);
                 if (selfPersonaId is not null
                     && TaskPersonaValidator.Error(personas, context.OwnerId, selfPersonaId, targetProjectId, extraScopes) is { } creatorError)
@@ -209,7 +213,9 @@ public sealed class TasksToolset(
 
                 var req = new CreateTaskRequest(
                     Title: title,
-                    Description: OptionalArg(arguments, "description"),
+                    // Пустая строка едет как есть (паритет со stdio): OptionalArg превратил
+                    // бы её в null, но у создания null/"" эквивалентны — форма едина с update
+                    Description: arguments.ContainsKey("description") ? StringArg(arguments, "description") : null,
                     ColumnId: columnId.Length > 0 ? columnId : null,
                     Status: cat,
                     Priority: ParseEnum<TaskItemPriority>(arguments, "priority"),
@@ -252,7 +258,7 @@ public sealed class TasksToolset(
                         return Deny("Проект не найден или недоступен");
                     if (targetProjectId is not null && targetProjectId != projectId)
                     {
-                        var writeDenied = WriteDenied(extraReadOnly, targetProjectId);
+                        var writeDenied = WriteDenied(projectId, allowed, extraReadOnly, targetProjectId);
                         if (writeDenied is not null) return Deny(writeDenied);
                     }
                 }
@@ -266,14 +272,18 @@ public sealed class TasksToolset(
                     : BoardColumnHelper.Category(
                         targetProjectId is null ? null : projects.GetById(targetProjectId), columnId);
                 var personaId = StringArg(arguments, "personaId");
+                // Скоупы назначаемой персоны, не вызывателя — как REST Update (блокер 2.1)
                 if (personaId.Length > 0
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId, extraScopes) is { } personaError)
+                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
+                        AssignedPersonaScopes(context.OwnerId, personaId)) is { } personaError)
                     return Deny(personaError);
 
                 var wasDone = existing.Status == TaskItemStatus.Done;
                 var req = new UpdateTaskRequest(
                     Title: OptionalArg(arguments, "title"),
-                    Description: OptionalArg(arguments, "description"),
+                    // Пустая строка = ОЧИСТИТЬ (семантика UpdateTaskRequest), null = не менять;
+                    // OptionalArg глотал очистку молча (блокер приёмки волны 2.1)
+                    Description: arguments.ContainsKey("description") ? StringArg(arguments, "description") : null,
                     Status: cat ?? ParseEnum<TaskItemStatus>(arguments, "status"),
                     Priority: ParseEnum<TaskItemPriority>(arguments, "priority"),
                     DueDate: arguments.ContainsKey("dueDate") ? StringArg(arguments, "dueDate") : null,
@@ -334,7 +344,9 @@ public sealed class TasksToolset(
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на TasksController.
                 // Execute: fail-closed без вызывателя, запрет на делегированном и реакционном
                 // ходу, квоты team-implement/work-loop вместо запрета. Сессия — из хвоста
-                // (уже изолирована по владельцу), заголовку от клиента доверять нельзя
+                // (уже изолирована по владельцу), заголовку от клиента доверять нельзя.
+                // failOpenWhenUnknown: false формально недостижим (сессию резолвит TryResolve
+                // выше, пустого id сюда не доезжает) — fail-closed защита на будущее
                 var gate = DelegatedTurnGate.Decide(
                     sessions, context.OwnerId, session.Id,
                     "Запуск задачи на исполнение",
@@ -348,6 +360,15 @@ public sealed class TasksToolset(
                 {
                     DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
                     return Deny($"Задача {taskId} не найдена.");
+                }
+                // Скоуп задачи: исполнитель стартует в рабочем каталоге её проекта — задача
+                // чужого (непривязанного) проекта запускаться не должна, как её не пустил бы
+                // tasks_update (усилитель блокера 2.1: у stdio этой проверки не было вовсе)
+                var scopeDenied = TaskDenied(projectId, allowed, task);
+                if (scopeDenied is not null)
+                {
+                    DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
+                    return Deny(scopeDenied);
                 }
                 try
                 {
@@ -507,6 +528,13 @@ public sealed class TasksToolset(
 
     // --- Скоупы проектов (живой эквивалент TASKS_EXTRA_* stdio-ветки) ---
 
+    // Кросс-проектные скоупы НАЗНАЧАЕМОЙ персоны: тот же расчёт, что REST Create/Update
+    // (BuildExternalTaskScopes по исполнителю), — валидация «свой проект» не должна
+    // смотреть на привязки вызывателя
+    private IReadOnlyList<(string ProjectId, bool ReadOnly)> AssignedPersonaScopes(
+        string ownerId, string personaId) =>
+        personas.Get(personaId, ownerId) is { } p ? bindings.BuildExternalTaskScopes(ownerId, p) : [];
+
     private static IReadOnlyCollection<string> AllowedProjectIds(string? projectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)> extraScopes)
     {
@@ -525,11 +553,19 @@ public sealed class TasksToolset(
             : $"Нет доступа к проекту {target} — нужна привязка ProjectTasks персоне (см. tasks_list_projects).";
     }
 
-    // Проект доступен для ЗАПИСИ (текущий или полная — не readonly — привязка)
-    private static string? WriteDenied(IReadOnlySet<string> extraReadOnly, string target) =>
-        extraReadOnly.Contains(target)
+    // Проект доступен для ЗАПИСИ (текущий или полная — не readonly — привязка). Начинает с
+    // ReadDenied — точный эквивалент stdio assertProjectWritable: без первой проверки пустое
+    // readonly-множество разрешало запись в проект БЕЗ привязки вовсе (блокер приёмки волны 2.1)
+    private static string? WriteDenied(string? projectId, IReadOnlyCollection<string> allowed,
+        IReadOnlySet<string> extraReadOnly, string target)
+    {
+        var readDenied = ReadDenied(projectId, allowed, target);
+        if (readDenied is not null) return readDenied;
+        if (projectId is null || target == projectId) return null;
+        return extraReadOnly.Contains(target)
             ? $"Доступ к проекту {target} только для чтения (привязка ProjectTasks с readonly) — создавать/менять задачи нельзя."
             : null;
+    }
 
     // Задача видна в контексте: без проекта чата — весь воркспейс владельца; личные задачи
     // (без проекта) видны из любого чата; проектные — только из доступных проектов
@@ -614,11 +650,13 @@ public sealed class TasksToolset(
     private static int? NullableIntArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
 
+    // Список строк: null — ключа нет (не менять), список — ключ есть (даже пустой массив =
+    // ОЧИСТИТЬ). Раньше пустой массив отдавал null, и снятие меток/linkedFiles молча
+    // не выполнялось (блокер приёмки волны 2.1)
     private static List<string>? LabelsArg(JsonObject arguments, string name = "labels") =>
-        arguments[name] is JsonArray arr && arr.Count > 0
-            ? arr.Where(t => t is JsonValue v && v.TryGetValue<string>(out _))
-                .Select(t => t!.GetValue<string>()).ToList()
-            : null;
+        arguments[name] is not JsonArray arr ? null
+            : arr.Where(t => t is JsonValue v && v.TryGetValue<string>(out _))
+                .Select(t => t!.GetValue<string>()).ToList();
 
     private static List<CreateSubtaskRequest>? SubtasksArg(JsonObject arguments) =>
         arguments["subtasks"] is JsonArray arr && arr.Count > 0

@@ -253,7 +253,8 @@ public sealed partial class WorkspaceToolset(
 
     // Гейт делегированного хода для деструктива и записи в чужие чаты — та же точка, что
     // [DenyOnDelegatedTurn] на REST-эндпоинтах (фильтр на McpTransportController не
-    // применяется вовсе). fail-closed без вызывателя: заголовки кладёт наш конфиг хода всегда.
+    // применяется вовсе). fail-closed без вызывателя: заголовки кладёт наш конфиг хода всегда
+    // (ветка формально недостижима — сессию резолвит TryResolve раньше; защита на будущее).
     private string? DelegatedDenied(McpToolCallContext context, Session callerSession, string action) =>
         DelegatedTurnGate.Decide(sessions, context.OwnerId, callerSession.Id, action,
             alsoWhenExecutorSuppressed: false, allowInTeamImplement: false, allowInWorkLoop: false,

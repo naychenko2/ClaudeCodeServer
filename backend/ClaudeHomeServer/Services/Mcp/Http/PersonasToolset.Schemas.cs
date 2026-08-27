@@ -455,11 +455,16 @@ public sealed partial class PersonasToolset
             }, "question")),
     ];
 
-    // Имена модульных инструментов — defense-in-depth на вызове (см. CallAsync)
+    // Имена модульных инструментов — defense-in-depth на вызове (см. CallAsync);
+    // mentions-гейт не косметика: без него вызов persona_ask при выключенном
+    // tool:consultants запускал бы платный one-shot ход другой персоны
     internal static readonly IReadOnlySet<string> ManageToolNames =
         ManageHeadTools(false).Concat(ManageBindingsTools).Concat(ManageTailTools(false))
             .Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
     internal static readonly IReadOnlySet<string> AutomationToolNames =
         AutomationTools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+
+    internal static readonly IReadOnlySet<string> MentionsToolNames =
+        MentionsTools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 }

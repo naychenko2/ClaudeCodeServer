@@ -70,7 +70,9 @@ export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 //
 // Только в ОБЫЧНОЙ шапке: в колонке «Стены» пилюль нет вовсе (там узко), а на
 // мобиле они склеены в один объединённый чип — прятать в нём нечего по частям.
-export type ChatBadgeKey = 'mechanic' | 'workflow' | 'context' | 'cost' | 'fal' | 'glif' | 'spend';
+export type ChatBadgeKey = 'mechanic' | 'workflow' | 'context' | 'cost' | 'fal' | 'glif' | 'spend'
+  // мобильный объединённый чип (MobileCombinedBadge): тем же глазиком, но целиком
+  | 'mobile-pills';
 
 export const CHAT_BADGE_ORDER: ChatBadgeKey[] = [
   'mechanic', 'workflow', 'context', 'cost', 'fal', 'glif', 'spend',
@@ -84,6 +86,7 @@ export const CHAT_BADGE_LABELS: Record<ChatBadgeKey, string> = {
   fal: 'Траты fal.ai',
   glif: 'Генерации glif',
   spend: 'Расход токенов',
+  'mobile-pills': 'Пилюли в шапке',
 };
 
 // Пилюли по умолчанию показаны все — они и есть сводка состояния чата;

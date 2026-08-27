@@ -1294,9 +1294,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : titleBlock;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
-  // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе, на мобиле они склеены в
-  // один чип. По умолчанию показаны все — они и есть сводка состояния чата
+  // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —
+  // они и есть сводка состояния чата. На мобиле отдельные пилюли склеены в один
+  // чип (MobileCombinedBadge), и ключ 'mobile-pills' гасит/возвращает его целиком:
+  // прятать по частям внутри чипа нечего, а совсем без глазика мобильную шапку
+  // распирающим чипом не освободить
   const badgeVisible = (key: ChatBadgeKey) => !compact && headerVis.isVisible(key);
+  const mobilePillsVisible = !compact && headerVis.isVisible('mobile-pills');
   const mechanicBadge = lastMechanic && !isCompact ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
   // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
@@ -1343,18 +1347,21 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // шапке они занимают всю ширину и переносят строку, а следить за деньгами и
   // контекстом уместнее в полном виде чата (открывается кнопкой из ярлыка колонки)
   const costBadges = compact ? null : isCompact ? (
-    // Мобил/планшет: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
+    // Мобил/планшет: один объединённый чип (контекст + стоимость/расход) — не распирает шапку.
+    // Чип можно скрыть целиком глазиком «Пилюли в шапке» в «⋯» (ключ mobile-pills)
     <>
-      <MobileCombinedBadge
-        estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
-        canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
-        online={online} assistantName={asstName}
-        isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
-        balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
-        activeWorkflow={activeWorkflow}
-        resetKey={session.id}
-      />
-      {spendBadge}
+      {mobilePillsVisible && (
+        <MobileCombinedBadge
+          estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
+          canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
+          online={online} assistantName={asstName}
+          isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
+          balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+          activeWorkflow={activeWorkflow}
+          resetKey={session.id}
+        />
+      )}
+      {badgeVisible('spend') && spendBadge}
     </>
   ) : (
     // Десктопная шапка: пилюли по отдельности, и каждую можно убрать глазиком.
@@ -1546,6 +1553,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // У расхода собственный источник (SpendBadge грузит его сам), снаружи виден
     // только факт, что ходы в чате были
     spend: cost.results > 0,
+    // Мобильный чип не раскладывается на части: его «доступность» решает не
+    // данные, а сам факт мобильной шапки (см. availableBadges)
+    'mobile-pills': true,
   };
   // Превью строки — САМА пилюля в том виде, в каком она стоит в шапке: узнать её
   // по картинке быстрее, чем по названию. Внутри меню превью неинтерактивно
@@ -1561,7 +1571,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'spend': return spendBadge;
     }
   };
-  const availableBadges = compact || isCompact ? [] : CHAT_BADGE_ORDER.filter(k => badgeAvailable[k]);
+  const availableBadges = compact ? [] : isCompact
+    // Мобил/планшет: в шапке ДВЕ пилюли — объединённый чип (контекст+стоимость)
+    // и отдельный «Расход токенов». Чипу — своя строка с превью (по названию не
+    // понять, что внутри составного чипа), расходу — обычная строка, как на
+    // десктопе. Строка чипа всегда: он условен по данным, но возможность его
+    // спрятать не должна зависеть от того, показался ли он в этом чате; строка
+    // расхода — только когда в чате были ходы (пилюли без данных в меню не бывает)
+    ? ['mobile-pills', ...(badgeAvailable.spend ? ['spend' as const] : [])] as ChatBadgeKey[]
+    : CHAT_BADGE_ORDER.filter(k => badgeAvailable[k]);
   const badgeItems: OverflowItem[] = availableBadges.map((k, i) => {
     const visible = headerVis.isVisible(k);
     return {
@@ -1569,9 +1587,17 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // Подпись остаётся именем пилюли — она читается скринридером и служит
       // запасным вариантом, если превью почему-то пустое
       label: CHAT_BADGE_LABELS[k],
-      // Показанную пилюлю человек и так видит в шапке — в меню хватает названия;
-      // а вот скрытую опознать не по чему, поэтому её рисуем целиком
-      preview: visible ? undefined : badgePreview(k),
+      preview: k === 'mobile-pills'
+        ? <MobileCombinedBadge
+            estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
+            canCompact={canCompact} compactNote={compactNote} onCompact={() => {}}
+            online={online} assistantName={asstName}
+            isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
+            balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+            activeWorkflow={activeWorkflow}
+            resetKey={`menu-${session.id}`}
+          />
+        : visible ? undefined : badgePreview(k),
       // Линия перед первой пилюлей отбивает их от действий: выше — что чат умеет,
       // ниже — что показывать в шапке
       separator: i === 0,

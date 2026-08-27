@@ -54,39 +54,43 @@ function readHidden(surface: ActionSurface): string[] | null {
 // касания глазика
 export function useActionVisibility(surface: ActionSurface, defaultHidden: string[] = []) {
   const [hidden, setHidden] = useState<string[]>(() => readHidden(surface) ?? defaultHidden);
+  // Дефолт в ref: callback'ам ниже он нужен живым, а в зависимостях он бы
+  // пересоздавал их каждый рендер
+  const defaultRef = useRef(defaultHidden);
 
-  // Переключить видимость элемента: показать (убрать из скрытых) или скрыть
+  // Переключить видимость элемента: показать (убрать из скрытых) или скрыть.
+  // Читаем и пишем синхронно, БЕЗ setState-updater'а: стор — единственный источник
+  // истины (два быстрых клика в одном тике иначе делают read-modify-write по
+  // устаревшему prev), а сайд-эффекты записи внутри updater'а запрещены — React
+  // в StrictMode прогоняет updater дважды, и второй прогон откатывал первый.
+  // Рендер трогаем последним простым setValue — соседи узнают о смене по событию
   const toggle = useCallback((key: string) => {
-    setHidden(prev => {
-      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
-      try {
-        localStorage.setItem(KEYS[surface], JSON.stringify(next));
-        // Свои экземпляры той же поверхности (соседние плитки, колонки стены)
-        // перечитают стор по событию — см. подписку ниже
-        window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { surface } }));
-      } catch { /* приватный режим — живём без сохранения */ }
-      return next;
-    });
+    const cur = readHidden(surface) ?? defaultRef.current;
+    const next = cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];
+    try {
+      localStorage.setItem(KEYS[surface], JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { surface } }));
+    } catch { /* приватный режим — живём без сохранения */ }
+    setHidden(next);
   }, [surface]);
 
   // Скрыть ключи разом (не переключая): нормализация сверхлимитного набора,
-  // считанного из старого localStorage. Идемпотентно
+  // считанного из старого localStorage. Идемпотентна; стор — истина (см. toggle)
   const hide = useCallback((keys: string[]) => {
     if (keys.length === 0) return;
-    setHidden(prev => {
-      const next = [...prev, ...keys.filter(k => !prev.includes(k))];
-      try {
-        localStorage.setItem(KEYS[surface], JSON.stringify(next));
-        window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { surface } }));
-      } catch { /* приватный режим — живём без сохранения */ }
-      return next;
-    });
+    const cur = readHidden(surface) ?? defaultRef.current;
+    const next = [...cur, ...keys.filter(k => !cur.includes(k))];
+    if (next.length === cur.length) return;
+    try {
+      localStorage.setItem(KEYS[surface], JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { surface } }));
+    } catch { /* приватный режим — живём без сохранения */ }
+    setHidden(next);
   }, [surface]);
 
   // Чужая запись в стор (глазик в другой плитке) — перечитать и подхватить.
   // Событие приходит после записи, так что readHidden вернёт свежий набор;
   // null не бывает (запись только что сделали), на всякий случай — дефолт
-  const defaultRef = useRef(defaultHidden);
   useEffect(() => {
     const onChange = (e: Event) => {
       const detail = (e as CustomEvent<{ surface: ActionSurface }>).detail;

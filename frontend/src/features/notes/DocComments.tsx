@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, MessageCircle, Pin, Sparkles, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { useNotesVersion } from '../../lib/notes';
+import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { Badge, Button, ConfirmDialog, SidebarSection } from '../../components/ui';
@@ -14,8 +15,8 @@ import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
-// для просмотра .md проекта — выделение → попап «Комментировать», подсветка якорных
-// блоков с балунами-маркерами и панель комментариев справа (на мобиле — снизу).
+// для просмотра .md проекта — выделение → попап «Комментировать», маркеры якорных
+// блоков на правом поле (флажок + нить) и панель комментариев справа (на мобиле — снизу).
 // Заметка-комментарий создаётся на бэке (verify-guard, 409 при гонке с правкой).
 
 const PRESET_TAGS = ['вопрос', 'правка', 'идея', 'обсудить'];
@@ -27,6 +28,22 @@ interface SelectionInfo { start: number; end: number; text: string; x: number; y
 const COMMENTS_OPEN_KEY = 'cc_doc_comments_open';
 
 const statusColor = (open: boolean) => (open ? C.warning : C.success);
+
+// Ступени рельса маркеров по ширине документа: размер флажка, его зазор от текста
+// и размер иконки внутри. Узкий документ (сплит с чатом, мобила) обязан отдавать полю
+// меньше — иначе строка текста рвётся на два слова
+export function railFor(docWidth: number | null, isMobile?: boolean): { size: number; gap: number; icon: number } {
+  // Ширина 0 — это не «очень узкий документ», а скрытый предок (вкладка, свёрнутая
+  // панель): замера ещё не было, идём по isMobile
+  const measured = docWidth || null;
+  const raw = measured === null
+    ? (isMobile ? 16 : 19)
+    : measured < 420 ? 14 : measured < 640 ? 16 : 19;
+  // На тач-экране флажок — единственный способ прыгнуть к карточке, и пальцем нужна
+  // цель крупнее самой мелкой ступени
+  const size = isMobile ? Math.max(raw, 16) : raw;
+  return { size, gap: size >= 19 ? 8 : size >= 16 ? 6 : 4, icon: size >= 19 ? 10 : size >= 16 ? 9 : 8 };
+}
 
 // Чип статуса/состояния комментария — на общем примитиве ui/Badge
 function StatusChip({ status, state }: { status: DocAnnotation['status']; state?: DocAnnotation['state'] }) {
@@ -88,7 +105,7 @@ interface Props {
 const HINT_KEY = 'cc_doc_comments_hint';
 
 export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts, panelTarget, deferPanel }: Props) {
-  const docRef = useRef<HTMLDivElement>(null);
+  const docRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { items, reload } = useDocAnnotations(scope, docPath);
   // Просмотр — без frontmatter (иначе title/annotates рендерятся текстом); офсеты
@@ -105,6 +122,22 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   // режим фильтра: панель и её соседи по сайдбару прячутся одним и тем же жестом
   const [filter, setFilter] = useState<'all' | 'open'>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Рельс маркеров считается по ширине САМОГО документа, а не окна: в сплите с чатом
+  // окно широкое, а тексту остаётся треть экрана — там полноразмерное поле съедает
+  // читаемую строку. До первого замера берём ступень по isMobile
+  const [measureRef, docWidth] = useContainerWidth<HTMLDivElement>();
+  const rail = useMemo(() => railFor(docWidth, isMobile), [docWidth, isMobile]);
+  // Один узел нужен и как docRef (поиск блоков, границы выделения), и замеряемым —
+  // поэтому callback-ref склеен вручную
+  const setDocNode = useCallback<RefCallback<HTMLDivElement>>(node => {
+    docRef.current = node;
+    return measureRef(node);
+  }, [measureRef]);
+
+  // Компонент переиспользуется между файлами (меняются docPath/content) — выбранный
+  // комментарий обязан забываться, иначе пунктирная обводка переезжает в чужой документ
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс выбора при смене документа
+  useEffect(() => { setSelectedId(null); }, [scope, docPath]);
 
   const shown = useMemo(
     () => items.filter(a => filter === 'all' || a.status === 'open'),
@@ -295,14 +328,10 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const gotoBlock = (a: DocAnnotation) => {
     setSelectedId(a.noteId);
     if (a.start < 0) return;
+    // Обводку блока ставит эффект маркеров по selectedId (пунктир акцентом) — здесь
+    // только доводим место до глаз; временная сплошная рамка снова спорила бы с цитатой
     const el = findBlockEl(docRef.current, a.start - fmOffset);
-    if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      el.style.transition = 'outline-color .2s';
-      el.style.outline = `2px solid ${C.accent}`;
-      el.style.outlineOffset = '2px';
-      window.setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 900);
-    }
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
   // Deep-link «Перейти к месту» из заметки-комментария: скроллим к якорному блоку
@@ -317,7 +346,11 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  // ── Подсветка якорных блоков + балуны-маркеры (DOM-слой поверх рендера) ──
+  // ── Маркеры якорных блоков на правом поле (DOM-слой поверх рендера) ──
+  // Флажок-кружок и пунктирная нить живут В ПОЛЕ справа, текста не касаются: заливка
+  // блока плюс полоса слева читались как blockquote (у цитаты ровно этот язык —
+  // сплошная полоса слева + фон). Поле справа, а не слева, потому что там же стоит
+  // панель комментариев — маркер смотрит в её сторону
   useEffect(() => {
     const root = docRef.current;
     if (!root) return;
@@ -331,59 +364,83 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     }
     byBlock.forEach((anns, el) => {
       const hasOpen = anns.some(a => a.status === 'open');
+      const selected = anns.some(a => a.noteId === selectedId);
       const prev = {
-        background: el.style.background, borderRadius: el.style.borderRadius,
-        position: el.style.position,
+        position: el.style.position, outline: el.style.outline,
+        outlineOffset: el.style.outlineOffset,
       };
-      // Геометрию блока НЕ трогаем (у списков паддинг держит маркеры) — только фон;
-      // акцентная полоса — отдельный absolute-элемент левее текста
-      el.style.background = C.accentLight;
-      el.style.borderRadius = '6px';
+      // Геометрию и фон блока НЕ трогаем — маркеры абсолютны в поле справа.
+      // Выбранный блок обводится ПУНКТИРОМ: сплошная рамка снова спорила бы с цитатой
       el.style.position = 'relative';
+      if (selected) {
+        el.style.outline = `1.5px dashed ${C.accent}`;
+        el.style.outlineOffset = '3px';
+      }
 
-      const bar = document.createElement('span');
-      Object.assign(bar.style, {
-        position: 'absolute', left: '-14px', top: '2px', bottom: '2px', width: '3px',
-        borderRadius: '3px', background: C.accent, pointerEvents: 'none',
-      } satisfies Partial<CSSStyleDeclaration>);
-      el.appendChild(bar);
-
-      // Балун: иконка-статус (пузырёк — есть открытые, галочка — решены) + счётчик
-      const mark = document.createElement('button');
-      mark.type = 'button';
-      mark.title = hasOpen
+      const color = selected ? C.accent : statusColor(hasOpen);
+      // Блок со своим скроллом (таблица едет в обёртке overflow-x) обрезал бы маркер
+      // в поле и получал вечную горизонтальную прокрутку на его ширину — такому блоку
+      // флажок ставим ВНУТРЬ, у правого края, и нить не тянем
+      const clipped = isClipped(el);
+      // Флажок: счётчик, когда комментариев несколько, иначе иконка статуса
+      // (пузырёк — есть открытые, галочка — все решены)
+      const flag = document.createElement('button');
+      flag.type = 'button';
+      flag.dataset.annMarker = '';
+      flag.title = hasOpen
         ? `Открытых: ${anns.filter(a => a.status === 'open').length} из ${anns.length}`
         : 'Все решены';
-      const color = statusColor(hasOpen);
-      Object.assign(mark.style, {
-        position: 'absolute', top: '-11px', right: '-4px', display: 'flex',
-        alignItems: 'center', gap: '4px', padding: '2px 8px 2px 6px',
-        border: `1px solid ${color}`, borderRadius: '12px', background: C.bgCard,
-        color, fontSize: '11px', fontWeight: '700', cursor: 'pointer',
-        boxShadow: '0 1px 4px rgba(0,0,0,.12)', fontFamily: FONT.sans, lineHeight: '1.3',
-        // Счётчик балуна не должен попадать в выделение текста (ломал verify-guard)
+      Object.assign(flag.style, {
+        position: 'absolute', top: clipped ? '3px' : '1px',
+        right: clipped ? '3px' : `-${rail.size + rail.gap}px`,
+        width: `${rail.size}px`, height: `${rail.size}px`, borderRadius: '50%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        border: `${rail.size >= 16 ? 1.5 : 1}px solid ${color}`,
+        background: selected ? C.accent : C.bgCard,
+        color: selected ? C.onAccent : color,
+        font: `600 ${rail.icon}px/1 ${FONT.mono}`, cursor: 'pointer',
+        // Содержимое флажка не должно попадать в выделение текста (ломало verify-guard)
         userSelect: 'none',
       } satisfies Partial<CSSStyleDeclaration>);
-      mark.innerHTML = (hasOpen ? SVG_BUBBLE : SVG_CHECK) + `<span>${anns.length}</span>`;
-      mark.addEventListener('click', e => {
+      flag.innerHTML = anns.length > 1
+        // Двузначное число в кружок 14px не влезает — после девяти считаем «9+»
+        ? `<span>${anns.length > 9 ? '9+' : anns.length}</span>`
+        : svgIcon(hasOpen ? BUBBLE_PATH : CHECK_PATH, rail.icon);
+      flag.addEventListener('click', e => {
         e.stopPropagation();
         const first = anns[0];
         setSelectedId(first.noteId);
         const card = panelRef.current?.querySelector(`[data-ann="${first.noteId}"]`);
         card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
-      el.appendChild(mark);
+      el.appendChild(flag);
+
+      // Нить от флажка вдоль блока — показывает, какой кусок текста прокомментирован.
+      // У блока в одну строку тянуть нечего; в поле скролл-блока её и рисовать негде
+      const thread = clipped ? null : document.createElement('span');
+      if (thread) {
+        thread.dataset.annMarker = '';
+        Object.assign(thread.style, {
+          position: 'absolute', right: `-${rail.size / 2 + rail.gap}px`,
+          // Зазор в 5px под кружком — чтобы нить начиналась от его края, а не из-под него
+          top: `${rail.size + 5}px`, bottom: '1px',
+          borderRight: `1.5px dashed ${color}`, opacity: '.6', pointerEvents: 'none',
+        } satisfies Partial<CSSStyleDeclaration>);
+        el.appendChild(thread);
+      }
 
       cleanups.push(() => {
-        mark.remove();
-        bar.remove();
-        el.style.background = prev.background;
-        el.style.borderRadius = prev.borderRadius;
+        flag.remove();
+        thread?.remove();
         el.style.position = prev.position;
+        el.style.outline = prev.outline;
+        el.style.outlineOffset = prev.outlineOffset;
       });
     });
     return () => cleanups.forEach(f => f());
-  }, [shown, content, fmOffset]);
+    // Ступень раскладывается на примитивы: объект rail пересобирается на каждый
+    // пиксель перетаскивания сплиттера, а маркеры зависят только от самих чисел
+  }, [shown, content, fmOffset, selectedId, rail.size, rail.gap, rail.icon]);
 
   // Действия секции: разбор открытых и фильтр. Живут в правом слоте заголовка и видны,
   // только пока секция раскрыта
@@ -574,8 +631,18 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     // не нужна и ВРЕДНА: у открытого файла колонка свойств и комментариев уже стоит
     // справа в потоке (FileViewer), вторая колонка рядом дала бы двойную полосу
     <div style={useTarget ? undefined : { display: 'flex', alignItems: 'flex-start', gap: 18 }}>
-      <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp}
-        style={useTarget ? { minWidth: 0 } : { flex: 1, minWidth: 0 }}>
+      <div ref={setDocNode} onMouseUp={onMouseUp} onTouchEnd={onMouseUp}
+        style={{
+          ...(useTarget ? { minWidth: 0 } : { flex: 1, minWidth: 0 }),
+          // Место под рельс маркеров справа — иначе флажок вылезет за край документа.
+          // Пока комментариев нет, поле документу ни к чему
+          paddingRight: items.length > 0 ? rail.size + rail.gap + 6 : undefined,
+          // Своё BFC — условие соседства с плавающей колонкой (NoteView держит сайдбар
+          // связей на float): без него бокс текста уходит ПОД колонку вместе с полем,
+          // и маркеры ложатся поверх её карточек. Та же причина, что у ul/blockquote
+          // в MarkdownViewer
+          display: items.length > 0 ? 'flow-root' : undefined,
+        }}>
         {/* Подсказка первого использования — пока нет ни одного комментария */}
         {!hintDismissed && items.length === 0 && (
           <div style={{
@@ -849,6 +916,14 @@ function ActionBtn({ children, onClick }: { children: React.ReactNode; onClick: 
   );
 }
 
+// Есть ли у блока собственный скролл: таблицу react-markdown отдаёт в обёртке
+// overflow-x, и data-md-* висят именно на ней
+function isClipped(el: HTMLElement): boolean {
+  if (typeof getComputedStyle !== 'function') return false;   // jsdom без раскладки
+  const cs = getComputedStyle(el);
+  return cs.overflowX !== 'visible' || cs.overflowY !== 'visible';
+}
+
 // Блок с позициями, содержащий офсет (при вложенности — самый глубокий)
 function findBlockEl(root: HTMLElement | null, offset: number): HTMLElement | null {
   if (!root) return null;
@@ -867,7 +942,11 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max);
 }
 
-// Инлайн-SVG для DOM-инъекции балуна (lucide message-circle / check)
-const SVG_ATTRS = 'viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
-const SVG_BUBBLE = `<svg ${SVG_ATTRS}><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`;
-const SVG_CHECK = `<svg ${SVG_ATTRS}><path d="M20 6 9 17l-5-5"/></svg>`;
+// Инлайн-SVG для DOM-инъекции флажка (lucide message-circle / check). Размер идёт
+// параметром: иконка обязана уместиться внутрь кружка, а он ужимается на узком документе
+const BUBBLE_PATH = 'M7.9 20A9 9 0 1 0 4 16.1L2 22Z';
+const CHECK_PATH = 'M20 6 9 17l-5-5';
+const svgIcon = (path: string, px: number) =>
+  `<svg viewBox="0 0 24 24" width="${px}" height="${px}" fill="none" stroke="currentColor" `
+  + `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+  + `<path d="${path}"/></svg>`;

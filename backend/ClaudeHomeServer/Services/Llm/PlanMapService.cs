@@ -167,15 +167,31 @@ public class PlanMapService
             .ToList();
 
         // Валидация 2: якорь обязан быть заголовком плана — блок с битым якорем ведёт
-        // в пустоту, отбрасываем целиком
-        var headings = ExtractHeadings(planText);
+        // в пустоту, отбрасываем целиком. Заодно считаем вхождения заголовка в плане —
+        // для блоков с одинаковым якорем назначаем AnchorIndex по порядку массива:
+        // первый блок с якорем X → 0, второй → 1 и т. д. Если блоков с одним якорем
+        // больше, чем реальных вхождений этого заголовка в плане — лишние блоки
+        // отбрасываются как и раньше (план, описывающий две независимые задачи, может
+        // иметь два «Тесты», но не три).
+        //
+        // Осознанная деградация: если модель вернула ОДИН блок с якорем «Тесты», а в
+        // плане их два, угадать её намерение нельзя — берётся первое вхождение. Блок
+        // всё равно ведёт в раздел с верным заголовком, важно лишь, что при ДВУХ
+        // блоках с одним якорем они получат разные индексы и не склеятся.
+        var headings = ExtractHeadingOccurrences(planText);
+        var availableCounts = headings.GroupBy(h => h, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        var nextIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         var kept = new List<PlanMapBlock>();
         var index = 0;
         foreach (var block in map.Blocks ?? [])
         {
             if (block is null) continue;
             var anchor = (block.Anchor ?? "").Trim();
-            if (anchor.Length == 0 || !headings.Contains(anchor)) continue;
+            if (anchor.Length == 0) continue;
+            var assigned = nextIndex.GetValueOrDefault(anchor, 0);
+            if (!availableCounts.TryGetValue(anchor, out var total) || assigned >= total) continue;
+            nextIndex[anchor] = assigned + 1;
             kept.Add(new PlanMapBlock
             {
                 Id = string.IsNullOrWhiteSpace(block.Id) ? $"b{++index}" : block.Id.Trim(),
@@ -183,6 +199,7 @@ public class PlanMapService
                 Type = PlanMapValues.BlockTypes.Contains(block.Type) ? block.Type : "step",
                 Flags = (block.Flags ?? []).Where(PlanMapValues.BlockFlags.Contains).Distinct().ToList(),
                 Anchor = anchor,
+                AnchorIndex = assigned,
                 DependsOn = (block.DependsOn ?? [])
                     .Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim()).ToList(),
             });
@@ -210,12 +227,14 @@ public class PlanMapService
         return map;
     }
 
-    // Заголовки markdown-плана: текст строк, начинающихся с решёток, вне кодовых заборов.
-    // Сравнение точное (Ordinal) — якорь это адрес прыжка в раздел, «примерно совпало»
-    // здесь означало бы прыжок в никуда
-    internal static HashSet<string> ExtractHeadings(string markdown)
+    // Заголовки markdown-плана в порядке появления: текст строк, начинающихся с решёток,
+    // вне кодовых заборов. Сравнение точное (Ordinal) — якорь это адрес прыжка в раздел,
+    // «примерно совпало» здесь означало бы прыжок в никуда. Возвращаем список с
+    // дубликатами, потому что одноимённые разделы встречаются в плане, описывающем
+    // несколько независимых задач (план-карта должна различать их по AnchorIndex).
+    internal static List<string> ExtractHeadingOccurrences(string markdown)
     {
-        var headings = new HashSet<string>(StringComparer.Ordinal);
+        var headings = new List<string>();
         var inFence = false;
         foreach (var line in markdown.Split('\n'))
         {

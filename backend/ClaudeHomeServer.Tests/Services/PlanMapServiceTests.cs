@@ -261,7 +261,7 @@ public class PlanMapServiceTests : IDisposable
     // ─── Заголовки markdown ───────────────────────────────────────────────────
 
     [Fact]
-    public void ExtractHeadings_СнимаетРешётки_иПропускаетКод()
+    public void ExtractHeadingOccurrences_СнимаетРешётки_иПропускаетКод_иСохраняетПорядок()
     {
         var md = """
             # План: значки
@@ -274,9 +274,118 @@ public class PlanMapServiceTests : IDisposable
 
             ### Шаг 1: список
             """;
-        var headings = PlanMapService.ExtractHeadings(md);
+        var headings = PlanMapService.ExtractHeadingOccurrences(md);
 
-        headings.Should().BeEquivalentTo("План: значки", "Состав работ", "Шаг 1: список");
+        headings.Should().ContainInOrder("План: значки", "Состав работ", "Шаг 1: список");
+    }
+
+    // ─── AnchorIndex: номер вхождения одноимённого заголовка ──────────────────
+
+    [Fact]
+    public async Task BuildMap_ДваБлокаСОдинаковымЯкорем_ПолучаютAnchorIndex0и1()
+    {
+        var json = MapJson(Blocks(
+            """{"id":"b1","title":"Тесты #1","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]}""",
+            """{"id":"b2","title":"Тесты #2","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]}"""));
+        var sut = BuildSut(new CountingRunner(json));
+
+        var map = await sut.BuildMapAsync(Owner, PlanWithTwoTests, CancellationToken.None);
+
+        map.Should().NotBeNull();
+        map!.Blocks.Should().HaveCount(2);
+        map.Blocks[0].AnchorIndex.Should().Be(0, "первый блок с якорем «Тесты» — нулевое вхождение");
+        map.Blocks[1].AnchorIndex.Should().Be(1, "второй блок с тем же якорем — следующее вхождение");
+    }
+
+    [Fact]
+    public async Task BuildMap_УникальныйЯкорь_ПолучаетAnchorIndex0()
+    {
+        var json = ValidJson; // «Контекст» и «Состав работ» — по одному разу в SamplePlan
+        var sut = BuildSut(new CountingRunner(json));
+
+        var map = await sut.BuildMapAsync(Owner, SamplePlan, CancellationToken.None);
+
+        map.Should().NotBeNull();
+        map!.Blocks.Should().OnlyContain(b => b.AnchorIndex == 0);
+    }
+
+    [Fact]
+    public async Task BuildMap_БлоковБольшеЧемВхождений_ЛишниеОтбрасываются()
+    {
+        // В плане PlanWithTwoTests «Тесты» встречается дважды, третий блок с тем же якорем
+        // должен быть отброшен (как и блок с несуществующим якорем — Anchor обязан существовать)
+        var json = MapJson(Blocks(
+            """{"id":"b1","title":"Тесты #1","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]}""",
+            """{"id":"b2","title":"Тесты #2","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]}""",
+            """{"id":"b3","title":"Тесты #3","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]}"""));
+        var sut = BuildSut(new CountingRunner(json));
+
+        var map = await sut.BuildMapAsync(Owner, PlanWithTwoTests, CancellationToken.None);
+
+        map.Should().NotBeNull();
+        map!.Blocks.Should().HaveCount(2, "третий блок «Тесты» уходит — в плане только два вхождения");
+        map.Blocks.Select(b => b.AnchorIndex).Should().BeEquivalentTo([0, 1]);
+    }
+
+    [Fact]
+    public async Task BuildMap_ОдинБлокСДублем_БерётПервоеВхождение()
+    {
+        // Модель вернула ОДИН блок с якорем «Тесты», а в плане их два — берётся первое
+        // вхождение (угадать намерение модели нельзя). Блок всё равно ведёт в раздел
+        // с верным заголовком, AnchorIndex == 0.
+        var json = MapJson(Blocks(
+            """{"id":"b1","title":"Тесты","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]}"""));
+        var sut = BuildSut(new CountingRunner(json));
+
+        var map = await sut.BuildMapAsync(Owner, PlanWithTwoTests, CancellationToken.None);
+
+        map.Should().NotBeNull();
+        map!.Blocks.Should().ContainSingle();
+        map.Blocks[0].AnchorIndex.Should().Be(0, "один блок на дубль — первое вхождение");
+    }
+
+    [Fact]
+    public void ParseAndValidate_ПорядокНазначенияДетерминирован()
+    {
+        // Тот же вход даёт тот же AnchorIndex при повторе
+        var json = """
+            {"genre":"feature","oneLine":"План.","numbers":[],"blocks":[
+              {"id":"b1","title":"X","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]},
+              {"id":"b2","title":"Y","type":"step","flags":[],"anchor":"Дизайн","dependsOn":[]},
+              {"id":"b3","title":"Z","type":"step","flags":[],"anchor":"Тесты","dependsOn":[]},
+              {"id":"b4","title":"W","type":"step","flags":[],"anchor":"Дизайн","dependsOn":[]}]}
+            """;
+        const string plan = """
+            # P
+
+            ## Тесты
+            text
+
+            ## Дизайн
+            text
+
+            ## Тесты
+            text
+
+            ## Дизайн
+            text
+            """;
+
+        var first = PlanMapService.ParseAndValidate(json, plan);
+        var second = PlanMapService.ParseAndValidate(json, plan);
+
+        first.Should().NotBeNull();
+        second.Should().NotBeNull();
+        first!.Blocks.Select(b => (b.Id, b.Anchor, b.AnchorIndex)).Should().Equal(
+            second!.Blocks.Select(b => (b.Id, b.Anchor, b.AnchorIndex)),
+            "тот же вход — тот же порядок назначения AnchorIndex");
+        // Назначение идёт по порядку массива: первый «Тесты» → 0, первый «Дизайн» → 0,
+        // второй «Тесты» → 1, второй «Дизайн» → 1
+        first.Blocks.Should().SatisfyRespectively(
+            b => { b.Id.Should().Be("b1"); b.AnchorIndex.Should().Be(0); },
+            b => { b.Id.Should().Be("b2"); b.AnchorIndex.Should().Be(0); },
+            b => { b.Id.Should().Be("b3"); b.AnchorIndex.Should().Be(1); },
+            b => { b.Id.Should().Be("b4"); b.AnchorIndex.Should().Be(1); });
     }
 
     // ─── Фикстуры ─────────────────────────────────────────────────────────────
@@ -308,6 +417,27 @@ public class PlanMapServiceTests : IDisposable
 
         ## Границы
         Рисование path'ов не делаем.
+        """;
+
+    // План с одноимёнными заголовками — имитирует план из двух независимых задач
+    // («Тесты» и «Дизайн» встречаются по два раза)
+    private const string PlanWithTwoTests = """
+        # План: двойка
+
+        ## Контекст
+        Задача А и задача Б.
+
+        ## Тесты
+        Тесты для задачи А.
+
+        ## Дизайн
+        Дизайн для задачи А.
+
+        ## Тесты
+        Тесты для задачи Б.
+
+        ## Дизайн
+        Дизайн для задачи Б.
         """;
 
     private const string ValidJson = """

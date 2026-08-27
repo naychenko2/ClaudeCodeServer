@@ -33,11 +33,20 @@ jobs:
       # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. Без этого
       # зависание на раннере выглядит как 39 минут тишины и «canceled» без виновника
       # (локально, на Windows, набор проходит за ~3 минуты — ловить нечего).
+      # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
+      # передаёт их MSBuild как неизвестные свитчи (MSB1001).
       - name: Test
         run: >
           dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
-          --blame-hang-timeout 15m --blame-hang-dump-type mini --diagnostic
-          --diagnostic-filelogger-synchronous-output
+          --blame-hang-timeout 15m --blame-hang-dump-type mini
+      # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
+      # иначе они умирают вместе с раннером
+      - name: Upload hang dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-hang-artifacts
+          path: backend/ClaudeHomeServer.Tests/TestResults/**
 
   frontend:
     name: Frontend (lint + typecheck + build)

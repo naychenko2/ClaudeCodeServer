@@ -93,6 +93,9 @@ public static class LocalActionCatalog
     // «Собрать сводку», кэшируется в Session.ArchiveSummary. Не путать с SessionSummary —
     // «Итогом сессии», который выносится заметкой и трогать который нельзя
     public const string ChatDigest = "chat-digest";
+    // Карта плана («Визуальный разворот плана», часть B): структурный слепок markdown-плана
+    // по кнопке «Собрать схему», кэш в data/plan-maps.json
+    public const string PlanMap = "plan-map";
     public const string NotificationSummary = "notification-summary";
     public const string GitCommitMsg = "git-commit-msg";
     public const string GitStashName = "git-stash-name";
@@ -213,6 +216,12 @@ public static class LocalActionCatalog
         // для карточки списка, поэтому Small вместо Large «Сводки сессии»: переплачивать
         // профилем за три строки незачем
         new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
+        // Карта плана: вход — markdown-план до 35 КБ, выход — структурный JSON, тот же класс
+        // задачи, что у планировщика (прецедент в шапке профиля Large: потолок вывода на
+        // облаке обрывал JSON плана на полуслове). DefaultLocal: false — разметка крупного
+        // текста локальной моделью ненадёжна; исполнитель настраивается админом во вкладке
+        // «Применение», переключение на локаль остаётся его правом. Tier из профиля — Medium
+        new(PlanMap, "Карта плана", "Сессии", CheapProfile.Large, DefaultLocal: false),
         new(NotificationSummary, "Суть уведомления", "Уведомления", CheapProfile.Small, DefaultLocal: true),
         new(GitCommitMsg, "Commit-сообщения", "Git", CheapProfile.Text, DefaultLocal: true),
         new(GitStashName, "Названия стэшей", "Git", CheapProfile.Small, DefaultLocal: true),

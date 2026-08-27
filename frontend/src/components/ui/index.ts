@@ -18,7 +18,6 @@ export { RailIconButton } from './RailIconButton';
 export { RailSep } from './RailSep';
 export { RailHat, RAIL_HAT_H } from './RailHat';
 export { PanelRail } from './PanelRail';
-export { CountBadge } from './CountBadge';
 export type { RailItem } from './PanelRail';
 export { PanelDropGuide } from './PanelDropGuide';
 export { Menu, MenuItem, MenuSep } from './Menu';

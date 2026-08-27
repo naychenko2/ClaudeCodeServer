@@ -1,6 +1,11 @@
 // MCP-сервер персон ClaudeHomeServer: stdio, JSON-RPC (newline-delimited),
 // без внешних зависимостей — деплой не требует npm install.
 //
+// ЗАМОРОЖЕН (ветка отката, ADR-012 фаза 2 волна 2): источник контракта —
+// backend/ClaudeHomeServer/Services/Mcp/Http/PersonasToolset.Schemas.cs; правки схем/поведения
+// обязаны ехать парой с http-веткой (сторож парности — PersonasToolsetParityTests).
+// Файл не удалять: Mcp:HttpTransport=false возвращает personas на stdio с этим env.
+//
 // Окружение (задаёт ClaudeSession при запуске claude):
 //   PERSONAS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   PERSONAS_API_TOKEN  — сервисный JWT владельца сессии

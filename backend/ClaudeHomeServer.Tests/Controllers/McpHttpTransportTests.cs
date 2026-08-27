@@ -179,11 +179,15 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     }
 
     /// <summary>
-    /// Тулсеты не имеют доступа к HttpContext и SessionManager: единственный вход — параметры
-    /// CallAsync. Иначе состав или поведение инструмента незаметно привяжется к ходу.
+    /// Тулсеты не имеют доступа к HttpContext: единственный вход — параметры CallAsync и DI.
+    /// Иначе состав или поведение инструмента незаметно привяжется к ходу (заголовки, путь,
+    /// пользователь HTTP-запроса). SessionManager из запретов волны 2 исключён: тулсетам
+    /// задач/заметок/персон он нужен легально — изоляция сессии-вызывателя из хвоста
+    /// (GetOwned), анти-рекурсия делегирования (DelegatedTurnGate) и живые формулы прав
+    /// (TasksMcpEnabled/PersonasEnabled) — всё это свойства СЕССИИ, а не хода (ADR-012).
     /// </summary>
     [Fact]
-    public void Тулсеты_НеЗависятОтHttpContextИSessionManager()
+    public void Тулсеты_НеЗависятОтHttpContext()
     {
         var toolsets = typeof(ClaudeHomeServer.Services.Mcp.Http.IMcpToolset).Assembly.GetTypes()
             .Where(t => typeof(ClaudeHomeServer.Services.Mcp.Http.IMcpToolset).IsAssignableFrom(t)
@@ -193,9 +197,9 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
         toolsets.Should().NotBeEmpty("хотя бы один тулсет обязан существовать");
         foreach (var type in toolsets)
         foreach (var parameter in type.GetConstructors().SelectMany(c => c.GetParameters()))
-            new[] { "IHttpContextAccessor", "HttpContext", "SessionManager" }
+            new[] { "IHttpContextAccessor", "HttpContext" }
                 .Should().NotContain(parameter.ParameterType.Name,
-                    $"тулсет {type.Name} не смеет заглядывать в состояние хода");
+                    $"тулсет {type.Name} не смеет заглядывать в HTTP-контекст запроса");
     }
 
     [Fact]

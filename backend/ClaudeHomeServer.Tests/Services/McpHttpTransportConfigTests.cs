@@ -34,16 +34,19 @@ public class McpHttpTransportConfigTests : IDisposable
 
     // Настоящий BuildTurnMcpConfig сессии: путь temp-конфига + строка сигнатуры серверов
     private (JsonObject Servers, string ServerKeys) BuildConfig(WidgetsMcpContext? widgets = null,
-        MemoryMcpContext? memory = null, PersonaAgentsContext? personaAgents = null)
+        MemoryMcpContext? memory = null, PersonaAgentsContext? personaAgents = null,
+        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
             RawSystemPrompt: null,
             PermissionRules: null,
-            TasksMcp: null,
+            TasksMcp: tasks,
+            NotesMcp: notes,
             WidgetsMcp: widgets,
             MemoryMcp: memory,
+            PersonasMcp: personas,
             PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents);
         var session = new ClaudeSession(new Session(), context);
 
@@ -296,5 +299,100 @@ public class McpHttpTransportConfigTests : IDisposable
             keys.Should().Contain("pmem_stdio:t:stdio");
         }
         keys.Should().Contain("pmem_http:t:http");
+    }
+
+    // --- tasks/notes/personas (фаза 2, волна 2): HTTP-ветка и откат ---
+
+    /// <summary>
+    /// Три сервера на годном http-адресе: узлы без command, сессия-вызыватель — хвостом URL
+    /// (по ней тулсет резолвит проект/персону/привязки), токен — из ФАБРИКИ на каждую сборку
+    /// (дополнение волны 2: у tasks/notes/personas до этого был захваченный строкой JWT —
+    /// у долгоживущего чата он истекал бы, как у widgets до 1.1).
+    /// </summary>
+    [Fact]
+    public void Волна2_ГодныйАдрес_ТриСервераНаНttpСХвостомСессии()
+    {
+        var (servers, keys) = BuildConfig(
+            tasks: new TasksMcpContext("http://localhost:5000", () => "tok-t", "proj-1", UseHttp: true),
+            notes: new NotesMcpContext("http://localhost:5000", () => "tok-n", "proj-1", UseHttp: true),
+            personas: new PersonasMcpContext("http://localhost:5000", () => "tok-p", "proj-1", UseHttp: true));
+
+        foreach (var key in new[] { "tasks", "notes", "personas" })
+        {
+            var node = servers[key]!.AsObject();
+            node["type"]!.GetValue<string>().Should().Be("http");
+            // Хвост — id сессии BuildTurnMcpConfig (Info.Id), он не пуст и это не имя сервера
+            node["url"]!.GetValue<string>().Should()
+                .Match($"http://localhost:5000/mcp/{key}/*",
+                    "сессия-вызыватель едет в ПУТИ — по ней тулсет резолвит контекст чата")
+                .And.NotBe($"http://localhost:5000/mcp/{key}/",
+                    "хвост обязан быть непустым id сессии");
+            node.ContainsKey("command").Should().BeFalse($"процессов node ради {key} больше нет");
+            node["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+            var headers = node["headers"]!.AsObject();
+            headers["Authorization"]!.GetValue<string>().Should().Match("Bearer tok-*");
+            headers.ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+            // Транспорт — в сигнатуре запуска; у notes/personas перед ним идёт отпечаток
+            // состава (модули, скоупы), поэтому сверяем сегмент ключа целиком
+            keys.Should().MatchRegex($"{key}:[^,]*t:http", "транспорт — в сигнатуре запуска");
+        }
+    }
+
+    /// <summary>Фабрика токена живая у всех трёх: повторная сборка конфига зовёт фабрику.</summary>
+    [Fact]
+    public void Волна2_ТокенФабрикой_АНеЗахваченСтрокой()
+    {
+        var issued = 0;
+        string Factory() => $"tok-{++issued}";
+        var tasks = new TasksMcpContext("http://localhost:5000", Factory, null, UseHttp: true);
+        var notes = new NotesMcpContext("http://localhost:5000", Factory, null, UseHttp: true);
+        var personas = new PersonasMcpContext("http://localhost:5000", Factory, null, UseHttp: true);
+        BuildConfig(tasks: tasks, notes: notes, personas: personas);
+        BuildConfig(tasks: tasks, notes: notes, personas: personas);
+
+        issued.Should().Be(6, "каждая сборка зовёт все три фабрики — старый чат не умирает на 401");
+    }
+
+    /// <summary>
+    /// Откат (рубильник Mcp:HttpTransport, не-http адрес): все три объявляются прежними
+    /// stdio-серверами с env (включая аварийные рубильники TASKS_EXECUTE/PERSONAS_WRITE —
+    /// в stdio-ветке они остались для прямых запусков), инструмент у модели остаётся.
+    /// </summary>
+    [Fact]
+    public void Волна2_Откат_ТриСервераНаStdioСEnv()
+    {
+        var (servers, keys) = BuildConfig(
+            tasks: new TasksMcpContext("https://naychenko.me", () => "tok", "proj-1", UseHttp: false),
+            notes: new NotesMcpContext("https://naychenko.me", () => "tok", "proj-1", UseHttp: false),
+            personas: new PersonasMcpContext("https://naychenko.me", () => "tok", "proj-1", UseHttp: false));
+
+        if (servers["tasks"] is { } tasksNode)
+        {
+            var env = tasksNode["env"]!.AsObject();
+            env["TASKS_PROJECT_ID"]!.GetValue<string>().Should().Be("proj-1");
+            env["TASKS_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            env["TASKS_EXECUTE"]!.GetValue<string>().Should().Be("1");
+            keys.Should().Contain("tasks:t:stdio");
+        }
+        else keys.Should().NotContain("tasks:t:http");
+
+        if (servers["notes"] is { } notesNode)
+        {
+            var env = notesNode["env"]!.AsObject();
+            env["NOTES_PROJECT_ID"]!.GetValue<string>().Should().Be("proj-1");
+            env["NOTES_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            keys.Should().Contain("notes:t:stdio");
+        }
+        else keys.Should().NotContain("notes:t:http");
+
+        if (servers["personas"] is { } personasNode)
+        {
+            var env = personasNode["env"]!.AsObject();
+            env["PERSONAS_PROJECT_ID"]!.GetValue<string>().Should().Be("proj-1");
+            env["PERSONAS_API_TOKEN"]!.GetValue<string>().Should().Be("tok");
+            env["PERSONAS_WRITE"]!.GetValue<string>().Should().Be("1");
+            keys.Should().Contain("personas:t:stdio");
+        }
+        else keys.Should().NotContain("personas:t:http");
     }
 }

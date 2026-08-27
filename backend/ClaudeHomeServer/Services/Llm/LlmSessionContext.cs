@@ -3,21 +3,29 @@ using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Контекст MCP-сервера задач для сессии: адрес API, сервисный токен владельца
+// Контекст MCP-сервера задач для сессии: адрес API, фабрика сервисного токена владельца
 // и проект (null — чат вне проекта, контекст личных задач).
 // ExtraProjectIds/ExtraProjectIdsReadOnly — кросс-проектные ProjectTasks-привязки текущей
 // персоны (§ Кросс-проектные привязки): доступ к задачам ДРУГИХ проектов владельца поверх
 // ProjectId; ReadOnly — подмножество только для чтения (create/update/delete запрещены).
-// Не Claude-специфичен: DeepSeek-адаптер может реализовать те же tasks_* инструменты нативно.
-public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId,
-    IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraProjectIdsReadOnly = null);
+// TokenFactory, а не строка (ADR-012, волна 2 — как widgets/memory с волны 1.1): контекст
+// живёт столько же, сколько адаптер, а захваченный строкой JWT у чата старше ServiceTokenLifetime
+// начал бы отдавать 401 и задачи пропадали бы у модели молча. stdio-ветка берёт токен
+// фабрикой на каждую сборку конфига хода, http — фабрикой в заголовок.
+// UseHttp — транспорт, решённый HttpMcpTransportUsable: false — ход объявляет прежний
+// stdio-сервер на node (путь отката). Не Claude-специфичен: DeepSeek-адаптер может
+// реализовать те же tasks_* инструменты нативно.
+public record TasksMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
+    IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraProjectIdsReadOnly = null,
+    bool UseHttp = false);
 
-// Контекст MCP-сервера заметок: адрес API, сервисный токен владельца и проект
+// Контекст MCP-сервера заметок: адрес API, фабрика сервисного токена владельца и проект
 // (задаёт источник по умолчанию для создания заметок; null — личный vault).
 // AnnotationsEnabled — модуль комментариев к документам и редких операций заметок
 // (ключ notes-annotations, дефолт выключен): решается ПО ПЕРСОНЕ, не по ходу.
-public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId,
-    bool AnnotationsEnabled = true);
+// TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks (ADR-012).
+public record NotesMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
+    bool AnnotationsEnabled = true, bool UseHttp = false);
 
 // Контекст MCP-сервера памяти персоны: адрес API, фабрика сервисного токена владельца, id
 // персоны, чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект
@@ -61,11 +69,12 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 // ai_team), AutomationEnabled — модуль automation (personas_automation_*): секции сервера
 // за отдельными tool-ключами personas-manage/personas-automation с дефолтом по роли персоны.
 // Ядро сервера (personas_list/get, привязки, persona_ask) от них не зависит.
+// TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012).
 // Не Claude-специфичен, как и остальные контексты.
-public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
+public record PersonasMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false,
     IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraPersonaIds = null,
-    bool ManageEnabled = true, bool AutomationEnabled = true);
+    bool ManageEnabled = true, bool AutomationEnabled = true, bool UseHttp = false);
 
 // Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
 // атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team|

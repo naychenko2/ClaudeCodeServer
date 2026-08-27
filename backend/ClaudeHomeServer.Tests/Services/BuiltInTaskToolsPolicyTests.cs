@@ -37,7 +37,7 @@ public class BuiltInTaskToolsPolicyTests
             RawSystemPrompt: null,
             PermissionRules: null,
             TasksMcp: withTasksMcp
-                ? new TasksMcpContext("http://localhost:5000", "token", null)
+                ? new TasksMcpContext("http://localhost:5000", () => "token", null)
                 : null);
         var session = new ClaudeSession(info, context);
         var field = typeof(ClaudeSession).GetField("_disallowedTools",

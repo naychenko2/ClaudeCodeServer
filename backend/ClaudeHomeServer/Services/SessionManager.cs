@@ -610,7 +610,9 @@ public class SessionManager : IDisposable
     // является исполнителем задачи — тогда tasks-MCP форсируется: исполнитель обязан
     // управлять задачей через mcp__tasks__* (иначе ограниченная персона не сможет её
     // ни прочитать, ни завершить и свалится в нерабочий встроенный Task-тул).
-    private bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
+    // internal — ту же формулу резолвит TasksToolset по живой сессии-вызывателю (http,
+    // ADR-012 волна 2): право на сервер проверяется на каждый tools/list и tools/call
+    internal bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
         session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
 
     // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
@@ -624,16 +626,18 @@ public class SessionManager : IDisposable
 
     // Контекст MCP-сервера задач для сессии; null — только для чата без владельца.
     // persona — для кросс-проектных ProjectTasks-привязок (доступ к задачам ДРУГИХ проектов).
+    // Токен — фабрикой (ADR-012 волна 2, как widgets/memory): захваченный строкой JWT у
+    // долгоживущего чата истекал, и задачи пропадали у модели молча.
     private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId, Persona? persona = null)
     {
         if (ownerId is null) return null;
-        // Перевыпуск за сутки до истечения — сервер может жить дольше срока токена
-        var token = GetServiceToken(ownerId);
         var extraScopes = _bindings.BuildExternalTaskScopes(ownerId, persona);
         var extraIds = extraScopes.Select(s => s.ProjectId).Distinct().ToList();
         var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId).Distinct().ToList();
-        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null);
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new TasksMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
+            extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null,
+            UseHttp: HttpMcpTransportUsable(apiUrl));
     }
 
     // Контекст MCP-сервера заметок; null — только для чата без владельца.
@@ -642,9 +646,10 @@ public class SessionManager : IDisposable
     private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId, Persona? persona)
     {
         if (ownerId is null) return null;
-        var token = GetServiceToken(ownerId);
-        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"));
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new NotesMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
+            AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"),
+            UseHttp: HttpMcpTransportUsable(apiUrl));
     }
 
     // Контекст MCP-сервера виджетов чата: адрес API и сервисный токен владельца — сервер
@@ -684,11 +689,13 @@ public class SessionManager : IDisposable
     // Сводный признак «у сессии есть продуктовые MCP-серверы на http-транспорте» (ADR-012):
     // от него зависит NO_PROXY хода — обход прокси нужен ЛЮБОМУ http-серверу, а не только
     // виджетам. Решение стоит на едином гейте HttpMcpTransportUsable (каждый Build*Context
-    // уже прогнал через него свой UseHttp) — отдельного условия «виджеты на http» больше нет,
-    // с переездом memory http-серверов у сессии их минимум два. pmem-консультанты приезжают
-    // списком на каждый ход и уточняют признак на стороне ClaudeSession.
-    private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory) =>
-        widgets is { UseHttp: true } || memory is { UseHttp: true };
+    // уже прогнал через него свой UseHttp) — отдельного условия «виджеты на http» больше нет;
+    // во волне 2 к widgets/memory добавились tasks/notes/personas. pmem-консультанты
+    // приезжают списком на каждый ход и уточняют признак на стороне ClaudeSession.
+    private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
+        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null) =>
+        widgets is { UseHttp: true } || memory is { UseHttp: true }
+        || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -2646,7 +2653,10 @@ public class SessionManager : IDisposable
     // обязан уметь спросить коллег по чату (BuildGroupChatHint прямо отсылает к этому блоку),
     // иначе групповой чат ломается по замыслу. Решение зависит только от персоны и состава
     // чата — детерминировано на сессию, состав tools/list от хода не зависит.
-    private bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
+    // internal: ту же формулу резолвит PersonasToolset по живой сессии-вызывателю (http,
+    // ADR-012 волна 2) — право на сервер проверяется на каждый tools/list и tools/call,
+    // а не только при построении контекста адаптера
+    internal bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
         session.Participants is { Count: > 1 }
         || _bindings.ServerToolEnabled(ownerId, persona, "consultants");
 
@@ -2654,7 +2664,9 @@ public class SessionManager : IDisposable
     // В ГРУППОВОМ чате ключ ИГНОРИРУЕТСЯ по той же причине, что и tool:consultants —
     // BuildGroupChatHint безусловно отсылает к блоку о консультациях (MentionsHint из
     // этого же сервера), Off-привязка сняла бы сервер и подсказка стала бы враньём.
-    private bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
+    // internal — по той же причине, что ConsultantsEnabled: PersonasToolset проверяет
+    // право на сервер персон по живой сессии на каждый вызов (http, ADR-012 волна 2)
+    internal bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
         session.Participants is { Count: > 1 }
         || _bindings.ServerToolEnabled(ownerId, persona, "personas");
 
@@ -2804,12 +2816,13 @@ public class SessionManager : IDisposable
             || _bindings.SectionEnabled(ownerId, persona, "personas-manage");
         var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
-        var token = GetServiceToken(ownerId);
-        return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new PersonasMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true,
             extraProjectIds.Count > 0 ? extraProjectIds : null,
             extraPersonaIds.Count > 0 ? extraPersonaIds : null,
-            ManageEnabled: manage, AutomationEnabled: automation);
+            ManageEnabled: manage, AutomationEnabled: automation,
+            UseHttp: HttpMcpTransportUsable(apiUrl));
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
@@ -3234,18 +3247,23 @@ public class SessionManager : IDisposable
 
         var widgetsMcp = BuildWidgetsContext(ownerId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
+        var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
+            ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
+        var notesMcp = _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes")
+            ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null;
+        var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
-            TasksMcp: TasksMcpEnabled(ownerId, session, persona.Persona) ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null,
-            NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null,
+            TasksMcp: tasksMcp,
+            NotesMcp: notesMcp,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
             PersonaProvider: BuildPersonaProvider(session, ownerId),
             MemoryMcp: memoryMcp,
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
-            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona),
+            PersonasMcp: personasMcp,
             NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
@@ -3267,7 +3285,7 @@ public class SessionManager : IDisposable
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
-            HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp)));
+            HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4568,18 +4586,23 @@ public class SessionManager : IDisposable
             var persona = BuildPersonaLayer(entry.Info, entry.Info.OwnerId);
             var workspace = BuildWorkspaceContext(entry.Info.OwnerId, null, entry.Info.Id, persona.Persona);
             var widgetsMcp = BuildWidgetsContext(entry.Info.OwnerId, persona.Persona);
+            var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
+                ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
+            var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
+                ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null;
+            var personasMcp = BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
-                TasksMcp: TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null,
-                NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null,
+                TasksMcp: tasksMcp,
+                NotesMcp: notesMcp,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 PersonaProvider: BuildPersonaProvider(entry.Info, entry.Info.OwnerId),
                 MemoryMcp: persona.Memory,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona, entry.Info),
-                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona),
+                PersonasMcp: personasMcp,
                 NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
@@ -4600,7 +4623,7 @@ public class SessionManager : IDisposable
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
-                HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory));
+                HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp));
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4612,19 +4635,24 @@ public class SessionManager : IDisposable
             var rootPath = EffectiveRoot(entry.Info, project.RootPath);
             var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
+            var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
+                ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
+            var notesMcp = _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes")
+                ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null;
+            var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                TasksMcp: TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null,
-                NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null,
+                TasksMcp: tasksMcp,
+                NotesMcp: notesMcp,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
                 MemoryMcp: memoryMcp,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),
-                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona),
+                PersonasMcp: personasMcp,
                 NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
@@ -4646,7 +4674,7 @@ public class SessionManager : IDisposable
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
-                HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp));
+                HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -38,13 +38,16 @@ public class McpToolsetStabilityTests
         return null;
     }
 
-    // Тело метода SessionManager по его сигнатуре (до начала следующего объявления)
+    // Тело метода SessionManager по его сигнатуре (до начала следующего объявления).
+    // internal с волны 2 http входит в допустимые «следующие» — PersonasEnabled/
+    // ConsultantsEnabled открыты тулсетам, и за ними могут идти internal-соседи
     private static string MethodBody(string source, string signature)
     {
         var start = source.IndexOf(signature, StringComparison.Ordinal);
         start.Should().BeGreaterThan(0, $"метод «{signature}» обязан существовать");
         var end = source.IndexOf("\n    private ", start + signature.Length, StringComparison.Ordinal);
         if (end < 0) end = source.IndexOf("\n    public ", start + signature.Length, StringComparison.Ordinal);
+        if (end < 0) end = source.IndexOf("\n    internal ", start + signature.Length, StringComparison.Ordinal);
         end.Should().BeGreaterThan(start, "за методом обязано идти следующее объявление");
         return string.Join('\n', source[start..end].Split('\n')
             .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
@@ -92,8 +95,9 @@ public class McpToolsetStabilityTests
     [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
     [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
     [InlineData("private Func<string?, Task<string?>>? BuildCodeGraphProvider", "codegraph")]
-    [InlineData("private bool PersonasEnabled", "personas")]
-    [InlineData("private bool ConsultantsEnabled", "consultants")]
+    // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
+    [InlineData("internal bool PersonasEnabled", "personas")]
+    [InlineData("internal bool ConsultantsEnabled", "consultants")]
     // Серверы личного реестра владельца: ключ каталога — «mcp:<ключ сервера>»,
     // выключает только Off-привязка персоны. Состав от хода не зависит.
     [InlineData("private Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]

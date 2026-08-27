@@ -3,13 +3,16 @@
 > Подробная документация. Выжимка и общий механизм подключения — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «MCP-серверы». Читать перед правками в `mcp/*/index.js` и `BuildTurnMcpConfig`.
 
-Транспорта два. Большинство серверов — по одному файлу `mcp/{имя}-server/index.js`: чистый
+Транспорта два. Часть серверов — по одному файлу `mcp/{имя}-server/index.js`: чистый
 Node (stdio JSON-RPC, **без зависимостей**, npm install не нужен), CLI поднимает их процессом
 на каждый ход. С августа 2026 идёт переезд на **MCP-over-HTTP внутри Kestrel**
 ([ADR-012](../adr/ADR-012-mcp-over-http-transport.md)): такой сервер живёт тулсетом в
 `Services/Mcp/Http`, отвечает по `POST /mcp/{name}` и процесса не требует вовсе. Переехали
-`widgets` (фаза 1) и `memory` вместе со всеми `pmem_*` (фаза 2, волна 1 — параметризованный
-маршрут `/mcp/memory/{personaId}/{projectId}`); остальные — фаза 2.
+`widgets` (фаза 1), `memory` вместе со всеми `pmem_*` (фаза 2, волна 1 — параметризованный
+маршрут `/mcp/memory/{personaId}/{projectId}`) и `tasks`/`notes`/`personas` (фаза 2, волна 2 —
+хвост маршрута `/mcp/{name}/{sessionId}`); на stdio остаются `wsp`, `notifications`,
+`codegraph`, `desktop` (волна 3) и внешние модули. stdio-файлы переехавших заморожены как ветки
+отката (`Mcp:HttpTransport=false`).
 
 Подключение per-ход общее: `ClaudeSession.BuildTurnMcpConfig` каждый ход собирает временный
 MCP-конфиг (серверы из `McpConfigPath` + продуктовые) и передаёт env с адресом API и сервисным
@@ -202,6 +205,35 @@ JWT: чужая персона или проект — отказ текстом
 гейт записи команды и лимит длины записи вынесены в `TeamMemoryService.WriteDeniedFor` /
 `LengthViolation` — общие для REST и MCP. `mcp/memory-server/index.js` заморожен как ветка
 отката (`Mcp:HttpTransport=false`), паритет состава держит `MemoryToolsetParityTests`.
+
+**tasks/notes/personas на http-транспорте (фаза 2, волна 2).** Три сервера — тулсеты
+`TasksToolset`/`NotesToolset`/`PersonasToolset` на `POST /mcp/{name}/{sessionId}`: хвост несёт
+СЕССИЮ-ВЫЗЫВАТЕЛЬ (эквивалент env `*_SESSION_ID`/`*_PROJECT_ID`/`*_EXTRA_*` stdio-ветки), по ней
+тулсет резолвит проект чата, персону и её привязки — ЖИВЫМИ формулами
+(`SessionManager.TasksMcpEnabled`/`PersonasEnabled`/`ConsultantsEnabled`,
+`PersonaBindingsService.SectionEnabled`) на каждый tools/list и tools/call. Сессия обязана
+принадлежать владельцу токена (`GetOwned`): чужая — отказ и пустой состав. Состав зависит только
+от свойств сессии (не хода!): модули `NOTES_ANNOTATIONS`/`PERSONAS_MANAGE`/`PERSONAS_AUTOMATION`
+и `persona_ask` — по живой персоне/чату; `PERSONAS_MENTIONS` на http не учитывает файловых
+сабагентов хода (свойство хода из состава убрано, защита — пер-вызовный гейт).
+
+**Гейт делегирования на http-пути** — `DelegatedTurnGate` (общая точка решения с
+`[DenyOnDelegatedTurn]`, тексты и квоты не могут разъехаться): MVC-фильтр на
+`McpTransportController` не применяется вовсе, тулсет зовёт сервисы через DI. Два отличия
+http-пути: гейт идёт по сессии из ХВОСТА (изолирована по владельцу токена; заголовку от клиента
+доверять нельзя) и **fail-closed без вызывателя** — у REST фейл-опен при отсутствии заголовка
+осознан (чужой клиент), у http его кладёт наш конфиг всегда. Квоты team-implement/work-loop
+сохранились вместе с возвратом при неудачном действии; `tasks_run_executor`, `persona_ask`,
+`personas_set_default` гейтятся на вызове — тест `TasksHttpDelegationGateTests`.
+
+Оркестрация CRUD персон вынесена в `PersonasCrudService` (общий для REST-контроллера и
+PersonasToolset): оркестрация Create/Update/Delete/MakeDefault/привязок/аватара/ai_team жила в
+приватных методах контроллера и была нужна двум потребителям — дублирование рассинхронило бы
+ветки. `mcp/{tasks,notes,personas}-server/index.js` заморожены, паритеты —
+`{Tasks,Notes,Personas}ToolsetParityTests`. Токен всем трём контекстам доставляется
+`TokenFactory` (как widgets/memory), откат `Mcp:HttpTransport=false` возвращает stdio с прежним
+env. Разбор per-turn флагов волны (что свойство сессии, а что хода — таблица для `wsp` волны 3) —
+[ADR-012](../adr/ADR-012-mcp-over-http-transport.md), раздел «Фаза 2, волна 2».
 
 ## Диета состава по данным использования
 

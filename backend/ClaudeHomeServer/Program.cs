@@ -384,6 +384,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // персона и проект едут хвостом маршрута /mcp/memory/{personaId}/{projectId}
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.MemoryToolset>();
+// Задачи и заметки (фаза 2, волна 2): сессия-вызыватель едет хвостом /mcp/{tasks,notes}/{sessionId},
+// по ней тулсет резолвит проект чата, персону и её привязки на каждый вызов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.TasksToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.NotesToolset>();
+// Персоны (фаза 2, волна 2): тяжёлая оркестрация CRUD — в PersonasCrudService (общий с REST),
+// тулсет — тонкий JSON-фасад над ним и сервисами; хвост маршрута — та же сессия-вызыватель
+builder.Services.AddSingleton<ClaudeHomeServer.Services.PersonasCrudService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.PersonasToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();

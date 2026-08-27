@@ -17,75 +17,59 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Controllers;
 
 // Персоны, per-owner (изоляция как у задач/заметок — по claim sub).
+// Тяжёлая оркестрация (создание/правка/удаление/дефолт, AI-команда, подбор привязок,
+// аватар, автоматизации) живёт в PersonasCrudService — общий код с http-тулсетом персон
+// (ADR-012, фаза 2 волна 2); экшены ниже — тонкие обёртки, читающие UserId и заголовок.
 [ApiController]
 [Authorize]
 [Route("api/personas")]
-public class PersonasController : ControllerBase
+public class PersonasController(
+    PersonaManager personas,
+    ProjectManager projects,
+    SessionManager sessions,
+    PersonaMemoryService memory,
+    PersonaBindingsService bindings,
+    NotesService notes,
+    SkillsService skills,
+    KnowledgeService knowledge,
+    Services.Images.ImageGenerationService images,
+    Services.Llm.OneShotClaudeRunner oneShot,
+    Services.Llm.ICheapTextRunner cheap,
+    PersonaPromptBuilder promptBuilder,
+    PersonaAskService ask,
+    PersonaAutomationService automation,
+    PersonaDraftService drafts,
+    PersonasCrudService crud,
+    IConfiguration config,
+    ILogger<PersonasController> log,
+    IHubContext<SessionHub> hub) : ControllerBase
 {
-    private readonly PersonaManager _personas;
-    private readonly ProjectManager _projects;
-    private readonly SessionManager _sessions;
-    private readonly UserStore _users;
-    private readonly PersonaMemoryService _memory;
-    private readonly PersonaBindingsService _bindings;
-    private readonly NotesService _notes;
-    private readonly SkillsService _skills;
-    private readonly KnowledgeService _knowledge;
-    private readonly Services.Images.ImageGenerationService _images;
-    private readonly Services.Images.ImageBackfillService _imageBackfill;
-    private readonly Services.Llm.OneShotClaudeRunner _oneShot;
-    private readonly Services.Llm.ICheapTextRunner _cheap;
-    private readonly PersonaPromptBuilder _promptBuilder;
-    private readonly PersonaAskService _ask;
-    private readonly PersonaAutomationService _automation;
-    private readonly SpecialtyTemplatesService _specialtyTemplates;
-    private readonly SpecialtySettingsStore _specialtySettings;
-    private readonly PersonaDraftService _drafts;
-    private readonly IConfiguration _config;
-    private readonly ILogger<PersonasController> _log;
-    private readonly IHubContext<SessionHub> _hub;
-
-    public PersonasController(PersonaManager personas, ProjectManager projects,
-        SessionManager sessions, UserStore users, PersonaMemoryService memory, PersonaBindingsService bindings,
-        NotesService notes, SkillsService skills, KnowledgeService knowledge,
-        Services.Images.ImageGenerationService images,
-        Services.Images.ImageBackfillService imageBackfill,
-        Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
-        PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation,
-        SpecialtyTemplatesService specialtyTemplates, SpecialtySettingsStore specialtySettings,
-        PersonaDraftService drafts,
-        IConfiguration config,
-        ILogger<PersonasController> log, IHubContext<SessionHub> hub)
-    {
-        _drafts = drafts;
-        _cheap = cheap;
-        _personas = personas;
-        _projects = projects;
-        _sessions = sessions;
-        _users = users;
-        _memory = memory;
-        _bindings = bindings;
-        _notes = notes;
-        _skills = skills;
-        _knowledge = knowledge;
-        _images = images;
-        _imageBackfill = imageBackfill;
-        _oneShot = oneShot;
-        _promptBuilder = promptBuilder;
-        _ask = ask;
-        _automation = automation;
-        _specialtyTemplates = specialtyTemplates;
-        _specialtySettings = specialtySettings;
-        _config = config;
-        _log = log;
-        _hub = hub;
-    }
+    private readonly PersonaManager _personas = personas;
+    private readonly ProjectManager _projects = projects;
+    private readonly SessionManager _sessions = sessions;
+    private readonly PersonaMemoryService _memory = memory;
+    private readonly PersonaBindingsService _bindings = bindings;
+    private readonly NotesService _notes = notes;
+    private readonly SkillsService _skills = skills;
+    private readonly KnowledgeService _knowledge = knowledge;
+    private readonly Services.Images.ImageGenerationService _images = images;
+    private readonly Services.Llm.OneShotClaudeRunner _oneShot = oneShot;
+    private readonly Services.Llm.ICheapTextRunner _cheap = cheap;
+    private readonly PersonaPromptBuilder _promptBuilder = promptBuilder;
+    private readonly PersonaAskService _ask = ask;
+    private readonly PersonaAutomationService _automation = automation;
+    private readonly PersonaDraftService _drafts = drafts;
+    private readonly PersonasCrudService _crud = crud;
+    private readonly IConfiguration _config = config;
+    private readonly ILogger<PersonasController> _log = log;
+    private readonly IHubContext<SessionHub> _hub = hub;
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
-    private const string ImageGenerationOffError =
-        "Генерация изображений не настроена: ни один провайдер (fal.ai, glif) не подключён";
+    // Сессия-вызыватель MCP-вызова (заголовок ставит конфиг хода): по ней crud отличает
+    // вызовы из чата (онбординг-предохранители) от рукотворного REST
+    private string? CallerSessionId() =>
+        Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
 
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)
@@ -219,373 +203,24 @@ public class PersonasController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest("Не задано имя персоны");
-
-        var scope = req.Scope ?? PersonaScope.Global;
-        if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
-            return BadRequest("Для проектной персоны нужен корректный projectId");
-        if (!TryParseAccess(req.Access, out var access))
-            return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
-        if (!ModelTiers.IsValidWireValue(req.ModelTier))
-            return BadRequest(new { error = ModelTiers.WireError });
-        if (!IsValidTierCell(req.TierStrong) || !IsValidTierCell(req.TierMedium) || !IsValidTierCell(req.TierWeak))
-            return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
-        if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
-            return BadRequest(new { error = tooBig });
-
-        // Серверный предохранитель знакомства (план 2.9): в личном знакомстве (сессия с
-        // OnboardingKind == "user") нельзя создавать НОВУЮ персону — интервью дорабатывает
-        // заготовку через personas_update. Срабатывает ТОЛЬКО когда вызов пришёл из
-        // user-онбординг-сессии И AssistantPersonaId резолвится в ЖИВУЮ персону. Резолв, а не
-        // проверка на непустоту: иначе висячий id запирал бы знакомство навсегда (создать нельзя,
-        // обновить некого). Проектное знакомство создаёт руководителя штатно — его не трогаем.
-        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault() is { Length: > 0 } guardCsid
-            && _sessions.GetOwned(guardCsid, UserId) is { OnboardingKind: OnboardingKinds.User }
-            && _users.GetById(UserId)?.AssistantPersonaId is { } liveAssistantId
-            && _personas.Get(liveAssistantId, UserId) is not null)
-        {
-            return BadRequest(new
-            {
-                error = $"В знакомстве нельзя создавать новую персону — дорабатывай существующего " +
-                    $"ассистента через personas_update (id: {liveAssistantId})",
-            });
-        }
-
-        // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную.
-        // Персона ещё не существует — для само-проверки ProjectPersonas/ProjectTasks передаём
-        // лёгкую заглушку с планируемыми Scope/ProjectId (полноценная персона не нужна).
-        var draftOwner = new Persona { Scope = scope, ProjectId = req.ProjectId };
-        var bindings = new List<PersonaBinding>();
-        if (req.Bindings is { Count: > 0 })
-        {
-            foreach (var b in req.Bindings)
-            {
-                var (binding, parseError) = ParseBinding(b);
-                if (binding is null) return BadRequest(new { error = parseError });
-                var err = await _bindings.ValidateAsync(UserId, binding, bindings, draftOwner);
-                if (err is not null) return BadRequest(new { error = err });
-                bindings.Add(binding);
-            }
-        }
-
-        // Шаблон специальности: при выборе специальности неподставленные
-        // access/tools/disallowedTools берутся из эффективного шаблона;
-        // явные поля запроса всегда побеждают, после создания поля правятся вручную.
-        var createSpecialty = req.Specialty ?? PersonaSpecialty.None;
-        var templated = _specialtyTemplates.Apply(UserId, createSpecialty, currentSpecialty: null,
-            access, req.Tools, req.DisallowedTools);
-
-        Persona persona;
-        try
-        {
-            persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
-                req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled ?? true, templated.Tools, req.Contract,
-                templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
-                req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak);
-        }
-        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
-        if (bindings.Count > 0)
-            persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
-        // Проектной персоне — сразу дефолтные привязки к данным её проекта (файлы/заметки/знания)
-        persona = _bindings.SeedProjectDefaults(UserId, persona);
-        // Типовые умения специальности: профиль роли (EffectiveDefaultBindings, дефолт —
-        // SpecialtyPromptPresets) материализуется в личные привязки персоны. Модель «копия
-        // при создании»: смена дефолта роли существующих персон не трогает. Профиль — более
-        // конкретная форма авто-подбора: когда он есть, общий autoBindings не нужен.
-        // Сбой материализации не роняет создание персоны (как и авто-подбор ниже):
-        // умения добавит кнопка «Применить типовые».
-        var (withDefaults, defaultsApplied) = (persona, 0);
-        try
-        {
-            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(persona);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "типовые умения: материализация при создании {Persona} не удалась", persona.Id);
-        }
-        persona = withDefaults;
-        // Авто-подбор привязок (autoBindings) — best-effort:
-        // сбой подбора не роняет создание, персона остаётся без привязок
-        if (defaultsApplied == 0 && req.AutoBindings == true)
-            persona = await TryAutoBindAsync(persona);
-        // Фото-аватар (autoAvatar) — явный опт-ин для путей, где человек не выбирает
-        // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
-        // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
-        if (req.AutoAvatar == true)
-            persona = await TryAutoGenerateAvatarAsync(persona, req.AvatarPrompt);
-        // Персона, созданная из онбординг-сессии (через MCP personas_create), запоминается на ней:
-        // финализация досеет профиль дефолта ТОЛЬКО ей, а не выбранной существующей
-        // (та прав не получает — молчаливая дозапись Access=Full+manage была бы эскалацией).
-        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault() is { Length: > 0 } csid)
-        {
-            var caller = _sessions.GetOwned(csid, UserId);
-            if (caller?.OnboardingKind is not null)
-                _sessions.SetOnboardingCreatedPersona(csid, UserId, persona.Id);
-        }
-        await Broadcast("created", persona.Id);
-        return Ok(persona);
-    }
+    public Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req) =>
+        _crud.CreateAsync(UserId, req, CallerSessionId());
 
     [HttpPut("{id}")]
-    public async Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req)
-    {
-        if (_personas.Get(id, UserId) is not { } current) return NotFound();
-        if (req.Scope == PersonaScope.Project && !ValidProject(req.ProjectId))
-            return BadRequest("Для проектной персоны нужен корректный projectId");
-        // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект
-        if (!string.IsNullOrEmpty(req.ProjectId) && !ValidProject(req.ProjectId))
-            return BadRequest("Проект не найден или недоступен");
-        if (!TryParseAccess(req.Access, out var access))
-            return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
-        if (!ModelTiers.IsValidWireValue(req.ModelTier))
-            return BadRequest(new { error = ModelTiers.WireError });
-        if (!IsValidTierCell(req.TierStrong) || !IsValidTierCell(req.TierMedium) || !IsValidTierCell(req.TierWeak))
-            return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
-        // Partial-update: null-поля не меняются, поэтому размер считаем по эффективному контракту.
-        // Порог — только на рост: у раздутой персоны остаётся право сохранить сокращение
-        if (req.Contract is not null || req.SystemPrompt is not null)
-        {
-            var currentSize = PersonaManager.ContractSize(current.Contract, current.SystemPrompt);
-            if (PersonaManager.ExceedsContractLimit(req.Contract ?? current.Contract,
-                    req.SystemPrompt ?? current.SystemPrompt, currentSize, out var tooBig))
-                return BadRequest(new { error = tooBig });
-        }
-
-        // Шаблон специальности: применяется только при реальной СМЕНЕ специальности;
-        // неподставленные access/tools/disallowedTools берутся из шаблона, явные поля
-        // запроса побеждают. Та же специальность в запросе — поля не трогает.
-        var templated = _specialtyTemplates.Apply(UserId, req.Specialty ?? current.Specialty, current.Specialty,
-            access, req.Tools, req.DisallowedTools);
-
-        // Статус заготовки снимает только ЧЕЛОВЕК из раздела «Персоны». Правка, пришедшая из
-        // личного знакомства владельца, статус НЕ снимает: интервью само зовёт personas_update
-        // на шаге доработки — задолго до финального personas_set_default. Сняв маркер там, мы
-        // ломали бы три вещи разом: предохранитель Create переставал держать (модель могла
-        // создать вторую персону), apply-transcript отвечал 404 ровно в сценарии «модель не
-        // довела интервью до финала», а возврат к чату знакомства деградировал промпт к
-        // «создай ассистента» поверх уже настроенного. Проверка — та же, что у предохранителя
-        // в Create: вызов из user-онбординг-сессии этого владельца.
-        var fromUserIntro = Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault() is { Length: > 0 } introCsid
-            && _sessions.GetOwned(introCsid, UserId) is { OnboardingKind: OnboardingKinds.User };
-        var isAssistantDraft = !fromUserIntro && _users.GetById(UserId)?.AssistantPersonaId == id;
-        // Снимок характер-релевантных полей ДО мутации: _personas.Get отдаёт живую ссылку
-        // (не копию), а _personas.Update правит персону in-place — current и persona ниже
-        // оказались бы ОДНИМ объектом, и сравнение «после == после» никогда не показало бы
-        // изменений (дефект нашли тесты AssistantStatusTests). Строки/объект контракта снимаем
-        // заранее — сама строка/контракт не мутируется, его лишь переприсваивают новым значением.
-        var beforeName = current.Name;
-        var beforeRole = current.Role;
-        var beforeGreeting = current.Greeting;
-        var beforeContract = current.Contract;
-        Persona persona;
-        try
-        {
-            persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
-                req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
-                req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak);
-        }
-        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
-        // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки
-        // меняется Name/Role/Greeting или любой слот характера — обнуляем AssistantPersonaId.
-        // Иначе карточка-приглашение «ассистент пока стандартный» горела бы над персоной,
-        // которую человек только что настроил руками, а «Познакомиться» предлагало бы интервью,
-        // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
-        if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
-            _users.SetAssistantPersona(UserId, null);
-        await Broadcast("updated", id);
-        return Ok(persona);
-    }
-
-    // Превращение заготовки в «своего» ассистента (план 2.8): Name/Role/Greeting или любой слот
-    // характера поменян → статус нетронутой заготовки снимается. Посторонние поля (цвет, модель,
-    // аватар, привязки) статус не трогают — карточка-приглашение не должна гаснуть от косметики.
-    private static bool IsCharacterRelevantChange(string beforeName, string? beforeRole, string? beforeGreeting,
-        PersonaContract? beforeContract, Persona after) =>
-        !string.Equals(beforeName, after.Name, StringComparison.Ordinal)
-        || !string.Equals(beforeRole ?? "", after.Role ?? "", StringComparison.Ordinal)
-        || !string.Equals(beforeGreeting ?? "", after.Greeting ?? "", StringComparison.Ordinal)
-        || !SameCharacterContract(beforeContract, after.Contract);
-
-    // Сравнение только слотов характера контракта (Character/Tone/MustDo/MustNot/OutputFormat/
-    // SpeechExamples/Instructions); null-контракт трактуем как пустой. Списки — пословно.
-    private static bool SameCharacterContract(PersonaContract? a, PersonaContract? b)
-    {
-        var ca = a ?? new PersonaContract();
-        var cb = b ?? new PersonaContract();
-        return Slot(ca.Character) == Slot(cb.Character)
-            && Slot(ca.Tone) == Slot(cb.Tone)
-            && Slot(ca.OutputFormat) == Slot(cb.OutputFormat)
-            && Slot(ca.Instructions) == Slot(cb.Instructions)
-            && ListSlot(ca.MustDo).SequenceEqual(ListSlot(cb.MustDo))
-            && ListSlot(ca.MustNot).SequenceEqual(ListSlot(cb.MustNot))
-            && ListSlot(ca.SpeechExamples).SequenceEqual(ListSlot(cb.SpeechExamples));
-
-        static string Slot(string? s) => s ?? "";
-        static IReadOnlyList<string> ListSlot(List<string>? xs) => xs is null ? Array.Empty<string>() : xs;
-    }
+    public Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req) =>
+        _crud.UpdateAsync(UserId, id, req, CallerSessionId());
 
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null)
-    {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+    public Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null) =>
+        _crud.DeleteAsync(UserId, id, successorId);
 
-        var me = _users.GetById(UserId);
-        var isAssistantDraft = me?.AssistantPersonaId == id;
-
-        // Заготовка-ассистент (план 2.7, решение §3в): AssistantPersonaId обнуляется ВСЕГДА при
-        // удалении заготовки — иначе поле повисает на мёртвом id и запирает знакомство навсегда.
-        // Если заготовка к тому же дефолт владельца — разрешаем удаление БЕЗ преемника и обнуляем
-        // дефолт: у нового пользователя единственная глобальная персона — заготовка, и требование
-        // преемника сделало бы её неудаляемой. Следующее создание чата заведёт нового ассистента
-        // (рубеж 2.4). Преемник нужен только обычной дефолт-персоне (не заготовке).
-        if (isAssistantDraft)
-        {
-            _users.SetAssistantPersona(UserId, null);
-            if (me?.DefaultPersonaId == id)
-            {
-                _users.SetDefaultPersona(UserId, null);
-                await Broadcast("default", null);
-            }
-        }
-        else
-        {
-            // Дефолт-персона удаляется только с преемником по той же зоне — остаться без
-            // дефолта нельзя (единственная точка каскада)
-            var isUserDefault = me?.DefaultPersonaId == id;
-            var defaultOfProjects = _projects.GetByOwner(UserId)
-                .Where(p => p.DefaultPersonaId == id).ToList();
-            if (isUserDefault || defaultOfProjects.Count > 0)
-            {
-                if (string.IsNullOrWhiteSpace(successorId))
-                    return BadRequest(new { error = "Это дефолт-персона: выберите преемника" });
-                var successor = _personas.Get(successorId, UserId);
-                if (successor is null || successor.Id == id)
-                    return BadRequest(new { error = "Преемник не найден или совпадает с удаляемой персоной" });
-                if (isUserDefault && successor.Scope != PersonaScope.Global)
-                    return BadRequest(new { error = "Преемником личной дефолт-персоны может быть только глобальная персона" });
-                foreach (var project in defaultOfProjects)
-                    if (successor.Scope != PersonaScope.Project || successor.ProjectId != project.Id)
-                        return BadRequest(new { error = $"Преемником руководителя проекта «{project.Name}» может быть только персона этого проекта" });
-
-                if (isUserDefault) _users.SetDefaultPersona(UserId, successor.Id);
-                foreach (var project in defaultOfProjects)
-                    _projects.SetDefaultPersona(project.Id, successor.Id);
-                await Broadcast("default", successor.Id);
-            }
-        }
-
-        if (!_personas.Delete(id, UserId)) return NotFound();
-        // Чистим долгую память персоны: Dify-датасет + data/persona-memory.json (иначе осиротят)
-        await _memory.DeletePersonaAsync(id);
-        await Broadcast("deleted", id);
-        return NoContent();
-    }
-
-    // Назначить персону дефолтной: глобальную — личным дефолтом владельца
-    // (User.DefaultPersonaId), проектную — дефолтом её проекта
-    // (Project.DefaultPersonaId). REST из UI свободен; вызов из чата (X-Caller-Session-Id
-    // от MCP personas_set_default) разрешён ТОЛЬКО онбординг-сессии — иначе любая
-    // manage-персона могла бы переназначить дефолт владельца из любого разговора.
-    // Из онбординг-сессии назначение финализирует онбординг: досев профиля дефолта,
-    // «просыпание» персоны в том же чате, событие onboarding_completed.
+    // Назначить персону дефолтной: глобальную — личным дефолтом владельца, проектную —
+    // дефолтом её проекта. Вызов из чата разрешён ТОЛЬКО онбординг-сессии — гейт и
+    // финализация онбординга внутри crud (по callerSessionId).
     [HttpPost("{id}/make-default")]
     [DenyOnDelegatedTurn("Назначение дефолт-персоны")]
-    public async Task<IActionResult> MakeDefault(string id)
-    {
-        var persona = _personas.Get(id, UserId);
-        if (persona is null) return NotFound();
-
-        // MCP-гейт: ход из чата обязан идти из онбординг-сессии (смена дефолта — в настройках)
-        Session? onboarding = null;
-        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault()
-            is { Length: > 0 } callerSessionId)
-        {
-            onboarding = _sessions.GetOwned(callerSessionId, UserId);
-            if (onboarding?.OnboardingKind is null)
-                return BadRequest(new
-                {
-                    error = "Назначение дефолт-персоны из чата доступно только сессии онбординга. "
-                        + "Смена дефолта выполняется в настройках — попроси об этом пользователя.",
-                });
-        }
-
-        if (persona.Scope == PersonaScope.Global)
-        {
-            _users.SetDefaultPersona(UserId, id);
-        }
-        else
-        {
-            var project = persona.ProjectId is null ? null : _projects.GetById(persona.ProjectId);
-            if (project is null || project.OwnerId != UserId)
-                return BadRequest(new { error = "Проект персоны не найден или недоступен" });
-            _projects.SetDefaultPersona(project.Id, id);
-        }
-
-        if (onboarding is not null)
-            await FinalizeOnboardingAsync(onboarding, persona);
-
-        // Событие и для инвалидации кэша auth.me / DTO проекта на фронте:
-        // смена дефолта видна резолверу аватаров без перезагрузки
-        await Broadcast("default", id);
-        return Ok(persona);
-    }
-
-    // Финализация онбординга (make-default пришёл из онбординг-сессии): досев профиля
-    // дефолт-персоны, у пользовательского — «просыпание» персоны в этом же чате
-    // (SetPersona: адаптер лениво пересоберётся, активный ход не рвётся) и очистка
-    // User.OnboardingSessionId; у проектного — очистка Project.OnboardingSessionId,
-    // но только когда каркас больше не предлагают (знакомство v2, п.5): пока
-    // PresetKey == "pending", точка входа обязана возвращать ту же сессию — иначе повторный
-    // start завёл бы вторую сессию «Знакомство с проектом» с новым kickoff поверх живой.
-    private async Task FinalizeOnboardingAsync(Session onboarding, Persona persona)
-    {
-        // Повторная финализация из живой сессии — no-op: событие onboarding_completed и
-        // телеметрия уже ушли, досев идемпотентен, но второй карточки в ленте быть не должно
-        // (критерий приёмки п.5). Флаг ставится здесь первым и переживает рестарт (sessions.json).
-        if (onboarding.OnboardingFinalized) return;
-        _sessions.SetOnboardingFinalized(onboarding.Id, UserId);
-
-        // Досев профиля дефолта (Coordinator+Full+manage) — ТОЛЬКО персоне, созданной в этом
-        // онбординге (через personas_create). Выбранная существующая персона прав НЕ получает:
-        // молчаливая дозапись Access=Full+manage была бы тихой эскалацией (как и ручная смена
-        // дефолта из настроек) — пользователь назначает роль, а не соглашается расширить права.
-        if (onboarding.OnboardingCreatedPersonaId is { Length: > 0 } seededId
-            && seededId == persona.Id)
-        {
-            persona = _bindings.SeedDefaultPersonaProfile(UserId, persona);
-        }
-        if (onboarding.OnboardingKind == OnboardingKinds.User)
-        {
-            _sessions.SetPersona(onboarding.Id, UserId, persona.Id);
-            // Финализация знакомства (план 2.6): фиксируем момент завершения и снимаем статус
-            // заготовки — ассистент превратился в «своего». IntroCompletedAt гасит карточку-
-            // приглашение, обнулённый AssistantPersonaId убирает метку и при будущей смене дефолта.
-            _users.SetIntroCompleted(UserId, DateTime.UtcNow);
-            _users.SetAssistantPersona(UserId, null);
-            _users.SetOnboardingSession(UserId, null);
-        }
-        else if (onboarding.OnboardingKind == OnboardingKinds.Project && onboarding.ProjectId is { } pid)
-        {
-            var project = _projects.GetById(pid);
-            // PresetKey == "pending" → сессию не чистим: надстройка сценария живёт до
-            // применения/отказа каркаса, и точка входа должна резюмить именно её
-            if (project?.PresetKey != ProjectPreset.Pending)
-                _projects.SetOnboardingSession(pid, null);
-        }
-        // Гейт на фронте снимается не по этому событию mid-turn, а по концу хода (result)
-        // или кнопке «Перейти в систему» — событие лишь помечает завершение
-        await _sessions.BroadcastSessionMessageAsync(onboarding.Id,
-            new OnboardingCompletedMessage(onboarding.OnboardingKind!, persona.Id, onboarding.ProjectId));
-        // Телеметрия знакомства (план 2.10): без разрезов по пользователю.
-        ServerMetrics.RecordIntroCompleted();
-    }
+    public Task<IActionResult> MakeDefault(string id) =>
+        _crud.MakeDefaultAsync(UserId, id, CallerSessionId());
 
     // Чаты, которые ведутся от лица этой персоны
     [HttpGet("{id}/chats")]
@@ -634,55 +269,8 @@ public class PersonasController : ControllerBase
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     [HttpPost("{id}/avatar/generate")]
-    public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
-    {
-        var persona = _personas.Get(id, UserId);
-        if (persona is null) return NotFound();
-
-        var prompt = string.IsNullOrWhiteSpace(req.Prompt)
-            ? BuildAvatarPrompt(persona)
-            : $"Photorealistic portrait photo. {req.Prompt.Trim()}";
-        var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
-
-        // Очередь снимает заявку, как только у сущности есть картинка (Resolve → HasImage),
-        // поэтому перерисовка УЖЕ стоящего аватара фоном не догоняется — обещать «появится
-        // сам» здесь нельзя, отказ остаётся отказом.
-        var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
-            || string.IsNullOrEmpty(persona.Avatar.ImageFile);
-
-        // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
-        // как только генерацию настроят
-        if (!_images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
-        {
-            if (canBackfill) _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, UserId, prompt);
-            return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
-        }
-
-        var images = await _images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, count);
-        // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
-        // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
-        // «появится сам», а не «генератор не ответил, аватар остался прежним».
-        if (images.Count == 0)
-        {
-            if (canBackfill) _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, UserId, prompt);
-            return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
-        }
-
-        // Свежая папка кандидатов (перезатираем прошлую генерацию)
-        var candDir = Path.Combine(_personas.AssetsDir, id, "candidates");
-        try { if (Directory.Exists(candDir)) Directory.Delete(candDir, recursive: true); } catch { }
-        Directory.CreateDirectory(candDir);
-
-        var files = new List<string>();
-        foreach (var img in images)
-        {
-            var ext = ImageAssetHelper.ExtFor(img.ContentType);
-            var name = $"cand-{Guid.NewGuid():N}{ext}";
-            await System.IO.File.WriteAllBytesAsync(Path.Combine(candDir, name), img.Bytes);
-            files.Add(name);
-        }
-        return Ok(new { candidates = files });
-    }
+    public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req) =>
+        _crud.GenerateAvatarAsync(UserId, id, req);
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/avatar/candidate/{file}")]
@@ -697,29 +285,8 @@ public class PersonasController : ControllerBase
 
     // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
     [HttpPost("{id}/avatar/select")]
-    public async Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req)
-    {
-        var persona = _personas.Get(id, UserId);
-        if (persona is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(req.File)) return BadRequest(new { error = "Не указан файл" });
-
-        var dir = Path.Combine(_personas.AssetsDir, id);
-        var candPath = Path.Combine(dir, "candidates", Path.GetFileName(req.File));
-        if (!System.IO.File.Exists(candPath)) return NotFound(new { error = "Кандидат не найден" });
-
-        var ext = Path.GetExtension(candPath);
-        var fileName = $"avatar-{Guid.NewGuid():N}{ext}";   // cache-busting
-        System.IO.File.Copy(candPath, Path.Combine(dir, fileName), overwrite: true);
-
-        // Удаляем прежний аватар и всю папку кандидатов
-        if (!string.IsNullOrEmpty(persona.Avatar.ImageFile))
-            try { System.IO.File.Delete(Path.Combine(dir, persona.Avatar.ImageFile)); } catch { }
-        try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
-
-        var updated = _personas.SetAvatarImage(id, UserId, fileName);
-        await Broadcast("updated", id);
-        return Ok(updated);
-    }
+    public Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req) =>
+        _crud.SelectAvatarAsync(UserId, id, req);
 
     // Отдать картинку аватара. JWT принимается и в query access_token (браузерный <img>).
     [HttpGet("{id}/avatar")]
@@ -801,52 +368,6 @@ public class PersonasController : ControllerBase
         var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
         await Broadcast("updated", id);
         return Ok(updated);
-    }
-
-    // Фото-промпт аватара по умолчанию — из имени и описания персоны
-    private static string BuildAvatarPrompt(Persona persona)
-    {
-        var who = string.IsNullOrWhiteSpace(persona.Description)
-            ? persona.Name
-            : $"{persona.Name}, {persona.Description}";
-        return $"Photorealistic portrait photo of {who}. Head and shoulders, looking at camera, " +
-               "clean solid background, soft studio lighting, natural skin, friendly expression, " +
-               "high detail, sharp focus, square crop.";
-    }
-
-    // Фото-аватар автоматически, best-effort (создание персоны не срывается из-за картинки).
-    // Общий путь для всех авто/LLM-сценариев создания, где человек не выбирает аватар сам —
-    // quick-create одной персоны, пакетная команда из ai/team.
-    // Не получилось (провайдера нет, отказ, сбой) — персона остаётся с инициалами, а аватар
-    // догонит её из очереди, когда генерация заработает.
-    private async Task<Persona> TryAutoGenerateAvatarAsync(Persona persona, string? avatarPrompt)
-    {
-        var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
-            ? BuildAvatarPrompt(persona)
-            : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
-
-        if (!_images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(persona, prompt);
-        try
-        {
-            var images = await _images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
-            if (images.Count == 0) return EnqueueAvatarBackfill(persona, prompt);
-            var dir = Path.Combine(_personas.AssetsDir, persona.Id);
-            Directory.CreateDirectory(dir);
-            var fileName = $"avatar-{Guid.NewGuid():N}{ImageAssetHelper.ExtFor(images[0].ContentType)}";
-            await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), images[0].Bytes);
-            return _personas.SetAvatarImage(persona.Id, persona.OwnerId, fileName);
-        }
-        catch
-        {
-            return EnqueueAvatarBackfill(persona, prompt);
-        }
-    }
-
-    private Persona EnqueueAvatarBackfill(Persona persona, string prompt)
-    {
-        _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
-            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId, prompt);
-        return persona;
     }
 
     // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
@@ -990,7 +511,7 @@ public class PersonasController : ControllerBase
             return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
 
         var scope = req.Scope ?? PersonaScope.Global;
-        if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
+        if (scope == PersonaScope.Project && !_crud.ValidProject(UserId, req.ProjectId))
             return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
 
         // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
@@ -1025,7 +546,7 @@ public class PersonasController : ControllerBase
             return StatusCode(502, new { error = "Модель не вернула корректный черновик — попробуйте ещё раз" });
 
         // 2. Создаём персону с заполненными полями; характер — сразу контрактом (P1)
-        var color = ValidColor(draft.Color) ? draft.Color : "orange";
+        var color = PersonasCrudService.ValidColor(draft.Color) ? draft.Color : "orange";
         var contract = new PersonaContract
         {
             Character = draft.Character,
@@ -1042,7 +563,7 @@ public class PersonasController : ControllerBase
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
-        persona = await TryAutoGenerateAvatarAsync(persona, draft.AvatarPrompt);
+        persona = await _crud.TryAutoGenerateAvatarAsync(UserId, persona, draft.AvatarPrompt);
 
         // 3.5. Проектной персоне — дефолтные привязки к данным проекта (файлы/заметки/знания)
         persona = _bindings.SeedProjectDefaults(UserId, persona);
@@ -1050,7 +571,7 @@ public class PersonasController : ControllerBase
         // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок
         if (req.AutoBindings != false)
-            persona = await TryAutoBindAsync(persona);
+            persona = await _crud.TryAutoBindAsync(UserId, persona, HttpContext.RequestAborted);
 
         await Broadcast("created", persona.Id);
         return Ok(persona);
@@ -1060,91 +581,8 @@ public class PersonasController : ControllerBase
     // персон (роль/имя/характер/специальность) для создания в команде проекта. Возвращает
     // черновики — фронт показывает их для одобрения, затем создаёт через обычный POST /api/personas.
     [HttpPost("ai/team")]
-    public async Task<ActionResult> AiTeam([FromBody] AiTeamRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.Prompt))
-            return BadRequest(new { error = "Опишите, какая команда нужна" });
-        var project = _projects.GetById(req.ProjectId);
-        if (project is null || project.OwnerId != UserId)
-            return BadRequest(new { error = "Проект не найден" });
-
-        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
-        try
-        {
-            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiTeam,
-                BuildTeamPrompt(project, req.Prompt), model, UserId, jsonFormat: "json",
-                ct: HttpContext.RequestAborted);
-            var drafts = ParseTeamDrafts(raw);
-            if (drafts is null || drafts.Count == 0)
-            {
-                _log.LogWarning("ai/team: команда не распознана; сырой ответ: {Raw}",
-                    raw.Length > 600 ? raw[..600] + "…" : raw);
-                return StatusCode(502, new { error = "Модель не вернула состав команды — попробуйте уточнить промпт" });
-            }
-            return Ok(new { members = drafts });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(502, new { error = $"Не удалось сформировать команду: {ex.Message}" });
-        }
-    }
-
-    private static string BuildTeamPrompt(Models.Project project, string userPrompt)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Ты помогаешь сформировать команду AI-ассистентов (персон) для проекта. " +
-                      "Проанализируй проект и промпт пользователя и предложи сбалансированный состав " +
-                      "из 3-6 персон, перекрывающих ключевые роли команды.");
-        sb.AppendLine($"Проект: {project.Name}.");
-        if (!string.IsNullOrWhiteSpace(project.SystemPrompt))
-            sb.AppendLine($"Контекст проекта (CLAUDE.md):\n{project.SystemPrompt!.Trim()}");
-        sb.AppendLine($"Запрос пользователя: {userPrompt.Trim()}");
-        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) объектов с полями:");
-        sb.AppendLine("  role — роль по-русски, 1-3 слова (напр. «Аналитик», «Исполнитель»);");
-        sb.AppendLine("  name — русское имя-человека (одно слово);");
-        sb.AppendLine("  description — кратко «кто это», 3-8 слов;");
-        sb.AppendLine("  character — характер и стиль общения, обращение на «ты», 2-4 предложения;");
-        sb.AppendLine("  tone — тон одной короткой фразой;");
-        sb.AppendLine("  specialty — одна из: analyst, planner, reviewer, executor, secretary, coordinator, mentor, designer, consultant, librarian;");
-        sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink;");
-        sb.AppendLine("  greeting — первое приветствие персоны, 1-2 предложения;");
-        sb.AppendLine("  avatarPrompt — описание внешности для фотопортрета, по-английски, 5-15 слов (пол, возраст, стиль, настроение, фон).");
-        sb.AppendLine("По возможности включи роли для конвейера (аналитик/планировщик/ревьюер/исполнитель), если уместно проекту. Всё по-русски. НЕ упоминай имя модели.");
-        return sb.ToString();
-    }
-
-    // Парс JSON-массива черновиков команды (устойчиво к преамбуле/markdown; fallback — одиночный объект)
-    private static List<TeamMemberDraft>? ParseTeamDrafts(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var start = raw.IndexOf('[');
-        if (start < 0)
-        {
-            var single = PersonaDraftService.ParseJsonObject<TeamMemberDraft>(raw);
-            return single is null ? null : [single];
-        }
-        int depth = 0; bool inStr = false, esc = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inStr) { if (esc) esc = false; else if (c == '\\') esc = true; else if (c == '"') inStr = false; continue; }
-            if (c == '"') inStr = true;
-            else if (c == '[') depth++;
-            else if (c == ']' && --depth == 0)
-            {
-                try
-                {
-                    return System.Text.Json.JsonSerializer.Deserialize<List<TeamMemberDraft>>(raw[start..(i + 1)],
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                }
-                catch (System.Text.Json.JsonException) { return null; }
-            }
-        }
-        return null;
-    }
-
-    private static bool ValidColor(string? c) =>
-        c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";
+    public Task<ActionResult> AiTeam([FromBody] AiTeamRequest req) =>
+        _crud.AiTeamAsync(UserId, req.ProjectId, req.Prompt ?? "", HttpContext.RequestAborted);
 
     // --- Привязки персоны: источники знаний и правила (фича persona-bindings) ---
     // CRUD работает независимо от флага (данные безвредны и переживают выключение);
@@ -1885,7 +1323,7 @@ public class PersonasController : ControllerBase
 
         try
         {
-            var candidates = await SuggestBindingsAsync(persona);
+            var candidates = await _crud.SuggestBindingsAsync(UserId, persona, ct: HttpContext.RequestAborted);
             return Ok(new { candidates });
         }
         catch (Exception ex)
@@ -1907,7 +1345,8 @@ public class PersonasController : ControllerBase
 
         try
         {
-            var candidates = await SuggestBindingsAsync(persona, req.Prompt.Trim());
+            var candidates = await _crud.SuggestBindingsAsync(UserId, persona, req.Prompt.Trim(),
+                ct: HttpContext.RequestAborted);
             return Ok(new { candidates });
         }
         catch (Exception ex)
@@ -1932,7 +1371,8 @@ public class PersonasController : ControllerBase
             return BadRequest(new { error = "У персоны не задана специальность — типовых умений роли нет" });
         try
         {
-            var (updated, applied) = await MaterializeDefaultBindingsAsync(persona);
+            var (updated, applied) = await _crud.MaterializeDefaultBindingsAsync(UserId, persona,
+                HttpContext.RequestAborted);
             return Ok(new { persona = updated, applied });
         }
         catch (Exception ex)
@@ -1959,290 +1399,6 @@ public class PersonasController : ControllerBase
             Mode = mode,
         }, null);
     }
-
-    // Авто-подбор и сохранение привязок для свежесозданной персоны (best-effort).
-    // Подобранное ДОПОЛНЯЕТ существующие (явные из запроса и посевные): UpdateBindings
-    // заменяет список целиком, отдавать ему только новых кандидатов — молчаливая потеря.
-    private async Task<Persona> TryAutoBindAsync(Persona persona)
-    {
-        try
-        {
-            var candidates = await SuggestBindingsAsync(persona);
-            if (candidates.Count > 0)
-                return _personas.UpdateBindings(persona.Id, UserId,
-                    (persona.Bindings ?? []).Concat(candidates).ToList());
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "autoBindings: подбор привязок для {Persona} не удался", persona.Id);
-        }
-        return persona;
-    }
-
-    // Типовые умения специальности → личные привязки персоны («копия при создании» и
-    // кнопка «Применить типовые» для существующих). Скиллы материализуются напрямую из
-    // каталога владельца (отсутствующие пропускаются молча — каталог у каждого свой),
-    // остальные типы — one-shot AI-подбор конкретных целей. Дубликаты и недоступные цели
-    // отбрасывает валидация. Возвращает персону и число ДОБАВЛЕННЫХ привязок (0 — профиль
-    // пуст или ничего не подошло). Сбой (например, недоступность AI-подбора) пробрасывает
-    // наружу: вызывающий сам решает семантику — создание персоны глотает его (best-effort),
-    // а кнопка «Применить типовые» отдаёт ошибку, иначе её ветка «Не удалось применить»
-    // недостижима (до записи привязок сбой ничего не меняет).
-    private async Task<(Persona Persona, int Applied)> MaterializeDefaultBindingsAsync(Persona persona)
-    {
-        if (persona.Specialty == PersonaSpecialty.None) return (persona, 0);
-        var profile = _specialtySettings.EffectiveDefaultBindings(UserId, persona.Specialty);
-        if (profile.Count == 0) return (persona, 0);
-
-        var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
-        var added = new List<PersonaBinding>();
-
-        // Скиллы — явная цель профиля, AI не нужен
-        foreach (var entry in profile.Where(e => e.Type == PersonaBindingType.Skill))
-        {
-            var binding = new PersonaBinding
-            {
-                Type = PersonaBindingType.Skill,
-                Target = entry.SkillName?.Trim() ?? "",
-                Condition = entry.Condition,
-                Mode = entry.Mode,
-            };
-            if (await _bindings.ValidateAsync(UserId, binding, accepted, persona) is not null) continue;
-            accepted.Add(binding);
-            added.Add(binding);
-        }
-
-        var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
-        if (aiEntries.Count > 0)
-            added.AddRange(await SuggestBindingsAsync(persona, profile: aiEntries, acceptedSeed: accepted));
-
-        if (added.Count > 0)
-            persona = _personas.UpdateBindings(persona.Id, UserId,
-                (persona.Bindings ?? []).Concat(added).ToList());
-        return (persona, added.Count);
-    }
-
-    // Подбор кандидатов-привязок: каталог целей владельца + профиль персоны → one-shot LLM
-    // (строгий JSON-массив, ретрай как в quick-create), невалидные кандидаты отбрасываются.
-    // userPrompt задан — генерация под свободный запрос пользователя, иначе подбор под роль.
-    // profile задан — материализация типовых умений роли: AI подбирает только ЦЕЛИ типов
-    // профиля (по одному на запись), условие и режим подставляются из профиля сервером.
-    // acceptedSeed — уже подготовленные к добавлению привязки (например, скиллы профиля):
-    // валидация дубликатов должна видеть их рядом с текущими привязками персоны.
-    private async Task<List<PersonaBinding>> SuggestBindingsAsync(Persona persona, string? userPrompt = null,
-        IReadOnlyList<SpecialtyDefaultBinding>? profile = null, List<PersonaBinding>? acceptedSeed = null)
-    {
-        // Полный каталог знаний (датасеты проектов/заметок + прочие доступные Dify-датасеты) —
-        // валидация всё равно принимает любой из KnowledgeTargetsAsync, каталог промпта не должен быть уже
-        var datasets = await _bindings.KnowledgeTargetsAsync(UserId);
-        var prompt = profile is not null
-            ? BuildProfilePrompt(persona, datasets, profile)
-            : BuildSuggestPrompt(persona, datasets, userPrompt);
-        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
-
-        List<SuggestRaw>? raws = null;
-        for (var attempt = 1; attempt <= 2 && raws is null; attempt++)
-        {
-            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaBindingsSuggest,
-                prompt, model, UserId, jsonFormat: "json", ct: HttpContext.RequestAborted);
-            raws = ParseSuggestArray(raw);
-            if (raws is null)
-                _log.LogWarning("suggest bindings: ответ не распознан (попытка {Attempt}); сырой ответ: {Raw}",
-                    attempt, raw.Length > 600 ? raw[..600] + "…" : raw);
-        }
-        if (raws is null) return [];
-
-        var accepted = new List<PersonaBinding>(acceptedSeed ?? persona.Bindings ?? []);
-        var result = new List<PersonaBinding>();
-
-        if (profile is not null)
-        {
-            // Слоты профиля: на каждую запись — максимум одна привязка её типа; чужие
-            // типы AI (сверх профиля) отбрасываются. Условие и режим — из профиля роли,
-            // их формулирует админ, а не модель.
-            var slots = profile.Select(e => (Entry: e, Used: false)).ToList();
-            foreach (var r in raws.Take(profile.Count))
-            {
-                var (binding, _) = ParseBinding(new PersonaBindingRequest(
-                    r.Type ?? "", r.Target ?? "", r.Path, "", "auto"));
-                if (binding is null) continue;
-                var index = -1;
-                for (var i = 0; i < slots.Count; i++)
-                    if (!slots[i].Used && slots[i].Entry.Type == binding.Type) { index = i; break; }
-                if (index < 0) continue;
-                slots[index] = (slots[index].Entry, true);
-                binding.Condition = slots[index].Entry.Condition;
-                binding.Mode = slots[index].Entry.Mode;
-                var err = await _bindings.ValidateAsync(UserId, binding, accepted, persona);
-                if (err is not null) continue;
-                accepted.Add(binding);
-                result.Add(binding);
-            }
-            return result;
-        }
-
-        foreach (var r in raws.Take(5))
-        {
-            var (binding, _) = ParseBinding(new PersonaBindingRequest(
-                r.Type ?? "", r.Target ?? "", r.Path, r.Condition, r.Mode ?? "auto"));
-            if (binding is null) continue;
-            var err = await _bindings.ValidateAsync(UserId, binding, accepted, persona);
-            if (err is not null) continue;
-            accepted.Add(binding);
-            result.Add(binding);
-        }
-        return result;
-    }
-
-    private string BuildSuggestPrompt(Persona persona,
-        IReadOnlyList<(string Id, string Label, string? ProjectId)> datasets, string? userPrompt = null)
-    {
-        var hasUserPrompt = !string.IsNullOrWhiteSpace(userPrompt);
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine(hasUserPrompt
-            ? "Составь AI-персоне привязку(и) — источники знаний, навыки и инструменты — по запросу пользователя. " +
-              "Выбирай ТОЛЬКО из каталога ниже (target — точный id из каталога)."
-            : "Подбери AI-персоне источники знаний и правила («привязки») под её роль. " +
-              "Выбирай ТОЛЬКО из каталога ниже (target — точный id из каталога).");
-        sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
-        if (!string.IsNullOrWhiteSpace(persona.Description))
-            sb.AppendLine($"Кто это: {persona.Description.Trim()}");
-        // Характер: у персон с контрактом (P1) источник правды — Contract.Character,
-        // SystemPrompt — legacy-фолбэк
-        var personaCharacter = persona.Contract?.Character ?? persona.SystemPrompt;
-        if (!string.IsNullOrWhiteSpace(personaCharacter))
-        {
-            var character = personaCharacter.Trim();
-            if (character.Length > 800) character = character[..800] + "…";
-            sb.AppendLine($"Характер: {character}");
-        }
-
-        if (hasUserPrompt)
-            sb.AppendLine($"\nЗапрос пользователя (главный ориентир — построй привязку(и) под него): {userPrompt!.Trim()}");
-
-        AppendBindingCatalog(sb, datasets);
-
-        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 5 объектов:");
-        sb.AppendLine("[{\"type\":\"project|projectPath|knowledge|notes|tool|skill\",\"target\":\"id из каталога\"," +
-                      "\"path\":\"папка (опционально; для projectPath обязательна)\"," +
-                      "\"condition\":\"когда применять, 1-2 предложения по-русски\",\"mode\":\"auto\"}]");
-        sb.AppendLine(hasUserPrompt
-            ? "Построй привязку(и) под запрос пользователя, опираясь на каталог; " +
-              "если запрос не покрывается ни одной целью каталога — верни []."
-            : "Бери только цели, реально полезные роли персоны; если подходящих нет — верни [].");
-        return sb.ToString();
-    }
-
-    // Каталог целей владельца — общий блок промптов подбора привязок (роль/запрос/профиль роли)
-    private void AppendBindingCatalog(System.Text.StringBuilder sb,
-        IReadOnlyList<(string Id, string Label, string? ProjectId)> datasets)
-    {
-        sb.AppendLine("\nКаталог целей:");
-        var projects = _projects.GetByOwner(UserId);
-        if (projects.Count > 0)
-        {
-            sb.AppendLine("Проекты (type \"project\", target = id; конкретная папка проекта — " +
-                          "type \"projectPath\", target = id + обязательный path):");
-            foreach (var p in projects.Take(20)) sb.AppendLine($"- {p.Id} — {p.Name}");
-        }
-        if (datasets.Count > 0)
-        {
-            sb.AppendLine("Базы знаний (type \"knowledge\", target = id):");
-            foreach (var d in datasets.Take(20)) sb.AppendLine($"- {d.Id} — {d.Label}");
-        }
-        var sources = _notes.GetSources(UserId);
-        if (sources.Count > 0)
-        {
-            sb.AppendLine("Источники заметок (type \"notes\", target = key):");
-            foreach (var s in sources.Take(20)) sb.AppendLine($"- {s.Key} — {s.Label}");
-        }
-        var skills = _skills.GetGlobalSkills();
-        if (skills.Count > 0)
-        {
-            sb.AppendLine("Скиллы (type \"skill\", target = имя):");
-            foreach (var s in skills.Take(20))
-            {
-                var desc = s.Description.Length > 120 ? s.Description[..120] + "…" : s.Description;
-                sb.AppendLine($"- {s.Name} — {desc}");
-            }
-        }
-        sb.AppendLine("Инструменты (type \"tool\", target = ключ):");
-        foreach (var kv in _bindings.ToolCatalogFor(UserId))
-            sb.AppendLine($"- {kv.Key} — {kv.Value.Label}: {kv.Value.Hint}");
-    }
-
-    // Промпт материализации типовых умений роли: AI подбирает КОНКРЕТНУЮ цель каждого
-    // типа из профиля; условие и режим модель не формулирует — их подставит сервер из
-    // профиля. Сверх профиля брать нечего: список типов закрыт.
-    private string BuildProfilePrompt(Persona persona,
-        IReadOnlyList<(string Id, string Label, string? ProjectId)> datasets,
-        IReadOnlyList<SpecialtyDefaultBinding> profile)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Материализуй типовые привязки AI-персоны: для каждого типа из профиля подбери " +
-                      "ОДНУ конкретную цель из каталога ниже (target — точный id из каталога).");
-        sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
-        if (!string.IsNullOrWhiteSpace(persona.Description))
-            sb.AppendLine($"Кто это: {persona.Description.Trim()}");
-        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
-            sb.AppendLine($"Персона проектная (её проект: {persona.ProjectId}) — Project/ProjectPath к другим проектам не подбирай.");
-
-        sb.AppendLine("\nПрофиль роли (по одной цели на строку):");
-        foreach (var entry in profile)
-        {
-            var line = $"- {WireBindingType(entry.Type)}";
-            if (!string.IsNullOrWhiteSpace(entry.Condition))
-                line += $" — когда: {entry.Condition.Trim()}";
-            sb.AppendLine(line);
-        }
-
-        AppendBindingCatalog(sb, datasets);
-
-        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown):");
-        sb.AppendLine("[{\"type\":\"project|projectPath|knowledge|notes|tool|skill|projectPersonas|projectTasks\"," +
-                      "\"target\":\"id из каталога\",\"path\":\"папка (для projectPath обязательна)\"}]");
-        sb.AppendLine("Если для какого-то типа в каталоге нет подходящей цели — пропусти его. " +
-                      "Ничего сверх профиля не добавляй.");
-        return sb.ToString();
-    }
-
-    // Wire-имя типа привязки (camelCase, как в конвертере персон) — для промптов подбора
-    private static string WireBindingType(ClaudeHomeServer.Models.PersonaBindingType type) =>
-        System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(type.ToString());
-
-    // Парс JSON-массива из ответа модели (устойчиво к преамбуле/markdown-fence)
-    private static List<SuggestRaw>? ParseSuggestArray(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var start = raw.IndexOf('[');
-        if (start < 0) return null;
-        int depth = 0; bool inStr = false, esc = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inStr)
-            {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') inStr = false;
-                continue;
-            }
-            if (c == '"') inStr = true;
-            else if (c == '[') depth++;
-            else if (c == ']' && --depth == 0)
-            {
-                try
-                {
-                    return System.Text.Json.JsonSerializer.Deserialize<List<SuggestRaw>>(raw[start..(i + 1)],
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                }
-                catch (System.Text.Json.JsonException) { return null; }
-            }
-        }
-        return null;
-    }
-
-    private sealed record SuggestRaw(string? Type, string? Target, string? Path, string? Condition, string? Mode);
 
     // Превью содержимого источника для ai-condition (2-4 КБ: имена файлов/документов/заметок)
     private async Task<string?> BuildSourcePreviewAsync(string type, string target, string? path)

@@ -2115,6 +2115,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
                     "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM. " +
+                    "Не жди явной просьбы: если в разговоре появился срок, дата или обязательство („завтра“, „в пятницу“, „не забыть“, „надо будет“) — " +
+                    "предложи поставить задачу-напоминание в один-два клика (dueDate/dueTime + reminderMinutes); напоминание пользователю — " +
+                    "assignee „me“, поручение себе — assignee „claude“. Часто мелькнул вопрос про планы — загляни в tasks_list, прежде чем отвечать «ничего не запланировано». " +
                     "Не путай их со встроенными TaskCreate/TaskUpdate: те ведут план ТЕКУЩЕГО хода " +
                     "(шаги работы, видны пользователю чек-листом в ленте) и в систему задач не попадают. " +
                     "Задача пользователя — только mcp__tasks__*." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;

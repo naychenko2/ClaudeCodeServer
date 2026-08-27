@@ -31,6 +31,9 @@ import { ICON_SIZE } from '../../components/ui/icons';
 
 interface FormAnchor {
   heading: string;
+  // 0-based порядковый номер среди одноимённых заголовков плана; пробрасывается в
+  // PlanRemark.anchorIndex, чтобы замечания к разным вхождениям не склеивались
+  occurrence: number;
   quote?: string;
   x: number;   // координаты якоря (для позиционирования попапа)
   y: number;
@@ -40,6 +43,10 @@ interface FormAnchor {
 interface SelectionInfo {
   text: string;
   heading: string | null;
+  // 0-based порядковый номер среди одноимённых заголовков плана; вычисляется при
+  // детекте выделения из DOM-узла заголовка, при `null` — заголовка над
+  // выделением нет или он не нашёлся в оглавлении
+  occurrence: number;
   x: number;
   y: number;
 }
@@ -164,10 +171,14 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
         const heading = headingEl?.textContent?.trim() ?? null;
         // Без заголовка замечание некуда привязать — закрываем попап
         if (!heading) { setSelection(null); return; }
+        // Находим occurrence среди одноимённых: headingEl — это живой <h*>;
+        // сравниваем по ссылке с el в текущем оглавлении
+        const occurrence = headingEl ? headings.findIndex(h => h.el === headingEl) : -1;
         const rect = range.getBoundingClientRect();
         setSelection({
           text,
           heading,
+          occurrence: occurrence >= 0 ? occurrence : 0,
           x: rect.left + rect.width / 2,
           y: rect.top,
         });
@@ -220,6 +231,7 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
         const rect = h.el.getBoundingClientRect();
         openForm({
           heading: h.text,
+          occurrence: h.occurrence,
           x: rect.left + rect.width / 2,
           y: rect.bottom,
           placement: 'below',
@@ -247,7 +259,7 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
     if (!form) return;
     const text = draft.trim();
     if (!text) return;
-    const next: PlanRemark = { anchorHeading: form.heading, text };
+    const next: PlanRemark = { anchorHeading: form.heading, anchorIndex: form.occurrence, text };
     const q = form.quote?.trim();
     if (q) next.quote = q;
     setRemarks(r => [...r, next]);
@@ -348,6 +360,7 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
   const selectionPopup = selection && !form && createPortal(
     <button onClick={() => openForm({
       heading: selection.heading ?? '—',
+      occurrence: selection.occurrence,
       quote: selection.text,
       x: selection.x, y: selection.y,
       placement: 'center',

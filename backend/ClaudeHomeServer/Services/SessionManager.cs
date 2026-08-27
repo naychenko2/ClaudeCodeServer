@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -1159,24 +1159,6 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.NotificationsMuted = muted;
-        SaveSessions();
-        return entry.Info;
-    }
-
-    // Убрать чат в архив / вернуть из архива. Архив — не удаление: транскрипт, история и
-    // настройки остаются на месте, чат просто уходит из основного списка, счётчиков
-    // непрочитанного и уведомлений.
-    //
-    // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
-    // Здесь это ещё и обязательное условие — иначе возврат из архива выкидывал бы чат в самый
-    // верх списка, будто в нём только что был ход, и метил бы его непрочитанным.
-    // Повторная архивация уже архивного чата НЕ переставляет отметку: от неё считается
-    // ретенция, и «поархивировал ещё раз» не должно продлевать срок хранения.
-    public Session? SetArchived(string sessionId, bool archived)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (archived == entry.Info.ArchivedAt.HasValue) return entry.Info;
-        entry.Info.ArchivedAt = archived ? DateTime.UtcNow : null;
         SaveSessions();
         return entry.Info;
     }
@@ -2838,12 +2820,6 @@ public class SessionManager : IDisposable
             // Человек написал в чат — цепочка автоотчётов оборвана: дальше это уже новый разговор,
             // и накопленная глубина не должна запрещать отчёты по нему
             entry.ReportChainDepth = 0;
-
-            // Человек пишет в архивный чат — значит разговор снова живой: возвращаем его из
-            // архива, иначе ход шёл бы в чат, невидимый в списке и молчащий в уведомлениях.
-            // Только на сообщение ЧЕЛОВЕКА: авто-ход (цикл, автоматизация, исполнитель задачи)
-            // фоновой активностью архив не отменяет — иначе убранный чат всплывал бы сам.
-            if (entry.Info.ArchivedAt is not null) SetArchived(sessionId, false);
 
             // Режим «Командная реализация» (Э5): вводная человека начинает новую итерацию —
             // бюджет с нуля. Делаем это на приёме сообщения, ДО очереди: иначе вводная,

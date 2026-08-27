@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
@@ -77,7 +77,6 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
-        if (req.Archived is bool archived) sessions.SetArchived(sessionId, archived);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
             return BadRequest(new { error = "Неизвестный стиль озвучки" });
@@ -181,7 +180,6 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 // ExcludeFromDossiers: null (поле не прислано) — не менять; иначе — признак opt-out
 // «Истории решений» (ADR-004 §6, тумблер «Не сохранять решения из этого чата»)
 // NotificationsMuted: null — не менять; true — заглушить уведомления чата
-// Archived: null — не менять; true — убрать чат в архив; false — вернуть из архива
 // VoiceMode: null — не менять; иначе — озвучка ответов включена/выключена
 // VoiceStyle: null — не менять; иначе VoiceStyles.Talk | Digest (см. UpdateChatRequest)
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null, bool? VoiceMode = null, string? VoiceStyle = null, bool? Archived = null);
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null, bool? VoiceMode = null, string? VoiceStyle = null);

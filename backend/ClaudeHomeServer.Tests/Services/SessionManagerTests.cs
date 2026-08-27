@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
@@ -1070,44 +1070,6 @@ public class SessionManagerTests : IDisposable
         await _sut.DeleteAsync(first.Id);
         File.Exists(transcript).Should().BeFalse();
         Directory.Exists(historyDir).Should().BeFalse();
-    }
-
-    // --- SetArchived ---
-
-    [Fact]
-    public async Task SetArchived_УбираетИВозвращаетЧат_НеДвигаяUpdatedAt()
-    {
-        // Архивация — настройка, а не активность: UpdatedAt держит сортировку списка и
-        // непрочитанность, и возврат из архива не должен выкидывать чат наверх списка
-        var dir = MkProjectDir("arch");
-        var project = _projectManager.Create("ARCH", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
-        session.UpdatedAt = DateTime.UtcNow.AddDays(-3);
-        var updatedAtBefore = session.UpdatedAt;
-        var before = DateTime.UtcNow;
-
-        var archived = _sut.SetArchived(session.Id, true);
-        archived!.ArchivedAt.Should().NotBeNull().And.Subject.As<DateTime>().Should().BeOnOrAfter(before);
-        archived.UpdatedAt.Should().Be(updatedAtBefore);
-
-        var restored = _sut.SetArchived(session.Id, false);
-        restored!.ArchivedAt.Should().BeNull();
-        restored.UpdatedAt.Should().Be(updatedAtBefore);
-    }
-
-    [Fact]
-    public async Task SetArchived_ПовторнаяАрхивация_НеПереставляетОтметку()
-    {
-        // От ArchivedAt считается ретенция архива — «поархивировал ещё раз» не должно
-        // продлевать срок хранения
-        var dir = MkProjectDir("arch2");
-        var project = _projectManager.Create("ARCH2", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
-
-        var first = _sut.SetArchived(session.Id, true)!.ArchivedAt;
-        var second = _sut.SetArchived(session.Id, true)!.ArchivedAt;
-
-        second.Should().Be(first);
     }
 
     // --- SetExpiry ---

@@ -22,57 +22,6 @@ public class ChatExpiryServiceTests
             ExpiryAnchor = expiryAnchor,
         };
 
-    // === Уборка архива (ShouldPurgeArchived) ===
-    // Правило независимое от временных чатов: включается ключом Session:ArchiveRetentionDays,
-    // отсчёт идёт от момента архивации
-
-    [Fact]
-    public void ShouldPurgeArchived_РетенцияВыключена_False()
-    {
-        // Дефолт продукта: архив вечен, сколько бы чат в нём ни лежал
-        var chat = new Session { ArchivedAt = Now.AddYears(-1) };
-        ChatExpiryService.ShouldPurgeArchived(chat, Now, 0).Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldPurgeArchived_НеАрхивныйЧат_False()
-    {
-        var chat = new Session { ArchivedAt = null, UpdatedAt = Now.AddYears(-1) };
-        ChatExpiryService.ShouldPurgeArchived(chat, Now, 30).Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldPurgeArchived_СрокПрошёл_True()
-    {
-        var chat = new Session { ArchivedAt = Now.AddDays(-31) };
-        ChatExpiryService.ShouldPurgeArchived(chat, Now, 30).Should().BeTrue();
-    }
-
-    [Fact]
-    public void ShouldPurgeArchived_СрокНеПрошёл_False()
-    {
-        var chat = new Session { ArchivedAt = Now.AddDays(-29) };
-        ChatExpiryService.ShouldPurgeArchived(chat, Now, 30).Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldPurgeArchived_СчитаетОтАрхивацииАНеОтАктивности_False()
-    {
-        // Чат пролежал без движения год, а в архив убран вчера — сносить его нельзя
-        var chat = new Session { ArchivedAt = Now.AddDays(-1), UpdatedAt = Now.AddDays(-365) };
-        ChatExpiryService.ShouldPurgeArchived(chat, Now, 30).Should().BeFalse();
-    }
-
-    [Theory]
-    [InlineData(SessionStatus.Working)]
-    [InlineData(SessionStatus.Waiting)]
-    public void ShouldPurgeArchived_ХодИдёт_False(SessionStatus status)
-    {
-        // В архивном чате может доигрывать исполнитель задачи — удаление посреди работы недопустимо
-        var chat = new Session { ArchivedAt = Now.AddDays(-90), Status = status };
-        ChatExpiryService.ShouldPurgeArchived(chat, Now, 30).Should().BeFalse();
-    }
-
     [Fact]
     public void ShouldExpire_СрокПрошёл_True()
     {

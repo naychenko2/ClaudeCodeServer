@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -28,10 +28,7 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         // Имена проектов владельца: id → Name (чужие проекты сюда не попадают по построению)
         var projectNames = projects.GetByOwner(UserId).ToDictionary(p => p.Id, p => p.Name);
 
-        // Архивные чаты в сводку не попадают вовсе: «убрал с глаз» распространяется и на
-        // главную, и на точку активности проекта, которая считается по этому же ответу
         var all = sessions.GetAllOwnedBy(UserId)
-            .Where(s => s.ArchivedAt is null)
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 

@@ -6,6 +6,8 @@ import { buildPlanFeedback } from './buildPlanFeedback';
 import { useHeadings, type Heading } from '../../hooks/useHeadings';
 import { C, FONT, R, SHADOW, Z, SP, FS } from '../../lib/design';
 import { ICON_SIZE } from '../../components/ui/icons';
+import { Button } from '../../components/ui/Button';
+import { IconButton } from '../../components/ui/IconButton';
 
 // Слой контекстных замечаний к плану. Ядро фичи «Визуальный разворот плана»
 // (часть A): работает самостоятельно, без бэкенда.
@@ -73,21 +75,26 @@ function injectRemarkStyles(): void {
   if (document.getElementById(REMARK_STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = REMARK_STYLE_ID;
+  // Маркер «замечание» у заголовка — НЕ оранжевый: на плане из 15 разделов это
+  // дало бы 15 оранжевых кнопок на экране (гайд дизайн-системы: «много оранжевого
+  // — дефект»). Покой — нейтральный чип, accent проявляется только при наведении
+  // или фокусе с клавиатуры.
   style.textContent = `
     [data-remark-host] { position: relative; }
     [data-remark-btn] {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 2px 7px; border-radius: ${R.md}px;
-      border: 1px solid ${C.accent}; background: ${C.bgCard};
-      color: ${C.accent}; cursor: pointer; font-size: ${FS.xs}px;
+      border: 1px solid ${C.border}; background: ${C.bgCard};
+      color: ${C.textSecondary}; cursor: pointer; font-size: ${FS.xs}px;
       font-family: ${FONT.sans}; font-weight: 600; line-height: 1.2;
       opacity: 0; pointer-events: none; transform: translateY(-1px);
-      transition: opacity .12s ease-out;
+      transition: opacity .12s ease-out, color .12s ease-out, border-color .12s ease-out;
       flex-shrink: 0;
     }
     [data-remark-host]:hover > [data-remark-btn],
     [data-remark-btn]:focus-visible {
       opacity: 1; pointer-events: auto; transform: none;
+      color: ${C.accent}; border-color: ${C.accent};
     }
     /* Тач-устройство: hover не работает — кнопка видна всегда, ставится
        внутрь строки заголовка рядом с текстом, а не абсолютно справа */
@@ -314,10 +321,12 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
   // ── Resolved-планы: ничего не рисуем (только чтение) ──
   if (status !== 'pending') return null;
 
-  // Форма ввода: портал с клампом по ширине экрана
+  // Форма ввода: портал с клампом по ширине экрана.
+  // Z.dropdown, не Z.modal: попап не блокирует фон и не закрывает остальное —
+  // модальный слой для него был бы семантической ложью (и перекрывал бы FAB).
   const formPopup = form && createPortal(
     <div style={{
-      position: 'fixed', zIndex: Z.modal,
+      position: 'fixed', zIndex: Z.dropdown,
       ...(isMobile
         ? { left: 8, right: 8, bottom: 8, borderRadius: R.modal }
         : {
@@ -337,9 +346,9 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={form.heading}>
           {form.heading}
         </span>
-        <button onClick={() => setForm(null)} aria-label="Закрыть" style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}>
+        <IconButton size="sm" tone="muted" ariaLabel="Закрыть" onClick={() => setForm(null)}>
           <X size={14} />
-        </button>
+        </IconButton>
       </div>
       {form.quote && (
         <div style={{
@@ -369,24 +378,22 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
           }}
         />
         <div style={{ display: 'flex', gap: SP.xs, justifyContent: 'flex-end' }}>
-          <button onClick={() => setForm(null)} style={{
-            padding: '6px 14px', background: 'transparent', color: C.textMuted,
-            border: `1px solid ${C.border}`, borderRadius: R.md,
-            fontSize: FS.base, cursor: 'pointer', fontFamily: FONT.sans,
-          }}>Отмена</button>
-          <button onClick={addRemark} disabled={!draft.trim()} style={{
-            padding: '6px 14px', background: C.accent, color: C.onAccent,
-            border: 'none', borderRadius: R.md,
-            fontSize: FS.base, fontWeight: 600, cursor: 'pointer',
-            fontFamily: FONT.sans, opacity: draft.trim() ? 1 : 0.5,
-          }}>Добавить</button>
+          <Button variant="ghostFilled" size="sm" onClick={() => setForm(null)}>
+            Отмена
+          </Button>
+          <Button variant="primary" size="sm" disabled={!draft.trim()} onClick={addRemark}>
+            Добавить
+          </Button>
         </div>
       </div>
     </div>,
     document.body,
   );
 
-  // Плавающая кнопка над выделением (только если форма ещё не открыта)
+  // Плавающая кнопка над выделением (только если форма ещё не открыта).
+  // Пара C.navInk/C.onNavInk — единая «чернильная» плашка (тот же приём, что у
+  // активного раздела хаба): читается как «поверхностный» слой и не путается
+  // с accent-призывом.
   const selectionPopup = selection && !form && createPortal(
     <button onClick={() => openForm({
       heading: selection.heading ?? '—',
@@ -395,11 +402,11 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
       x: selection.x, y: selection.y,
       placement: 'center',
     })} style={{
-      position: 'fixed', zIndex: Z.modal,
+      position: 'fixed', zIndex: Z.dropdown,
       left: clamp(selection.x - 90, 8, window.innerWidth - 200),
       top: Math.max(8, selection.y - 40),
       display: 'flex', alignItems: 'center', gap: 6,
-      padding: '6px 12px', background: C.textHeading, color: C.bgMain,
+      padding: '6px 12px', background: C.navInk, color: C.onNavInk,
       border: 'none', borderRadius: R.md, fontSize: FS.base, fontWeight: 600,
       cursor: 'pointer', boxShadow: SHADOW.dropdown, fontFamily: FONT.sans,
     }}>
@@ -418,12 +425,12 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
     }}>
       {/* Список замечаний с возможностью удалить */}
       {remarks.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
           {remarks.map((r, i) => (
             <div key={i} style={{
               border: `1px solid ${C.border}`, borderRadius: R.lg,
               background: C.bgWhite, padding: '8px 10px',
-              display: 'flex', flexDirection: 'column', gap: 4,
+              display: 'flex', flexDirection: 'column', gap: SP.xxs,
             }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs,
@@ -434,12 +441,9 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
                   flex: 1, minWidth: 0, overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }} title={r.anchorHeading}>{r.anchorHeading}</span>
-                <button onClick={() => removeRemark(i)} aria-label="Удалить замечание" style={{
-                  border: 'none', background: 'none', cursor: 'pointer',
-                  color: C.textMuted, padding: 0, display: 'flex',
-                }}>
+                <IconButton size="xs" tone="muted" ariaLabel="Удалить замечание" onClick={() => removeRemark(i)}>
                   <Trash2 size={12} />
-                </button>
+                </IconButton>
               </div>
               {r.quote && (
                 <div style={{
@@ -460,35 +464,33 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountCha
         <span style={{
           display: 'inline-flex', alignItems: 'center', gap: 5,
           fontSize: FS.sm,
-          padding: '4px 9px', borderRadius: R.pill,
+          padding: '4px 9px', borderRadius: R.max,
           background: remarks.length > 0 ? C.accentLight : C.bgInset,
           color: remarks.length > 0 ? C.textHeading : C.textMuted,
           fontWeight: 600, fontFamily: FONT.sans,
         }}>Замечаний: {remarks.length}</span>
 
         {remarks.length > 0 && (
-          <button onClick={clearAll} style={{
-            padding: '6px 10px', background: 'transparent',
-            border: `1px solid ${C.border}`, color: C.textMuted,
-            borderRadius: R.md, fontSize: FS.base, cursor: 'pointer',
-            fontFamily: FONT.sans,
-          }}>Сбросить</button>
+          <Button variant="ghostFilled" size="sm" onClick={clearAll}>
+            Сбросить
+          </Button>
         )}
 
         <div style={{ flex: 1 }} />
 
-        <button onClick={submit} style={{
-          padding: '8px 14px', minHeight: 40,
-          background: remarks.length > 0 ? C.accent : C.bgInset,
-          color: remarks.length > 0 ? C.onAccent : C.textSecondary,
-          border: 'none', borderRadius: R.lg,
-          fontSize: FS.base, fontWeight: 600,
-          cursor: 'pointer', fontFamily: FONT.sans,
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-        }}>
-          <MessageSquarePlus size={14} />
+        {/* Кнопка «Отправить на доработку» — primary, у неё Button variant="primary"
+            сам даёт focus-ring/press из коробки (а у самодельной их не было — ревью).
+            Disabled при пустом списке: показываем, что действие доступно только когда
+            есть что отправлять, а не «отправить пустоту». */}
+        <Button
+          variant="primary"
+          size="md"
+          disabled={remarks.length === 0}
+          leftIcon={<MessageSquarePlus size={14} />}
+          onClick={submit}
+        >
           Отправить на доработку ({remarks.length})
-        </button>
+        </Button>
       </div>
     </div>
   );

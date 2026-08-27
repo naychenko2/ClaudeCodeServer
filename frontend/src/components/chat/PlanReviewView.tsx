@@ -12,6 +12,9 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
 import { api } from '../../lib/api';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { InlineSegmented } from '../ui/InlineSegmented';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
 function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size?: number; color?: string; strokeWidth?: number }) {
@@ -22,21 +25,26 @@ function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size
 function CollapsedPlanBody({ plan }: { plan: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ marginTop: 8 }}>
-      <button
+    <div style={{ marginTop: SP.xs }}>
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={() => setOpen(o => !o)}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none',
-          cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 600, color: C.textSecondary, fontFamily: 'inherit',
-        }}
+        leftIcon={
+          <span style={{
+            display: 'inline-block',
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.2s',
+            fontSize: 12, lineHeight: 1,
+          }}>▾</span>
+        }
       >
-        <span style={{ display: 'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▾</span>
         {open ? 'Скрыть план' : 'Показать план'}
-      </button>
+      </Button>
       {open && (
         <div style={{
-          marginTop: 8, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-          padding: '10px 12px', maxHeight: 320, overflow: 'auto', fontSize: 13, color: C.textHeading, wordBreak: 'break-word',
+          marginTop: SP.xs, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          padding: '10px 12px', maxHeight: 320, overflow: 'auto', fontSize: FS.sm, color: C.textHeading, wordBreak: 'break-word',
         }}>
           <MarkdownContent text={plan || '_(пустой план)_'} />
         </div>
@@ -59,25 +67,25 @@ function SavePlanButton({ plan, online }: { plan: string; online: boolean }) {
       .catch(() => {})
       .finally(() => setBusy(false));
   };
-  const btn: React.CSSProperties = {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 24, height: 24, borderRadius: 6, border: 'none', background: 'transparent',
-    color: C.textMuted, cursor: 'pointer', padding: 0, flexShrink: 0, opacity: busy ? 0.5 : 1,
-  };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 'auto', flexShrink: 0 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs, marginLeft: 'auto', flexShrink: 0 }}>
       {savedId && (
-        <button onClick={() => openNoteById(savedId)} title="Открыть созданную заметку"
-          style={{ ...btn, width: 'auto', padding: '0 6px', fontSize: 11, fontWeight: 600, color: C.successText }}>
+        <Button variant="ghost" size="xs" onClick={() => openNoteById(savedId)}
+          style={{ color: C.successText, fontSize: FS.xs }}>
           Открыть
-        </button>
+        </Button>
       )}
-      <button onClick={save} disabled={busy} style={btn}
-        title={savedId ? 'Сохранено в заметки' : 'Сохранить план в заметку'} aria-label="Сохранить план в заметку">
+      <IconButton
+        size="xs"
+        tone="muted"
+        ariaLabel={savedId ? 'Сохранено в заметки' : 'Сохранить план в заметку'}
+        disabled={busy}
+        onClick={save}
+      >
         {savedId
           ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
           : <IconNotes size={14} />}
-      </button>
+      </IconButton>
     </span>
   );
 }
@@ -167,15 +175,19 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         {/* Выход из режима «План» — только у актуального (последнего) одобренного плана.
             Предлагаем выбрать режим исполнения, как в нативном approval Claude Code. */}
         {showSwitch && onSwitchMode && (
-          <div style={{ marginTop: 9, paddingTop: 9, borderTop: `1px solid ${C.success}`, fontSize: 12, color: C.textSecondary }}>
-            <div style={{ marginBottom: 7 }}>Чат остаётся в режиме «План» — следующие задачи тоже будут согласованы. Выйти и выполнять в:</div>
-            <div style={{ display: 'flex', gap: 7 }}>
+          <div style={{ marginTop: SP.xs, paddingTop: SP.xs, borderTop: `1px solid ${C.success}`, fontSize: FS.sm, color: C.textSecondary }}>
+            <div style={{ marginBottom: SP.xs }}>Чат остаётся в режиме «План» — следующие задачи тоже будут согласованы. Выйти и выполнять в:</div>
+            <div style={{ display: 'flex', gap: SP.xs }}>
               {(['acceptEdits', 'auto'] as Mode[]).map(m => (
-                <button key={m} onClick={() => onSwitchMode(m)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: C.textHeading, padding: '5px 10px' }}>
-                  <span style={{ display: 'flex', color: C.accent }}><ModeIcon mode={m} /></span>
+                <Button
+                  key={m}
+                  variant="ghostFilled"
+                  size="xs"
+                  onClick={() => onSwitchMode(m)}
+                  leftIcon={<span style={{ display: 'flex', color: C.accent }}><ModeIcon mode={m} /></span>}
+                >
                   {MODE_META[m].label}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -245,41 +257,53 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           // плана сразу дёргало бы модель. Сюда же вынесена кнопка «Собрать
           // схему», чтобы не терялась за переключателем.
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap',
+            display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs, flexWrap: 'wrap',
           }}>
-            <SegmentedToggle
-              options={[
-                { value: 'text' as const, label: 'Текстом', icon: <FileText size={12} /> },
-                { value: 'scheme' as const, label: 'Схемой', icon: <Network size={12} /> },
-              ]}
+            <InlineSegmented
               value={schemeView}
               onChange={setSchemeView}
+              options={[
+                { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+                  tone: { bg: C.plan, fg: C.onAccent } },
+                { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+                  tone: { bg: C.plan, fg: C.onAccent } },
+              ]}
             />
             {schemeView === 'scheme' && schemeStatus !== 'ready' && (
-              <button onClick={buildScheme} disabled={schemeStatus === 'building'} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                padding: '5px 10px', borderRadius: R.md,
-                border: `1px solid ${C.border}`, background: C.bgWhite,
-                color: C.textHeading, cursor: schemeStatus === 'building' ? 'default' : 'pointer',
-                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
-                opacity: schemeStatus === 'building' ? 0.6 : 1,
-              }}>
-                {schemeStatus === 'building'
-                  ? <Loader2 size={12} style={{ animation: 'cc-spin 1s linear infinite' }} />
+              <Button
+                variant="ghostFilled"
+                size="sm"
+                loading={schemeStatus === 'building'}
+                onClick={buildScheme}
+                leftIcon={schemeStatus === 'building'
+                  ? <Loader2 size={12} />
                   : <Network size={12} />}
+              >
                 {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
-              </button>
+              </Button>
             )}
           </div>
         )}
 
         {schemeView === 'scheme' && visualPlanEnabled ? (
           schemeStatus === 'ready' && map ? (
-            <div style={{
-              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-              padding: '12px 14px',
-            }}>
-              <PlanScheme map={map} planText={plan} contentRef={planBodyRef} />
+            // Схема в карточке ленты — с maxHeight и fade снизу (как у текста
+            // плана): иначе длинная карта растягивала бы карточку на весь чат.
+            <div style={{ position: 'relative' }}>
+              <div ref={planBodyRef} style={{
+                background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+                padding: '12px 14px', maxHeight: 360, overflow: 'auto',
+                fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+              }}>
+                <PlanScheme map={map} planText={plan} contentRef={planBodyRef} />
+              </div>
+              {overflowing && (
+                <div style={{
+                  position: 'absolute', left: 1, right: 1, bottom: 1, height: 40, borderRadius: `0 0 ${R.lg}px ${R.lg}px`,
+                  background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
+                  pointerEvents: 'none',
+                }} />
+              )}
             </div>
           ) : schemeStatus === 'failed' ? (
             // Отказ сборки: НЕ падаем в красную ошибку — план остался на тексте с
@@ -294,12 +318,9 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
                 <div style={{ fontWeight: 600 }}>
                   {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
                 </div>
-                <button onClick={buildScheme} style={{
-                  marginTop: 6, padding: '4px 10px', borderRadius: R.sm,
-                  border: `1px solid ${C.border}`, background: C.bgWhite,
-                  color: C.textSecondary, cursor: 'pointer',
-                  fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-                }}>Попробовать снова</button>
+                <Button variant="ghostFilled" size="xs" onClick={buildScheme} style={{ marginTop: SP.xs }}>
+                  Попробовать снова
+                </Button>
               </div>
             </div>
           ) : schemeStatus === 'building' ? (
@@ -326,7 +347,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             <div ref={planBodyRef} style={{
               background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
               padding: '10px 12px', maxHeight: 360, overflow: 'auto',
-              fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
+              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
             }}>
               <MarkdownContent text={plan || '_(пустой план)_'} />
             </div>
@@ -343,7 +364,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       </div>
 
       {!online ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted }}>Недоступно офлайн</div>
       ) : visualPlanEnabled ? (
         // Под флагом visualPlan — кнопка одобрения + слой замечаний (PlanRemarks)
         // с кнопкой «Отправить на доработку (N)». Когда замечаний нет, одобрение —
@@ -354,37 +375,44 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         // updatedInput, комментарий на уровне протокола отбрасывается).
         remarksCount > 0 ? (
           <div>
-            <button onClick={() => onRespond(item.requestId, true)}
-              style={{
-                width: '100%', minHeight: 42, background: C.bgWhite, color: C.planText,
-                border: `1px solid ${C.planBorder}`, borderRadius: R.lg, padding: 9,
-                cursor: 'pointer', fontSize: 13.5, fontWeight: 600,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-              }}>
-              <Check size={16} color={C.planText} strokeWidth={2.4} style={{ flexShrink: 0 }} />
+            {/* Кнопка одобрения в режиме «есть замечания» — вторичная: пока
+                пользователь не отправил их на доработку, нажатие этой кнопки
+                потеряет их без предупреждения. Тон — planBorder как нейтральный
+                accent плана, чтобы «не главное» читалось по обводке. */}
+            <Button
+              fullWidth
+              variant="ghostFilled"
+              size="md"
+              onClick={() => onRespond(item.requestId, true)}
+              style={{ color: C.planText, borderColor: C.planBorder }}
+              leftIcon={<Check size={16} color={C.planText} strokeWidth={2.4} />}
+            >
               Одобрить и выполнить
-            </button>
+            </Button>
             <div style={{
-              marginTop: 6, fontSize: 12, color: C.textMuted, textAlign: 'center', lineHeight: 1.35,
+              marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted, textAlign: 'center', lineHeight: 1.35,
             }}>
               замечания ({remarksCount}) не отправятся
             </div>
           </div>
         ) : (
-          <button onClick={() => onRespond(item.requestId, true)}
-            style={{
-              width: '100%', minHeight: 42, background: C.plan, color: C.onAccent, borderRadius: R.lg,
-              padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
-              boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-            }}>
-            <Check size={16} color={C.onAccent} strokeWidth={2.6} style={{ flexShrink: 0 }} />
+          // Primary одобрения без замечаний — основное действие карточки, ему
+          // нужны focus-ring и shadow из коробки (Box variant="primary" + glow).
+          // Раньше был самодельный rgba — линтер не видел, и focus-ring отсутствовал.
+          <Button
+            fullWidth
+            variant="primary"
+            size="md"
+            glow
+            onClick={() => onRespond(item.requestId, true)}
+            leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
+          >
             Одобрить и выполнить
-          </button>
+          </Button>
         )
       ) : rejecting ? (
         <div>
-          <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 7 }}>
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs }}>
             {asstName} учтёт это и предложит новый план
           </div>
           <textarea
@@ -393,35 +421,51 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             autoFocus
             placeholder="Что поправить в плане? (необязательно)"
             rows={3}
-            style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.lg, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: 13, color: C.textHeading, fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: 8 }}
+            style={{
+              width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
+              border: `1px solid ${C.border}`, background: C.bgWhite,
+              padding: '8px 10px', fontSize: FS.sm, color: C.textHeading,
+              fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: SP.xs,
+            }}
           />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => onRespond(item.requestId, false, feedback.trim() || undefined)}
-              style={{ flex: 1, minHeight: 40, background: C.plan, color: C.onAccent, borderRadius: R.lg, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+          <div style={{ display: 'flex', gap: SP.xs }}>
+            <Button
+              fullWidth
+              variant="primary"
+              size="md"
+              onClick={() => onRespond(item.requestId, false, feedback.trim() || undefined)}
+            >
               Переработать план
-            </button>
-            <button onClick={() => { setRejecting(false); setFeedback(''); }}
-              style={{ flex: 'none', minHeight: 40, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: R.lg, padding: '9px 16px', cursor: 'pointer', fontSize: 13 }}>
+            </Button>
+            <Button
+              variant="ghostFilled"
+              size="md"
+              onClick={() => { setRejecting(false); setFeedback(''); }}
+            >
               Назад
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => onRespond(item.requestId, true)}
-            style={{
-              flex: 1, minHeight: 42, background: C.plan, color: C.onAccent, borderRadius: R.lg,
-              padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
-              boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-            }}>
-            <Check size={16} color={C.onAccent} strokeWidth={2.6} style={{ flexShrink: 0 }} />
+        <div style={{ display: 'flex', gap: SP.xs }}>
+          <Button
+            fullWidth
+            variant="primary"
+            size="md"
+            glow
+            onClick={() => onRespond(item.requestId, true)}
+            leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
+          >
             Одобрить и выполнить
-          </button>
-          <button onClick={() => setRejecting(true)}
-            style={{ flex: 'none', minHeight: 42, background: 'transparent', border: `1px solid ${C.planBorder}`, color: C.planText, borderRadius: R.lg, padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+          </Button>
+          <Button
+            variant="ghostAccent"
+            size="md"
+            onClick={() => setRejecting(true)}
+            style={{ color: C.planText, borderColor: C.planBorder }}
+          >
             Отклонить
-          </button>
+          </Button>
         </div>
       )}
       {/* Слой замечаний: рендерится ВСЕГДА у pending-плана, чтобы кнопки у
@@ -440,36 +484,5 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   );
 }
 
-// Сегмент-переключатель: два варианта, активный — на plan-фоне, неактивный — нейтральный.
-// Один общий компонент: «Текстом / Схемой» в PlanReviewView и в PlanSection.
-function SegmentedToggle<V extends string>({ options, value, onChange }: {
-  options: ReadonlyArray<{ value: V; label: string; icon?: React.ReactNode }>;
-  value: V;
-  onChange: (v: V) => void;
-}) {
-  return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center',
-      border: `1px solid ${C.border}`, borderRadius: R.pill,
-      background: C.bgInset, padding: 2,
-    }}>
-      {options.map(opt => {
-        const active = opt.value === value;
-        return (
-          <button key={opt.value} onClick={() => onChange(opt.value)} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '4px 10px', borderRadius: R.pill,
-            border: 'none',
-            background: active ? C.plan : 'transparent',
-            color: active ? C.onAccent : C.textSecondary,
-            cursor: 'pointer',
-            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-          }}>
-            {opt.icon}
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+// Сегмент-переключатель: общий InlineSegmented с тоном плана (см. PlanSection).
+// Активный сегмент на C.plan, не C.accent — режим «План» живёт своей гаммой.

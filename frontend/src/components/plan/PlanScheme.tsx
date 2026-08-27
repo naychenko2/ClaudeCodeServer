@@ -29,6 +29,7 @@ import { useHeadings, type Heading } from '../../hooks/useHeadings';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { C, FONT, R, SP, FS } from '../../lib/design';
 import { resolveHeading, headingHasDuplicates, sliceSection } from './schemeLogic';
+import { Button } from '../ui/Button';
 
 interface Props {
   // Карта (PlanMap) — приходит с бэка. Сборка инициируется родителем; компонент
@@ -216,7 +217,7 @@ function Essence({ map, attentionBlocks, boundaryBlocks, onOpenBlock }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
         <span style={{
           alignSelf: 'flex-start',
-          padding: '3px 9px', borderRadius: R.pill,
+          padding: '3px 9px', borderRadius: R.max,
           background: C.bgInset, color: C.textSecondary,
           fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700,
           textTransform: 'lowercase',
@@ -255,10 +256,10 @@ function Essence({ map, attentionBlocks, boundaryBlocks, onOpenBlock }: {
           display: 'flex', flexDirection: 'column', gap: SP.sm,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textHeading, fontWeight: 700 }}>
-            <AlertTriangle size={14} style={{ color: 'var(--c-warning)', flexShrink: 0 }} />
+            <AlertTriangle size={14} style={{ color: C.warning, flexShrink: 0 }} />
             Требует вашего внимания · {attentionBlocks.length}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
             {attentionBlocks.map(b => (
               <button key={b.id} onClick={() => onOpenBlock(b.id)} style={{
                 display: 'flex', alignItems: 'center', gap: SP.sm,
@@ -266,14 +267,19 @@ function Essence({ map, attentionBlocks, boundaryBlocks, onOpenBlock }: {
                 background: C.bgWhite, border: `1px solid ${C.border}`,
                 cursor: 'pointer', fontFamily: FONT.sans,
                 textAlign: 'left', width: '100%',
-              }}>
+                // hover/active даём строке «живой» отклик — это кнопка, а не надпись
+                transition: 'background 0.12s',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = C.bgSelected)}
+              onMouseLeave={e => (e.currentTarget.style.background = C.bgWhite)}
+              >
                 <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, color: C.textHeading, fontWeight: 600 }}>
                   {b.title || b.anchor}
                 </span>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xxs, justifyContent: 'flex-end' }}>
                   {b.flags.map(f => (
                     <span key={f} style={{
-                      padding: '2px 7px', borderRadius: R.pill,
+                      padding: '2px 7px', borderRadius: R.max,
                       background: C.bgInset, color: C.textSecondary,
                       fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
                     }}>{FLAG_LABEL[f] || f}</span>
@@ -336,7 +342,7 @@ function MapView({ blocks, resolved, onOpenBlock }: {
         const dependsOnPrevious = prev && b.dependsOn.includes(prev.id);
         const hasLiveAnchor = resolved.has(b.id);
         return (
-          <div key={b.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div key={b.id} style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
             {dependsOnPrevious && (
               <div style={{
                 width: 2, height: 14, marginLeft: 18,
@@ -353,6 +359,15 @@ function MapView({ blocks, resolved, onOpenBlock }: {
                 cursor: hasLiveAnchor ? 'pointer' : 'default',
                 fontFamily: FONT.sans, textAlign: 'left', width: '100%',
                 opacity: hasLiveAnchor ? 1 : 0.55,
+                // hover-подсветка ряда — это кнопка-строка, а не надпись; подсказка
+                // о кликабельности без неё прячется
+                transition: 'background 0.12s',
+              }}
+              onMouseEnter={e => {
+                if (hasLiveAnchor) e.currentTarget.style.background = C.bgSelected;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = C.bgWhite;
               }}
             >
               <span style={{
@@ -367,14 +382,14 @@ function MapView({ blocks, resolved, onOpenBlock }: {
                     fontSize: FS.md, fontWeight: 700, color: C.textHeading,
                   }}>{b.title || b.anchor}</span>
                   <span style={{
-                    padding: '1px 7px', borderRadius: R.pill,
+                    padding: '1px 7px', borderRadius: R.max,
                     background: C.bgInset, color: C.textMuted,
                     fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
                   }}>{TYPE_LABEL[b.type] || b.type}</span>
                   {b.flags.length > 0 && (
                     <span style={{
-                      padding: '1px 7px', borderRadius: R.pill,
-                      background: 'var(--c-warning-bg)', color: 'var(--c-warning-text)',
+                      padding: '1px 7px', borderRadius: R.max,
+                      background: C.warningBg, color: C.warningText,
                       fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
                     }}>{b.flags.length} {b.flags.length === 1 ? 'флаг' : 'флагов'}</span>
                   )}
@@ -406,23 +421,13 @@ function BlockView({ block, heading, section, headings, onBackToEssence, onBackT
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
-        <button onClick={onBackToEssence} title="К сути" style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          border: 'none', background: 'transparent', cursor: 'pointer',
-          fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary, fontWeight: 600,
-          padding: '2px 4px',
-        }}>
-          <ArrowLeft size={12} /> к сути
-        </button>
+        <Button variant="ghost" size="xs" leftIcon={<ArrowLeft size={12} />} onClick={onBackToEssence}>
+          к сути
+        </Button>
         <span style={{ color: C.textMuted, fontFamily: FONT.sans, fontSize: FS.xs }}>·</span>
-        <button onClick={onBackToMap} title="К карте" style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          border: 'none', background: 'transparent', cursor: 'pointer',
-          fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary, fontWeight: 600,
-          padding: '2px 4px',
-        }}>
+        <Button variant="ghost" size="xs" onClick={onBackToMap}>
           к карте
-        </button>
+        </Button>
       </div>
 
       <div style={{
@@ -432,15 +437,15 @@ function BlockView({ block, heading, section, headings, onBackToEssence, onBackT
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span style={{
-            padding: '2px 8px', borderRadius: R.pill,
+            padding: '2px 8px', borderRadius: R.max,
             background: C.bgInset, color: C.textSecondary,
             fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
             textTransform: 'lowercase',
           }}>{TYPE_LABEL[block.type] || block.type}</span>
           {block.flags.map(f => (
             <span key={f} style={{
-              padding: '2px 8px', borderRadius: R.pill,
-              background: 'var(--c-warning-bg)', color: 'var(--c-warning-text)',
+              padding: '2px 8px', borderRadius: R.max,
+              background: C.warningBg, color: C.warningText,
               fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
               whiteSpace: 'nowrap',
             }}>{FLAG_LABEL[f] || f}</span>
@@ -466,8 +471,11 @@ function BlockView({ block, heading, section, headings, onBackToEssence, onBackT
       </div>
 
       {section !== null ? (
+        // Исходный markdown раздела — НИША внутри карточки блока: внешняя карточка
+        // на C.bgWhite, эта — на C.bgInset. Иначе два белых прямоугольника подряд
+        // читаются как «одно и то же поле», а должны как «заголовок → раздел».
         <div style={{
-          background: C.bgWhite, border: `1px solid ${C.border}`,
+          background: C.bgInset, border: `1px solid ${C.border}`,
           borderRadius: R.lg, padding: `${SP.md}px`,
           fontSize: FS.base, color: C.textHeading,
         }}>

@@ -162,6 +162,7 @@ export const SHADOW = {
   peek:     'var(--shadow-peek)',       // попап-превью панели: остров НАД раскладкой
   sheet:    'var(--shadow-sheet)',      // мобильная шторка (тень кверху)
   button:   'var(--shadow-button)',     // свечение основной кнопки
+  planButton: 'var(--shadow-plan-button)', // свечение основной кнопки режима «План» (индиго-гамма)
   fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB) с accent-заливкой
   fabNeutral: 'var(--shadow-fab-neutral)', // тот же ореол, но нейтральный — FAB без заливки
   alert:      'var(--shadow-alert)',       // янтарный ореол «нужен ответ» (редуцированное движение)

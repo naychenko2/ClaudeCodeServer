@@ -4,6 +4,9 @@ import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { ChevronRight, ChevronLeft, ChevronsRight, List, Network, FileText, AlertCircle, Loader2 } from 'lucide-react';
 import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { InlineSegmented } from '../ui/InlineSegmented';
 import { MarkdownViewer } from '../MarkdownViewer';
 import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadings';
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
@@ -14,6 +17,7 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
 import { api } from '../../lib/api';
+import { showToast } from '../../lib/toast';
 
 // Единый стиль кнопок-чипов в навигаторе плана («последний», «оглавление») —
 // утопленный фон (не белый), одинаковые размеры/типографика.
@@ -60,58 +64,22 @@ const STATUS_META: Record<PlanStatus, { label: string; fg: string; bg: string }>
 // Иконка-кнопка навигатора планов (стрелка ‹ / ›)
 function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: boolean; onClick: () => void }) {
   return (
-    <button
-      onClick={onClick}
+    <IconButton
+      size="xs"
+      tone="muted"
+      ariaLabel={dir === 'prev' ? 'Предыдущий план' : 'Следующий план'}
       disabled={disabled}
-      title={dir === 'prev' ? 'Предыдущий план' : 'Следующий план'}
-      style={{
-        width: 24, height: 24, border: 'none', borderRadius: R.sm, background: 'transparent',
-        cursor: disabled ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: disabled ? C.border : C.textSecondary, flexShrink: 0,
-      }}
+      onClick={onClick}
     >
       {dir === 'prev'
         ? <ChevronLeft size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-    </button>
+    </IconButton>
   );
 }
 
-// Сегмент-переключатель «Текстом / Схемой» в навигаторе панели «План». Локальный
-// компонент: один внутри карточки чата (PlanReviewView), другой — внутри панели
-// «План». Дублирование умышленное — оба места живут в разных композициях, и тащить
-// компонент наверх ради двух вызовов преждевременно.
-function SegmentedToggle<V extends string>({ options, value, onChange }: {
-  options: ReadonlyArray<{ value: V; label: string; icon?: React.ReactNode }>;
-  value: V;
-  onChange: (v: V) => void;
-}) {
-  return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center',
-      border: `1px solid ${C.border}`, borderRadius: R.pill,
-      background: C.bgInset, padding: 2,
-    }}>
-      {options.map(opt => {
-        const active = opt.value === value;
-        return (
-          <button key={opt.value} onClick={() => onChange(opt.value)} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '4px 10px', borderRadius: R.pill,
-            border: 'none',
-            background: active ? C.plan : 'transparent',
-            color: active ? C.onAccent : C.textSecondary,
-            cursor: 'pointer',
-            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-          }}>
-            {opt.icon}
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+// Сегмент-переключатель «Текстом / Схемой» — общий InlineSegmented с тоном плана.
+// Активный сегмент на C.plan, не C.accent — режим «План» живёт своей гаммой.
 
 export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; projectId?: string }) {
   // Навигация по планам: null = «не выбирал» → показываем последний
@@ -121,7 +89,6 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
 
   // Оглавление текущего плана + поповер
   const [tocOpen, setTocOpen] = useState(false);
-  const [copiedHint, setCopiedHint] = useState(false);
   const planContentRef = useRef<HTMLDivElement>(null);
   const headings = useHeadings(planContentRef, curPlan?.plan);
   // Фича «Визуальный разворот плана»: в панели `requestId` не хранится
@@ -167,20 +134,20 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
     <>
       {/* Навигатор планов + статус + оглавление */}
       <div style={{
-        flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: 6,
+        flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: '8px 10px 8px 12px', borderBottom: `1px solid ${C.border}`,
       }}>
         {plans.length > 1 && (
           <NavArrow dir="prev" disabled={effIdx === 0} onClick={() => setPlanIdx(effIdx - 1)} />
         )}
-        <span style={{ fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}>
           {plans.length > 1 ? `План ${effIdx + 1} / ${plans.length}` : 'План'}
         </span>
         {plans.length > 1 && (
           <NavArrow dir="next" disabled={effIdx === plans.length - 1} onClick={() => setPlanIdx(effIdx + 1)} />
         )}
         <span style={{
-          fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: R.sm,
+          fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, padding: '2px 8px', borderRadius: R.max,
           color: STATUS_META[curPlan.status].fg, background: STATUS_META[curPlan.status].bg, whiteSpace: 'nowrap',
         }}>
           {STATUS_META[curPlan.status].label}
@@ -188,26 +155,24 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
         <div style={{ flex: 1 }} />
         <SavePlanChip plan={curPlan.plan} projectId={projectId} />
         {plans.length > 1 && effIdx !== plans.length - 1 && (
-          <button
+          <Button
+            variant="ghostFilled"
+            size="xs"
             onClick={() => setPlanIdx(null)}
-            title="К последнему плану"
-            style={navChip}
+            leftIcon={<ChevronsRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
           >
-            <ChevronsRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             последний
-          </button>
+          </Button>
         )}
         {headings.length > 0 && (
-          <button
+          <Button
+            variant={tocOpen ? 'ghostAccent' : 'ghostFilled'}
+            size="xs"
             onClick={() => setTocOpen(v => !v)}
-            title="Оглавление"
-            style={tocOpen
-              ? { ...navChip, background: C.accentMuted, border: `1px solid ${C.accentMuted}`, color: C.accent }
-              : navChip}
+            leftIcon={<List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
           >
-            <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             оглавление
-          </button>
+          </Button>
         )}
 
         {/* Поповер оглавления */}
@@ -215,10 +180,10 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
           <>
             <div onClick={() => setTocOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
             <div style={{
-              position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 41,
+              position: 'absolute', top: '100%', right: 8, marginTop: SP.xxs, zIndex: 41,
               width: 'min(280px, calc(100% - 16px))', maxHeight: 320, overflowY: 'auto',
               background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-              boxShadow: SHADOW.dropdown, padding: '6px 0',
+              boxShadow: SHADOW.dropdown, padding: SP.xs + ' 0',
             }}>
               {headings.map((h, i) => (
                 <button
@@ -227,7 +192,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
                   style={{
                     width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer',
                     padding: '5px 12px', paddingLeft: 12 + (h.level - 1) * 12,
-                    fontFamily: FONT.sans, fontSize: 12.5, color: h.level <= 2 ? C.textHeading : C.textSecondary,
+                    fontFamily: FONT.sans, fontSize: FS.sm, color: h.level <= 2 ? C.textHeading : C.textSecondary,
                     fontWeight: h.level <= 2 ? 600 : 400,
                     whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.35,
                   }}
@@ -252,28 +217,28 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             display: 'flex', alignItems: 'center', gap: 6,
             padding: '8px 12px 0', flexShrink: 0, flexWrap: 'wrap',
           }}>
-            <SegmentedToggle
-              options={[
-                { value: 'text' as const, label: 'Текстом', icon: <FileText size={12} /> },
-                { value: 'scheme' as const, label: 'Схемой', icon: <Network size={12} /> },
-              ]}
+            <InlineSegmented
               value={schemeView}
               onChange={setSchemeView}
+              options={[
+                { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+                  tone: { bg: C.plan, fg: C.onAccent } },
+                { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+                  tone: { bg: C.plan, fg: C.onAccent } },
+              ]}
             />
             {schemeView === 'scheme' && schemeStatus !== 'ready' && (
-              <button onClick={buildScheme} disabled={schemeStatus === 'building'} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                padding: '5px 10px', borderRadius: R.md,
-                border: `1px solid ${C.border}`, background: C.bgWhite,
-                color: C.textHeading, cursor: schemeStatus === 'building' ? 'default' : 'pointer',
-                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
-                opacity: schemeStatus === 'building' ? 0.6 : 1,
-              }}>
-                {schemeStatus === 'building'
-                  ? <Loader2 size={12} style={{ animation: 'cc-spin 1s linear infinite' }} />
+              <Button
+                variant="ghostFilled"
+                size="sm"
+                loading={schemeStatus === 'building'}
+                onClick={buildScheme}
+                leftIcon={schemeStatus === 'building'
+                  ? <Loader2 size={12} />
                   : <Network size={12} />}
+              >
                 {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -295,12 +260,14 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
                 <div style={{ fontWeight: 600 }}>
                   {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
                 </div>
-                <button onClick={buildScheme} style={{
-                  marginTop: 6, padding: '4px 10px', borderRadius: R.sm,
-                  border: `1px solid ${C.border}`, background: C.bgWhite,
-                  color: C.textSecondary, cursor: 'pointer',
-                  fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-                }}>Попробовать снова</button>
+                <Button
+                  variant="ghostFilled"
+                  size="xs"
+                  onClick={buildScheme}
+                  style={{ marginTop: SP.xs }}
+                >
+                  Попробовать снова
+                </Button>
               </div>
             </div>
           ) : schemeStatus === 'building' ? (
@@ -330,7 +297,14 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
           </div>
         )}
 
-        {visualPlanEnabled && schemeView === 'text' && (
+        {/* Слой замечаний рендерится ВСЕГДА под флагом: иначе переключение
+            «Схемой» размонтировало бы его и унесло несобранные черновики
+            (отзыв ревью: «план из 15 разделов — замечания не должны пропадать
+            от смены вкладки»). При schemeView='scheme' contentRef указывает на
+            контейнер схемы — useHeadings там даёт [] и кнопки у заголовков
+            временно не показываются; сам черновик в state живёт, и при возврате
+            на «Текстом» заголовки снова оживают. */}
+        {visualPlanEnabled && (
           <PlanRemarks
             contentRef={planContentRef}
             planText={curPlan.plan}
@@ -343,21 +317,12 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
               if (navigator.clipboard) {
                 navigator.clipboard.writeText(feedback).catch(() => {});
               }
-              setCopiedHint(true);
-              window.setTimeout(() => setCopiedHint(false), 4000);
+              showToast(
+                'Замечания скопированы',
+                'Откройте план в чате, чтобы отправить их планировщику.',
+              );
             }}
           />
-        )}
-        {copiedHint && (
-          <div style={{
-            position: 'absolute', bottom: 18, left: 14, right: 14,
-            padding: '8px 12px', background: C.bgCard, color: C.textHeading,
-            border: `1px solid ${C.success}`, borderRadius: R.md,
-            fontSize: 12, fontFamily: FONT.sans, fontWeight: 600,
-            boxShadow: SHADOW.dropdown, zIndex: 10,
-          }}>
-            Замечания скопированы в буфер. Откройте план в чате, чтобы отправить их планировщику.
-          </div>
         )}
       </div>
     </>

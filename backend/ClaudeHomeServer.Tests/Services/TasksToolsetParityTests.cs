@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -12,34 +11,19 @@ namespace ClaudeHomeServer.Tests.Services;
 /// и правка только в C# прошла бы зелёные тесты, молча разойдясь со второй веткой.
 /// Источник контракта — TasksToolset.cs (index.js заморожен, см. его шапку).
 ///
-/// Сильнее посимвольного сравнения: состав сверяется с ЖИВЫМ stdio-сервером — node с env
-/// TASKS_EXECUTE противпадает группам тулсета. Осей две: execute (12 без run_executor /
+/// Сильнее посимвольного сравнения: состав и required-наборы сверяются с ЖИВЫМ stdio-сервером —
+/// node с env TASKS_EXECUTE противпадает группам тулсета. Осей две: execute (12 без run_executor /
 /// 13 с) и контекст чата (проект/личные — состав один, различаются описания; состав
-/// сверяем по обеим группам тулсета).
+/// сверяем по обеим группам тулсета). Сверка по данным ответа, без regex-скрейпинга JS
+/// (техдолг MCP-over-HTTP §6).
 /// </summary>
 public class TasksToolsetParityTests
 {
-    private static string JsPath => RepoFile("mcp", "tasks-server", "index.js");
-
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
-        return path;
-    }
-
-    private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
+    private record StdioTool(string Name, JsonElement Schema);
 
     // tools/list живого stdio-сервера с заданным env: бэкенд не нужен (состав считается из
     // env, в сеть сервер не ходит). null — node недоступен.
-    private static IReadOnlyList<string>? ListStdioTools(params (string Key, string Value)[] env)
+    private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -81,7 +65,9 @@ public class TasksToolsetParityTests
             using var doc = JsonDocument.Parse(line!);
             return doc.RootElement.GetProperty("result").GetProperty("tools")
                 .EnumerateArray()
-                .Select(t => t.GetProperty("name").GetString()!)
+                .Select(t => new StdioTool(
+                    t.GetProperty("name").GetString()!,
+                    t.GetProperty("inputSchema").Clone()))
                 .ToList();
         }
     }
@@ -96,7 +82,7 @@ public class TasksToolsetParityTests
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
         if (stdio is null) return;
         var expected = TasksToolset.ProjectChatTools.Select(t => t.Name).ToList();
-        stdio.Should().BeEquivalentTo(expected, options => options.WithStrictOrdering(),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering(),
             "состав обязан совпадать с stdio-веткой отката");
         // Контекст (проект/личные) состав не меняет — только описания
         TasksToolset.PersonalTools.Select(t => t.Name).Should().BeEquivalentTo(expected,
@@ -116,33 +102,30 @@ public class TasksToolsetParityTests
         if (stdio is null) return;
         var expected = TasksToolset.ProjectChatTools.Select(t => t.Name)
             .Where(n => n != "tasks_run_executor").ToList();
-        stdio.Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
     }
 
     /// <summary>
-    /// Схемы: required-наборы из JS-литералов обязаны совпадать с C#-схемами по каждому
+    /// Схемы: required-наборы ЖИВОГО stdio-ответа обязаны совпадать с C#-схемами по каждому
     /// инструменту. Промах означал бы, что ветки валидируют аргументы по-разному.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
-        var all = TasksToolset.ProjectChatTools;
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        if (stdio is null) return;
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
 
-        foreach (var tool in all)
+        foreach (var tool in stdio)
         {
-            var blockStart = Js.Value.IndexOf($"name: '{tool.Name}'", StringComparison.Ordinal);
-            blockStart.Should().BeGreaterThan(0, $"инструмент {tool.Name} обязан быть в stdio-ветке");
-            var next = Js.Value.IndexOf("name: '", blockStart + 10, StringComparison.Ordinal);
-            if (next < 0) next = Js.Value.Length;
-            var block = Js.Value[blockStart..next];
-            var requiredMatch = Regex.Match(block, @"required:\s*\[([^\]]*)\]");
-            var jsRequired = requiredMatch.Success
-                ? Regex.Matches(requiredMatch.Groups[1].Value, "'([^']+)'")
-                    .Select(m => m.Groups[1].Value).ToList()
+            var csharp = byName.GetValueOrDefault(tool.Name);
+            csharp.Should().NotBeNull($"инструмент {tool.Name} обязан быть в http-ветке");
+            var stdioRequired = tool.Schema.TryGetProperty("required", out var required)
+                ? required.EnumerateArray().Select(n => n.GetString()!).ToList()
                 : [];
-            var csharpRequired = tool.InputSchema["required"]?.AsArray()
+            var csharpRequired = csharp!.InputSchema["required"]?.AsArray()
                 .Select(n => n!.GetValue<string>()).ToList() ?? [];
-            jsRequired.Should().BeEquivalentTo(csharpRequired,
+            stdioRequired.Should().BeEquivalentTo(csharpRequired,
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }

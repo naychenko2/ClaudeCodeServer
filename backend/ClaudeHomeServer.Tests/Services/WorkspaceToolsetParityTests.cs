@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -12,36 +11,24 @@ namespace ClaudeHomeServer.Tests.Services;
 /// прошла бы зелёные тесты, молча разойдясь со второй веткой. Источник контракта —
 /// WorkspaceToolset.Schemas.cs (index.js заморожен, см. его шапку).
 ///
-/// Сильнее посимвольного сравнения имён: состав сверяется с ЖИВЫМ stdio-сервером по ОСЯМ
-/// СЕКЦИЙ (WORKSPACE_SECTIONS) — базовый набор, надстройки git/git_write/knowledge_bases,
-/// секция chats, деструктив и выкатка. Плюс поведенческие проверки, которых у сторожей
-/// волны 2 не было (урок приёмки: имена совпадали, а поведение разъезжалось):
-/// карта «инструмент → секция» покрывает ВЕСЬ состав, а формулировки-предохранители
-/// деструктива и выкатки совпадают дословно.
+/// Сильнее посимвольного сравнения имён: состав, required-наборы и описания сверяются
+/// с ЖИВЫМ stdio-сервером по ОСЯМ СЕКЦИЙ (WORKSPACE_SECTIONS) — базовый набор, надстройки
+/// git/git_write/knowledge_bases, секция chats, деструктив и выкатка. Плюс поведенческие
+/// проверки, которых у сторожей волны 2 не было (урок приёмки: имена совпадали, а поведение
+/// разъезжалось): карта «инструмент → секция» покрывает ВЕСЬ состав, а формулировки-
+/// предохранители деструктива и выкатки совпадают с stdio-веткой дословно. Сверка по данным
+/// ответа, без regex-скрейпинга JS (техдолг MCP-over-HTTP §6).
 /// </summary>
 public class WorkspaceToolsetParityTests
 {
-    private static string JsPath => RepoFile("mcp", "workspace-server", "index.js");
+    private record StdioTool(string Name, string Description, JsonElement Schema);
 
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
-        return path;
-    }
-
-    private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
+    // Полный набор секций — режим, в котором живой stdio-сервер отдаёт весь каталог
+    private const string AllSections = "projects,files,knowledge,search,chats,git,git_write,knowledge_bases,destructive,deploy";
 
     // tools/list живого stdio-сервера с заданным набором секций: бэкенд не нужен
     // (состав считается из env, в сеть сервер не ходит). null — node недоступен.
-    private static IReadOnlyList<string>? ListStdioTools(string sections)
+    private static IReadOnlyList<StdioTool>? ListStdioTools(string sections)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -60,6 +47,11 @@ public class WorkspaceToolsetParityTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            // node пишет stdout в UTF-8, а .NET по умолчанию читает в консольной кодировке
+            // ОС — кириллические описания превращались в кракозябры и ломали посимвольную
+            // сверку (на Linux тесты проходят и без этого, CI там)
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         psi.Environment["WORKSPACE_API_URL"] = "http://127.0.0.1:1";
         psi.Environment["WORKSPACE_API_TOKEN"] = "test";
@@ -85,7 +77,10 @@ public class WorkspaceToolsetParityTests
             using var doc = JsonDocument.Parse(line!);
             return doc.RootElement.GetProperty("result").GetProperty("tools")
                 .EnumerateArray()
-                .Select(t => t.GetProperty("name").GetString()!)
+                .Select(t => new StdioTool(
+                    t.GetProperty("name").GetString()!,
+                    t.GetProperty("description").GetString()!,
+                    t.GetProperty("inputSchema").Clone()))
                 .ToList();
         }
     }
@@ -112,7 +107,7 @@ public class WorkspaceToolsetParityTests
         var set = sections.Split(",").ToHashSet(StringComparer.Ordinal);
         var expected = WorkspaceToolset.ToolsForSections(set, "контекст")
             .Select(t => t.Name).ToList();
-        stdio.Should().BeEquivalentTo(expected, options => options.WithStrictOrdering(),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering(),
             $"состав на секциях «{sections}» обязан совпадать со stdio-веткой отката");
     }
 
@@ -134,62 +129,56 @@ public class WorkspaceToolsetParityTests
     }
 
     /// <summary>
-    /// Схемы: required-наборы из JS-литералов обязаны совпадать с C#-схемами по каждому
+    /// Схемы: required-наборы ЖИВОГО stdio-ответа обязаны совпадать с C#-схемами по каждому
     /// инструменту. Промах означал бы, что ветки валидируют аргументы по-разному.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
-        foreach (var tool in WorkspaceToolset.AllTools)
+        var stdio = ListStdioTools(AllSections);
+        if (stdio is null) return;
+        var byName = WorkspaceToolset.AllTools.ToDictionary(t => t.Name);
+
+        foreach (var tool in stdio)
         {
-            var blockStart = Js.Value.IndexOf($"name: '{tool.Name}'", StringComparison.Ordinal);
-            blockStart.Should().BeGreaterThan(0, $"инструмент {tool.Name} обязан быть в stdio-ветке");
-            var next = Js.Value.IndexOf("name: '", blockStart + 10, StringComparison.Ordinal);
-            if (next < 0) next = Js.Value.Length;
-            var block = Js.Value[blockStart..next];
-            var requiredMatch = Regex.Match(block, @"required:\s*\[([^\]]*)\]");
-            var jsRequired = requiredMatch.Success
-                ? Regex.Matches(requiredMatch.Groups[1].Value, "'([^']+)'")
-                    .Select(m => m.Groups[1].Value).ToList()
+            var csharp = byName.GetValueOrDefault(tool.Name);
+            csharp.Should().NotBeNull($"инструмент {tool.Name} обязан быть в http-ветке");
+            var stdioRequired = tool.Schema.TryGetProperty("required", out var required)
+                ? required.EnumerateArray().Select(n => n.GetString()!).ToList()
                 : [];
-            var csharpRequired = tool.InputSchema["required"]?.AsArray()
+            var csharpRequired = csharp!.InputSchema["required"]?.AsArray()
                 .Select(n => n!.GetValue<string>()).ToList() ?? [];
-            jsRequired.Should().BeEquivalentTo(csharpRequired,
+            stdioRequired.Should().BeEquivalentTo(csharpRequired,
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }
     }
 
     /// <summary>
-    /// ПОВЕДЕНЧЕСКАЯ ось: формулировки-предохранители деструктива и выкатки совпадают с
-    /// stdio-веткой дословно. Это не косметика — «БЕЗВОЗВРАТНО… ТОЛЬКО по явной просьбе»
-    /// и «Зови ТОЛЬКО по явной просьбе… никогда по своей инициативе» и есть защита от
-    /// того, чтобы модель удалила или выкатила лишнее сама (требование задачи волны 3:
-    /// формулировки менять нельзя).
+    /// ПОВЕДЕНЧЕСКАЯ ось: описания инструментов деструктива и выкатки совпадают с ЖИВЫМ
+    /// stdio-ответом ПОСИМВОЛЬНО — включая формулировки-предохранители («БЕЗВОЗВРАТНО…,
+    /// ТОЛЬКО по явной просьбе…, никогда по своей инициативе»). Это не косметика: они и есть
+    /// защита от того, чтобы модель удалила или выкатила лишнее сама (требование задачи
+    /// волны 3: формулировки менять нельзя). Посимвольная сверка покрывает все фрагменты
+    /// разом и не зависит от разбивки описаний на строки в index.js.
     /// </summary>
-    [Theory]
-    [InlineData("files_delete", "БЕЗВОЗВРАТНО удалить файл или папку проекта")]
-    [InlineData("files_delete", "ТОЛЬКО по явной просьбе пользователя удалить конкретный путь, никогда по своей инициативе")]
-    [InlineData("chats_delete", "БЕЗВОЗВРАТНО удалить чат/сессию вместе со всей историей сообщений")]
-    [InlineData("chats_delete", "ТОЛЬКО по явной просьбе пользователя удалить конкретный чат, никогда по своей инициативе")]
-    [InlineData("deploy_start", "выкатка ПЕРЕЗАПУСКАЕТ сервер")]
-    [InlineData("deploy_start", "никогда по своей инициативе и никогда")]
-    [InlineData("deploy_rollback", "ПЕРЕЗАПУСКАЕТ сервер")]
-    public void ФормулировкиПредохранители_НеРазошлисьСоStdio(string tool, string fragment)
+    [SkippableFact]
+    public void ОписанияПредохранителей_СовпадаютСоСtdioПосимвольно()
     {
-        var description = WorkspaceToolset.AllTools.Single(t => t.Name == tool).Description;
-        description.Should().Contain(fragment,
-            $"описание {tool} — часть защиты от самовольного действия модели, менять нельзя");
-        // Тот же фрагмент обязан быть и в замороженной stdio-ветке: расхождение веток
-        // означало бы разное поведение модели в зависимости от транспорта
-        NormalizeJs(Js.Value).Should().Contain(fragment,
-            $"stdio-ветка обязана нести ту же формулировку {tool}");
-    }
+        var stdio = ListStdioTools(AllSections);
+        if (stdio is null) return;
+        var byName = WorkspaceToolset.AllTools.ToDictionary(t => t.Name);
 
-    // Склейка JS-конкатенаций («…» + «…»): в index.js длинные описания разбиты на строки,
-    // и поиск фрагмента через границу склейки иначе не находит его
-    private static string NormalizeJs(string js) =>
-        Regex.Replace(js, @"'\s*\+\s*'", "");
+        foreach (var name in new[] { "files_delete", "chats_delete", "deploy_start", "deploy_rollback" })
+        {
+            var stdioDescription = stdio.SingleOrDefault(t => t.Name == name)?.Description;
+            stdioDescription.Should().NotBeNull($"инструмент {name} обязан быть в stdio-ветке");
+            var csharp = byName.GetValueOrDefault(name);
+            csharp.Should().NotBeNull($"инструмент {name} обязан быть в http-ветке");
+            stdioDescription.Should().Be(csharp!.Description,
+                $"описание {name} обязано совпадать между ветками посимвольно — это защита от самовольного действия модели");
+        }
+    }
 
     /// <summary>Хвост маршрута — та же точка правды, что у tasks/notes: форма не разъедется.</summary>
     [Fact]

@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -43,13 +42,15 @@ public class MemoryToolsetParityTests
 
     private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
 
+    private record StdioTool(string Name, JsonElement Schema);
+
     private static IReadOnlyList<string> GroupNames(IReadOnlyList<McpToolSchema> group) =>
         group.Select(t => t.Name).ToList();
 
     // tools/list живого stdio-сервера с заданными env (паттерн McpToolsetStabilityTests.
     // ListMemoryTools): бэкенд не нужен, состав считается из env, в сеть сервер не ходит.
     // null — node недоступен.
-    private static IReadOnlyList<string>? ListStdioTools(params (string Key, string Value)[] env)
+    private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -91,7 +92,9 @@ public class MemoryToolsetParityTests
             using var doc = JsonDocument.Parse(line!);
             return doc.RootElement.GetProperty("result").GetProperty("tools")
                 .EnumerateArray()
-                .Select(t => t.GetProperty("name").GetString()!)
+                .Select(t => new StdioTool(
+                    t.GetProperty("name").GetString()!,
+                    t.GetProperty("inputSchema").Clone()))
                 .ToList();
         }
     }
@@ -105,7 +108,7 @@ public class MemoryToolsetParityTests
     {
         var stdio = ListStdioTools(("MEMORY_PERSONA_ID", "p1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(GroupNames(MemoryToolset.PersonalTools),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(GroupNames(MemoryToolset.PersonalTools),
             options => options.WithStrictOrdering(),
             "личные инструменты обязаны совпадать с stdio-веткой отката");
     }
@@ -118,7 +121,7 @@ public class MemoryToolsetParityTests
         if (stdio is null) return;
         var expected = GroupNames(MemoryToolset.PersonalTools)
             .Concat(GroupNames(MemoryToolset.TeamTools)).ToList();
-        stdio.Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
     }
 
     /// <summary>
@@ -134,7 +137,7 @@ public class MemoryToolsetParityTests
         var expected = GroupNames(MemoryToolset.PersonalTools)
             .Concat(GroupNames(MemoryToolset.TeamTools))
             .Concat(GroupNames(MemoryToolset.DossierTools)).ToList();
-        stdio.Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
     }
 
     /// <summary>
@@ -146,38 +149,36 @@ public class MemoryToolsetParityTests
     {
         var stdio = ListStdioTools(("MEMORY_PROJECT_ID", "proj1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(GroupNames(MemoryToolset.TeamTools),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(GroupNames(MemoryToolset.TeamTools),
             options => options.WithStrictOrdering());
     }
 
     /// <summary>
-    /// Схемы: required-наборы из JS-литералов обязаны совпадать с C#-схемами по каждому
+    /// Схемы: required-наборы ЖИВОГО stdio-ответа обязаны совпадать с C#-схемами по каждому
     /// инструменту. Промах означал бы, что ветки валидируют аргументы по-разному — модель
-    /// получила бы разные отказы на один и тот же вызов.
+    /// получила бы разные отказы на один и тот же вызов. Сверка по данным, без regex-
+    /// скрейпинга JS (урок техдолга MCP-over-HTTP §6 о хрупкости по форматированию).
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
+        var stdio = ListStdioTools(
+            ("MEMORY_PERSONA_ID", "p1"), ("MEMORY_PROJECT_ID", "proj1"), ("MEMORY_DOSSIER_TOOLS", "1"));
+        if (stdio is null) return;
         var all = MemoryToolset.PersonalTools
             .Concat(MemoryToolset.TeamTools).Concat(MemoryToolset.DossierTools).ToList();
+        var byName = all.ToDictionary(t => t.Name);
 
-        foreach (var tool in all)
+        foreach (var tool in stdio)
         {
-            var blockStart = Js.Value.IndexOf($"name: '{tool.Name}'", StringComparison.Ordinal);
-            blockStart.Should().BeGreaterThan(0, $"инструмент {tool.Name} обязан быть в stdio-ветке");
-            // Блок инструмента: до описания следующего (или конца файла) — required чужого
-            // блока в окно попадать не должен
-            var next = Js.Value.IndexOf("name: '", blockStart + 10, StringComparison.Ordinal);
-            if (next < 0) next = Js.Value.Length;
-            var block = Js.Value[blockStart..next];
-            var requiredMatch = Regex.Match(block, @"required:\s*\[([^\]]*)\]");
-            var jsRequired = requiredMatch.Success
-                ? Regex.Matches(requiredMatch.Groups[1].Value, "'([^']+)'")
-                    .Select(m => m.Groups[1].Value).ToList()
+            var csharp = byName.GetValueOrDefault(tool.Name);
+            csharp.Should().NotBeNull($"инструмент {tool.Name} обязан быть в http-ветке");
+            var stdioRequired = tool.Schema.TryGetProperty("required", out var required)
+                ? required.EnumerateArray().Select(n => n.GetString()!).ToList()
                 : [];
-            var csharpRequired = tool.InputSchema["required"]?.AsArray()
+            var csharpRequired = csharp!.InputSchema["required"]?.AsArray()
                 .Select(n => n!.GetValue<string>()).ToList() ?? [];
-            jsRequired.Should().BeEquivalentTo(csharpRequired,
+            stdioRequired.Should().BeEquivalentTo(csharpRequired,
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }

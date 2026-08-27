@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -10,27 +9,16 @@ namespace ClaudeHomeServer.Tests.Services;
 /// состав ПОСТОЯННЫЙ (3 чтения и 4 инструмента), поэтому ось одна — но сверка идёт с
 /// ЖИВЫМ stdio-сервером, а не с литералами: замороженный index.js остаётся веткой отката
 /// по рубильнику Mcp:HttpTransport, и разошедшийся состав дал бы разное поведение модели
-/// в зависимости от транспорта.
+/// в зависимости от транспорта. Required-наборы — тоже по данным живого ответа, без
+/// regex-скрейпинга JS (техдолг MCP-over-HTTP §6).
 /// </summary>
 public class CodeGraphNotificationsToolsetParityTests
 {
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
-        return path;
-    }
+    private record StdioTool(string Name, JsonElement Schema);
 
     // tools/list живого stdio-сервера: бэкенд не нужен, в сеть сервер не ходит.
     // null — node недоступен (тест пропускается).
-    private static IReadOnlyList<string>? ListStdioTools(string serverDir,
+    private static IReadOnlyList<StdioTool>? ListStdioTools(string serverDir,
         params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -79,7 +67,11 @@ public class CodeGraphNotificationsToolsetParityTests
             answer.Should().NotBeNull("сервер обязан ответить на tools/list");
             using var doc = answer!;
             return doc.RootElement.GetProperty("result").GetProperty("tools")
-                .EnumerateArray().Select(t => t.GetProperty("name").GetString()!).ToList();
+                .EnumerateArray()
+                .Select(t => new StdioTool(
+                    t.GetProperty("name").GetString()!,
+                    t.GetProperty("inputSchema").Clone()))
+                .ToList();
         }
     }
 
@@ -91,7 +83,7 @@ public class CodeGraphNotificationsToolsetParityTests
             ("CODEGRAPH_API_TOKEN", "test"),
             ("CODEGRAPH_PROJECT_ID", "proj-1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(CodeGraphToolset.AllTools.Select(t => t.Name),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(CodeGraphToolset.AllTools.Select(t => t.Name),
             options => options.WithStrictOrdering(),
             "состав графа кода обязан совпадать со stdio-веткой отката");
     }
@@ -103,36 +95,40 @@ public class CodeGraphNotificationsToolsetParityTests
             ("NOTIFICATIONS_API_URL", "http://127.0.0.1:1"),
             ("NOTIFICATIONS_API_TOKEN", "test"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(NotificationsToolset.AllTools.Select(t => t.Name),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(NotificationsToolset.AllTools.Select(t => t.Name),
             options => options.WithStrictOrdering(),
             "состав уведомлений обязан совпадать со stdio-веткой отката");
     }
 
     /// <summary>
     /// Required-наборы обеих веток совпадают: иначе аргументы валидируются по-разному.
+    /// Сверка — по данным живого stdio-ответа.
     /// </summary>
-    [Theory]
-    [InlineData("codegraph-server", "codegraph")]
-    [InlineData("notifications-server", "notifications")]
-    public void RequiredНаборы_СовпадаютПосимвольно(string serverDir, string kind)
+    [SkippableTheory]
+    [InlineData("codegraph-server", "codegraph",
+        "CODEGRAPH_API_URL", "http://127.0.0.1:1", "CODEGRAPH_API_TOKEN", "test", "CODEGRAPH_PROJECT_ID", "proj-1")]
+    [InlineData("notifications-server", "notifications",
+        "NOTIFICATIONS_API_URL", "http://127.0.0.1:1", "NOTIFICATIONS_API_TOKEN", "test")]
+    public void RequiredНаборы_СовпадаютПосимвольно(string serverDir, string kind,
+        params string[] envPairs)
     {
-        var js = File.ReadAllText(RepoFile("mcp", serverDir, "index.js"));
+        var env = envPairs.Chunk(2)
+            .Select(p => (Key: p[0], Value: p[1])).ToArray();
+        var stdio = ListStdioTools(serverDir, env);
+        if (stdio is null) return;
         var tools = kind == "codegraph" ? CodeGraphToolset.AllTools : NotificationsToolset.AllTools;
-        foreach (var tool in tools)
+        var byName = tools.ToDictionary(t => t.Name);
+
+        foreach (var tool in stdio)
         {
-            var blockStart = js.IndexOf($"name: '{tool.Name}'", StringComparison.Ordinal);
-            blockStart.Should().BeGreaterThan(0, $"инструмент {tool.Name} обязан быть в stdio-ветке");
-            var next = js.IndexOf("name: '", blockStart + 10, StringComparison.Ordinal);
-            if (next < 0) next = js.Length;
-            var block = js[blockStart..next];
-            var requiredMatch = Regex.Match(block, @"required:\s*\[([^\]]*)\]");
-            var jsRequired = requiredMatch.Success
-                ? Regex.Matches(requiredMatch.Groups[1].Value, "'([^']+)'")
-                    .Select(m => m.Groups[1].Value).ToList()
+            var csharp = byName.GetValueOrDefault(tool.Name);
+            csharp.Should().NotBeNull($"инструмент {tool.Name} обязан быть в http-ветке");
+            var stdioRequired = tool.Schema.TryGetProperty("required", out var required)
+                ? required.EnumerateArray().Select(n => n.GetString()!).ToList()
                 : [];
-            var csharpRequired = tool.InputSchema["required"]?.AsArray()
+            var csharpRequired = csharp!.InputSchema["required"]?.AsArray()
                 .Select(n => n!.GetValue<string>()).ToList() ?? [];
-            jsRequired.Should().BeEquivalentTo(csharpRequired,
+            stdioRequired.Should().BeEquivalentTo(csharpRequired,
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }

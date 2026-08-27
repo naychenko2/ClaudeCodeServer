@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -11,30 +10,15 @@ namespace ClaudeHomeServer.Tests.Services;
 /// mcp/notes-server/index.js (stdio-ветка отката) — обе живые, правка обязана ехать парой.
 /// Источник контракта — NotesToolset.cs (index.js заморожен).
 ///
-/// Состав сверяется с ЖИВЫМ stdio-сервером по оси NOTES_ANNOTATIONS: ядро (7 инструментов)
-/// всегда, модуль комментариев и редких операций (+12) — по привязке персоны.
+/// Состав и required-наборы сверяются с ЖИВЫМ stdio-сервером по оси NOTES_ANNOTATIONS:
+/// ядро (7 инструментов) всегда, модуль комментариев и редких операций (+12) — по привязке
+/// персоны. Сверка по данным ответа, без regex-скрейпинга JS (техдолг MCP-over-HTTP §6).
 /// </summary>
 public class NotesToolsetParityTests
 {
-    private static string JsPath => RepoFile("mcp", "notes-server", "index.js");
+    private record StdioTool(string Name, JsonElement Schema);
 
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
-        return path;
-    }
-
-    private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
-
-    private static IReadOnlyList<string>? ListStdioTools(params (string Key, string Value)[] env)
+    private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -76,7 +60,9 @@ public class NotesToolsetParityTests
             using var doc = JsonDocument.Parse(line!);
             return doc.RootElement.GetProperty("result").GetProperty("tools")
                 .EnumerateArray()
-                .Select(t => t.GetProperty("name").GetString()!)
+                .Select(t => new StdioTool(
+                    t.GetProperty("name").GetString()!,
+                    t.GetProperty("inputSchema").Clone()))
                 .ToList();
         }
     }
@@ -87,7 +73,7 @@ public class NotesToolsetParityTests
     {
         var stdio = ListStdioTools(("NOTES_ANNOTATIONS", "0"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(NotesToolset.CoreTools.Select(t => t.Name).ToList(),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(NotesToolset.CoreTools.Select(t => t.Name).ToList(),
             options => options.WithStrictOrdering(),
             "ядро заметок обязано совпадать с stdio-веткой отката");
     }
@@ -100,33 +86,31 @@ public class NotesToolsetParityTests
         if (stdio is null) return;
         var expected = NotesToolset.CoreTools.Select(t => t.Name)
             .Concat(NotesToolset.AnnotationTools.Select(t => t.Name)).ToList();
-        stdio.Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
     }
 
     /// <summary>
-    /// Схемы: required-наборы из JS-литералов обязаны совпадать с C#-схемами по каждому
+    /// Схемы: required-наборы ЖИВОГО stdio-ответа обязаны совпадать с C#-схемами по каждому
     /// инструменту — ветки валидируют аргументы одинаково.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
-        var all = NotesToolset.CoreTools.Concat(NotesToolset.AnnotationTools).ToList();
+        var stdio = ListStdioTools(("NOTES_ANNOTATIONS", "1"));
+        if (stdio is null) return;
+        var byName = NotesToolset.CoreTools.Concat(NotesToolset.AnnotationTools)
+            .ToDictionary(t => t.Name);
 
-        foreach (var tool in all)
+        foreach (var tool in stdio)
         {
-            var blockStart = Js.Value.IndexOf($"name: '{tool.Name}'", StringComparison.Ordinal);
-            blockStart.Should().BeGreaterThan(0, $"инструмент {tool.Name} обязан быть в stdio-ветке");
-            var next = Js.Value.IndexOf("name: '", blockStart + 10, StringComparison.Ordinal);
-            if (next < 0) next = Js.Value.Length;
-            var block = Js.Value[blockStart..next];
-            var requiredMatch = Regex.Match(block, @"required:\s*\[([^\]]*)\]");
-            var jsRequired = requiredMatch.Success
-                ? Regex.Matches(requiredMatch.Groups[1].Value, "'([^']+)'")
-                    .Select(m => m.Groups[1].Value).ToList()
+            var csharp = byName.GetValueOrDefault(tool.Name);
+            csharp.Should().NotBeNull($"инструмент {tool.Name} обязан быть в http-ветке");
+            var stdioRequired = tool.Schema.TryGetProperty("required", out var required)
+                ? required.EnumerateArray().Select(n => n.GetString()!).ToList()
                 : [];
-            var csharpRequired = tool.InputSchema["required"]?.AsArray()
+            var csharpRequired = csharp!.InputSchema["required"]?.AsArray()
                 .Select(n => n!.GetValue<string>()).ToList() ?? [];
-            jsRequired.Should().BeEquivalentTo(csharpRequired,
+            stdioRequired.Should().BeEquivalentTo(csharpRequired,
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }

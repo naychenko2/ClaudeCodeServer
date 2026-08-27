@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -11,33 +10,18 @@ namespace ClaudeHomeServer.Tests.Services;
 /// mcp/personas-server/index.js (stdio-ветка отката) — обе живые, правка обязана ехать парой.
 /// Источник контракта — PersonasToolset (index.js заморожен).
 ///
-/// Состав сверяется с ЖИВЫМ stdio-сервером по осям модулей (PERSONAS_MANAGE / _AUTOMATION /
-/// _MENTIONS): ядро, +manage, +automation, +mentions. BINDINGS у http-ветки включён всегда
-/// (как и в контексте сессии — BindingsEnabled: true), поэтому stdio запускаем с ним же.
+/// Состав и required-наборы сверяются с ЖИВЫМ stdio-сервером по осям модулей (PERSONAS_MANAGE /
+/// _AUTOMATION / _MENTIONS): ядро, +manage, +automation, +mentions. BINDINGS у http-ветки
+/// включён всегда (как и в контексте сессии — BindingsEnabled: true), поэтому stdio запускаем
+/// с ним же. Сверка по данным ответа, без regex-скрейпинга JS (техдолг MCP-over-HTTP §6).
 /// </summary>
 public class PersonasToolsetParityTests
 {
-    private static string JsPath => RepoFile("mcp", "personas-server", "index.js");
-
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
-        return path;
-    }
-
-    private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
+    private record StdioTool(string Name, JsonElement Schema);
 
     // tools/list живого stdio-сервера с заданными env: состав считается из env, в сеть
     // сервер не ходит. null — node недоступен.
-    private static IReadOnlyList<string>? ListStdioTools(params (string Key, string Value)[] env)
+    private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -84,7 +68,9 @@ public class PersonasToolsetParityTests
             using var doc = JsonDocument.Parse(line!);
             return doc.RootElement.GetProperty("result").GetProperty("tools")
                 .EnumerateArray()
-                .Select(t => t.GetProperty("name").GetString()!)
+                .Select(t => new StdioTool(
+                    t.GetProperty("name").GetString()!,
+                    t.GetProperty("inputSchema").Clone()))
                 .ToList();
         }
     }
@@ -110,7 +96,7 @@ public class PersonasToolsetParityTests
     {
         var stdio = ListStdioTools();
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(Expected(manage: false, automation: false, mentions: false),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(Expected(manage: false, automation: false, mentions: false),
             options => options.WithStrictOrdering(),
             "ядро сервера персон обязано совпадать с веткой отката");
     }
@@ -121,7 +107,7 @@ public class PersonasToolsetParityTests
     {
         var stdio = ListStdioTools(("PERSONAS_MANAGE", "1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(Expected(manage: true, automation: false, mentions: false),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(Expected(manage: true, automation: false, mentions: false),
             options => options.WithStrictOrdering());
     }
 
@@ -131,7 +117,7 @@ public class PersonasToolsetParityTests
     {
         var stdio = ListStdioTools(("PERSONAS_AUTOMATION", "1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(Expected(manage: false, automation: true, mentions: false),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(Expected(manage: false, automation: true, mentions: false),
             options => options.WithStrictOrdering());
     }
 
@@ -141,7 +127,7 @@ public class PersonasToolsetParityTests
     {
         var stdio = ListStdioTools(("PERSONAS_MENTIONS", "1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(Expected(manage: false, automation: false, mentions: true),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(Expected(manage: false, automation: false, mentions: true),
             options => options.WithStrictOrdering());
     }
 
@@ -152,17 +138,20 @@ public class PersonasToolsetParityTests
         var stdio = ListStdioTools(
             ("PERSONAS_MANAGE", "1"), ("PERSONAS_AUTOMATION", "1"), ("PERSONAS_MENTIONS", "1"));
         if (stdio is null) return;
-        stdio.Should().BeEquivalentTo(Expected(manage: true, automation: true, mentions: true),
+        stdio.Select(t => t.Name).Should().BeEquivalentTo(Expected(manage: true, automation: true, mentions: true),
             options => options.WithStrictOrdering());
     }
 
     /// <summary>
-    /// Схемы: required-наборы из JS-литералов обязаны совпадать с C#-схемами по каждому
+    /// Схемы: required-наборы ЖИВОГО stdio-ответа обязаны совпадать с C#-схемами по каждому
     /// инструменту — иначе ветки валидируют аргументы по-разному.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
+        var stdio = ListStdioTools(
+            ("PERSONAS_MANAGE", "1"), ("PERSONAS_AUTOMATION", "1"), ("PERSONAS_MENTIONS", "1"));
+        if (stdio is null) return;
         var all = PersonasToolset.CoreTools(true)
             .Concat(PersonasToolset.ManageHeadTools(true))
             .Concat(PersonasToolset.BindingsReadTools)
@@ -172,23 +161,19 @@ public class PersonasToolsetParityTests
             .Concat(PersonasToolset.ManageTailTools(true))
             .Concat(PersonasToolset.MentionsTools)
             .ToList();
+        var byName = all.ToDictionary(t => t.Name);
 
-        foreach (var tool in all)
+        foreach (var tool in stdio)
         {
-            var blockStart = Js.Value.IndexOf($"name: '{tool.Name}'", StringComparison.Ordinal);
-            blockStart.Should().BeGreaterThan(0, $"инструмент {tool.Name} обязан быть в stdio-ветке");
-            var next = Js.Value.IndexOf("name: '", blockStart + 10, StringComparison.Ordinal);
-            if (next < 0) next = Js.Value.Length;
-            var block = Js.Value[blockStart..next];
-            // required верхнего уровня схемы: первый в блоке (вложенные — у items фильтров)
-            var requiredMatch = Regex.Match(block, @"required:\s*\[([^\]]*)\]");
-            var jsRequired = requiredMatch.Success
-                ? Regex.Matches(requiredMatch.Groups[1].Value, "'([^']+)'")
-                    .Select(m => m.Groups[1].Value).ToList()
+            var csharp = byName.GetValueOrDefault(tool.Name);
+            csharp.Should().NotBeNull($"инструмент {tool.Name} обязан быть в http-ветке");
+            // required верхнего уровня схемы (вложенные — у items фильтров)
+            var stdioRequired = tool.Schema.TryGetProperty("required", out var required)
+                ? required.EnumerateArray().Select(n => n.GetString()!).ToList()
                 : [];
-            var csharpRequired = tool.InputSchema["required"]?.AsArray()
+            var csharpRequired = csharp!.InputSchema["required"]?.AsArray()
                 .Select(n => n!.GetValue<string>()).ToList() ?? [];
-            jsRequired.Should().BeEquivalentTo(csharpRequired,
+            stdioRequired.Should().BeEquivalentTo(csharpRequired,
                 options => options.WithStrictOrdering(),
                 $"required-набор {tool.Name} не должен расходиться между ветками");
         }

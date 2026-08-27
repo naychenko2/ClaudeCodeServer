@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -22,10 +23,20 @@ public class PlansControllerTests : IDisposable
         var plan = await File.ReadAllTextAsync(FeaturesMdPath);
         plan.Length.Should().BeGreaterThan(30_000,
             "проверка идёт на крупном файле, а не на мини-фикстуре");
+
+        // Якоря берём из самого файла, а не хардкодим: иначе любое переименование
+        // раздела в features.md роняет тест контроллера, и человек ищет причину
+        // не в том месте. Достаточно двух заголовков `##` — этого хватает, чтобы
+        // тест собрал карту из двух блоков и прогнал валидацию якоря.
+        var anchors = ExtractLevel2Headings(plan);
+        anchors.Should().HaveCountGreaterThanOrEqualTo(2,
+            "фикстура-документ не годится: нужно минимум два заголовка `##`, иначе тест не построит карту из двух блоков");
+        var first = anchors[0];
+        var second = anchors[1];
         var runner = new CountingRunner($$"""
             {"genre":"feature","oneLine":"Справочник фич продукта","numbers":[{"value":"2","label":"раздела"}],"blocks":[
-              {"id":"b1","title":"Базовые возможности","type":"step","flags":[],"anchor":"Базовые возможности","dependsOn":[]},
-              {"id":"b2","title":"Голосовой режим","type":"step","flags":["blocking"],"anchor":"Голосовой режим чата","dependsOn":["b1"]}]}
+              {"id":"b1","title":"{{first}}","type":"step","flags":[],"anchor":"{{first}}","dependsOn":[]},
+              {"id":"b2","title":"{{second}}","type":"step","flags":["blocking"],"anchor":"{{second}}","dependsOn":["b1"]}]}
             """);
         _factory.ExtraServices = services => services.AddSingleton<ICheapTextRunner>(runner);
         var client = _factory.CreateAuthenticatedClient();
@@ -37,10 +48,19 @@ public class PlansControllerTests : IDisposable
         map.GetProperty("genre").GetString().Should().Be("feature");
         map.GetProperty("oneLine").GetString().Should().Be("Справочник фич продукта");
         map.GetProperty("blocks").GetArrayLength().Should().Be(2);
-        map.GetProperty("blocks")[1].GetProperty("anchor").GetString().Should().Be("Голосовой режим чата");
+        map.GetProperty("blocks")[1].GetProperty("anchor").GetString().Should().Be(second);
         runner.Calls.Should().Be(1);
         runner.LastActionKey.Should().Be(LocalActionCatalog.PlanMap,
             "эндпоинт ходит через место каталога, а не мимо него");
+    }
+
+    // Заголовки второго уровня в порядке появления: тест берёт первые два как якоря.
+    // Серверная валидация (PlanMapService.ExtractHeadingOccurrences) тоже режет строку
+    // по `#` и Trim, и сравнение идёт Ordinal — формат совпадает с серверным.
+    private static List<string> ExtractLevel2Headings(string markdown)
+    {
+        var matches = Regex.Matches(markdown, @"^## (.+?)\s*$", RegexOptions.Multiline);
+        return matches.Select(m => m.Groups[1].Value).ToList();
     }
 
     [Fact]

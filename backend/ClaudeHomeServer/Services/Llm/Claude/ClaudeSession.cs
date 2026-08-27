@@ -751,6 +751,16 @@ public class ClaudeSession : ILlmSessionAdapter
         var difyServerPath = _difyMcp is { UseHttp: false }
             ? MapMcpPath(DifyServerLocator.FindDifyServerPath()) : null;
         var hasDify = _difyMcp is not null && (_difyMcp.UseHttp || difyServerPath is not null);
+        // Каскад отката dify упёрся в несобранный mcp-dify/dist: узел не встанет ни http
+        // (рубильник), ни stdio — остаётся только внешняя запись базового конфига, а если её
+        // нет, инструмент пропадает МОЛЧА (deploy-agent.ps1 помечает сборку dify как skipped,
+        // т.е. свежий деплой — штатный случай). ADR-012 обещает деградацию до внешней записи,
+        // а не потерю — предупреждаем хозяина инстанса явно
+        if (_difyMcp is { UseHttp: false } && difyServerPath is null)
+            Console.Error.WriteLine("[ClaudeSession] WARN: секция Dify настроена, Mcp:HttpTransport=false, "
+                + "но stdio-ветка dify недоступна (mcp-dify/dist не собран) — без внешней записи базового "
+                + "конфига инструменты баз знаний пропадут. Соберите mcp-dify (npm run build) или верните "
+                + "Mcp:HttpTransport=true.");
         var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
         var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);

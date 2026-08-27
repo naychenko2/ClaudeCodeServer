@@ -2,6 +2,7 @@ using System.Text;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -17,6 +18,11 @@ public class WorkflowMetaResolverTests : IDisposable
         // Подменяем статический Log на наш собирающий — иначе warning'и про mojibake
         // уходят в NullLogger и тесты не видят, что сторож сработал.
         _savedLog = WorkflowMetaResolver.Log;
+        // Фоновое значение статика непредсказуемо: Program.cs перезаписывает его логгером
+        // каждого поднимаемого тестового хоста, и после чужого Dispose тот мёртв (EventLog →
+        // ObjectDisposedException на записи — флак полного прогона). Работаем от NullLogger;
+        // тесты, которым нужны warnings, подменяют Log своим коллектором (ниже)
+        WorkflowMetaResolver.Log = NullLogger.Instance;
     }
 
     public void Dispose()

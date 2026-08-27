@@ -26,13 +26,17 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// эквивалент env DIFY_SEARCH_ONLY=true stdio-ветки), нет базы или чат вне проекта → полный
 /// состав (12). Отпечаток для сигнатуры запуска (shapes["dify"]) строится по той же формуле.
 ///
-/// Изоляция — обе проверки stdio/REST-ветки сохранены на КАЖДЫЙ вызов:
+/// Изоляция — проверки stdio/REST-веток сохранены на КАЖДЫЙ вызов:
 /// - <see cref="DifyOptions.Namespace"/> (контуры Dev/Prod на одном Dify) — внутри
 ///   KnowledgeService.ListDatasetsAsync/CreateDatasetAsync, логические имена без префикса;
 /// - релевантность датасета пользователю — KnowledgeBaseCatalogService.ResolveReadableAsync
 ///   (своя или публичная — доступна, чужая помеченная — нет), как каждый {id}-эндпоинт REST
 ///   (KnowledgeBasesController). У stdio-сервера этого гейта НЕ БЫЛО: TS-клиент ходил в Dify
-///   ключом инстанса и видел ВСЕ датасеты — перенос ужесточил доступ, а не перенёс брешь.
+///   ключом инстанса и видел ВСЕ датасеты — перенос ужесточил доступ, а не перенёс брешь;
+/// - форма document_id — белый список IsValidDifyId ДО резолва датасета и любого HTTP:
+///   dot-segment-пейлоад («../../{uuid}/documents/{doc}») раньше резолвился HttpClient'ом
+///   в чужой датасет под общим ключом workspace (блокер приёмки 4.1); парная защита
+///   REST-пути — экранирование сегментов в KnowledgeService.
 ///
 /// Ключ Dify — секрет: наружу не уезжает ни в env, ни в конфиг хода; тексты ошибок для модели
 /// собираются из статуса/тела ответа Dify (ключ в них не возвращается — он только в заголовке
@@ -144,11 +148,17 @@ public sealed class DifyToolset(
                     var logicalName = isPublic ? name : $"{username}:kb:{name}";
                     var permission = isPublic ? "all_team_members" : "only_me";
                     // Лимит Dify: имя датасета ≤ 40 символов (вместе с префиксом владельца) —
-                    // режем сами с внятным текстом, иначе модель получит сырую 400-ю pydantic
+                    // режем сами с внятным текстом, иначе модель получит сырую 400-ю pydantic.
+                    // Публичная база живёт без префикса — её планка и подсказка полные 40
                     if (logicalName.Length > 40)
-                        return Deny($"Название слишком длинное: лимит Dify — 40 символов вместе "
-                            + $"с префиксом владельца («{username}:kb:»). Сократи название минимум до "
-                            + $"{40 - (username.Length + 4)} символов.");
+                    {
+                        var maxName = isPublic ? 40 : 40 - username.Length - 4;
+                        return Deny(isPublic
+                            ? $"Название слишком длинное: лимит Dify — 40 символов. Сократи название "
+                            + $"минимум до {maxName} символов."
+                            : $"Название слишком длинное: лимит Dify — 40 символов вместе с префиксом "
+                            + $"владельца («{username}:kb:»). Сократи название минимум до {maxName} символов.");
+                    }
                     var description = OptionalArg(arguments, "description");
                     // Явная проверка коллизии: Dify на дубль имени отвечает невнятной ошибкой,
                     // а совпадение с чужой личной базой нельзя доводить до создания
@@ -219,8 +229,8 @@ public sealed class DifyToolset(
 
                 case "update_document_by_text":
                 {
-                    var documentId = StringArg(arguments, "document_id").Trim();
-                    if (documentId.Length == 0) return Deny("Нужен параметр document_id");
+                    if (!TryDocumentId(arguments, out var documentId, out var documentIdError))
+                        return Deny(documentIdError);
                     var resolved = await ResolveDatasetAsync(username, arguments, defaultDatasetId);
                     if (resolved is not { } ds) return DatasetDenied(arguments, defaultDatasetId);
                     var doc = await knowledge.UpdateDocumentByTextAsync(ds.Id, documentId,
@@ -231,8 +241,8 @@ public sealed class DifyToolset(
 
                 case "update_document_by_file":
                 {
-                    var documentId = StringArg(arguments, "document_id").Trim();
-                    if (documentId.Length == 0) return Deny("Нужен параметр document_id");
+                    if (!TryDocumentId(arguments, out var documentId, out var documentIdError))
+                        return Deny(documentIdError);
                     var resolved = await ResolveDatasetAsync(username, arguments, defaultDatasetId);
                     if (resolved is not { } ds) return DatasetDenied(arguments, defaultDatasetId);
                     if (!TryFileArgs(arguments, out var fileName, out var bytes, out var fileError))
@@ -244,8 +254,8 @@ public sealed class DifyToolset(
 
                 case "delete_document":
                 {
-                    var documentId = StringArg(arguments, "document_id").Trim();
-                    if (documentId.Length == 0) return Deny("Нужен параметр document_id");
+                    if (!TryDocumentId(arguments, out var documentId, out var documentIdError))
+                        return Deny(documentIdError);
                     var resolved = await ResolveDatasetAsync(username, arguments, defaultDatasetId);
                     if (resolved is not { } ds) return DatasetDenied(arguments, defaultDatasetId);
                     await knowledge.DeleteDocumentAsync(resolved.Id, documentId);
@@ -254,8 +264,8 @@ public sealed class DifyToolset(
 
                 case "list_segments":
                 {
-                    var documentId = StringArg(arguments, "document_id").Trim();
-                    if (documentId.Length == 0) return Deny("Нужен параметр document_id");
+                    if (!TryDocumentId(arguments, out var documentId, out var documentIdError))
+                        return Deny(documentIdError);
                     var resolved = await ResolveDatasetAsync(username, arguments, defaultDatasetId);
                     if (resolved is not { } ds) return DatasetDenied(arguments, defaultDatasetId);
                     var segments = await knowledge.ListSegmentsAsync(resolved.Id, documentId,
@@ -268,8 +278,8 @@ public sealed class DifyToolset(
 
                 case "add_segments":
                 {
-                    var documentId = StringArg(arguments, "document_id").Trim();
-                    if (documentId.Length == 0) return Deny("Нужен параметр document_id");
+                    if (!TryDocumentId(arguments, out var documentId, out var documentIdError))
+                        return Deny(documentIdError);
                     var resolved = await ResolveDatasetAsync(username, arguments, defaultDatasetId);
                     if (resolved is not { } ds) return DatasetDenied(arguments, defaultDatasetId);
                     var drafts = SegmentDrafts(arguments);
@@ -317,6 +327,31 @@ public sealed class DifyToolset(
         if (route.Length is < 1 or > 128 || !route.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
             return false;
         sessionId = route;
+        return true;
+    }
+
+    // Идентификаторы Dify (документы/датасеты — UUID) — белый список формы, как у
+    // TryParseRoute/resumeSessionId. Гейт стоит ДО резолва датасета и любого HTTP:
+    // dot-segment-пейлоад в document_id раньше резолвился HttpClient'ом в чужой датасет
+    // под общим ключом workspace (блокер приёмки волны 4.1) — теперь он получает внятный
+    // отказ, не доезжая до Dify
+    internal static bool IsValidDifyId(string id) =>
+        id.Length is >= 1 and <= 128 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
+    // document_id из аргументов: непустой и прошедший белый список формы
+    private static bool TryDocumentId(JsonObject arguments,
+        out string documentId,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? error)
+    {
+        documentId = StringArg(arguments, "document_id").Trim();
+        if (documentId.Length == 0) { error = "Нужен параметр document_id"; return false; }
+        if (!IsValidDifyId(documentId))
+        {
+            error = "Некорректный document_id: это идентификатор документа Dify из латиницы, "
+                + "цифр, «-» и «_» — пути и относительные сегменты («/», «..») в нём не допускаются.";
+            return false;
+        }
+        error = null;
         return true;
     }
 

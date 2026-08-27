@@ -614,13 +614,25 @@ public class McpHttpTransportConfigTests : IDisposable
     /// Откат (рубильник, не-http адрес): dify объявляется прежним stdio-сервером mcp-dify/dist
     /// с env из секции Dify. dist не живёт в git — вне дерева с собранным mcp-dify узла нет,
     /// и это всё равно НЕ выход по http (ключ не уезжает в http-узел негодного адреса).
+    /// Потеря узла при несобранном dist обязана быть ГРОМКОЙ (неблокирующее №1 приёмки 4.1):
+    /// WARN в Console.Error — иначе ADR-012 обещает деградацию до внешней записи, а инстанс
+    /// молча теряет инструменты (deploy-agent.ps1 помечает сборку dify как skipped).
     /// </summary>
     [Fact]
     public void Волна4_Откат_StdioСерверомСEnvИзСекцииDify()
     {
-        var (servers, keys) = BuildConfig(
-            dify: new DifyMcpContext("https://naychenko.me", "http://dify.local:81", "secret-key",
-                () => "tok", UseHttp: false));
+        var prev = Console.Error;
+        using var sw = new System.IO.StringWriter();
+        Console.SetError(sw);
+        JsonObject servers; string keys;
+        try
+        {
+            (servers, keys) = BuildConfig(
+                dify: new DifyMcpContext("https://naychenko.me", "http://dify.local:81", "secret-key",
+                    () => "tok", UseHttp: false));
+        }
+        finally { Console.SetError(prev); }
+        var console = sw.ToString();
 
         if (servers["dify"] is { } node)
         {
@@ -639,11 +651,16 @@ public class McpHttpTransportConfigTests : IDisposable
             env["DIFY_DEFAULT_DATASET_ID"]!.GetValue<string>().Should().Be("");
             env["DIFY_SEARCH_ONLY"]!.GetValue<string>().Should().Be("");
             keys.Should().Contain("dify:s0:t:stdio");
+            console.Should().NotContain("mcp-dify/dist не собран",
+                "dist на месте — каскад отката работает, предупреждать не о чем");
         }
         else
         {
-            // Сборка без dist (CI): сервера в конфиге нет вовсе — но точно не http-узел
+            // Сборка без dist (CI): сервера в конфиге нет вовсе — но точно не http-узел,
+            // и потеря инструмента ГРОМКАЯ: WARN воспроизводится на каждом сборе конфига
             keys.Should().NotContain("dify:s0:t:http");
+            console.Should().Contain("WARN").And.Contain("mcp-dify/dist не собран",
+                "молчаливая потеря dify-инструментов в каскаде отката — регрессия честности рубильника");
         }
     }
 

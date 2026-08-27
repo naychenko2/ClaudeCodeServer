@@ -171,6 +171,14 @@ public class KnowledgeService
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_cfg.ApiUrl) && !string.IsNullOrEmpty(_cfg.ApiKey);
 
+    // Сегмент пути к API Dify: КАЖДЫЙ id датасета/документа экранируется — иначе
+    // dot-segment-пейлоад («../../{uuid}/documents/{id}» в document_id) резолвится
+    // HttpClient'ом по RFC в чужой датасет под общим ключом workspace (блокер приёмки
+    // волны 4.1). «/» кодируется в %2F — пейлоад остаётся одним непрозрачным сегментом;
+    // настоящие UUID (латиница/цифры/«-») экранирование не меняет. Пара этому гейту —
+    // белый список формы id в DifyToolset (модель получает внятный отказ раньше HTTP)
+    private static string Seg(string id) => Uri.EscapeDataString(id);
+
     // --- Неймспейс контура (Dev/Prod на одном Dify, см. DifyOptions.Namespace) ---
     // Полное имя в Dify = "{Namespace}:{логическое имя}". Префикс добавляется при создании/
     // переименовании и срезается при листинге ТОЛЬКО здесь — потребители (классификация
@@ -278,7 +286,7 @@ public class KnowledgeService
                     value = f.Value ?? "",
                 }),
             };
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve",
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/retrieve",
             new { query = TrimQuery(query), retrieval_model = retrievalModel });
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
@@ -296,7 +304,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return [];
         var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        var resp = await client.GetAsync($"datasets/{Seg(datasetId)}/metadata");
         resp.EnsureSuccessStatusCode();
         var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
         return meta?.DocMetadata
@@ -368,7 +376,7 @@ public class KnowledgeService
         string? indexingTechnique = null, string? processRuleMode = null)
     {
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/document/create_by_text", new
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/document/create_by_text", new
         {
             name = fileName,
             text = content,
@@ -417,7 +425,7 @@ public class KnowledgeService
             process_rule = new { mode = processRuleMode ?? "automatic" },
         })), "data");
 
-        var resp = await client.PostAsync($"datasets/{datasetId}/document/create_by_file", form);
+        var resp = await client.PostAsync($"datasets/{Seg(datasetId)}/document/create_by_file", form);
         if (!resp.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync();
@@ -444,7 +452,7 @@ public class KnowledgeService
         if (!string.IsNullOrWhiteSpace(name)) payload["name"] = name;
         if (!string.IsNullOrEmpty(text)) payload["text"] = text;
         var resp = await client.PostAsJsonAsync(
-            $"datasets/{datasetId}/documents/{documentId}/update_by_text", payload);
+            $"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/update_by_text", payload);
         if (!resp.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync();
@@ -472,7 +480,7 @@ public class KnowledgeService
         })), "data");
 
         var resp = await client.PostAsync(
-            $"datasets/{datasetId}/documents/{documentId}/update_by_file", form);
+            $"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/update_by_file", form);
         if (!resp.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync();
@@ -490,7 +498,7 @@ public class KnowledgeService
             return cached;
 
         var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        var resp = await client.GetAsync($"datasets/{Seg(datasetId)}/metadata");
         resp.EnsureSuccessStatusCode();
 
         var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
@@ -501,7 +509,7 @@ public class KnowledgeService
             return existing.Id;
         }
 
-        var createResp = await client.PostAsJsonAsync($"datasets/{datasetId}/metadata",
+        var createResp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/metadata",
             new { type = "string", name = "tags" });
         createResp.EnsureSuccessStatusCode();
 
@@ -517,7 +525,7 @@ public class KnowledgeService
         var fieldId = await EnsureTagsFieldAsync(datasetId);
         var tagValue = string.Join(",", tags);
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/documents/metadata", new
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/documents/metadata", new
         {
             operation_data = new[]
             {
@@ -540,7 +548,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return new DifyDocumentsPage([], false, 0);
         var client = CreateClient();
-        var query = $"datasets/{datasetId}/documents?page={page}&limit={limit}";
+        var query = $"datasets/{Seg(datasetId)}/documents?page={page}&limit={limit}";
         if (!string.IsNullOrEmpty(status)) query += $"&status={Uri.EscapeDataString(status)}";
         if (!string.IsNullOrEmpty(keyword)) query += $"&keyword={Uri.EscapeDataString(keyword)}";
         var resp = await client.GetAsync(query);
@@ -604,7 +612,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return [];
         var client = CreateClient();
-        var query = $"datasets/{datasetId}/documents/{documentId}/segments?limit=100";
+        var query = $"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/segments?limit=100";
         if (!string.IsNullOrEmpty(keyword)) query += $"&keyword={Uri.EscapeDataString(keyword)}";
         if (!string.IsNullOrEmpty(status)) query += $"&status={Uri.EscapeDataString(status)}";
         var resp = await client.GetAsync(query);
@@ -623,7 +631,7 @@ public class KnowledgeService
         IReadOnlyList<DifySegmentDraft> segments)
     {
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/documents/{documentId}/segments", new
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/segments", new
         {
             segments = segments.Select(s => new
             {
@@ -645,14 +653,14 @@ public class KnowledgeService
     public async Task DeleteDocumentAsync(string datasetId, string documentId)
     {
         var client = CreateClient();
-        var resp = await client.DeleteAsync($"datasets/{datasetId}/documents/{documentId}");
+        var resp = await client.DeleteAsync($"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}");
         resp.EnsureSuccessStatusCode();
     }
 
     public async Task DeleteDatasetAsync(string datasetId)
     {
         var client = CreateClient();
-        var resp = await client.DeleteAsync($"datasets/{datasetId}");
+        var resp = await client.DeleteAsync($"datasets/{Seg(datasetId)}");
         if (resp.StatusCode != System.Net.HttpStatusCode.NoContent)
             resp.EnsureSuccessStatusCode();
     }
@@ -664,7 +672,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return;
         var client = CreateClient();
-        var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { name = WithNs(newName) });
+        var resp = await client.PatchAsJsonAsync($"datasets/{Seg(datasetId)}", new { name = WithNs(newName) });
         resp.EnsureSuccessStatusCode();
     }
 
@@ -673,7 +681,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return;
         var client = CreateClient();
-        var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { description });
+        var resp = await client.PatchAsJsonAsync($"datasets/{Seg(datasetId)}", new { description });
         resp.EnsureSuccessStatusCode();
     }
 }

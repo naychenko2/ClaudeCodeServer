@@ -33,8 +33,17 @@ public static class TimestampedConsoleWriter
         if (string.IsNullOrWhiteSpace(format)) return;
         try
         {
-            Console.SetOut(new TimestampWriter(Console.Out, format));
-            Console.SetError(new TimestampWriter(Console.Error, format));
+            // Повторный вызов НЕ оборачивает уже обёрнутое: тесты поднимают в одном
+            // процессе десятки хостов, каждый звал Enable → Console.Out обрастал луковицей
+            // вложенных TimestampWriter×SyncTextWriter. Вложенные пары «свой lock + монитор
+            // SyncTextWriter» дают lock-ordering inversion между потоками — на CI (stdout =
+            // узкий пайп) это приводило к дедлоку всех тестовых слотов (диагноз по full-дампу:
+            // цепочка из 8 обёрток, 6 мониторов SyncTextWriter с разными владельцами).
+            if (Console.Out is not TimestampWriter)
+            {
+                Console.SetOut(new TimestampWriter(Console.Out, format));
+                Console.SetError(new TimestampWriter(Console.Error, format));
+            }
         }
         catch
         {

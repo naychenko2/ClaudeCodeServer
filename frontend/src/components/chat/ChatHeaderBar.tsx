@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Plus, Archive, ArchiveRestore, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { TagAssignMenu } from '../TagChip';
@@ -1407,21 +1407,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     notify: online && isNotifySupported(),
     dossier: !!project && online,
     expiry: online,
-    archive: online,
     delete: !!onChatDeleted && online && !compact,
   };
   const headerActions = CHAT_ACTION_ORDER.filter(k => headerActionAvailable[k]);
   // Порядок ряда — канонический: набор скрытых фильтрует ряд, сохраняя привычную
   // расстановку оставшихся действий относительно друг друга
-  // Возврат из архива — вне настройки видимости: у архивного чата кнопка в ряду ВСЕГДА
-  // (то же правило, что на карточке в списке). Само «В архив» по умолчанию спрятано в
-  // «⋯», и без этого исключения выход из архива пришлось бы искать в меню.
-  // Место — каноническое (перед «Удалить»), а не первое: ряд не должен перетасовываться
-  // от того, что чат убрали в архив
-  const chatArchived = !!session.archivedAt;
-  const visibleActions = chatArchived && headerActionAvailable.archive
-    ? headerActions.filter(k => k === 'archive' || headerVis.isVisible(k))
-    : headerActions.filter(k => headerVis.isVisible(k));
+  const visibleActions = headerActions.filter(k => headerVis.isVisible(k));
 
   // Исполнение действий шапки. Часть уже живёт готовыми кнопками (у них свои
   // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
@@ -1457,16 +1448,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
-      case 'archive':
-        // Архивация из шапки чат НЕ закрывает: человек мог убрать его «на потом», продолжая
-        // читать. Чат просто уходит из списка слева, а вернуть его можно этой же кнопкой
-        void updateChatFields(session, { archived: !session.archivedAt })
-          .then(s => {
-            onSessionUpdated?.(s);
-            showToast('Архив', s.archivedAt ? 'Чат убран в архив' : 'Чат вернулся в список', 'info');
-          })
-          .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
-        break;
       case 'delete': setDeleteAsk(true); break;
     }
   };
@@ -1501,11 +1482,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         label: session.expiresAfterMinutes != null ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения',
         active: session.expiresAfterMinutes != null,
       };
-      // Архив не подсвечиваем акцентом по той же причине, что досье: акцент читается как
-      // «включено и важно», а «этот чат убран с глаз» — состояние тихое
-      case 'archive': return session.archivedAt
-        ? { icon: <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Вернуть из архива' }
-        : { icon: <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'В архив' };
       case 'delete': return { icon: <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Удалить чат', danger: true };
     }
   };
@@ -1615,9 +1591,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       ...headerActions.map(k => {
         const m = actionMeta(k);
         const visible = headerVis.isVisible(k);
-        // У возврата из архива глазика нет: кнопка стоит в ряду всегда, и переключатель
-        // предлагал бы то, что ни на что не влияет
-        const pinned = k === 'archive' && chatArchived;
         return {
           key: k,
           icon: m.icon,
@@ -1626,7 +1599,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
           // вместе с меню, и её rect брать было бы неоткуда
           onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
-          action: pinned ? undefined : {
+          action: {
             icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
             title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
             onClick: () => headerVis.toggle(k),

@@ -1,16 +1,19 @@
 // Секция «План»: навигатор планов + статус + оглавление + текст.
 // Перенесена из ArtifactsPanel verbatim при разбиении на секции.
-import { useState, useRef, type CSSProperties } from 'react';
-import { ChevronRight, ChevronLeft, ChevronsRight, List } from 'lucide-react';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
+import { ChevronRight, ChevronLeft, ChevronsRight, List, Network, FileText, AlertCircle, Loader2 } from 'lucide-react';
+import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { MarkdownViewer } from '../MarkdownViewer';
 import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadings';
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
+import type { PlanMap } from '../../types';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
+import { PlanScheme } from '../plan/PlanScheme';
+import { api } from '../../lib/api';
 
 // Единый стиль кнопок-чипов в навигаторе плана («последний», «оглавление») —
 // утопленный фон (не белый), одинаковые размеры/типографика.
@@ -74,6 +77,42 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
   );
 }
 
+// Сегмент-переключатель «Текстом / Схемой» в навигаторе панели «План». Локальный
+// компонент: один внутри карточки чата (PlanReviewView), другой — внутри панели
+// «План». Дублирование умышленное — оба места живут в разных композициях, и тащить
+// компонент наверх ради двух вызовов преждевременно.
+function SegmentedToggle<V extends string>({ options, value, onChange }: {
+  options: ReadonlyArray<{ value: V; label: string; icon?: React.ReactNode }>;
+  value: V;
+  onChange: (v: V) => void;
+}) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center',
+      border: `1px solid ${C.border}`, borderRadius: R.pill,
+      background: C.bgInset, padding: 2,
+    }}>
+      {options.map(opt => {
+        const active = opt.value === value;
+        return (
+          <button key={opt.value} onClick={() => onChange(opt.value)} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            padding: '4px 10px', borderRadius: R.pill,
+            border: 'none',
+            background: active ? C.plan : 'transparent',
+            color: active ? C.onAccent : C.textSecondary,
+            cursor: 'pointer',
+            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
+          }}>
+            {opt.icon}
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; projectId?: string }) {
   // Навигация по планам: null = «не выбирал» → показываем последний
   const [planIdx, setPlanIdx] = useState<number | null>(null);
@@ -90,6 +129,32 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
   // Слой замечаний работает на сбор: копирует текст обратной связи в буфер
   // обмена, дальше пользователь открывает план в чате и вставляет его туда.
   const visualPlanEnabled = useFeature(FLAGS.visualPlan);
+  // Состояние схемы — отдельная сущность от текста. Идентично PlanReviewView:
+  // сборка только по кнопке (вики-план часть B §4), сброс при смене плана.
+  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>('text');
+  const [map, setMap] = useState<PlanMap | null>(null);
+  const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
+  const [schemeError, setSchemeError] = useState<string | null>(null);
+  useEffect(() => {
+    setMap(null);
+    setSchemeStatus('idle');
+    setSchemeError(null);
+    setSchemeView('text');
+  }, [curPlan?.plan]);
+  async function buildScheme() {
+    if (schemeStatus === 'building' || !curPlan) return;
+    setSchemeStatus('building');
+    setSchemeError(null);
+    try {
+      const m = await api.plans.buildMap(curPlan.plan);
+      setMap(m);
+      setSchemeStatus(m === null ? 'failed' : 'ready');
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      setSchemeError(err.message || 'Не удалось собрать схему');
+      setSchemeStatus('failed');
+    }
+  }
 
   const goToHeading = (h: Heading) => {
     scrollToHeading(planContentRef.current, h);
@@ -179,10 +244,93 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
 
       {/* Текст плана (скроллится) + слой замечаний под флагом visual-plan */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
-          <MarkdownViewer content={curPlan.plan} />
-        </div>
         {visualPlanEnabled && (
+          // Переключатель «Схемой / Текстом» + кнопка «Собрать схему» — над телом
+          // секции. Сборка ТОЛЬКО по кнопке (вики-план часть B §4): иначе любое
+          // открытие плана дёргало бы модель.
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '8px 12px 0', flexShrink: 0, flexWrap: 'wrap',
+          }}>
+            <SegmentedToggle
+              options={[
+                { value: 'text' as const, label: 'Текстом', icon: <FileText size={12} /> },
+                { value: 'scheme' as const, label: 'Схемой', icon: <Network size={12} /> },
+              ]}
+              value={schemeView}
+              onChange={setSchemeView}
+            />
+            {schemeView === 'scheme' && schemeStatus !== 'ready' && (
+              <button onClick={buildScheme} disabled={schemeStatus === 'building'} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '5px 10px', borderRadius: R.md,
+                border: `1px solid ${C.border}`, background: C.bgWhite,
+                color: C.textHeading, cursor: schemeStatus === 'building' ? 'default' : 'pointer',
+                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+                opacity: schemeStatus === 'building' ? 0.6 : 1,
+              }}>
+                {schemeStatus === 'building'
+                  ? <Loader2 size={12} style={{ animation: 'cc-spin 1s linear infinite' }} />
+                  : <Network size={12} />}
+                {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {schemeView === 'scheme' && visualPlanEnabled ? (
+          schemeStatus === 'ready' && map ? (
+            <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+              <PlanScheme map={map} planText={curPlan.plan} contentRef={planContentRef} />
+            </div>
+          ) : schemeStatus === 'failed' ? (
+            <div style={{
+              margin: '14px 16px', padding: '10px 12px',
+              background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+              fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
+            }}>
+              <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
+                </div>
+                <button onClick={buildScheme} style={{
+                  marginTop: 6, padding: '4px 10px', borderRadius: R.sm,
+                  border: `1px solid ${C.border}`, background: C.bgWhite,
+                  color: C.textSecondary, cursor: 'pointer',
+                  fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
+                }}>Попробовать снова</button>
+              </div>
+            </div>
+          ) : schemeStatus === 'building' ? (
+            <div style={{
+              margin: '14px 16px', padding: '14px',
+              background: C.bgInset, border: `1px dashed ${C.border}`, borderRadius: R.lg,
+              textAlign: 'center',
+              fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}>
+              <Loader2 size={14} style={{ animation: 'cc-spin 1s linear infinite' }} />
+              Собираю схему…
+            </div>
+          ) : (
+            <div style={{
+              margin: '14px 16px', padding: '14px',
+              background: C.bgInset, border: `1px dashed ${C.border}`, borderRadius: R.lg,
+              textAlign: 'center',
+              fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+            }}>
+              Нажмите «Собрать схему», чтобы построить разворот.
+            </div>
+          )
+        ) : (
+          <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+            <MarkdownViewer content={curPlan.plan} />
+          </div>
+        )}
+
+        {visualPlanEnabled && schemeView === 'text' && (
           <PlanRemarks
             contentRef={planContentRef}
             planText={curPlan.plan}

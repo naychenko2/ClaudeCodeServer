@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useContext } from 'react';
-import { ClipboardList, Check, RotateCcw } from 'lucide-react';
-import type { ChatItem } from '../../types';
+import { ClipboardList, Check, RotateCcw, Network, FileText, AlertCircle, Loader2 } from 'lucide-react';
+import type { ChatItem, PlanMap } from '../../types';
 import { type Mode, MODE_META, ModeIcon } from '../../lib/modes';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
@@ -10,6 +10,8 @@ import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
+import { PlanScheme } from '../plan/PlanScheme';
+import { api } from '../../lib/api';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
 function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size?: number; color?: string; strokeWidth?: number }) {
@@ -107,6 +109,40 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   // В тексте плана пути показываем относительно корня проекта
   const plan = stripRoot(item.plan, project?.rootPath);
   const planBodyRef = useRef<HTMLDivElement>(null);
+
+  // Состояние схемы: idle — карты нет; building — идёт POST; ready — есть карта;
+  // failed — последний сборка провалилась (план остался на тексте).
+  // Сборка ТОЛЬКО по кнопке (см. вики-план «Визуальный разворот плана», часть B §4):
+  // не дёргаем модель на каждый mount компонента.
+  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>('text');
+  const [map, setMap] = useState<PlanMap | null>(null);
+  const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
+  const [schemeError, setSchemeError] = useState<string | null>(null);
+
+  // Сброс карты при смене версии/текста плана: старая карта привязана к старому тексту
+  useEffect(() => {
+    setMap(null);
+    setSchemeStatus('idle');
+    setSchemeError(null);
+    setSchemeView('text');
+  }, [plan]);
+
+  async function buildScheme() {
+    if (schemeStatus === 'building') return;
+    setSchemeStatus('building');
+    setSchemeError(null);
+    try {
+      const m = await api.plans.buildMap(plan);
+      setMap(m);
+      // m === null → 204, сервер не смог собрать карту: НЕ падаем в ошибку, остаёмся на
+      // тексте с работающими замечаниями. План «Визуальный разворот» §4 и §6.
+      setSchemeStatus(m === null ? 'failed' : 'ready');
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      setSchemeError(err.message || 'Не удалось собрать схему');
+      setSchemeStatus('failed');
+    }
+  }
   // fade-оверлей снизу появляется только если контент плана не помещается в maxHeight
   const [overflowing, setOverflowing] = useState(false);
   useEffect(() => {
@@ -203,20 +239,106 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       </div>
 
       <div style={{ position: 'relative', margin: '12px 0' }}>
-        <div ref={planBodyRef} style={{
-          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-          padding: '10px 12px', maxHeight: 360, overflow: 'auto',
-          fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
-        }}>
-          <MarkdownContent text={plan || '_(пустой план)_'} />
-        </div>
-        {overflowing && (
-          // Градиентный fade снизу — подсказка, что план длиннее видимой области
+        {visualPlanEnabled && (
+          // Переключатель «Схемой / Текстом» — сегмент над телом карточки. Сборка
+          // карты ТОЛЬКО по кнопке (вики-план часть B §4): иначе любое открытие
+          // плана сразу дёргало бы модель. Сюда же вынесена кнопка «Собрать
+          // схему», чтобы не терялась за переключателем.
           <div style={{
-            position: 'absolute', left: 1, right: 1, bottom: 1, height: 40, borderRadius: `0 0 ${R.lg}px ${R.lg}px`,
-            background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
-            pointerEvents: 'none',
-          }} />
+            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap',
+          }}>
+            <SegmentedToggle
+              options={[
+                { value: 'text' as const, label: 'Текстом', icon: <FileText size={12} /> },
+                { value: 'scheme' as const, label: 'Схемой', icon: <Network size={12} /> },
+              ]}
+              value={schemeView}
+              onChange={setSchemeView}
+            />
+            {schemeView === 'scheme' && schemeStatus !== 'ready' && (
+              <button onClick={buildScheme} disabled={schemeStatus === 'building'} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '5px 10px', borderRadius: R.md,
+                border: `1px solid ${C.border}`, background: C.bgWhite,
+                color: C.textHeading, cursor: schemeStatus === 'building' ? 'default' : 'pointer',
+                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+                opacity: schemeStatus === 'building' ? 0.6 : 1,
+              }}>
+                {schemeStatus === 'building'
+                  ? <Loader2 size={12} style={{ animation: 'cc-spin 1s linear infinite' }} />
+                  : <Network size={12} />}
+                {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {schemeView === 'scheme' && visualPlanEnabled ? (
+          schemeStatus === 'ready' && map ? (
+            <div style={{
+              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              padding: '12px 14px',
+            }}>
+              <PlanScheme map={map} planText={plan} contentRef={planBodyRef} />
+            </div>
+          ) : schemeStatus === 'failed' ? (
+            // Отказ сборки: НЕ падаем в красную ошибку — план остался на тексте с
+            // работающими замечаниями. Текст ровно как в плане «Визуальный разворот» §4.
+            <div style={{
+              background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              padding: '10px 12px', display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+              fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
+            }}>
+              <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
+                </div>
+                <button onClick={buildScheme} style={{
+                  marginTop: 6, padding: '4px 10px', borderRadius: R.sm,
+                  border: `1px solid ${C.border}`, background: C.bgWhite,
+                  color: C.textSecondary, cursor: 'pointer',
+                  fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
+                }}>Попробовать снова</button>
+              </div>
+            </div>
+          ) : schemeStatus === 'building' ? (
+            <div style={{
+              background: C.bgInset, border: `1px dashed ${C.border}`, borderRadius: R.lg,
+              padding: '14px', textAlign: 'center',
+              fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}>
+              <Loader2 size={14} style={{ animation: 'cc-spin 1s linear infinite' }} />
+              Собираю схему…
+            </div>
+          ) : (
+            <div style={{
+              background: C.bgInset, border: `1px dashed ${C.border}`, borderRadius: R.lg,
+              padding: '14px', textAlign: 'center',
+              fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+            }}>
+              Нажмите «Собрать схему», чтобы построить разворот.
+            </div>
+          )
+        ) : (
+          <>
+            <div ref={planBodyRef} style={{
+              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+              padding: '10px 12px', maxHeight: 360, overflow: 'auto',
+              fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
+            }}>
+              <MarkdownContent text={plan || '_(пустой план)_'} />
+            </div>
+            {overflowing && (
+              // Градиентный fade снизу — подсказка, что план длиннее видимой области
+              <div style={{
+                position: 'absolute', left: 1, right: 1, bottom: 1, height: 40, borderRadius: `0 0 ${R.lg}px ${R.lg}px`,
+                background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
+                pointerEvents: 'none',
+              }} />
+            )}
+          </>
         )}
       </div>
 
@@ -314,6 +436,40 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           onCountChange={setRemarksCount}
         />
       )}
+    </div>
+  );
+}
+
+// Сегмент-переключатель: два варианта, активный — на plan-фоне, неактивный — нейтральный.
+// Один общий компонент: «Текстом / Схемой» в PlanReviewView и в PlanSection.
+function SegmentedToggle<V extends string>({ options, value, onChange }: {
+  options: ReadonlyArray<{ value: V; label: string; icon?: React.ReactNode }>;
+  value: V;
+  onChange: (v: V) => void;
+}) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center',
+      border: `1px solid ${C.border}`, borderRadius: R.pill,
+      background: C.bgInset, padding: 2,
+    }}>
+      {options.map(opt => {
+        const active = opt.value === value;
+        return (
+          <button key={opt.value} onClick={() => onChange(opt.value)} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            padding: '4px 10px', borderRadius: R.pill,
+            border: 'none',
+            background: active ? C.plan : 'transparent',
+            color: active ? C.onAccent : C.textSecondary,
+            cursor: 'pointer',
+            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
+          }}>
+            {opt.icon}
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

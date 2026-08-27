@@ -512,7 +512,17 @@ public class FileService(
 
     private record GitStatusCache(HashSet<string> Modified, HashSet<string> New, long ExpiresAt);
     private static readonly Dictionary<string, GitStatusCache> _statusCache = new();
+    // Идущие прямо сейчас вычисления статуса по rootPath — single-flight: при монтировании
+    // панели фронт шлёт пачку параллельных листингов (корень + восстановленные раскрытые
+    // папки + полное дерево), и все они обязаны ждать ОДИН запуск git status, а не делать
+    // одинаковую работу независимо.
+    private static readonly Dictionary<string, Lazy<(HashSet<string> modified, HashSet<string> @new)>>
+        _statusInFlight = new();
     private static readonly Lock _cacheLock = new();
+
+    // Подмена вычислителя git-статуса в тестах (счётчик вызовов для single-flight);
+    // null — штатный путь через GitService / прямой запуск git.
+    internal Func<string, (HashSet<string> modified, HashSet<string> @new)>? GitStatusComputer { get; set; }
 
     // Кеш признака «папка — git-репо». Меняется редко (git init), TTL длиннее статуса.
     private record GitRepoCache(bool IsRepo, long ExpiresAt);
@@ -545,11 +555,48 @@ public class FileService(
                     new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
         var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        Lazy<(HashSet<string> modified, HashSet<string> @new)> flight;
         lock (_cacheLock)
         {
             if (_statusCache.TryGetValue(rootPath, out var cached) && cached.ExpiresAt > now)
                 return (cached.Modified, cached.New);
+            if (!_statusInFlight.TryGetValue(rootPath, out flight!))
+            {
+                // ExecutionAndPublication: фабрику исполняет ровно один поток,
+                // остальные блокируются на flight.Value до её результата
+                flight = new Lazy<(HashSet<string>, HashSet<string>)>(
+                    () => ComputeGitStatus(rootPath),
+                    System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+                _statusInFlight[rootPath] = flight;
+            }
         }
+
+        try
+        {
+            var result = flight.Value;
+            var ttl = System.Diagnostics.Stopwatch.Frequency * 5; // 5 секунд
+            lock (_cacheLock)
+            {
+                _statusCache[rootPath] = new GitStatusCache(result.modified, result.@new,
+                    System.Diagnostics.Stopwatch.GetTimestamp() + ttl);
+            }
+            return result;
+        }
+        finally
+        {
+            // Снимаем flight по ссылке: запись мог уже заменить следующий промах кэша
+            lock (_cacheLock)
+            {
+                if (_statusInFlight.TryGetValue(rootPath, out var cur) && ReferenceEquals(cur, flight))
+                    _statusInFlight.Remove(rootPath);
+            }
+        }
+    }
+
+    private (HashSet<string> modified, HashSet<string> @new) ComputeGitStatus(string rootPath)
+    {
+        if (GitStatusComputer is not null)
+            return GitStatusComputer(rootPath);
 
         var modified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var @new = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -558,8 +605,10 @@ public class FileService(
             if (git is not null)
             {
                 // Через слой Execution: для container-юзеров git выполняется в песочнице
-                // по правильному дереву (владелец резолвится по корню проекта)
-                var st = git.StatusAsync(OwnerOf(rootPath), rootPath).GetAwaiter().GetResult();
+                // по правильному дереву (владелец резолвится по корню проекта).
+                // Лёгкий StatusPathsAsync — только пути, один запуск git status: тяжёлый
+                // StatusAsync с построчной статистикой здесь не нужен, числа выбрасывались.
+                var st = git.StatusPathsAsync(OwnerOf(rootPath), rootPath).GetAwaiter().GetResult();
                 foreach (var f in st.Staged) modified.Add(f.Path.Replace('\\', '/'));
                 foreach (var f in st.Unstaged) modified.Add(f.Path.Replace('\\', '/'));
                 foreach (var f in st.Untracked) @new.Add(f.Path.Replace('\\', '/'));
@@ -567,7 +616,7 @@ public class FileService(
             else
             {
                 // Фолбэк без DI (юнит-тесты): прежний прямой запуск git на хосте
-                // -uall — как в GitService.StatusAsync: иначе новая папка приходит одной записью
+                // -uall — как в GitService.StatusPathsAsync: иначе новая папка приходит одной записью
                 // «dir/», и файлы внутри неё не помечаются новыми в дереве
                 var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain -uall")
                 {
@@ -596,11 +645,6 @@ public class FileService(
         }
         catch { }
 
-        var ttl = System.Diagnostics.Stopwatch.Frequency * 5; // 5 секунд
-        lock (_cacheLock)
-        {
-            _statusCache[rootPath] = new GitStatusCache(modified, @new, now + ttl);
-        }
         return (modified, @new);
     }
 }

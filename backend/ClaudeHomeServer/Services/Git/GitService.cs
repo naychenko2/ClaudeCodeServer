@@ -151,6 +151,26 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
     public async Task<GitStatusDto> StatusAsync(string? ownerId, string root, CancellationToken ct = default)
     {
+        var dto = await StatusPathsAsync(ownerId, root, ct);
+        if (!dto.IsRepo) return dto;
+
+        // Обогащаем статистикой строк (+N/−M) только отслеживаемые файлы (суммарно vs HEAD).
+        // Untracked остаются с Added/Deleted = null — осознанно, см. комментарий NumstatAsync.
+        var stats = await NumstatAsync(ownerId, root, ct);
+        if (stats.Count == 0) return dto;
+        return dto with
+        {
+            Staged = ApplyStats(dto.Staged, stats),
+            Unstaged = ApplyStats(dto.Unstaged, stats),
+        };
+    }
+
+    // Лёгкий статус — те же множества путей (staged/unstaged/untracked), но БЕЗ построчной
+    // статистики: ровно один запуск `git status`. Для горячих путей вроде листинга файловой
+    // панели (FileService.GetGitStatus), которому числа не нужны. Панель «Изменения»
+    // продолжает звать полный StatusAsync.
+    public async Task<GitStatusDto> StatusPathsAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
         if (!IsGitRepo(root))
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
 
@@ -163,45 +183,25 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var dto = ParsePorcelainV2(r.Stdout);
 
         // Признак linked worktree: в его корне `.git` — файл-ссылка (`gitdir: …`), а не папка.
-        // Ставим ДО раннего return ниже, иначе worktree с чистым деревом (но незапушенными
-        // коммитами) вернётся без флага, и UI покажет ветку вместо имени worktree.
-        dto = dto with { IsWorktree = File.Exists(Path.Combine(root, ".git")) };
-
-        // Обогащаем файлы статистикой строк (+N/−M): tracked — суммарно vs HEAD, untracked — числом строк
-        var stats = await NumstatAsync(ownerId, root, dto.Untracked.Select(f => f.Path), ct);
-        if (stats.Count == 0) return dto;
-        return dto with
-        {
-            Staged = ApplyStats(dto.Staged, stats),
-            Unstaged = ApplyStats(dto.Unstaged, stats),
-            Untracked = ApplyStats(dto.Untracked, stats),
-        };
+        // Ставим ДО раннего return в StatusAsync, иначе worktree с чистым деревом (но
+        // незапушенными коммитами) вернётся без флага, и UI покажет ветку вместо имени worktree.
+        return dto with { IsWorktree = File.Exists(Path.Combine(root, ".git")) };
     }
 
-    // Статистика строк по файлам: tracked — `git diff HEAD --numstat` (staged+unstaged суммарно vs
-    // HEAD), untracked — `git diff --no-index` по каждому. Пустой репо/нет HEAD → tracked-часть пуста
-    // (не кидаем: файлы всё равно untracked). Ключ словаря — путь файла (для rename — новый путь).
-    // Сколько неотслеживаемых файлов считаем построчно (см. комментарий в цикле ниже)
-    private const int UntrackedNumstatLimit = 200;
-
+    // Статистика строк по ОТСЛЕЖИВАЕМЫМ файлам: `git diff HEAD --numstat` (staged+unstaged
+    // суммарно vs HEAD). Пустой репо/нет HEAD → пусто (не кидаем: файлы всё равно untracked).
+    // Ключ словаря — путь файла (для rename — новый путь).
+    // Неотслеживаемые файлы чисел не получают осознанно: раньше каждый замерялся своим
+    // запуском `git diff --no-index` (до 200 процессов git на один вызов — секунды на
+    // проектах без .gitignore, а листинг файловой панели дёргал StatusAsync на каждую
+    // папку). Согласовано: у untracked цифры «+N/−M» не показываем, Added/Deleted = null —
+    // штатное значение контракта GitFileChange (int?), фронт его переживает.
     private async Task<Dictionary<string, (int add, int del, bool binary)>> NumstatAsync(
-        string? ownerId, string root, IEnumerable<string> untracked, CancellationToken ct)
+        string? ownerId, string root, CancellationToken ct)
     {
         var map = new Dictionary<string, (int, int, bool)>();
-
         var tracked = await RunAsync(ownerId, root, ["diff", "HEAD", "--numstat", "-z"], ct: ct);
         if (tracked.Ok) ParseNumstatZ(tracked.Stdout, map);
-
-        // untracked нет в `diff HEAD` — считаем по одному через --no-index (даёт числа и `-` для бинаря).
-        // Лимит: на каждый файл — свой запуск git, а с -uall новая папка разворачивается во все
-        // свои файлы (репо без .gitignore даёт их сотнями). Сверх лимита панель просто без «+N/−M».
-        foreach (var rel in untracked.Take(UntrackedNumstatLimit))
-        {
-            var r = await RunAsync(ownerId, root,
-                ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", rel], ct: ct);
-            // --no-index при различиях возвращает exit 1 — это норма, парсим stdout независимо от Ok
-            ParseNumstatZ(r.Stdout, map);
-        }
         return map;
     }
 

@@ -87,6 +87,24 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         st.Untracked.Should().NotContain(f => f.Path.EndsWith('/'));
     }
 
+    // Решение по перфу листинга (27.08): untracked больше не замеряются per-file
+    // (`git diff --no-index` на каждый — секунды на проектах без .gitignore).
+    // Контракт: untracked приходят с Added/Deleted = null, tracked — с числами.
+    [Fact]
+    public async Task Status_Untracked_БезПострочнойСтатистики()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "u1.txt"), "раз\nдва\nтри\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "один\nДВА\nтри\n"); // tracked unstaged
+
+        var st = await _git.StatusAsync(null, _repo);
+
+        var untracked = st.Untracked.Should().ContainSingle(f => f.Path == "u1.txt").Which;
+        untracked.Added.Should().BeNull();
+        untracked.Deleted.Should().BeNull();
+        var modified = st.Unstaged.Should().ContainSingle(f => f.Path == "a.txt").Which;
+        modified.Added.Should().NotBeNull("tracked-файлы по-прежнему получают +N/−M");
+    }
+
     [Fact]
     public async Task Commit_Кириллица_И_Amend()
     {

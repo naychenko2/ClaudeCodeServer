@@ -51,6 +51,8 @@
 тексты интерфейса и «Что нового»),
 [project-onboarding-v2.md](features/project-onboarding-v2.md) (критерии снятия флага
 знакомства v2),
+[video-panel.md](features/video-panel.md) (видео: эфиры телеканалов и лента
+подписок YouTube — почему СМОТРИМ, а не Rutube, и почему плеер всегда анонимен),
 [voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
 устройство, ограничения, критерии снятия флага).
 

@@ -1213,6 +1213,52 @@ public class SessionManager : IDisposable
             .Select(e => e.Info.Id)
             .ToList();
 
+    // Чаты, подпадающие под автоправило архивации «без сообщений дольше N дней» (план v4,
+    // флаг chat-auto-archive) — ЕДИНАЯ точка отбора для счётчика превью
+    // (GET /api/chats/archive-preview) и тика правила (ChatArchiveService.TickAsync):
+    // превью обязано считать той же функцией, что архивирует, иначе счётчик покажет «3»,
+    // а исчезнет 200 (пре-мортем №2). nowUtc — параметром, чтобы превью и тик сходились
+    // при одном моменте времени; фронт этот отбор повторить не может в принципе
+    // (HasTurnInFlight и живость агентов — серверные).
+    //
+    // projectId != null — чаты проекта (владение проектом контроллер проверил отдельно,
+    // у проектных сессий OwnerId null); null — чаты вне проекта владельца ownerId
+    // (личный дефолт правила). Потолок пачки и ArchivedBy="rule" — забота тика, не отбора.
+    public IReadOnlyList<Session> GetArchiveRuleCandidates(string ownerId, string? projectId, int days, DateTime nowUtc)
+    {
+        var cutoff = nowUtc - TimeSpan.FromDays(days);
+        var result = new List<Session>();
+        foreach (var entry in _sessions.Values)
+        {
+            var info = entry.Info;
+            if (projectId is null)
+            {
+                if (info.ProjectId is not null || info.OwnerId != ownerId) continue;
+            }
+            else if (info.ProjectId != projectId) continue;
+            if (!MatchesArchiveRule(info, cutoff)) continue;
+            // Живость в чистый предикат не входит: она — свойство entry/адаптера, не Session
+            if (HasTurnInFlight(entry) || entry.Process is { HasTrackedBg: true }) continue;
+            result.Add(info);
+        }
+        return result;
+    }
+
+    // Чистая часть предиката правила (порог + исключения плана v4; живость хода/фоновых
+    // агентов — в GetArchiveRuleCandidates). internal static для юнит-тестов, образец —
+    // ShouldExpire в ChatExpiryService. Исключения: закреплённые («чат нужен»), временные
+    // (ими управляет свой срок), онбординг (человек в середине знакомства), штаб в работе
+    // (Idle с закрытыми волнами — можно), чат живой задачи-исполнителя (выполненной — можно).
+    internal static bool MatchesArchiveRule(Session s, DateTime cutoff) =>
+        !s.IsArchived
+        && !s.IsPinned
+        && s.ExpiresAfterMinutes is null
+        && s.OnboardingKind is null
+        && s.UpdatedAt <= cutoff
+        && (s.TeamImplement is not { } ti
+            || (ti.Stage == TeamImplementStage.Idle && ti.WaveNumber <= ti.ClosedWave))
+        && (s.TaskId is null || s.TaskDone);
+
     // Число сессий проекта — для карточки проекта (без аллокации списка)
     public int CountByProject(string projectId) =>
         _sessions.Values.Count(e => e.Info.ProjectId == projectId);

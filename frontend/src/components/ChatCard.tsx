@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -8,12 +8,14 @@ import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
+import { isArchivedChat } from '../lib/chatFilters';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
 import { updateChatFields } from '../lib/chatUpdate';
 import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
 import { showToast } from '../lib/toast';
+import { ChatArchiveActions } from './ChatArchiveActions';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { TagChip } from './TagChip';
 import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
@@ -154,6 +156,15 @@ interface Props {
   onRename?: (name: string) => Promise<unknown>;
   // «На стену» (воркспейс): добавить чат в набор стены. Не задан — пункта нет
   onAddToWall?: () => void;
+  // Архив: убрать/вернуть. Вызывающая сторона ловит 409 «в чате идёт ход» и показывает
+  // тостом. Не задан — пункта меню «В архив» нет (например, витрина UI-кита)
+  onArchive?: (archived: boolean) => void;
+  // Сводка чата (модель по ленте). Сеть на стороне списка (archiveApi.buildDigest).
+  // Не задан — подвал у архивной карточки пуст
+  onBuildDigest?: () => Promise<unknown>;
+  // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
+  // Не задан — кнопки в подвале нет
+  onSaveAsNote?: () => Promise<unknown>;
   // Изменение чата из меню карточки (мьют уведомлений, срок хранения) — обновлённую
   // сессию возвращает бэкенд, список обновляет ею своё состояние. Не задан — пунктов нет
   onEdited?: (s: Session) => void;
@@ -182,7 +193,7 @@ export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
-  onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
+  onArchive, onBuildDigest, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -341,12 +352,25 @@ export function ChatCard({
   // экрана 360 CSS (Flip 8) — карточка уезжала бы целиком, оставляя под пальцем
   // ряд одинаковых иконок без имени и превью. Остальное достаётся из меню
   const MAX_QUICK_BTNS = 3;
+  // Кандидаты ряда — ВСЕ видимые действия, включая «В архив»: глазик управляет им на
+  // общих основаниях. Исключение archive здесь (была такая правка) ломало инвариант
+  // «глазик показывает "видна" — кнопка есть»: действие исчезало из ряда у обычного
+  // чата при включённом глазике, хотя хранилище говорило обратное
   const quickActions = cardActions.filter(k => cardVis.isVisible(k));
   // Видимых сверх потолка — добираем по каноническому порядку и молча уводим в
   // меню. Так честно и с сохранённой настройкой на 5+ кнопок (снял один — на
   // её место встает следующий по порядку, а не «дырка» в середине)
   const overLimitKeys = quickActions.slice(MAX_QUICK_BTNS).join(',');
-  const quickButtons = quickActions.slice(0, MAX_QUICK_BTNS);
+  const shownActions = quickActions.slice(0, MAX_QUICK_BTNS);
+  // Возврат из архива — единственное действие вне настройки видимости: у архивного чата
+  // оно стоит кнопкой ВСЕГДА, на своём каноническом месте — прямо перед «Удалить».
+  // Иначе человек, спрятавший «В архив» в меню (а оно спрятано по умолчанию), в архивном
+  // списке искал бы выход из архива по одному чату через «⋮».
+  // Добавляется СВЕРХ отрезанного потолка (кандидаты без неё + она сама), а не вместо
+  // одной из трёх: вытеснять ради неё «Удалить» (соседа по смыслу) нельзя, а архивный
+  // список — редкий режим, четвёртая кнопка там ряд не ломает. Дубля нет: если archive
+  // уже в shownActions по глазику, фильтр отдаст её один раз
+  const quickButtons = shownActions;
   useEffect(() => { if (overLimitKeys) cardVis.hide(overLimitKeys.split(',')); }, [overLimitKeys]);
   const swipeOpenW = quickButtons.length * SWIPE_BTN_W;
   // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
@@ -356,7 +380,7 @@ export function ChatCard({
   // место освобождают, убрав соседнюю кнопку
   const visAction = (key: ChatActionKey) => {
     const shown = cardVis.isVisible(key);
-    const blocked = !shown && quickButtons.length >= MAX_QUICK_BTNS;
+    const blocked = !shown && shownActions.length >= MAX_QUICK_BTNS;
     return {
       icon: shown
         ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -528,6 +552,9 @@ export function ChatCard({
   // перебиваем только спокойные состояния, живой working подменять незачем
   const agentsRunningLive = useAgentsRunning(s.id);
   const agentsRunning = agentsRunningProp ?? agentsRunningLive;
+  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
+  const bgCommandRunningLive = useBgCommandRunning(s.id);
+  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
   const visualStatus: VisualStatus = teamWait ? 'waiting'
     : agentsRunning && !STATUS_GLOW[s.status].breath ? 'agents'
       : s.status;
@@ -549,9 +576,6 @@ export function ChatCard({
     // Сила подмешивания в фон: alpha из STATUS_GLOW (45..72) задумана под
     // свечение — для заливки её ужимаем втрое и добавляем 10 п.п. Даёт 25..34%:
     // ниже ~10% подкраска на кремовом фоне уже неразличима
-  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
-  const bgCommandRunningLive = useBgCommandRunning(s.id);
-  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
     '--cc-tint-a': `${Math.round(glow.alpha / 3) + 10}%`,
   } as CSSProperties;
 
@@ -835,6 +859,17 @@ export function ChatCard({
               <Bot size={13} strokeWidth={2.2} />
             </span>
           )}
+          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
+              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
+              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
+              перестают замечать. При работающих агентах не показываем — свечение уже
+              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
+          {bgCommandRunning && !agentsRunning && !workflowRunning && (
+            <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
+              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              <Terminal size={13} strokeWidth={2.2} />
+            </span>
+          )}
           {workflowRunning && (
             <div title="Выполняется Workflow" style={{
               display: 'flex', alignItems: 'center', gap: 3, padding: '1px 5px',
@@ -856,17 +891,6 @@ export function ChatCard({
         ) : (
           <>
             {/* Строка 2: превью последнего сообщения */}
-          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
-              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
-              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
-              перестают замечать. При работающих агентах не показываем — свечение уже
-              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
-          {bgCommandRunning && !agentsRunning && !workflowRunning && (
-            <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
-              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
-              <Terminal size={13} strokeWidth={2.2} />
-            </span>
-          )}
             {s.lastMessage && (
               <div style={{
                 minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
@@ -1027,6 +1051,16 @@ export function ChatCard({
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); setExpiryMenu(anchor); }}
             />
           )}
+          {canEditChat && onArchive && (
+            <MenuItem
+              icon={isArchivedChat(s)
+                ? <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label={isArchivedChat(s) ? 'Вернуть из архива' : 'В архив'}
+              isMobile={isMobile}
+              onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
+            />
+          )}
           <MenuItem
             icon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             label="Удалить"
@@ -1051,6 +1085,19 @@ export function ChatCard({
             )}
           </div>
         </Menu>
+      )}
+
+      {/* Подвал архивной карточки — то полезное, что раньше жило на отдельной
+          странице «Архив» (её больше нет — архив стал РЕЖИМОМ списка). Показывается
+          только у архивных карточек И только когда список дал все три канала —
+          иначе часть кнопок была бы мёртвой */}
+      {isArchivedChat(s) && onArchive && onBuildDigest && onSaveAsNote && (
+        <ChatArchiveActions
+          chat={s}
+          onRestore={() => onArchive(false)}
+          onBuildDigest={onBuildDigest}
+          onSaveAsNote={onSaveAsNote}
+        />
       )}
     </div>
   );

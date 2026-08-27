@@ -7,6 +7,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
+import { VideoPanel } from '../features/video/VideoPanel';
 import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { SESSION_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
@@ -1780,6 +1781,7 @@ const windowWidth = useWindowWidth();
             skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+            video: <VideoPanel />,
           }}
         />
       </div>

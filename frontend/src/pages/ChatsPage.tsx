@@ -8,7 +8,7 @@ import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
 import { C, FONT, CHAT_COLUMN_W, SPLASH_W } from '../lib/design';
 import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
-import { Button, IslandScaffold } from '../components/ui';
+import { Button, Island, IslandScaffold } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
@@ -16,6 +16,9 @@ import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
+import { VideoPanel } from '../features/video/VideoPanel';
+import { VideoCenter } from '../features/video/VideoCenter';
+import { useVideoCenter, VIDEO_PANEL_EVENT } from '../lib/videoStage';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
@@ -148,6 +151,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   }, []);
 
   const selectChat = (chat: Session) => {
+    // Эфир трогать не надо: развёрнутый кадр занимает центр вместо ленты, но
+    // выбор чата его не гасит — кадр сворачивают сами, кнопкой или крестиком,
+    // а насильный возврат прервал бы просмотр на полуслове.
     setActiveId(chat.id);
     localStorage.setItem(OPEN_CHAT_KEY, chat.id);
     navPush({ screen: 'chats', chatId: chat.id });
@@ -210,6 +216,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
   // берутся по одной сессии.
   const sessionPanels = useSessionPanels(activeChat);
+  // Кто занимает центральный остров, кроме ленты: кадр или каталог каналов
+  const videoCenter = useVideoCenter();
 
   // Эксклюзив боковых сторон на планшете: гейт флагом exclusive в сторе chatPanels —
   // зеркально DesktopWorkspace. При входе в планшет активной становится левая
@@ -217,7 +225,16 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // При выходе/unmount флаг снимается — на мобильной ветке compact передаётся
   // безусловно, и isTablet там всегда false, так что эксклюзив десктопной веткой
   // не поднимается впустую.
-  const { setExclusive, markActive, closeCompactStack } = chatPanels.use();
+  const { setExclusive, markActive, closeCompactStack, reveal } = chatPanels.use();
+  // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
+  // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
+  // она, а стор только просит об этом событием.
+  useEffect(() => {
+    const show = () => reveal('video');
+    window.addEventListener(VIDEO_PANEL_EVENT, show);
+    return () => window.removeEventListener(VIDEO_PANEL_EVENT, show);
+  }, [reveal]);
+
   useEffect(() => {
     setExclusive(isTablet);
     if (isTablet) markActive('left');
@@ -324,6 +341,46 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     );
   }
 
+  // Центр раздела: лента активного чата или заставка. Функцией, а не готовым узлом,
+  // чтобы не считать её, когда центр занят видео.
+  const chatCenter = () => activeChat ? (
+    <ChatPanel
+      key={activeChat.id}
+      session={activeChat}
+      onChatDeleted={handleChatDeleted}
+      headerIsland
+      skills={skills}
+      attachedFiles={attachedFiles}
+      onAttachedFilesChange={setAttachedFiles}
+      onSessionUpdated={handleChatEdited}
+      onWorkflowRunning={handleWorkflowRunning}
+    />
+  ) : (
+    <>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
+          {/* Иконка раздела */}
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+            <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
+          </div>
+          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
+            О чём поговорим?
+          </div>
+          <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
+            Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
+          </div>
+          <Button
+            variant="primary" size="md" glow loading={creating}
+            onClick={newChat} style={{ marginTop: 10 }}
+            leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+          >
+            Новый чат
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <PageCanvas>
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
@@ -341,7 +398,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               // порог PANEL_INLINE_MAX_SHARE переключит стек обратно в поток.
               compact={isTablet}
               panelStack={chatPanels}
-              panels={{ chats: sidebar }}
+              panels={{
+                chats: sidebar,
+                video: <VideoPanel />,
+              }}
               railBadges={{ chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined } }}
               sessionPanels={sessionPanels}
             />
@@ -353,44 +413,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // компенсация съест место, которое ленте ещё нужно. Пока чат не выбран,
           // в центре стоит заставка вдвое уже — её потребность SPLASH_W, и завышать
           // её до ленты нельзя: на узком окне запаса не останется и заставку перекосит
-          centerContentWidth={activeChat ? CHAT_COLUMN_W : SPLASH_W}
-          center={activeChat ? (
-            <ChatPanel
-              key={activeChat.id}
-              session={activeChat}
-              onChatDeleted={handleChatDeleted}
-              headerIsland
-              skills={skills}
-              attachedFiles={attachedFiles}
-              onAttachedFilesChange={setAttachedFiles}
-              onSessionUpdated={handleChatEdited}
-              onWorkflowRunning={handleWorkflowRunning}
-            />
-          ) : (
-            <>
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
-                  {/* Иконка раздела */}
-                  <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
-                    <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
-                  </div>
-                  <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
-                    О чём поговорим?
-                  </div>
-                  <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
-                    Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
-                  </div>
-                  <Button
-                    variant="primary" size="md" glow loading={creating}
-                    onClick={newChat} style={{ marginTop: 10 }}
-                    leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-                  >
-                    Новый чат
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
+          // Рядом с эфиром компенсировать нечего: центр делят два резиновых острова
+          centerContentWidth={videoCenter ? undefined : (activeChat ? CHAT_COLUMN_W : SPLASH_W)}
+          center={videoCenter ? (
+            // Видео занимает центр ЦЕЛИКОМ — и кадр, и каталог. Кадр пробовали ставить
+            // вторым островом рядом с лентой, как файл в проекте: в узкой половине от
+            // него мало толку, а разворачивают его как раз тогда, когда хотят смотреть,
+            // а не переписываться. Фоновый просмотр закрывает панель рельсы, она рядом.
+            <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}><VideoCenter /></Island>
+          ) : chatCenter()}
           // Сессионная рельса (План/Агенты/Персона) — только когда в чате есть
           // сообщения (есть что показать в артефактах). Для нового пустого чата
           // рельса не нужна — это держит центральную область симметричной:

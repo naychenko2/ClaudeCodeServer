@@ -550,24 +550,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             />
           </div>
         )}
-        {/* Все чаты проекта в архиве — то же состояние, что у глобального списка:
-            иное пустое состояние молчит (chats есть), и панель без этого блока
-            оставалась бы белой дырой. Кнопки создания нет — «Новый» в тулбаре панели */}
-        {!inArchive && loaded && sessions.length > 0 && viewTotal === 0 && (
-          <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
-            <EmptyState
-              compact
-              icon={<Archive size={20} strokeWidth={2} />}
-              title="Все чаты в архиве"
-              subtitle="Список пуст: живых чатов нет, архив не считается."
-              action={
-                <Button variant="ghost" size="sm" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archived: true })}>
-                  Открыть архив
-                </Button>
-              }
-            />
-          </div>
-        )}
         {!inArchive && loaded && sessions.length === 0 && (
           // Та же центрирующая обёртка, что у архивного empty — не прижимать
           // «Чатов пока нет» к верху высокой панели

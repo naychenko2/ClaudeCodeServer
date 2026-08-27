@@ -59,6 +59,24 @@ export function headingText(el: HTMLElement): string {
   return (clone.textContent ?? '').trim();
 }
 
+// Сборка оглавления из узлов заголовков. Вынесена из хука чистой функцией, чтобы
+// счётчик вхождений можно было проверить тестом без браузерного окружения.
+export function collectHeadings(nodes: HTMLElement[]): Heading[] {
+  const list: Heading[] = [];
+  // Счётчик вхождений по слагу: одинаковый текст у заголовков даёт
+  // одинаковый слаг, заголовки с пустым текстом сюда не доходят
+  const occurrences = new Map<string, number>();
+  for (const el of nodes) {
+    const text = headingText(el);
+    if (!text) continue;
+    const slug = slugify(text);
+    const occurrence = occurrences.get(slug) ?? 0;
+    occurrences.set(slug, occurrence + 1);
+    list.push({ level: Number(el.tagName[1]), text, el, occurrence });
+  }
+  return list;
+}
+
 // оглавление пересобирается (обычно текст документа)
 export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unknown): Heading[] {
   const [headings, setHeadings] = useState<Heading[]>([]);
@@ -66,20 +84,7 @@ export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unkn
   useEffect(() => {
     const root = contentRef.current;
     if (!root) { setHeadings([]); return; }
-    const list: Heading[] = [];
-    // Счётчик вхождений по слагу: одинаковый текст у заголовков даёт
-    // одинаковый слаг, заголовки с пустым текстом сюда не доходят
-    const occurrences = new Map<string, number>();
-    root.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(n => {
-      const el = n as HTMLElement;
-      const text = headingText(el);
-      if (!text) return;
-      const slug = slugify(text);
-      const occurrence = occurrences.get(slug) ?? 0;
-      occurrences.set(slug, occurrence + 1);
-      list.push({ level: Number(el.tagName[1]), text, el, occurrence });
-    });
-    setHeadings(list);
+    setHeadings(collectHeadings([...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]));
     // contentRef стабилен между рендерами, пересбор нужен только при смене содержимого
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dep]);

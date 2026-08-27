@@ -1,4 +1,5 @@
 // Сборка текста обратной связи по списку замечаний к плану.
+import { PLAN_GENERAL_HEADING } from './PlanRemarks';
 //
 // Формат (визуально):
 //
@@ -118,8 +119,15 @@ export function buildPlanFeedback(
     const a = parseKey(k);
     const items = byAnchor.get(k) ?? [];
     const suffix = needsIndexSuffix(a.heading) ? ` (${a.index + 1}-й)` : '';
+    // Общий якорь — не раздел плана, оборачивать в «Раздел «…»» нельзя:
+    // планировщик прочтёт это как имя раздела и пойдёт его искать в документе.
+    // У реальных заголовков формат прежний.
+    const isGeneral = a.heading === PLAN_GENERAL_HEADING;
     for (const r of items) {
-      const lines = [`Раздел «${a.heading}»${suffix} → ${r.text}`];
+      const head = isGeneral
+        ? `${PLAN_GENERAL_HEADING}${suffix} → ${r.text}`
+        : `Раздел «${a.heading}»${suffix} → ${r.text}`;
+      const lines = [head];
       const q = r.quote?.trim();
       if (q) lines.push(`> ${q}`);
       blocks.push(lines.join('\n'));

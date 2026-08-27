@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { MessageCircle, MessageSquarePlus, Trash2, X } from 'lucide-react';
 import type { PlanRemark } from './buildPlanFeedback';
 import { buildPlanFeedback } from './buildPlanFeedback';
-import { useHeadings } from '../../hooks/useHeadings';
+import { useHeadings, type Heading } from '../../hooks/useHeadings';
 import { C, FONT, R, SHADOW, Z, SP, FS } from '../../lib/design';
 import { ICON_SIZE } from '../../components/ui/icons';
 
@@ -105,21 +105,53 @@ function injectRemarkStyles(): void {
   document.head.appendChild(style);
 }
 
-// Ближайший заголовок раздела выше точки выделения. Поднимаемся по предкам
-// от range.startContainer — heading ищем ВВЕРХ, потому что выделение ниже
-// принадлежит ближайшему предыдущему заголовку раздела. Если выше heading нет
-// (выделение до самого верха документа) — возвращаем null: такое замечание
-// нельзя привязать к разделу, и попап не откроется.
-function headingForRange(range: Range): HTMLElement | null {
+// Заголовок-заглушка для замечаний, у которых над выделением нет своего раздела
+// (выделение выше первого h1–h6 в документе — обычно это шапка плана со
+// статусом/датой, или план вообще без заголовков). Такие замечания собираются в
+// одну общую группу в обратной связи, а молчание («ничего не вышло») заменяется
+// видимым якорем — пользователь видит, что замечание принято, и планировщик
+// видит, что оно не привязано к разделу.
+export const PLAN_GENERAL_HEADING = 'Общее по плану';
+
+// Заголовок раздела, к которому относится выделение. ReactMarkdown рендерит
+// заголовки и абзацы как СОСЕДЕЙ в одном контейнере, а не как вложенную
+// структуру, поэтому подъём по родителям дойдёт до root и вернёт null на любом
+// выделении внутри <p>/<ul>/<pre>, не на самом заголовке.
+//
+// Алгоритм: подняться от узла выделения до прямого потомка root, затем идти
+// назад по previousElementSibling, пока не встретится h1–h6. Так попадаем в
+// ближайший ПРЕДЫДУЩИЙ заголовок раздела. Если его нет (выделение выше
+// первого заголовка) — возвращаем null: такие замечания уйдут на общий якорь
+// PLAN_GENERAL_HEADING в onUp.
+export function headingForRange(root: HTMLElement, range: Range): HTMLElement | null {
   let n: Node | null = range.startContainer;
-  // text node → parent element
-  if (n && n.nodeType === Node.TEXT_NODE) n = n.parentElement;
-  for (; n; n = (n as Element).parentElement || n.parentNode) {
-    if (n.nodeType === Node.ELEMENT_NODE && /^H[1-6]$/.test((n as Element).tagName)) {
-      return n as HTMLElement;
-    }
+  // text node → parent element. Число вместо Node.TEXT_NODE, чтобы резолв
+  // оставался чистой функцией и не падал в node-окружении тестов
+  if (n && n.nodeType === 3) n = n.parentElement;
+  if (!n) return null;
+  // Поднимаемся до прямого потомка root — markdown может вкладывать <p>
+  // внутрь <blockquote>/<details>, и тогда нам нужен не первый встреченный
+  // родитель, а именно уровень плоского списка блоков
+  for (; n && n !== root; n = (n as Element).parentElement) {
+    if (n.parentElement === root) break;
+  }
+  if (!n || n === root) return null;
+  for (let cur: Element | null = n as Element; cur; cur = cur.previousElementSibling) {
+    if (/^H[1-6]$/.test(cur.tagName)) return cur as HTMLElement;
   }
   return null;
+}
+
+// Якорь замечания по живому узлу заголовка. Берём ТЕКСТ И occurrence из оглавления,
+// а не позицию узла в списке: occurrence — номер среди ОДНОИМЁННЫХ разделов, а позиция
+// в документе дала бы «(13-й)» у второго раздела «Тесты» и увела бы замечание в другую
+// группу, чем такое же замечание, оставленное маркером у того же заголовка.
+export function anchorForHeadingEl(
+  el: HTMLElement | null, headings: Heading[],
+): { heading: string; occurrence: number } | null {
+  if (!el) return null;
+  const found = headings.find(h => h.el === el);
+  return found ? { heading: found.text, occurrence: found.occurrence } : null;
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -167,18 +199,15 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
         if (text.length < 3) { setSelection(null); return; }
         const range = sel.getRangeAt(0);
         if (!root.contains(range.commonAncestorContainer)) { setSelection(null); return; }
-        const headingEl = headingForRange(range);
-        const heading = headingEl?.textContent?.trim() ?? null;
-        // Без заголовка замечание некуда привязать — закрываем попап
-        if (!heading) { setSelection(null); return; }
-        // Находим occurrence среди одноимённых: headingEl — это живой <h*>;
-        // сравниваем по ссылке с el в текущем оглавлении
-        const occurrence = headingEl ? headings.findIndex(h => h.el === headingEl) : -1;
+        const anchor = anchorForHeadingEl(headingForRange(root, range), headings);
+        // Заголовка над выделением нет — привязываем замечание к общему якорю
+        // «Общее по плану», чтобы попап не закрывался молча. Такие замечания
+        // соберутся в одну группу в обратной связи.
         const rect = range.getBoundingClientRect();
         setSelection({
           text,
-          heading,
-          occurrence: occurrence >= 0 ? occurrence : 0,
+          heading: anchor?.heading ?? PLAN_GENERAL_HEADING,
+          occurrence: anchor?.occurrence ?? 0,
           x: rect.left + rect.width / 2,
           y: rect.top,
         });
@@ -190,7 +219,7 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
       root.removeEventListener('mouseup', onUp);
       root.removeEventListener('touchend', onUp);
     };
-  }, [contentRef]);
+  }, [contentRef, headings]);
 
   // Сбрасываем форму/выделение при смене плана (новая версия — новые якоря)
   useEffect(() => {

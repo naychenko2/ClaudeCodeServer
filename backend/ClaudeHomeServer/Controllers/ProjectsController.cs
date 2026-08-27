@@ -108,12 +108,13 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
     // Гейт записи в память команды: правило и текст отказа — в TeamMemoryService.WriteDeniedFor
     // (единая точка с http-тулсетом памяти), здесь только резолв вызывающей персоны из заголовка.
+    // «Заголовка нет» и «заголовок был, персона не резолвилась» (удалена/чужой владелец) —
+    // РАЗНЫЕ случаи: первый — «свой» вызов (UI, обычный проектный чат), второй обязан отказывать.
     private bool TeamMemoryWriteAllowed(string projectId, out object? error)
     {
         var callerPersonaId = Request.Headers[CallerPersonaHeader].FirstOrDefault();
-        var denied = callerPersonaId is null || callerPersonaId.Length == 0
-            ? null // «свой» вызов без персоны (UI, обычный проектный чат)
-            : TeamMemoryService.WriteDeniedFor(personas.Get(callerPersonaId, UserId), projectId);
+        var caller = callerPersonaId is { Length: > 0 } ? personas.Get(callerPersonaId, UserId) : null;
+        var denied = TeamMemoryService.WriteDeniedFor(callerPersonaId, caller, projectId);
         error = denied is null ? null : new { error = denied };
         return denied is null;
     }

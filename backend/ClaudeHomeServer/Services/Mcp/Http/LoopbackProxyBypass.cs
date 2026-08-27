@@ -60,7 +60,11 @@ public static class LoopbackProxyBypass
     /// <item>local — <see cref="Merge"/>: унаследованное дополняем локальными адресами,
     /// HTTP_PROXY на машине бывает единственным маршрутом до провайдеров.</item>
     /// </list>
+    /// Адресов много, а не один: у хода бывают РАЗНЫЕ http-серверы (widgets, memory,
+    /// pmem-консультанты), и «первый попавшийся URL» пропускал бы хосты остальных — их
+    /// запросы уезжали бы в прокси вместе с открытым JWT из заголовка Authorization.
     /// </summary>
-    internal static string? ForTurn(bool useHttp, bool isSandboxed, string? inherited, string? apiUrl) =>
-        !useHttp || isSandboxed ? null : Merge(inherited, apiUrl);
+    internal static string? ForTurn(bool useHttp, bool isSandboxed, string? inherited,
+        params string?[] apiUrls) =>
+        !useHttp || isSandboxed ? null : Merge(inherited, apiUrls);
 }

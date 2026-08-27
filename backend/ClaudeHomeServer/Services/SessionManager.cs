@@ -657,7 +657,9 @@ public class SessionManager : IDisposable
     {
         if (ownerId is null || !_bindings.ServerToolEnabled(ownerId, persona, "widgets")) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new WidgetsMcpContext(apiUrl, GetServiceToken(ownerId), HttpMcpTransportUsable(apiUrl));
+        // Токен — фабрикой, как у памяти: контекст живёт столько же, сколько адаптер, а
+        // захваченный строкой JWT у долгоживущего чата истекал (ADR-012, урок фазы 1)
+        return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpMcpTransportUsable(apiUrl));
     }
 
     // Годится ли адрес бэкенда под MCP-over-HTTP (ADR-012). Два входа, оба fail-closed:

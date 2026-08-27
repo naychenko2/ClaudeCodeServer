@@ -19,22 +19,26 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class MemoryToolsetParityTests
 {
-    private static string JsPath
+    private static string JsPath => RepoFile("mcp", "memory-server", "index.js");
+
+    // Исходник http-ветки — второй вход сторожа write-path (см. тест ниже): паритет путей
+    // записи живёт в коде тулсета, скомпилированный контракт его не различает
+    private static string CsPath =>
+        RepoFile("backend", "ClaudeHomeServer", "Services", "Mcp", "Http", "MemoryToolset.cs");
+
+    // Файл репозитория по пути от корня: корень ищем от bin-каталога тестов вверх до .git
+    private static string RepoFile(params string[] parts)
     {
-        get
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null
-                   && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-                   && !File.Exists(Path.Combine(dir.FullName, ".git")))
-                dir = dir.Parent;
-            var path = dir is null
-                ? null
-                : Path.Combine(dir.FullName, "mcp", "memory-server", "index.js");
-            if (path is null || !File.Exists(path))
-                throw new InvalidOperationException("index.js stdio-ветки не найден — сторож парности не может работать");
-            return path;
-        }
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
+        if (path is null || !File.Exists(path))
+            throw new InvalidOperationException(
+                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
+        return path;
     }
 
     private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
@@ -191,5 +195,40 @@ public class MemoryToolsetParityTests
         // Отсутствующие параметры — дефис: не сталкивается с GUID-идентификаторами
         MemoryToolset.EndpointFor("http://localhost:5000", null, null)
             .Should().Be("http://localhost:5000/mcp/memory/-/-");
+    }
+
+    /// <summary>
+    /// Сторож write-path (блокер 2 приёмки волны 1): team_memory_remember обязан писать
+    /// точным Add — тем же путём, что REST-эндпоинт, на который POST-ит stdio-ветка
+    /// (index.js → POST /api/projects/{id}/team-memory → TeamMemoryService.Add). Семантический
+    /// AddAsync менял бы ПОВЕДЕНИЕ, а не транспорт: близкая по смыслу чужая запись
+    /// перезаписывалась бы, а модели возвращался её id под видом новой. Рубильник
+    /// Mcp:HttpTransport не смеет менять семантику записи — поэтому сверяем исходники веток.
+    /// </summary>
+    [Fact]
+    public void TeamRemember_WriteПуть_ТочныйAddКакУStdioВетки()
+    {
+        // stdio-ветка пишет POST-ом на REST-эндпоинт (точный Add контроллера) — якорь,
+        // что «одинаковый write-path» действительно путь отката, а не выдумка теста
+        var rememberJs = CaseBlock(Js.Value, "case 'team_memory_remember':");
+        rememberJs.Should().Contain("teamBase").And.Contain("POST",
+            "stdio-ветка пишет через REST /team-memory — тот же точный Add");
+
+        var rememberCs = CaseBlock(File.ReadAllText(CsPath), "case \"team_memory_remember\":");
+        rememberCs.Should().Contain("teamMemory.Add(",
+            "http-ветка пишет тем же точным Add, что и REST/stdio — транспорт, не семантика");
+        // Сверяем форму ВЫЗОВА, а не голое слово: «AddAsync» в комментарии блока — не вызов
+        rememberCs.Should().NotContain("teamMemory.AddAsync(",
+            "семантический дедуп — другое поведение записи, рубильник транспорта его менять не может");
+    }
+
+    // Блок case по маркеру («case "x":» для C#, «case 'x':» для JS): до следующего «case ».
+    // Окно, в котором живут вызовы одного инструмента — required чужого блока не цепляет
+    private static string CaseBlock(string source, string caseMarker)
+    {
+        var start = source.IndexOf(caseMarker, StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, $"маркер {caseMarker} обязан быть в исходнике");
+        var next = source.IndexOf("case ", start + caseMarker.Length, StringComparison.Ordinal);
+        return source[start..(next < 0 ? source.Length : next)];
     }
 }

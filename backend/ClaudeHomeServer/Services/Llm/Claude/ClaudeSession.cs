@@ -952,10 +952,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 servers["widgets"] = _widgetsMcp!.UseHttp
                     // Токен — сервисный JWT владельца обычным заголовком Authorization (как у
                     // fal-ai/glif), эндпоинт проверяет его сам ([Authorize], владелец из claim
-                    // sub). X-Caller-Session-Id при http шлёт КЛИЕНТ, а не наш код: сюда его
-                    // кладём статикой — на нём держатся [DenyOnDelegatedTurn] и журнал
-                    // GET /api/mcp/calls, а id чата в рамках сессии постоянен.
-                    // URL — из ServerName тулсета: литерал имени не дублируется строкой.
+                    // sub); берём ФАБРИКОЙ на каждую сборку конфига — захваченный строкой JWT
+                    // у чата старше срока жизни токена отдавал бы 401 и прятал widget_show
+                    // молча (как у памяти, ADR-012 урок фазы 1). X-Caller-Session-Id при http
+                    // шлёт КЛИЕНТ, а не наш код: сюда его кладём статикой — на нём держатся
+                    // [DenyOnDelegatedTurn] и журнал GET /api/mcp/calls, а id чата в рамках
+                    // сессии постоянен. URL — из ServerName тулсета: литерал имени
+                    // не дублируется строкой.
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
@@ -963,7 +966,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             _widgetsMcp.ApiUrl, Services.Mcp.Http.WidgetsToolset.ServerName),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
-                            ["Authorization"] = $"Bearer {_widgetsMcp.Token}",
+                            ["Authorization"] = $"Bearer {_widgetsMcp.TokenFactory()}",
                             [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
@@ -2583,11 +2586,22 @@ public class ClaudeSession : ILlmSessionAdapter
         // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
         var httpMcpActive = _httpMcpActive
             || (personaAgents?.MemoryServers.Any(s => s.UseHttp) ?? false);
+        // Адреса ВСЕХ http-серверов хода, а не один: pmem-консультанты приезжают списком и
+        // в ходе могут остаться одни (чат вне проекта, память чата выключена, widgets Off) —
+        // их хост обязан попасть в обход вместе с widgets/memory, иначе запрос mcp__pmem_*
+        // уедет в HTTP_PROXY с открытым сервисным JWT в заголовке и инструмент молча пропадёт.
+        var httpApiUrls = new List<string?>
+        {
+            _widgetsMcp is { UseHttp: true } widgets ? widgets.ApiUrl : null,
+            _memoryMcp is { UseHttp: true } mem ? mem.ApiUrl : null,
+        };
+        httpApiUrls.AddRange(personaAgents?.MemoryServers
+            .Where(s => s.UseHttp).Select(s => s.ApiUrl) ?? []);
         var noProxy = Services.Mcp.Http.LoopbackProxyBypass.ForTurn(
             httpMcpActive,
             _launcher.IsSandboxed,
             Environment.GetEnvironmentVariable("NO_PROXY") ?? Environment.GetEnvironmentVariable("no_proxy"),
-            _widgetsMcp?.ApiUrl ?? _memoryMcp?.ApiUrl);
+            httpApiUrls.ToArray());
         if (noProxy is not null)
         {
             envOverrides["NO_PROXY"] = noProxy;

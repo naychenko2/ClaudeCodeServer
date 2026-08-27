@@ -97,7 +97,7 @@ public class LoopbackProxyBypassTests
     public void ForTurn_Песочница_ХостовойNO_PROXY_НеНаследуетсяНичем()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: true,
-            inherited: "corp.example.com,10.0.0.0/8", apiUrl: "http://host.docker.internal:5000");
+            inherited: "corp.example.com,10.0.0.0/8", apiUrls: "http://host.docker.internal:5000");
 
         value.Should().BeNull("exec-оверрайд затёр бы egress-whitelist песочницы; " +
             "нужные адреса уже стоят в её собственном NO_PROXY");
@@ -111,7 +111,7 @@ public class LoopbackProxyBypassTests
     public void ForTurn_ТранспортНеHttp_ОверрайдаНет()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: false, isSandboxed: false,
-            inherited: "corp.example.com", apiUrl: "http://localhost:5000");
+            inherited: "corp.example.com", apiUrls: "http://localhost:5000");
 
         value.Should().BeNull("в бэкенд по этому адресу CLI не ходит — переменная не нужна");
     }
@@ -120,8 +120,24 @@ public class LoopbackProxyBypassTests
     public void ForTurn_LocalВладелец_УнаследованноеДополняетсяАдресомЭндпоинта()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: false,
-            inherited: "corp.example.com", apiUrl: "http://ccs-host:5000");
+            inherited: "corp.example.com", apiUrls: "http://ccs-host:5000");
 
         value.Should().Be("corp.example.com,localhost,127.0.0.1,::1,host.docker.internal,ccs-host");
+    }
+
+    /// <summary>
+    /// Блокер приёмки волны 1 (A): адресов у хода НЕСКОЛЬКО — widgets, memory и pmem-хвосты
+    /// консультантов. Сценарий «на http только pmem» (чат вне проекта, память выключена,
+    /// widgets Off): пустые URL widgets/memory отбрасываются, хост pmem попадает в обход —
+    /// раньше один URL через ?? молча пропускал его в HTTP_PROXY вместе с JWT из заголовка.
+    /// </summary>
+    [Fact]
+    public void ForTurn_ТолькоПmemНаХttp_ЕгоХостПопадаетВОбход()
+    {
+        var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: false,
+            inherited: null, apiUrls: [null, null, "http://ccs-pmem-host:5000", null]);
+
+        value!.Split(',').Should().Contain("ccs-pmem-host",
+            "хост каждого http-сервера хода обязан попасть в обход, не только первого");
     }
 }

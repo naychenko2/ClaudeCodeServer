@@ -195,14 +195,18 @@ public sealed class MemoryToolset(
             case "team_memory_remember":
             {
                 if (!team) return DenyTeam();
-                var denied = TeamWriteDenied(context, persona, project!);
+                var denied = TeamWriteDenied(persona, project!);
                 if (denied is not null) return Deny(denied);
                 var text = StringArg(arguments, "text");
                 if (string.IsNullOrWhiteSpace(text)) return Deny("Пустой текст");
                 if (TeamMemoryService.LengthViolation(text, 0) is { } tooLong) return Deny(tooLong);
                 var type = Enum.TryParse<TeamMemoryType>(StringArg(arguments, "type"), true, out var tt)
                     ? tt : TeamMemoryType.Fact;
-                var entry = await teamMemory.AddAsync(context.OwnerId, project!.Id, text, type);
+                // Точный Add, как REST-путь UI (ProjectsController) и stdio-ветка отката,
+                // которая POST-ит на тот же REST: рубильник Mcp:HttpTransport меняет только
+                // транспорт, а не семантику записи — семантический дедуп AddAsync перезаписал
+                // бы чужую близкую запись и вернул её модели под видом новой
+                var entry = teamMemory.Add(context.OwnerId, project!.Id, text, type);
                 await BroadcastTeamAsync(context.OwnerId, project.Id, "added", entry.Id);
                 return Json(entry);
             }
@@ -251,7 +255,7 @@ public sealed class MemoryToolset(
             case "team_memory_forget":
             {
                 if (!team) return DenyTeam();
-                var denied = TeamWriteDenied(context, persona, project!);
+                var denied = TeamWriteDenied(persona, project!);
                 if (denied is not null) return Deny(denied);
                 var id = StringArg(arguments, "id");
                 if (!teamMemory.Remove(context.OwnerId, project!.Id, id))
@@ -263,7 +267,7 @@ public sealed class MemoryToolset(
             case "team_memory_update":
             {
                 if (!team) return DenyTeam();
-                var denied = TeamWriteDenied(context, persona, project!);
+                var denied = TeamWriteDenied(persona, project!);
                 if (denied is not null) return Deny(denied);
                 var text = StringArg(arguments, "text");
                 if (string.IsNullOrWhiteSpace(text)) return Deny("Пустой текст");
@@ -410,9 +414,10 @@ public sealed class MemoryToolset(
     // Гейт записи команды (③-3.4): пишет либо «свой» вызов без персоны (обычный проектный
     // чат), либо персона САМОГО проекта. Вызывающая персона здесь — персона из хвоста
     // маршрута: при stdio ту же роль играл заголовок X-Caller-Persona-Id, который сервер
-    // ставил из MEMORY_PERSONA_ID
-    private static string? TeamWriteDenied(McpToolCallContext context, Persona? persona, Project project) =>
-        TeamMemoryService.WriteDeniedFor(persona, project.Id);
+    // ставил из MEMORY_PERSONA_ID. id и персона идут парой — сюда с непустым id при
+    // null-персоне не доехать (неразрешимый хвост отказал выше, в TryResolve)
+    private static string? TeamWriteDenied(Persona? persona, Project project) =>
+        TeamMemoryService.WriteDeniedFor(persona?.Id, persona, project.Id);
 
     // --- Ответы ---
 

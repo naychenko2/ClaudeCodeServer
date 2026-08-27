@@ -460,13 +460,19 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
     // Гейт записи в память команды (③-3.4, диета памяти команды, ч.3): пишет либо «свой»
     // вызов без персоны (обычный проектный чат, ручное редактирование через UI), либо
     // персона ЭТОГО ЖЕ проекта. Глобальные персоны и консультанты других проектов —
-    // read-only (team_memory_list/search остаются). Персона, которую не удалось резолвить
-    // (удалена/чужой owner) — тоже отказ, а не молчаливое разрешение. Единая точка для
-    // ProjectsController и MCP memory-сервера (http-тулсет): текст отказа читает модель,
+    // read-only (team_memory_list/search остаются). Пара (callerPersonaId, caller) разводит
+    // два смысла null-персоны: пустой id — «персоны нет» (разрешено), непустой id при
+    // null-персоне — «не резолвилась» (удалена/чужой owner), и это отказ, а не молчаливое
+    // разрешение. Единая точка для ProjectsController (заголовок X-Caller-Persona-Id
+    // stdio-ветки) и MCP memory-сервера (http-тулсет): текст отказа читает модель,
     // рассинхрон копий менял бы поведение веток по-разному.
-    public static string? WriteDeniedFor(Persona? caller, string projectId)
+    public static string? WriteDeniedFor(string? callerPersonaId, Persona? caller, string projectId)
     {
-        if (caller is null) return null;
+        if (string.IsNullOrEmpty(callerPersonaId)) return null;
+        if (caller is null)
+            return "Персона, от имени которой идёт запись, не найдена (удалена или недоступна) — "
+                + "запись в память команды отклонена. Не меняй общую память, пока пользователь "
+                + "не уточнит актуальную персону.";
         if (caller.Scope == PersonaScope.Project && caller.ProjectId == projectId) return null;
         return "Запись в память команды доступна только персоне ЭТОГО проекта. Ты — "
             + "глобальная персона или консультант другого проекта: можешь читать общую память "

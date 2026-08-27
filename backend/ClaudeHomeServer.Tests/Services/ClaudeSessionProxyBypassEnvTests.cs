@@ -71,7 +71,8 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
         }
     }
 
-    private async Task<Dictionary<string, string>?> RunTurnAsync(bool sandboxed, bool useHttp)
+    private async Task<Dictionary<string, string>?> RunTurnAsync(bool sandboxed, bool useHttp,
+        WidgetsMcpContext? widgets = null, PersonaAgentsContext? personaAgents = null)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -89,7 +90,8 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
             RawSystemPrompt: null,
             PermissionRules: null,
             TasksMcp: null,
-            WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", "tok", UseHttp: useHttp),
+            WidgetsMcp: widgets ?? new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: useHttp),
+            PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents,
             // Как в SessionManager: сводный признак http-серверов хода решается там по
             // UseHttp-контекстам (HttpMcpActive) — здесь эмулируем его тем же значением
             HttpMcpActive: useHttp,
@@ -161,5 +163,28 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
 
         env!.ContainsKey("NO_PROXY").Should().BeFalse();
         env.ContainsKey("no_proxy").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Блокер приёмки волны 1 (A), сквозной: ход, где на http живут ТОЛЬКО pmem-консультанты
+    /// (чат вне проекта, память чата выключена, widgets Off) — контекстный HttpMcpActive
+    /// ложен, его уточняют pmem на месте, и NO_PROXY обязан встать с хостом pmem-эндпоинта.
+    /// Регрессия: единственный URL через ?? молча выкидывал адреса pmem — запрос уезжал в
+    /// HTTP_PROXY с открытым сервисным JWT, а mcp__pmem_* пропадали у сабагентов.
+    /// </summary>
+    [Fact]
+    public async Task ХодТолькоСПmemНаХttp_ОбходПроксиСодержитХостPmem()
+    {
+        var pmem = new PersonaAgentsContext([],
+        [
+            new ConsultantMemoryServer("pmem_test", "http://ccs-pmem-host:5998", () => "tok",
+                "p-1", null, UseHttp: true),
+        ], ["test"]);
+
+        var env = await RunTurnAsync(sandboxed: false, useHttp: false, widgets: null, personaAgents: pmem);
+
+        env!["NO_PROXY"].Split(',').Should().Contain("ccs-pmem-host",
+            "запрос mcp__pmem_* идёт от того же CLI — его хост не смеет уезжать в прокси");
+        env["no_proxy"].Should().Be(env["NO_PROXY"]);
     }
 }

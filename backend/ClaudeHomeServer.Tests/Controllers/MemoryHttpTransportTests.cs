@@ -275,6 +275,87 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         payload.Should().NotContain("не должно записаться");
     }
 
+    /// <summary>
+    /// Блокер 2 приёмки волны 1: team_memory_remember через http и через REST дают ОДИНАКОВЫЙ
+    /// результат при близкой по смыслу существующей записи — рубильник Mcp:HttpTransport
+    /// меняет транспорт, а не семантику записи. Регрессия: AddAsync семантически дедупликатал
+    /// бы близкую запись (перезапись чужого текста, возврат её id под видом новой).
+    /// </summary>
+    [Fact]
+    public async Task TeamRemember_ЧерезHttpИRest_ОдинаковыйРезультатПриБлизкойЗаписи()
+    {
+        var (_, projectId) = await SeedAsync();
+
+        // Близкая по смыслу запись уже лежит
+        var seed = await _client.PostAsJsonAsync($"/api/projects/{projectId}/team-memory",
+            new { text = "Договорённость: код-ревью проводит Глеб" });
+        seed.EnsureSuccessStatusCode();
+
+        var viaHttp = await RpcAsync(MemoryUrl("-", projectId), "tools/call", new
+        {
+            name = "team_memory_remember",
+            arguments = new { text = "Договорённость: код-ревью делает Глеб" },
+        });
+        viaHttp.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();
+        var httpEntry = JsonSerializer.Deserialize<JsonElement>(
+            viaHttp.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!);
+
+        var viaRest = await _client.PostAsJsonAsync($"/api/projects/{projectId}/team-memory",
+            new { text = "Договорённость: код-ревью проходит Глеб" });
+        viaRest.EnsureSuccessStatusCode();
+        var restEntry = await viaRest.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Оба пути создали НОВЫЕ записи: свои id, свой текст — ничья формулировка не перезаписана
+        httpEntry.GetProperty("id").GetString().Should().NotBe(restEntry.GetProperty("id").GetString());
+        httpEntry.GetProperty("text").GetString().Should().Be("Договорённость: код-ревью делает Глеб");
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/team-memory");
+        list.EnumerateArray().Should().HaveCount(3, "близкая запись не поглотила новые: дедуп только точный");
+    }
+
+    /// <summary>
+    /// Тестовый пробел волны 1 (C): личная память персоны A недоступна персоне B ТОГО ЖЕ
+    /// владельца — хвост маршрута не источник прав даже внутри одного owner (URL виден
+    /// модели в конфиге хода, персона резолвится owner-скоупно на каждый вызов).
+    /// </summary>
+    [Fact]
+    public async Task ЛичнаяПамятьПерсоны_НедоступнаЧерезХвостДругойПерсоныТогоЖеВладельца()
+    {
+        var (personaA, _) = await SeedAsync(projectScopedPersona: false);
+        var (personaB, _) = await SeedAsync(projectScopedPersona: false);
+
+        var remember = await RpcAsync(MemoryUrl(personaA, "-"), "tools/call", new
+        {
+            name = "memory_remember",
+            arguments = new { type = "semantic", text = "Личный секрет персоны A: пароль от сейфа" },
+        });
+        remember.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();
+
+        var list = await RpcAsync(MemoryUrl(personaB, "-"), "tools/call", new
+        {
+            name = "memory_list",
+            arguments = new { },
+        });
+        var listText = list.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+        listText.Should().NotContain("сейфа", "хвост B — память B, а не окно в память соседа");
+
+        var recall = await RpcAsync(MemoryUrl(personaB, "-"), "tools/call", new
+        {
+            name = "memory_recall",
+            arguments = new { query = "пароль от сейфа" },
+        });
+        var recallText = recall.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+        recallText.Should().NotContain("сейфа");
+
+        // Память A при этом цела — изоляция не уничтожила её
+        var own = await RpcAsync(MemoryUrl(personaA, "-"), "tools/call", new
+        {
+            name = "memory_list",
+            arguments = new { },
+        });
+        own.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!
+            .Should().Contain("сейфа");
+    }
+
     [Fact]
     public async Task TeamList_ПагинируетИУсекаетТекст()
     {

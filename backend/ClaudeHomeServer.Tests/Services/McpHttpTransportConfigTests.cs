@@ -68,7 +68,7 @@ public class McpHttpTransportConfigTests : IDisposable
     public void ГодныйАдрес_ВиджетыОбъявленыHttpЭндпоинтомСТокеномВладельца()
     {
         var (servers, keys) = BuildConfig(
-            new WidgetsMcpContext("http://localhost:5000", "tok-A", UseHttp: true));
+            new WidgetsMcpContext("http://localhost:5000", () => "tok-A", UseHttp: true));
 
         var widgets = servers["widgets"]!.AsObject();
         widgets["type"]!.GetValue<string>().Should().Be("http");
@@ -96,7 +96,7 @@ public class McpHttpTransportConfigTests : IDisposable
     public void АдресНеHttp_FailClosed_ВиджетыЕдутПрежнимStdioСервером()
     {
         var (servers, keys) = BuildConfig(
-            new WidgetsMcpContext("https://naychenko.me", "tok-A", UseHttp: false));
+            new WidgetsMcpContext("https://naychenko.me", () => "tok-A", UseHttp: false));
 
         if (servers["widgets"] is { } node)
         {
@@ -124,9 +124,9 @@ public class McpHttpTransportConfigTests : IDisposable
     public void ТранспортВходитВСигнатуруЗапуска()
     {
         var (_, httpKeys) = BuildConfig(
-            new WidgetsMcpContext("http://localhost:5000", "tok-A", UseHttp: true));
+            new WidgetsMcpContext("http://localhost:5000", () => "tok-A", UseHttp: true));
         var (_, otherKeys) = BuildConfig(
-            new WidgetsMcpContext("http://localhost:5000", "tok-A", UseHttp: false));
+            new WidgetsMcpContext("http://localhost:5000", () => "tok-A", UseHttp: false));
 
         httpKeys.Should().Contain("widgets:t:http");
         // Вне дерева репозитория вторая сигнатура вырождается в пустую — она всё равно другая,

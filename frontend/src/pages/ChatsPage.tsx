@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
-import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
@@ -186,30 +185,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   const activeChat = chats.find(c => c.id === activeId) ?? null;
 
-  // Открытый чат заархивировали ИЗВНЕ этого экрана (другое окно/устройство) — события
-  // архивации бэкенд не шлёт, поллинг привозит archivedAt в fresh-списке. Ловим только
-  // ПЕРЕХОД «не архивен → архивен» у ТОГО ЖЕ чата: чат, открытый из архивного вида,
-  // архивен ещё до выбора, и выкидывать его из центра нельзя
-  const activeChatArchivedAt = activeChat?.archivedAt;
-  const prevActiveRef = useRef({ id: activeChat?.id ?? null, archived: false });
-  useEffect(() => {
-    const prev = prevActiveRef.current;
-    const cur = { id: activeChat?.id ?? null, archived: !!activeChatArchivedAt };
-    prevActiveRef.current = cur;
-    if (!cur.id || !cur.archived) return;
-    if (prev.id !== cur.id || prev.archived) return; // выбор архивного — не переход
-    const neighbor = chatNeighborForArchive(chats, cur.id);
-    if (neighbor) {
-      setActiveId(neighbor.id);
-      localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
-      markChatRead(neighbor.id);
-      navReplace({ screen: 'chats', chatId: neighbor.id });
-    } else {
-      backToList();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChat?.id, activeChatArchivedAt]);
-
   // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
   const unreadCount = useUnreadChatCount(chats);
 
@@ -264,23 +239,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   }, [activeChatId, activeChatUpdatedAt]);
 
   // Чат отредактирован/закреплён — обновить в списке
-  const handleChatEdited = (updated: Session) => {
+  const handleChatEdited = (updated: Session) =>
     setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-    // Активный чат ушёл в архив — центр покидает его и встаёт на соседа по списку
-    // (архивный вид списка чат скрывает, а открытым он висел бы призраком).
-    // Сосед — «предыдущий» в порядке списка; нет соседа — возврат к списку
-    if (updated.archivedAt && activeId === updated.id) {
-      const neighbor = chatNeighborForArchive(chats, updated.id);
-      if (neighbor) {
-        setActiveId(neighbor.id);
-        localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
-        markChatRead(neighbor.id);
-        navReplace({ screen: 'chats', chatId: neighbor.id });
-      } else {
-        backToList();
-      }
-    }
-  };
 
   // Чат удалён — убрать из списка; если был активным — вернуться к списку
   const handleChatDeleted = (id: string) => {
@@ -315,7 +275,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 skills={skills}
                 attachedFiles={attachedFiles}
                 onAttachedFilesChange={setAttachedFiles}
-                onSessionUpdated={handleChatEdited}
+                onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
                 onWorkflowRunning={handleWorkflowRunning}
               />
             </div>
@@ -340,46 +300,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       </PageCanvas>
     );
   }
-
-  // Центр раздела: лента активного чата или заставка. Функцией, а не готовым узлом,
-  // чтобы не считать её, когда центр занят видео.
-  const chatCenter = () => activeChat ? (
-    <ChatPanel
-      key={activeChat.id}
-      session={activeChat}
-      onChatDeleted={handleChatDeleted}
-      headerIsland
-      skills={skills}
-      attachedFiles={attachedFiles}
-      onAttachedFilesChange={setAttachedFiles}
-      onSessionUpdated={handleChatEdited}
-      onWorkflowRunning={handleWorkflowRunning}
-    />
-  ) : (
-    <>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
-          {/* Иконка раздела */}
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
-            <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
-          </div>
-          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
-            О чём поговорим?
-          </div>
-          <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
-            Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
-          </div>
-          <Button
-            variant="primary" size="md" glow loading={creating}
-            onClick={newChat} style={{ marginTop: 10 }}
-            leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-          >
-            Новый чат
-          </Button>
-        </div>
-      </div>
-    </>
-  );
 
   return (
     <PageCanvas>
@@ -413,7 +333,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // компенсация съест место, которое ленте ещё нужно. Пока чат не выбран,
           // в центре стоит заставка вдвое уже — её потребность SPLASH_W, и завышать
           // её до ленты нельзя: на узком окне запаса не останется и заставку перекосит
-          // Рядом с эфиром компенсировать нечего: центр делят два резиновых острова
+// Рядом с эфиром компенсировать нечего: центр делят два резиновых острова
           centerContentWidth={videoCenter ? undefined : (activeChat ? CHAT_COLUMN_W : SPLASH_W)}
           center={videoCenter ? (
             // Видео занимает центр ЦЕЛИКОМ — и кадр, и каталог. Кадр пробовали ставить
@@ -421,7 +341,43 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             // него мало толку, а разворачивают его как раз тогда, когда хотят смотреть,
             // а не переписываться. Фоновый просмотр закрывает панель рельсы, она рядом.
             <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}><VideoCenter /></Island>
-          ) : chatCenter()}
+          ) : (activeChat ? (
+            <ChatPanel
+              key={activeChat.id}
+              session={activeChat}
+              onChatDeleted={handleChatDeleted}
+              headerIsland
+              skills={skills}
+              attachedFiles={attachedFiles}
+              onAttachedFilesChange={setAttachedFiles}
+              onSessionUpdated={handleChatEdited}
+              onWorkflowRunning={handleWorkflowRunning}
+            />
+          ) : (
+            <>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
+                  {/* Иконка раздела */}
+                  <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+                    <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
+                  </div>
+                  <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
+                    О чём поговорим?
+                  </div>
+                  <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
+                    Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
+                  </div>
+                  <Button
+                    variant="primary" size="md" glow loading={creating}
+                    onClick={newChat} style={{ marginTop: 10 }}
+                    leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+                  >
+                    Новый чат
+                  </Button>
+                </div>
+              </div>
+            </>
+          ))}
           // Сессионная рельса (План/Агенты/Персона) — только когда в чате есть
           // сообщения (есть что показать в артефактах). Для нового пустого чата
           // рельса не нужна — это держит центральную область симметричной:

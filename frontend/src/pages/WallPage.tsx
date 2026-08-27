@@ -38,7 +38,7 @@ import type { Zone } from './workspace/panelCatalog';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { SessionList } from '../components/SessionList';
 import { ProjectRail } from '../features/projects/ProjectRail';
-import { useWallState, getWallState, initWall, slotCount, addChatSafe, focusChat, updateProject, updateChat } from '../features/wall/wallStore';
+import { useWallState, getWallState, initWall, slotCount, addChatSafe, focusChat, updateProject } from '../features/wall/wallStore';
 import { WallColumn } from '../features/wall/WallColumn';
 import { WallPicker } from '../features/wall/WallPicker';
 import { WallDock } from '../features/wall/WallDock';
@@ -182,9 +182,6 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
           onSelect={s => openChatOnWall(s.id)}
           isMobile={false}
           onAddToWall={s => { void addChatSafe(s); }}
-          // Правки чата из карточек панели — в стор стены: смена модели/имени обновит
-          // колонку, а архивация («В архив» в списке) колонку УБИРАЕТ (wallStore.updateChat)
-          onSessionUpdated={updateChat}
         />
       </div>
     ) : undefined,

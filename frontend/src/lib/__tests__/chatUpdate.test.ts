@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { updateChatFields, chatNeighborForArchive } from '../chatUpdate';
+import { updateChatFields } from '../chatUpdate';
 import { api } from '../api';
 import type { Session } from '../../types';
 
@@ -36,35 +36,5 @@ describe('updateChatFields — частичный патч, а не полная
   it('чат вне проекта уходит на /chats', async () => {
     await updateChatFields({ ...session, projectId: undefined } as Session, { notificationsMuted: true });
     expect(api.chats.update).toHaveBeenCalledWith('s1', { notificationsMuted: true });
-  });
-});
-
-describe('chatNeighborForArchive — сосед архивируемого чата', () => {
-  const s = (id: string, archivedAt?: string): Session =>
-    ({ id, archivedAt, projectId: 'p1' } as Session);
-
-  it('берёт ближайшего неархивного соседа СВЕРХУ (список свежими сверху)', () => {
-    const list = [s('a'), s('b'), s('c')];
-    expect(chatNeighborForArchive(list, 'c')).toMatchObject({ id: 'b' });
-  });
-
-  it('над архивируемым только архивные — берёт первого живого снизу', () => {
-    const list = [s('a', '2026-08-01'), s('b'), s('c')];
-    expect(chatNeighborForArchive(list, 'b')).toMatchObject({ id: 'c' });
-  });
-
-  it('первый в списке — сосед снизу', () => {
-    const list = [s('a'), s('b')];
-    expect(chatNeighborForArchive(list, 'a')).toMatchObject({ id: 'b' });
-  });
-
-  it('архивировали последний живой — null (центр в пустое состояние)', () => {
-    const list = [s('a', '2026-08-01'), s('b')];
-    expect(chatNeighborForArchive(list, 'b')).toBeNull();
-  });
-
-  it('чат вне списка — первый живой', () => {
-    const list = [s('a', '2026-08-01'), s('b')];
-    expect(chatNeighborForArchive(list, 'zzz')).toMatchObject({ id: 'b' });
   });
 });

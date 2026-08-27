@@ -199,14 +199,6 @@ public class ClaudeSession : ILlmSessionAdapter
     // открыт именно потому, что доживали bg-агенты — их task_notification запускает продолжение.
     private static readonly TimeSpan ContinuationStartGrace = TimeSpan.FromMinutes(2);
 
-    // Грейс на штатный EOF stdout после смерти процесса. Обычно pipe закрывается сразу, но
-    // унаследовавшие его потомки (node-процессы MCP) держат write-end и после гибели CLI, а
-    // Kill дерева их уже не достаёт: у мёртвого родителя дети осиротели (на Linux ppid=1) и в
-    // дерево не попадают. Тогда ReadLineAsync висит, ReadLoopAsync не выходит, финализация
-    // прогона не стартует — ни ExitedMessage, ни уборки, чат залипает в Working до часового
-    // watchdog. По истечении грейса закрываем СВОЙ конец pipe сами (ForceCloseStdout).
-    private static readonly TimeSpan ReaderEofGrace = TimeSpan.FromSeconds(5);
-
     // Потолок доживания процесса с работающими фоновыми агентами после конца хода.
     // Агенты (Agent run_in_background, Workflow) живут ВНУТРИ процесса CLI: убить его
     // по грейсу — значит убить их на середине (наблюдалось на проде: task-notification
@@ -284,9 +276,6 @@ public class ClaudeSession : ILlmSessionAdapter
         // декремент — поток reader'а)
         public int SkipResults;
         public volatile bool StdinClosed;
-        // Ридер разбужен принудительным закрытием stdout (см. ForceCloseStdout): падение чтения
-        // с IOException в этом случае — не крах разбора, а штатный выход из цикла
-        public volatile bool StdoutForceClosed;
         // Прогон убит ради несовместимого нового хода: ExitedMessage не слать —
         // статусом сессии владеет уже новый ход
         public volatile bool SuppressExited;
@@ -2749,16 +2738,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         // хуки/мосты (наблюдалось с oh-my-claudecode), гасим молча
                         _launcher.Kill(run.Process, run.LaunchTurnId);
                         // Добираем висящее чтение: kill закрыл stdout → оно завершится (null/ошибка),
-                        // без await остался бы unobserved-таск. Ждём ограниченно: pipe могли унаследовать
-                        // потомки убитого процесса (см. ReaderEofGrace) — тогда чтение не вернётся вовсе,
-                        // и безусловный await запер бы цикл здесь навсегда, не дав финализировать прогон.
-                        try { await pendingRead.WaitAsync(ReaderEofGrace, CancellationToken.None); }
-                        catch (TimeoutException)
-                        {
-                            ForceCloseStdout(run);
-                            try { await pendingRead; } catch { /* свой конец pipe закрыт — ожидаемо */ }
-                        }
-                        catch { /* пайп закрыт убийством — ожидаемо */ }
+                        // без await остался бы unobserved-таск
+                        try { await pendingRead; } catch { /* пайп закрыт убийством — ожидаемо */ }
                         break;
                     }
                     delayCts.Cancel(); // чтение выиграло — гасим таймер, иначе на активном стриме
@@ -2773,14 +2754,6 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         catch (OperationCanceledException) { /* отмена сессии — штатно */ }
-        catch (Exception ex) when (run.StdoutForceClosed)
-        {
-            // Не крах разбора, а наше же пробуждение ридера (ForceCloseStdout): чтение падает
-            // IOException по закрытому концу pipe. Стек тут — шум, ошибка клиенту уже отправлена
-            // тем, кто диагностировал смерть; идём сразу в финализацию (ExitedMessage).
-            Console.Error.WriteLine(
-                $"[ClaudeSession] Ридер разбужен закрытием stdout (session={Info.Id} cli={Info.ClaudeSessionId ?? "-"}): {ex.GetType().Name}");
-        }
         catch (Exception ex)
         {
             // Полный стек — иначе не видно, ГДЕ упал разбор (напр. небезопасное чтение числа
@@ -2791,7 +2764,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // размышления). Шлём ошибку, чтобы ход честно завершился. DeathDiagnosed — ДО сообщения:
             // finally убьёт процесс → Exited → HandleProcessExitedAsync, и по флагу не пришлёт дубль
             // ErrorMessage (текст краха цикла здесь точнее, чем «процесс завершился»).
-            if (!run.TurnDone && !run.DeathDiagnosed)
+            if (!run.TurnDone)
             {
                 run.DeathDiagnosed = true;
                 TurnTelemetry.RecordError(Info.Provider, "process_exit");
@@ -3068,45 +3041,6 @@ public class ClaudeSession : ILlmSessionAdapter
         // без этого висящее ReadLineAsync не вернётся и финализация не стартует.
         try { _launcher.Kill(run.Process, run.LaunchTurnId); }
         catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] Kill прогона при смерти не удался: {ex.Message}"); }
-
-        // …но Kill дерева спасает не всегда: к этому моменту родитель УЖЕ мёртв, его потомки
-        // осиротели (на Linux ppid=1) и в дерево не попадают — унаследованный stdout остаётся
-        // открытым, EOF не приходит. Страхуемся: если ридер не вышел за грейс, будим его сами.
-        _ = WakeReaderAfterEofGraceAsync(run);
-    }
-
-    // Гарантия выхода ридера после смерти процесса: ждём штатный EOF (обычно приходит сразу
-    // после Kill дерева), а если его нет — закрываем свой конец pipe. Иначе прогон не
-    // финализируется вовсе: нет ни ExitedMessage (чат висит в Working), ни уборки temp-конфига
-    // с сервисным токеном, ни закрытия карточек фоновых задач.
-    private async Task WakeReaderAfterEofGraceAsync(CliRun run)
-    {
-        var deadline = DateTime.UtcNow + ReaderEofGrace;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (run.ReaderTask is { IsCompleted: true }) return;
-            await Task.Delay(250);
-        }
-        if (run.ReaderTask is { IsCompleted: true }) return;
-        Console.Error.WriteLine(
-            $"[ClaudeSession] stdout мёртвого прогона держат его потомки — закрываем свой конец pipe " +
-            $"(session={Info.Id} cli={Info.ClaudeSessionId ?? "-"})");
-        ForceCloseStdout(run);
-    }
-
-    // Закрытие СВОЕГО конца stdout: висящее ReadLineAsync падает IOException, цикл чтения
-    // выходит и финализирует прогон. Идемпотентно — путей пробуждения два (смерть процесса
-    // и watchdog), а поток stdout закрывается ровно один раз.
-    private void ForceCloseStdout(CliRun run)
-    {
-        if (run.StdoutForceClosed) return;
-        run.StdoutForceClosed = true;
-        // Процесс мог быть уже финализирован и Dispose'нут в гонке — тогда будить некого
-        try { run.Process.StandardOutput.Close(); }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[ClaudeSession] Не удалось закрыть stdout прогона: {ex.GetType().Name}: {ex.Message}");
-        }
     }
 
     /// <summary>

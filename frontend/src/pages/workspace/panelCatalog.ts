@@ -16,7 +16,7 @@
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
   BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
-  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
+  SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
   TableOfContents, Lightbulb,
   type LucideIcon,
 } from 'lucide-react';
@@ -36,6 +36,11 @@ export const PANEL_KEYS = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
+  // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
+  // Каталог каналов панелью НЕ является: он открывается в центральном острове
+  // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
+  // а в рельсе их не разглядеть.
+  'video',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
@@ -103,7 +108,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   skills:   { title: 'Навыки',    Icon: Puzzle },
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
-  preview:  { title: 'Сервисы',   Icon: MonitorPlay },
+  preview:  { title: 'Сервисы',   Icon: AppWindow },
+  video:    { title: 'Видео',     Icon: MonitorPlay },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -140,6 +146,9 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   team: 'right',
   skills: 'right',
   terminal: 'right',
+  // Справа, как «Сервисы»: слева живёт список чатов, а эфир рядом с ним отнимал бы
+  // место у навигации — смотрят его сбоку от ленты, а не вместо неё
+  video: 'right',
   preview: 'right',
   plan: 'right',
   agents: 'right',
@@ -156,10 +165,10 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc',
+  'plan', 'agents', 'context', 'toc', 'video',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
-export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context'];
+export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
 export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph'];
 export const KNOWLEDGE_KEYS: readonly PanelKey[] = ['knowledgeList'];
 export const PERSONAS_KEYS: readonly PanelKey[] = ['personasList'];
@@ -188,7 +197,7 @@ export const CENTER_KEYS: readonly PanelKey[] = ['toc'];
 // и по дефолту была скрыта у всех. Гейт убран: видимость кнопок — дело ящика
 // рельсы («…»), а не настроек проекта, и per-project разницы у неё нет. Обе кнопки
 // лежат в ящике по умолчанию (defaultTucked у wsPanels).
-export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview'];
+export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview', 'video'];
 
 // Содержимое проекта и панели разделов: всё, что не относится ни к текущей сессии,
 // ни к запуску процессов, ни к центральной области. Первая группа рельсы, дальше

@@ -344,6 +344,13 @@ export interface PanelZones {
   // не список поверх него. Каждая PanelZone подписывается эффектом и чистит свой
   // локальный tabletPanels. runtime, не персистится (см. persist).
   closeCompactSignal: number;
+  // Счётчик сигнала «активная сторона освободилась — соседка, выбитая эксклюзивом,
+  // возвращает свой compact-стек». Бросает его зона, закрывшая у себя ПОСЛЕДНЮЮ
+  // панель (releaseCompactSide): в узком планшете открытость дроверов живёт в
+  // локальном состоянии зон, и стор сам увидеть опустевшую сторону не может — в
+  // отличие от inline-раскладки, где то же делает чистая restoreOppositeIfEmpty.
+  // runtime, не персистится (см. persist).
+  restoreCompactSignal: number;
 }
 
 export function emptyZone(): ZoneState {
@@ -351,7 +358,7 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null, closeCompactSignal: 0 };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null, closeCompactSignal: 0, restoreCompactSignal: 0 };
 }
 
 // Зона, в которой панель показывает свою иконку, когда закрыта
@@ -443,6 +450,7 @@ export function sanitizeZones(raw: unknown): PanelZones {
     exclusive: false,
     activeSide: null,
     closeCompactSignal: 0,
+    restoreCompactSignal: 0,
   });
 }
 
@@ -654,6 +662,30 @@ export function markActiveSide(zones: PanelZones, side: Zone): PanelZones {
   return next;
 }
 
+
+// Обратная операция к markActiveSide: активная сторона ОПУСТЕЛА — соседка,
+// свёрнутая эксклюзивом, возвращается из stash сама. Без этого закрытие панели,
+// которая только что выбила соседнюю, оставляло планшет с пустыми боками: набор
+// соседки лежал в stash, но достать его можно было лишь кликом по её иконке.
+//
+// Guard'ы (в порядке проверки): режим выключен; сторона ещё занята — возвращать
+// рано; соседка и так на экране — выбивания не было; stash пуст — возвращать
+// нечего. Чистая и идемпотентная: безопасна на каждое закрытие панели.
+export function restoreOppositeIfEmpty(zones: PanelZones, side: Zone): PanelZones {
+  if (!zones.exclusive) return zones;
+  const other: Zone = side === 'left' ? 'right' : 'left';
+  if (zones[side].layout.flat().length > 0) return zones;
+  if (zones[other].layout.flat().length > 0) return zones;
+  if (zones[other].stash.flat().length === 0) return zones;
+  return {
+    ...zones,
+    [other]: { ...zones[other], layout: zones[other].stash, stash: [] },
+    // Активность переезжает вместе с панелями: иначе compact-зона соседки увидела
+    // бы «активна не я» и схлопнула бы то, что мы только что вернули.
+    activeSide: other,
+  };
+}
+
 // Дроп панели НА панель — они меняются местами, в том числе через границу зон:
 // каждая встаёт в слот другой, раскладки обеих зон по форме не меняются.
 export function swapAcross(zones: PanelZones, a: PanelKey, b: PanelKey): PanelZones {
@@ -821,6 +853,7 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     exclusive: false,
     activeSide: null,
     closeCompactSignal: 0,
+    restoreCompactSignal: 0,
   });
 }
 
@@ -908,6 +941,11 @@ export interface PanelZonesApi {
   // эффектом на счётчик и чистит свой локальный tabletPanels. runtime, мимо persist
   // — в localStorage не пишем.
   closeCompactStack: () => void;
+  // Compact-зона (узкий планшет) сообщает: у неё закрылась ПОСЛЕДНЯЯ панель, сторона
+  // свободна. Стор передаёт активность соседке и бросает restoreCompactSignal —
+  // та возвращает свой выбитый стек. Для inline-раскладки этого не нужно: там
+  // опустевшую сторону стор видит сам (см. closing/restoreOppositeIfEmpty).
+  releaseCompactSide: (side: Zone) => void;
   // Показать панель по внешнему запросу (git-бар над композером). Возвращает
   // true, если она УЖЕ была открыта — тогда вызывающий просит её мигнуть.
   reveal: (k: PanelKey) => boolean;
@@ -999,11 +1037,11 @@ function createPanelZones(ns: string, opts?: {
   const openers = new Map<Zone, (k: PanelKey) => void>();
 
   function persist() {
-    // exclusive/activeSide/closeCompactSignal — runtime: в localStorage не пишем,
+    // exclusive/activeSide/сигналы — runtime: в localStorage не пишем,
     // иначе флаг поднимался бы на WallPage и при откате кода. sanitizeZones
     // обнулит их и при чтении — двойная защита.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructure to omit
-    const { exclusive: _exclusive, activeSide: _activeSide, closeCompactSignal: _closeCompactSignal, ...rest } = _zones;
+    const { exclusive: _exclusive, activeSide: _activeSide, closeCompactSignal: _closeCompactSignal, restoreCompactSignal: _restoreCompactSignal, ...rest } = _zones;
     lsSet(KEY, JSON.stringify(rest));
   }
 
@@ -1033,6 +1071,14 @@ function createPanelZones(ns: string, opts?: {
     emit();
   }
 
+  // Закрытие панели могло освободить сторону — тогда соседка, свёрнутая
+  // эксклюзивом планшета, возвращается из stash сама (см. restoreOppositeIfEmpty).
+  // Сторону берём ДО операции: после неё панели в раскладке уже нет, и спросить
+  // негде. null — панель и не была открыта (закрывают закрытую): возвращать нечего.
+  function closing(next: PanelZones, was: Zone | null): PanelZones {
+    return was ? restoreOppositeIfEmpty(next, was) : next;
+  }
+
   // Вес новой панели заводим ДО раскладки, иначе normalizeWeights даст ей 1 уже
   // после деления и соседи дрогнут. Нужно и клику по иконке, и дропу из рельсы:
   // оба открывают панель, которой в раскладке ещё не было.
@@ -1047,7 +1093,10 @@ function createPanelZones(ns: string, opts?: {
 
     const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
       ensureWeight(k);
-      commit(togglePanelIn(_zones, zone, k, cap, railSeq));
+      const was = zoneOf(_zones, k);
+      const next = togglePanelIn(_zones, zone, k, cap, railSeq);
+      // Toggle и открывает, и закрывает: соседку зовём назад только во второй ветке
+      commit(closing(next, was && !zoneOf(next, k) ? was : null));
     }, []);
 
     // Принудительное открытие (placeHere): идемпотентно — если панель уже в зоне,
@@ -1057,11 +1106,12 @@ function createPanelZones(ns: string, opts?: {
       commit(openPanelIn(_zones, zone, k, cap, railSeq));
     }, []);
 
-    const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);
+    const close = useCallback((k: PanelKey) => { commit(closing(closePanel(_zones, k), zoneOf(_zones, k))); }, []);
 
-    const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closePanelTo(_zones, zone, k)); }, []);
+    const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closing(closePanelTo(_zones, zone, k), zoneOf(_zones, k))); }, []);
 
-    const tuck = useCallback((zone: Zone, k: PanelKey) => { commit(tuckPanel(_zones, zone, k)); }, []);
+    // Убрать кнопку в ящик — тоже закрытие панели, сторона освобождается так же
+    const tuck = useCallback((zone: Zone, k: PanelKey) => { commit(closing(tuckPanel(_zones, zone, k), zoneOf(_zones, k))); }, []);
 
     const untuck = useCallback((zone: Zone, k: PanelKey) => { commit(untuckPanel(_zones, zone, k)); }, []);
 
@@ -1175,6 +1225,16 @@ function createPanelZones(ns: string, opts?: {
       emit();
     }, []);
 
+    // Сторона освободилась — активность переезжает к соседке, и та по счётчику
+    // разворачивает свой compact-стек. Мимо commit по тем же основаниям, что и
+    // closeCompactStack: раскладка не меняется, персистить нечего.
+    const releaseCompactSide = useCallback((side: Zone) => {
+      if (!_zones.exclusive) return;
+      const other: Zone = side === 'left' ? 'right' : 'left';
+      _zones = { ..._zones, activeSide: other, restoreCompactSignal: _zones.restoreCompactSignal + 1 };
+      emit();
+    }, []);
+
     const registerOpener = useCallback((zone: Zone, open: (k: PanelKey) => void) => {
       openers.set(zone, open);
       // Снимаем только СВОЙ открыватель: зона могла перемонтироваться, и её место
@@ -1197,7 +1257,7 @@ function createPanelZones(ns: string, opts?: {
       return false;
     }, []);
 
-    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, reveal, registerOpener };
+    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener };
   }
 
   return { use: usePanelZones };

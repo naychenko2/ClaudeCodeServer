@@ -642,7 +642,7 @@ public class SessionManager : IDisposable
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new TasksMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
             extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null,
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Контекст MCP-сервера заметок; null — только для чата без владельца.
@@ -654,7 +654,7 @@ public class SessionManager : IDisposable
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new NotesMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
             AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"),
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Контекст MCP-сервера виджетов чата: адрес API и сервисный токен владельца — сервер
@@ -669,35 +669,43 @@ public class SessionManager : IDisposable
         var apiUrl = ResolveTasksApiUrl(ownerId);
         // Токен — фабрикой, как у памяти: контекст живёт столько же, сколько адаптер, а
         // захваченный строкой JWT у долгоживущего чата истекал (ADR-012, урок фазы 1)
-        return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpMcpTransportUsable(apiUrl));
+        return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
     }
 
-    // Годится ли адрес бэкенда под MCP-over-HTTP (ADR-012). Два входа, оба fail-closed:
-    // рубильник Mcp:HttpTransport (дефолт включён — откат без выкатки кода) и СХЕМА адреса.
-    // Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся в
-    // ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
+    // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
+    // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
+    // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
     // ещё и редиректится на https в пайплайне. В этом случае ход объявляет прежний
-    // stdio-сервер, а причина уходит в лог: тихо терять инструмент нельзя.
+    // stdio-сервер, а причина уходит в лог: тихо терять инструмент нельзя. Схема — свойство
+    // адреса контекста и в жизни адаптера не меняется; рубильник Mcp:HttpTransport сюда НЕ
+    // входит — он живой, читается провайдером на каждый ход (HttpMcpEnabledProvider).
     private string? _httpMcpWarnedFor;
-    private bool HttpMcpTransportUsable(string apiUrl)
+    private bool HttpEndpointUsable(string apiUrl)
     {
-        var enabled = _config.GetValue(Services.Mcp.Http.McpHttpTransport.EnabledKey, true);
-        if (!enabled) return false;
-        var http = Services.Mcp.Http.McpHttpTransport.Usable(apiUrl, enabled);
-        // Предупреждаем один раз на адрес: состояние постоянное, ход идёт каждую минуту
+        var http = Services.Mcp.Http.McpHttpTransport.Usable(apiUrl, enabled: true);
+        // Предупреждаем один раз на адрес: состояние постоянное, ход идёт каждую минуту.
+        // Узнаёт и хозяин выключенного рубильника: включённый транспорт этот адрес всё равно
+        // не поднимет — инстанс останется на stdio.
         if (!http && Interlocked.Exchange(ref _httpMcpWarnedFor, apiUrl) != apiUrl)
-            _log.LogWarning("MCP-over-HTTP выключен: адрес бэкенда «{Url}» не http — "
+            _log.LogWarning("MCP-over-HTTP невозможен: адрес бэкенда «{Url}» не http — "
                 + "продуктовые серверы объявляются ходу по-старому, через stdio", apiUrl);
         return http;
     }
 
-    // Сводный признак «у сессии есть продуктовые MCP-серверы на http-транспорте» (ADR-012):
-    // от него зависит NO_PROXY хода — обход прокси нужен ЛЮБОМУ http-серверу, а не только
-    // виджетам. Решение стоит на едином гейте HttpMcpTransportUsable (каждый Build*Context
-    // уже прогнал через него свой UseHttp) — отдельного условия «виджеты на http» больше нет;
-    // во волне 2 к widgets/memory добавились tasks/notes/personas, в волне 3 —
-    // wsp/notifications/codegraph, в волне 4 — dify. pmem-консультанты приезжают списком
-    // на каждый ход и уточняют признак на стороне ClaudeSession.
+    // Живое значение рубильника Mcp:HttpTransport для провайдера контекста: IConfiguration
+    // перечитывается (appsettings.Local.json подключён с reloadOnChange), поэтому поворот
+    // ключа доезжает до уже поднятых чатов следующим ходом — без рестарта бэкенда.
+    private bool HttpMcpEnabled() =>
+        _config.GetValue(Services.Mcp.Http.McpHttpTransport.EnabledKey, true);
+
+    // Сводный признак «у сессии есть продуктовые MCP-серверы, чей адрес допускает http»
+    // (ADR-012): от него (вместе с живым рубильником) зависит NO_PROXY хода — обход прокси
+    // нужен ЛЮБОМУ http-серверу, а не только виджетам. Решение стоит на едином гейте
+    // HttpEndpointUsable (каждый Build*Context уже прогнал через него свой UseHttp) —
+    // отдельного условия «виджеты на http» больше нет; во волне 2 к widgets/memory
+    // добавились tasks/notes/personas, в волне 3 — wsp/notifications/codegraph, в волне 4 —
+    // dify. pmem-консультанты приезжают списком на каждый ход и уточняют признак на стороне
+    // ClaudeSession.
     private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
@@ -728,7 +736,7 @@ public class SessionManager : IDisposable
         if (string.IsNullOrEmpty(_dify.ApiUrl) || string.IsNullOrEmpty(_dify.ApiKey)) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new DifyMcpContext(apiUrl, _dify.ApiUrl.TrimEnd('/'), _dify.ApiKey,
-            () => GetServiceToken(ownerId), UseHttp: HttpMcpTransportUsable(apiUrl));
+            () => GetServiceToken(ownerId), UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
@@ -745,7 +753,7 @@ public class SessionManager : IDisposable
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new CodeGraphMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, sessionId, rootPath,
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Право чата на десктопную грань по СУЩНОСТИ чата — единая точка правды (ADR-008:
@@ -814,7 +822,7 @@ public class SessionManager : IDisposable
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
             DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall),
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -2736,7 +2744,7 @@ public class SessionManager : IDisposable
                     _personas.GetForContext(ownerId, projectId).ToList());
                 var apiUrl = ResolveTasksApiUrl(ownerId);
                 var tokenFactory = () => GetServiceToken(ownerId);
-                var useHttp = HttpMcpTransportUsable(apiUrl);
+                var useHttp = HttpEndpointUsable(apiUrl);
                 // ProjectId консультанта — проект ТЕКУЩЕГО чата (как у BuildPersonaLayer выше), не
                 // scope самого консультанта: приглашённая в проектный workflow глобальная персона
                 // тоже должна видеть team_memory_list/search этого проекта (read-only — пишет только
@@ -2860,7 +2868,7 @@ public class SessionManager : IDisposable
             extraProjectIds.Count > 0 ? extraProjectIds : null,
             extraPersonaIds.Count > 0 ? extraPersonaIds : null,
             ManageEnabled: manage, AutomationEnabled: automation,
-            UseHttp: HttpMcpTransportUsable(apiUrl),
+            UseHttp: HttpEndpointUsable(apiUrl),
             MentionsToolsEnabled: MentionsToolsEnabled(ownerId, session, persona));
     }
 
@@ -2882,7 +2890,7 @@ public class SessionManager : IDisposable
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new WorkspaceMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
             plan.Sections, plan.AllowedProjectIds, selfSessionId,
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     /// <summary>
@@ -3106,7 +3114,7 @@ public class SessionManager : IDisposable
         if (!_bindings.NotificationsEnabled(ownerId, persona)) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new NotificationsMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId,
-            UseHttp: HttpMcpTransportUsable(apiUrl));
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
@@ -3347,7 +3355,8 @@ public class SessionManager : IDisposable
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp)));
+                workspace, notificationsMcp, codeGraphMcp, difyMcp),
+            HttpMcpEnabledProvider: HttpMcpEnabled));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4689,7 +4698,8 @@ public class SessionManager : IDisposable
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, dify: difyMcp));
+                    workspace, notificationsMcp, dify: difyMcp),
+                HttpMcpEnabledProvider: HttpMcpEnabled);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4745,7 +4755,8 @@ public class SessionManager : IDisposable
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp));
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp),
+                HttpMcpEnabledProvider: HttpMcpEnabled);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

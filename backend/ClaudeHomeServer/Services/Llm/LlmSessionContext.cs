@@ -12,9 +12,12 @@ namespace ClaudeHomeServer.Services.Llm;
 // живёт столько же, сколько адаптер, а захваченный строкой JWT у чата старше ServiceTokenLifetime
 // начал бы отдавать 401 и задачи пропадали бы у модели молча. stdio-ветка берёт токен
 // фабрикой на каждую сборку конфига хода, http — фабрикой в заголовок.
-// UseHttp — транспорт, решённый HttpMcpTransportUsable: false — ход объявляет прежний
-// stdio-сервер на node (путь отката). Не Claude-специфичен: DeepSeek-адаптер может
-// реализовать те же tasks_* инструменты нативно.
+// UseHttp — СХЕМА адреса допускает http (fail-closed по https и кривой форме строки):
+// свойство ApiUrl, стабильно в жизни адаптера. Рубильник Mcp:HttpTransport сюда НЕ входит —
+// он живой, спрашивается на каждый ход (LlmSessionContext.HttpMcpEnabledProvider), чтобы
+// откат доезжал и до уже поднятых чатов (техдолг ADR-012 §1). false — ход объявляет
+// прежний stdio-сервер на node (путь отката). Не Claude-специфичен: DeepSeek-адаптер
+// может реализовать те же tasks_* инструменты нативно.
 public record TasksMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
     IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraProjectIdsReadOnly = null,
     bool UseHttp = false);
@@ -40,8 +43,8 @@ public record NotesMcpContext(string ApiUrl, Func<string> TokenFactory, string? 
 // состава tools/list); сама секция требует ещё и проектный чат.
 // TokenFactory, а не строка: контекст живёт столько же, сколько адаптер, а у чата старше
 // срока жизни сервисного JWT эндпоинт начал бы отвечать 401, и инструменты памяти пропали
-// бы молча (ADR-012, урок фазы 1). UseHttp — транспорт, решённый HttpMcpTransportUsable:
-// false — ход объявляет прежний stdio-сервер на node (путь отката).
+// бы молча (ADR-012, урок фазы 1). UseHttp — схема адреса (рубильник живой, см.
+// TasksMcpContext): false — ход объявляет прежний stdio-сервер на node (путь отката).
 public record MemoryMcpContext(string ApiUrl, Func<string> TokenFactory, string PersonaId,
     string? ProjectId = null, bool DossierToolsEnabled = false, bool UseHttp = false);
 
@@ -127,10 +130,9 @@ public sealed record DifyMcpContext(string ApiUrl, string DifyUrl, string DifyKe
 // же, сколько адаптер, а захваченный строкой JWT у чата старше срока жизни токена начал бы
 // отдавать 401 и widget_show пропал бы молча. stdio-ветка отката токен не использует вовсе.
 //
-// UseHttp — решение о транспорте, принятое ОДИН раз в SessionManager (рубильник
-// Mcp:HttpTransport + проверка схемы адреса). false — ход объявляет прежний stdio-сервер
-// на node: fail-closed, потому что https по локальному адресу CLI не осилит, а инструмент
-// пропадёт у модели молча.
+// UseHttp — СХЕМА адреса допускает http (свойство ApiUrl, стабильно в жизни адаптера);
+// fail-closed: https по локальному адресу CLI не осилит, а инструмент пропадёт у модели
+// молча. Рубильник Mcp:HttpTransport НЕ входит — живой, на каждый ход (HttpMcpEnabledProvider).
 public sealed record WidgetsMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
@@ -185,7 +187,8 @@ public sealed record ExternalMcpContext(IReadOnlyList<ExternalMcpServer> Servers
 // projectId чата едут хвостом URL, ADR-012 фаза 2). Файл агента ссылается на сервер по
 // имени (mcpServers: [pmem_<handle>]), а токен живёт только во временном конфиге хода —
 // фабрика выдаёт свежий на каждый ход, секреты не попадают в персистентные файлы.
-// UseHttp=false — откат на stdio-процесс node (рубильник Mcp:HttpTransport).
+// UseHttp — схема адреса (рубильник Mcp:HttpTransport применяется живьём на каждый ход
+// в ClaudeSession, как у остальных контекстов): false — stdio-процесс node.
 public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, Func<string> TokenFactory,
     string PersonaId, string? ProjectId = null, bool UseHttp = false);
 
@@ -315,13 +318,20 @@ public sealed record LlmSessionContext(
     // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
     // на момент запуска CLI — от свойств хода состав не зависит.
     DesktopMcpContext? DesktopMcp = null,
-    // Сводный признак «у сессии есть продуктовые MCP-серверы на http-транспорте»
-    // (widgets/memory на момент сборки контекста): от него ClaudeSession ставит NO_PROXY
-    // хода (ADR-012) — обход прокси нужен ЛЮБОМУ http-серверу, а не одному виджету.
-    // Решение принимает SessionManager на базе единого гейта HttpMcpTransportUsable;
-    // pmem-консультанты приезжают списком на каждый ход и уточняют признак на месте
-    // (UseHttp в ConsultantMemoryServer).
+    // Сводный признак «у сессии есть продуктовые MCP-серверы, чей АДРЕС допускает http»:
+    // от него (вместе с живым рубильником ниже) ClaudeSession ставит NO_PROXY хода
+    // (ADR-012) — обход прокси нужен ЛЮБОМУ http-серверу, а не одному виджету. Решение
+    // принимает SessionManager на базе единого гейта схемы адреса; pmem-консультанты
+    // приезжают списком на каждый ход и уточняют признак на месте (UseHttp в
+    // ConsultantMemoryServer).
     bool HttpMcpActive = false,
+    // Рубильник Mcp:HttpTransport (откат всех продуктовых серверов на stdio) — ЖИВОЙ:
+    // вызывается на КАЖДЫЙ ход, как PromptSectionsProvider/ExternalMcpProvider. Захваченный
+    // bool вмораживал транспорт в контекст адаптера, и откат не доезжал до уже поднятых
+    // чатов до рестарта бэкенда (техдолг ADR-012 §1). Смена значения меняет конфиг хода
+    // и сигнатуру запуска — процесс CLI перезапустится штатно. null — рубильник включён
+    // (тесты без SessionManager).
+    Func<bool>? HttpMcpEnabledProvider = null,
     // Живая персона чата: матрицы персоны/специальности участвуют в постройке цепочки
     // фолбэка (ClaudeSession.EffectiveTurnChain → ModelAssignmentResolver.ResolveChain
     // с персоной) — старт и хвост хода резолвятся по одним правилам. Перечитывается каждый

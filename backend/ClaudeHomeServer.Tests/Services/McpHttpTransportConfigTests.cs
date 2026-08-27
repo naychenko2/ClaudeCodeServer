@@ -32,13 +32,15 @@ public class McpHttpTransportConfigTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* уборка best-effort */ }
     }
 
-    // Настоящий BuildTurnMcpConfig сессии: путь temp-конфига + строка сигнатуры серверов
+    // Настоящий BuildTurnMcpConfig сессии: путь temp-конфига + строка сигнатуры серверов.
+    // httpEnabled — живой провайдер рубильника (null — рубильник включён, как в тестах без
+    // SessionManager).
     private (JsonObject Servers, string ServerKeys) BuildConfig(WidgetsMcpContext? widgets = null,
         MemoryMcpContext? memory = null, PersonaAgentsContext? personaAgents = null,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
-        string? difyDatasetId = null, string? mcpConfigPath = null)
+        string? difyDatasetId = null, string? mcpConfigPath = null, Func<bool>? httpEnabled = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -54,9 +56,18 @@ public class McpHttpTransportConfigTests : IDisposable
             NotificationsMcp: notifications,
             CodeGraphMcp: codeGraph,
             DifyMcp: dify,
-            PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents);
+            PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents,
+            HttpMcpEnabledProvider: httpEnabled);
         var session = new ClaudeSession(new Session(), context, mcpConfigPath);
+        return BuildFor(session, difyDatasetId, personaAgents);
+    }
 
+    // Вызов приватного BuildTurnMcpConfig готовой сессии + разбор temp-конфига: сессию можно
+    // звать повторно — так тесты проверяют ЖИВЫЕ решения (рубильник, фабрика токена), а не
+    // снятые при создании адаптера слепки
+    private (JsonObject Servers, string ServerKeys) BuildFor(ClaudeSession session,
+        string? difyDatasetId = null, PersonaAgentsContext? personaAgents = null)
+    {
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var result = method.Invoke(session, [difyDatasetId, personaAgents])!;
@@ -142,6 +153,50 @@ public class McpHttpTransportConfigTests : IDisposable
         // Вне дерева репозитория вторая сигнатура вырождается в пустую — она всё равно другая,
         // то есть переключение рубильника обязано убить живой процесс доживания
         otherKeys.Should().NotBe(httpKeys, "смена транспорта меняет сигнатуру прогона");
+    }
+
+    /// <summary>
+    /// Техдолг ADR-012 §1: рубильник Mcp:HttpTransport — ЖИВОЙ. Раньше транспорт вмораживался
+    /// в контекст при создании адаптера, и откат не доезжал до уже поднятых чатов до рестарта
+    /// бэкенда. Теперь значение спрашивается на каждую сборку конфига: одна и та же сессия
+    /// (адаптер не пересоздаётся) обязана сменить http-узел на stdio вслед за рубильником.
+    /// Схема адреса в UseHttp контекста при этом не меняется — это проверяет именно рубильник.
+    /// </summary>
+    [Fact]
+    public void РубильникОтключаетсяБезПересозданияАдаптера()
+    {
+        var httpOn = true;
+        var context = new LlmSessionContext(
+            RootPath: _root,
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null,
+            PermissionRules: null,
+            TasksMcp: null,
+            WidgetsMcp: new WidgetsMcpContext("http://localhost:5000", () => "tok", UseHttp: true),
+            HttpMcpEnabledProvider: () => httpOn);
+        var session = new ClaudeSession(new Session(), context);
+
+        var (httpServers, httpKeys) = BuildFor(session);
+        httpServers["widgets"]!["type"]!.GetValue<string>().Should().Be("http",
+            "годный http-адрес при включённом рубильнике едет http-узлом");
+        httpKeys.Should().Contain("widgets:t:http");
+
+        httpOn = false;
+        var (stdioServers, stdioKeys) = BuildFor(session);
+        if (stdioServers["widgets"] is { } node)
+        {
+            var widgets = node.AsObject();
+            widgets.ContainsKey("type").Should().BeFalse("рубильник снял http-узел");
+            widgets["command"]!.GetValue<string>().Should().Be("node",
+                "инструмент обязан остаться у модели — откат не теряет его");
+            stdioKeys.Should().Contain("widgets:t:stdio");
+        }
+        else
+        {
+            // Вне дерева репозитория index.js stdio-сервера не найден — но http-узла точно нет
+            stdioKeys.Should().NotContain("widgets:t:http");
+        }
+        stdioKeys.Should().NotBe(httpKeys, "смена транспорта обязана пробить сигнатуру доживания");
     }
 
     [Theory]

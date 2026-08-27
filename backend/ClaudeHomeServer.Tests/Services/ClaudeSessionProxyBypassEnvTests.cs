@@ -72,7 +72,8 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
     }
 
     private async Task<Dictionary<string, string>?> RunTurnAsync(bool sandboxed, bool useHttp,
-        WidgetsMcpContext? widgets = null, PersonaAgentsContext? personaAgents = null)
+        WidgetsMcpContext? widgets = null, PersonaAgentsContext? personaAgents = null,
+        Func<bool>? httpEnabled = null)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -95,6 +96,7 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
             // Как в SessionManager: сводный признак http-серверов хода решается там по
             // UseHttp-контекстам (HttpMcpActive) — здесь эмулируем его тем же значением
             HttpMcpActive: useHttp,
+            HttpMcpEnabledProvider: httpEnabled,
             Launcher: launcher);
         var session = new ClaudeSession(new Session(), context);
 
@@ -162,6 +164,22 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
         var env = await RunTurnAsync(sandboxed: false, useHttp: false);
 
         env!.ContainsKey("NO_PROXY").Should().BeFalse();
+        env.ContainsKey("no_proxy").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Техдолг ADR-012 §1: рубильник ЖИВОЙ (HttpMcpEnabledProvider на каждый ход), а не
+    /// захваченный при создании адаптера. Контексты при этом схемно-пригодны (UseHttp=true,
+    /// HttpMcpActive=true — как у чата, поднятого при включённом транспорте): выключение
+    /// рубильника обязано снять оверрайд уже в ПОДНЯТОМ чате, без пересоздания адаптера.
+    /// </summary>
+    [Fact]
+    public async Task РубильникОтключаетсяЖивьём_ОверрайдСнимаетсяУПоднятогоЧата()
+    {
+        var env = await RunTurnAsync(sandboxed: false, useHttp: true, httpEnabled: () => false);
+
+        env!.ContainsKey("NO_PROXY").Should().BeFalse(
+            "откат уносит не только http-узлы конфига, но и env-обход прокси");
         env.ContainsKey("no_proxy").Should().BeFalse();
     }
 

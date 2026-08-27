@@ -569,10 +569,16 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ModulesMcpContext? _modulesMcp;
     // MCP-сервер виджетов чата (widget_show): null — сессия без владельца
     private readonly WidgetsMcpContext? _widgetsMcp;
-    // Сводный признак «в сессии есть продуктовые MCP-серверы на http-транспорте» (widgets/
-    // memory на момент сборки контекста): решён SessionManager на едином гейте
-    // HttpMcpTransportUsable, сюда приезжает готовым (pmem-консультанты уточняют на ходу)
+    // Сводный признак «в сессии есть продуктовые MCP-серверы, чей адрес допускает http»:
+    // решён SessionManager на едином гейте СХЕМЫ адреса, сюда приезжает готовым
+    // (pmem-консультанты уточняют на ходу). Рубильник в нём НЕ сидит — он живой, ниже.
     private readonly bool _httpMcpActive;
+    // Рубильник Mcp:HttpTransport (откат всех продуктовых серверов на stdio), ЖИВОЙ:
+    // спрашивается на каждую сборку конфига хода, чтобы поворот ключа доезжал до уже
+    // поднятых чатов без пересоздания адаптера (техдолг ADR-012 §1). null — включён
+    // (тесты без SessionManager).
+    private readonly Func<bool>? _httpMcpEnabled;
+    private bool HttpMcpOnNow() => _httpMcpEnabled?.Invoke() ?? true;
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -660,6 +666,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
         _httpMcpActive = context.HttpMcpActive;
+        _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
         _difyMcp = context.DifyMcp;
         _desktopMcp = context.DesktopMcp;
@@ -707,60 +714,79 @@ public class ClaudeSession : ILlmSessionAdapter
     private (string? Path, string ServerKeys, IReadOnlyList<string> ServerNames) BuildTurnMcpConfig(
         string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
+        // Рубильник Mcp:HttpTransport спрашивается на ХОД (HttpMcpEnabledProvider, а не
+        // захваченный при создании адаптера bool): контекст живёт столько же, сколько адаптер,
+        // и замороженное решение не доезжало бы до уже поднятых чатов — откат требовал
+        // рестарта бэкенда (техдолг ADR-012 §1). Смена значения меняет конфиг хода и
+        // отпечаток транспорта в сигнатуре — процесс CLI перезапустится штатно, как при
+        // любом изменении shapes. UseHttp в контекстах — СХЕМА адреса (стабильна),
+        // решение хода = UseHttp && httpOn.
+        var httpOn = HttpMcpOnNow();
+        var tasksHttp = _tasksMcp is { UseHttp: true } && httpOn;
+        var notesHttp = _notesMcp is { UseHttp: true } && httpOn;
+        var memoryHttp = _memoryMcp is { UseHttp: true } && httpOn;
+        var personasHttp = _personasMcp is { UseHttp: true } && httpOn;
+        var workspaceHttp = _workspaceMcp is { UseHttp: true } && httpOn;
+        var notificationsHttp = _notificationsMcp is { UseHttp: true } && httpOn;
+        var widgetsHttp = _widgetsMcp is { UseHttp: true } && httpOn;
+        var codeGraphHttp = _codeGraphMcp is { UseHttp: true } && httpOn;
+        var difyHttp = _difyMcp is { UseHttp: true } && httpOn;
+        // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
+        bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
-        // stdio-серверов всё равно резолвим у откатившихся (UseHttp=false): ход обязан
+        // stdio-серверов всё равно резолвим у откатившихся (http-ветка не выбрана): ход обязан
         // объявить прежний node-сервер, а не остаться без инструмента
-        var tasksServerPath = _tasksMcp is { UseHttp: false }
+        var tasksServerPath = _tasksMcp is not null && !tasksHttp
             ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
-        var hasTasks = _tasksMcp is not null && (_tasksMcp.UseHttp || tasksServerPath is not null);
-        var notesServerPath = _notesMcp is { UseHttp: false }
+        var hasTasks = _tasksMcp is not null && (tasksHttp || tasksServerPath is not null);
+        var notesServerPath = _notesMcp is not null && !notesHttp
             ? MapMcpPath(NotesServerLocator.FindNotesServerPath()) : null;
-        var hasNotes = _notesMcp is not null && (_notesMcp.UseHttp || notesServerPath is not null);
+        var hasNotes = _notesMcp is not null && (notesHttp || notesServerPath is not null);
         var hasConsultants = personaAgents is { MemoryServers.Count: > 0 };
         // Память живёт в Kestrel (ADR-012, фаза 2), но путь stdio-сервера всё равно нужен
-        // отложившимся на stdio: сам сервер чата при UseHttp=false И любой pmem-консультант
-        // без http обязаны получить node-файл, а не остаться без инструмента
-        var hasStdioMemory = _memoryMcp is { UseHttp: false }
-            || personaAgents?.MemoryServers.Any(s => !s.UseHttp) == true;
+        // отложившимся на stdio: сам сервер чата без http И любой pmem-консультант без http
+        // обязаны получить node-файл, а не остаться без инструмента
+        var hasStdioMemory = (_memoryMcp is not null && !memoryHttp)
+            || personaAgents?.MemoryServers.Any(s => !ConsultantHttp(s)) == true;
         var memoryServerPath = _memoryMcp is not null || hasConsultants
             ? (hasStdioMemory ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null) : null;
-        var hasMemory = _memoryMcp is not null && (_memoryMcp.UseHttp || memoryServerPath is not null);
-        var personasServerPath = _personasMcp is { UseHttp: false }
+        var hasMemory = _memoryMcp is not null && (memoryHttp || memoryServerPath is not null);
+        var personasServerPath = _personasMcp is not null && !personasHttp
             ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
-        var hasPersonas = _personasMcp is not null && (_personasMcp.UseHttp || personasServerPath is not null);
+        var hasPersonas = _personasMcp is not null && (personasHttp || personasServerPath is not null);
         // wsp/notifications/codegraph живут в Kestrel (ADR-012, фаза 2 волна 3), но пути их
-        // stdio-серверов резолвим у откатившихся (UseHttp=false) — как у tasks/notes/personas
-        var workspaceServerPath = _workspaceMcp is { UseHttp: false }
+        // stdio-серверов резолвим у откатившихся — как у tasks/notes/personas
+        var workspaceServerPath = _workspaceMcp is not null && !workspaceHttp
             ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
-        var hasWorkspace = _workspaceMcp is not null && (_workspaceMcp.UseHttp || workspaceServerPath is not null);
-        var notificationsServerPath = _notificationsMcp is { UseHttp: false }
+        var hasWorkspace = _workspaceMcp is not null && (workspaceHttp || workspaceServerPath is not null);
+        var notificationsServerPath = _notificationsMcp is not null && !notificationsHttp
             ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
-        var hasNotifications = _notificationsMcp is not null && (_notificationsMcp.UseHttp || notificationsServerPath is not null);
+        var hasNotifications = _notificationsMcp is not null && (notificationsHttp || notificationsServerPath is not null);
         // Виджеты живут в Kestrel (ADR-012), но путь stdio-сервера всё равно резолвим:
-        // при негодном для http адресе (не http-схема, выключенный рубильник) ход обязан
-        // объявить прежний node-сервер, а не остаться без инструмента
-        var widgetsServerPath = _widgetsMcp is { UseHttp: false }
+        // при негодном для http адресе или выключенном рубильнике ход обязан объявить
+        // прежний node-сервер, а не остаться без инструмента
+        var widgetsServerPath = _widgetsMcp is not null && !widgetsHttp
             ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
-        var hasWidgets = _widgetsMcp is not null && (_widgetsMcp.UseHttp || widgetsServerPath is not null);
-        var codeGraphServerPath = _codeGraphMcp is { UseHttp: false }
+        var hasWidgets = _widgetsMcp is not null && (widgetsHttp || widgetsServerPath is not null);
+        var codeGraphServerPath = _codeGraphMcp is not null && !codeGraphHttp
             ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
-        var hasCodeGraph = _codeGraphMcp is not null && (_codeGraphMcp.UseHttp || codeGraphServerPath is not null);
+        var hasCodeGraph = _codeGraphMcp is not null && (codeGraphHttp || codeGraphServerPath is not null);
         // dify живёт в Kestrel (ADR-012, волна 4), но путь его stdio-ветки (mcp-dify/dist,
         // сборка tsc — в git не живёт) всё равно нужен откатившимся: без dist откат
         // деградирует до записи внешнего базового конфига, а не теряет инструмент
-        var difyServerPath = _difyMcp is { UseHttp: false }
+        var difyServerPath = _difyMcp is not null && !difyHttp
             ? MapMcpPath(DifyServerLocator.FindDifyServerPath()) : null;
-        var hasDify = _difyMcp is not null && (_difyMcp.UseHttp || difyServerPath is not null);
+        var hasDify = _difyMcp is not null && (difyHttp || difyServerPath is not null);
         // Каскад отката dify упёрся в несобранный mcp-dify/dist: узел не встанет ни http
         // (рубильник), ни stdio — остаётся только внешняя запись базового конфига, а если её
         // нет, инструмент пропадает МОЛЧА (deploy-agent.ps1 помечает сборку dify как skipped,
         // т.е. свежий деплой — штатный случай). ADR-012 обещает деградацию до внешней записи,
         // а не потерю — предупреждаем хозяина инстанса явно
-        if (_difyMcp is { UseHttp: false } && difyServerPath is null)
-            Console.Error.WriteLine("[ClaudeSession] WARN: секция Dify настроена, Mcp:HttpTransport=false, "
-                + "но stdio-ветка dify недоступна (mcp-dify/dist не собран) — без внешней записи базового "
-                + "конфига инструменты баз знаний пропадут. Соберите mcp-dify (npm run build) или верните "
-                + "Mcp:HttpTransport=true.");
+        if (_difyMcp is not null && !difyHttp && difyServerPath is null)
+            Console.Error.WriteLine("[ClaudeSession] WARN: секция Dify настроена, http-транспорт недоступен "
+                + "(Mcp:HttpTransport=false либо не-http адрес), но stdio-ветка dify недоступна "
+                + "(mcp-dify/dist не собран) — без внешней записи базового конфига инструменты баз знаний "
+                + "пропадут. Соберите mcp-dify (npm run build) или верните Mcp:HttpTransport=true.");
         var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
         var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
@@ -776,7 +802,7 @@ public class ClaudeSession : ILlmSessionAdapter
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal
             && !(hasConsultants && (memoryServerPath is not null
-                || personaAgents!.MemoryServers.Any(s => s.UseHttp)))) return (null, "", []);
+                || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
         try
         {
@@ -933,7 +959,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // начинал получать 401, http-эндпоинт отвечал бы 401 на initialize, и задачи
                 // пропадали у модели молча
                 var tasksToken = _tasksMcp!.TokenFactory();
-                servers["tasks"] = _tasksMcp.UseHttp
+                servers["tasks"] = tasksHttp
                     // HTTP-ветка (ADR-012, фаза 2): сессия-вызыватель едет хвостом URL — по ней
                     // тулсет резолвит проект/персону/привязки; env больше нет, их роль выполняет
                     // хвост и владелец из claim sub. alwaysLoad как у stdio-ветки.
@@ -982,8 +1008,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 // меняются при смене персоны/привязок, а не от хода к ходу, поэтому процесс
                 // от них не «мерцает». Пустые скоупы не оставляют пустых сегментов (tasks:t:stdio).
                 shapes["tasks"] = extraProjectIdsCsv.Length == 0 && extraReadOnlyCsv.Length == 0
-                    ? $"t:{(_tasksMcp.UseHttp ? "http" : "stdio")}"
-                    : $"{extraProjectIdsCsv}:{extraReadOnlyCsv}:t:{(_tasksMcp.UseHttp ? "http" : "stdio")}";
+                    ? $"t:{(tasksHttp ? "http" : "stdio")}"
+                    : $"{extraProjectIdsCsv}:{extraReadOnlyCsv}:t:{(tasksHttp ? "http" : "stdio")}";
             }
 
             if (hasNotes)
@@ -996,7 +1022,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 var notesAnnotations = _notesMcp!.AnnotationsEnabled ? "1" : "0";
                 // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 2, как tasks)
                 var notesToken = _notesMcp.TokenFactory();
-                servers["notes"] = _notesMcp.UseHttp
+                servers["notes"] = notesHttp
                     // HTTP-ветка (ADR-012, фаза 2): сессия-вызыватель хвостом URL, модуль
                     // annotations тулсет резолвит по живой персоне сессии — семантика та же,
                     // что у env stdio-ветки, но без запекания в env
@@ -1029,7 +1055,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Состав инструментов заметок зависит от модуля и транспорта — оба
                 // в сигнатуру запуска (переключение рубильника пробивает доживание)
-                shapes["notes"] = $"a{notesAnnotations}:t:{(_notesMcp.UseHttp ? "http" : "stdio")}";
+                shapes["notes"] = $"a{notesAnnotations}:t:{(notesHttp ? "http" : "stdio")}";
             }
 
             if (hasWidgets)
@@ -1039,7 +1065,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // alwaysLoad стоит в обеих ветках: без него первый вызов в ходе падает
                 // «No such tool available» (claude-code#19282), а ретраить показ виджета
                 // модели не свойственно.
-                servers["widgets"] = _widgetsMcp!.UseHttp
+                servers["widgets"] = widgetsHttp
                     // Токен — сервисный JWT владельца обычным заголовком Authorization (как у
                     // fal-ai/glif), эндпоинт проверяет его сам ([Authorize], владелец из claim
                     // sub); берём ФАБРИКОЙ на каждую сборку конфига — захваченный строкой JWT
@@ -1053,10 +1079,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         ["type"] = "http",
                         ["url"] = Services.Mcp.Http.McpHttpTransport.EndpointFor(
-                            _widgetsMcp.ApiUrl, Services.Mcp.Http.WidgetsToolset.ServerName),
+                            _widgetsMcp!.ApiUrl, Services.Mcp.Http.WidgetsToolset.ServerName),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
-                            ["Authorization"] = $"Bearer {_widgetsMcp.TokenFactory()}",
+                            ["Authorization"] = $"Bearer {_widgetsMcp!.TokenFactory()}",
                             [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
@@ -1071,7 +1097,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Транспорт — в сигнатуру запуска: переключение рубильника обязано пробить
                 // живой процесс доживания, иначе применится «когда-нибудь потом»
-                shapes["widgets"] = _widgetsMcp.UseHttp ? "t:http" : "t:stdio";
+                shapes["widgets"] = widgetsHttp ? "t:http" : "t:stdio";
             }
 
             if (hasMemory)
@@ -1085,7 +1111,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // а захваченный строкой JWT у долгоживущего чата истекал, и инструменты
                 // памяти пропадали молча (урок фазы 1, ADR-012)
                 var memoryToken = _memoryMcp.TokenFactory();
-                servers["memory"] = _memoryMcp.UseHttp
+                servers["memory"] = memoryHttp
                     // HTTP-ветка (ADR-012, фаза 2): персона и проект чата едят хвостом URL,
                     // состава от env больше нет — их резолвит тулсет в Kestrel по хвосту
                     // и владельцу токена. alwaysLoad как у stdio-ветки: память модель зовёт
@@ -1124,7 +1150,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Состав инструментов памяти зависит от секции паспортов и транспорта —
                 // оба в сигнатуру запуска (переключение рубильника обязано пробить доживание)
-                shapes["memory"] = $"d{memoryDossierTools}:t:{(_memoryMcp.UseHttp ? "http" : "stdio")}";
+                shapes["memory"] = $"d{memoryDossierTools}:t:{(memoryHttp ? "http" : "stdio")}";
             }
 
             // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст
@@ -1160,7 +1186,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? string.Join(",", extraPersonas) : "";
                 // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 2, как tasks/notes)
                 var personasToken = _personasMcp.TokenFactory();
-                servers["personas"] = _personasMcp.UseHttp
+                servers["personas"] = personasHttp
                     // HTTP-ветка (ADR-012, фаза 2): сессия-вызыватель хвостом URL; модули
                     // manage/automation/mentions тулсет резолвит по живой персоне сессии.
                     // PERSONAS_MENTIONS на http не учитывает файлых сабагентов хода (это
@@ -1207,12 +1233,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // (блокер приёмки волны 2.1). Остальные постоянны в рамках сессии
                 // (состав персон, привязки, роль), поэтому процесс от них не «мерцает»;
                 // write в сигнатуре больше нет — он всегда включён.
-                var mentionsForShape = _personasMcp.UseHttp
+                var mentionsForShape = personasHttp
                     ? (_personasMcp.MentionsToolsEnabled ? "1" : "0")
                     : personaMentions;
                 shapes["personas"] = $"m{mentionsForShape}b{(_personasMcp.BindingsEnabled ? "1" : "0")}"
                     + $"g{personaManage}a{personaAutomation}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}"
-                    + $":t:{(_personasMcp.UseHttp ? "http" : "stdio")}";
+                    + $":t:{(personasHttp ? "http" : "stdio")}";
             }
 
             if (hasWorkspace)
@@ -1237,7 +1263,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
                 // (сервер не стартует, инструменты не появляются). Отсюда же префикс
                 // инструментов mcp__wsp__* в подсказках ниже и в PersonaBindingsService.
-                servers["wsp"] = _workspaceMcp.UseHttp
+                servers["wsp"] = workspaceHttp
                     // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL —
                     // по ней тулсет живьём резолвит секции, зону проектов и персону (роль
                     // env WORKSPACE_SECTIONS/WORKSPACE_PROJECT_IDS). Права (зона, владение,
@@ -1288,14 +1314,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 // в сигнатуру. Секции и их отпечаток считает ОДНА формула (SessionManager.
                 // BuildWorkspacePlan): её же на каждый tools/list зовёт WorkspaceToolset
                 // (блокер приёмки волны 2 — состав и shape по разным формулам расходятся)
-                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}:t:{(_workspaceMcp.UseHttp ? "http" : "stdio")}";
+                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}:t:{(workspaceHttp ? "http" : "stdio")}";
             }
 
             if (hasNotifications)
             {
                 // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как wsp)
                 var notificationsToken = _notificationsMcp!.TokenFactory();
-                servers["notifications"] = _notificationsMcp.UseHttp
+                servers["notifications"] = notificationsHttp
                     // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL,
                     // персона (лицо уведомления) резолвится тулсетом живьём из сессии
                     ? new System.Text.Json.Nodes.JsonObject
@@ -1323,7 +1349,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         },
                     };
                 // Состав уведомлений постоянный (4 инструмента), в сигнатуру — только транспорт
-                shapes["notifications"] = $"t:{(_notificationsMcp.UseHttp ? "http" : "stdio")}";
+                shapes["notifications"] = $"t:{(notificationsHttp ? "http" : "stdio")}";
             }
 
             if (hasCodeGraph && _codeGraphMcp is not null)
@@ -1334,7 +1360,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // и в CodeGraphToolset (http, ADR-012 волна 3).
                 // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как wsp)
                 var codeGraphToken = _codeGraphMcp.TokenFactory();
-                servers["codegraph"] = _codeGraphMcp.UseHttp
+                servers["codegraph"] = codeGraphHttp
                     // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL.
                     // Рабочее дерево (worktree) в маршрут НЕ кладётся: тулсет резолвит его
                     // живьём из сессии на каждый вызов — адрес и состав от дерева не зависят,
@@ -1367,7 +1393,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         },
                     };
                 // Состав графа постоянный (3 чтения), в сигнатуру — только транспорт
-                shapes["codegraph"] = $"t:{(_codeGraphMcp.UseHttp ? "http" : "stdio")}";
+                shapes["codegraph"] = $"t:{(codeGraphHttp ? "http" : "stdio")}";
             }
 
             if (hasDify && _difyMcp is not null)
@@ -1382,7 +1408,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // означало бы холостой перезапуск CLI.
                 var difyToken = _difyMcp.TokenFactory();
                 var difySearchOnly = hasDataset ? "1" : "0";
-                servers["dify"] = _difyMcp.UseHttp
+                servers["dify"] = difyHttp
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
@@ -1410,7 +1436,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             ["DIFY_SEARCH_ONLY"] = difySearchOnly == "1" ? "true" : "",
                         },
                     };
-                shapes["dify"] = $"s{difySearchOnly}:t:{(_difyMcp.UseHttp ? "http" : "stdio")}";
+                shapes["dify"] = $"s{difySearchOnly}:t:{(difyHttp ? "http" : "stdio")}";
             }
 
             if (hasDesktop && _desktopMcp is not null)
@@ -1460,8 +1486,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // stdio-ветке нужен файл сервера (в песочнице может не резолвиться);
                     // http-запись едет и без него — процесса node нет
-                    if (!c.UseHttp && memoryServerPath is null) continue;
-                    servers[c.ServerKey] = c.UseHttp
+                    if (!ConsultantHttp(c) && memoryServerPath is null) continue;
+                    servers[c.ServerKey] = ConsultantHttp(c)
                         ? new System.Text.Json.Nodes.JsonObject
                         {
                             ["type"] = "http",
@@ -1486,7 +1512,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             },
                         };
                     // Транспорт — в отпечаток: откат рубильника обязан пробить доживание
-                    shapes[c.ServerKey] = c.UseHttp ? "t:http" : "t:stdio";
+                    shapes[c.ServerKey] = ConsultantHttp(c) ? "t:http" : "t:stdio";
                 }
             }
 
@@ -2807,8 +2833,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // окружение не доезжает вовсе, иначе exec-переменная подменяет узкий egress-whitelist
         // контейнера. Правило целиком — в LoopbackProxyBypass.ForTurn.
         // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
-        var httpMcpActive = _httpMcpActive
-            || (personaAgents?.MemoryServers.Any(s => s.UseHttp) ?? false);
+        // Рубильник живой (HttpMcpEnabledProvider на каждый ход): откат уносит не только
+        // http-узлы конфига, но и этот env — оверрайд обязан откатиться вместе с транспортом
+        var httpOn = HttpMcpOnNow();
+        var httpMcpActive = httpOn && (_httpMcpActive
+            || (personaAgents?.MemoryServers.Any(s => s.UseHttp) ?? false));
         // Адреса ВСЕХ http-серверов хода, а не один: pmem-консультанты приезжают списком и
         // в ходе могут остаться одни (чат вне проекта, память чата выключена, widgets Off) —
         // их хост обязан попасть в обход вместе с widgets/memory, иначе запрос mcp__pmem_*

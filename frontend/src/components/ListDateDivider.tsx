@@ -25,16 +25,22 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  * dense — вариант для плотных списков (панели «Документация» и «Сервисы»): отступы
  * вдвое меньше, высота подписи совпадает со строкой файла.
  *
+ * plain — вариант без черт: одна подпись у левого края, липнущая к верху при прокрутке.
+ * Стоит там, где сами строки списка рамок не имеют (чаты): черта у заголовка была бы
+ * единственной линией на экране и читалась бы как граница блока, а не как метка группы.
+ *
  * С onClick разделитель становится переключателем группы (свернуть/развернуть) — корень
  * тогда кнопка, а не div: у сворачивания есть клавиатура и фокус, самодельный кликабельный
  * div их теряет. leading/trailing — место под шеврон и счётчик скрытых строк.
  */
 export function ListDateDivider({
-  title, dense = false, flash = false, onClick, leading, trailing, titleAttr,
+  title, dense = false, plain = false, flash = false, onClick, leading, trailing, titleAttr,
   highlightOnHover = false, active = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle, titleOverlay,
 }: {
   title: string;
   dense?: boolean;
+  // Без черт: подпись у левого края, липкая при прокрутке (см. описание выше)
+  plain?: boolean;
   // Кратко подсветить и мигнуть — «вот сюда прокрутили»
   flash?: boolean;
   onClick?: () => void;
@@ -73,17 +79,23 @@ export function ListDateDivider({
   const body = (
     <>
       {leading}
-      <div style={line} />
+      {!plain && <div style={line} />}
       {beforeTitle}
       <span style={{
         position: 'relative',   // точка отсчёта для titleOverlay (булавка поверх текста)
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
-        color: flash ? C.accent : active ? C.textHeading : C.textSecondary,
+        // Без черт подпись сама отделяет группу — поэтому она набирается прописными
+        // с разрядкой и приглушённым тоном: метка колонки, а не заголовок раздела
+        ...(plain ? { textTransform: 'uppercase' as const, letterSpacing: '0.05em' } : null),
+        color: flash ? C.accent : active ? C.textHeading : plain ? C.textMuted : C.textSecondary,
       }}>
         {title}
         {titleOverlay}
       </span>
-      {onLineClick ? (
+      {plain ? (
+        // Распорка вместо правой черты: держит trailing (счётчик, шеврон) у правого края
+        <div style={{ flex: 1 }} />
+      ) : onLineClick ? (
         // Зона клика во всю высоту строки, черта в 1px — по центру: попасть по линии
         // толщиной в пиксель мышью нельзя, поэтому кликабельна вся правая колонка.
         // stopPropagation держит жест отдельно от onClick подписи (та открывает документ)
@@ -111,7 +123,13 @@ export function ListDateDivider({
     // его высота считается по строке файла: 3 + бейдж 16 + 3 = 22, ровно ROW_H
     // соседних документов. С прежними 5/3 подпись была на два пикселя выше их и
     // читалась как более крупный элемент — особенно под заливкой выделения
-    padding: dense ? '3px 4px' : '10px 4px 7px',
+    padding: dense ? '3px 4px' : plain ? '8px 4px 5px' : '10px 4px 7px',
+    // Липкая подпись группы: при прокрутке видно, к какому дню относятся строки под
+    // курсором. Непрозрачный фон обязателен — иначе строки просвечивают сквозь неё.
+    // Липнет в пределах своей группы: каждая обёрнута отдельным блоком в ChatList
+    ...(plain ? {
+      position: 'sticky' as const, top: 0, zIndex: 2, background: C.bgWhite,
+    } : null),
   };
   if (!onClick) return <div style={layout}>{body}</div>;
   return (

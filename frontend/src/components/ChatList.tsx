@@ -316,7 +316,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           ) : (
             dayGroups.map(g => (
               <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-                <ListDateDivider title={g.title} />
+                <ListDateDivider title={g.title} plain />
                 {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
                   <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                 )))}
@@ -333,7 +333,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
         // её margin наружу не выходит. Панель растёт по контенту, и переключение
         // иерархии дёргало её на эту разницу
         <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-          <ListDateDivider title={g.title} />
+          <ListDateDivider title={g.title} plain />
           {g.items.map(c => renderCard(c))}
         </div>
       ))}
@@ -392,7 +392,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       // Скролл списка закрывает раскрытую свайпом карточку: жест и прокрутка —
       // разные намерения, держать раскрытие во время прокрутки мешает обзору
       onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
-      style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+      // Фон задан явно, хотя тело панели и так белое: строки чатов рамок не имеют
+      // и в покое прозрачны, а липкая подпись группы закрашена тем же bgWhite —
+      // оба приёма ломаются, если список поставить на чужой фон (мобильная
+      // раскладка воркспейса своего фона колонке не задаёт)
+      style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: C.bgWhite, padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
       {listContent}
     </div>
   );

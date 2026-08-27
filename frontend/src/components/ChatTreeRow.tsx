@@ -5,6 +5,7 @@ import { C, R, FONT, FS } from '../lib/design';
 import { formatGroupCount, type ChatTreeRowData } from '../lib/chatTree';
 import type { Session } from '../types';
 import { useChatDrag } from './useChatDrag';
+import { ROW_GAP, ROW_R } from './ChatCard';
 
 // === Строка дерева чатов: отступ + connector-линии + chevron вокруг ChatCard ===
 // Линии и контрол рисуются здесь, а НЕ в карточке: у ChatCard overflow:hidden,
@@ -18,9 +19,10 @@ import { useChatDrag } from './useChatDrag';
 
 const STEP = 14;
 const MAX_DEPTH = 6;
-// Зазор между карточками — marginBottom у ChatCard. Держим синхронно: по нему
-// обрезается рамка подсветки drop-цели, иначе она вылезает на соседнюю строку.
-const CARD_GAP = 5;
+// Зазор между карточками — marginBottom у ChatCard: по нему обрезается рамка
+// подсветки drop-цели, иначе она вылезает на соседнюю строку. Берём саму
+// константу карточки, а не копию числа
+const CARD_GAP = ROW_GAP;
 // Отдельной колонки слева у строки больше нет: карточка корня стоит вплотную к краю
 // списка, как в плоском виде. Ось связи проходит ПО карточке, в SPINE_INSET от её
 // левого края — там же, в шве, сидит контрол ветки. Инсет меньше внутреннего отступа
@@ -108,7 +110,7 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
       {highlight && (
         <div aria-hidden style={{
           position: 'absolute', left: offset(depth), right: 0, top: 0, bottom: CARD_GAP,
-          border: `2px solid ${C.accent}`, borderRadius: isMobile ? 16 : R.xl,
+          border: `2px solid ${C.accent}`, borderRadius: ROW_R,
           pointerEvents: 'none', zIndex: 3,
         }} />
       )}

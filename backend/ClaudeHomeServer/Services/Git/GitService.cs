@@ -266,6 +266,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<IReadOnlyList<GitLogEntry>> LogAsync(string? ownerId, string root, int limit = 100, string? branch = null, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
+        ValidateRevision(branch);
         // %x1f/%x1e — unit/record separators: subject может содержать что угодно
         var args = new List<string> { "log", "-n", limit.ToString(),
             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e" };
@@ -335,6 +336,23 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // sha валидируем формально (hex 6-40) — защита от передачи опций/ссылок вместо хеша
     private static bool IsValidSha(string sha) =>
         sha.Length is >= 6 and <= 40 && sha.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'));
+
+    // Ревизия из пользовательского ввода (ветка/тег/sha) перед попаданием в argv. ArgumentList
+    // защищает от shell-инъекции, но НЕ от инъекции опции: элемент argv, начинающийся с «-»,
+    // git разбирает как ФЛАГ — «--output=…» в git log перезаписывала произвольный файл мимо
+    // SafeJoin и границ проекта (находка приёмки волны 3.1). Отвергаем всё, что не похоже на
+    // ref по правилам git check-ref-format: ведущий «-», пробелы/управляющие, спецсимволы
+    // ревизий (~ ^ : ? * [ \), «..» внутри. Имена веток (feature/x), теги, HEAD и sha проходят.
+    private static void ValidateRevision(string? rev)
+    {
+        if (string.IsNullOrWhiteSpace(rev)) return;
+        if (rev.Length > 255
+            || rev[0] == '-'
+            || rev.Contains("..", StringComparison.Ordinal)
+            || rev.Any(c => char.IsControl(c) || c is ' ' or '~' or '^' or ':' or '?' or '*' or '[' or '\\'))
+            throw new GitCommandException(
+                $"Некорректная ревизия «{rev}»: ожидается имя ветки/тега или sha без опций");
+    }
 
     // Пути файлов, затронутых ОДНИМ коммитом (git show --name-only) — якорение паспортов
     // (DossierCaptureService). Оговорка: на merge-коммите --name-only файлов не печатает
@@ -667,8 +685,11 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         finally { sem.Release(); }
     }
 
-    public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, ["checkout", branch], ct: ct);
+    public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default)
+    {
+        ValidateRevision(branch);
+        return WriteOp(ownerId, root, ["checkout", branch], ct: ct);
+    }
 
     // ---------- Ветка паспортов ccs/dossiers/v1 (экспорт «Историй решений») ----------
 
@@ -1034,8 +1055,11 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         NetworkOp(ownerId, root, ["push"], creds, ct);
 
     // Первый push новой ветки: выставить upstream (origin/<branch>)
-    public Task PushSetUpstreamAsync(string? ownerId, string root, string branch, GitCredentials? creds = null, CancellationToken ct = default) =>
-        NetworkOp(ownerId, root, ["push", "-u", "origin", branch], creds, ct);
+    public Task PushSetUpstreamAsync(string? ownerId, string root, string branch, GitCredentials? creds = null, CancellationToken ct = default)
+    {
+        ValidateRevision(branch);
+        return NetworkOp(ownerId, root, ["push", "-u", "origin", branch], creds, ct);
+    }
 
     private async Task NetworkOp(string? ownerId, string root, string[] args, GitCredentials? creds, CancellationToken ct)
     {
@@ -1064,6 +1088,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!hasUpstream && string.IsNullOrWhiteSpace(branch))
             throw new GitCommandException("Не удалось определить ветку для публикации");
+        ValidateRevision(branch);
 
         var (pre, credEnv) = CredArgs(creds);
         var env = WithCLocale(credEnv);
@@ -1228,8 +1253,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             await RunOkAsync(ownerId, root, ["remote", "add", "origin", url], ct: ct);
     }
 
-    public Task CreateBranchAsync(string? ownerId, string root, string name, string? from, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, from is null ? ["checkout", "-b", name] : ["checkout", "-b", name, from], ct: ct);
+    public Task CreateBranchAsync(string? ownerId, string root, string name, string? from, CancellationToken ct = default)
+    {
+        ValidateRevision(name);
+        ValidateRevision(from);
+        return WriteOp(ownerId, root, from is null ? ["checkout", "-b", name] : ["checkout", "-b", name, from], ct: ct);
+    }
 
     // ---------- Worktree ----------
     // Пути worktree в API — всегда ХОСТОВЫЕ. Git в args принимает пути ЦЕЛЕВОЙ среды
@@ -1241,6 +1270,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // Checkout большой репы небыстрый — таймаут сетевого класса.
     public async Task WorktreeAddAsync(string? ownerId, string mainRoot, string worktreePath, string branch, CancellationToken ct = default)
     {
+        ValidateRevision(branch);
         var paths = launchers.ForOwner(ownerId).Paths;
         var runtimePath = paths.ToRuntime(worktreePath);
         var sem = LockFor(mainRoot);

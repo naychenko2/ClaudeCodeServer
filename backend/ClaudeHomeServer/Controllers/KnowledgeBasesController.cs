@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/knowledge")]
-public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub, UserStore userStore,
+public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub,
     Services.Llm.ICheapTextRunner cheap, KnowledgeBaseCatalogService catalog) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;

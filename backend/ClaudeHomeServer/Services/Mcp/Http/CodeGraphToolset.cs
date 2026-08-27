@@ -26,7 +26,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// (defense-in-depth, урок приёмки волны 2).
 ///
 /// Состав постоянный (3 чтения). Сторож парности со stdio-веткой отката —
-/// CodeGraphToolsetParityTests (index.js заморожен).
+/// CodeGraphNotificationsToolsetParityTests (index.js заморожен).
 /// </summary>
 public sealed class CodeGraphToolset(
     CodeGraphService graphs,
@@ -296,7 +296,7 @@ public sealed class CodeGraphToolset(
     }
 
     // Полный состав: 3 чтения, схемы — порт mcp/codegraph-server/index.js
-    // (источник контракта — здесь, index.js заморожен; сторож — CodeGraphToolsetParityTests)
+    // (источник контракта — здесь, index.js заморожен; сторож — CodeGraphNotificationsToolsetParityTests)
     internal static IReadOnlyList<McpToolSchema> AllTools { get; } =
     [
         new("codegraph_find",

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -105,5 +106,50 @@ public class PersonaAccessPolicyTests
         foreach (var name in PersonaAccessPolicy.ReadOnlyDisallowed.Where(t => t.Contains("desktop")))
             name.Should().StartWith("mcp__desktop__",
                 "голое имя без префикса mcp__ — это неизвестное встроенное имя, класс MultiEdit");
+    }
+
+    // ---------- Рабочее пространство (wsp) в профиле «Только чтение» (волна 3.1) ----------
+
+    // До волны 3.1 шапка WorkspaceToolset и ADR-012 утверждали, что write-инструменты wsp
+    // гейтятся ExtraDisallowedTools — а списка не было: персона «Только чтение» спокойно
+    // звала files_write/git_commit. Профиль обязан означать то, что написано.
+    [Fact]
+    public void ReadOnly_ЗапрещаетВсеМутирующиеИнструментыWsp()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
+
+        // Весь мутирующий периметр wsp: файлы (включая files_to_markdown — он пишет .md),
+        // git-запись, проекты и теги, базы знаний, чаты-мутации, деструктив
+        result.Should().Contain([
+            "mcp__wsp__files_write", "mcp__wsp__files_mkdir", "mcp__wsp__files_rename",
+            "mcp__wsp__files_to_markdown", "mcp__wsp__files_delete",
+            "mcp__wsp__git_commit", "mcp__wsp__git_stage",
+            "mcp__wsp__projects_create", "mcp__wsp__projects_update", "mcp__wsp__tags_apply",
+            "mcp__wsp__knowledge_index", "mcp__wsp__kb_add_document",
+            "mcp__wsp__chats_create", "mcp__wsp__chats_update", "mcp__wsp__chats_delete"]);
+
+        // Чтение и общение остаются: «только чтение» значит «не меняет», а не «молчит»
+        result.Should().NotContain([
+            "mcp__wsp__files_read", "mcp__wsp__files_tree", "mcp__wsp__git_status",
+            "mcp__wsp__git_log", "mcp__wsp__search_unified", "mcp__wsp__projects_list",
+            "mcp__wsp__chats_send", "mcp__wsp__chats_report_up", "mcp__wsp__chats_history"]);
+    }
+
+    // Список запретов wsp живёт в PersonaAccessPolicy, каталог инструментов — в
+    // WorkspaceToolset: опечатка в имени прошла бы молча (deny неизвестного имени wsp — не
+    // падение CLI, а тихо неработающий запрет). Сверяем каждое имя с живым каталогом.
+    [Fact]
+    public void WspЗапреты_ИменаСуществуютВКаталогеТулсета()
+    {
+        var catalog = WorkspaceToolset.AllTools.Select(t => t.Name).ToHashSet();
+        var wspDeny = PersonaAccessPolicy.ReadOnlyDisallowed
+            .Where(t => t.StartsWith("mcp__wsp__", StringComparison.Ordinal))
+            .Select(t => t["mcp__wsp__".Length..])
+            .ToList();
+
+        wspDeny.Should().NotBeEmpty("список запретов wsp обязан существовать (блокер волны 3.1)");
+        foreach (var name in wspDeny)
+            catalog.Should().Contain(name,
+                $"deny-имя {name} обязано совпадать с инструментом каталога wsp — иначе запрет молча не работает");
     }
 }

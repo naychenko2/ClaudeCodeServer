@@ -52,7 +52,7 @@ public sealed class KnowledgeBaseCatalogService(KnowledgeService knowledge, User
 
     /// <summary>Список релевантных пользователю баз (личные + публичные), свежие первыми.</summary>
     public async Task<(bool Configured, IReadOnlyList<KnowledgeBaseSummary> Items)> ListForUserAsync(
-        string username, CancellationToken ct = default)
+        string username)
     {
         if (!knowledge.IsConfigured)
             return (false, Array.Empty<KnowledgeBaseSummary>());
@@ -67,8 +67,7 @@ public sealed class KnowledgeBaseCatalogService(KnowledgeService knowledge, User
     }
 
     /// <summary>Карточка базы с документами (null — недоступна/не найдена).</summary>
-    public async Task<KnowledgeBaseDetail?> GetDetailForUserAsync(string username, string id,
-        CancellationToken ct = default)
+    public async Task<KnowledgeBaseDetail?> GetDetailForUserAsync(string username, string id)
     {
         var d = await ResolveReadableAsync(username, id);
         if (d is null) return null;

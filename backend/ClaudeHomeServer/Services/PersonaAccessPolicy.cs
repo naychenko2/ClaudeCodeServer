@@ -35,6 +35,19 @@ public static class PersonaAccessPolicy
         // имён — см. MultiEdit выше). Проверено живым прогоном CLI — см. тест
         // DesktopMcpToolsetStabilityTests.DenyИменаДесктопа_НеРоняютЗапускCli.
         "mcp__desktop__desktop_act", "mcp__desktop__desktop_open", "mcp__desktop__desktop_run",
+        // Рабочее пространство (wsp, ADR-012 волна 3): все МУТИРУЮЩИЕ инструменты — файлы
+        // (включая files_to_markdown: он сохраняет .md в проекте), git-запись, проекты и
+        // теги, базы знаний, создание/переименование чатов и деструктив. Находка приёмки
+        // волны 3.1: шапка тулсета и ADR утверждали этот гейт, а списка не было — профиль
+        // «Только чтение» спокойно звал files_write. Чтение и ОБЩЕНИЕ (chats_send/
+        // chats_report_up — как память memory_remember выше) не запрещаем.
+        // Соответствие имён каталогу инструментов держит WorkspaceToolsetParityTests.
+        "mcp__wsp__files_write", "mcp__wsp__files_mkdir", "mcp__wsp__files_rename",
+        "mcp__wsp__files_to_markdown", "mcp__wsp__files_delete",
+        "mcp__wsp__git_commit", "mcp__wsp__git_stage",
+        "mcp__wsp__projects_create", "mcp__wsp__projects_update", "mcp__wsp__tags_apply",
+        "mcp__wsp__knowledge_index", "mcp__wsp__kb_add_document",
+        "mcp__wsp__chats_create", "mcp__wsp__chats_update", "mcp__wsp__chats_delete",
     ];
 
     // Итоговый список дополнительных запретов сессии персоны:

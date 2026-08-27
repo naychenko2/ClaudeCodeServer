@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.SignalR.Client;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -298,5 +300,167 @@ public class WorkspaceHttpOwnerIsolationTests : IDisposable
         JsonSerializer.Deserialize<JsonElement>(TextOf(afterClear))
             .GetProperty("systemPrompt").GetString()
             .Should().BeEmpty("пустая строка обязана ОЧИЩАТЬ, а не игнорироваться");
+    }
+
+    // ---------- Правки приёмки волны 3.1 ----------
+
+    /// <summary>
+    /// Блокер 2: projects_create не принимает абсолютный rootPath. Раньше модель сама
+    /// переносила границу SafeJoin — подключала проектом любую папку сервера, и файловые
+    /// инструменты работали в ней законно. Теперь — отказ с подсказкой; папка выбирает
+    /// сервер в стандартном каталоге, подключение существующей — человек через UI.
+    /// </summary>
+    [Fact]
+    public async Task ProjectsCreate_АбсолютныйRootPath_Отказ()
+    {
+        var client = Client;
+        var projectId = await CreateProjectAsync(client, "wsp-rootpath");
+        var sessionId = await CreateSessionAsync(client, projectId);
+        var foreignDir = Path.Combine(_factory.TempDir, "wsp-alien-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(foreignDir);
+
+        var denied = await CallToolAsync(client, sessionId, "projects_create", new
+        {
+            name = "Чужая папка",
+            rootPath = foreignDir,
+        });
+        IsError(denied).Should().BeTrue("подключение произвольной папки из MCP — блокер волны 3.1");
+        TextOf(denied).Should().Contain("недоступно из MCP");
+
+        // Без rootPath проект создаётся в стандартном каталоге — штатный путь жив
+        var created = await CallToolAsync(client, sessionId, "projects_create", new
+        {
+            name = "wsp-обычный-" + Guid.NewGuid().ToString("N")[..8],
+        });
+        IsError(created).Should().BeFalse(TextOf(created));
+        var rootPath = JsonSerializer.Deserialize<JsonElement>(TextOf(created))
+            .GetProperty("rootPath").GetString()!;
+        rootPath.Should().NotBe(foreignDir, "путь выбирает сервер, а не модель");
+    }
+
+    /// <summary>
+    /// Блокер 4: tags_apply для задачи шлёт task_changed(updated) в группу владельца —
+    /// как REST-путь (TasksController.Update). Бродкаст был обязанностью контроллера и
+    /// потерялся при переходе на прямые вызовы: интерфейс жил с устаревшими метками.
+    /// Ловим через живой SignalR (LongPolling через TestServer).
+    /// </summary>
+    [Fact]
+    public async Task TagsApply_Задача_ШлётTaskUpdated()
+    {
+        var client = Client;
+        var projectId = await CreateProjectAsync(client, "wsp-tags");
+        var sessionId = await CreateSessionAsync(client, projectId);
+
+        var task = await client.PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Задача с метками" });
+        task.EnsureSuccessStatusCode();
+        var taskId = JsonSerializer.Deserialize<JsonElement>(
+            await task.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var me = await client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+        var updated = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (msg.TryGetProperty("type", out var type) && type.GetString() == "task_changed"
+                && msg.GetProperty("action").GetString() == "updated"
+                && msg.GetProperty("task").GetProperty("id").GetString() == taskId)
+                updated.TrySetResult(msg);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var applied = await CallToolAsync(client, sessionId, "tags_apply", new
+            {
+                entityType = "task",
+                entityId = taskId,
+                tags = new[] { "метка-из-mcp" },
+            });
+            IsError(applied).Should().BeFalse(TextOf(applied));
+
+            var received = await Task.WhenAny(updated.Task, Task.Delay(15_000));
+            received.Should().Be(updated.Task, "task_changed(updated) обязан прийти в группу владельца");
+            updated.Task.Result.GetProperty("task").GetProperty("labels").EnumerateArray()
+                .Select(l => l.GetString())
+                .Should().Contain("метка-из-mcp", "в событии — уже обновлённая задача");
+        }
+        finally { await connection.DisposeAsync(); }
+    }
+
+    /// <summary>
+    /// Зона сессии (AllowedProjectIds) обязана держать и поиск, и метки задач: суженная
+    /// персона не читает и не правит данные за пределами своих проектов — ни задачи чужого
+    /// проекта, ни личные задачи владельца (правка волны 3.1).
+    /// </summary>
+    [Fact]
+    public async Task ЗонаСессии_SearchUnifiedИTagsApply_ДержатДанныеВнутри()
+    {
+        var client = Client;
+        var inZone = await CreateProjectAsync(client, "wsp-zone-in");
+        var outZone = await CreateProjectAsync(client, "wsp-zone-out");
+
+        // Персона с Project-привязкой к inZone: её чат видит ровно один проект
+        var persona = await client.PostAsJsonAsync("/api/personas", new { name = "Суженная зона" });
+        persona.EnsureSuccessStatusCode();
+        var personaId = JsonSerializer.Deserialize<JsonElement>(
+            await persona.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var binding = await client.PutAsJsonAsync($"/api/personas/{personaId}/bindings", new
+        {
+            bindings = new object[] { new { type = "Project", target = inZone } },
+        });
+        binding.EnsureSuccessStatusCode();
+        var chat = await client.PostAsJsonAsync($"/api/personas/{personaId}/chats",
+            new { mode = "acceptEdits" });
+        chat.EnsureSuccessStatusCode();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(
+            await chat.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var marker = "зонамаркер-" + Guid.NewGuid().ToString("N")[..8];
+        var outTask = await client.PostAsJsonAsync($"/api/projects/{outZone}/tasks",
+            new { title = $"{marker} чужой проект" });
+        outTask.EnsureSuccessStatusCode();
+        var outTaskId = JsonSerializer.Deserialize<JsonElement>(
+            await outTask.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var personal = await client.PostAsJsonAsync("/api/tasks", new { title = $"{marker} личная" });
+        personal.EnsureSuccessStatusCode();
+        var personalId = JsonSerializer.Deserialize<JsonElement>(
+            await personal.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var inTask = await client.PostAsJsonAsync($"/api/projects/{inZone}/tasks",
+            new { title = $"{marker} своя" });
+        inTask.EnsureSuccessStatusCode();
+        var inTaskId = JsonSerializer.Deserialize<JsonElement>(
+            await inTask.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        // search_unified: видна только задача проекта зоны
+        var search = await CallToolAsync(client, sessionId, "search_unified", new { query = marker });
+        IsError(search).Should().BeFalse(TextOf(search));
+        var hits = TextOf(search);
+        hits.Should().Contain("своя", "задача проекта зоны — в выдаче");
+        hits.Should().NotContain("чужой проект", "задача вне зоны скрыта")
+            .And.NotContain("личная", "личные задачи при суженной зоне скрыты");
+
+        // tags_apply: метки меняются только у задачи проекта зоны
+        var denyForeign = await CallToolAsync(client, sessionId, "tags_apply", new
+        { entityType = "task", entityId = outTaskId, tags = new[] { "не-туда" } });
+        IsError(denyForeign).Should().BeTrue("задача чужого проекта — вне зоны");
+        TextOf(denyForeign).Should().Contain("вне разрешённой зоны");
+
+        var denyPersonal = await CallToolAsync(client, sessionId, "tags_apply", new
+        { entityType = "task", entityId = personalId, tags = new[] { "не-туда" } });
+        IsError(denyPersonal).Should().BeTrue("личная задача при суженной зоне — вне зоны");
+
+        var allow = await CallToolAsync(client, sessionId, "tags_apply", new
+        { entityType = "task", entityId = inTaskId, tags = new[] { "в-зону" } });
+        IsError(allow).Should().BeFalse(TextOf(allow));
     }
 }

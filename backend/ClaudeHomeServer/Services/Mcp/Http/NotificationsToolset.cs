@@ -19,8 +19,8 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// волны 2: гейт только в составе пропускал платный вызов при выключенной привязке).
 ///
 /// Состав постоянный (4 инструмента) и от свойств хода не зависит (инвариант IMcpToolset).
-/// Сторож парности со stdio-веткой отката — NotificationsToolsetParityTests (index.js
-/// заморожен).
+/// Сторож парности со stdio-веткой отката — CodeGraphNotificationsToolsetParityTests
+/// (index.js заморожен).
 /// </summary>
 public sealed class NotificationsToolset(
     NotificationStore store,
@@ -204,7 +204,7 @@ public sealed class NotificationsToolset(
         arguments[name] is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
 
     // Полный состав: 4 инструмента, схемы — порт mcp/notifications-server/index.js
-    // (источник контракта — здесь, index.js заморожен; сторож — NotificationsToolsetParityTests)
+    // (источник контракта — здесь, index.js заморожен; сторож — CodeGraphNotificationsToolsetParityTests)
     internal static IReadOnlyList<McpToolSchema> AllTools { get; } =
     [
         new("notifications_create",

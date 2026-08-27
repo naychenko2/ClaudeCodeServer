@@ -43,7 +43,8 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 ///
 /// WORKSPACE_WRITE (фиксация, ADR-012): уже константа "1" со времён снятия WriteIntentGate —
 /// write-инструменты в составе всегда; safety-уровень — права персоны (Persona.Tools /
-/// ExtraDisallowedTools на уровне CLI) и гейты выше.
+/// ExtraDisallowedTools на уровне CLI: профиль «Только чтение» гасит все мутирующие
+/// mcp__wsp__* через PersonaAccessPolicy.ReadOnlyDisallowed — правка волны 3.1) и гейты выше.
 ///
 /// Сторож парности со stdio-веткой отката — WorkspaceToolsetParityTests (index.js заморожен).
 /// </summary>
@@ -52,7 +53,6 @@ public sealed partial class WorkspaceToolset(
     ProjectGroupManager groups,
     SessionManager sessions,
     PersonaManager personas,
-    PersonaBindingsService bindings,
     FileService files,
     NotesService notes,
     DocumentAiService docAi,
@@ -61,6 +61,7 @@ public sealed partial class WorkspaceToolset(
     ProjectKnowledgeSyncService knowledgeSync,
     UnifiedSearchService search,
     Git.GitService git,
+    Git.CommitAttributionService commitAttribution,
     UserStore users,
     TeamMemoryService teamMemory,
     DeployService deploy,
@@ -281,7 +282,7 @@ public sealed partial class WorkspaceToolset(
             "projects" => await ProjectsCall(tool, arguments, context, session, plan),
             "files" => await FilesCall(tool, arguments, context, plan, ct),
             "knowledge" => await KnowledgeCall(tool, arguments, context, plan),
-            "search" => await SearchCall(tool, arguments, context),
+            "search" => await SearchCall(tool, arguments, context, plan),
             "git" or "git_write" => await GitCall(tool, arguments, context, session, plan, ct),
             "knowledge_bases" => await KbCall(tool, arguments, context),
             "chats" => await ChatsCall(tool, arguments, context, session, plan),
@@ -352,7 +353,17 @@ public sealed partial class WorkspaceToolset(
                     return Deny("Создание проектов недоступно: зона этой сессии ограничена перечисленными проектами");
                 var name = StringArg(arguments, "name").Trim();
                 if (name.Length == 0) return Deny("Название проекта не может быть пустым");
+                // Абсолютный rootPath НЕ принимаем (блокер приёмки волны 3.1): модель сама
+                // переносила бы границу SafeJoin, подключив проектом любую папку сервера,
+                // после чего файловые инструменты работали бы в ней законно. MCP создаёт
+                // проект только в стандартном каталоге владельца; подключение существующей
+                // папки — осознанное действие человека через UI (REST). Решение — ADR-012,
+                // раздел «Волна 3.1». Параметр в схеме оставлен для паритета со stdio-веткой.
                 var rootPath = OptionalArg(arguments, "rootPath");
+                if (rootPath is not null)
+                    return Deny("Подключение существующей папки недоступно из MCP: создайте проект "
+                        + "без rootPath (папка появится в стандартном каталоге) либо попросите "
+                        + "пользователя подключить нужную папку через интерфейс.");
                 var groupId = OptionalArg(arguments, "groupId");
                 try
                 {
@@ -455,8 +466,19 @@ public sealed partial class WorkspaceToolset(
                 var task = tasks.GetById(entityId);
                 if (task is null || task.OwnerId != context.OwnerId)
                     return Deny($"Задача {entityId} не найдена.");
+                // Зона сессии: при суженной зоне доступен только проектный ряд — личные
+                // задачи и чужие проекты вне зоны (правка приёмки волны 3.1: раньше метки
+                // менялись у любой задачи владельца)
+                if (plan.AllowedProjectIds is { Count: > 0 } allowed
+                    && (task.ProjectId is null || !allowed.Contains(task.ProjectId)))
+                    return Deny($"Задача {entityId} вне разрешённой зоны этой сессии");
                 var mergedLabels = UnionStrings(task.Labels, incoming);
-                tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels));
+                var updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels));
+                // Бродкаст task_updated — как REST-путь (TasksController.Update): без него
+                // интерфейс жил бы с устаревшими метками до перезагрузки (блокер волны 3.1;
+                // TaskManager.Update бродкаста не делает — он был обязанностью контроллера)
+                if (updatedTask is not null)
+                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updatedTask);
                 var taskAnswer = new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -662,40 +684,54 @@ public sealed partial class WorkspaceToolset(
             case "files_document_read":
             {
                 var path = StringArg(arguments, "path");
-                if (DocumentAbsPath(root, path) is not { } abs)
-                    return Deny("Это не документ (pdf/docx/xlsx/pptx)");
-                var md = await docAi.ConvertAsync(abs, ct);
-                return md is null
-                    ? Deny("Не удалось конвертировать документ (markitdown недоступен?)")
-                    : Json(new Dictionary<string, object?> { ["path"] = path, ["markdown"] = md });
+                // SafeJoinPublic внутри DocumentAbsPath — под try, как у остальных файловых
+                // инструментов: traversal здесь обязан давать отказ, а не исключение (волна 3.1)
+                try
+                {
+                    if (DocumentAbsPath(root, path) is not { } abs)
+                        return Deny("Это не документ (pdf/docx/xlsx/pptx)");
+                    var md = await docAi.ConvertAsync(abs, ct);
+                    return md is null
+                        ? Deny("Не удалось конвертировать документ (markitdown недоступен?)")
+                        : Json(new Dictionary<string, object?> { ["path"] = path, ["markdown"] = md });
+                }
+                catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
             }
 
             case "files_document_summary":
             {
                 var path = StringArg(arguments, "path");
-                var text = await GetAiTextAsync(root, path, ct);
-                if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
-                var summary = await docAi.SummaryAsync(context.OwnerId, text, ct);
-                return summary is null
-                    ? Deny("Не удалось обработать файл")
-                    : Json(new Dictionary<string, object?> { ["path"] = path, ["summary"] = summary });
+                try
+                {
+                    var text = await GetAiTextAsync(root, path, ct);
+                    if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
+                    var summary = await docAi.SummaryAsync(context.OwnerId, text, ct);
+                    return summary is null
+                        ? Deny("Не удалось обработать файл")
+                        : Json(new Dictionary<string, object?> { ["path"] = path, ["summary"] = summary });
+                }
+                catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
             }
 
             case "files_document_extract":
             {
                 var path = StringArg(arguments, "path");
-                var text = await GetAiTextAsync(root, path, ct);
-                if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
-                var extract = await docAi.ExtractAsync(context.OwnerId, text, ct);
-                return extract is null
-                    ? Deny("Не удалось обработать файл")
-                    : Json(new
-                    {
-                        decisions = extract.Decisions,
-                        dates = extract.Dates,
-                        people = extract.People,
-                        actionItems = extract.ActionItems,
-                    });
+                try
+                {
+                    var text = await GetAiTextAsync(root, path, ct);
+                    if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
+                    var extract = await docAi.ExtractAsync(context.OwnerId, text, ct);
+                    return extract is null
+                        ? Deny("Не удалось обработать файл")
+                        : Json(new
+                        {
+                            decisions = extract.Decisions,
+                            dates = extract.Dates,
+                            people = extract.People,
+                            actionItems = extract.ActionItems,
+                        });
+                }
+                catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
             }
 
             case "files_to_markdown":
@@ -902,13 +938,15 @@ public sealed partial class WorkspaceToolset(
     // --- Секция search (единый поиск по рабочему пространству) ---
 
     private async Task<McpToolCallResult> SearchCall(string tool, JsonObject arguments,
-        McpToolCallContext context)
+        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan)
     {
         if (tool != "search_unified") return Deny($"Неизвестный инструмент: {tool}");
         var query = StringArg(arguments, "query").Trim();
         if (query.Length == 0) return Json(Array.Empty<object>());
         var limit = Math.Clamp(IntArg(arguments, "limit") ?? 8, 1, 20);
-        var hits = await search.SearchAsync(context.OwnerId, query, limit);
+        // Зона сессии режет выдачу: суженная персона не должна видеть заметки и задачи
+        // за пределами своих проектов (правка приёмки волны 3.1)
+        var hits = await search.SearchAsync(context.OwnerId, query, limit, plan.AllowedProjectIds);
         return Json(hits);
     }
 
@@ -928,7 +966,14 @@ public sealed partial class WorkspaceToolset(
             switch (tool)
             {
                 case "git_status":
-                    return Json(await git.StatusAsync(p.OwnerId, root, ct));
+                {
+                    var status = await git.StatusAsync(p.OwnerId, root, ct);
+                    // Детект коммита по сдвигу HEAD — как REST Status (GitController):
+                    // без него коммиты мимо продукта (Bash в чате, терминал) выпадали из
+                    // атрибуции файлов чатам на этом пути (правка волны 3.1)
+                    await commitAttribution.OnStatusRequestAsync(p.OwnerId, root, status.HeadSha);
+                    return Json(status);
+                }
 
                 case "git_diff":
                 {

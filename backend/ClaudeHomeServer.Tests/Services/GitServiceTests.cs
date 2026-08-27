@@ -123,6 +123,50 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         sha2.Should().NotBe(sha1);
     }
 
+    // ---------- Инъекция git-опций через ref-подобные параметры (блокер приёмки волны 3.1) ----------
+
+    // branch уходит в argv как есть: элемент с ведущим «-» git разбирает как ОПЦИЮ, и
+    // «--output=<путь>» в git log перезаписывает произвольный файл мимо SafeJoin и границ
+    // проекта (воспроизведено на живом git в задаче волны 3.1). Валидация — в GitService,
+    // один слой для MCP (git_log) и REST (/git/log): проверяем и непопадание файла на диск.
+    [Fact]
+    public async Task Log_ВеткаОпция_Отвергается_И_НеСоздаётФайл()
+    {
+        var target = Path.Combine(Path.GetTempPath(),
+            "gitsvc_inject_" + Guid.NewGuid().ToString("N") + ".txt");
+
+        var act = () => _git.LogAsync(null, _repo, 5, $"--output={target}");
+
+        await act.Should().ThrowAsync<GitCommandException>()
+            .WithMessage("*Некорректная ревизия*");
+        File.Exists(target).Should().BeFalse(
+            "git не должен был выполниться вовсе — файл вне репо не создаётся и не затирается");
+    }
+
+    // Валидация не ломает штатные ревизии: имя ветки, sha и пусто (текущая)
+    [Fact]
+    public async Task Log_ВеткаИSha_ПроходятВалидацию()
+    {
+        var head = (await _git.LogAsync(null, _repo, 1))[0].Sha;
+
+        (await _git.LogAsync(null, _repo, 5, "main")).Should().NotBeEmpty("имя ветки валидно");
+        (await _git.LogAsync(null, _repo, 5, head)).Should().NotBeEmpty("sha валиден");
+        (await _git.LogAsync(null, _repo, 5)).Should().NotBeEmpty("пусто — текущая ветка");
+    }
+
+    // Тот же паттерн в соседних методах: подконтрольная строка в argv обязательна
+    // выглядеть как ref — иначе «--force» в checkout/create-branch менял бы поведение git
+    [Fact]
+    public async Task CheckoutИCreateBranch_ИмяСОпцией_Отвергается()
+    {
+        await FluentActions.Awaiting(() => _git.CheckoutAsync(null, _repo, "--force"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+        await FluentActions.Awaiting(() => _git.CreateBranchAsync(null, _repo, "-b", "main"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+        await FluentActions.Awaiting(() => _git.CreateBranchAsync(null, _repo, "ok", "--detach"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+    }
+
     // ---------- Метрика охвата паспортов: CountRecentCommitsAsync (GET /dossiers) ----------
 
     // Обе даты коммита в прошлом: --since фильтрует по committer date, поэтому сдвигаем

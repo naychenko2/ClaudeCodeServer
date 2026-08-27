@@ -11,8 +11,18 @@ namespace ClaudeHomeServer.Services;
 public sealed class UnifiedSearchService(
     NotesService notes, NotesKnowledgeService kb, TaskManager tasks, ProjectManager projects)
 {
-    public async Task<IReadOnlyList<SearchHit>> SearchAsync(string userId, string query, int topK)
+    // allowedProjects — зона сессии-вызова (AllowedProjectIds плана wsp, ADR-012 волна 3.1):
+    // при суженной зоне выдача ограничена её проектами — заметки по источнику (личный vault
+    // и чужие проекты скрыты), задачи по проекту (личные скрыты). null — зона не сужена,
+    // поведение прежнее (REST-поиск человека зоны не имеет).
+    public async Task<IReadOnlyList<SearchHit>> SearchAsync(string userId, string query, int topK,
+        IReadOnlyCollection<string>? allowedProjects = null)
     {
+        bool NoteInScope(string source) =>
+            allowedProjects is null || allowedProjects.Contains(source);
+        bool TaskInScope(Models.TaskItem t) =>
+            allowedProjects is null || (t.ProjectId is not null && allowedProjects.Contains(t.ProjectId));
+
         var hits = new List<SearchHit>();
 
         // --- Заметки ---
@@ -22,7 +32,8 @@ public sealed class UnifiedSearchService(
             try
             {
                 foreach (var h in await kb.SearchAsync(userId, query, topK))
-                    hits.Add(new SearchHit("note", h.Id, h.Title, h.SourceLabel, h.Snippet, h.Score, NoteUrl(h.Id)));
+                    if (NoteInScope(h.Source))
+                        hits.Add(new SearchHit("note", h.Id, h.Title, h.SourceLabel, h.Snippet, h.Score, NoteUrl(h.Id)));
                 noteHitsAdded = hits.Count > 0;
             }
             catch { /* Dify недоступен — ключевой фолбэк ниже */ }
@@ -30,11 +41,12 @@ public sealed class UnifiedSearchService(
         if (!noteHitsAdded)
         {
             foreach (var s in notes.GetSummaries(userId, null, query).Take(topK))
-                hits.Add(new SearchHit("note", s.Id, s.Title, s.SourceLabel, "", null, NoteUrl(s.Id)));
+                if (NoteInScope(s.Source))
+                    hits.Add(new SearchHit("note", s.Id, s.Title, s.SourceLabel, "", null, NoteUrl(s.Id)));
         }
 
         // --- Задачи (ключевой поиск) ---
-        foreach (var t in MatchTasks(userId, query).Take(topK))
+        foreach (var t in MatchTasks(userId, query).Take(topK).Where(TaskInScope))
         {
             var ctx = t.ProjectId is null
                 ? "Личная задача"

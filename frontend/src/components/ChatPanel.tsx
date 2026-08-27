@@ -1,3 +1,4 @@
+import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
 import { ArrowDown, ArrowUp, RotateCw, CircleHelp } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
@@ -757,6 +758,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // вовсе (ни на result, ни в фолбэке hitMarkup), что закрывает и дубль озвучки, и
   // конфликт токенов. Гейт handsFreeActive поднимает Composer (петля живёт там).
   const [handsFreeActive, setHandsFreeActive] = useState(false);
+
+  // Разговор без рук занимает звук продукта целиком: микрофон открыт, и фоновое видео
+  // в панели услышит собственный телевизор как чужую речь. Фокус держим на весь режим,
+  // а не на отдельные фразы — паузы между репликами тоже часть разговора.
+  useEffect(() => {
+    setAudioFocus('conversation', handsFreeActive);
+    return () => setAudioFocus('conversation', false);
+  }, [handsFreeActive]);
   const streamStRef = useRef<TurnStreamState>(TURN_STREAM_INIT);
   const streamRef = useRef<StreamSpeech | null>(null);
   // Сброс на границах хода/чата: новый ход (user_message), прерывание, ошибка, смена

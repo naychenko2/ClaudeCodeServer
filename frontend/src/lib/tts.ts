@@ -8,6 +8,7 @@
 // пока играет текущий, — иначе между фразами повисали бы паузы на круг до сервера.
 
 import { request, subscribeOnline, isOnline } from './offline';
+import { setAudioFocus } from './audioFocus';
 import { talkMark } from './talkDiag';
 
 // Максимум символов, который отдаём на озвучку: лимит контроллера — 3000, но слушать
@@ -415,6 +416,8 @@ export function stopSpeaking() {
     currentUrl = null;
   }
   if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+  // Звук продукта освободился — фоновое видео может вернуть громкость
+  setAudioFocus('speech', false);
   releaseWaiters();
 }
 
@@ -424,6 +427,8 @@ export function stopSpeaking() {
 export function speak(rawText: string, personaId?: string, sessionId?: string): Promise<void> {
   watchConnection();
   stopSpeaking();
+  // Заявляем звук ПОСЛЕ stopSpeaking: тот снимает фокус предыдущей озвучки
+  setAudioFocus('speech', true);
   const token = ++speakToken;
   return new Promise<void>((resolve) => {
     let settled = false;
@@ -431,6 +436,10 @@ export function speak(rawText: string, personaId?: string, sessionId?: string): 
       if (settled) return;
       settled = true;
       speechWaiters = speechWaiters.filter(w => w !== finish);
+      // Освобождаем звук ТОЛЬКО если мы всё ещё владелец: следующая озвучка могла
+      // стартовать раньше, чем догорела эта, и тогда снятие фокуса вернуло бы
+      // фоновое видео прямо поверх новой речи.
+      if (speakToken === token) setAudioFocus('speech', false);
       resolve();
     };
     speechWaiters.push(finish);
@@ -614,6 +623,7 @@ export interface StreamSpeech {
 export function startStreamSpeak(onDone?: () => void, personaId?: string,
   sessionId?: string): StreamSpeech {
   watchConnection();
+  setAudioFocus('speech', true);
   const token = ++speakToken;
   const queue: string[] = [];
   // Копилка предложений перед отправкой: синтез берёт деньги за ЗАПРОС, и слать каждое
@@ -629,6 +639,7 @@ export function startStreamSpeak(onDone?: () => void, personaId?: string,
   const finishDone = () => {
     if (settledDone) return;
     settledDone = true;
+    if (speakToken === token) setAudioFocus('speech', false);
     resolveDone();
     onDone?.();
   };

@@ -4,13 +4,15 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 
 /// <summary>
 /// Тулсет MCP-over-HTTP: один «сервер» в терминах конфига хода, живущий внутри Kestrel
-/// (ADR-012). Новый сервер добавляется реализацией этого интерфейса — контроллер
-/// <c>McpTransportController</c> для всех тулсетов один и не копируется.
+/// (ADR-012). Новый сервер добавляется реализацией одного из контрактов состава —
+/// <see cref="IMcpStaticToolset"/> (фиксированный набор) или <see cref="IMcpParameterizedToolset"/>
+/// (состав от хвоста маршрута); контроллер <c>McpTransportController</c> для всех тулсетов
+/// один и не копируется.
 ///
-/// ИНВАРИАНТ: <see cref="Tools"/> не зависит от свойств хода. Состав tools/list входит в
-/// сигнатуру запуска CLI ровно так же, как у stdio-серверов: как только он начнёт «мерцать»
-/// между ходами, процесс claude перезапустится со всеми серверами разом («Stream closed»,
-/// «No such tool available»). Ограничения по ходу живут на бэкенде, а не в составе.
+/// ИНВАРИАНТ: состав tools/list не зависит от свойств хода. Он входит в сигнатуру запуска
+/// CLI ровно так же, как у stdio-серверов: как только он начнёт «мерцать» между ходами,
+/// процесс claude перезапустится со всеми серверами разом («Stream closed», «No such tool
+/// available»). Ограничения по ходу живут на бэкенде, а не в составе.
 /// Сторож — <c>McpToolsetStabilityTests</c>.
 /// </summary>
 public interface IMcpToolset
@@ -21,9 +23,6 @@ public interface IMcpToolset
     /// <summary>Версия для serverInfo ответа initialize.</summary>
     string Version { get; }
 
-    /// <summary>Полный состав инструментов. Один и тот же на любом ходу любого владельца.</summary>
-    IReadOnlyList<McpToolSchema> Tools { get; }
-
     /// <summary>
     /// Вызов инструмента. Исключение наружу не выпускаем — контроллер обернёт его в
     /// content-ошибку (isError), как это делают stdio-серверы: модель должна получить
@@ -31,6 +30,18 @@ public interface IMcpToolset
     /// </summary>
     Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments, McpToolCallContext context,
         CancellationToken ct);
+}
+
+/// <summary>
+/// Тулсет с фиксированным составом: единственный источник tools/list на любом ходу
+/// любого владельца (widgets). Член вынесен сюда из базового контракта, чтобы
+/// параметризованные тулсеты не тащили бессмысленный <c>Tools => []</c> — потребитель
+/// базового интерфейса не обязан знать, откуда тулсет берёт состав.
+/// </summary>
+public interface IMcpStaticToolset : IMcpToolset
+{
+    /// <summary>Полный состав инструментов. Один и тот же на любом ходу любого владельца.</summary>
+    IReadOnlyList<McpToolSchema> Tools { get; }
 }
 
 /// <summary>Описание инструмента для tools/list. InputSchema — JSON Schema как есть.</summary>
@@ -60,9 +71,11 @@ public sealed record McpToolCallContext(string OwnerId, string? CallerSessionId,
 /// персоны), а параметры обязаны ехать в ПУТИ, а не в теле: тело контролирует модель,
 /// путь — наш конфиг хода.
 ///
-/// ИНВАРИАНТ тот же, что у <see cref="IMcpToolset.Tools"/>: состав на фиксированном хвосте
-/// и владельце не зависит от свойств хода. Хвост закрепляется конфигом хода на жизнь
-/// адаптера и меняется только вместе с ним.
+/// ИНВАРИАНТ тот же, что у <see cref="IMcpStaticToolset.Tools"/>: состав на фиксированном
+/// хвосте и владельце не зависит от свойств хода. Хвост закрепляется конфигом хода на жизнь
+/// адаптера и меняется только вместе с ним. Члена <c>Tools</c> здесь нет — состава без
+/// хвоста не существует, и контроллер на <c>/mcp/{name}</c> без хвоста отвечает 404
+/// до диспетчера.
 /// </summary>
 public interface IMcpParameterizedToolset : IMcpToolset
 {

@@ -44,10 +44,6 @@ public sealed class CodeGraphToolset(
     public string Name => ServerName;
     public string Version => "1.0.0";
 
-    // У параметризованного тулсета состава без хвоста не существует: контроллер на
-    // /mcp/codegraph без хвоста отвечает 404 до диспетчера
-    public IReadOnlyList<McpToolSchema> Tools => [];
-
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolve(context, out _, out _, out _) ? AllTools : [];
 

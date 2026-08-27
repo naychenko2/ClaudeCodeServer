@@ -60,8 +60,6 @@ public sealed partial class PersonasToolset(
     public string Name => ServerName;
     public string Version => "1.0.0";
 
-    public IReadOnlyList<McpToolSchema> Tools => [];
-
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context)
     {
         if (!TryResolve(context, out var session, out var persona, out _)) return [];

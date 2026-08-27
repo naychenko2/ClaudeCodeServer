@@ -64,10 +64,6 @@ public sealed class DifyToolset(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    // У параметризованного тулсета состава без хвоста не существует: контроллер на
-    // /mcp/dify без хвоста отвечает 404 до диспетчера
-    public IReadOnlyList<McpToolSchema> Tools => [];
-
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         !knowledge.IsConfigured || !TryResolve(context, out _, out _, out var searchOnly, out _)
             ? []

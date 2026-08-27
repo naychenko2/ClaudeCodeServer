@@ -490,7 +490,7 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
 
     // Тулсет-«бомба»: tools/list падает исключением за пределами catch tools/call —
     // проверка, что диспетчер превращает внутренний сбой в -32603, а не в HTTP 500
-    private sealed class ExplodingToolset : ClaudeHomeServer.Services.Mcp.Http.IMcpToolset
+    private sealed class ExplodingToolset : ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset
     {
         public string Name => "boom";
         public string Version => "0.0.1";

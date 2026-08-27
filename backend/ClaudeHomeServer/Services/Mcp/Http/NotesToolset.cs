@@ -49,8 +49,6 @@ public sealed class NotesToolset(
     public string Name => ServerName;
     public string Version => "1.0.0";
 
-    public IReadOnlyList<McpToolSchema> Tools => [];
-
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolve(context, out _, out _, out var annotations, out _)
             ? annotations ? [.. CoreTools, .. AnnotationTools] : CoreTools

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// Сам HTML рендерит фронт (WidgetView) из аргументов вызова — sandbox-iframe в ленте чата,
 /// ответ инструмента лишь подтверждает показ.
 /// </summary>
-public sealed class WidgetsToolset : IMcpToolset
+public sealed class WidgetsToolset : IMcpStaticToolset
 {
     // Лимит размера html: учит модель ретраиться компактнее. Input уже улетел в историю
     // до валидации — от первого раздутого вызова историю лимит не спасает (фронт имеет

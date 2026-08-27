@@ -67,10 +67,6 @@ public sealed class TasksToolset(
     public string Name => ServerName;
     public string Version => "1.0.0";
 
-    // У параметризованного тулсета состава без хвоста не существует: контроллер на
-    // /mcp/tasks без хвоста отвечает 404 до диспетчера
-    public IReadOnlyList<McpToolSchema> Tools => [];
-
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolve(context, out var session, out _, out _)
             ? ToolsFor(session.ProjectId is not null)

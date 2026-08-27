@@ -75,10 +75,6 @@ public sealed class MemoryToolset(
     public string Name => ServerName;
     public string Version => "1.0.0";
 
-    // У параметризованного тулсета состав без хвоста не существует: контроллер на
-    // /mcp/memory без хвоста отвечает 404 до диспетчера
-    public IReadOnlyList<McpToolSchema> Tools => [];
-
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) => BuildTools(context);
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,

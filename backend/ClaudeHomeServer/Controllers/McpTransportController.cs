@@ -179,10 +179,18 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
 
                 case "tools/list":
                 {
-                    // Параметризованный тулсет считает состав по хвосту маршрута (memory);
-                    // простые отдают статический Tools (widgets)
-                    var schemas = toolset is IMcpParameterizedToolset parameterized
-                        ? parameterized.ToolsFor(context) : toolset.Tools;
+                    // Состав приходит одним из двух контрактов: параметризованный тулсет
+                    // считает его по хвосту маршрута (memory/tasks/…), статический отдаёт
+                    // фиксированный Tools (widgets). Базовый IMcpToolset члена Tools больше
+                    // не имеет — иначе параметризованные тащили бы бессмысленный Tools => []
+                    var schemas = toolset switch
+                    {
+                        IMcpParameterizedToolset parameterized => parameterized.ToolsFor(context),
+                        IMcpStaticToolset staticToolset => staticToolset.Tools,
+                        _ => throw new InvalidOperationException(
+                            $"Тулсет «{toolset.Name}» не реализует контракт состава "
+                            + "(IMcpStaticToolset или IMcpParameterizedToolset) — tools/list невозможен"),
+                    };
                     var tools = new JsonArray();
                     foreach (var tool in schemas)
                         tools.Add(new JsonObject

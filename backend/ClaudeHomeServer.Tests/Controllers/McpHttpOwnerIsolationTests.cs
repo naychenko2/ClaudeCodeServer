@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 public class McpHttpOwnerIsolationTests : IDisposable
 {
     // Тулсет-эхо: единственный инструмент возвращает владельца, каким его увидел контроллер
-    private sealed class WhoAmIToolset : IMcpToolset
+    private sealed class WhoAmIToolset : IMcpStaticToolset
     {
         public string Name => "test-whoami";
         public string Version => "0.0.1";

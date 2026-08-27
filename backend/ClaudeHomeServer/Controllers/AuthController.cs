@@ -67,9 +67,6 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         {
             userId, username, displayName = me?.DisplayName, role, featureFlags,
             contextThresholds, executionEnvironment,
-            // Срок хранения архива чатов (дни; null — не удалять) — им управляет кнопка
-            // в строке действий архивного списка
-            archiveRetentionDays = me?.ArchiveRetentionDays,
             defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
         });
     }
@@ -113,22 +110,6 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         return Ok(new { contextThresholds = thresholds });
     }
 
-    // Срок хранения архива чатов: сколько дней архивный чат живёт после архивации.
-    // null или 0 — не удалять никогда (дефолт). Потолок 3650 дней — защита от опечатки
-    // вроде «36500», которая по смыслу всё равно «никогда», но выглядит как настройка.
-    [Authorize]
-    [HttpPut("archive-retention")]
-    public IActionResult SetArchiveRetention([FromBody] ArchiveRetentionRequest req)
-    {
-        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
-        if (userId is null) return Unauthorized();
-        if (req.Days is < 0 or > 3650)
-            return BadRequest(new { error = "Срок хранения архива — от 1 до 3650 дней (0 или пусто — не удалять)" });
-
-        if (!users.SetArchiveRetentionDays(userId, req.Days)) return Unauthorized();
-        return Ok(new { archiveRetentionDays = req.Days is > 0 ? req.Days : null });
-    }
-
     [Authorize]
     [HttpPut("password")]
     public IActionResult ChangePassword([FromBody] ChangePasswordRequest req)
@@ -155,5 +136,3 @@ public record LoginRequest(string? Username, string? Password);
 public record ChangePasswordRequest(string? CurrentPassword, string NewPassword);
 public record ContextThresholdsRequest(int? WarnPct, int? DangerPct);
 public record TimeZoneRequest(string? TimeZone);
-// Days: null или 0 — архив не удалять; N > 0 — удалять через N дней после архивации
-public record ArchiveRetentionRequest(int? Days);

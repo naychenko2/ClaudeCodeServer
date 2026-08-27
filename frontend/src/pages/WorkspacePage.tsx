@@ -17,6 +17,7 @@ import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
+import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { C, FONT } from '../lib/design';
@@ -955,6 +956,25 @@ const windowWidth = useWindowWidth();
   };
 
   const handleSessionUpdated = (updated: Session) => {
+    // Активный чат ушёл в архив (шапка центра или карточка в списке) — центр обязан
+    // покинуть его: архивный чат скрыт из списка и молчит, оставшись открытым он висел
+    // бы призраком. Сосед — по свежему списку сервера («предыдущий» в порядке списка),
+    // навигация чинится на месте. Сам updated в activeSession не кладём
+    if (updated.archivedAt && activeSession?.id === updated.id) {
+      void (async () => {
+        const list = await api.sessions.list(project.id).catch(() => null);
+        const neighbor = list ? chatNeighborForArchive(list, updated.id) : null;
+        if (neighbor) {
+          handleSelectSession(neighbor, undefined, true);
+          navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });
+        } else {
+          handleClearSession();
+          if (isMobile) setMobileView('sidebar');
+          navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+        }
+      })();
+      return;
+    }
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
 
@@ -1140,7 +1160,10 @@ const windowWidth = useWindowWidth();
       // Пока запрос летал, пользователь мог переключиться на другой чат —
       // тогда трогать активную сессию нельзя.
       if (activeSessionRef.current?.id !== restored.id) return;
-      if (!sessions.some(s => s.id === restored.id)) {
+      // Архивный чат центру показывать нельзя: как и удалённый, он скрыт из списка
+      // (архивация из другого окна/устройства не долетела бы сюда событием)
+      const fresh = sessions.find(s => s.id === restored.id);
+      if (!fresh || fresh.archivedAt) {
         setActiveSession(null);
       }
     }).catch(() => { /* офлайн / ошибка сети — оставляем как есть */ });

@@ -1458,8 +1458,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
       case 'archive':
-        // Архивация из шапки чат НЕ закрывает: человек мог убрать его «на потом», продолжая
-        // читать. Чат просто уходит из списка слева, а вернуть его можно этой же кнопкой
+        // Архивация из шапки: владелец экрана реагирует на onSessionUpdated сам — центр
+        // воркспейса/«Чатов» уходит на соседа по списку, колонка стены убирается.
+        // Здесь только запрос и тост; вернуть чат можно из архивного вида списка
         void updateChatFields(session, { archived: !session.archivedAt })
           .then(s => {
             onSessionUpdated?.(s);

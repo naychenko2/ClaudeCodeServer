@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
+import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
@@ -179,6 +180,30 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   const activeChat = chats.find(c => c.id === activeId) ?? null;
 
+  // Открытый чат заархивировали ИЗВНЕ этого экрана (другое окно/устройство) — события
+  // архивации бэкенд не шлёт, поллинг привозит archivedAt в fresh-списке. Ловим только
+  // ПЕРЕХОД «не архивен → архивен» у ТОГО ЖЕ чата: чат, открытый из архивного вида,
+  // архивен ещё до выбора, и выкидывать его из центра нельзя
+  const activeChatArchivedAt = activeChat?.archivedAt;
+  const prevActiveRef = useRef({ id: activeChat?.id ?? null, archived: false });
+  useEffect(() => {
+    const prev = prevActiveRef.current;
+    const cur = { id: activeChat?.id ?? null, archived: !!activeChatArchivedAt };
+    prevActiveRef.current = cur;
+    if (!cur.id || !cur.archived) return;
+    if (prev.id !== cur.id || prev.archived) return; // выбор архивного — не переход
+    const neighbor = chatNeighborForArchive(chats, cur.id);
+    if (neighbor) {
+      setActiveId(neighbor.id);
+      localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
+      markChatRead(neighbor.id);
+      navReplace({ screen: 'chats', chatId: neighbor.id });
+    } else {
+      backToList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat?.id, activeChatArchivedAt]);
+
   // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
   const unreadCount = useUnreadChatCount(chats);
 
@@ -222,8 +247,23 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   }, [activeChatId, activeChatUpdatedAt]);
 
   // Чат отредактирован/закреплён — обновить в списке
-  const handleChatEdited = (updated: Session) =>
+  const handleChatEdited = (updated: Session) => {
     setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+    // Активный чат ушёл в архив — центр покидает его и встаёт на соседа по списку
+    // (архивный вид списка чат скрывает, а открытым он висел бы призраком).
+    // Сосед — «предыдущий» в порядке списка; нет соседа — возврат к списку
+    if (updated.archivedAt && activeId === updated.id) {
+      const neighbor = chatNeighborForArchive(chats, updated.id);
+      if (neighbor) {
+        setActiveId(neighbor.id);
+        localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
+        markChatRead(neighbor.id);
+        navReplace({ screen: 'chats', chatId: neighbor.id });
+      } else {
+        backToList();
+      }
+    }
+  };
 
   // Чат удалён — убрать из списка; если был активным — вернуться к списку
   const handleChatDeleted = (id: string) => {
@@ -258,7 +298,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 skills={skills}
                 attachedFiles={attachedFiles}
                 onAttachedFilesChange={setAttachedFiles}
-                onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
+                onSessionUpdated={handleChatEdited}
                 onWorkflowRunning={handleWorkflowRunning}
               />
             </div>
@@ -323,7 +363,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               skills={skills}
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
-              onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
+              onSessionUpdated={handleChatEdited}
               onWorkflowRunning={handleWorkflowRunning}
             />
           ) : (

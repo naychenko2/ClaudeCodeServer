@@ -313,6 +313,10 @@ export function updateProject(p: Project): void {
 
 export function updateChat(s: Session): void {
   if (!_state.chats.some(c => c.id === s.id)) return;
+  // Чат заархивировали (действие «В архив» в шапке колонки) — колонка уходит:
+  // архивный чат скрыт из списков и молчит, колонка стала бы призраком. removeChat
+  // сам чинит фокус и сохраняет состав PUT'ом
+  if (s.archivedAt) { removeChat(s.id); return; }
   setState({ chats: _state.chats.map(c => (c.id === s.id ? s : c)) });
 }
 

@@ -74,7 +74,7 @@ export function QuickPhrasesMenu({ anchor, onClose, onPick, onEdit }: {
         display: 'flex', alignItems: 'center', gap: SP.sm,
         padding: `${SP.xxs}px ${SP.xs}px ${SP.xxs}px ${SP.sm}px`,
       }}>
-        <FieldLabel>Фразы</FieldLabel>
+        <FieldLabel>Быстрые фразы</FieldLabel>
         <span style={{ flex: 1 }} />
         <IconButton
           size="xs"

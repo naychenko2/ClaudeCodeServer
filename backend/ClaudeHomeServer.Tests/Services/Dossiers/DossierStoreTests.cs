@@ -158,6 +158,59 @@ public class DossierStoreTests : IDisposable
         File.Exists(archivePath).Should().BeFalse("превышения нет — архив не создаётся");
     }
 
+    private static ChangeDossier Imported(string sha, DateTimeOffset committedAt) => new()
+    {
+        OwnerId = Owner,
+        ProjectId = Project,
+        CommitSha = sha,
+        CommitSubject = "импортированный",
+        CommittedAt = committedAt,
+        Origin = DossierOrigin.Imported,
+        ImportedAuthor = "сосед",
+        ImportedFromBranch = "ccs/dossiers/v1",
+    };
+
+    // Запрет вытеснять own-записи импортированными (разбор консилиума 23.08): чужая ветка
+    // с неправдоподобно свежими датами не должна выдавливать собственные паспорта владельца
+    // из активного стора — лишние за потолком импортированные уходят в архив первыми.
+    [Fact]
+    public void Потолок_ИмпортированныеНеВытесняютOwn()
+    {
+        _store.Add(New("own1", "свой старый", committedAt: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        _store.Add(New("own2", "свой чуть свежее", committedAt: new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero)));
+
+        // Дата 2099: до фикса сортировка по CommittedAt выпихивала бы own-записи вперёд очереди
+        var farFuture = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        _store.AddImportedRange(Owner, Project,
+            [Imported("imp1", farFuture), Imported("imp2", farFuture.AddDays(1))]);
+
+        var live = _store.List(Owner, Project);
+        live.Should().OnlyContain(d => d.Origin == DossierOrigin.Own,
+            "собственные паспорта не вытесняются импортированными, даже «более свежими» по дате");
+        live.Should().HaveCount(2, "потолок соблюдён — лишние импортированные ушли");
+
+        var archiveText = File.ReadAllText(Path.Combine(_temp, "dossiers", Owner, Project + ".archive.jsonl"));
+        archiveText.Should().Contain("imp1").And.Contain("imp2",
+            "вытесненные импортированные записи не потеряны — в архивном JSONL");
+    }
+
+    // Промежуточный случай: потолок заполнен own+imported вперемешку — при превышении
+    // уходят импортированные, own остаётся даже при более старой дате.
+    [Fact]
+    public void Потолок_СмешанныйСтор_СначалаУходятИмпортированные()
+    {
+        _store.Add(New("own1", "свой старый", committedAt: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        var farFuture = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        _store.AddImportedRange(Owner, Project,
+            [Imported("imp1", farFuture), Imported("imp2", farFuture.AddDays(1))]);
+
+        var live = _store.List(Owner, Project);
+        live.Should().HaveCount(2, "потолок 2 соблюдён");
+        live.Should().Contain(d => d.CommitSha == "own1", "своя запись осталась в активном сторе");
+        live.Should().Contain(d => d.CommitSha == "imp2", "одна импортированная живёт — излишек ушёл, не вся партия");
+        live.Should().NotContain(d => d.CommitSha == "imp1", "старейшая из импортированных вытеснена");
+    }
+
     [Fact]
     public async Task DeleteProjectDossiersAsync_ЧиститСтор()
     {
@@ -179,5 +232,58 @@ public class DossierStoreTests : IDisposable
 
         _store.List(Owner, "p1").Should().BeEmpty();
         _store.List(Owner, "p2").Should().BeEmpty();
+    }
+
+    // CapturedAt (спринт Г): момент снятия паспорта. Own-записи получают UtcNow в Add,
+    // импортированные (AddImportedRange) остаются null, старый JSON без поля читается без ошибок.
+    [Fact]
+    public void Add_ЗаполняетCapturedAt_ИПерсистит()
+    {
+        var before = DateTimeOffset.UtcNow;
+        var added = _store.Add(New("aaaa1111"));
+        var after = DateTimeOffset.UtcNow;
+
+        added.CapturedAt.Should().NotBeNull();
+        var captured = added.CapturedAt!.Value;
+        captured.Should().BeOnOrAfter(before);
+        captured.Should().BeOnOrBefore(after);
+
+        // Персист: новый стор поверх того же data-каталога читает поле с диска
+        var reloaded = new DossierStore(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_temp, "projects.json"),
+                ["Dossiers:MaxEntries"] = "2",
+            }).Build());
+        reloaded.List(Owner, Project).Should().ContainSingle(d => d.CommitSha == "aaaa1111")
+            .Which.CapturedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddImportedRange_НеЗаполняетCapturedAt()
+    {
+        var imported = New("imp1");
+        imported.Origin = DossierOrigin.Imported;
+        imported.ImportedAuthor = "author";
+        imported.ImportedFromBranch = "ccs/dossiers/v1";
+
+        _store.AddImportedRange(Owner, Project, [imported]);
+
+        _store.List(Owner, Project).Should().ContainSingle(d => d.CommitSha == "imp1")
+            .Which.CapturedAt.Should().BeNull("момент захвата импортированной записи не известен");
+    }
+
+    [Fact]
+    public void СтарыйJsonБезCapturedAt_ДесериализуетсяБезОшибок()
+    {
+        var dir = Path.Combine(_temp, "dossiers", Owner);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "legacy.json"),
+            """
+            [{"Id":"legacy1","OwnerId":"ownerA","ProjectId":"legacy","CommitSha":"old1111","CommitSubject":"старая запись","CommittedAt":"2026-01-01T00:00:00Z"}]
+            """);
+
+        var d = _store.List(Owner, "legacy").Should().ContainSingle(x => x.CommitSha == "old1111").Subject;
+        d.CapturedAt.Should().BeNull();
     }
 }

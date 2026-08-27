@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -39,9 +39,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
-    // (тесты) — один элемент (эффективная модель), т.е. цепочки нет.
+    // (тесты) — один элемент (эффективная модель), т.е. цепочки нет. Персона передаётся в резолв:
+    // хвост тира строится по её узким матрицам (персона → специальность), а не по общему слоту
+    // владельца — старт и фолбэк идут по одним правилам.
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
+        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
     // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
@@ -66,8 +68,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Словари ниже — Concurrent: их мутируют и памп stdout, и SignalR-вызовы
     // (RespondPermission/AnswerQuestion/RespondPlan/Interrupt) параллельно
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
-    // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии (значение не используется)
-    private readonly ConcurrentDictionary<string, byte> _autoAllowTools = new();
+    // «Всегда разрешать» больше не живёт в адаптере: список инструментов хранится на сессии
+    // (Session.AutoAllowTools) и переживает пересоздание адаптера — см. DecidePermissionAsync.
     // tool_use_id → request_id вопросов AskUserQuestion (приходят как control_request can_use_tool, ждут control_response)
     private readonly ConcurrentDictionary<string, string> _pendingQuestions = new();
     // request_id → исходный input ожидающего согласования ExitPlanMode (режим «План»)
@@ -172,6 +174,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // Полный поток inline-сабагентов из их транскриптов (CLI шлёт в stdout только tool_use);
     // создаётся на system/init каждого хода, диспозится по завершении процесса
     private SubagentStreamWatcher? _subagentWatcher;
+    // Окно контекста, объявленное CLI на запуске прогона (CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+    // 0 — не объявляли. Уходит в паспорта сабагентов: без него «контекст 198k при обрыве»
+    // читается по-разному в окне 200k и в окне 1M. Считается при сборке env хода.
+    private int _turnContextWindow;
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR), с которым реально запущен прогон: env хода
+    // (сторонний провайдер / подписка пула — BuildCliEnv/BuildOAuthCliEnv), иначе корень
+    // сессии. Именно ЭТОТ, а не _cliConfigRoot: FallbackLlmSessionAdapter меняет провайдера
+    // у того же инстанса, и корень сессии после фолбэка устаревает. Ватчер сабагентов ищет
+    // папку сессии сначала здесь — в других профилях лежат её копии от фолбэк-ходов.
+    private string? _turnConfigRoot;
 
     // Максимальная тишина stdout активного хода: при живой работе (генерация, инструмент,
     // субагент, компакция, ожидание пользователя) CLI шлёт события регулярно; полное молчание
@@ -566,6 +578,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Провайдер системного промпта персоны — вызывается на каждый ход
     // (свежие контракт/модель/PersonaSwitched без пересоздания адаптера)
     private readonly Func<string?>? _personaPromptProvider;
+    // Живая персона чата — для цепочки фолбэка (EffectiveTurnChain зовёт ResolveChain
+    // с матрицами персоны). Перечитывается на каждый ход: правка матриц персоны/специальности
+    // применяется со следующего хода без пересоздания адаптера (как у _personaPromptProvider).
+    private readonly Func<Persona?>? _personaProvider;
     // MCP-сервер долгой памяти персоны + auto-recall её памяти (текст промпта + манифест F3)
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<RecallBlock?>>? _personaRecallProvider;
@@ -573,6 +589,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<string, Task<string?>>? _bindingsProvider;
     // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
     private readonly Func<string?, Task<string?>>? _codeGraphProvider;
+    // Секции промпта специальности персоны (план «Секции промптов», флаг specialty-prompt-sections)
+    private readonly Func<string?, Task<string?>>? _promptSectionsProvider;
     // Снимок промпта хода: черновик → id записанного снимка. null — снимки не ведутся.
     private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
     // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
@@ -594,8 +612,23 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ModulesMcpContext? _modulesMcp;
     // MCP-сервер виджетов чата (widget_show): null — сессия без владельца
     private readonly WidgetsMcpContext? _widgetsMcp;
+    // Сводный признак «в сессии есть продуктовые MCP-серверы, чей адрес допускает http»:
+    // решён SessionManager на едином гейте СХЕМЫ адреса, сюда приезжает готовым
+    // (pmem-консультанты уточняют на ходу). Рубильник в нём НЕ сидит — он живой, ниже.
+    private readonly bool _httpMcpActive;
+    // Рубильник Mcp:HttpTransport (откат всех продуктовых серверов на stdio), ЖИВОЙ:
+    // спрашивается на каждую сборку конфига хода, чтобы поворот ключа доезжал до уже
+    // поднятых чатов без пересоздания адаптера (техдолг ADR-012 §1). null — включён
+    // (тесты без SessionManager).
+    private readonly Func<bool>? _httpMcpEnabled;
+    private bool HttpMcpOnNow() => _httpMcpEnabled?.Invoke() ?? true;
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
+    // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
+    // не настроена (тогда dify продолжает ехать записью внешнего базового конфига)
+    private readonly DifyMcpContext? _difyMcp;
+    // MCP-сервер десктопной грани (ADR-008): null — грань чату не доставляется
+    private readonly DesktopMcpContext? _desktopMcp;
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004): null — флаг выключен/вне проекта
     private readonly string? _dossierTrailerHint;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
@@ -660,10 +693,12 @@ public class ClaudeSession : ILlmSessionAdapter
         _notesMcp = context.NotesMcp;
         _recallProvider = context.RecallProvider;
         _personaPromptProvider = context.PersonaPromptProvider;
+        _personaProvider = context.PersonaProvider;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
         _codeGraphProvider = context.CodeGraphProvider;
+        _promptSectionsProvider = context.PromptSectionsProvider;
         _promptSnapshotSink = context.PromptSnapshotSink;
         _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
         _subagentRunSink = context.SubagentRunSink;
@@ -673,7 +708,11 @@ public class ClaudeSession : ILlmSessionAdapter
         _notificationsMcp = context.NotificationsMcp;
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
+        _httpMcpActive = context.HttpMcpActive;
+        _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
+        _difyMcp = context.DifyMcp;
+        _desktopMcp = context.DesktopMcp;
         _dossierTrailerHint = context.DossierTrailerHint;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
@@ -703,8 +742,9 @@ public class ClaudeSession : ILlmSessionAdapter
             fileChangeAttributor, info.Id);
     }
 
-    // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
-    // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
+    // Объединённый MCP-конфиг хода: серверы из базового конфига (dify — только пока секция
+    // Dify не настроена: с волны 4 ADR-012 он объявляется продуктовым узлом ниже, а внешний
+    // dify-узел перекрывается) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
     // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     // Возвращает путь temp-конфига и отсортированный набор ключей серверов — ключи входят
@@ -717,24 +757,81 @@ public class ClaudeSession : ILlmSessionAdapter
     private (string? Path, string ServerKeys, IReadOnlyList<string> ServerNames) BuildTurnMcpConfig(
         string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
-        var tasksServerPath = _tasksMcp is not null ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
-        var hasTasks = tasksServerPath is not null;
-        var notesServerPath = _notesMcp is not null ? MapMcpPath(NotesServerLocator.FindNotesServerPath()) : null;
-        var hasNotes = notesServerPath is not null;
+        // Рубильник Mcp:HttpTransport спрашивается на ХОД (HttpMcpEnabledProvider, а не
+        // захваченный при создании адаптера bool): контекст живёт столько же, сколько адаптер,
+        // и замороженное решение не доезжало бы до уже поднятых чатов — откат требовал
+        // рестарта бэкенда (техдолг ADR-012 §1). Смена значения меняет конфиг хода и
+        // отпечаток транспорта в сигнатуре — процесс CLI перезапустится штатно, как при
+        // любом изменении shapes. UseHttp в контекстах — СХЕМА адреса (стабильна),
+        // решение хода = UseHttp && httpOn.
+        var httpOn = HttpMcpOnNow();
+        var tasksHttp = _tasksMcp is { UseHttp: true } && httpOn;
+        var notesHttp = _notesMcp is { UseHttp: true } && httpOn;
+        var memoryHttp = _memoryMcp is { UseHttp: true } && httpOn;
+        var personasHttp = _personasMcp is { UseHttp: true } && httpOn;
+        var workspaceHttp = _workspaceMcp is { UseHttp: true } && httpOn;
+        var notificationsHttp = _notificationsMcp is { UseHttp: true } && httpOn;
+        var widgetsHttp = _widgetsMcp is { UseHttp: true } && httpOn;
+        var codeGraphHttp = _codeGraphMcp is { UseHttp: true } && httpOn;
+        var difyHttp = _difyMcp is { UseHttp: true } && httpOn;
+        // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
+        bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
+        // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
+        // stdio-серверов всё равно резолвим у откатившихся (http-ветка не выбрана): ход обязан
+        // объявить прежний node-сервер, а не остаться без инструмента
+        var tasksServerPath = _tasksMcp is not null && !tasksHttp
+            ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
+        var hasTasks = _tasksMcp is not null && (tasksHttp || tasksServerPath is not null);
+        var notesServerPath = _notesMcp is not null && !notesHttp
+            ? MapMcpPath(NotesServerLocator.FindNotesServerPath()) : null;
+        var hasNotes = _notesMcp is not null && (notesHttp || notesServerPath is not null);
         var hasConsultants = personaAgents is { MemoryServers.Count: > 0 };
+        // Память живёт в Kestrel (ADR-012, фаза 2), но путь stdio-сервера всё равно нужен
+        // отложившимся на stdio: сам сервер чата без http И любой pmem-консультант без http
+        // обязаны получить node-файл, а не остаться без инструмента
+        var hasStdioMemory = (_memoryMcp is not null && !memoryHttp)
+            || personaAgents?.MemoryServers.Any(s => !ConsultantHttp(s)) == true;
         var memoryServerPath = _memoryMcp is not null || hasConsultants
-            ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null;
-        var hasMemory = _memoryMcp is not null && memoryServerPath is not null;
-        var personasServerPath = _personasMcp is not null ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
-        var hasPersonas = personasServerPath is not null;
-        var workspaceServerPath = _workspaceMcp is not null ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
-        var hasWorkspace = workspaceServerPath is not null;
-        var notificationsServerPath = _notificationsMcp is not null ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
-        var hasNotifications = notificationsServerPath is not null;
-        var widgetsServerPath = _widgetsMcp is not null ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
-        var hasWidgets = widgetsServerPath is not null;
-        var codeGraphServerPath = _codeGraphMcp is not null ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
-        var hasCodeGraph = codeGraphServerPath is not null;
+            ? (hasStdioMemory ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null) : null;
+        var hasMemory = _memoryMcp is not null && (memoryHttp || memoryServerPath is not null);
+        var personasServerPath = _personasMcp is not null && !personasHttp
+            ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
+        var hasPersonas = _personasMcp is not null && (personasHttp || personasServerPath is not null);
+        // wsp/notifications/codegraph живут в Kestrel (ADR-012, фаза 2 волна 3), но пути их
+        // stdio-серверов резолвим у откатившихся — как у tasks/notes/personas
+        var workspaceServerPath = _workspaceMcp is not null && !workspaceHttp
+            ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
+        var hasWorkspace = _workspaceMcp is not null && (workspaceHttp || workspaceServerPath is not null);
+        var notificationsServerPath = _notificationsMcp is not null && !notificationsHttp
+            ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
+        var hasNotifications = _notificationsMcp is not null && (notificationsHttp || notificationsServerPath is not null);
+        // Виджеты живут в Kestrel (ADR-012), но путь stdio-сервера всё равно резолвим:
+        // при негодном для http адресе или выключенном рубильнике ход обязан объявить
+        // прежний node-сервер, а не остаться без инструмента
+        var widgetsServerPath = _widgetsMcp is not null && !widgetsHttp
+            ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
+        var hasWidgets = _widgetsMcp is not null && (widgetsHttp || widgetsServerPath is not null);
+        var codeGraphServerPath = _codeGraphMcp is not null && !codeGraphHttp
+            ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
+        var hasCodeGraph = _codeGraphMcp is not null && (codeGraphHttp || codeGraphServerPath is not null);
+        // dify живёт в Kestrel (ADR-012, волна 4), но путь его stdio-ветки (mcp-dify/dist,
+        // сборка tsc — в git не живёт) всё равно нужен откатившимся: без dist откат
+        // деградирует до записи внешнего базового конфига, а не теряет инструмент
+        var difyServerPath = _difyMcp is not null && !difyHttp
+            ? MapMcpPath(DifyServerLocator.FindDifyServerPath()) : null;
+        var hasDify = _difyMcp is not null && (difyHttp || difyServerPath is not null);
+        // Каскад отката dify упёрся в несобранный mcp-dify/dist: узел не встанет ни http
+        // (рубильник), ни stdio — остаётся только внешняя запись базового конфига, а если её
+        // нет, инструмент пропадает МОЛЧА (deploy-agent.ps1 помечает сборку dify как skipped,
+        // т.е. свежий деплой — штатный случай). ADR-012 обещает деградацию до внешней записи,
+        // а не потерю — предупреждаем хозяина инстанса явно
+        if (_difyMcp is not null && !difyHttp && difyServerPath is null)
+            Console.Error.WriteLine("[ClaudeSession] WARN: секция Dify настроена, http-транспорт недоступен "
+                + "(Mcp:HttpTransport=false либо не-http адрес), но stdio-ветка dify недоступна "
+                + "(mcp-dify/dist не собран) — без внешней записи базового конфига инструменты баз знаний "
+                + "пропадут. Соберите mcp-dify (npm run build) или верните Mcp:HttpTransport=true.");
+        var desktopServerPath = _desktopMcp is not null ? MapMcpPath(DesktopServerLocator.FindDesktopServerPath()) : null;
+        var hasDesktop = desktopServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var hasModules = _modulesMcp is { Servers.Count: > 0 };
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
@@ -745,9 +842,10 @@ public class ClaudeSession : ILlmSessionAdapter
         var externalMcp = _externalMcpProvider?.Invoke();
         var hasExternal = externalMcp is { Servers.Count: > 0 };
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
+            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal
-            && !(hasConsultants && memoryServerPath is not null)) return (null, "", []);
+            && !(hasConsultants && (memoryServerPath is not null
+                || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
         try
         {
@@ -768,7 +866,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     if (val?.DeepClone() is { } clone && AdaptServerForRuntime(key, clone))
                         servers[key] = clone;
 
-            // Серверы из базового конфига (+ dataset id в env Dify)
+            // Серверы из базового конфига. dify — историческое исключение: пока секция Dify
+            // не настроена, он живёт только здесь (с инжекцией dataset id ниже); настроена —
+            // продуктовый узел волны 4 ниже его перекрывает, и запись здесь пропускается
+            // с логом, чтобы хозяин инстанса видел, что внешний узел больше не действует
             if (!string.IsNullOrEmpty(_mcpConfigPath) && File.Exists(_mcpConfigPath))
             {
                 var baseDoc = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_mcpConfigPath));
@@ -778,10 +879,19 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         var clone = val?.DeepClone();
                         if (clone is null || !AdaptServerForRuntime(key, clone)) continue;
-                        if (key == "dify" && hasDataset && clone["env"] is { } env)
+                        if (key == "dify")
                         {
-                            env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
-                            env["DIFY_SEARCH_ONLY"] = "true";
+                            if (hasDify)
+                            {
+                                Console.Error.WriteLine("[ClaudeSession] Запись dify базового конфига перекрыта "
+                                    + "продуктовым сервером (ADR-012, волна 4): ключ и адрес — секция Dify appsettings");
+                                continue;
+                            }
+                            if (hasDataset && clone["env"] is { } env)
+                            {
+                                env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
+                                env["DIFY_SEARCH_ONLY"] = "true";
+                            }
                         }
                         servers[key] = clone;
                     }
@@ -870,7 +980,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 // ИНВАРИАНТ: состав инструментов сервера не зависит от хода. tasks_run_executor
                 // подключён ВСЕГДА; анти-рекурсия (запуск исполнителя с делегированного хода и
                 // с реакционного авто-хода постановщика) проверяется бэкендом по актуальному
-                // состоянию сессии — [DenyOnDelegatedTurn] на TasksController.Execute.
+                // состоянию сессии — [DenyOnDelegatedTurn] на TasksController.Execute (REST)
+                // и DelegatedTurnGate в TasksToolset (http, ADR-012 волна 2: MVC-атрибут на
+                // McpTransportController не применяется вовсе — тулсет зовёт сервисы через DI).
                 // Было наоборот: env TASKS_EXECUTE входил в сигнатуру запуска, поэтому
                 // чередование обычного и делегированного хода убивало процесс CLI со всеми
                 // MCP-серверами («Stream closed»), а инструмент то появлялся, то исчезал.
@@ -878,43 +990,69 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Кросс-проектные ProjectTasks-привязки текущей персоны: доступ к задачам
                 // ДРУГИХ проектов владельца (extraProjectIdsCsv), подмножество только для
                 // чтения — extraReadOnlyCsv (create/update/delete там запрещены)
-                // hasTasks ⇒ _tasksMcp не null (путь сервера резолвится только при заданном
-                // контексте), но связь через промежуточный флаг компилятор не видит — идём
-                // через ?., чтобы инвариант не держался на подавлении nullable-анализа
+                // hasTasks ⇒ _tasksMcp не null (см. резолв пути выше), но связь через
+                // промежуточный флаг компилятор не видит — идём через ?., чтобы инвариант
+                // не держался на подавлении nullable-анализа
                 var extraProjectIdsCsv = _tasksMcp?.ExtraProjectIds is { Count: > 0 } extraIds
                     ? string.Join(",", extraIds) : "";
                 var extraReadOnlyCsv = _tasksMcp?.ExtraProjectIdsReadOnly is { Count: > 0 } extraRo
                     ? string.Join(",", extraRo) : "";
-                servers["tasks"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { tasksServerPath! },
-                    // alwaysLoad как у memory/personas/wsp: при ленивом подключении первый вызов
-                    // в ходе падает «No such tool available» (claude-code#19282), а аккаунт-
-                    // коннекторы claude.ai переводят CLI в режим deferred-tools, где ленивый
-                    // сервер и вовсе прячет инструменты от модели. В истории прода этим
-                    // объясняются карточки «No such tool available: mcp__tasks__*» при живом
-                    // сервере. Цена — node-процесс на каждый ход, стартует параллельно.
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 2, как widgets/
+                // memory): захваченный строкой JWT у долгоживущего чата истекал — stdio-сервер
+                // начинал получать 401, http-эндпоинт отвечал бы 401 на initialize, и задачи
+                // пропадали у модели молча
+                var tasksToken = _tasksMcp!.TokenFactory();
+                servers["tasks"] = tasksHttp
+                    // HTTP-ветка (ADR-012, фаза 2): сессия-вызыватель едет хвостом URL — по ней
+                    // тулсет резолвит проект/персону/привязки; env больше нет, их роль выполняет
+                    // хвост и владелец из claim sub. alwaysLoad как у stdio-ветки.
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["TASKS_API_URL"] = _tasksMcp!.ApiUrl,
-                        ["TASKS_API_TOKEN"] = _tasksMcp.Token,
-                        ["TASKS_PROJECT_ID"] = _tasksMcp.ProjectId ?? "",
-                        // Происхождение создаваемых задач: чат-источник и персона-постановщик.
-                        // Берём из Info на каждый ход (как NOTES_SESSION_ID) — PersonaId сессии
-                        // меняется по ходу разговора (SetPersona, смена спикера в группе)
-                        ["TASKS_SESSION_ID"] = Info.Id,
-                        ["TASKS_SELF_PERSONA_ID"] = Info.PersonaId ?? "",
-                        ["TASKS_EXECUTE"] = tasksExecute,
-                        ["TASKS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
-                        ["TASKS_EXTRA_PROJECT_IDS_READONLY"] = extraReadOnlyCsv,
-                    },
-                };
-                // Кросс-проектные скоупы влияют на видимость/доступность задач других проектов —
-                // смена привязок должна пробить доживание живого процесса. Меняются они при смене
-                // персоны/привязок, а не от хода к ходу, поэтому процесс от них не «мерцает».
-                shapes["tasks"] = $"{extraProjectIdsCsv}:{extraReadOnlyCsv}";
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.TasksToolset.EndpointFor(_tasksMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {tasksToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    // Fail-closed (не-http адрес, рубильник Mcp:HttpTransport) — прежний
+                    // stdio-сервер на node: инструмент у модели остаётся
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { tasksServerPath! },
+                        // alwaysLoad как у memory/personas/wsp: при ленивом подключении первый вызов
+                        // в ходе падает «No such tool available» (claude-code#19282), а аккаунт-
+                        // коннекторы claude.ai переводят CLI в режим deferred-tools, где ленивый
+                        // сервер и вовсе прячет инструменты от модели. В истории прода этим
+                        // объясняются карточки «No such tool available: mcp__tasks__*» при живом
+                        // сервере. Цена — node-процесс на каждый ход, стартует параллельно.
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["TASKS_API_URL"] = _tasksMcp.ApiUrl,
+                            ["TASKS_API_TOKEN"] = tasksToken,
+                            ["TASKS_PROJECT_ID"] = _tasksMcp.ProjectId ?? "",
+                            // Происхождение создаваемых задач: чат-источник и персона-постановщик.
+                            // Берём из Info на каждый ход (как NOTES_SESSION_ID) — PersonaId сессии
+                            // меняется по ходу разговора (SetPersona, смена спикера в группе)
+                            ["TASKS_SESSION_ID"] = Info.Id,
+                            ["TASKS_SELF_PERSONA_ID"] = Info.PersonaId ?? "",
+                            ["TASKS_EXECUTE"] = tasksExecute,
+                            ["TASKS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
+                            ["TASKS_EXTRA_PROJECT_IDS_READONLY"] = extraReadOnlyCsv,
+                        },
+                    };
+                // Кросс-проектные скоупы влияют на видимость/доступность задач других проектов,
+                // транспорт — на сам способ доставки; оба в сигнатуру запуска — смена привязок
+                // и переключение рубильника обязаны пробить доживание живого процесса. Скоупы
+                // меняются при смене персоны/привязок, а не от хода к ходу, поэтому процесс
+                // от них не «мерцает». Пустые скоупы не оставляют пустых сегментов (tasks:t:stdio).
+                shapes["tasks"] = extraProjectIdsCsv.Length == 0 && extraReadOnlyCsv.Length == 0
+                    ? $"t:{(tasksHttp ? "http" : "stdio")}"
+                    : $"{extraProjectIdsCsv}:{extraReadOnlyCsv}:t:{(tasksHttp ? "http" : "stdio")}";
             }
 
             if (hasNotes)
@@ -925,37 +1063,84 @@ public class ClaudeSession : ILlmSessionAdapter
                 // не зависит. Ядро заметок (создать/прочитать/найти/изменить/переместить)
                 // остаётся у всех, у кого сервер включён.
                 var notesAnnotations = _notesMcp!.AnnotationsEnabled ? "1" : "0";
-                servers["notes"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { notesServerPath! },
-                    // alwaysLoad — по той же причине, что у tasks (см. выше): ленивый сервер
-                    // прячет инструменты в режиме deferred-tools
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 2, как tasks)
+                var notesToken = _notesMcp.TokenFactory();
+                servers["notes"] = notesHttp
+                    // HTTP-ветка (ADR-012, фаза 2): сессия-вызыватель хвостом URL, модуль
+                    // annotations тулсет резолвит по живой персоне сессии — семантика та же,
+                    // что у env stdio-ветки, но без запекания в env
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["NOTES_API_URL"] = _notesMcp.ApiUrl,
-                        ["NOTES_API_TOKEN"] = _notesMcp.Token,
-                        ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
-                        ["NOTES_SESSION_ID"] = Info.Id,
-                        ["NOTES_ANNOTATIONS"] = notesAnnotations,
-                    },
-                };
-                // Состав инструментов заметок зависит от модуля — в сигнатуру запуска
-                shapes["notes"] = $"a{notesAnnotations}";
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.NotesToolset.EndpointFor(_notesMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {notesToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { notesServerPath! },
+                        // alwaysLoad — по той же причине, что у tasks (см. выше): ленивый сервер
+                        // прячет инструменты в режиме deferred-tools
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["NOTES_API_URL"] = _notesMcp.ApiUrl,
+                            ["NOTES_API_TOKEN"] = notesToken,
+                            ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
+                            ["NOTES_SESSION_ID"] = Info.Id,
+                            ["NOTES_ANNOTATIONS"] = notesAnnotations,
+                        },
+                    };
+                // Состав инструментов заметок зависит от модуля и транспорта — оба
+                // в сигнатуру запуска (переключение рубильника пробивает доживание)
+                shapes["notes"] = $"a{notesAnnotations}:t:{(notesHttp ? "http" : "stdio")}";
             }
 
             if (hasWidgets)
             {
-                // Сервер виджетов: без env (API ему не нужен). alwaysLoad — единственный
-                // крохотный инструмент; без него первый вызов в ходе падает «No such tool
-                // available» (claude-code#19282), а ретраить показ виджета модели не свойственно.
-                servers["widgets"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { widgetsServerPath! },
-                    ["alwaysLoad"] = true,
-                };
+                // Сервер виджетов — первый на MCP-over-HTTP (ADR-012): при http процесс node
+                // на ход не поднимается, состав tools/list отдаёт эндпоинт Kestrel.
+                // alwaysLoad стоит в обеих ветках: без него первый вызов в ходе падает
+                // «No such tool available» (claude-code#19282), а ретраить показ виджета
+                // модели не свойственно.
+                servers["widgets"] = widgetsHttp
+                    // Токен — сервисный JWT владельца обычным заголовком Authorization (как у
+                    // fal-ai/glif), эндпоинт проверяет его сам ([Authorize], владелец из claim
+                    // sub); берём ФАБРИКОЙ на каждую сборку конфига — захваченный строкой JWT
+                    // у чата старше срока жизни токена отдавал бы 401 и прятал widget_show
+                    // молча (как у памяти, ADR-012 урок фазы 1). X-Caller-Session-Id при http
+                    // шлёт КЛИЕНТ, а не наш код: сюда его кладём статикой — на нём держатся
+                    // [DenyOnDelegatedTurn] и журнал GET /api/mcp/calls, а id чата в рамках
+                    // сессии постоянен. URL — из ServerName тулсета: литерал имени
+                    // не дублируется строкой.
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.McpHttpTransport.EndpointFor(
+                            _widgetsMcp!.ApiUrl, Services.Mcp.Http.WidgetsToolset.ServerName),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {_widgetsMcp!.TokenFactory()}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    // Fail-closed: адрес не http или рубильник Mcp:HttpTransport выключен —
+                    // едем прежним stdio-сервером, инструмент у модели остаётся
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { widgetsServerPath! },
+                        ["alwaysLoad"] = true,
+                    };
+                // Транспорт — в сигнатуру запуска: переключение рубильника обязано пробить
+                // живой процесс доживания, иначе применится «когда-нибудь потом»
+                shapes["widgets"] = widgetsHttp ? "t:http" : "t:stdio";
             }
 
             if (hasMemory)
@@ -965,26 +1150,50 @@ public class ClaudeSession : ILlmSessionAdapter
                 // человеком из меню редко), от свойств хода не зависит. Флаг входит в
                 // отпечаток состава: переключение корректно перезапустит процесс CLI.
                 var memoryDossierTools = _memoryMcp!.DossierToolsEnabled ? "1" : "0";
-                servers["memory"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
-                    // MCP подключается лениво (claude-code#19282): без alwaysLoad первый вызов
-                    // инструмента в ходе падает «No such tool available». Память/персон модель
-                    // зовёт первым же действием — ждём подключения до старта хода.
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждый ход: контекст живёт столько же, сколько адаптер,
+                // а захваченный строкой JWT у долгоживущего чата истекал, и инструменты
+                // памяти пропадали молча (урок фазы 1, ADR-012)
+                var memoryToken = _memoryMcp.TokenFactory();
+                servers["memory"] = memoryHttp
+                    // HTTP-ветка (ADR-012, фаза 2): персона и проект чата едят хвостом URL,
+                    // состава от env больше нет — их резолвит тулсет в Kestrel по хвосту
+                    // и владельцу токена. alwaysLoad как у stdio-ветки: память модель зовёт
+                    // первым же действием, ленивое подключение роняет первый вызов.
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["MEMORY_API_URL"] = _memoryMcp.ApiUrl,
-                        ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
-                        ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
-                        // ③-3.4: проектная персона получает team_memory_* — общая память команды
-                        ["MEMORY_PROJECT_ID"] = _memoryMcp.ProjectId ?? "",
-                        ["MEMORY_DOSSIER_TOOLS"] = memoryDossierTools,
-                    },
-                };
-                // Состав инструментов памяти зависит от секции паспортов — в сигнатуру запуска
-                shapes["memory"] = $"d{memoryDossierTools}";
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.MemoryToolset.EndpointFor(
+                            _memoryMcp.ApiUrl, _memoryMcp.PersonaId, _memoryMcp.ProjectId),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {memoryToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    // Fail-closed (не-http адрес, рубильник Mcp:HttpTransport) — прежний
+                    // stdio-сервер на node: инструмент у модели остаётся
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
+                        // MCP подключается лениво (claude-code#19282): без alwaysLoad первый вызов
+                        // инструмента в ходе падает «No such tool available». Память/персон модель
+                        // зовёт первым же действием — ждём подключения до старта хода.
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["MEMORY_API_URL"] = _memoryMcp.ApiUrl,
+                            ["MEMORY_API_TOKEN"] = memoryToken,
+                            ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
+                            // ③-3.4: проектная персона получает team_memory_* — общая память команды
+                            ["MEMORY_PROJECT_ID"] = _memoryMcp.ProjectId ?? "",
+                            ["MEMORY_DOSSIER_TOOLS"] = memoryDossierTools,
+                        },
+                    };
+                // Состав инструментов памяти зависит от секции паспортов и транспорта —
+                // оба в сигнатуру запуска (переключение рубильника обязано пробить доживание)
+                shapes["memory"] = $"d{memoryDossierTools}:t:{(memoryHttp ? "http" : "stdio")}";
             }
 
             // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст
@@ -1018,34 +1227,61 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? string.Join(",", extraProjects) : "";
                 var extraPersonaIdsCsv = _personasMcp.ExtraPersonaIds is { Count: > 0 } extraPersonas
                     ? string.Join(",", extraPersonas) : "";
-                servers["personas"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { personasServerPath! },
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 2, как tasks/notes)
+                var personasToken = _personasMcp.TokenFactory();
+                servers["personas"] = personasHttp
+                    // HTTP-ветка (ADR-012, фаза 2): сессия-вызыватель хвостом URL; модули
+                    // manage/automation/mentions тулсет резолвит по живой персоне сессии.
+                    // PERSONAS_MENTIONS на http не учитывает файлых сабагентов хода (это
+                    // свойство ХОДА, не сессии — состав от него не зависит, фиксация в ADR-012)
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["PERSONAS_API_URL"] = _personasMcp.ApiUrl,
-                        ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
-                        ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
-                        ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
-                        // Сессия-вызыватель: по ней бэкенд гейтит persona_ask на делегированном
-                        // ходу (заголовок X-Caller-Session-Id → DenyOnDelegatedTurn)
-                        ["PERSONAS_SESSION_ID"] = Info.Id,
-                        ["PERSONAS_MENTIONS"] = personaMentions,
-                        ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
-                        ["PERSONAS_WRITE"] = personaWrite,
-                        ["PERSONAS_MANAGE"] = personaManage,
-                        ["PERSONAS_AUTOMATION"] = personaAutomation,
-                        ["PERSONAS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
-                        ["PERSONAS_EXTRA_PERSONA_IDS"] = extraPersonaIdsCsv,
-                    },
-                };
-                // Область персон зависит от mentions/bindings/модулей/extra-скоупов — в сигнатуру.
-                // Все они постоянны в рамках сессии (состав персон, привязки, роль), поэтому
-                // процесс от них не «мерцает»; write в сигнатуре больше нет — он всегда включён.
-                shapes["personas"] = $"m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}"
-                    + $"g{personaManage}a{personaAutomation}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}";
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.PersonasToolset.EndpointFor(_personasMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {personasToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { personasServerPath! },
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["PERSONAS_API_URL"] = _personasMcp.ApiUrl,
+                            ["PERSONAS_API_TOKEN"] = personasToken,
+                            ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
+                            ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
+                            // Сессия-вызыватель: по ней бэкенд гейтит persona_ask на делегированном
+                            // ходу (заголовок X-Caller-Session-Id → DenyOnDelegatedTurn)
+                            ["PERSONAS_SESSION_ID"] = Info.Id,
+                            ["PERSONAS_MENTIONS"] = personaMentions,
+                            ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
+                            ["PERSONAS_WRITE"] = personaWrite,
+                            ["PERSONAS_MANAGE"] = personaManage,
+                            ["PERSONAS_AUTOMATION"] = personaAutomation,
+                            ["PERSONAS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
+                            ["PERSONAS_EXTRA_PERSONA_IDS"] = extraPersonaIdsCsv,
+                        },
+                    };
+                // Область персон зависит от mentions/bindings/модулей/extra-скоупов и транспорта —
+                // всё в сигнатуру. Для http mentions — MentionsToolsEnabled (единая формула
+                // SessionManager, тот же метод зовёт tools/list тулсета): то, что реально
+                // отдаст состав. НЕ MentionsHint: подсказка гаснет при единственной персоне
+                // владельца, а инструмент остаётся — старая формула расходилась с составом
+                // (блокер приёмки волны 2.1). Остальные постоянны в рамках сессии
+                // (состав персон, привязки, роль), поэтому процесс от них не «мерцает»;
+                // write в сигнатуре больше нет — он всегда включён.
+                var mentionsForShape = personasHttp
+                    ? (_personasMcp.MentionsToolsEnabled ? "1" : "0")
+                    : personaMentions;
+                shapes["personas"] = $"m{mentionsForShape}b{(_personasMcp.BindingsEnabled ? "1" : "0")}"
+                    + $"g{personaManage}a{personaAutomation}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}"
+                    + $":t:{(personasHttp ? "http" : "stdio")}";
             }
 
             if (hasWorkspace)
@@ -1061,19 +1297,40 @@ public class ClaudeSession : ILlmSessionAdapter
                 // между ходами → MCP-сервер перезапускался («Stream closed»). Write-инструменты
                 // (files_write, projects_create, git_commit, knowledge_index) доступны всегда,
                 // safety-уровень — право доступа персоны (Persona.Tools / ExtraDisallowedTools).
-                var workspaceWrite = "1";
+                const string workspaceWrite = "1";
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как tasks/notes):
+                // захваченный строкой JWT у долгоживущего чата истекал, и инструменты
+                // пропадали у модели молча
+                var wspToken = _workspaceMcp.TokenFactory();
                 // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
                 // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
                 // (сервер не стартует, инструменты не появляются). Отсюда же префикс
                 // инструментов mcp__wsp__* в подсказках ниже и в PersonaBindingsService.
-                servers["wsp"] = new System.Text.Json.Nodes.JsonObject
+                servers["wsp"] = workspaceHttp
+                    // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL —
+                    // по ней тулсет живьём резолвит секции, зону проектов и персону (роль
+                    // env WORKSPACE_SECTIONS/WORKSPACE_PROJECT_IDS). Права (зона, владение,
+                    // секции) проверяются на КАЖДЫЙ вызов в тулсете, не при построении
+                    // контекста. alwaysLoad как у stdio-ветки.
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.WorkspaceToolset.EndpointFor(_workspaceMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {wspToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { workspaceServerPath! },
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["WORKSPACE_API_URL"] = _workspaceMcp!.ApiUrl,
-                        ["WORKSPACE_API_TOKEN"] = _workspaceMcp.Token,
+                        ["WORKSPACE_API_TOKEN"] = wspToken,
                         ["WORKSPACE_PROJECT_ID"] = _workspaceMcp.ProjectId ?? "",
                         ["WORKSPACE_SECTIONS"] = sectionsJoined,
                         ["WORKSPACE_PROJECT_IDS"] = _workspaceMcp.AllowedProjectIds is { Count: > 0 } allowed
@@ -1096,78 +1353,209 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
                 };
-                // Состав wsp-инструментов зависит от write-режима и набора секций — в сигнатуру
-                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}";
+                // Состав wsp-инструментов зависит от write-режима, набора секций и транспорта —
+                // в сигнатуру. Секции и их отпечаток считает ОДНА формула (SessionManager.
+                // BuildWorkspacePlan): её же на каждый tools/list зовёт WorkspaceToolset
+                // (блокер приёмки волны 2 — состав и shape по разным формулам расходятся)
+                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}:t:{(workspaceHttp ? "http" : "stdio")}";
             }
 
             if (hasNotifications)
             {
-                servers["notifications"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
-                    // alwaysLoad — по той же причине, что у tasks (см. выше)
-                    ["alwaysLoad"] = true,
-                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как wsp)
+                var notificationsToken = _notificationsMcp!.TokenFactory();
+                servers["notifications"] = notificationsHttp
+                    // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL,
+                    // персона (лицо уведомления) резолвится тулсетом живьём из сессии
+                    ? new System.Text.Json.Nodes.JsonObject
                     {
-                        ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
-                        ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
-                        ["NOTIFICATIONS_SELF_PERSONA_ID"] = _notificationsMcp.SelfPersonaId ?? "",
-                    },
-                };
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.NotificationsToolset.EndpointFor(_notificationsMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {notificationsToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
+                        // alwaysLoad — по той же причине, что у tasks (см. выше)
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["NOTIFICATIONS_API_URL"] = _notificationsMcp.ApiUrl,
+                            ["NOTIFICATIONS_API_TOKEN"] = notificationsToken,
+                            ["NOTIFICATIONS_SELF_PERSONA_ID"] = _notificationsMcp.SelfPersonaId ?? "",
+                        },
+                    };
+                // Состав уведомлений постоянный (4 инструмента), в сигнатуру — только транспорт
+                shapes["notifications"] = $"t:{(notificationsHttp ? "http" : "stdio")}";
             }
 
             if (hasCodeGraph && _codeGraphMcp is not null)
             {
                 // Граф кода проекта: поиск типа, связи узла, хабы по связности. Состав
                 // инструментов постоянный (три чтения), per-owner изоляция — токеном
-                // владельца и проверкой владельца проекта в CodeGraphController.
-                servers["codegraph"] = new System.Text.Json.Nodes.JsonObject
+                // владельца и проверкой владельца проекта в CodeGraphController (REST)
+                // и в CodeGraphToolset (http, ADR-012 волна 3).
+                // Токен — фабрикой на каждую сборку конфига (ADR-012 волна 3, как wsp)
+                var codeGraphToken = _codeGraphMcp.TokenFactory();
+                servers["codegraph"] = codeGraphHttp
+                    // HTTP-ветка (ADR-012, фаза 2 волна 3): сессия-вызыватель хвостом URL.
+                    // Рабочее дерево (worktree) в маршрут НЕ кладётся: тулсет резолвит его
+                    // живьём из сессии на каждый вызов — адрес и состав от дерева не зависят,
+                    // а смена worktree mid-session подхватывается без перезапуска CLI.
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.CodeGraphToolset.EndpointFor(_codeGraphMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {codeGraphToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { codeGraphServerPath! },
+                        // alwaysLoad — по той же причине, что у tasks (см. выше)
+                        ["alwaysLoad"] = true,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["CODEGRAPH_API_URL"] = _codeGraphMcp.ApiUrl,
+                            ["CODEGRAPH_API_TOKEN"] = codeGraphToken,
+                            ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
+                            ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
+                            // Рабочее дерево хода: отдельное worktree чата имеет свой граф
+                            ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
+                        },
+                    };
+                // Состав графа постоянный (3 чтения), в сигнатуру — только транспорт
+                shapes["codegraph"] = $"t:{(codeGraphHttp ? "http" : "stdio")}";
+            }
+
+            if (hasDify && _difyMcp is not null)
+            {
+                // Базы знаний Dify (ADR-012, волна 4 — последний продуктовый сервер фазы 2):
+                // тулсет в Kestrel ходит во внешний Dify сам, DIFY_API_KEY наружу не уезжает
+                // вовсе. Отпечаток состава: s-бит — есть ли у проекта чата свой датасет
+                // (search-only состав из 4 инструментов; считается ЖИВЬЁМ на каждую сборку
+                // конфига — датасет может появиться в середине жизни чата, и появление
+                // обязано пробить доживание: состав реально меняется). Формула та же, что у
+                // DifyToolset.ToolsFor (EffectiveRoot → WorkspaceKnowledgeStore) — расхождение
+                // означало бы холостой перезапуск CLI.
+                var difyToken = _difyMcp.TokenFactory();
+                var difySearchOnly = hasDataset ? "1" : "0";
+                servers["dify"] = difyHttp
+                    ? new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["type"] = "http",
+                        ["url"] = Services.Mcp.Http.DifyToolset.EndpointFor(_difyMcp.ApiUrl, Info.Id),
+                        ["headers"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Authorization"] = $"Bearer {difyToken}",
+                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        },
+                        ["alwaysLoad"] = true,
+                    }
+                    : new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { difyServerPath! },
+                        // alwaysLoad ставим и на stdio (внешний узел его не имел): в режиме
+                        // deferred-tools ленивый сервер прячет инструменты от модели
+                        ["alwaysLoad"] = true,
+                        // env — только у откатившихся: на http-ветке ключ не покидает бэкенд
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["DIFY_API_URL"] = _difyMcp.DifyUrl,
+                            ["DIFY_API_KEY"] = _difyMcp.DifyKey,
+                            ["DIFY_DEFAULT_DATASET_ID"] = datasetId ?? "",
+                            ["DIFY_SEARCH_ONLY"] = difySearchOnly == "1" ? "true" : "",
+                        },
+                    };
+                shapes["dify"] = $"s{difySearchOnly}:t:{(difyHttp ? "http" : "stdio")}";
+            }
+
+            if (hasDesktop && _desktopMcp is not null)
+            {
+                // Десктопная грань (ADR-008): шесть инструментов desktop_* — руки на машине
+                // пользователя. Состав постоянный: офлайн-устройство и отсутствие сеанса рук —
+                // это ОТВЕТ инструмента честным текстом, а не изменение tools/list. Право чата
+                // на грань бэкенд проверяет на КАЖДЫЙ вызов (тип чата + включение в проекте +
+                // активный сеанс), чат-вызывателя выводит из capability-токена.
+                servers["desktop"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
-                    ["args"] = new System.Text.Json.Nodes.JsonArray { codeGraphServerPath! },
-                    // alwaysLoad — по той же причине, что у tasks (см. выше)
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { desktopServerPath! },
+                    // alwaysLoad — по той же причине, что у tasks (см. выше): без него первый
+                    // вызов в ходе падает «No such tool available», а ретраить клик по чужому
+                    // рабочему столу нельзя — ввод не идемпотентен
                     ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
-                        ["CODEGRAPH_API_URL"] = _codeGraphMcp.ApiUrl,
-                        ["CODEGRAPH_API_TOKEN"] = _codeGraphMcp.Token,
-                        ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
-                        ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
-                        // Рабочее дерево хода: отдельное worktree чата имеет свой граф
-                        ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
+                        ["DESKTOP_API_URL"] = _desktopMcp.ApiUrl,
+                        // Capability-токен грани, а не сервисный JWT владельца: /api/devices/*
+                        // сервисный токен не принимает вовсе (ADR-008, «Авторизация канала»)
+                        ["DESKTOP_API_TOKEN"] = _desktopMcp.Token,
+                        ["DESKTOP_SESSION_ID"] = _desktopMcp.SessionId,
                     },
                 };
             }
 
             // pmem-серверы персон-консультантов (файловые сабагенты):
-            // тот же memory-server под уникальным ключом pmem_<handle> с env КОНСУЛЬТАНТА —
-            // файл агента ссылается на него по имени (mcpServers: [pmem_<handle>]), токен
-            // живёт только в этом временном конфиге. Ретрай «No such tool available» вшит
-            // в тело файла агента.
+            // тот же memory-сервер под уникальным ключом pmem_<handle> с контекстом
+            // КОНСУЛЬТАНТА — файл агента ссылается на него по имени (mcpServers:
+            // [pmem_<handle>]), токен живёт только в этом временном конфиге. Ретрай
+            // «No such tool available» вшит в тело файла агента.
             //
-            // alwaysLoad здесь НЕ ставится, но экономии процессов это не даёт: CLI поднимает
-            // ВСЕ stdio-серверы конфига на старте, а флаг управляет лишь видимостью их
-            // инструментов в tools/list (проверено 15.08.2026 на CLI 2.1.229 отдельным стендом,
-            // см. docs/architecture/mcp-servers.md). Поэтому сколько персон объявлено ходу,
-            // столько и процессов node: на боевом 14 персон ≈ 610 МБ на каждый ход. Цена
-            // осознанно принята; уменьшить её можно только числом объявленных серверов.
-            if (hasConsultants && memoryServerPath is not null)
+            // На http-транспорте (ADR-012, фаза 2) все pmem_* — это ОДИН тулсет в Kestrel:
+            // записей серверов в конфиге столько же (файлы агентов ссылаются по имени),
+            // но ни одного процесса node — персона консультанта едет хвостом URL.
+            // На stdio было иначе: CLI поднимает ВСЕ серверы конфига на старте (alwaysLoad
+            // управляет лишь видимостью — проверено 15.08.2026 на CLI 2.1.229), то есть
+            // по процессу на каждую персону: на боевом 14 персон ≈ 610 МБ на каждый ход.
+            //
+            // alwaysLoad здесь НЕ ставится в обеих ветках: с ним главная сессия увидела бы
+            // инструменты чужой памяти (mcp__pmem_*), сегодня они видимы только сабагенту.
+            if (hasConsultants)
             {
                 foreach (var c in personaAgents!.MemoryServers)
                 {
-                    servers[c.ServerKey] = new System.Text.Json.Nodes.JsonObject
-                    {
-                        ["command"] = "node",
-                        ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath },
-                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                    // stdio-ветке нужен файл сервера (в песочнице может не резолвиться);
+                    // http-запись едет и без него — процесса node нет
+                    if (!ConsultantHttp(c) && memoryServerPath is null) continue;
+                    servers[c.ServerKey] = ConsultantHttp(c)
+                        ? new System.Text.Json.Nodes.JsonObject
                         {
-                            ["MEMORY_API_URL"] = c.ApiUrl,
-                            ["MEMORY_API_TOKEN"] = c.Token,
-                            ["MEMORY_PERSONA_ID"] = c.PersonaId,
-                            ["MEMORY_PROJECT_ID"] = c.ProjectId ?? "",
-                        },
-                    };
+                            ["type"] = "http",
+                            ["url"] = Services.Mcp.Http.MemoryToolset.EndpointFor(
+                                c.ApiUrl, c.PersonaId, c.ProjectId),
+                            ["headers"] = new System.Text.Json.Nodes.JsonObject
+                            {
+                                ["Authorization"] = $"Bearer {c.TokenFactory()}",
+                                [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            },
+                        }
+                        : new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["command"] = "node",
+                            ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath },
+                            ["env"] = new System.Text.Json.Nodes.JsonObject
+                            {
+                                ["MEMORY_API_URL"] = c.ApiUrl,
+                                ["MEMORY_API_TOKEN"] = c.TokenFactory(),
+                                ["MEMORY_PERSONA_ID"] = c.PersonaId,
+                                ["MEMORY_PROJECT_ID"] = c.ProjectId ?? "",
+                            },
+                        };
+                    // Транспорт — в отпечаток: откат рубильника обязан пробить доживание
+                    shapes[c.ServerKey] = ConsultantHttp(c) ? "t:http" : "t:stdio";
                 }
             }
 
@@ -1619,6 +2007,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
+        // Режим «Авто» обещает «действует сам»: shell-команды разрешаем без карточки,
+        // необратимые (стоп-список IrreversibleCommandGuard) — как раньше спрашивают.
+        // Строго ПОСЛЕ deny-правил проекта: явный запрет сильнее авто-разрешения.
+        if (ruleDecision == null
+            && Info.Mode == ClaudeMode.Auto
+            && IrreversibleCommandGuard.IsShellTool(toolName)
+            && inputEl.ValueKind == JsonValueKind.Object
+            && inputEl.TryGetProperty("command", out var autoCmdEl)
+            && autoCmdEl.ValueKind == JsonValueKind.String
+            && !IrreversibleCommandGuard.LooksIrreversible(autoCmdEl.GetString()))
+            return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
         // вязнет в первом же permission-запросе (status=Waiting до таймаута в 60 мин) и не может
@@ -1636,7 +2035,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // (sdk_control_request и основной) сходятся сюда — второго места для правки нет.
         if (ruleDecision == null && Array.Exists(BuiltInTaskPlanTools, t => string.Equals(t, toolName, StringComparison.Ordinal)))
             return "allow";
-        if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
+        // «Всегда разрешать» этого чата: читаем с ЖИВОЙ сессии (Info — тот же объект, что
+        // держит SessionManager), поэтому список свежий на каждый запрос и переживает
+        // рестарт сервера. Копию на старте адаптера делать нельзя: RespondPermission
+        // дописывает список по ходу разговора.
+        if (ruleDecision == "allow"
+            || Info.AutoAllowTools.Contains(toolName, StringComparer.OrdinalIgnoreCase)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();
         _permissionWaiters[requestId] = tcs;
@@ -1665,13 +2069,9 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         _permissionWaiters.TryRemove(requestId, out _);
 
-        // «Всегда разрешать»: запоминаем инструмент и отвечаем обычным allow
-        if (behavior == "allow_always")
-        {
-            _autoAllowTools.TryAdd(toolName, 0);
-            behavior = "allow";
-        }
-        return behavior;
+        // «Всегда разрешать» для CLI — обычный allow; сам инструмент в Session.AutoAllowTools
+        // положил SessionManager.RespondPermission (он же сохранил стор).
+        return behavior == "allow_always" ? "allow" : behavior;
     }
 
     private void SendControlResponse(string requestId, object responsePayload, Process? target = null)
@@ -2155,7 +2555,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("mcp-notes", "Как работать с заметками", notesHint, group: "mcp");
             }
 
-            // Подсказка про виджеты — только когда widgets-server подключён
+            // Подсказка про виджеты — только когда сервер виджетов подключён ходу
             if (_widgetsMcp is not null)
             {
                 var widgetsHint =
@@ -2355,9 +2755,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
             // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
             // Заодно собираем манифест (что подтянулось) для «использовано сейчас» (F3).
+            RecallBlock? memRecall = null;
             if (_personaRecallProvider is not null && _memoryMcp is not null)
             {
-                RecallBlock? memRecall = null;
                 try { memRecall = await _personaRecallProvider(text); }
                 catch { /* recall памяти не должен ронять ход */ }
                 Add("recall-memory", "Что персона помнит по теме", memRecall?.Text, stable: false, group: "persona");
@@ -2367,6 +2767,27 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.AddRange(memRecall.Items);
                 }
             }
+
+            // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+            // specialty-prompt-sections): сценарные инструкции «когда и как» по роли — история,
+            // граф кода, процессы, правила. Позиция — между recall-memory и блоком досье
+            // (контракт плана: «призыв и данные рядом»), провайдер сам гейтит по флагу/
+            // специальности/групповому чату, ошибки не роняют ход.
+            if (_promptSectionsProvider is not null)
+            {
+                string? promptSectionsBlock = null;
+                try { promptSectionsBlock = await _promptSectionsProvider(text); }
+                catch { /* секции специальности не должны ронять ход */ }
+                Add("prompt-sections", "Инструкции по специальности", promptSectionsBlock, group: "persona");
+            }
+
+            // Блок досье (план «Секции промптов» этап 3, флаг specialty-prompt-sections): при
+            // включённом флаге PersonaMemoryService отдаёт его ОТДЕЛЬНО от recall-memory (см.
+            // RecallBlock.DossierText) — своей секцией, сразу после prompt-sections (призыв и
+            // данные рядом); при выключенном флаге DossierText всегда null (досье уже внутри
+            // recall-memory выше, как до фичи).
+            Add("dossier-recall", "История решений по коду хода", memRecall?.DossierText,
+                stable: false, group: "persona");
 
             // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
             // «когда → откуда» + выжимки режима «всегда». Только у персонных сессий;
@@ -2390,6 +2811,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Граф меняется при пересборке, а не под текст хода, но и стабильным
                 // его не назовёшь: правки кода прилетают в промпт следующего же хода
                 Add("code-graph", "Главные узлы кода проекта", codeGraphBlock, stable: false, group: "project");
+
+                // Сценарное правило выбора codegraph / LSP / Grep (ADR-011 шаг 3): slice выше —
+                // данные и может отсутствовать (граф не построен), правило же статично и доезжает
+                // до каждого хода проектного чата. Тот же гейт, что у slice: провайдер не null
+                // (проектный чат с включённым codegraph) — правило не советует инструменты,
+                // которых в этом ходе нет.
+                Add("code-navigation", "Какой инструмент навигации по коду звать",
+                    Prompts.CodeNavigationPrompts.SectionText, group: "project");
             }
 
             // Персональный слой: промпт персоны имеет приоритет
@@ -2440,6 +2869,56 @@ public class ClaudeSession : ILlmSessionAdapter
             ["MCP_TIMEOUT"] = "30000",
         };
 
+        // Обход прокси для локального бэкенда — жёсткое требование HTTP-транспорта MCP
+        // (ADR-012): по этому адресу теперь ходит САМ CLI, и без NO_PROXY его запрос уедет
+        // в HTTP_PROXY, а инструмент молча исчезнет у модели (503 CLIENT_HTTP_NOT_IMPLEMENTED).
+        // Признак «в ходу есть http-сервер» — сводный: контекстный флаг (widgets/memory,
+        // решён SessionManager на едином гейте) ИЛИ pmem-консультанты этого хода на http.
+        // Ставим только при активном http-транспорте (рубильник отката возвращает stdio —
+        // env обязан откатиться вместе с ним) и только local-владельцу: песочнице хостовое
+        // окружение не доезжает вовсе, иначе exec-переменная подменяет узкий egress-whitelist
+        // контейнера. Правило целиком — в LoopbackProxyBypass.ForTurn.
+        // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
+        // Рубильник живой (HttpMcpEnabledProvider на каждый ход): откат уносит не только
+        // http-узлы конфига, но и этот env — оверрайд обязан откатиться вместе с транспортом
+        var httpOn = HttpMcpOnNow();
+        var httpMcpActive = httpOn && (_httpMcpActive
+            || (personaAgents?.MemoryServers.Any(s => s.UseHttp) ?? false));
+        // Адреса ВСЕХ http-серверов хода, а не один: pmem-консультанты приезжают списком и
+        // в ходе могут остаться одни (чат вне проекта, память чата выключена, widgets Off) —
+        // их хост обязан попасть в обход вместе с widgets/memory, иначе запрос mcp__pmem_*
+        // уедет в HTTP_PROXY с открытым сервисным JWT в заголовке и инструмент молча пропадёт.
+        var httpApiUrls = new List<string?>
+        {
+            _widgetsMcp is { UseHttp: true } widgets ? widgets.ApiUrl : null,
+            _memoryMcp is { UseHttp: true } mem ? mem.ApiUrl : null,
+            _tasksMcp is { UseHttp: true } tasks ? tasks.ApiUrl : null,
+            _notesMcp is { UseHttp: true } notes ? notes.ApiUrl : null,
+            _personasMcp is { UseHttp: true } personas ? personas.ApiUrl : null,
+            _workspaceMcp is { UseHttp: true } wsp ? wsp.ApiUrl : null,
+            _notificationsMcp is { UseHttp: true } ntf ? ntf.ApiUrl : null,
+            _codeGraphMcp is { UseHttp: true } cg ? cg.ApiUrl : null,
+        };
+        httpApiUrls.AddRange(personaAgents?.MemoryServers
+            .Where(s => s.UseHttp).Select(s => s.ApiUrl) ?? []);
+        // Унаследованное — СКЛЕЙКОЙ обеих форм, а не «??»: на Linux словарь окружения
+        // регистрозависим, и пустая NO_PROXY выигрывала у осмысленного lowercase-списка,
+        // обнуляя его. Пустая строка — отсутствие значения; дедупликацию делает Merge.
+        var inheritedNoProxy = string.Join(",",
+            new[] { Environment.GetEnvironmentVariable("NO_PROXY"),
+                    Environment.GetEnvironmentVariable("no_proxy") }
+                .Where(v => !string.IsNullOrWhiteSpace(v)));
+        var noProxy = Services.Mcp.Http.LoopbackProxyBypass.ForTurn(
+            httpMcpActive,
+            _launcher.IsSandboxed,
+            inheritedNoProxy,
+            httpApiUrls.ToArray());
+        if (noProxy is not null)
+        {
+            envOverrides["NO_PROXY"] = noProxy;
+            envOverrides["no_proxy"] = noProxy;
+        }
+
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
         var cliEnv = _providers?.BuildCliEnv(EffectiveModel);
@@ -2463,6 +2942,25 @@ public class ClaudeSession : ILlmSessionAdapter
                         envOverrides[k] = v;
             }
         }
+
+        // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
+        // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
+        // ПОСЛЕ ResolveModelForCli — ровно по той, что уедет в --model: срезанный по
+        // способности пула алиас обязан дать 200k, иначе CLI не сожмёт контекст вовремя.
+        // Ветка cliEnv is null = модель не принадлежит стороннему провайдеру (там ключ уже
+        // стоит по каталогу, перетирать его нельзя).
+        if (cliEnv is null)
+            envOverrides["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] =
+                LlmProviderRegistry.ClaudeContextWindowValue(ResolveModelForCli(EffectiveModel));
+
+        // Что именно объявили CLI — в паспорта сабагентов этого прогона (у стороннего
+        // провайдера значение поставил BuildCliEnv по каталогу, у родного — строка выше;
+        // fail-open у неизвестной модели провайдера оставляет 0 = «не объявляли»)
+        _turnContextWindow = envOverrides.TryGetValue("CLAUDE_CODE_MAX_CONTEXT_TOKENS", out var declaredWindow)
+            && int.TryParse(declaredWindow, NumberStyles.Integer, CultureInfo.InvariantCulture, out var windowValue)
+            ? windowValue : 0;
+        _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
+            && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
 
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
@@ -3327,8 +3825,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Same-process ход (init повторяется в том же процессе, контекст тот же) —
                     // ватчер переиспользуем: пересоздание помечало бы файлы «прочитанными
                     // целиком» и теряло хвост текста доживающих агентов. Иной контекст —
-                    // дочитываем хвост (Drain) и только потом пересоздаём.
-                    if (_subagentWatcher is null || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!))
+                    // дочитываем хвост (Drain) и только потом пересоздаём. Профиль прогона —
+                    // часть контекста: новый процесс под другим CLAUDE_CONFIG_DIR (фолбэк сменил
+                    // провайдера) пишет транскрипты в другую папку, старый ватчер с закешированной
+                    // папкой их не увидит.
+                    if (_subagentWatcher is null
+                        || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot))
                     {
                         if (_subagentWatcher is not null)
                         {
@@ -3336,7 +3838,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             _subagentWatcher.Dispose();
                         }
                         _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage,
-                            Info.Id, _subagentRunSink);
+                            Info.Id, _subagentRunSink, _turnContextWindow, preferredConfigRoot: _turnConfigRoot);
                         _subagentWatcher.Start();
                     }
 

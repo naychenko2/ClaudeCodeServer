@@ -4,7 +4,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Мост в командные механики (фича default-personas-onboarding): серверный мини-каталог
+// Мост в командные механики: серверный мини-каталог
 // TeamMechanicsPromptCatalog обязан совпадать по id с union TeamMechanicId фронтового
 // реестра (frontend/src/features/team/teamMechanics.ts) — тест читает фронтовый файл
 // напрямую, третьей копии списка нет. Путь строится от корня репозитория через

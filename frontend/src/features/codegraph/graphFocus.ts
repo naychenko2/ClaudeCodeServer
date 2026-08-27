@@ -64,6 +64,9 @@ export interface FocusModel {
 export interface FocusOptions {
   filters?: Record<CodeGraphRelation, boolean>;
   hideTests?: boolean;
+  // Языки, которые НУЖНО оставить. По умолчанию оба — иначе оба (старые холсты
+  // вызывают focusNeighbours без этого поля, и обратная совместимость важна).
+  languages?: Record<NodeLanguage, boolean>;
   degree?: Map<string, number>;
 }
 
@@ -106,6 +109,16 @@ export function isTestSourceFile(file: string): boolean {
   return /[\\/]Tests[\\/]|\.Tests[\\/]|[\\/]test[\\/]|[\\/]__tests__[\\/]|\.Tests\./i.test(file);
 }
 
+// Язык узла определяется расширением sourceFile. .ts/.tsx → TS/React, всё остальное
+// (включая .cs) считаем C# — NodeKind на бэке уже различает ровно эти две группы,
+// поля language у узла нет, и расширение здесь единственный надёжный сигнал.
+// Префикс TS-Kind'ов (Component/Hook/UiPrimitive/Util) — отдельный разговор: расширение
+// не различает «компонент» и «утилиту», их различает сам бэкенд по AST и кладёт в kind.
+export type NodeLanguage = 'csharp' | 'typescript';
+export function nodeLanguage(file: string): NodeLanguage {
+  return /\.tsx?$/i.test(file) ? 'typescript' : 'csharp';
+}
+
 export function graphDegree(graph: CodeGraph): Map<string, number> {
   const degree = new Map<string, number>();
   for (const e of graph.edges) {
@@ -128,6 +141,7 @@ export function focusNeighbours(
   const acc = new Map<string, { node: CodeGraphNode; rels: Set<CodeGraphRelation>; weight: number }>();
 
   const accept = (e: CodeGraphEdge) => !opts.filters || opts.filters[e.relation];
+  const langs = opts.languages ?? { csharp: true, typescript: true };
 
   for (const e of graph.edges) {
     if (!accept(e)) continue;
@@ -138,6 +152,7 @@ export function focusNeighbours(
     const node = byId.get(otherId);
     if (!node) continue;
     if (opts.hideTests && isTestSourceFile(node.sourceFile)) continue;
+    if (!langs[nodeLanguage(node.sourceFile)]) continue;
     let o = acc.get(otherId);
     if (!o) { o = { node, rels: new Set(), weight: 0 }; acc.set(otherId, o); }
     o.rels.add(e.relation);
@@ -179,7 +194,7 @@ export function buildFocusModel(
   const viewH = panel ? FOCUS_VIEW_H_PANEL : mobile ? FOCUS_VIEW_H_MOBILE : FOCUS_VIEW_H;
   const limit = panel ? FOCUS_LIMIT_PANEL : mobile ? FOCUS_LIMIT_MOBILE : FOCUS_LIMIT;
   const maxLabel = mobile ? 13 : 22;
-  const nOpts: FocusOptions = { filters: opts.filters, hideTests: opts.hideTests, degree };
+  const nOpts: FocusOptions = { filters: opts.filters, hideTests: opts.hideTests, languages: opts.languages, degree };
 
   const incoming = focusNeighbours(graph, centerId, 'in', nOpts);
   const outgoing = focusNeighbours(graph, centerId, 'out', nOpts);

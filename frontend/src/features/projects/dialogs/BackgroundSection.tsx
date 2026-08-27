@@ -94,7 +94,7 @@ interface Props {
   onProjectUpdated: (p: Project) => void;
 }
 
-// Секция «Фон рабочего пространства» в настройках проекта (фича project-backgrounds).
+// Секция «Фон рабочего пространства» в настройках проекта.
 // Владелец может сгенерировать фон по смыслу и вернуть стандартный; состояние генерации
 // и ошибку показывает по продуктовым текстам docs/features/project-backgrounds.md (они
 // расходятся с макетом — спека источник правды). Цвет выбран руками, а генерация предлагает
@@ -254,6 +254,9 @@ export function BackgroundSection({ project, iconColor, onColorChange, onProject
         <Modal
           width={MODAL_W.confirm}
           onClose={() => setConfirm(null)}
+          // Без title первым ребёнком идёт превью во всю ширину — встроенный
+          // крестик встал бы над ним и отодвинул картинку вниз.
+          hideCloseButton
           footer={
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: SP.sm }}>
               <Button variant="ghost" size="md" onClick={() => setConfirm(null)}>

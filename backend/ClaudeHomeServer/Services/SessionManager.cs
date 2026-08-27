@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -78,6 +78,11 @@ public class SessionManager : IDisposable
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
         public volatile Llm.Claude.SubagentRunPassport? TruncatedSubagent;
+        // Пометка координатору: ФОНОВЫЙ агент оборвался на tool_use, а CLI выдал координатору
+        // его последнюю реплику за готовый результат. Своего хода на пометку не тратим (второй
+        // systemDirective в идущий процесс слать нельзя) — она уезжает префиксом ближайшего
+        // хода, см. BuildCliTurnText. null — пометки нет либо она уже уехала.
+        public volatile Llm.Claude.SubagentRunPassport? TruncatedBgNote;
         // Сколько добиваний подряд отправлено ЗА ОДНОГО агента (потолок — MaxSubagentNudges).
         // Обнуляется штатным отчётом ТОГО ЖЕ агента и любым ходом человека: две попытки — на серию.
         public int SubagentNudges;
@@ -303,8 +308,13 @@ public class SessionManager : IDisposable
     private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;
     private readonly JwtService _jwt;
+    // Токены грани десктопа (ADR-008): кеш по чату поверх _jwt, отдельный от сервисных
+    private readonly Desktop.DesktopCapabilityTokenService _desktopTokens;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
+    // Копии транскриптов заархивированных чатов (data/archived-transcripts) — шаг 0 плана
+    // «Архив чатов»: создаётся в конструкторе напрямую, см. там же
+    private readonly ArchivedTranscriptStore _archivedTranscripts;
     // Сервисный токен MCP-серверов — ОДИН на владельца (задачи/заметки/память/персоны/…
     // используют один и тот же owner-scoped JWT), с перевыпуском до истечения. См. GetServiceToken.
     private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _serviceTokens = new();
@@ -342,6 +352,14 @@ public class SessionManager : IDisposable
     // Есть ли хотя бы один зритель у сессии?
     public bool HasViewers(string sessionId) =>
         _sessionViewers.TryGetValue(sessionId, out var conns) && !conns.IsEmpty;
+
+    // Есть ли у сессии живой прогон CLI (ход идёт либо вот-вот начнётся — принят адаптером,
+    // процесс поднимается секунды). Тот же предикат, что stuck-детект Interrupt, вынесен
+    // наружу для пульса волны «Командной реализации»: «штаб заявляет работу (Working/
+    // Waiting), а прогона нет» = мёртвый штаб, а не живая волна.
+    public bool HasLiveTurnProcess(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry)
+        && entry.Process is { HasLiveTurn: true } or { HasQueuedTurn: true };
 
     // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
@@ -398,9 +416,17 @@ public class SessionManager : IDisposable
     private readonly Mcp.McpOAuthService? _mcpOAuth;
     // Recall паспортов изменений (этап 2, ADR-004 §5); null — в тестах, секции паспортов нет
     private readonly Dossiers.DossierRecallService? _dossierRecall;
+    // Резолвер секций промпта специальности (план «Секции промптов», флаг
+    // specialty-prompt-sections); null — в тестах, секция prompt-sections в промпт не попадает
+    // (перестановка блока досье в dossier-recall от него не зависит — только от флага).
+    private readonly SpecialtySettingsStore? _specialtySettings;
     // Кеш якорей «файлы предыдущего хода» для recall паспортов: sessionId → (отпечаток истории,
     // файлы). Пересбор — только когда файл истории сменился (LastWriteUtc), не на каждый ход.
     private readonly Dictionary<string, (DateTime? Stamp, List<string> Files)> _dossierAnchorCache = new();
+    // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
+    // потребление тут — проверка настроенности и строки stdio-ветки отката; вся работа с
+    // Dify — в KnowledgeService со своей копией IOptions
+    private readonly Models.DifyOptions _dify = new();
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -470,11 +496,15 @@ public class SessionManager : IDisposable
         // модели — ветка локального голосового хода (chat-voice). Без них разговор
         // идёт через claude CLI как раньше.
         Llm.LocalActionRouter? router = null,
-        Llm.OllamaClient? ollama = null)
+        Llm.OllamaClient? ollama = null,
+        // Опционально (в тестах не передаётся): резолвер секций промпта специальности
+        // (план «Секции промптов») — без него секция prompt-sections не собирается
+        SpecialtySettingsStore? specialtySettings = null)
     {
         _subagentRuns = subagentRuns;
         _router = router;
         _ollama = ollama;
+        _specialtySettings = specialtySettings;
 
         _skills = skills;
         _mcpRegistry = mcpRegistry;
@@ -509,12 +539,22 @@ public class SessionManager : IDisposable
         _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
         _users = users;
         _jwt = jwt;
+        _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);
         _server = server;
         _config = config;
+        // Копии транскриптов архивных чатов (шаг 0 плана «Архив чатов»): стор файловый и
+        // без зависимостей, создаём напрямую — точки вызова (SetArchived/DeleteAsync) живут
+        // здесь, отдельная регистрация в Program.cs ничего не добавляет.
+        _archivedTranscripts = new ArchivedTranscriptStore(config);
+        config.GetSection(Models.DifyOptions.Section).Bind(_dify);
         // Sweep-terminus grace (P12/P15): потолок ожидания exited после result до принудительного
         // Active→Finished. <=0 — выключить sweep (только для тестов/отладки).
         _stuckActiveGraceSeconds = int.TryParse(config["Session:StuckActiveGraceSeconds"], out var grace)
             && grace >= 0 ? grace : DefaultStuckActiveGraceSeconds;
+        // Порог свежести хода для гейта перезапуска (этап 3): тот же ключ/дефолт, что у
+        // пульса волны — TeamWaveService._quietThreshold
+        _freshTurnThreshold = TimeSpan.FromMinutes(
+            int.TryParse(config["TeamImplement:QuietMinutes"], out var quietMin) && quietMin > 0 ? quietMin : 15);
         _notesKb = notesKb;
         _flags = flags;
         _personas = personas;
@@ -575,7 +615,9 @@ public class SessionManager : IDisposable
     // является исполнителем задачи — тогда tasks-MCP форсируется: исполнитель обязан
     // управлять задачей через mcp__tasks__* (иначе ограниченная персона не сможет её
     // ни прочитать, ни завершить и свалится в нерабочий встроенный Task-тул).
-    private bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
+    // internal — ту же формулу резолвит TasksToolset по живой сессии-вызывателю (http,
+    // ADR-012 волна 2): право на сервер проверяется на каждый tools/list и tools/call
+    internal bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
         session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
 
     // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
@@ -589,16 +631,18 @@ public class SessionManager : IDisposable
 
     // Контекст MCP-сервера задач для сессии; null — только для чата без владельца.
     // persona — для кросс-проектных ProjectTasks-привязок (доступ к задачам ДРУГИХ проектов).
+    // Токен — фабрикой (ADR-012 волна 2, как widgets/memory): захваченный строкой JWT у
+    // долгоживущего чата истекал, и задачи пропадали у модели молча.
     private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId, Persona? persona = null)
     {
         if (ownerId is null) return null;
-        // Перевыпуск за сутки до истечения — сервер может жить дольше срока токена
-        var token = GetServiceToken(ownerId);
         var extraScopes = _bindings.BuildExternalTaskScopes(ownerId, persona);
         var extraIds = extraScopes.Select(s => s.ProjectId).Distinct().ToList();
         var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId).Distinct().ToList();
-        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null);
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new TasksMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
+            extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null,
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Контекст MCP-сервера заметок; null — только для чата без владельца.
@@ -607,18 +651,69 @@ public class SessionManager : IDisposable
     private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId, Persona? persona)
     {
         if (ownerId is null) return null;
-        var token = GetServiceToken(ownerId);
-        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"));
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new NotesMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
+            AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"),
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
-    // Контекст MCP-сервера виджетов чата: чистый маркер «сессия с владельцем» —
-    // серверу не нужны ни API, ни токен, он только валидирует input (HTML рендерит фронт).
+    // Контекст MCP-сервера виджетов чата: адрес API и сервисный токен владельца — сервер
+    // переехал в Kestrel (ADR-012), ход зовёт его по http, а не поднимает процесс node.
+    // Адрес даёт та же ResolveTasksApiUrl, что и остальным серверам: второго правила про
+    // песочницу здесь нет — оно уже внутри резолвера.
     // Фича штатная (без фич-флага), как personas/notifications; персона может выключить
     // сервер Off-привязкой tool:widgets (PersonaBindingsService.ServerToolEnabled).
-    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona) =>
-        ownerId is not null && _bindings.ServerToolEnabled(ownerId, persona, "widgets")
-            ? new WidgetsMcpContext() : null;
+    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona)
+    {
+        if (ownerId is null || !_bindings.ServerToolEnabled(ownerId, persona, "widgets")) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        // Токен — фабрикой, как у памяти: контекст живёт столько же, сколько адаптер, а
+        // захваченный строкой JWT у долгоживущего чата истекал (ADR-012, урок фазы 1)
+        return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
+    // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
+    // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
+    // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
+    // ещё и редиректится на https в пайплайне. В этом случае ход объявляет прежний
+    // stdio-сервер, а причина уходит в лог: тихо терять инструмент нельзя. Схема — свойство
+    // адреса контекста и в жизни адаптера не меняется; рубильник Mcp:HttpTransport сюда НЕ
+    // входит — он живой, читается провайдером на каждый ход (HttpMcpEnabledProvider).
+    private string? _httpMcpWarnedFor;
+    private bool HttpEndpointUsable(string apiUrl)
+    {
+        var http = Services.Mcp.Http.McpHttpTransport.Usable(apiUrl, enabled: true);
+        // Предупреждаем один раз на адрес: состояние постоянное, ход идёт каждую минуту.
+        // Узнаёт и хозяин выключенного рубильника: включённый транспорт этот адрес всё равно
+        // не поднимет — инстанс останется на stdio.
+        if (!http && Interlocked.Exchange(ref _httpMcpWarnedFor, apiUrl) != apiUrl)
+            _log.LogWarning("MCP-over-HTTP невозможен: адрес бэкенда «{Url}» не http — "
+                + "продуктовые серверы объявляются ходу по-старому, через stdio", apiUrl);
+        return http;
+    }
+
+    // Живое значение рубильника Mcp:HttpTransport для провайдера контекста: IConfiguration
+    // перечитывается (appsettings.Local.json подключён с reloadOnChange), поэтому поворот
+    // ключа доезжает до уже поднятых чатов следующим ходом — без рестарта бэкенда.
+    private bool HttpMcpEnabled() =>
+        _config.GetValue(Services.Mcp.Http.McpHttpTransport.EnabledKey, true);
+
+    // Сводный признак «у сессии есть продуктовые MCP-серверы, чей адрес допускает http»
+    // (ADR-012): от него (вместе с живым рубильником) зависит NO_PROXY хода — обход прокси
+    // нужен ЛЮБОМУ http-серверу, а не только виджетам. Решение стоит на едином гейте
+    // HttpEndpointUsable (каждый Build*Context уже прогнал через него свой UseHttp) —
+    // отдельного условия «виджеты на http» больше нет; во волне 2 к widgets/memory
+    // добавились tasks/notes/personas, в волне 3 — wsp/notifications/codegraph, в волне 4 —
+    // dify. pmem-консультанты приезжают списком на каждый ход и уточняют признак на стороне
+    // ClaudeSession.
+    private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
+        TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
+        WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
+        CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null) =>
+        widgets is { UseHttp: true } || memory is { UseHttp: true }
+        || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
+        || workspace is { UseHttp: true } || notifications is { UseHttp: true }
+        || codeGraph is { UseHttp: true } || dify is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -628,6 +723,21 @@ public class SessionManager : IDisposable
     private bool BrowserEnabled(string? ownerId, Persona? persona) =>
         persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
 
+
+    // Контекст MCP-сервера баз знаний Dify (ADR-012, волна 4 — последний продуктовый
+    // сервер фазы 2). Подключается при настроенной секции Dify (ApiUrl/ApiKey — источник
+    // правды ключа с волны 4: внешний dify-узел базового конфига им перекрывается).
+    // Проект/дефолтный датасет в контекст не входят: тулсет резолвит их живьём из
+    // сессии-вызывателя (датасет появляется у проекта в середине жизни чата).
+    // DifyUrl/DifyKey — только stdio-ветке отката (env узла mcp-dify/dist).
+    private DifyMcpContext? BuildDifyContext(string? ownerId)
+    {
+        if (ownerId is null) return null;
+        if (string.IsNullOrEmpty(_dify.ApiUrl) || string.IsNullOrEmpty(_dify.ApiKey)) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new DifyMcpContext(apiUrl, _dify.ApiUrl.TrimEnd('/'), _dify.ApiKey,
+            () => GetServiceToken(ownerId), UseHttp: HttpEndpointUsable(apiUrl));
+    }
 
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
@@ -641,8 +751,47 @@ public class SessionManager : IDisposable
     {
         if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
-        var token = GetServiceToken(ownerId);
-        return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new CodeGraphMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, sessionId, rootPath,
+            UseHttp: HttpEndpointUsable(apiUrl));
+    }
+
+    // Право чата на десктопную грань по СУЩНОСТИ чата — единая точка правды (ADR-008:
+    // «Грань не доставляется в ходы исполнения задач, отложенные и регулярные чаты,
+    // групповые чаты»), никаких дублей-предикатов рядом. internal static — чистая функция,
+    // тестируется напрямую (DesktopTurnEligibleTests).
+    internal static bool DesktopTurnEligible(Session session) =>
+        // Десктопный ли чат (тип чата «Десктопный») — свойство конфигурации чата, а не хода
+        session.DesktopChat
+        // Чат-исполнитель задачи (в том числе отложенной и регулярной — их создаёт
+        // TaskExecutionService по расписанию, человека у машины в этот момент нет) и чат
+        // правила проактивности: Origin выводится из TaskId/AutomationRuleId (Session.Origin)
+        && session.Origin == ChatOrigin.Manual
+        && !session.TaskExecution
+        // Групповой чат: руки одного устройства на несколько собеседников не делятся.
+        // Participants заполняется ТОЛЬКО у групповых (ValidateParticipants: 2–8 персон);
+        // чат с одной персоной хранит её в PersonaId — поэтому «есть участники» == «групповой».
+        // Проверяем Count > 0, а не Count > 1: если валидацию состава когда-нибудь ослабят
+        // до одиночных участников, грань не должна молча поехать в чат с чужой персоной.
+        && session.Participants is not { Count: > 0 };
+
+    // Контекст MCP-сервера десктопной грани (ADR-008, «Два уровня, которые нельзя смешивать»):
+    // состав грани решает КОНФИГУРАЦИЯ на момент запуска CLI — тип чата «Десктопный» плюс
+    // включение грани в проекте, — и никогда состояние хода. Право на каждый конкретный вызов
+    // проверяет бэкенд (DesktopAccessGate), поэтому здесь нет ни сеанса рук, ни устройства:
+    // их появление и исчезновение не должно менять tools/list и перезапускать процесс CLI.
+    // Право чата по его сущности — DesktopTurnEligible (единственная точка правды);
+    // персона может отказаться от грани Off-привязкой tool:desktop, как от codegraph/widgets.
+    private DesktopMcpContext? BuildDesktopContext(string? ownerId, Session session, Persona? persona)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (!DesktopTurnEligible(session)) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.DesktopAgent)) return null;
+        if (_projects.GetById(session.ProjectId!)?.DesktopAgentEnabled != true) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "desktop")) return null;
+        // Capability-токен чата, а не сервисный JWT владельца: /api/devices/* его не принимают
+        return new DesktopMcpContext(ResolveTasksApiUrl(ownerId),
+            _desktopTokens.TokenFor(ownerId, session.Id), session.Id);
     }
 
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): только
@@ -658,19 +807,22 @@ public class SessionManager : IDisposable
             "Не убирай и не меняй значение при amend/squash.";
     }
 
-    // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
+    // Контекст MCP-сервера памяти персоны (та же фабрика сервисного токена, что у tasks/notes).
     // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
     // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
-    // пишет ли она в команду реально — решает бэкенд-гейт (ProjectsController.TeamMemoryWriteAllowed).
+    // пишет ли она в команду реально — решает бэкенд-гейт (TeamMemoryService.WriteDeniedFor).
     // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): гейт по
     // флагу ВЛАДЕЛЬЦА change-dossiers-recall. Решение стабильно в рамках сессии (флаг меняется
     // человеком из меню редко) и входит в отпечаток состава сервера (shapes memory) — от
     // СВОЙСТВ ХОДА состав tools/list не зависит (инвариант McpToolsetStabilityTests).
+    // UseHttp — сервер памяти переехал в Kestrel (ADR-012, фаза 2): ход зовёт его по http
+    // (personaId/projectId едут хвостом URL), процесса node нет; false — откат на stdio.
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
-        var token = GetServiceToken(ownerId);
-        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), token, personaId, projectId,
-            DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall));
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
+            DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall),
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -718,11 +870,16 @@ public class SessionManager : IDisposable
                         text);
                 }
 
-                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore, dossier);
+                // Перестановка блока досье в свою секцию (план «Секции промптов» этап 3) —
+                // за тем же флагом, что и вклейка prompt-sections (dark launch единым флагом):
+                // выключен — досье остаётся ВНУТРИ recall-memory, как до фичи.
+                var splitDossier = _flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections);
+                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore,
+                    dossier, splitDossier);
                 var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
                 if (completed != recallTask) return null;   // таймаут — ход без recall
                 var recall = await recallTask;
-                if (recall?.Text is null) return null;
+                if (recall?.Text is null && recall?.DossierText is null) return null;
                 // Манифест: hits личной памяти + команды проекта + паспорта → айтемы (F3).
                 // Паспорта — видимость для человека: видно, какие записи истории решений
                 // реально учтены персоной в этом ходу.
@@ -731,7 +888,7 @@ public class SessionManager : IDisposable
                     .Concat(recall.DossierHits.Select(d => new RecallItem("dossier", d.Id,
                         $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                     .ToList();
-                return new RecallBlock(recall.Text, items);
+                return new RecallBlock(recall.Text, items, recall.DossierText);
             }
             catch (Exception ex)
             {
@@ -1137,6 +1294,182 @@ public class SessionManager : IDisposable
         return false;
     }
 
+    // Убрать чат в архив (archived = true) / вернуть (false). Единственная точка записи
+    // полей архива — как SetParent для группировки. by — "user" (пункт меню) | "rule"
+    // (автоправило), batchId — идентификатор прохода правила (откат возвращает ровно одну
+    // пачку; у ручной архивации null).
+    //
+    // UpdatedAt/LastReadAt намеренно НЕ трогает (как SetExpiry): по ним сортируется список
+    // и считается непрочитанность, а архивация — не активность; возврат не должен всплывать
+    // чат наверх и метить его непрочитанным. Признак архива производный (Session.IsArchived),
+    // поэтому «снять архив» — это сброс полей, и повторная активность снимет его и без
+    // мутатора. Попутно копируем транскрипт в data/archived-transcripts (архивация) или
+    // возвращаем его в профиль (возврат) — best-effort, сбой файловой части не роняет вызов.
+    //
+    // SaveSessions сознательно НЕ зовём: ручная архивация сохранит стор сразу после вызова,
+    // а проход автоправила пишет файл ОДИН раз на всю пачку (до 200 чатов за тик — иначе
+    // каждая архивация перезаписывала бы sessions.json целиком и дёргала sweep).
+    public Session? SetArchived(string sessionId, bool archived, string by, string? batchId = null)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (archived)
+        {
+            entry.Info.ArchivedAt = DateTime.UtcNow;
+            entry.Info.ArchivedBy = by;
+            entry.Info.ArchiveBatchId = batchId;
+            ArchiveTranscriptCopy(entry.Info);
+        }
+        else
+        {
+            entry.Info.ArchivedAt = null;
+            entry.Info.ArchivedBy = null;
+            entry.Info.ArchiveBatchId = null;
+            RestoreTranscriptCopy(entry.Info);
+        }
+        return entry.Info;
+    }
+
+    // Копия транскрипта при архивации: источники — ВСЕ корни профилей, как у уборки при
+    // удалении (DeleteTranscript): за время жизни чат мог мигрировать между профилями и
+    // рабочими папками, а миграции исходники не удаляют. Сам стор валидирует csid белым
+    // списком и гейтит десктопные чаты; best-effort — сбой не имеет права ронять архивацию.
+    private void ArchiveTranscriptCopy(Session info)
+    {
+        try
+        {
+            if (info.ClaudeSessionId is not string csid) return;
+            _archivedTranscripts.Archive(csid, info.DesktopChat, TranscriptSearchRoots(info), TryResolveCwd(info));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Копия транскрипта при архивации чата {SessionId} не создана", info.Id);
+        }
+    }
+
+    // Возврат копии при возврате чата: цель резолвится НА МОМЕНТ возврата — за время в
+    // архиве могли смениться профиль провайдера (MigrateProviderAsync) и папка уплощённого
+    // cwd (worktree, правка RootPath), поэтому исходный путь не запоминаем.
+    private void RestoreTranscriptCopy(Session info)
+    {
+        try
+        {
+            if (info.ClaudeSessionId is not string csid) return;
+            var hostCwd = TryResolveCwd(info);
+            if (hostCwd is null) return;
+            var ownerId = ResolveOwnerId(info);
+            _archivedTranscripts.Restore(csid,
+                ConfigRootFor(ownerId, info.Provider), CwdForOwner(ownerId, hostCwd));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Копия транскрипта при возврате чата {SessionId} не возвращена", info.Id);
+        }
+    }
+
+    // Корни профилей CLI для поиска транскрипта чата: все конфиг-корни провайдеров плюс
+    // профили песочницы владельца (раскладка RewriteProfileEnv; берём ВСЕ папки владельца,
+    // а не один ключ — чат мог мигрировать). Выделено из DeleteTranscript: тот же список
+    // нужен и копии при архивации.
+    private IEnumerable<string> TranscriptSearchRoots(Session info)
+    {
+        var roots = new List<string>(_llmProviders.GetAllConfigRoots());
+        if (ResolveOwnerId(info) is string ownerId)
+        {
+            var ownerProfiles = Path.Combine(_sandbox.ProfilesHostDir, ownerId);
+            if (Directory.Exists(ownerProfiles))
+                roots.AddRange(Directory.GetDirectories(ownerProfiles));
+        }
+        return roots;
+    }
+
+    // Ручная архивация/возврат из архива (PUT /api/chats/{id}/archived, шаг 2 плана
+    // «Архив чатов»): обёртка над SetArchived для точки входа из UI — гейт живости,
+    // снятие срока временного чата, персист и событие ленты chat_archived. Автоправило
+    // (ChatArchiveService) зовёт SetArchived напрямую: у него свой гейт отбора и одна
+    // SaveSessions() на всю пачку.
+    //
+    // Гейт живости — только на архивацию: возврат ничего не рвёт, а «вернуть из архива,
+    // пока идёт ход» — ровно то, что происходит при снятии архива активностью. 409 на
+    // живом ходе отсюда уезжает InvalidOperationException (конвенция RestartWave и др.).
+    public async Task<Session?> SetArchivedAsync(string sessionId, string ownerId, bool archived)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } info) return null;
+        if (archived && _sessions.TryGetValue(sessionId, out var entry))
+        {
+            if (HasTurnInFlight(entry))
+                throw new InvalidOperationException(
+                    "В чате идёт ход — дождитесь его завершения или прервите его, затем уберите чат в архив");
+            if (entry.Process is { HasTrackedBg: true })
+                throw new InvalidOperationException(
+                    "В чате работают фоновые агенты — дождитесь их завершения, затем уберите чат в архив");
+            // Временный чат: архив бессрочен до возврата, срок снимаем ДО записи признака
+            // архива — иначе чат умер бы по таймеру ChatExpiryService уже в архиве
+            // (SetExpiry заодно обнуляет ExpiryAnchor). SetExpiry пишет стор сам —
+            // промежуточное состояние «срок снят, архива нет» безопасно.
+            if (info.ExpiresAfterMinutes is not null) SetExpiry(sessionId, null);
+        }
+        var updated = SetArchived(sessionId, archived, by: "user");
+        if (updated is null) return null;
+        SaveSessions();
+        await BroadcastChatArchivedAsync(sessionId, updated, archived);
+        return updated;
+    }
+
+    // Уведомить клиентов об архивации/возврате чата (адресация как у BroadcastChatDeletedAsync):
+    // project-группа для проектной сессии, user-группа для чата вне проекта
+    private async Task BroadcastChatArchivedAsync(string sessionId, Session info, bool archived)
+    {
+        var msg = new ChatArchivedMessage(archived) with { SessionId = sessionId };
+        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        if (info.ProjectId is string pid)
+            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+        else if (info.OwnerId is string oid)
+            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+        await Task.WhenAll(tasks);
+    }
+
+    // Проход автоправила архивации (ChatArchiveService, шаг 6 плана v4): заархивировать
+    // пачку одним batchId — ОДНОЙ SaveSessions на весь проход (до 200 чатов; иначе каждая
+    // архивация переписывала бы sessions.json целиком и дёргала sweep) и событием
+    // chat_archived каждому чату. Гейт живости не повторяем: отбор кандидатов
+    // (GetArchiveRuleCandidates) уже его отработал; кому-то стать живым между отбором и
+    // записью — допустимая гонка, чат вернёт из архива собственная активность.
+    public async Task ArchiveBatchAsync(IReadOnlyCollection<string> sessionIds, string batchId)
+    {
+        var archived = new List<(string Id, Session Info)>();
+        foreach (var id in sessionIds)
+        {
+            var updated = SetArchived(id, archived: true, by: "rule", batchId);
+            if (updated is not null) archived.Add((id, updated));
+        }
+        if (archived.Count == 0) return;
+        SaveSessions();
+        foreach (var (id, info) in archived)
+            await BroadcastChatArchivedAsync(id, info, archived: true);
+    }
+
+    // Откат пачки автоправила из уведомления/раздела «Архив»: вернуть РОВНО чаты прохода
+    // batchId (ArchivedBy="rule" и чат ещё в архиве), а не всю историю правила. Одна
+    // SaveSessions на пачку, событие возврата каждому. Владелец — по GetOwned: батч-id
+    // приходит из URL, чужой не должен возвращать чужие чаты (даже угаданный).
+    public async Task<int> RestoreArchiveBatchAsync(string ownerId, string batchId)
+    {
+        var restored = new List<(string Id, Session Info)>();
+        foreach (var s in _sessions.Values.Select(e => e.Info)
+                     .Where(s => s.ArchiveBatchId == batchId && s.ArchivedBy == "rule" && s.IsArchived)
+                     .ToList())
+        {
+            if (GetOwned(s.Id, ownerId) is null) continue;
+            var updated = SetArchived(s.Id, archived: false, by: "user");
+            if (updated is not null) restored.Add((s.Id, updated));
+        }
+        if (restored.Count == 0) return 0;
+        SaveSessions();
+        foreach (var (id, info) in restored)
+            await BroadcastChatArchivedAsync(id, info, archived: false);
+        return restored.Count;
+    }
+
     // Включить/выключить временность чата: minutes > 0 — авто-удаление через N минут
     // после последней активности, null — обычный чат.
     //
@@ -1206,6 +1539,23 @@ public class SessionManager : IDisposable
     // Все сессии (для планировщика авто-удаления временных чатов)
     public IReadOnlyCollection<Session> GetAll() =>
         _sessions.Values.Select(e => e.Info).ToList();
+
+    // Разовая переадресация закреплённых моделей (миграция каталога провайдера): id из карты
+    // заменяется, всё остальное — включая незнакомые модели и «preset:{id}» — остаётся как есть.
+    // Возвращает число изменённых чатов; 0 — стор на диск не переписывается.
+    // Идёт через живой реестр, а не файл: иначе первый же SaveSessions вернул бы старые id.
+    public int RemapModels(IReadOnlyDictionary<string, string> map)
+    {
+        var changed = 0;
+        foreach (var info in _sessions.Values.Select(e => e.Info))
+        {
+            if (info.Model is null || !map.TryGetValue(info.Model.Trim(), out var next)) continue;
+            info.Model = next;
+            changed++;
+        }
+        if (changed > 0) SaveSessions();
+        return changed;
+    }
 
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
     // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень
@@ -1340,21 +1690,45 @@ public class SessionManager : IDisposable
         {
             _subagentRuns.Record(passport);
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-            if (passport.Truncated) entry.TruncatedSubagent = passport;
-            // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
-            // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
-            // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
-            // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
-            else if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+            if (passport.Truncated)
             {
-                entry.SubagentNudges = 0;
-                entry.NudgeAgentId = null;
+                entry.TruncatedSubagent = passport;
+                // Фоновый агент: продукт ТОЛЬКО ЧТО объявил его результат готовым посреди хода
+                // координатора (bg_agent_done), и координатор принял обрывок последней реплики
+                // за итог. Ждать result здесь нельзя: ход координатора не заканчивается, а сам
+                // фоновый агент часто дозавершается уже ПОСЛЕ конца хода — тогда отметку не
+                // разбирает никто и чат стоит до сообщения человека (ровно то, что видно в логе:
+                // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
+                if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
+            }
+            else
+            {
+                // Опровержение обрыва: сигнал bg_agent_done обгоняет дозапись финального отчёта
+                // в транскрипт, и пометка могла взвестись по хвосту tool_use агента, который
+                // на деле дописал end_turn. Штатный отчёт гасит ТОЛЬКО СВОЮ пометку — иначе
+                // в чат уходит ложная директива добивания давно завершившегося агента, а чужая
+                // пометка (другой AgentId) ждёт отчёта своего агента.
+                if (RefutesTruncation(entry.TruncatedSubagent?.AgentId, passport.AgentId))
+                    entry.TruncatedSubagent = null;
+                if (RefutesTruncation(entry.TruncatedBgNote?.AgentId, passport.AgentId))
+                    entry.TruncatedBgNote = null;
+                // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
+                // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
+                // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
+                // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
+                if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+                {
+                    entry.SubagentNudges = 0;
+                    entry.NudgeAgentId = null;
+                }
             }
         };
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
-    private static string EffectiveRoot(Session session, string fallbackRoot) =>
+    // internal — той же формулой DifyToolset резолвит дефолтный датасет проекта чата
+    // (волна 4): расхождение формул означало бы разный состав tools/list и shape.
+    internal static string EffectiveRoot(Session session, string fallbackRoot) =>
         session.WorktreePath ?? fallbackRoot;
 
     // Корень, куда «Командная реализация» пишет файл полного плана (Э8-доп., 2026-08-02):
@@ -1475,23 +1849,45 @@ public class SessionManager : IDisposable
             await BroadcastAsync(sessionId, new ProviderLimitMessage(resetsAt, options));
     }
 
-    // Явная миграция начатого чата на другого провайдера (кнопка «Продолжить на …» при
-    // исчерпании лимитов). Guard «смена провайдера у начатой сессии — 400» в Update
-    // остаётся: здесь обход осознанный — транскрипт CLI локальный, переносим его в
-    // профиль целевого провайдера и продолжаем разговор через --resume без потери контекста.
+    // «Переезжать некуда»: по СЫРЫМ полям чата (Info.Model → Info.Provider) цель совпала с
+    // текущим провайдером. Для эндпоинта migrate-provider это отказ (просили перенести — не
+    // перенесли, 400), для UpdateAsync — штатный случай: он сравнивает провайдеров по
+    // ЭФФЕКТИВНЫМ моделям, и после переставленного назначения места две картины расходятся.
+    // Отдельный ТИП, а не сравнение текста исключения: текст пишется человеку и меняется, а
+    // ловля по нему молча пропускала бы наружу любую другую форму «переезжать не нужно»
+    // ложным 400 на весь PATCH.
+    private sealed class ProviderUnchangedException()
+        : InvalidOperationException("Чат уже на этом провайдере");
+
+    // Единственная точка смены провайдера у чата: и кнопка «Продолжить на …» (исчерпан
+    // лимит), и обычная смена модели в настройках (UpdateAsync). Транскрипт CLI локальный —
+    // переносим его в профиль целевого провайдера и продолжаем разговор через --resume без
+    // потери контекста.
     // subscriptionKey — явный выбор аккаунта ТОГО ЖЕ пула подписок (кнопка карточки с
     // Kind="subscription"): вместо автовыбора Pick пользователь указывает конкретный ключ.
-    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string model,
+    // model = null — «По умолчанию» из настроек чата, когда назначение места модель не даёт:
+    // переезжаем на родной Claude, ничего не закрепляя. Эндпоинт migrate-provider пустую
+    // модель по-прежнему не принимает — проверка живёт у него.
+    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string? model,
         string? subscriptionKey = null)
     {
         if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
             throw new KeyNotFoundException("Чат не найден");
 
-        var newModel = model?.Trim();
-        if (string.IsNullOrEmpty(newModel))
-            throw new InvalidOperationException("Не указана модель");
+        var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
 
         var target = _llmProviders.ResolveByModel(newModel);
+        // Десктопный чат стороннему вендору не отдаём (ADR-008): в его транскрипте оседают
+        // кадры рабочего стола (desktop_screen пишет base64 в .jsonl), а миграция — это копия
+        // файла в чужой профиль плюс --resume с чужим ANTHROPIC_BASE_URL. Автоматический
+        // фолбэк то же правило держит обрезкой цепочки (TrimChainForDesktop); здесь — второй
+        // шлюз, на единственной точке РУЧНОЙ смены провайдера: и настройки чата (UpdateAsync),
+        // и кнопка «Продолжить на …» карточки provider_limit. Ротация внутри пула подписок
+        // Claude (target is null) правилом не затронута — эндпоинт и владелец данных те же.
+        if (entry.Info.DesktopChat && target is not null)
+            throw new InvalidOperationException(
+                "Десктопный чат нельзя перевести на стороннего провайдера: в его истории есть "
+                + "кадры рабочего стола. Останьтесь на Claude или заведите обычный чат");
         if (target is { Enabled: false })
             throw new InvalidOperationException(
                 $"Провайдер «{target.DisplayName}» не настроен: задай LlmProviders:{target.Key}:ApiKey");
@@ -1523,12 +1919,18 @@ public class SessionManager : IDisposable
                 // префиксу ни одного провайдера — фронт и реестр рассинхронизированы (каталог
                 // /api/models отдал id, которого текущий LlmProviderRegistry не знает). Молчаливый
                 // фолбэк на Pick давал ложное «Чат уже на этом провайдере» (Pick выбирал тот же
-                // аккаунт пула, что текущий). Если чат сейчас на подписке и модель РЕАЛЬНО другая —
-                // это не смена аккаунта, а неизвестная модель, говорим правду. Совпадает с текущей
-                // моделью — значит и правда та же подписка, корректное «уже на провайдере» ниже.
-                var currentIsSubscription = _subscriptionPool.All.Any(s => s.Key == currentKey);
-                if (currentIsSubscription
-                    && !string.Equals(newModel, entry.Info.Model, StringComparison.OrdinalIgnoreCase))
+                // аккаунт пула, что текущий), поэтому неизвестную модель называем вслух.
+                // Два случая различает ФОРМА id (IsNativeClaudeModel), а не сравнение с
+                // Info.Model: у чата на «По умолчанию» она null, и по ней opus при живом пуле
+                // выглядел как неизвестная модель — PATCH настроек падал с ложным «модель не
+                // найдена» (дефект 3-й итерации). Проверка безусловная: форма id от наличия
+                // пула подписок не зависит, а на коробке БЕЗ ClaudeSubscriptions мусорный id
+                // иначе доезжал бы до Pick → PrimaryKey → «уже на этом провайдере», молча
+                // ложился в Info.Model и валил каждый следующий ход.
+                // Родная модель идёт дальше в Pick: тот вернёт либо текущий аккаунт (переезд
+                // вырождается в «просто закрепить модель» — ProviderUnchangedException ниже),
+                // либо здоровый другой — это штатная ротация пула кнопкой «Продолжить на …».
+                if (!LlmProviderRegistry.IsNativeClaudeModel(newModel))
                     throw new InvalidOperationException(
                         $"Модель «{newModel}» не найдена среди настроенных провайдеров");
                 targetKey = _subscriptionPool.Pick(newModel);
@@ -1540,8 +1942,11 @@ public class SessionManager : IDisposable
         }
 
         if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Чат уже на этом провайдере");
+            throw new ProviderUnchangedException();
 
+        // Разделитель «Продолжено на …» ставим только по факту переноса: в чате, где
+        // переносить было нечего, продолжать тоже нечего — карточка врала бы.
+        var transcriptMoved = false;
         if (entry.Info.ClaudeSessionId is not null)
         {
             var hostCwd = TryResolveCwd(entry.Info)
@@ -1550,9 +1955,24 @@ public class SessionManager : IDisposable
             // другие. Исключение ToRuntime (путь вне монтирований) намеренно не глушим:
             // операция явная, пользователь должен увидеть причину отказа (400)
             var cwd = CwdForOwner(ownerId, hostCwd);
-            if (!TranscriptMigrator.TryMigrate(ConfigRootFor(ownerId, currentKey),
-                    ConfigRootFor(ownerId, targetKey), cwd, entry.Info.ClaudeSessionId, out var error))
+            var srcRoot = ConfigRootFor(ownerId, currentKey);
+            // Различаем «переносить нечего» и «перенос сорвался» — TryMigrate отдаёт false в
+            // обоих случаях, а последствия разные. Транскрипта может не быть вовсе:
+            // ClaudeSessionId выставляется на ЛЮБОМ первом ходе (включая служебный kickoff
+            // онбординга), а файл к этому моменту мог не появиться, чат мог быть создан из
+            // чужого resumeSessionId, либо его убрала плановая уборка CLI. Терять нечего —
+            // меняем провайдера и пишем строку в лог. Сорвавшийся же перенос НАЙДЕННОГО файла
+            // остаётся жёстким отказом: TryMigrate возвращает false и по таймауту копирования
+            // живого файла (CopyFileShared, дедлайн 8 с), а это молчаливая потеря контекста.
+            if (TranscriptMigrator.FindTranscript(srcRoot, cwd, entry.Info.ClaudeSessionId) is null)
+                Console.Error.WriteLine(
+                    $"[SessionManager] Чат {sessionId}: транскрипт {entry.Info.ClaudeSessionId} "
+                    + $"не найден в {srcRoot} — переносить нечего, меняем провайдера");
+            else if (!TranscriptMigrator.TryMigrate(srcRoot, ConfigRootFor(ownerId, targetKey),
+                         cwd, entry.Info.ClaudeSessionId, out var error))
                 throw new InvalidOperationException($"Не удалось перенести транскрипт: {error}");
+            else
+                transcriptMoved = true;
         }
 
         entry.Info.Model = newModel;
@@ -1572,12 +1992,29 @@ public class SessionManager : IDisposable
             RestoreUserMode(sessionId, entry);
         SaveSessions();
 
-        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI»
-        var switchLabel = pickedSub is not null
-            ? $"Продолжено на подписке «{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»"
-            : $"Продолжено на {(target is null ? "AI" : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName)}";
+        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI».
+        // Label = null — сообщение уходит без разделителя: висящую карточку «Продолжить на …»
+        // оно всё равно гасит (chatReducer), а ленту не засоряет. Разделителя нет в двух
+        // случаях: переносить было нечего (продолжать нечего — карточка врала бы) и автовыбор
+        // ДРУГОГО аккаунта того же пула Claude (ротация подписок по договорённости тихая: тип
+        // поставщика не менялся, а «Продолжено на AI» читается как уход к другому вендору).
+        // Явный тык в карточку подписки (pickedSub) подпись сохраняет — это выбор человека.
+        string? switchLabel = null;
+        if (transcriptMoved)
+        {
+            if (pickedSub is not null)
+                switchLabel = "Продолжено на подписке "
+                    + $"«{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»";
+            else if (target is not null)
+                switchLabel = "Продолжено на "
+                    + (string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName);
+            // Возврат СО стороннего провайдера на родной Claude — смена типа поставщика, подпись нужна
+            else if (_llmProviders.GetByKey(currentKey) is not null)
+                switchLabel = "Продолжено на AI";
+        }
         await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, switchLabel));
-        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} ({newModel})");
+        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} "
+            + $"({newModel ?? "по умолчанию"}, транскрипт: {(transcriptMoved ? "перенесён" : "нечего переносить")})");
         return entry.Info;
     }
 
@@ -1604,6 +2041,18 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Info.SummaryNoteId = noteId;
+        SaveSessions();
+    }
+
+    // Кэш сводки карточки архива (ChatDigestService, место chat-digest): текст и момент
+    // сборки — при UpdatedAt > ArchiveSummaryAt сводка не актуальна (см. Session).
+    // UpdatedAt намеренно не двигается: сборка сводки — не активность чата, иначе она
+    // сама снимала бы архив и поднимала чат в списке. null — сбросить кэш.
+    public void SetArchiveSummary(string sessionId, string? summary)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Info.ArchiveSummary = summary;
+        entry.Info.ArchiveSummaryAt = summary is null ? null : DateTime.UtcNow;
         SaveSessions();
     }
 
@@ -1683,7 +2132,7 @@ public class SessionManager : IDisposable
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null)
+        string? onboardingKind = null, bool desktopChat = false)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -1705,6 +2154,9 @@ public class SessionManager : IDisposable
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
+            // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
+            // состав грани фиксируется на момент запуска CLI
+            DesktopChat = desktopChat,
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -1917,6 +2369,13 @@ public class SessionManager : IDisposable
             .Where(s => ResolveOwnerId(s) == ownerId)
             .ToList();
 
+    // Живая персона чата для цепочки фолбэка (ClaudeSession.EffectiveTurnChain →
+    // ResolveChain с матрицами персоны): перечитывается на каждый ход — правка матриц
+    // персоны/специальности применяется со следующего хода без пересоздания адаптера.
+    // null — у чата нет персоны (или владельца).
+    private Func<Persona?> BuildPersonaProvider(Session session, string? ownerId) =>
+        () => session.PersonaId is { } pid && ownerId is not null ? _personas.Get(pid, ownerId) : null;
+
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
     // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
@@ -1924,7 +2383,7 @@ public class SessionManager : IDisposable
     private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<RecallBlock?>>? Recall, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
-        // Онбординг пользователя (фича default-personas-onboarding): персоны у сессии ещё
+        // Онбординг пользователя (знакомство): персоны у сессии ещё
         // нет — слой ведёт системный «Мастер настройки» тем же каналом PersonaPromptProvider.
         // После назначения дефолта персона садится в эту же сессию (SetPersona → AdapterStale),
         // слой пересобирается и становится обычным персонным.
@@ -1999,9 +2458,9 @@ public class SessionManager : IDisposable
         return (prompt, null, null, persona);
     }
 
-    // Блок «Командные механики» для руководителя проекта (мост в механики, фича
-    // default-personas-onboarding): добавляется, только когда персона чата — дефолт-персона
-    // его проекта (Project.DefaultPersonaId). Состав — по установленным скиллам
+    // Блок «Командные механики» для руководителя проекта (мост в механики): добавляется,
+    // только когда персона чата — дефолт-персона его проекта (Project.DefaultPersonaId).
+    // Состав — по установленным скиллам
     // (TeamMechanicsPromptCatalog); без SkillsService (тесты) остаются механики без скилла.
     // Только промпт: состав MCP-инструментов не меняется, зависимость от хода отсутствует.
     private string? BuildTeamMechanicsBlock(Session session, Persona persona)
@@ -2068,6 +2527,29 @@ public class SessionManager : IDisposable
         // Off-привязка tool:codegraph убирает и выжимку графа из промпта — заодно с сервером
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         return _ => _codeGraphPrompt.GetSliceAsync(rootPath, fallbackRoot);
+    }
+
+    // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
+    // specialty-prompt-sections): сценарные инструкции «когда и как» по роли (история, граф
+    // кода, процессы, правила роли) — резолвер EffectivePromptSections (SpecialtySettingsStore,
+    // этап 2). Текст хода игнорируется (секции статичны для owner+специальности). null —
+    // провайдер не injecting (тесты), нет владельца/персоны, специальность none или групповой
+    // чат (несколько собеседников — контракт плана: секции только у персонных сессий).
+    // Гейт по флагу — ВНУТРИ, на каждый ход (переключение действует сразу, как у dossier).
+    private Func<string?, Task<string?>>? BuildPromptSectionsProvider(
+        string? ownerId, Session session, Persona? persona)
+    {
+        if (ownerId is null || _specialtySettings is null || persona is null) return null;
+        if (persona.Specialty == PersonaSpecialty.None) return null;
+        if (session.Participants is { Count: > 1 }) return null;
+        return _ =>
+        {
+            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections))
+                return Task.FromResult<string?>(null);
+            var sections = _specialtySettings.EffectivePromptSections(ownerId, persona.Specialty);
+            var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
+            return Task.FromResult(text);
+        };
     }
 
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
@@ -2170,7 +2652,10 @@ public class SessionManager : IDisposable
     // обязан уметь спросить коллег по чату (BuildGroupChatHint прямо отсылает к этому блоку),
     // иначе групповой чат ломается по замыслу. Решение зависит только от персоны и состава
     // чата — детерминировано на сессию, состав tools/list от хода не зависит.
-    private bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
+    // internal: ту же формулу резолвит PersonasToolset по живой сессии-вызывателю (http,
+    // ADR-012 волна 2) — право на сервер проверяется на каждый tools/list и tools/call,
+    // а не только при построении контекста адаптера
+    internal bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
         session.Participants is { Count: > 1 }
         || _bindings.ServerToolEnabled(ownerId, persona, "consultants");
 
@@ -2178,9 +2663,21 @@ public class SessionManager : IDisposable
     // В ГРУППОВОМ чате ключ ИГНОРИРУЕТСЯ по той же причине, что и tool:consultants —
     // BuildGroupChatHint безусловно отсылает к блоку о консультациях (MentionsHint из
     // этого же сервера), Off-привязка сняла бы сервер и подсказка стала бы враньём.
-    private bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
+    // internal — по той же причине, что ConsultantsEnabled: PersonasToolset проверяет
+    // право на сервер персон по живой сессии на каждый вызов (http, ADR-012 волна 2)
+    internal bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
         session.Participants is { Count: > 1 }
         || _bindings.ServerToolEnabled(ownerId, persona, "personas");
+
+    // Решение «в составе ли mentions-группа (persona_ask)» — ЕДИНАЯ формула для tools/list
+    // тулсета (живой резолв по сессии-вызывателю) и отпечатка сигнатуры запуска CLI (shape
+    // через PersonasMcpContext.MentionsToolsEnabled). Две формулы расходились при единственной
+    // персоне владельца: MentionsHint обнулялся (спрашивать некого), а инструмент оставался —
+    // shape говорил m0, tools/list отдавал persona_ask, и любой из переходов бил по запуску
+    // (блокер приёмки волны 2.1). НЕ «MentionsHint != null»: подсказка — про текст промпта,
+    // инструмент — про состав, у них разные условия.
+    internal bool MentionsToolsEnabled(string? ownerId, Session session, Persona? persona) =>
+        PersonasEnabled(ownerId, session, persona) && ConsultantsEnabled(ownerId, session, persona);
 
     // План файловых сабагентов-персон на ход: папки для --add-dir + pmem-серверы памяти
     // видимых персон. Замыкание вычисляется на каждый ход (актуальные персоны и модель
@@ -2200,22 +2697,26 @@ public class SessionManager : IDisposable
                 var addDirs = _agentSync.GetAddDirs(ownerId, session.Model, projectId);
                 // pmem — для ВСЕХ видимых персон с памятью (включая персону самого чата):
                 // файлы в add-dir видны все, а Task(agentType=handle) может позвать любую.
-                // Объявление НЕ бесплатное: каждый сервер — отдельный процесс node на ход
-                // (CLI поднимает все stdio-серверы конфига на старте, alwaysLoad на это не
-                // влияет — см. docs/architecture/mcp-servers.md). Сузишь этот список —
-                // сузишь и круг персон, которых можно позвать сабагентом.
+                // С stdio объявление стоило процессом node на каждого консультанта (CLI
+                // поднимает все stdio-серверы конфига на старте, alwaysLoad на это не
+                // влияет — см. docs/architecture/mcp-servers.md); на http-транспорте
+                // (ADR-012, фаза 2) все pmem_* живут в Kestrel одним тулсетом — процессов
+                // нет, сколько бы персон ни было смонтировано. Сузишь список — сузишь и
+                // круг персон, которых можно позвать сабагентом.
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
-                var token = GetServiceToken(ownerId);
+                var apiUrl = ResolveTasksApiUrl(ownerId);
+                var tokenFactory = () => GetServiceToken(ownerId);
+                var useHttp = HttpEndpointUsable(apiUrl);
                 // ProjectId консультанта — проект ТЕКУЩЕГО чата (как у BuildPersonaLayer выше), не
                 // scope самого консультанта: приглашённая в проектный workflow глобальная персона
                 // тоже должна видеть team_memory_list/search этого проекта (read-only — пишет только
-                // персона САМОГО проекта, гейт в ProjectsController.TeamMemoryWriteAllowed).
+                // персона САМОГО проекта, гейт в TeamMemoryService.WriteDeniedFor).
                 var servers = subagents
                     .Where(p => p.MemoryEnabled)
                     .Select(p => new ConsultantMemoryServer(
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
-                        ResolveTasksApiUrl(ownerId), token, p.Id, projectId))
+                        apiUrl, tokenFactory, p.Id, projectId, useHttp))
                     .ToList();
                 var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
                 return new PersonaAgentsContext(addDirs, servers, handles);
@@ -2324,12 +2825,14 @@ public class SessionManager : IDisposable
             || _bindings.SectionEnabled(ownerId, persona, "personas-manage");
         var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
-        var token = GetServiceToken(ownerId);
-        return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new PersonasMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true,
             extraProjectIds.Count > 0 ? extraProjectIds : null,
             extraPersonaIds.Count > 0 ? extraPersonaIds : null,
-            ManageEnabled: manage, AutomationEnabled: automation);
+            ManageEnabled: manage, AutomationEnabled: automation,
+            UseHttp: HttpEndpointUsable(apiUrl),
+            MentionsToolsEnabled: MentionsToolsEnabled(ownerId, session, persona));
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
@@ -2345,7 +2848,26 @@ public class SessionManager : IDisposable
         string? selfSessionId, Persona? persona)
     {
         if (ownerId is null) return null;
+        var plan = BuildWorkspacePlan(ownerId, projectId, persona);
+        if (plan is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new WorkspaceMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
+            plan.Sections, plan.AllowedProjectIds, selfSessionId,
+            UseHttp: HttpEndpointUsable(apiUrl));
+    }
 
+    /// <summary>
+    /// План сервера рабочего пространства: секции инструментов и зона проектов.
+    /// ЕДИНАЯ формула состава (ADR-012, волна 3): её зовёт и BuildWorkspaceContext (конфиг
+    /// хода и отпечаток shapes), и WorkspaceToolset (живой tools/list по сессии из хвоста
+    /// маршрута). Состав и его отпечаток, посчитанные двумя формулами, расходятся — блокер
+    /// приёмки волны 2 у personas. null — сервер не подключается (все секции выключены).
+    /// </summary>
+    internal sealed record WorkspaceMcpPlan(IReadOnlyList<string> Sections,
+        IReadOnlyList<string>? AllowedProjectIds);
+
+    internal WorkspaceMcpPlan? BuildWorkspacePlan(string ownerId, string? projectId, Persona? persona)
+    {
         var sections = new List<string>();
         foreach (var key in new[] { "projects", "files", "knowledge" })
             if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
@@ -2416,9 +2938,7 @@ public class SessionManager : IDisposable
             allowedIds = set.ToList();
         }
 
-        var token = GetServiceToken(ownerId);
-        return new WorkspaceMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            sections, allowedIds, selfSessionId);
+        return new WorkspaceMcpPlan(sections, allowedIds);
     }
 
     // Контекст MCP-серверов внешних модулей (контракт §6, ТЗ R7): по каждому модулю
@@ -2555,8 +3075,9 @@ public class SessionManager : IDisposable
     {
         if (ownerId is null) return null;
         if (!_bindings.NotificationsEnabled(ownerId, persona)) return null;
-        var token = GetServiceToken(ownerId);
-        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token, personaId);
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new NotificationsMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId,
+            UseHttp: HttpEndpointUsable(apiUrl));
     }
 
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
@@ -2586,8 +3107,9 @@ public class SessionManager : IDisposable
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
     // Разрешено и ПО ХОДУ разговора: персона-слой строится на каждый ход, транскрипт
     // продолжается через --resume с новым системным слоем. Модель/усилие подтягиваются
-    // из персоны; у начатой сессии — только при том же провайдере (guard «смена
-    // провайдера у начатой сессии — 400» нерушим: транскрипт живёт у эндпоинта).
+    // из персоны; у начатой сессии — только при том же провайдере: смена собеседника
+    // транскрипт не перевозит (в отличие от явной смены модели), а уводить ход в чужой
+    // профиль CLI молча нельзя — модель персоны просто не применяется.
     public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
@@ -2751,26 +3273,40 @@ public class SessionManager : IDisposable
         // прогона от позднего exited доживающего (см. SessionEntry.DrainOnExitedRun)
         var runId = Interlocked.Increment(ref _runSeq);
 
+        var widgetsMcp = BuildWidgetsContext(ownerId, persona.Persona);
+        var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
+        var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
+            ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
+        var notesMcp = _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes")
+            ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null;
+        var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
+        var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
+        var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
+        var difyMcp = BuildDifyContext(ownerId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
-            TasksMcp: TasksMcpEnabled(ownerId, session, persona.Persona) ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null,
-            NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null,
+            TasksMcp: tasksMcp,
+            NotesMcp: notesMcp,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
-            MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId),
+            PersonaProvider: BuildPersonaProvider(session, ownerId),
+            MemoryMcp: memoryMcp,
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
-            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona),
-            NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona),
+            PersonasMcp: personasMcp,
+            NotificationsMcp: notificationsMcp,
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             CodeGraphProvider: BuildCodeGraphProvider(ownerId, persona.Persona, rootPath, projectRoot),
+            PromptSectionsProvider: BuildPromptSectionsProvider(ownerId, session, persona.Persona),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
-            WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
-            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
+            WidgetsMcp: widgetsMcp,
+            CodeGraphMcp: codeGraphMcp,
+            DifyMcp: difyMcp,
+            DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
@@ -2780,7 +3316,10 @@ public class SessionManager : IDisposable
             DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
-            OrchestrationDone: BuildOrchestrationDone(session.Id)));
+            OrchestrationDone: BuildOrchestrationDone(session.Id),
+            HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
+                workspace, notificationsMcp, codeGraphMcp, difyMcp),
+            HttpMcpEnabledProvider: HttpMcpEnabled));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -3092,6 +3631,16 @@ public class SessionManager : IDisposable
     private string BuildCliTurnText(SessionEntry entry, string text)
     {
         var result = text;
+
+        // Обрыв фонового агента (см. NoteTruncatedBgAgent): CLI объявил его прогон
+        // завершённым и отдал координатору последнюю реплику как результат. Пометка едет
+        // префиксом ближайшего хода — своего хода на неё не тратим, а координатор обязан
+        // знать, что итог по обрывку подводить нельзя. Одноразовая: уехала — снята.
+        if (entry.TruncatedBgNote is { } cutBgAgent)
+        {
+            entry.TruncatedBgNote = null;
+            result = SubagentPrompts.TruncatedBgAgent(cutBgAgent) + "\n\n" + result;
+        }
 
         if (entry.Info.WorkLoop is { } loop)
         {
@@ -4070,27 +4619,38 @@ public class SessionManager : IDisposable
                 ?? throw new InvalidOperationException("У чата не задан владелец"));
             var persona = BuildPersonaLayer(entry.Info, entry.Info.OwnerId);
             var workspace = BuildWorkspaceContext(entry.Info.OwnerId, null, entry.Info.Id, persona.Persona);
+            var widgetsMcp = BuildWidgetsContext(entry.Info.OwnerId, persona.Persona);
+            var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
+                ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
+            var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
+                ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null;
+            var personasMcp = BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona);
+            var notificationsMcp = BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona);
+            var difyMcp = BuildDifyContext(entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
-                TasksMcp: TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null,
-                NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null,
+                TasksMcp: tasksMcp,
+                NotesMcp: notesMcp,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
+                PersonaProvider: BuildPersonaProvider(entry.Info, entry.Info.OwnerId),
                 MemoryMcp: persona.Memory,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona, entry.Info),
-                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona),
-                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona),
+                PersonasMcp: personasMcp,
+                NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(entry.Info.OwnerId, persona.Persona, rootPath),
+                PromptSectionsProvider: BuildPromptSectionsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId, persona.Persona),
+                WidgetsMcp: widgetsMcp,
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
                 CodeGraphMcp: null,
+                DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
@@ -4099,7 +4659,10 @@ public class SessionManager : IDisposable
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
+                HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
+                    workspace, notificationsMcp, dify: difyMcp),
+                HttpMcpEnabledProvider: HttpMcpEnabled);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4109,27 +4672,41 @@ public class SessionManager : IDisposable
             var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
             var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
             var rootPath = EffectiveRoot(entry.Info, project.RootPath);
+            var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
+            var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
+            var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
+                ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
+            var notesMcp = _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes")
+                ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null;
+            var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
+            var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
+            var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
+            var difyMcp = BuildDifyContext(project.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                TasksMcp: TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null,
-                NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null,
+                TasksMcp: tasksMcp,
+                NotesMcp: notesMcp,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
-                MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id),
+                PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
+                MemoryMcp: memoryMcp,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),
-                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona),
-                NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona),
+                PersonasMcp: personasMcp,
+                NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 CodeGraphProvider: BuildCodeGraphProvider(project.OwnerId, persona.Persona, rootPath, project.RootPath),
+                PromptSectionsProvider: BuildPromptSectionsProvider(project.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
-                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
+                WidgetsMcp: widgetsMcp,
+                CodeGraphMcp: codeGraphMcp,
+                DifyMcp: difyMcp,
+                DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
@@ -4139,7 +4716,10 @@ public class SessionManager : IDisposable
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
+                HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp),
+                HttpMcpEnabledProvider: HttpMcpEnabled);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -4285,7 +4865,9 @@ public class SessionManager : IDisposable
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.Name = line;
         entry.Info.NameLocked = true; // явное действие пользователя — авто больше не трогает
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Архивный чат из архива не выводим: «Обновить название» доступен и в разделе
+        // «Архив», а правка названия — не активность разговора (признак архива производный)
+        if (!entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
         return entry.Info;
@@ -4346,8 +4928,14 @@ public class SessionManager : IDisposable
             .Where(e => ResolveOwnerId(e.Info) == userId && (projectId is null || e.Info.ProjectId == projectId))
             .Select(e => e.Info)
             .ToList();
-        // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём
-        var pending = all.Where(s => string.IsNullOrEmpty(s.Topic)).Select(s => s.Id).ToList();
+        // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём.
+        // Архивные — туда же: у старых чатов Topic как раз пуст (значки появились позже),
+        // и один клик «Проставить значки» выводил бы из архива ВСЕ старые чаты (UpdatedAt
+        // двигается в SetChatIconAsync) и заказывал сотни вызовов модели
+        var pending = all
+            .Where(s => string.IsNullOrEmpty(s.Topic) && !s.IsArchived)
+            .Select(s => s.Id)
+            .ToList();
         var processed = 0;
         var skipped = all.Count - pending.Count;
         foreach (var id in pending)
@@ -4376,13 +4964,41 @@ public class SessionManager : IDisposable
         await Task.WhenAll(tasks);
     }
 
+    // Занят ли чат ходом ПРЯМО СЕЙЧАС. Status для этого не годится: у свежего чата он ещё
+    // Starting, а между стартом хода и сменой статуса есть реальное окно. Занятость адаптера
+    // спрашиваем каноническим Busy (живой прогон ИЛИ фолбэк-оркестрация): в паузе между
+    // попытками цепочки прогона CLI нет, но ход идёт — и оркестратор в этот момент сам
+    // копирует транскрипт, так что смена провайдера под ним разошлась бы с его restore.
+    // Плюс признаки, которых Busy не знает: ход, принятый адаптером но ещё не поднявший
+    // процесс, awaited-ход агента (TurnWaiter) и непустая серверная очередь — её сообщения
+    // уедут в тот же чат, и провайдера менять под ними нельзя.
+    private static bool HasTurnInFlight(SessionEntry entry)
+    {
+        if (Busy(entry.Process) || entry.Process is { HasQueuedTurn: true }) return true;
+        if (entry.TurnWaiter is not null) return true;
+        lock (entry.PendingLock) return entry.Pending.Count > 0;
+    }
+
+    // Публичная обёртка HasTurnInFlight для API-слоя (архивация чата, шаг 2 плана
+    // «Архив чатов»): нужен тот же гейт, что у смены провайдера, — Status для этого не
+    // годится (у свежего чата Starting, между стартом хода и сменой статуса есть окно).
+    // false и для отсутствующего чата — гейт по чужому id не должен падать, caller
+    // всё равно ответит 404 по GetOwned.
+    public bool HasTurnInFlight(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && HasTurnInFlight(entry);
+
     // Редактирование названия и модели. Модель применяется со следующего хода
     // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с адаптером.
     //
     // PATCH-семантика: null = «поле не передано, не трогать». Иначе частичные апдейты
-    // (MCP chats_update только с name; PUT {pinned} из togglePin) затирали бы модель/имя,
-    // а для начатой сессии стороннего провайдера ещё и падали с «нельзя сменить провайдера».
-    public Session? Update(string sessionId, string? name, string? model, string? effort, List<string>? tags = null)
+    // (MCP chats_update только с name; PUT {pinned} из togglePin) затирали бы модель/имя.
+    //
+    // ownerId — владелец, от чьего имени идёт правка (UserId контроллера). Единственная
+    // мутирующая точка, где его раньше не было: смена провайдера уходит в
+    // MigrateProviderAsync, а тот проверяет владение — брать владельца из самой сессии
+    // означало бы сверять её саму с собой.
+    public async Task<Session?> UpdateAsync(string sessionId, string ownerId, string? name, string? model,
+        string? effort, List<string>? tags = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
 
@@ -4399,41 +5015,81 @@ public class SessionManager : IDisposable
             var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
 
             // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
-            // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
-            // В рамках одного провайдера/пула модель менять можно.
+            // и «переехавшая» сессия молча потеряла бы его. Прежний запрет «нельзя у начатой
+            // сессии» держался ровно на этом, но с тех пор в продукте завелась миграция
+            // транскрипта — та же, что кнопка «Продолжить на …» даёт живому разговору.
+            // Значит вопрос не в том, начат ли чат, а в том, есть ли что переносить: этим
+            // занимается MigrateProviderAsync.
             var newProvKey = _llmProviders.ResolveByModel(effectiveNew)?.Key;
             var curProvKey = _llmProviders.ResolveByModel(effectiveCur)?.Key;
+            var migrated = false;
             if (newProvKey != curProvKey)
             {
-                if (entry.Info.ClaudeSessionId is not null)
+                // Единственная причина отказа — ход прямо сейчас в полёте: смена провайдера
+                // на лету увела бы ход в другой профиль CLI посреди прогона. Проверка стоит
+                // ЗДЕСЬ, а не внутри MigrateProviderAsync: кнопка «Продолжить на …» аварийная
+                // (приходит при исчерпании лимита, когда ход ещё формально жив), и такая
+                // проверка сломала бы её.
+                if (HasTurnInFlight(entry))
                     throw new InvalidOperationException(
-                        "Нельзя сменить провайдера у начатой сессии — создайте новый чат");
-                // Ходов ещё не было — пересоздаём адаптер нужного типа при следующем сообщении
-                if (entry.Process is { } old)
+                        "Идёт ответ ассистента — дождитесь его завершения, затем смените модель");
+
+                try
                 {
-                    entry.Process = null;
-                    FireAndForget(old.DisposeAsync().AsTask(),
-                        $"остановка адаптера при смене провайдера ({sessionId})");
+                    // effectiveNew = null — выбрали «По умолчанию», а назначение места модель не
+                    // даёт: это переезд на родной Claude без закреплённой модели, а не «модель не
+                    // указана». MigrateProviderAsync такой вызов понимает.
+                    await MigrateProviderAsync(sessionId, ownerId, effectiveNew);
+                    // Сброс на «По умолчанию» не должен закреплять модель: MigrateProviderAsync
+                    // кладёт в Info.Model то, что ему передали (эффективную), и чат переставал бы
+                    // следовать назначению места. Provider внутри уже выставлен.
+                    if (newModel is null) entry.Info.Model = null;
+                    migrated = true;
+                }
+                catch (ProviderUnchangedException)
+                {
+                    // Здесь провайдеров сравнивали по ЭФФЕКТИВНЫМ моделям, а миграция — по сырым
+                    // (Info.Model ?? Info.Provider), и после переставленного назначения места эти
+                    // две картины расходятся: чат с Model = null числится на claude (или на своём
+                    // аккаунте пула), а по назначению эффективно уезжает на glm; выбор opus
+                    // миграция видит как claude → claude. По сырым полям переносить нечего, так
+                    // что это не повод валить 400 весь PATCH (вместе с name/effort/tags) —
+                    // просто закрепляем модель обычной веткой ниже. Настоящая неизвестная
+                    // модель сюда не попадает: у неё свой тип (InvalidOperationException) и
+                    // честный 400 наружу.
                 }
             }
-
-            // В Info.Model кладём именно то, что выбрали: null = «следовать настройке»
-            // (резолвится на каждом ходу, смена настройки подхватывается сама)
-            entry.Info.Model = newModel;
-            // Провайдер ВСЕГДА выводится из модели (комментарий LlmProviderRegistry: модель —
-            // единственный источник правды, Provider не персистится как самостоятельное значение).
-            // Инцидент 14.08.2026: пересчёт был только «в стороннего», и смена glm→opus[1m]
-            // (пилюля модели в NewChatSetup до первого хода) оставляла пару (Claude-модель, ключ
-            // glm) — CLI стартовал в профиле glm с моделью Anthropic → мгновенный 401.
-            if (effectiveNew is not null && _llmProviders.ResolveByModel(effectiveNew) is { } newProv)
-                entry.Info.Provider = newProv.Key;
-            // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): ключ — из пула
-            // (Pick сам отфильтрует исчерпанные/auth-dead, при пустом пуле — PrimaryKey),
-            // модель меняем на лету у живого хода — применится к его последующим round-trip'ам.
-            else if (effectiveNew is not null)
+            if (!migrated)
             {
-                entry.Info.Provider = _subscriptionPool.Pick(effectiveNew);
-                entry.Process?.TrySetModelLive(effectiveNew);
+                // В Info.Model кладём именно то, что выбрали: null = «следовать настройке»
+                // (резолвится на каждом ходу, смена настройки подхватывается сама)
+                entry.Info.Model = newModel;
+                // Провайдер ВСЕГДА выводится из модели (комментарий LlmProviderRegistry: модель —
+                // единственный источник правды, Provider не персистится как самостоятельное значение).
+                // Инцидент 14.08.2026: пересчёт был только «в стороннего», и смена glm→opus[1m]
+                // (пилюля модели в NewChatSetup до первого хода) оставляла пару (Claude-модель, ключ
+                // glm) — CLI стартовал в профиле glm с моделью Anthropic → мгновенный 401.
+                if (effectiveNew is not null && _llmProviders.ResolveByModel(effectiveNew) is { } newProv)
+                    entry.Info.Provider = newProv.Key;
+                // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): ключ — из пула
+                // (Pick сам отфильтрует исчерпанные/auth-dead, при пустом пуле — PrimaryKey),
+                // модель меняем на лету у живого хода — применится к его последующим round-trip'ам.
+                else if (effectiveNew is not null)
+                {
+                    // Чат уже сидит на аккаунте пула, который эту модель тянет — Provider НЕ
+                    // трогаем: транскрипт лежит в профиле именно этого аккаунта, а Pick при
+                    // равных тарифах тай-брейкает случайно (LeastLoaded, deterministic: false).
+                    // Переезд без переноса .jsonl и без AdapterStale не виден сразу (живой
+                    // адаптер держит старый корень), но после рестарта --resume идёт в чужой
+                    // профиль — «No conversation found» и разговор с нуля. Pick нужен ровно
+                    // там, где текущий ключ модель не тянет (пин Opus на плане без Opus) либо
+                    // это возврат со стороннего провайдера/чат вообще без аккаунта пула.
+                    var cur = entry.Info.Provider;
+                    if (cur is null || !_subscriptionPool.All.Any(s => s.Key == cur)
+                        || !_subscriptionPool.SupportsModel(cur, effectiveNew))
+                        entry.Info.Provider = _subscriptionPool.Pick(effectiveNew);
+                    entry.Process?.TrySetModelLive(effectiveNew);
+                }
             }
         }
 
@@ -4454,8 +5110,11 @@ public class SessionManager : IDisposable
         // настройками (срок хранения, тумблер уведомлений — их применяет контроллер до этого
         // вызова, сюда все поля доезжают как null): безусловный UpdatedAt поднимал бы чат
         // в списке и метил непрочитанным просто за смену настройки.
+        // Архивный чат из архива не выводим: правка имени/модели/тегов доступна и в разделе
+        // «Архив», а признак архива производный — UpdatedAt снимает его сам.
         if (name is not null || model is not null || effort is not null || tags is not null)
-            entry.Info.UpdatedAt = DateTime.UtcNow;
+            if (!entry.Info.IsArchived)
+                entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
     }
@@ -4479,10 +5138,40 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (IsStaleInteractionAnswer(sessionId, entry, $"permission {requestId}")) return;
+        // «Разрешать всегда» запоминаем НА СЕССИИ, а не в памяти адаптера: тот пересоздаётся
+        // рестартом сервера, ленивым восстановлением чата и сменой собеседника, и человеку
+        // приходилось жать «всегда» заново. Имя инструмента берём из висящей карточки —
+        // в ответе клиента его нет. Сверяем requestId: у одного хода карточек может быть
+        // несколько (параллельные tool_use), и ответ на неактуальную законен — но запомнить
+        // «всегда» по чужой карточке значило бы выдать бессрочные права инструменту, которому
+        // их не давали. Карточка не та (или имя пустое) — просто не запоминаем, ход идёт
+        // своим чередом.
+        if (behavior == "allow_always"
+            && entry.PendingInteraction is PermissionRequestMessage
+                { ToolName: { Length: > 0 } tool } pending
+            && pending.RequestId == requestId
+            && !entry.Info.AutoAllowTools.Contains(tool, StringComparer.OrdinalIgnoreCase))
+        {
+            entry.Info.AutoAllowTools.Add(tool);
+            SaveSessions();
+        }
         entry.Process?.RespondPermission(requestId, behavior);
         entry.PendingInteraction = null;
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после permission ({sessionId})");
+    }
+
+    // Снять инструмент с «Разрешать всегда» этого чата: следующий его вызов снова спросит.
+    // Идемпотентно — инструмента в списке нет, отдаём сессию как есть (диск не трогаем).
+    // Сравнение имён — OrdinalIgnoreCase, как при проверке в ClaudeSession.
+    // null — сессии нет (владение проверяет контроллер, как у соседних эндпоинтов).
+    // UpdatedAt не двигаем: настройка чата — не активность (см. соглашение о настройках).
+    public Session? RemoveAutoAllowTool(string sessionId, string tool)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (entry.Info.AutoAllowTools.RemoveAll(t => string.Equals(t, tool, StringComparison.OrdinalIgnoreCase)) > 0)
+            SaveSessions();
+        return entry.Info;
     }
 
     public void Interrupt(string sessionId)
@@ -4575,6 +5264,189 @@ public class SessionManager : IDisposable
             "Зависший ход сброшен — чат снова доступен.");
     }
 
+    // === КР-наблюдаемость, этап 3: перезапуск хода штаба без потери работы ===
+
+    // Повреждённый транскрипт: resume запрещён, человеку предлагаем начать ход заново.
+    // Отдельный тип, а не текст в InvalidOperationException: контроллер различает отказ
+    // гейта (просто текст) и этот случай (code=transcript_damaged + кнопка «начать заново»).
+    public sealed class TurnTranscriptDamagedException(string message) : InvalidOperationException(message);
+
+    // Результат перезапуска хода. Resumed=true — следующий ход продолжит разговор по
+    // транскрипту (--resume); false — ход начнётся заново без старого контекста (startFresh).
+    public sealed record StuckTurnRestartResult(bool Resumed, string Message);
+
+    // Ожидание смерти процесса после kill: Kill асинхронен, и «вызвали kill» ≠ «процесс
+    // мёртв». internal — тесты сужают до сотен миллисекунд; прод живёт 20 с (Kill плюс
+    // WaitForExitAsync внутри финализации адаптера занимает до ~10 с).
+    internal TimeSpan KillWaitTimeout { get; set; } = TimeSpan.FromSeconds(20);
+
+    // Порог «живой ход начался недавно — убивать рано» (защита честной долгой работы от
+    // случайного перезапуска). Тот же ключ конфига и дефолт, что у пульса волны
+    // (TeamWaveService._quietThreshold): гейт и индикация обязаны соглашаться по порогу.
+    private readonly TimeSpan _freshTurnThreshold;
+
+    // Гейт повторного вызова: перезапуск — это kill → уборка адаптера → revive, второй
+    // параллельный вызов того же чата (двойной клик) плодил бы процессы и карточки.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _turnRestarts = new();
+
+    // Перезапуск зависшего хода (главный сценарий этапа 3): чат занят, процесс молчит,
+    // написать в него нельзя. Строго по шагам: проверка живости → kill → дождаться смерти →
+    // валидация транскрипта → revive → новый ход с --resume (разбор отложенной очереди:
+    // EnsureProcessAsync поднимёт процесс с --resume по ClaudeSessionId). Рецепт уборки —
+    // тот же, что ReviveStuckSession (карточка → адаптер → статус), но отдельной сборкой:
+    // та шлёт СВОЮ карточку «зависший ход сброшен» fire-and-forget, а здесь статус обязан
+    // встать в Active до разбора очереди и с карточкой перезапуска. Стадия, бюджет и версия
+    // плана живут на Session.TeamImplement и этим путём не трогаются — режим переживает.
+    // Ходов модели сам путь не запускает и квоту пробуждений не тратит: до модели доехают
+    // только сообщения, уже стоявшие в очереди до зависания.
+    public async Task<StuckTurnRestartResult> RestartStuckTurnAsync(string sessionId, bool startFresh)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            throw new InvalidOperationException("Сессия не найдена");
+        // Гейт режима: кнопка и тексты — про штаб «Командной реализации», семантика
+        // перезапуска (kill → resume хода штаба) работает только там. Обобщение на
+        // все чаты — отдельное решение, не побочный эффект.
+        if (entry.Info.TeamImplement is null)
+            throw new InvalidOperationException(
+                "Перезапуск хода доступен только в чате штаба «Командной реализации»");
+        if (!_turnRestarts.TryAdd(sessionId, 0))
+            throw new InvalidOperationException("Ход уже перезапускается — дождитесь результата");
+        try
+        {
+            // 1. Живость: чат обязан быть занят — свободному чату перезапуск не нужен.
+            // Спасательная ветка (major ревью): первый вызов успел убить процесс и
+            // вернуть 409 transcript_damaged, финализация убитого прогона перевела
+            // чат в Active, а отложенная очередь умерла на --resume по тому же битому
+            // файлу. Чат свободен, но resume-якорь отравлен — без пропуска здесь
+            // повторный startFresh вечно упирался бы в «Чат не занят», и у чата не
+            // было бы штатного выхода из повреждённого транскрипта.
+            if (entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting))
+            {
+                var rescue = startFresh
+                    && FindResumeTranscript(entry) is { } damaged
+                    && !Llm.Claude.TranscriptProbe.IsTailIntact(damaged);
+                if (!rescue)
+                    throw new InvalidOperationException(
+                        "Чат не занят: ход не идёт. Просто напишите сообщение — оно продолжит разговор");
+            }
+            // Штаб ждёт ответа человека на карточку (разрешение/вопрос/план) — это не
+            // зависание: ответ лежит в ленте чата, прерывать ожидание рестартом нельзя
+            if (entry.PendingInteraction is not null)
+                throw new InvalidOperationException(
+                    "Штаб ждёт вашего ответа на карточку в чате — перезапуск не нужен, ответьте на неё");
+            // Живой прогон, начавшийся недавно, — честная работа, а не зависание (тот же
+            // порог тишины, что у пульса волны). Долгий немой ход прервать можно — с
+            // сохранением контекста через resume.
+            var quiet = DateTime.UtcNow - entry.Info.UpdatedAt;
+            if (HasLiveTurnProcess(sessionId) && quiet < _freshTurnThreshold)
+                throw new InvalidOperationException(
+                    $"Штаб работает — {(int)Math.Max(0, quiet.TotalMinutes)} мин назад была активность. " +
+                    "Дождитесь результата или остановите ход кнопкой «Стоп»");
+
+            // 2-3. Kill и ОЖИДАНИЕ смерти: HasLiveTurn гаснет в финализации прогона — уже
+            // после WaitForExit самого процесса, поэтому поллинг по нему и есть ожидание
+            // настоящей смерти, а не факта вызова kill.
+            if (entry.Process is { HasLiveTurn: true })
+            {
+                entry.Process.Interrupt();
+                var deadline = DateTime.UtcNow + KillWaitTimeout;
+                while (entry.Process is { HasLiveTurn: true })
+                {
+                    if (DateTime.UtcNow >= deadline)
+                        throw new InvalidOperationException(
+                            "Не удалось остановить зависший процесс — попробуйте ещё раз через минуту");
+                    await Task.Delay(TimeSpan.FromMilliseconds(250));
+                }
+            }
+
+            // 4. Валидация транскрипта: повреждённый (оборванная последняя строка) через
+            // --resume не продолжится. Файл не нашёлся — проверку пропускаем: профиль
+            // подписки пула может не входить в AllowedRoots, и ложный «повреждён» на
+            // здоровом разговоре хуже пропущенной проверки (CLI сам скажет при resume).
+            // startFresh идёт мимо — транскрипт всё равно выбрасываем.
+            if (!startFresh && FindResumeTranscript(entry) is { } transcript
+                && !Llm.Claude.TranscriptProbe.IsTailIntact(transcript))
+                throw new TurnTranscriptDamagedException(
+                    "Файл разговора повреждён — продолжить с прежним контекстом нельзя. " +
+                    "Можно начать ход заново: старый контекст будет потерян, чат снова заработает");
+
+            // 5. Revive: убираем ожидающую карточку и отравленный адаптер (у него мог
+            // остаться захваченным _turnLock зависшей финализацией — DisposeAsync с
+            // _cts.Cancel разблокирует ожидателей), статус в Active.
+            entry.PendingInteraction = null;
+            if (entry.Process is { } dead)
+            {
+                entry.Process = null;
+                FireAndForget(dead.DisposeAsync().AsTask(),
+                    $"уборка адаптера перезапущенного хода ({sessionId})");
+            }
+            // M5 — тот же сброс буфера маркеров, что у Interrupt: убитый ход result не
+            // пришлёт, буфер не потребляется, и маркер мёртвого хода (<escalate:*>,
+            // <team:work>) доклеился бы к следующему и применился задним числом.
+            lock (entry.TeamTurnLock)
+            {
+                entry.TeamTurnText.Clear();
+                entry.TeamTurnShownLength = 0;
+                entry.TurnSawAngleBracket = false;
+                entry.TeamTurnAsked = false;
+            }
+            entry.SkipNextTeamTurnEnd = false;
+            // «Начать заново»: снимаем resume-якорь — следующий адаптер стартует без
+            // --resume, CLI заведёт новую сессию и пришлёт новый id (init ниже допишет)
+            if (startFresh && entry.Info.ClaudeSessionId is not null)
+            {
+                entry.Info.ClaudeSessionId = null;
+                SaveSessions();
+            }
+            await ApplyStatusAsync(sessionId, entry, SessionStatus.Active);
+            // Честный текст (minor ревью): продолжение разговора обещаем, только если
+            // в очереди правда что-то стоит или активный цикл продолжит себя сам —
+            // при пустой очереди нового хода не будет, и «разговор продолжится
+            // с того же места» обещало бы его напрасно.
+            bool willContinue;
+            lock (entry.PendingLock) willContinue = !entry.QueueFrozen && entry.Pending.Count > 0;
+            willContinue |= entry.Info.WorkLoop is not null;
+            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "team_restart",
+                startFresh
+                    ? "Ход перезапущен вручную с чистого листа: прежний контекст утерян — напишите, что делать дальше"
+                    : willContinue
+                        ? "Ход перезапущен вручную — разговор продолжится с сохранённым контекстом"
+                        : "Ход перезапущен вручную — чат снова доступен, контекст сохранён");
+
+            // Новый ход с --resume: сообщения, отложенные зависшим ходом, уходят обычной
+            // доставкой (DrainInFlight гасит параллельные разборы). Замороженная «Стоп»
+            // очередь не разбирается — её держал человек, не мы.
+            await DrainNextPendingAsync(sessionId);
+
+            return new StuckTurnRestartResult(
+                Resumed: !startFresh,
+                Message: startFresh
+                    ? willContinue
+                        ? "Ход начнётся заново — контекст сброшен, чат снова доступен"
+                        : "Контекст сброшен, чат снова доступен — напишите сообщение, чтобы начать новый ход"
+                    : willContinue
+                        ? "Ход перезапущен: чат снова доступен, разговор продолжится с того же места"
+                        : "Ход перезапущен: чат снова доступен — напишите сообщение, чтобы продолжить разговор");
+        }
+        finally { _turnRestarts.TryRemove(sessionId, out _); }
+    }
+
+    // Рабочая папка хода для поиска транскрипта: дерево чата, иначе корень проекта.
+    // Точность тут не критична — TranscriptProbe при промахе по конвенции сканирует
+    // все проекты зарегистрированных корней, cwd лишь сужает первый поиск.
+    private string ResolveTurnCwd(Session info) =>
+        info.WorktreePath
+        ?? (info.ProjectId is { } pid ? _projects.GetById(pid)?.RootPath : null)
+        ?? "";
+
+    // Транскрипт resume-якоря чата: null — якоря нет или файл не найден (проверку
+    // целостности тогда пропускаем). Обе точки RestartStuckTurnAsync — гейт
+    // спасательной ветки и валидация перед resume — ищут файл одним путём.
+    private string? FindResumeTranscript(SessionEntry entry) =>
+        entry.Info.ClaudeSessionId is { } csid
+            ? Llm.Claude.TranscriptProbe.FindMainTranscript(ResolveTurnCwd(entry.Info), csid)
+            : null;
+
     // Дефолт лимитов цикла «до готово». Невалидное значение конфига (не число или ≤ 0)
     // сваливается в дефолт, а не молча отрубает цикл: MaxTaskExecutions=0 иначе даёт
     // Exhausted с первой попытки, MaxIterations=0 — немедленную остановку по лимиту.
@@ -4638,6 +5510,15 @@ public class SessionManager : IDisposable
         if (enabled && entry.Info.TeamImplement is not null)
             throw new SessionModeConflictException(
                 "Автопилот недоступен в чате «Командной реализации» — здесь работа идёт через задачи исполнителям.");
+
+        // ADR-008 («Два уровня, которые нельзя смешивать»): автопродолжение work-loop
+        // в десктопном чате запрещено. Цикл ведёт агента по итерациям без человека, а вся
+        // модель грани держится на том, что человек подтверждает каждое действие на
+        // устройстве. Выключение не запрещаем — вернуть false всегда можно.
+        if (enabled && entry.Info.DesktopChat)
+            throw new SessionModeConflictException(
+                "Цикл «до готово» недоступен в десктопном чате: агент не должен действовать на " +
+                "вашем компьютере без подтверждения каждого действия.");
 
         var wasEnabled = entry.Info.WorkLoop is not null;
         // Присвоение WorkLoop и очистку буфера хода держим под одним локом: иначе обнуление
@@ -4957,7 +5838,8 @@ public class SessionManager : IDisposable
         if (_teamPlanning.ResolveCoordinator(entry.Info, ownerId) is null)
             return (null, "Выберите координатора — чат без персоны штабом быть не может");
 
-        if (_teamPlanning.ResolveCandidates(entry.Info, ownerId).Count == 0)
+        var candidates = _teamPlanning.ResolveCandidates(entry.Info, ownerId);
+        if (candidates.Count == 0)
             return (null, entry.Info.ProjectId is null
                 ? "Выберите исполнителей — вне проекта команды нет, и подбирать не из кого"
                 : "В команде проекта нет персон — выберите исполнителей явно");
@@ -4969,24 +5851,28 @@ public class SessionManager : IDisposable
         var previous = entry.Info.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
             ? await GetTeamPlanAsync(sessionId, prevId)
             : null;
+        // Планировщика резолвим тут же: фронту нужна его персона для карточки «Готовит план…»
+        // в ленте. ResolvePlanner без побочных эффектов (тот же пул кандидатов, что уйдёт
+        // в CreatePlanAsync ниже), так что лишнего запроса не добавляем
+        var plannerPersonaId = _teamPlanning.ResolvePlanner(entry.Info, ownerId, candidates)?.Id;
         // Событие «планировщик запущен» сразу после резолва кандидатов: фронт рисует
         // «Штаб планирует…», а сам факт не путается с долгим молчанием (контракт для Киры).
         var empty = new TeamPlanningService.Result(null, TeamPlanningService.Failure.Failed, null, 0, 0, TimeSpan.Zero);
-        await BroadcastTeamPlanningStartedAsync(sessionId, empty);
+        await BroadcastTeamPlanningStartedAsync(sessionId, empty, plannerPersonaId);
 
         var planning = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous, feedback);
         if (planning.Plan is null)
         {
             // Событие «планировщик закончил» с отказом — фронт снимет спиннер и покажет
             // причину в плашке рядом с карточкой отказа (контракт для Киры, см. docs).
-            await BroadcastTeamPlanningFinishedAsync(sessionId, planning);
+            await BroadcastTeamPlanningFinishedAsync(sessionId, planning, plannerPersonaId);
             return (null, PlannerFailureReason(planning.Failure));
         }
 
         // План построен — сохранённая вводная и правка отказа отработаны (повтор по кнопке
         // «Повторить планирование» после успеха не нужен)
         WithTeamState(sessionId, t => { t.LastPlanRequest = null; t.LastPlanFeedback = null; return true; });
-        await BroadcastTeamPlanningFinishedAsync(sessionId, planning);
+        await BroadcastTeamPlanningFinishedAsync(sessionId, planning, plannerPersonaId);
         await PublishTeamPlanAsync(sessionId, entry, planning.Plan, fromHuman);
         return (planning.Plan, null);
     }
@@ -5009,7 +5895,7 @@ public class SessionManager : IDisposable
     // Событие ТРАНЗИТНОЕ: в историю не пишется (карточка плана или карточка отказа уже там,
     // дублировать не надо), и при рестарте сервера не восстанавливается — спиннер просто
     // не показывается, карточка подтянется через /api/.../history.
-    private Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r) =>
+    private Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
         BroadcastAsync(sessionId, new TeamPlanningMessage(
             Start: true,
             Success: false,
@@ -5018,10 +5904,11 @@ public class SessionManager : IDisposable
             ElapsedMs: 0,
             Route: r.Route?.Model,
             Failure: null,
+            PersonaId: plannerPersonaId,
             PromptChars: r.PromptChars,
             ResponseChars: 0));
 
-    private Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r) =>
+    private Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
         BroadcastAsync(sessionId, new TeamPlanningMessage(
             Start: false,
             Success: r.Plan is not null,
@@ -5030,6 +5917,7 @@ public class SessionManager : IDisposable
             ElapsedMs: (long)r.Elapsed.TotalMilliseconds,
             Route: r.Route?.Model,
             Failure: r.Plan is null ? PlannerFailureReason(r.Failure) : null,
+            PersonaId: plannerPersonaId,
             PromptChars: r.PromptChars,
             ResponseChars: r.ResponseChars));
 
@@ -6090,7 +6978,7 @@ public class SessionManager : IDisposable
         await SendOrEnqueueAsync(sessionId,
             TeamImplementPrompts.EscalationResolvedTurn(escalation, label, comment),
             senderPersonaId: null, silent: true, suppressTasksExecute: true,
-            staffNote: "Ответ на карточку передан координатору");
+            staffNote: TeamStaffNotes.EscalationResolved);
         return true;
     }
 
@@ -6149,7 +7037,7 @@ public class SessionManager : IDisposable
         // маркер в молчаливый тупик (модель по XML-привычке закрывает тег по имени при генерации).
         var found = FindPairedMarkerOutsideCode(text, EscalateOpenTagRegex, EscalateCloseTagRegex);
         if (found is null) return null;
-        var (openEnd, closeStart, openMatch) = found.Value;
+        var (openEnd, closeStart, _, openMatch) = found.Value;
         var kind = openMatch.Groups[1].Value switch
         {
             "deviation" => TeamEscalationKind.PlanDeviation,
@@ -6175,7 +7063,7 @@ public class SessionManager : IDisposable
         // терпит close-регэксп — фикс инцидента 2026-07-31 сохранён.
         var found = FindPairedMarkerOutsideCode(text, WorkOpenTagRegex, WorkCloseTagRegex);
         if (found is null) return null;
-        var (openEnd, closeStart, _) = found.Value;
+        var (openEnd, closeStart, _, _) = found.Value;
         var request = text[openEnd..closeStart].Trim();
         return request.Length == 0 ? null : request;
     }
@@ -6221,22 +7109,18 @@ public class SessionManager : IDisposable
     // модель вправе процитировать протокол примером, это не активный вызов.
     private static readonly System.Text.RegularExpressions.Regex CodeSpanOrFenceRegex =
         new("```[\\s\\S]*?```|`[^`\n]*`", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex EscalateMarkerRegex =
-        new(@"<escalate:(?:deviation|check|decision|clarify)>[\s\S]*?</escalate(?::\w+)?>",
-            System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex WorkMarkerRegex =
-        new(@"<team:work>[\s\S]*?</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex TalkMarkerRegex =
         new(@"<team:talk\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex NoReplyMarkerRegex =
         new(@"<no-reply\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    // Открывающие/закрывающие теги для РАЗБОРА маркеров вне код-блоков (Parse*/Has* выше).
-    // Отдельно от WorkMarkerRegex/EscalateMarkerRegex (тем нужен весь маркер одним куском для
-    // удаления из ленты): найти закрывающий тег ВНЕ кода одним lazy-регэкспом нельзя — он
-    // свернётся на закрывающем теге, процитированном внутри код-блока, и настоящий маркер с
-    // вложенным кодом (P19) не соберётся. Поэтому ищем теги по отдельности и проверяем, что
-    // оба лежат вне код-блоков, а содержимое между ними берём из оригинала.
+    // Открывающие/закрывающие теги маркеров — и для РАЗБОРА (Parse*/Has* выше), и для
+    // зачистки ленты (RemovePairedMarkers ниже) один и тот же позиционный поиск пары:
+    // зачистка и разбор находят границы маркера одним способом и не расходятся. Найти
+    // закрывающий тег ВНЕ кода одним lazy-регэкспом нельзя — он свернётся на закрывающем
+    // теге, процитированном внутри код-блока, и настоящий маркер с вложенным кодом (P19)
+    // не соберётся. Поэтому ищем теги по отдельности и проверяем, что оба лежат вне
+    // код-блоков, а содержимое между ними берём из оригинала.
     private static readonly System.Text.RegularExpressions.Regex WorkOpenTagRegex =
         new("<team:work>", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex WorkCloseTagRegex =
@@ -6248,7 +7132,7 @@ public class SessionManager : IDisposable
 
     // Осиротевший закрывающий тег без пары (прод 2026-08-02, находка Веры): в длинном
     // структурированном ответе модель иногда закрывает маркер повторно или цитирует закрытие
-    // отдельно от открытия, которое уже вырезано парным регэкспом выше (например тем же именем
+    // отдельно от открытия, которое уже вырезано парным поиском выше (например тем же именем
     // маркера двумя абзацами раньше). Такой закрывающий тег — всегда служебный синтаксис
     // нашего протокола (`</team>`/`</team:work>`, `</escalate>`/`</escalate:kind>`), человеку
     // он не нужен ни в какой форме — вырезаем и его.
@@ -6258,23 +7142,43 @@ public class SessionManager : IDisposable
     internal static string StripTeamProtocolMarkers(string text)
     {
         if (string.IsNullOrEmpty(text) || !text.Contains('<')) return text;
+        // Парные маркеры (эскалация/работа) вырезаем из ИСХОДНОГО текста позиционно — тем же
+        // поиском пары тегов вне код-блоков, что и разбор. Рез по код-блокам здесь не годится:
+        // маркер с fenced-блоком внутри (хвост P19) разрезался на сегменты, сегмент до фенса
+        // оставался в ленте с буквальным <team:work> и всей постановкой, а закрывающий тег
+        // съедался как осиротевший. Диапазон [openStart, closeEnd) уносит и вложенный код.
+        text = RemovePairedMarkers(text, EscalateOpenTagRegex, EscalateCloseTagRegex);
+        text = RemovePairedMarkers(text, WorkOpenTagRegex, WorkCloseTagRegex);
+        // Остальное (самозакрывающиеся маркеры, осиротевшие закрывающие теги) — по-прежнему
+        // посегментно: только вне код-блоков, процитированный в примере протокол не трогаем.
         var sb = new System.Text.StringBuilder(text.Length);
         var pos = 0;
         foreach (System.Text.RegularExpressions.Match code in CodeSpanOrFenceRegex.Matches(text))
         {
-            sb.Append(StripMarkersOutsideCode(text[pos..code.Index]));
+            sb.Append(StripUnpairedMarkers(text[pos..code.Index]));
             sb.Append(text, code.Index, code.Length);
             pos = code.Index + code.Length;
         }
-        sb.Append(StripMarkersOutsideCode(text[pos..]));
+        sb.Append(StripUnpairedMarkers(text[pos..]));
         return sb.ToString();
     }
 
-    private static string StripMarkersOutsideCode(string text)
+    // Вырезает из текста каждый парный маркер openTag...closeTag, у которого ОБА тега лежат
+    // вне код-блоков. После каждого удаления поиск начинается заново — позиции сдвинулись.
+    private static string RemovePairedMarkers(string text,
+        System.Text.RegularExpressions.Regex openTagRegex, System.Text.RegularExpressions.Regex closeTagRegex)
+    {
+        while (FindPairedMarkerOutsideCode(text, openTagRegex, closeTagRegex) is { } found)
+        {
+            var openStart = found.OpenMatch.Index;
+            text = text.Remove(openStart, found.CloseEnd - openStart);
+        }
+        return text;
+    }
+
+    private static string StripUnpairedMarkers(string text)
     {
         if (text.Length == 0 || !text.Contains('<')) return text;
-        text = EscalateMarkerRegex.Replace(text, "");
-        text = WorkMarkerRegex.Replace(text, "");
         text = TalkMarkerRegex.Replace(text, "");
         text = NoReplyMarkerRegex.Replace(text, "");
         text = OrphanCloserRegex.Replace(text, "");
@@ -6302,11 +7206,12 @@ public class SessionManager : IDisposable
     }
 
     // Первый парный маркер (openTag...closeTag), у которого ОБА тега целиком лежат вне код-блоков.
-    // Возвращает границы в оригинальном тексте и match открывающего тега (для групп — напр. тип
-    // эскалации). Содержимое между тегами (включая вложенный код) вызывающий берёт из оригинала
-    // через text[openEnd..closeStart]. Так процитированный в ```-примере маркер не сработает
-    // (тег внутри код-блока), а код внутри настоящей постановки не потеряется.
-    private static (int OpenEnd, int CloseStart, System.Text.RegularExpressions.Match OpenMatch)?
+    // Возвращает границы в оригинальном тексте (включая конец закрывающего тега — зачистка ленты
+    // вырезает диапазон [openStart, closeEnd) целиком) и match открывающего тега (для групп —
+    // напр. тип эскалации). Содержимое между тегами (включая вложенный код) вызывающий берёт из
+    // оригинала через text[openEnd..closeStart]. Так процитированный в ```-примере маркер не
+    // сработает (тег внутри код-блока), а код внутри настоящей постановки не потеряется.
+    private static (int OpenEnd, int CloseStart, int CloseEnd, System.Text.RegularExpressions.Match OpenMatch)?
         FindPairedMarkerOutsideCode(
             string text,
             System.Text.RegularExpressions.Regex openTagRegex,
@@ -6320,7 +7225,7 @@ public class SessionManager : IDisposable
             for (var cm = closeTagRegex.Match(text, openEnd); cm.Success; cm = cm.NextMatch())
             {
                 if (IsRangeOutsideCode(ranges, cm.Index, cm.Index + cm.Length))
-                    return (openEnd, cm.Index, om);   // закрывающий вне кода — настоящий маркер
+                    return (openEnd, cm.Index, cm.Index + cm.Length, om);   // закрывающий вне кода — настоящий маркер
             }
         }
         return null;
@@ -7079,7 +7984,7 @@ public class SessionManager : IDisposable
         if (withTurn)
             await SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
                 senderPersonaId: null, silent: true, suppressTasksExecute: true,
-                staffNote: "Возврат в интервью — координатор задаст вопросы");
+                staffNote: TeamStaffNotes.InterviewReturn);
     }
 
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не
@@ -7318,6 +8223,58 @@ public class SessionManager : IDisposable
         nudgesSent < MaxSubagentNudges && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
 
     /// <summary>
+    /// Ход координатора в полёте: сообщение ему уже отдано в процесс и result ещё не пришёл.
+    /// Пока это так, второй systemDirective-ход слать нельзя (он уйдёт в тот же процесс) —
+    /// добивание ждёт конца хода, координатору достаётся только пометка.
+    /// </summary>
+    internal static bool TurnInFlight(SessionStatus status) =>
+        status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting;
+
+    /// <summary>
+    /// Обрыв ФОНОВОГО агента: пометка координатору обязательна всегда, добивание — только
+    /// если ход координатора не идёт (иначе ждём result, как раньше).
+    /// </summary>
+    private void NoteTruncatedBgAgent(string sessionId, SessionEntry entry,
+        Llm.Claude.SubagentRunPassport run)
+    {
+        // Пометка уедет префиксом ближайшего хода — чем бы он ни был поднят (человеком,
+        // очередью, добиванием): координатор обязан узнать, что обрывок не итог, даже когда
+        // добивать мы не стали.
+        entry.TruncatedBgNote = run;
+
+        if (entry.Process is null || TurnInFlight(entry.Info.Status)) return;
+        // Оборвался другой агент — у него своя серия попыток (счётчик per-agentId)
+        if (StartsNudgeSeries(entry.NudgeAgentId, run.AgentId)) entry.SubagentNudges = 0;
+        if (!ShouldNudgeSubagent(entry.SubagentNudges, entry.Info.WorkLoop is not null,
+                entry.Info.TeamImplement is not null, HasPending(entry), entry.LoopTurnInFlight)) return;
+
+        // Разбираем отметку здесь — иначе по ближайшему result добивание ушло бы вторым разом
+        entry.TruncatedSubagent = null;
+        entry.NudgeAgentId = run.AgentId;
+        var attempt = ++entry.SubagentNudges;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Ход мог стартовать, пока планировалась отправка (очередь, автоматизация,
+                // цикл): откатываем попытку и возвращаем отметку — добивание уедет по его
+                // result, штатным путём. Второй ход в живой процесс не отправляем никогда.
+                if (TurnInFlight(entry.Info.Status))
+                {
+                    entry.SubagentNudges = Math.Max(0, entry.SubagentNudges - 1);
+                    entry.TruncatedSubagent = run;
+                    return;
+                }
+                await NudgeTruncatedSubagentAsync(sessionId, run, attempt);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Добивание фонового сабагента ({sessionId}): {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>
     /// Снимает ли штатный отчёт агента серию добиваний. Счётчик общий на сессию, а агентов
     /// в ходе несколько — поэтому серию закрывает ТОТ ЖЕ агент, которого добивали (либо любой,
     /// пока серии нет). Чужой отчёт счётчик не трогает: иначе потолок MaxSubagentNudges
@@ -7333,6 +8290,14 @@ public class SessionManager : IDisposable
     internal static bool StartsNudgeSeries(string? nudgeAgentId, string truncatedAgentId) =>
         nudgeAgentId != truncatedAgentId;
 
+    /// <summary>
+    /// Гасит ли штатный отчёт агента пометку обрыва. Пометка бывает ложной: bg_agent_done
+    /// обгоняет дозапись финала в транскрипт, и по хвосту tool_use агент числится оборванным,
+    /// хотя дописал end_turn. Опровергает пометку только отчёт ТОГО ЖЕ агента.
+    /// </summary>
+    internal static bool RefutesTruncation(string? markedAgentId, string reportedAgentId) =>
+        markedAgentId == reportedAgentId;
+
     // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
     // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же
     // потолком попыток — см. SubagentPrompts.ResumeTruncated.
@@ -7340,6 +8305,13 @@ public class SessionManager : IDisposable
         Llm.Claude.SubagentRunPassport run, int attempt)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
+        // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта
+        // после перепроверки): последний паспорт агента уже штатный — директиву не шлём.
+        // Источник истины — стор паспортов, а не пометки на сессии: их разобрали до планирования
+        if (_subagentRuns?.Latest(run.AgentId) is { Truncated: false }) return;
+        // Директива добивания уже несёт все факты обрыва — дублировать их пометкой
+        // в том же ходе незачем (пометка чужого агента остаётся ждать своего хода)
+        if (entry.TruncatedBgNote?.AgentId == run.AgentId) entry.TruncatedBgNote = null;
         _subagentRuns?.NoteNudge(run.AgentId);
         _log.LogWarning("Сабагент {AgentId} ({AgentType}) оборвался на {Tool} после {Tools} вызовов " +
             "и {Seconds} с (контекст {Context} токенов) — добивание {Attempt}/{Max}, чат {SessionId}",
@@ -7537,6 +8509,9 @@ public class SessionManager : IDisposable
             {
                 _history.Delete(csid);
                 DeleteTranscript(entry.Info, csid);
+                // Архивная копия транскрипта уходит вместе с чатом — иначе переписка
+                // переживёт его и в data, и в бэкапе. Гейт тот же (общий csid у чата-двойника)
+                _archivedTranscripts.Delete(csid);
             }
         }
         // Снимки промпта ключуются id ЧАТА, а не транскриптом, — гейт общего разговора выше
@@ -7587,19 +8562,8 @@ public class SessionManager : IDisposable
     {
         try
         {
-            var roots = new List<string>(_llmProviders.GetAllConfigRoots());
-            // Профили песочницы владельца: {ProfilesHostDir}/{ownerId}/{key} (раскладку задает
-            // DockerProcessRunner.RewriteProfileEnv, ее же зеркалит ConfigRootFor). Здесь берем
-            // ВСЕ папки владельца, а не считаем ключ: чат мог мигрировать между профилями
-            if (ResolveOwnerId(info) is string ownerId)
-            {
-                var ownerProfiles = Path.Combine(_sandbox.ProfilesHostDir, ownerId);
-                if (Directory.Exists(ownerProfiles))
-                    roots.AddRange(Directory.GetDirectories(ownerProfiles));
-            }
-
             var removed = Llm.TranscriptMigrator.DeleteEverywhere(
-                roots, TryResolveCwd(info), claudeSessionId);
+                TranscriptSearchRoots(info), TryResolveCwd(info), claudeSessionId);
             if (removed > 0)
                 _log.LogInformation("Транскрипт чата {SessionId} удален ({Count} файлов)", info.Id, removed);
             else
@@ -8071,23 +9035,19 @@ public class SessionManager : IDisposable
                 }
             }
 
-            if (msg is ResultMessage or ErrorMessage && entry.LoopTurnInFlight)
-            {
-                entry.LoopTurnInFlight = false;
-                if (entry.Info.WorkLoop is not null)
-                    _ = Task.Run(async () =>
-                    {
-                        try { await ContinueWorkLoopAsync(sessionId); }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
-                        }
-                    });
-            }
-
             // Сабагент этого хода оборвался на середине — добиваем его продолжением. Строго по
             // result (ход в процесс уже не идёт): systemDirective-отправка очередь не проходит
-            // и запустила бы второй ход параллельно живому. Ошибочный ход добивать нечем —
+            // и запустила бы второй ход параллельно живому.
+            //
+            // ПОРЯДОК ВАЖЕН: этот блок стоит ПЕРЕД разбором цикла «до готово» ниже. Цикл поднимает
+            // следующий ход из Task.Run, и пометка об обрыве (TruncatedBgNote) обязана лечь раньше —
+            // иначе она опаздывает ровно на один ход, а на последней итерации цикла теряется совсем.
+            // Перенос сделан поведенчески нейтральным: раньше блок стоял ПОСЛЕ сброса
+            // LoopTurnInFlight и потому всегда видел флаг ложным — здесь он ещё взведён, поэтому
+            // в ShouldNudgeSubagent идёт «ход цикла реально продолжится» (флаг И живой WorkLoop),
+            // а не сырой флаг. Иначе снятый посреди хода цикл (WorkLoop=null при взведённом флаге)
+            // потерял бы добивание, которое получал до переноса.
+            // Ошибочный ход добивать нечем —
             // сначала разбирается ошибка, поэтому ErrorMessage только гасит отметку.
             if (msg is ResultMessage or ErrorMessage && entry.TruncatedSubagent is { } cutAgent)
             {
@@ -8096,7 +9056,7 @@ public class SessionManager : IDisposable
                 if (StartsNudgeSeries(entry.NudgeAgentId, cutAgent.AgentId)) entry.SubagentNudges = 0;
                 if (msg is ResultMessage && ShouldNudgeSubagent(entry.SubagentNudges,
                         entry.Info.WorkLoop is not null, entry.Info.TeamImplement is not null,
-                        HasPending(entry), entry.LoopTurnInFlight))
+                        HasPending(entry), entry.LoopTurnInFlight && entry.Info.WorkLoop is not null))
                 {
                     entry.NudgeAgentId = cutAgent.AgentId;
                     var attempt = ++entry.SubagentNudges;
@@ -8109,6 +9069,32 @@ public class SessionManager : IDisposable
                         }
                     });
                 }
+                else
+                {
+                    // Добивать не стали (уступили циклу «до готово»/штабу, очередь непуста, потолок
+                    // исчерпан, ход ошибочный) — но МОЛЧАТЬ об обрыве нельзя: координатор уже принял
+                    // последнюю реплику агента за его итог. Раньше отметка здесь просто гасилась, и в
+                    // чате с активным циклом обрыв не оставлял следа вообще — ни добивания, ни
+                    // предупреждения (инцидент 25.08.2026, чат «Зависание чатов практики»: обрыв
+                    // заметил сам координатор, потому что обрывок случайно не был похож на отчёт).
+                    // Пометка уедет префиксом ближайшего хода — а его цикл и штаб поднимут сами,
+                    // это и есть их «свой протокол продолжения», ради которого им уступает добивание.
+                    entry.TruncatedBgNote = cutAgent;
+                }
+            }
+
+            if (msg is ResultMessage or ErrorMessage && entry.LoopTurnInFlight)
+            {
+                entry.LoopTurnInFlight = false;
+                if (entry.Info.WorkLoop is not null)
+                    _ = Task.Run(async () =>
+                    {
+                        try { await ContinueWorkLoopAsync(sessionId); }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
+                        }
+                    });
             }
 
             // Ход закончился — выпускаем следующее сообщение из очереди (и агентские chats_send,

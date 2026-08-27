@@ -20,28 +20,46 @@ export const EDGE_BG: Record<CodeGraphRelation, string> = {
 };
 
 // Цвет узла по типу. Class — нейтральный (большинство узлов), остальные — свои.
+// Палитра TS-Kind'ов наследует семантику C# (контракт → info, строительный блок → success),
+// но переоткрывает её с другими ролями, чтобы фронт и бэк на холсте читались как разные миры:
+// Component — нейтральный (большинство TS-узлов), Hook — info (как Interface у C#),
+// UiPrimitive — success (как Struct), Util — plan (как Enum).
 export const KIND_COLOR: Record<CodeGraphNodeKind, string> = {
   Class: C.textSecondary,
   Interface: C.info,
   Struct: C.success,
   Enum: C.plan,
+  Component: C.textSecondary,
+  Hook: C.info,
+  UiPrimitive: C.success,
+  Util: C.plan,
 };
 
 // Контур кольца узла-класса в тёмной теме должен читаться на белом фоне холста —
-// textSecondary там светлый, поэтому для кольца Class берём заголовочный тон
+// textSecondary там светлый, поэтому для кольца Class берём заголовочный тон.
+// Component наследует ту же логику — это самый «классический» TS-Kind.
 export const KIND_RING: Record<CodeGraphNodeKind, string> = {
   Class: C.textHeading,
   Interface: C.info,
   Struct: C.success,
   Enum: C.plan,
+  Component: C.textHeading,
+  Hook: C.info,
+  UiPrimitive: C.success,
+  Util: C.plan,
 };
 
-// Глиф типа в центре кружка (моноширинная буква)
+// Глиф типа в центре кружка (моноширинная буква). TS-Kind'ы: X — JSX,
+// h — hook, p — primitive, u — utility. Кейс латиницей — единство с C# глифами.
 export const KIND_GLYPH: Record<CodeGraphNodeKind, string> = {
   Class: 'C',
   Interface: 'I',
   Struct: 'S',
   Enum: 'E',
+  Component: 'X',
+  Hook: 'h',
+  UiPrimitive: 'p',
+  Util: 'u',
 };
 
 // Русские подписи связей для легенды/паспорта

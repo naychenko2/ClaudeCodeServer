@@ -338,30 +338,37 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("tagRegistry").GetArrayLength().Should().Be(0);
     }
 
-    // === Значок проекта (ADR-009 §8): suggest/select/mode/icon.svg ===
+    // === Значок проекта (ADR-009 §8): suggest/select/mode ===
 
-    // Стаб места модели: отвечает заготовленным JSON на любой вызов — как будто
-    // «Поставщики моделей» настроены и модель ответила по контракту ADR-009 §2.2
-    private sealed class StubCheapRunner(string reply) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
+    // Стаб места модели для двухходовой схемы (ревизия 20.08.2026): ход различается
+    // контрактным ключом в промпте — ходу слов свой ответ, ходу выбора свой
+    private sealed class StubCheapRunner(string wordsReply, string pickReply) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
+        private string ReplyFor(string prompt) => prompt.Contains("\"words\"") ? wordsReply : pickReply;
+
         public bool UsesLocal(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(reply);
+            => Task.FromResult(ReplyFor(prompt));
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(reply);
+            CancellationToken ct = default) => Task.FromResult<string?>(pickReply);
         public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(reply);
+            => Task.FromResult<string?>(pickReply);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult(reply, null, 0));
+            => Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult(pickReply, null, 0));
     }
 
-    // Годный ответ модели по контракту: 2 имени + 2 нарисованных, вперемешку
+    // Годный ответ хода слов: понятия, по которым сервер находит piggy-bank и chart-line
+    // точным совпадением (ADR-009 §2.2)
+    private const string ModelWordsReply = """{"words":["piggy-bank","chart-line","savings"]}""";
+
+    // Годный ответ хода выбора по контракту: 2 имени из меню; paths-элементы модель ещё
+    // может слать — парсер отбрасывает их как негодных кандидатов
     private const string ModelGlyphsReply =
-        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"paths":["M3 21h18","M6 21V9l6-4 6 4v12"]},{"paths":["M4 18l5-4 4 4 7-4"]}]}""";
+        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"paths":["M3 21h18"]},{"paths":["M4 18l5-4 4 4 7-4"]}]}""";
 
     [Fact]
     public async Task SuggestIcon_МодельНеНастроена_ПустыеКандидатыИПроектНеИзменён()
@@ -384,12 +391,12 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task SuggestIcon_ОтветМодели_ДоЧетырёхКандидатовВперемешку()
+    public async Task SuggestIcon_ОтветМодели_ИменаБезОтброшенныхПутей()
     {
         using var factory = new TestWebApplicationFactory
         {
             ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
-                new StubCheapRunner(ModelGlyphsReply)),
+                new StubCheapRunner(ModelWordsReply, ModelGlyphsReply)),
         };
         var client = factory.CreateAuthenticatedClient();
         var dir = Path.Combine(factory.TempDir, "glyph-project");
@@ -404,12 +411,12 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         var candidates = body.GetProperty("candidates");
-        candidates.GetArrayLength().Should().Be(4);
-        // Виды вперемешку: у первых двух только name, у остальных только paths
+        // Только имена: paths-кандидаты ответа отброшены как негодные
+        candidates.GetArrayLength().Should().Be(2);
         candidates[0].TryGetProperty("name", out var nameEl).Should().BeTrue();
         nameEl.GetString().Should().Be("piggy-bank");
         candidates[0].TryGetProperty("paths", out _).Should().BeFalse();
-        candidates[2].GetProperty("paths").GetArrayLength().Should().Be(2);
+        body.GetProperty("failReason").ValueKind.Should().Be(JsonValueKind.Null);
 
         // Стор не меняется: candidates нигде не хранятся между вызовами (ADR-009 §8)
         var after = JsonSerializer.Deserialize<JsonElement>(
@@ -430,7 +437,11 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             LastPrompt = prompt;
-            return Task.FromResult(prompt.Contains(hintMarker, StringComparison.Ordinal) ? ModelGlyphsReply : "");
+            // Годные ответы — только если пожелание дошло до промпта (на обоих ходах);
+            // иначе модель «отвечает мусором» и парсер отвергает
+            var hintReached = prompt.Contains(hintMarker, StringComparison.Ordinal);
+            if (!hintReached) return Task.FromResult("");
+            return Task.FromResult(prompt.Contains("\"words\"") ? ModelWordsReply : ModelGlyphsReply);
         }
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
             CancellationToken ct = default) => Task.FromResult<string?>(null);
@@ -468,7 +479,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         // Кандидаты есть только потому, что пожелание дошло до промпта и изменило ответ модели
-        body.GetProperty("candidates").GetArrayLength().Should().Be(4);
+        body.GetProperty("candidates").GetArrayLength().Should().Be(2);
         body.GetProperty("failReason").ValueKind.Should().Be(JsonValueKind.Null);
         cheap.LastPrompt.Should().Contain("Что изобразить (пожелание владельца): копилка с монетками");
     }
@@ -481,7 +492,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         using var factory = new TestWebApplicationFactory
         {
             ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
-                new StubCheapRunner(ModelGlyphsReply)),
+                new StubCheapRunner(ModelWordsReply, ModelGlyphsReply)),
         };
         var client = factory.CreateAuthenticatedClient();
 
@@ -490,7 +501,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
-        body.GetProperty("candidates").GetArrayLength().Should().Be(4);
+        body.GetProperty("candidates").GetArrayLength().Should().Be(2);
         body.GetProperty("failReason").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
@@ -508,45 +519,16 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         var icon = body.GetProperty("icon");
         icon.GetProperty("kind").GetString().Should().Be("glyph");
         icon.GetProperty("glyph").GetProperty("name").GetString().Should().Be("wallet");
+        // Рисованных путей у значка больше нет — в DTO только имя
+        icon.GetProperty("glyph").TryGetProperty("paths", out _).Should().BeFalse();
         icon.GetProperty("glyph").GetProperty("v").GetString().Should().HaveLength(8);
-
-        // Name-значок файла не имеет — icon.svg отдаёт 404 (ADR-009 §7, последняя строка)
-        var svg = await _client.GetAsync($"/api/projects/{id}/icon.svg");
-        svg.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
-    [Fact]
-    public async Task SelectIcon_Пути_ОтдаютСобранныйСерверомSvg()
-    {
-        var project = await CreateProjectAsync("SelectPaths");
-        var id = project.GetProperty("id").GetString()!;
-
-        // Пример из ADR-009 §2.2 с координатами -5/-6 не проходит его же габарит §3.4 —
-        // здесь годные данные (тот же приём, что в тестах сервиса)
-        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/select",
-            new { paths = new[] { "M3 21h18", "M6 21V9l6-4 6 4v12" } });
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var svg = await _client.GetAsync($"/api/projects/{id}/icon.svg");
-
-        svg.StatusCode.Should().Be(HttpStatusCode.OK);
-        svg.Content.Headers.ContentType!.ToString().Should().Be("image/svg+xml");
-        svg.Headers.CacheControl!.ToString().Should().Contain("max-age=604800");
-        svg.Headers.CacheControl!.NoStore.Should().BeFalse();
-        svg.Headers.GetValues("X-Content-Type-Options").Should().Equal("nosniff");
-        svg.Headers.GetValues("Content-Security-Policy").Should().Equal("default-src 'none'");
-        var content = await svg.Content.ReadAsStringAsync();
-        content.Should().StartWith("<svg ");
-        content.Should().Contain("<path d=\"M3 21h18\"");
-        content.Should().Contain("stroke=\"currentColor\"");
-        // Ни байта разметки от модели: путь едет экранированным атрибутом, не тегом
-        content.Should().NotContainAny("<script", "onload");
-    }
-
+    // Рисованные пути вырезаны: select с paths вместо имени — 400, стор не меняется
     [Theory]
     [InlineData("not-a-lucide-name", null)]      // имя вне белого списка
-    [InlineData("wallet", "M3 21h18")]           // оба вида сразу
-    [InlineData(null, "M0 0e5 5")]               // экспонента в d
+    [InlineData("wallet", "M3 21h18")]           // имя и paths вместе
+    [InlineData(null, "M3 21h18")]               // только пути
     public async Task SelectIcon_НегодноеТело_400ИСторНеМеняется(string? name, string? path)
     {
         var project = await CreateProjectAsync("SelectBad");
@@ -617,8 +599,6 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         (await other.PostAsJsonAsync($"/api/projects/{id}/icon/select", new { name = "wallet" }))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await other.PostAsJsonAsync($"/api/projects/{id}/icon/mode", new { kind = "glyph" }))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await other.GetAsync($"/api/projects/{id}/icon.svg"))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

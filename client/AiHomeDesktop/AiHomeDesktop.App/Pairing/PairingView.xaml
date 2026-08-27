@@ -1,0 +1,57 @@
+<UserControl x:Class="AiHomeDesktop.App.Pairing.PairingView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BgMain}">
+    <!--
+        Экран сопряжения: адрес сервера, имя устройства и код из восьми символов.
+        Код выпускает веб-морда владельца и живёт он пять минут — об этом сказано прямо,
+        иначе человек ищет причину отказа в клиенте.
+    -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Border MaxWidth="560" Margin="24,40,24,40"
+                Background="{StaticResource BgCard}"
+                BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="14"
+                Padding="28">
+            <StackPanel>
+                <TextBlock Style="{StaticResource H1}" Text="Сопряжение с AI Home" />
+                <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,0"
+                           Text="Откройте веб-морду AI Home, выпустите код сопряжения устройства и введите его здесь. Код живёт пять минут." />
+
+                <TextBlock Style="{StaticResource FieldLabel}" Margin="0,24,0,4" Text="Адрес сервера" />
+                <TextBox x:Name="ServerBox" Style="{StaticResource Field}" />
+                <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0" FontSize="12"
+                           Text="Например https://home:5000. По открытому http сопряжение доступно только на этой же машине — иначе код и токен уехали бы в открытом виде." />
+
+                <TextBlock Style="{StaticResource FieldLabel}" Margin="0,18,0,4" Text="Имя устройства" />
+                <TextBox x:Name="NameBox" Style="{StaticResource Field}" MaxLength="32" />
+                <TextBlock Style="{StaticResource Muted}" Margin="0,6,0,0" FontSize="12"
+                           Text="Этим именем вы адресуете руки в чате: «на home открой…»." />
+
+                <TextBlock Style="{StaticResource FieldLabel}" Margin="0,18,0,4" Text="Код сопряжения" />
+                <TextBox x:Name="CodeBox" Style="{StaticResource Field}" MaxLength="8"
+                         CharacterCasing="Upper" FontFamily="Consolas" FontSize="20"
+                         KeyDown="OnCodeKeyDown" />
+
+                <Border x:Name="ErrorPane" Visibility="Collapsed" Margin="0,18,0,0"
+                        Background="{StaticResource AccentLight}"
+                        BorderBrush="{StaticResource AccentSoft}" BorderThickness="1"
+                        CornerRadius="8" Padding="12,10">
+                    <TextBlock x:Name="ErrorText" Style="{StaticResource Body}" FontSize="13" />
+                </Border>
+
+                <StackPanel Orientation="Horizontal" Margin="0,22,0,0">
+                    <Button x:Name="PairButton" Style="{StaticResource PrimaryButton}"
+                            Content="Сопрячь устройство" Click="OnPairClick" />
+                    <TextBlock x:Name="BusyText" Style="{StaticResource Muted}" Margin="14,0,0,0"
+                               VerticalAlignment="Center" Visibility="Collapsed"
+                               Text="Обмениваем код на токен устройства…" />
+                </StackPanel>
+
+                <Border Margin="0,26,0,0" Background="{StaticResource BgPanel}" CornerRadius="8" Padding="12,10">
+                    <TextBlock Style="{StaticResource Muted}" FontSize="12"
+                               Text="При сопряжении клиент получает только собственный токен устройства — ключ владельца по этому пути не уезжает. Вход в веб-морду после сопряжения хранит профиль WebView2 на этой машине, как обычный браузер." />
+                </Border>
+            </StackPanel>
+        </Border>
+    </ScrollViewer>
+</UserControl>

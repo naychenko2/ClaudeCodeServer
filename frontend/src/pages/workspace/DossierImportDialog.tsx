@@ -8,8 +8,8 @@
 // Состояния по макету docs/mockups/decision-history-import-v1.html §4 и текстам
 // docs/features/decision-history-import-texts.md §2.2:
 //  1. confirm          — обычное подтверждение
-//  2. loading          — запрос ушёл; диалог НЕ закрывается (иначе git-операция
-//                        оставила бы человека без ответа)
+//  2. loading          — запрос ушёл; closeOnBackdrop=false, но Escape и крестик
+//                        закрывают диалог штатно (явное намерение пользователя)
 //  3. success          — загружено N (плюс «уже было M», если M > 0)
 //  4. nothing          — новых нет, ветка прочитана
 //  5. noBranch         — ветки в репозитории нет (info-выноска, не danger)
@@ -34,7 +34,7 @@ const T = {
   body: 'Из ветки ccs/dossiers/v1 подтянутся записи, которых у вас ещё нет. Ваши записи не изменятся: если по коммиту есть и ваша, и приехавшая — в списке будут обе.',
   successPrefix: 'Загружено записей: ',
   nothing: 'Новых записей нет — всё, что есть в ветке, уже в истории решений.',
-  noBranch: 'В репозитории нет ветки ccs/dossiers/v1. Если её уже выгрузили и отправили — обновите репозиторий (git fetch) и повторите.',
+  noBranch: 'Загружать пока нечего: выгруженной истории решений в репозитории не нашлось. Возможно, её ещё ни разу не выгружали — или выгрузил коллега, но к вам она ещё не приехала: обновите репозиторий (git fetch) и повторите.',
   error: 'Не удалось загрузить историю решений. Ничего не изменилось — попробуйте ещё раз.',
   btnImport: 'Загрузить',
   btnCancel: 'Отмена',
@@ -111,6 +111,12 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
     }
   }, [open]);
 
+  // Закрыт — не рендерим карточку. Эта проверка нужна на случай, когда родитель
+  // держит DossierImportDialog смонтированным постоянно (двойное монтирование
+  // панели): без неё диалог жил бы в DOM даже при open=false, плюс активный
+  // реестр Modal увидел бы «занято» и не дал открыть второй.
+  if (!open) return null;
+
   const run = async () => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- переход перед запросом, чтобы нажатая кнопка показала спиннер
     setPhase('loading');
@@ -128,14 +134,17 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
       setAlreadyHad(res.skipped);
       if (res.added > 0) setPhase('success');
       else setPhase('nothing');
+      // Дёргаем onSuccess ровно в момент смены фазы, а не в onClick «Закрыть»: иначе
+      // закрытие крестиком/Escape/фоном пропускало бы колбэк и список панели не
+      // перезагружался (M1 из ревью Глеба 20.08). На noBranch и error не зовём —
+      // записей не появилось, перезагрузка не нужна.
+      onSuccess?.();
     } catch {
       setPhase('error');
     }
   };
 
   const busy = phase === 'loading';
-  // no-op пока идёт запрос: закрытие посреди git-операции оставило бы без ответа.
-  const guardedClose = busy ? () => {} : onClose;
 
   return (
     <Modal
@@ -144,7 +153,7 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
       // closeOnBackdrop=false во время запроса — иначе клик по оверлею посреди
       // git-чтения оставил бы пользователя без ответа.
       closeOnBackdrop={!busy}
-      onClose={guardedClose}
+      onClose={onClose}
     >
       {(phase === 'confirm' || phase === 'loading') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
@@ -201,7 +210,11 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
         {(phase === 'confirm' || phase === 'loading') && (
           <>
             <div style={{ flex: 1 }}>
-              <Button variant="ghost" size="md" fullWidth disabled={busy} onClick={onClose}>
+              {/* «Отмена» не блокируется на loading — кнопка остаётся рабочим способом
+                  выхода из диалога (второй — крестик Modal). Действие само по себе не
+                  прерывает git-операцию: Promise в run() дойдёт до конца и переведёт
+                  фазу уже на размонтированном компоненте, что безопасно. */}
+              <Button variant="ghost" size="md" fullWidth onClick={onClose}>
                 {T.btnCancel}
               </Button>
             </div>
@@ -244,14 +257,10 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
           <>
             <div style={{ flex: 1 }} />
             <div style={{ flex: 1.5 }}>
-              {/* На success/nothing зовём onSuccess (если есть) ДО закрытия — родитель
-                  успеет поднять флаг перезагрузки до того, как диалог исчезнет, и при
-                  следующем открытии список уже будет с новыми импортированными записями.
-                  На noBranch — пусто, onSuccess не нужен. */}
-              <Button variant="secondary" size="md" fullWidth onClick={() => {
-                if (phase === 'success' || phase === 'nothing') onSuccess?.();
-                onClose();
-              }}>
+              {/* onSuccess уже вызван в run() при переходе в success/nothing,
+                  здесь просто закрываем модалку. На noBranch — та же кнопка «Закрыть»,
+                  onSuccess не нужен (записей не появилось). */}
+              <Button variant="secondary" size="md" fullWidth onClick={onClose}>
                 {T.btnClose}
               </Button>
             </div>

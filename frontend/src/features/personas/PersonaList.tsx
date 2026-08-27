@@ -1,6 +1,6 @@
 import type { Persona, Project } from '../../types';
 import { Plus, Users } from 'lucide-react';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, R } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
 import { PillSwitch } from '../../components/Toolbar';
@@ -10,8 +10,11 @@ import { PersonaAvatar } from './PersonaAvatar';
 // Что показывать в разделе: только глобальных или вообще всех (с проектными)
 export type PersonaListMode = 'global' | 'all';
 
-// Сайдбар раздела «Персоны»: кнопка создания сверху, ниже — список персон.
-export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onModeChange, projects, dashedNewButton, teamCenter }: {
+// Сайдбар раздела «Персоны»: компактная кнопка создания в хедере тулбара (по аналогии
+// с TasksPanel: «+ Задача» через PanelHeaderSlot pinned — accent primary, size="xs"),
+// ниже — список персон. «Командный центр» рисуется первым пунктом списка (опция
+// teamCenter) — это часть контента, а не тулбара.
+export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onModeChange, projects, teamCenter }: {
   personas: Persona[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -21,9 +24,6 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
   mode?: PersonaListMode;
   onModeChange?: (m: PersonaListMode) => void;
   projects?: Project[];
-  // Пунктирная кнопка создания «как Новый чат» — включается в панели «Команда» проекта
-  // (единый вид с сайдбаром чатов). Хаб «Персоны» оставляет прежнюю залитую кнопку.
-  dashedNewButton?: boolean;
   // «Командный центр» — первый пункт списка (только панель «Команда»): та же строка-строка,
   // что и персоны, но с иконкой команды. active — открыт ли центр (персона не выбрана).
   teamCenter?: { active: boolean; onClick: () => void };
@@ -31,16 +31,17 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
   return (
     <>
       <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {dashedNewButton ? (
-          <Button variant="dashed" size="md" fullWidth onClick={onNew}
-            leftIcon={<Plus size={15} strokeWidth={2.2} />}>
-            Новая персона
+        {/* Кнопка создания персоны — компактная accent в хедере тулбара (аналог
+            TasksPanel: variant="primary" size="xs" + Plus + короткая подпись). Подпись
+            «Персона» (а не «Новая персона») — место действия понятно из хедера и
+            иконки плюс; полное название остаётся в title для тултипа и доступности. */}
+        <div>
+          <Button variant="primary" size="xs" title="Новая персона"
+            leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
+            onClick={onNew}>
+            Персона
           </Button>
-        ) : (
-          <button onClick={onNew} style={newBtn}>
-            <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />Новая персона
-          </button>
-        )}
+        </div>
         {onModeChange && (
           <PillSwitch<PersonaListMode>
             value={mode ?? 'global'} onChange={onModeChange} fill
@@ -101,6 +102,9 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
             return (
               <button
                 key={p.id}
+                role="option"
+                aria-selected={active}
+                aria-label={`${personaTitleLines(p).primary}${personaTitleLines(p).secondary ? ' — ' + personaTitleLines(p).secondary : ''}`}
                 onClick={() => onSelect(p.id)}
                 onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
                 onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
@@ -158,10 +162,10 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
             : [];
 
           return (
-            <>
+            <div role="listbox" aria-label="Список персон">
               {ownGlobal.map(row)}
               {ownByProject.map((g, i) => (
-                <div key={g.title}>
+                <div key={g.title} role="group" aria-label={g.title}>
                   <div style={{ ...groupHeader, marginTop: i === 0 && ownGlobal.length === 0 ? 2 : 8 }}>{g.title}</div>
                   {g.rows.map(row)}
                 </div>
@@ -187,7 +191,7 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
                   {pantheon.map(row)}
                 </>
               )}
-            </>
+            </div>
           );
         })()}
       </div>
@@ -200,10 +204,4 @@ const groupHeader: React.CSSProperties = {
   margin: '8px 8px 4px', paddingTop: 8, borderTop: `1px solid ${C.border}`,
   fontSize: 10.5, fontWeight: 700, color: C.textMuted,
   textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
-};
-
-const newBtn: React.CSSProperties = {
-  width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
-  padding: '8px 12px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans,
 };

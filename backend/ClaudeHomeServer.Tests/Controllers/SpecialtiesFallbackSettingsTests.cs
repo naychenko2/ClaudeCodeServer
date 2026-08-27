@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -92,8 +92,6 @@ public class SpecialtiesFallbackSettingsTests : IClassFixture<TestWebApplication
         // Существующие поля на месте
         settings.GetProperty("version").GetInt32().Should().Be(SpecialtySettingsStore.FormatVersion);
         settings.GetProperty("global").ValueKind.Should().Be(JsonValueKind.Object);
-        settings.GetProperty("owner").ValueKind.Should().Be(JsonValueKind.Object);
-        settings.GetProperty("user").ValueKind.Should().Be(JsonValueKind.Object);
         settings.GetProperty("presets").ValueKind.Should().Be(JsonValueKind.Array);
 
         // Новое поле присутствует и клампится в жёсткий диапазон 1..HardMaxSubstitutions
@@ -127,16 +125,11 @@ public class SpecialtiesFallbackSettingsTests : IClassFixture<TestWebApplication
             .GetProperty("maxSubstitutions").GetInt32().Should().Be(3);
         (await GetMaxSubstitutionsAsync()).Should().Be(3, "global применился к пользователю");
 
-        // Личный: пользователь пишет свой сам
-        var putOwner = await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
-            new { maxSubstitutions = 5 });
-        putOwner.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
-        (await GetMaxSubstitutionsAsync()).Should().Be(5, "личный потолок сильнее глобального");
-
-        // Снятие личного (null) возвращает глобальный
-        await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
-            new { maxSubstitutions = (int?)null });
-        (await GetMaxSubstitutionsAsync()).Should().Be(3);
+        // Личного маршрута записи больше нет (ADR-012): бюджет подмен — общий
+        (await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
+            new { maxSubstitutions = 5 })).StatusCode
+            .Should().BeOneOf([System.Net.HttpStatusCode.NotFound, System.Net.HttpStatusCode.MethodNotAllowed]);
+        (await GetMaxSubstitutionsAsync()).Should().Be(3, "общее значение осталось прежним");
 
         // Снятие глобального возвращает дефолт
         await admin.PutAsJsonAsync("/api/specialties/settings/fallback/global",
@@ -163,7 +156,9 @@ public class SpecialtiesFallbackSettingsTests : IClassFixture<TestWebApplication
     public async Task MaxSubstitutions_ВнеДиапазона_400(int value)
     {
         ResetStore();
-        var put = await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
+        using var admin = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var put = await admin.PutAsJsonAsync("/api/specialties/settings/fallback/global",
             new { maxSubstitutions = value });
         put.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
         // Слой не записался — дефолт

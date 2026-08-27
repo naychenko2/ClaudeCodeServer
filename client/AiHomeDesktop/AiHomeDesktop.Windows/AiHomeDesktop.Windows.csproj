@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows-половина клиента: всё, что зовёт WinAPI, — кадр экрана, запуск целей
+    desktop_open, хранение токена под DPAPI CurrentUser. Реализует интерфейсы ядра
+    (IDesktopExecutor, ISecretStore); обратной зависимости у ядра на этот проект нет.
+    UseWindowsForms — ради System.Drawing и Screen из общего фреймворка WindowsDesktop,
+    а не ради формочек: интерфейс живёт в App на WPF.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiHomeDesktop.Core\AiHomeDesktop.Core.csproj" />
+  </ItemGroup>
+
+</Project>

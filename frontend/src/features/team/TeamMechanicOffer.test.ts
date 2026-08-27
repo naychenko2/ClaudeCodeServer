@@ -5,13 +5,15 @@
 // отказом не считаются. Запущенная механика сюда не доходит — её раньше ловит launched.
 import { describe, it, expect } from 'vitest';
 import {
-  hasUserTurnAfter, buildMechanicOffers,
+  hasUserTurnAfter, hasLaunchedAfter, hasFailedLaunchAfter, buildMechanicOffers,
   type FeedTurnLike, type MechanicOfferItem,
 } from './TeamMechanicOffer';
 
-const user = (): FeedTurnLike => ({ kind: 'user_message' });
+const user = (text = 'обычное сообщение'): MechanicOfferItem => ({ kind: 'user_message', text });
 const assistant = (text = ''): MechanicOfferItem => ({ kind: 'text', text });
 const offer = (text: string): MechanicOfferItem => ({ kind: 'text', text });
+const error = (): MechanicOfferItem => ({ kind: 'error', text: 'упал ход' });
+const result = (): MechanicOfferItem => ({ kind: 'result' });
 
 describe('hasUserTurnAfter — детект отказа от механики', () => {
   it('нет хода пользователя после карточки — отказа нет', () => {
@@ -107,5 +109,96 @@ describe('buildMechanicOffers — карточка несёт последнее
   it('пустой/без маркера текст — карточек нет', () => {
     const items = [user(), assistant('обычный ответ без маркера')];
     expect(buildMechanicOffers(items).size).toBe(0);
+  });
+});
+
+describe('hasLaunchedAfter — детект запуска механики', () => {
+  const CONSENSUS = '<team-mechanic id="consensus" topic="тема"/>';
+
+  it('нет user_message после карточки — запуска нет', () => {
+    const items = [assistant(), assistant()];
+    expect(hasLaunchedAfter(items, 0, 'consensus')).toBe(false);
+  });
+
+  it('user_message с командой этой механики после карточки — запуск', () => {
+    const items = [assistant(CONSENSUS), user('/oh-my-claudecode:ralplan "тема"'), assistant()];
+    expect(hasLaunchedAfter(items, 0, 'consensus')).toBe(true);
+  });
+
+  it('запуск ДО карточки её не гасит — старая карточка тоже снята, но новая живая', () => {
+    // Сценарий из задачи: чат-штаб с прошлым /team-implement, потом модель заново предложила.
+    const items = [
+      user('/team-implement {"task":"прошлая"}'),
+      assistant(CONSENSUS),
+      assistant('свежий текст'),
+    ];
+    // Запуск был до нового маркера — для новой карточки launched = false
+    expect(hasLaunchedAfter(items, 1, 'consensus')).toBe(false);
+  });
+
+  it('запуск ДРУГОЙ механики не гасит карточку', () => {
+    const items = [
+      assistant(CONSENSUS),
+      user('/team-implement {"task":"другая"}'),
+    ];
+    expect(hasLaunchedAfter(items, 0, 'consensus')).toBe(false);
+  });
+
+  it('служебный user_message (systemDirective/staffNote/auto) запуском не считается', () => {
+    const items: MechanicOfferItem[] = [
+      assistant(CONSENSUS),
+      { kind: 'user_message', text: '/oh-my-claudecode:ralplan "тема"', systemDirective: true },
+      { kind: 'user_message', text: '/oh-my-claudecode:ralplan "тема"', staffNote: 'штаб' },
+      { kind: 'user_message', text: '/oh-my-claudecode:ralplan "тема"', auto: true },
+    ];
+    expect(hasLaunchedAfter(items, 0, 'consensus')).toBe(false);
+  });
+
+  it('прошлый запуск и новая карточка той же механики → кнопка активна (главный сценарий)', () => {
+    // В чате раньше уже был /team-implement; теперь модель заново предложила ту же механику.
+    const items = [
+      user('/team-implement {"task":"прошлый"}'),
+      assistant('что-то'),
+      assistant(CONSENSUS),
+    ];
+    // hasLaunchedAfter смотрит ТОЛЬКО после индекса карточки — старый запуск игнорируется
+    expect(hasLaunchedAfter(items, 2, 'implement')).toBe(false);
+  });
+});
+
+describe('hasFailedLaunchAfter — детект провалившегося запуска', () => {
+  const CONSENSUS = '<team-mechanic id="consensus" topic="тема"/>';
+
+  it('error без user_message с командой — провала нет (карточка вообще не запущена)', () => {
+    const items = [assistant(CONSENSUS), error()];
+    expect(hasFailedLaunchAfter(items, 0)).toBe(false);
+  });
+
+  it('user_message + error — провал (кнопка «Повторить»)', () => {
+    const items = [
+      assistant(CONSENSUS),
+      user('/oh-my-claudecode:ralplan "тема"'),
+      error(),
+    ];
+    expect(hasFailedLaunchAfter(items, 0)).toBe(true);
+  });
+
+  it('user_message + result — штатный запуск, не провал', () => {
+    const items = [
+      assistant(CONSENSUS),
+      user('/oh-my-claudecode:ralplan "тема"'),
+      result(),
+    ];
+    expect(hasFailedLaunchAfter(items, 0)).toBe(false);
+  });
+
+  it('error ДО команды провалом запуска не считается', () => {
+    const items = [
+      assistant(CONSENSUS),
+      error(),
+      user('/oh-my-claudecode:ralplan "тема"'),
+      result(),
+    ];
+    expect(hasFailedLaunchAfter(items, 0)).toBe(false);
   });
 });

@@ -111,8 +111,8 @@ public static class ServerMetrics
         unit: "{tick}",
         description: "Heartbeat телеметрии — если остановился, pipeline сломан");
 
-    // Знакомство вместо обязательного онбординга (фича default-personas-onboarding, план 2.10).
-    // После снятия гейта доля прохождения — единственный способ узнать, не убило ли изменение
+    // Знакомство вместо обязательного онбординга (план 2.10). Доля прохождения —
+    // единственный способ узнать, не убило ли изменение
     // персонализацию. Без разрезов по пользователю (PII): только факт события.
     public static readonly Counter<long> IntroStarted = _meter.CreateCounter<long>(
         "ccs.intro.started",
@@ -126,7 +126,7 @@ public static class ServerMetrics
 
     // Решение по каркасу проекта (знакомство v2): применение или отказ. Тег reason —
     // ключ пресета либо "none" (отказ): без разбивки не посчитать долю принявших каркас
-    // и не решить про снятие флага. Значения из кода (каталог + зарезервированное "none"),
+    // и не оценить пользу каркаса. Значения из кода (каталог + зарезервированное "none"),
     // не снаружи — ограничитель кардинальности не нужен, но форму держим через MetricTagGuard.
     public static readonly Counter<long> IntroPresetApplied = _meter.CreateCounter<long>(
         "ccs.intro.preset_applied",

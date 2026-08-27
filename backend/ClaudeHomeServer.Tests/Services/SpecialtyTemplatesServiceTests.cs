@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -30,7 +30,7 @@ public class SpecialtyTemplatesServiceTests : IDisposable
             new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
             NullLogger<UserStore>.Instance);
         _ownerId = _users.GetFirst()!.Id;
-        _settings = new SpecialtySettingsStore(config, NullLogger<SpecialtySettingsStore>.Instance);
+        _settings = ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config);
         _sut = new SpecialtyTemplatesService(_settings);
     }
 
@@ -112,7 +112,7 @@ public class SpecialtyTemplatesServiceTests : IDisposable
     [Fact]
     public void Apply_НастройкаВСторе_СильнееДефолтаКода()
     {
-        _settings.SetOwner(_ownerId, new SpecialtySettingsLayer
+        _settings.SetGlobal(new SpecialtySettingsLayer
         {
             Specialties = new Dictionary<string, SpecialtyTemplateSettings>
             {

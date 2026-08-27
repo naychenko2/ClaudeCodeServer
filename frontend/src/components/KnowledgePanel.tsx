@@ -7,6 +7,7 @@ import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { EmptyState, IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { useListAutoFocus } from '../lib/listAutoFocus';
 
 interface Props {
   project: Project;
@@ -47,8 +48,9 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [suggestionsExpanded, setSuggestionsExpanded] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const shouldFocus = useListAutoFocus();
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => { if (shouldFocus) inputRef.current?.focus(); }, [shouldFocus]);
 
   const query = input.trim().toLowerCase();
 
@@ -424,6 +426,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   usePanelHeaderHold(searchOpen);
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchShouldFocus = useListAutoFocus();
 
   const loadStatus = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -535,7 +538,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
         </span>
         <input
           value={searchQuery}
-          autoFocus
+          autoFocus={searchShouldFocus}
           onChange={e => setSearchQuery(e.target.value)}
           onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); } }}
           placeholder="Поиск по знаниям…"

@@ -15,6 +15,9 @@ export interface NavSnapshot {
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
   persona?: string | null;       // открытая персона (id) или null (screen === 'personas')
+  // Подвид раздела «Персоны»: 'automation' — открыть вкладку автоматизаций в студии;
+  // 'specialties' — режим «Специальности» (центральная зона раздела, без выбранной персоны)
+  personaView?: 'automation' | 'specialties';
   knowledge?: string | null;     // открытая база знаний (id датасета Dify) или null
 }
 
@@ -26,7 +29,13 @@ function toHash(s: NavSnapshot): string {
     case 'wall': return '#/wall';
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
-    case 'personas': return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
+    case 'personas': {
+      if (s.personaView === 'specialties') return '#/personas/specialties';
+      // Вкладка «Проактивность» симметрична разбору в parseHash (parts[2] === 'automation'):
+      // требует заданной персоны, без неё automation уходит в центральный экран.
+      if (s.personaView === 'automation' && s.persona) return `#/personas/${encodeURIComponent(s.persona)}/automation`;
+      return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
+    }
     case 'knowledge': return s.knowledge ? `#/knowledge/${encodeURIComponent(s.knowledge)}` : '#/knowledge';
     case 'spend': return '#/spend';
     case 'telemetry': return '#/telemetry';
@@ -56,7 +65,7 @@ export interface HashTarget {
   board?: boolean;
   noteId?: string;
   personaId?: string;
-  personaView?: 'automation'; // сразу открыть вкладку студии персоны (бэйдж автоматизации в чате)
+  personaView?: 'automation' | 'specialties'; // 'automation' — вкладка студии персоны (бэйдж автоматизации в чате); 'specialties' — режим «Специальности» раздела «Персоны»
   knowledgeId?: string;
   chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
   // #/telemetry/incident/{fingerprint} — карточка инцидента (уведомление об алерте);
@@ -64,7 +73,7 @@ export interface HashTarget {
   incidentFingerprint?: string;
   telemetryIncidents?: boolean;
   history?: boolean; // #/history — открыть overlay «Что нового» (поверх дашборда)
-  intro?: boolean;   // #/intro — открыть overlay знакомства (фича default-personas-onboarding)
+  intro?: boolean;   // #/intro — открыть overlay знакомства
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
@@ -101,7 +110,10 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'personas':
     case 'agents': {
       const target: HashTarget = { screen: 'personas' };
-      if (parts[1]) target.personaId = decodeURIComponent(parts[1]);
+      // #/personas/specialties — режим «Специальности» центральной зоны (без personaId,
+      // сегмент резервируется ДО присвоения personaId — иначе "specialties" уехал бы в неё).
+      if (parts[1] === 'specialties') target.personaView = 'specialties';
+      else if (parts[1]) target.personaId = decodeURIComponent(parts[1]);
       if (parts[2] === 'automation') target.personaView = 'automation';
       return target;
     }

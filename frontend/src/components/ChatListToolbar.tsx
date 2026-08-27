@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Plus, CalendarDays, Tags, List, ListTree, Check,
-  ArrowDownWideNarrow, ArrowUpNarrowWide, SlidersHorizontal,
+  Plus, CalendarDays, Tags, List, ListTree, Check, MonitorSmartphone,
+  ArrowDownWideNarrow, ArrowUpNarrowWide, SlidersHorizontal, Archive,
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
@@ -12,7 +12,9 @@ import type { ChatFilters, ChatGroupBy, ChatSortOrder } from '../lib/chatFilters
 
 // === Однострочный тулбар списка чатов (макет chat-unified-view, вариант А) ===
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
-// иерархия. Поиска здесь нет — он первой секцией поповера фильтров.
+// иерархия → архив. Поиска здесь нет — он первой секцией поповера фильтров.
+// «Архивные» — не фильтр, а РЕЖИМ списка (ось filters.archivedOnly): включён — видно
+// только архивные чаты, поэтому переключатель стоит рядом с осями вида, а не в поповере.
 // Ступени по ширине панели (ResizeObserver):
 //   comfort ≥400: «+ Новый» текстом, IconButton md
 //   cozy 260–399: «+» квадрат 32, IconButton sm
@@ -36,6 +38,10 @@ type Tier = 'comfort' | 'cozy' | 'compact';
 
 interface ChatListToolbarProps {
   onNew: () => void;
+  // Второй тип чата — десктопный (ADR-008): отдельная кнопка рядом с «+», а не выбор
+  // в диалоге. Тип задаётся ТОЛЬКО при создании и потом не меняется, поэтому дверей две.
+  // undefined — грань в этом проекте не включена, кнопки нет вовсе
+  onNewDesktop?: () => void;
   creating?: boolean;
   // Оффлайн — кнопка создания не рисуется (создать чат без сети нельзя), тулбар остаётся
   hideNew?: boolean;
@@ -64,7 +70,7 @@ function SheetSec({ children }: { children: React.ReactNode }) {
 }
 
 export function ChatListToolbar({
-  onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
+  onNew, onNewDesktop, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
   isMobile = false, groupByOptions = ['days', 'tags', 'none'],
 }: ChatListToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -85,7 +91,7 @@ export function ChatListToolbar({
   const tier: Tier = width >= 400 ? 'comfort' : width >= 260 ? 'cozy' : 'compact';
   const iconBtnSize = tier === 'comfort' ? 'md' : 'sm';
 
-  const { groupBy, sortOrder, hierarchy } = filters;
+  const { groupBy, sortOrder, hierarchy, archivedOnly } = filters;
   // groupBy из хранилища может отсутствовать в groupByOptions (напр. 'tags' у
   // глобального списка после переезда чата) — PillSwitch без активного сегмента
   // не рисует пилюлю, это валидное состояние; первый же выбор всё чинит.
@@ -106,6 +112,14 @@ export function ChatListToolbar({
   const [viewSheet, setViewSheet] = useState(false);
 
   const newIcon = <Plus size={15} strokeWidth={2.4} />;
+  // Кнопка десктопного чата: нейтральная иконка рядом с главным действием — накат
+  // акцента на второй тип чата сделал бы из него равное главное действие
+  const desktopBtn = (size: 'xs' | 'sm' | 'lg') => onNewDesktop && !hideNew ? (
+    <IconButton size={size} title="Новый десктопный чат (руки на вашем компьютере)"
+      onClick={onNewDesktop}>
+      <MonitorSmartphone size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </IconButton>
+  ) : null;
   const sort = SORT_META[sortOrder];
 
   // === Мобильная ступень: [+ текстом flex] [Ф lg] [Вид lg] ===
@@ -123,11 +137,12 @@ export function ChatListToolbar({
             </Button>
           )}
         </div>
+        {desktopBtn('lg')}
         <FilterBar
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
           hiddenCount={hiddenCount} isMobile triggerSize="lg"
         />
-        <IconButton size="lg" title="Вид: группировка, сортировка, иерархия"
+        <IconButton size="lg" title="Вид: группировка, сортировка, иерархия, архивные"
           onClick={() => setViewSheet(true)}>
           <SlidersHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </IconButton>
@@ -174,13 +189,24 @@ export function ChatListToolbar({
               <Toggle checked={hierarchy} onChange={v => patch({ hierarchy: v })}
                 ariaLabel="Иерархия (вложенные чаты)" />
             </div>
+            <SheetSec>Архив</SheetSec>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              minHeight: 48, gap: SP.sm,
+            }}>
+              <span style={{ fontSize: FS.md, color: C.textPrimary, fontFamily: FONT.sans }}>
+                Архивные
+              </span>
+              <Toggle checked={archivedOnly} onChange={v => patch({ archivedOnly: v })}
+                ariaLabel="Архивные" />
+            </div>
           </Modal>
         )}
       </div>
     );
   }
 
-  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [+ Чат] ===
+  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [архив] [+ Чат] ===
   // Ряд нейтральных иконок 24px, главное действие последним и залитым — общий
   // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает и
   // уехала секцией в поповер фильтров: из трёх осей вида она самая редкая, а
@@ -223,9 +249,18 @@ export function ChatListToolbar({
         >
           <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
+        <IconButton
+          size="xs"
+          active={archivedOnly}
+          title="Архивные"
+          onClick={() => patch({ archivedOnly: !archivedOnly })}
+        >
+          <Archive size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
       </PanelHeaderSlot>
       {!hideNew && (
         <PanelHeaderSlot pinned>
+          {desktopBtn('xs')}
           <Button
             variant="primary" size="xs" title="Новый чат" loading={creating}
             leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
@@ -258,6 +293,8 @@ export function ChatListToolbar({
           {newIcon}
         </Button>
       ))}
+
+      {desktopBtn('sm')}
 
       {/* Группировка: PillSwitch только иконками (comfort/cozy) или кнопка-меню на compact */}
       {tier === 'compact' ? (
@@ -327,6 +364,14 @@ export function ChatListToolbar({
         onClick={() => patch({ hierarchy: !hierarchy })}
       >
         <ListTree size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      <IconButton
+        size={iconBtnSize}
+        active={archivedOnly}
+        title="Архивные"
+        onClick={() => patch({ archivedOnly: !archivedOnly })}
+      >
+        <Archive size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
     </div>
   );

@@ -10,6 +10,7 @@ import { Splitter } from '../../components/ui';
 import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock, IconChevronRight } from './shared';
 import { KbActionsMenu } from './KbActionsMenu';
 import { DocumentViewer } from './DocumentViewer';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 
 // Ширина правой панели просмотра документа (десктоп). Общий паттерн с «Артефактами
 // сессии»: персист в localStorage, clamp по разумным границам. Сплиттер между списком
@@ -100,12 +101,13 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
 
   // AI-хаб: действие «Поиск по смыслу в базе» из палитры — включаем семантический
   // режим и фокусируем поле поиска (переиспользуем существующее состояние поиска).
+  const searchShouldFocus = useListAutoFocus();
   useEffect(() => {
     const onRun = (e: Event) => {
       const action = (e as CustomEvent<{ action?: string }>).detail?.action;
       if (action === 'knowledge.search') {
         setMode('semantic');
-        searchRef.current?.focus();
+        if (searchShouldFocus) searchRef.current?.focus();
       } else if (action === 'knowledge.describe') {
         void (async () => {
           beginAiBusy();

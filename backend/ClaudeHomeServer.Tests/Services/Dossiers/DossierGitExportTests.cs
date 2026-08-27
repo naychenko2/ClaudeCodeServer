@@ -161,9 +161,16 @@ public class DossierGitExportTests : IDisposable
             promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
     }
 
-    // Экспортёр собирается как в DossiersController — на живом графе зависимостей
-    private DossierGitExporter MkExporter(SessionManager sessions) =>
-        new(sessions, _store, _git, MkSecrets());
+    // Экспортёр собирается как в DossiersController — на живом графе зависимостей.
+    // Конспекты: сервис на моке LLM — в этих фикстурах лент чатов нет, модель не зовётся
+    // (пустая лента → конспект не снимается), мок лишь замыкает зависимость
+    private DossierGitExporter MkExporter(SessionManager sessions)
+    {
+        var digests = new DossierDiscussionStore(_config);
+        var discussions = new DossierDiscussionService(digests, _store, sessions,
+            new Mock<ClaudeHomeServer.Services.Llm.ICheapTextRunner>().Object, MkSecrets());
+        return new DossierGitExporter(sessions, _store, _git, MkSecrets(), discussions);
+    }
 
     // Провайдер секретов со своим конфигом: единственный секрет фикстуры — ключ провайдера
     private InstanceSecretsProvider MkSecrets() =>

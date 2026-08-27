@@ -1,6 +1,11 @@
 // MCP-сервер графа кода ClaudeHomeServer: stdio, JSON-RPC (newline-delimited),
 // без внешних зависимостей.
 //
+// ЗАМОРОЖЕН (ветка отката, ADR-012 фаза 2 волна 3): источник контракта —
+// backend/ClaudeHomeServer/Services/Mcp/Http/CodeGraphToolset.cs; правки схем/поведения
+// обязаны ехать парой с http-веткой (сторож — CodeGraphNotificationsToolsetParityTests).
+// Файл не удалять: Mcp:HttpTransport=false возвращает codegraph на stdio с этим env.
+//
 // Окружение (задаёт ClaudeSession при запуске claude):
 //   CODEGRAPH_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   CODEGRAPH_API_TOKEN  — сервисный JWT владельца сессии
@@ -75,12 +80,26 @@ function describeError(err) {
       + '. Это не запрет — повтори вызов через несколько секунд.';
   const status = err?.status;
   if (!status) return String(err?.message ?? err);
+  // 404 с building=true — граф строится фоном: это не «условие не изменится», а наоборот.
+  // Без ветки текст ниже противоречил бы телу ответа бэкенда.
+  if (status === 404 && isBuildingBody(err)) {
+    return 'Граф строится, повтори запрос через 1–2 минуты.';
+  }
   const body = err.bodyText ? ` ${err.bodyText}` : '';
   if (status === 409 || status === 429)
     return `Сейчас занято (HTTP ${status}).${body} Повтори позже, не чаще раза в 30 секунд.`;
   if (RETRIABLE_STATUS.has(status))
     return `Временный сбой на сервере (HTTP ${status}).${body} Это не запрет — повтори вызов через несколько секунд.`;
   return `Отказ (HTTP ${status}).${body} Повторять тот же вызов бессмысленно — само условие не изменится.`;
+}
+
+// Тело ошибки несёт {"building": true} — бэкенд поднял фоновую постройку графа.
+function isBuildingBody(err) {
+  try {
+    return JSON.parse(err?.bodyText ?? '').building === true;
+  } catch {
+    return false;
+  }
 }
 
 async function api(path, { timeoutMs = 60_000, ...options } = {}, attempt = 0) {
@@ -188,12 +207,38 @@ const TOOLS = [
 
 const staleNote = r => r?.isStale ? '\n(граф может быть устаревшим — файлы менялись после построения)' : '';
 
+// Пустой результат на устаревшем графе — не «ничего не найдено», а «проверено по старому
+// снимку»: иначе модель принимает пустоту за истину и не повторяет запрос. Предупреждение
+// В НАЧАЛЕ ответа — первая строка задаёт интерпретацию всего текста.
+const staleEmptyWarning = () =>
+  '⚠ Граф кода устарел и перестраивается фоном — поиск шёл по СТАРОМУ снимку.\n'
+  + 'Если тип обязан существовать (фронт только что добавлен и т.п.), повтори запрос через 1–2 минуты.';
+
 // «FQN [Kind] file.cs:42 — N связей»
 const nodeLine = n => `${n.fqn} [${n.kind}] ${n.location || '?'} — ${n.degree} связей`;
 
+const pluralFiles = n => {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'файл';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'файла';
+  return 'файлов';
+};
+
+// Хаб: метрика «используют N файлов» (уникальные файлы-импортёры) честнее сырого degree —
+// разворот «файл::*» надувает in-degree (784 ребра у токена C = всего 332 файла).
+// У хаба без входящих — откат на обычную строку со связями.
+const hubLine = n => (n.files > 0
+  ? `${n.fqn} [${n.kind}] ${n.location || '?'} — используют ${n.files} ${pluralFiles(n.files)}`
+  : nodeLine(n));
+
 function renderFind(result, query, limit) {
   const rows = result.results ?? [];
-  if (rows.length === 0) return `По запросу «${query}» в графе кода ничего не найдено.${staleNote(result)}`;
+  if (rows.length === 0) {
+    if (result.isStale) {
+      return `${staleEmptyWarning()}\nПо запросу «${query}» в старом снимке ничего не найдено.`;
+    }
+    return `По запросу «${query}» в графе кода ничего не найдено.`;
+  }
   const lines = rows.map(nodeLine);
   const rest = result.total - rows.length;
   if (rest > 0) lines.push(`… ещё ${rest} (показаны первые ${rows.length}, limit=${limit})`);
@@ -211,7 +256,12 @@ function renderNeighbors(result, limit) {
     + `Связей: ${node.degree} (входящих ${result.totalIn}, исходящих ${result.totalOut})`
     + (byRelation ? `; под фильтром ${result.total}: ${byRelation}` : '');
 
-  if (rows.length === 0) return `${head}\nПод фильтром связей нет.${staleNote(result)}`;
+  if (rows.length === 0) {
+    if (result.isStale) {
+      return `${head}\n${staleEmptyWarning()}\nПод фильтром связей в старом снимке нет.`;
+    }
+    return `${head}\nПод фильтром связей нет.`;
+  }
 
   // ← кто зависит от узла, → от чего зависит узел
   const lines = rows.map(n => {
@@ -227,7 +277,7 @@ function renderNeighbors(result, limit) {
 function renderHubs(result) {
   const rows = result.hubs ?? [];
   if (rows.length === 0) return `В графе кода нет связанных узлов (узлов ${result.nodeCount}, рёбер ${result.edgeCount}).`;
-  const lines = rows.map((n, i) => `${i + 1}. ${nodeLine(n)}`);
+  const lines = rows.map((n, i) => `${i + 1}. ${hubLine(n)}`);
   return `Хабы по связности (граф: ${result.nodeCount} узлов, ${result.edgeCount} рёбер):\n`
     + `${lines.join('\n')}${staleNote(result)}`;
 }

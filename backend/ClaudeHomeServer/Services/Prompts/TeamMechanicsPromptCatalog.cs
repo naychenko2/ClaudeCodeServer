@@ -3,7 +3,7 @@ using System.Text;
 namespace ClaudeHomeServer.Services.Prompts;
 
 // Серверный мини-каталог командных механик для промпт-блока руководителя проекта
-// (мост в механики, фича default-personas-onboarding). Id СТРОГО из union TeamMechanicId
+// (мост в механики). Id СТРОГО из union TeamMechanicId
 // в frontend/src/features/team/teamMechanics.ts — дрейф ловит TeamMechanicsCatalogTests
 // (тест читает фронтовый файл, третьей копии списка нет). Запуск механики остаётся на
 // фронте: карточка по маркеру <team-mechanic/> в ленте + buildTeamTurnText по клику —

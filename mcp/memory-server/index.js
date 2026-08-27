@@ -1,6 +1,12 @@
 // MCP-сервер долгой памяти персоны ClaudeHomeServer: stdio, JSON-RPC (newline-delimited),
 // без внешних зависимостей — деплой не требует npm install.
 //
+// ⛔ ЗАМОРОЖЕН (ADR-012, фаза 2 волна 1): рабочая ветка памяти — HTTP-тулсет
+// MemoryToolset.cs внутри Kestrel (POST /mcp/memory/{personaId}/{projectId}), этот файл
+// остаётся ТОЛЬКО путём отката (рубильник Mcp:HttpTransport=false) и живой фикстурой
+// проб McpProbeService. Контракт (состав/схемы/тексты) источник правды — MemoryToolset.cs;
+// правки сюда не вносятся, расхождение веток ловит MemoryToolsetParityTests.
+//
 // Окружение (задаёт ClaudeSession при запуске claude для персонной сессии):
 //   MEMORY_API_URL       — базовый URL бэкенда (http://127.0.0.1:5000)
 //   MEMORY_API_TOKEN     — сервисный JWT владельца сессии

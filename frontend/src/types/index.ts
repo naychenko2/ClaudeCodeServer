@@ -15,8 +15,8 @@ export interface ProjectTag {
   color?: string;
 }
 
-// Фон рабочего пространства проекта (фича project-backgrounds, ADR-008). Wire-формат
-// совпадает с ProjectBackgroundView бэка: kind — lowercase-строка, tileVersion — имя файла
+// Фон рабочего пространства проекта (ADR-008). Wire-формат совпадает
+// с ProjectBackgroundView бэка: kind — lowercase-строка, tileVersion — имя файла
 // тайла (оно же cache-buster у GET tile.svg, только при generated), failReason — класс
 // отказа. У проекта без фона поле отсутствует/null (генерацию не пробовали).
 export type ProjectBackgroundKind = 'pending' | 'generated' | 'standard' | 'failed';
@@ -59,31 +59,38 @@ export interface Project {
   // Ключи серверов личного MCP-реестра, ВКЛЮЧЁННЫХ в этом проекте (allow-list):
   // сервер едет в ход только там, где явно включён. Пусто/нет — не включён никто
   mcpServersOn?: string[] | null;
-  // Персона-«руководитель проекта» (фича default-personas-onboarding): дефолт для новых
-  // чатов проекта; null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
+  // Грань десктопного агента включена в этом проекте (ADR-008, флаг desktop-agent):
+  // вторая половина оси выдачи «проект + десктопный чат». Тумблер — рубильник: снятие
+  // гасит живые сеансы рук проекта, а не только запрещает новые
+  desktopAgentEnabled?: boolean;
+  // Персона-«руководитель проекта»: дефолт для новых чатов проекта;
+  // null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
   defaultPersonaId?: string | null;
   // Живая сессия онбординга проекта — для резюма прерванного интервью
   onboardingSessionId?: string | null;
   // Каркас знакомства v2: null/отсутствует — проект создан до фичи (не предлагаем),
   // "pending" — новый (можно предложить), "none" — человек отказался, иначе — ключ пресета
   presetKey?: string | null;
-  // Фон рабочего пространства (фича project-backgrounds): null/отсутствует — генерацию
-  // не пробовали (стандартный фон). Гейтом по флагу + владение (только владелец меняет)
+  // Фон рабочего пространства: null/отсутствует — генерацию не пробовали
+  // (стандартный фон). Меняет только владелец проекта
   background?: ProjectBackground | null;
+  // Автоимпорт «Историй решений»: фоновый наблюдатель ветки ccs/dossiers/v1 в Git-репозитории
+  // проекта (по новому tip подтягивает записи коллег). Гейт — отдельный тумблер в настройках;
+  // бэкенд-сервис включается только когда поле true.
+  autoImportDossiers?: boolean;
 }
 
-// Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — SVG-значок
-// из белого списка lucide (name) либо нарисованный моделью (paths). Проверка показа
-// значка — СТРОГО положительная (`kind === 'glyph'`, не `kind !== 'initials'`): старая
-// запись с числовым Kind = 1 (бывший Image) должна тихо деградировать в инициалы,
-// а не притворяться глифом. color — ключ палитры AGENT_COLORS, красит плитку и глиф
-// через currentColor.
+// Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
+// белого списка lucide (только name). Проверка показа значка — СТРОГО положительная
+// (`kind === 'glyph'`, не `kind !== 'initials'`): старая запись с числовым Kind = 1
+// (бывший Image) должна тихо деградировать в инициалы, а не притворяться глифом.
+// color — ключ палитры AGENT_COLORS, красит плитку и глиф через currentColor.
 export interface ProjectIcon {
   kind: 'initials' | 'glyph';
   color?: string;
-  // Значок: заполнено ровно одно из name/paths. Проверка на клиенте: glyph присутствует
-  // и (name есть ИЛИ paths непустой). Иначе — рисуем инициалы (§7 ADR-009).
-  glyph?: { name?: string | null; paths?: string[] | null } | null;
+  // Имя lucide-значка. Проверка на клиенте: glyph присутствует и name непустой.
+  // Иначе — рисуем инициалы (§7 ADR-009).
+  glyph?: { name?: string | null } | null;
 }
 
 // Колонка Kanban-доски проекта. category — семантическая категория статуса
@@ -98,7 +105,9 @@ export interface BoardColumn {
 // Code Graph — логическая карта типов проекта и рёбер между ними
 // (GET /api/projects/{id}/code-graph). Узлы — типы, рёбра — связи типов,
 // godNodes — точки перегруза (кандидаты на разбиение).
-export type CodeGraphNodeKind = 'Class' | 'Interface' | 'Struct' | 'Enum';
+export type CodeGraphNodeKind =
+  | 'Class' | 'Interface' | 'Struct' | 'Enum'
+  | 'Component' | 'Hook' | 'UiPrimitive' | 'Util';
 export type CodeGraphRelation = 'Calls' | 'Implements' | 'References';
 export type CodeGraphConfidence = 'Extracted' | 'Inferred';
 
@@ -345,6 +354,9 @@ export interface DossierEntry {
   // tip-коммита ветки (кто нажал «Выгрузить», тот и подписан).
   origin: DossierOrigin;
   importedAuthor: string | null;
+  // Момент снятия паспорта для own-записей; у импортированных null — там время брать
+  // неоткуда, и строка в карточке для них не рисуется (см. DossierHistoryPanel).
+  capturedAt?: string | null;
 }
 
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
@@ -577,7 +589,15 @@ export interface Session {
   // Закреплён в списке чатов
   isPinned?: boolean;
   claudeSessionId?: string;
+  // Десктопный чат (ADR-008): тип задаётся при создании и не меняется — в его транскрипте
+  // лежат кадры чужого рабочего стола, поэтому продолжить его обычным чатом нельзя
+  desktopChat?: boolean;
   mode: Mode;
+  // Инструменты, разрешённые в этом чате без вопроса («Всегда разрешать …»). Скоуп —
+  // инструмент целиком: «Bash» = любые команды этого чата. Разрешение постоянное
+  // (переживает рестарт), снимается через api.sessions.revokeAutoAllow.
+  // Необязательное: старые ответы и бэкенд без этой правки поля не присылают
+  autoAllowTools?: string[];
   status: 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error';
   lastMessage?: string;
   messageCount: number;
@@ -638,10 +658,22 @@ export interface Session {
   // чата не попадают в историю решений и не уходят в репозиторий. Только у проектных
   // сессий. Меняется через PUT sessions/{sid} (поле excludeFromDossiers)
   excludeFromDossiers?: boolean;
-  // Онбординг-сессия (фича default-personas-onboarding): "user" — гейт первого входа,
+  // Онбординг-сессия: "user" — гейт первого входа,
   // "project" — гейт проекта; отсутствует у обычных чатов. По признаку фронт прячет
   // командные механики («Обсудить с командой») — команды в интервью ещё нет
   onboardingKind?: 'user' | 'project' | null;
+  // Архив чатов (план «Архив чатов» v4, шаги 4-5). archived — готовый bool с бэка,
+  // производный от ArchivedAt и UpdatedAt (см. Session.IsArchived в C#). На фронте
+  // НЕ пересчитываем — вторая копия правила ломалась бы на равных таймстемпах.
+  // ArchiveSummary/ArchiveSummaryAt — кэш сводки карточки архива (ChatDigestService);
+  // SummaryNoteId проставляется SessionSummaryService при «Сохранить в заметки».
+  // ArchivedAt — для совместимости с серверной сериализацией (не используется на
+  // чтении фронтом: достаточно bool archived).
+  archived?: boolean;
+  archivedAt?: string | null;
+  archiveSummary?: string | null;
+  archiveSummaryAt?: string | null;
+  summaryNoteId?: string | null;
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта
@@ -889,6 +921,11 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'chat_deleted' }
+  // Чат убран в архив или возвращён из архива (archived — направление): архив ПРЯЧЕТ
+  // чат, а не удаляет (на chat_deleted строятся ChatsPage/awaiting, здесь — нет).
+  // Принимает строго по этому типу: подписки на chat_archived не должны случайно
+  // отрабатывать событие удаления, и наоборот.
+  | { type: 'chat_archived'; archived: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
@@ -900,8 +937,8 @@ export type ServerMessage = { sessionId: string } & (
   // при каждой генерации новое (icon-{guid}), поэтому получатель ПЕРЕЧИТЫВАЕТ сущность,
   // а не дёргает прежний URL. Персонам бэк вдобавок шлёт personas_changed
   | { type: 'image_backfilled'; kind: 'project-icon' | 'persona-avatar'; entityId: string }
-  // Онбординг завершён (фича default-personas-onboarding): дефолт-персона назначена из
-  // онбординг-сессии. Гейт снимается НЕ по этому событию mid-turn, а по концу хода
+  // Онбординг завершён: дефолт-персона назначена из онбординг-сессии.
+  // Гейт снимается НЕ по этому событию mid-turn, а по концу хода
   // (result) или кнопке «Перейти в систему» — событие лишь помечает завершение
   | { type: 'onboarding_completed'; kind: 'user' | 'project'; personaId: string; projectId?: string | null }
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
@@ -942,7 +979,14 @@ export type ServerMessage = { sessionId: string } & (
   // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
   // start=false — закончил: success=true → subtaskCount/waveCount/elapsedMs, success=false →
   // failure (готовый текст причины, тот же, что уйдёт в title карточки отказа следом)
-  | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number }
+  | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number; personaId?: string | null }
+  // Пульс волны командной реализации (Э2 КР-наблюдаемости). Эфемерное: в ленту НЕ
+  // попадает и в историю НЕ пишется, состояние держится в ChatState.teamWavePulse.
+  // Список задач приходит отдельным REST-снапшотом (/chats/{id}/team-wave-snapshot) при
+  // открытии поповера бейджа — иначе пришлось бы раздувать каждое событие массивом.
+  // stage: бэк шлёт пульс и в финальной проверке — она тоже работа команды и может
+  // «зависнуть», отбрасывать её WS-события как мусор было ошибкой
+  | { type: 'team_wave_pulse'; stage: 'wave' | 'checking'; waveNumber: number; plannedWaves: number; tasksActive: number; tasksTotal: number; lastActivityAt: string; quietSeconds: number; liveness: TeamWaveLiveness }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
   // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
@@ -1248,6 +1292,13 @@ export interface SubscriptionUsage {
   // Готовая PowerShell-команда входа в профиль аккаунта (для плашки «нужен claude login»);
   // null — команда неприменима (токен приходит из env, логин в файл не поможет)
   loginCommand?: string | null;
+  // Способности аккаунта по тарифу: пул отсекает его раньше сравнения утилизаций
+  // (SupportsModel в ClaudeSubscriptionPool), карточка рисует пилюлю «Без Opus» / «Без 1M»
+  // рядом с тарифом. false → не принимает соответствующие ходы (но всё ещё в ротации
+  // для доступных моделей); null → поле не пришло со старого бэка снимков (обратная
+  // совместимость data/usage.json), пилюлю не рисуем, дефолт true неинформативен.
+  supportsOpus?: boolean | null;
+  supports1M?: boolean | null;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)
@@ -1428,6 +1479,85 @@ export interface SessionTeamImplement {
 export interface TeamImplementState extends SessionTeamImplement {
   active: boolean;
 }
+
+// === Пульс волны командной реализации (Э2 КР-наблюдаемости) ===
+// Эфемерное состояние: приходит WS-событием раз в минуту в чат штаба, в ленту НЕ
+// кладётся, в историю не пишется. Без пульса (старый бэкенд) бейдж показывает только
+// стадию — обратная совместимость.
+export type TeamWaveLiveness = 'alive' | 'quiet' | 'stalled' | 'dead';
+
+// То, что шлёт бэкенд в WS-событии team_wave_pulse (краткая форма, без списка задач).
+// stage ограничен двумя значениями: волна исполнителей и финальная проверка — обе стадии
+// могут «дышать» (задачи ещё крутятся), остальные стадии пульса не шлют
+export interface TeamWavePulse {
+  stage: 'wave' | 'checking';
+  waveNumber: number;
+  plannedWaves: number;
+  tasksActive: number;
+  tasksTotal: number;
+  lastActivityAt: string;       // ISO, момент последней активности штаба
+  quietSeconds: number;
+  liveness: TeamWaveLiveness;
+}
+
+// Задача волны (расширенный REST-снапшот)
+// Совпадает с TaskItemStatus на бэке. Шире делать нельзя: бэк пришлёт незнакомый
+// статус, фронт его не распарсит — задача пропадёт из списка молча
+export type TeamWaveTaskStatus = 'todo' | 'inProgress' | 'done';
+
+export interface TeamWaveTask {
+  id: string;
+  title: string;
+  executorPersonaId: string | null;
+  status: TeamWaveTaskStatus;
+  updatedAt: string;
+  startedAt: string | null;
+}
+
+// Полный снимок пульса + список задач + пороги (REST /api/chats/{id}/team-wave-snapshot)
+// Refetch при КАЖДОМ открытии поповера — после реконнекта кэш протухнет, а человек
+// должен видеть свежее состояние
+export interface TeamWaveSnapshot extends TeamWavePulse {
+  tasks: TeamWaveTask[];
+  thresholds: { quietMinutes: number; stalledMinutes: number };
+}
+
+// === КР-наблюдаемость, этап 3: перезапуск без потери работы ===
+
+// Ответ POST /api/chats/{id}/team-wave/tasks/{taskId}/restart.
+// reissued — перевыдана тем же путём, что провал хода (потолок попыток общий);
+// escalated — перевыдача не разрешена, карточка с решением легла в ленту штаба;
+// failed — исполнитель не стартовал (причина — в message)
+export type TeamTaskRestartOutcome = 'reissued' | 'escalated' | 'failed';
+
+export interface TeamTaskRestartResponse {
+  outcome: TeamTaskRestartOutcome;
+  message: string;
+}
+
+// Ответ POST /api/chats/{id}/team-wave/restart. requiresConfirm=true — есть живые
+// исполнения (liveTasks) либо волна выглядит живой: повторный вызов с confirm=true
+// останавливает их и перевыдаёт незакрытое. Под-задачи в Done не трогаются
+export interface TeamWaveRestartResponse {
+  requiresConfirm: boolean;
+  liveTasks?: string[];
+  reissued: number;
+  escalated: number;
+  failed: number;
+  message: string;
+}
+
+// Ответ POST /api/chats/{id}/team-wave/restart-turn. outcome=restarted — ход продолжится
+// с сохранённым контекстом (--resume), fresh — контекст сброшен (startFresh при
+// повреждённом транскрипте). Отказ 409 с code=transcript_damaged предлагает «начать заново»
+export interface TeamTurnRestartResponse {
+  outcome: 'restarted' | 'fresh';
+  resumed: boolean;
+  message: string;
+}
+
+// Код ошибки 409 restart-turn: файл разговора повреждён, resume запрещён
+export type TeamTurnRestartErrorCode = 'transcript_damaged';
 
 // Под-задача плана командной реализации: единица раздачи (в Э3 из неё создаётся задача).
 // executorRationale — одна строка «почему именно он» от планировщика; в ней же приходят
@@ -1659,8 +1789,8 @@ export interface GeneratedSkill {
 }
 
 // Ответ GET /api/auth/me — профиль текущего пользователя + эффективные настройки.
-// Поля онбординга (фича default-personas-onboarding): defaultPersonaId — личная
-// дефолт-персона (null — онбординг не пройден), needsOnboarding — обязательный гейт
+// Поля онбординга: defaultPersonaId — личная дефолт-персона
+// (null — онбординг не пройден), needsOnboarding — обязательный гейт
 // онбординга при входе, onboardingSessionId — живая сессия интервью для резюма.
 export interface Me {
   userId: string;
@@ -2006,13 +2136,20 @@ export interface SpecialtyTemplate {
   disallowedTools: string[] | null;
 }
 
-// Запись каталога специальностей из GET /api/specialties: подписи и эффективный
-// шаблон прав вызывающего (настройки поверх дефолтов кода) приходят с бэкенда.
+// Запись каталога специальностей из GET /api/specialties: подписи, описание (для
+// карточек панели «Инструкции для роли»), значок/цвет роли (из белого списка
+// SpecialtyCatalog.Entry.Icon/Color на бэке) и эффективный шаблон прав
+// вызывающего (настройки поверх дефолтов кода) приходят с бэкенда. icon/color
+// опциональны: бэкенды младше волны их ещё не отдают, фронт отрисует lucide-глиф
+// в цветном круге как последний фолбэк.
 export interface SpecialtyCatalogEntry {
   key: PersonaSpecialty;
   label: string;
+  description?: string;
   executorFamily: boolean;
   template: SpecialtyTemplate | null;
+  icon?: string | null;
+  color?: string | null;
 }
 
 // Именованный пресет — упорядоченная цепочка шагов (ADR-007 §1). Шаг — маршрут
@@ -2036,6 +2173,9 @@ export interface ScopedPreset extends ModelRoutePreset {
 // моделей по уровням (ADR-007 §2). Значение ячейки — id модели ИЛИ "preset:{id}";
 // пустая ячейка — «спроси матрицу шире». defaultTier — уровень по умолчанию для
 // персон специальности без своего. Запись в личном слое заменяет глобальную ЦЕЛИКОМ.
+// PromptSections и DefaultBindings — посекочное наследование (отдельный резолв по
+// каждой секции/записи): переопределение одной секции не затирает соседние. Соответствует
+// SpecialtyTemplateSettings на бэке (Services/SpecialtySettingsStore.cs).
 export interface SpecialtyTemplateSettings {
   access: PersonaAccess;
   tools?: string[] | null;
@@ -2044,6 +2184,65 @@ export interface SpecialtyTemplateSettings {
   tierMedium?: string | null;
   tierWeak?: string | null;
   defaultTier?: ModelTierValue | null;
+  // Секции промптов специальности (плана «Секции промптов»): null/[] — слой секций
+  // не задаёт, наследование вниз (owner → user → global → дефолт кода).
+  promptSections?: SpecialtyPromptSection[] | null;
+  // Типовой профиль умений роли (материализуется в личные привязки при создании
+  // персоны, см. PersonaMaterialization). null/[] — слой профиль не задаёт.
+  defaultBindings?: SpecialtyDefaultBinding[] | null;
+}
+
+// Секция промпта специальности в слое (id из каталога SpecialtyPromptPresets.Sections).
+// enabled и text наследуются НЕЗАВИСИМО: переопределение enabled не сбрасывает текст и
+// наоборот. На бэке соответствует SpecialtyPromptSectionSettings.
+export interface SpecialtyPromptSection {
+  id: string;
+  enabled: boolean;
+  // null/пусто — текст наследуется снизу (или дефолт кода, если нигде не задан)
+  text?: string | null;
+}
+
+// Типовое умение роли: при создании персоны специальности материализуется в её
+// личные привязки (модель «копия при создании», не динамическое наследование). Цель
+// НЕ хранится: конкретную цель подбирает AI по каталогу владельца; исключение — тип
+// «Навык» (Skill), там явное имя скилла (skillName), отсутствующие в каталоге скиллы
+// пропускаются молча. На бэке соответствует SpecialtyDefaultBinding.
+export interface SpecialtyDefaultBinding {
+  type: PersonaBindingType;
+  mode: PersonaBindingMode;
+  // Условие «когда применять» — попадает в индекс системного промпта
+  condition: string;
+  // Имя скилла из каталога владельца — только при type === 'skill'
+  skillName?: string | null;
+}
+
+// Каталог секций промптов: дефолты кода, единые для всех (фича specialty-prompt-sections).
+// Источник — GET /api/specialties/prompt-sections. textLimit жёстко ограничивает длину
+// текста секции (1024 символа на бэке, SpecialtyPromptPresets.SectionTextLimit).
+export interface SpecialtyPromptSectionsCatalog {
+  textLimit: number;
+  sections: SpecialtyPromptSectionMeta[];
+  specialties: Record<string, SpecialtyPromptSectionsForSpecialty>;
+}
+
+export interface SpecialtyPromptSectionMeta {
+  id: string;
+  label: string;
+  description: string;
+}
+
+// Состав каталога по конкретной специальности: включённость и типовой текст каждой
+// секции + профиль типовых умений роли (дефолты кода).
+export interface SpecialtyPromptSectionsForSpecialty {
+  sections: { id: string; enabled: boolean; text: string }[];
+  defaultBindings: SpecialtyDefaultBinding[];
+}
+
+// Результат POST /api/personas/{id}/bindings/apply-defaults: сколько типовых умений
+// роли ДОБАВЛЕНО в личные привязки персоны (0 — профиль пуст или ничего не подошло).
+export interface ApplyDefaultBindingsResult {
+  persona: Persona;
+  applied: number;
 }
 
 // Слой настроек специальностей и пресетов: шаблоны + «любая специальность» + пресеты-цепочки
@@ -2054,20 +2253,15 @@ export interface SpecialtySettingsLayer {
   presets: ModelRoutePreset[];
 }
 
-// Ответ GET /api/specialties/settings: глобальный слой, личный слой вызывающего
-// и объединённый список пресетов с признаком слоя. user — только для admin,
-// подтягивается через getUserLayer (см. api.specialties) — здесь не обязателен.
+// Ответ GET /api/specialties/settings: единственный глобальный слой (волна 4 убрала
+// owner/user-слои — запись всегда идёт в global) и объединённый список пресетов
+// с признаком слоя (для UI/диагностики).
 export interface SpecialtySettingsResponse {
   version: number;
   // Эффективный бюджет подмен цепочки хода (per-owner → global → дефолт, кламп 1..5):
   // шаги пресета за пределом бюджета+1 приглушаются как «обычно не используется»
   maxSubstitutions?: number;
   global: SpecialtySettingsLayer;
-  owner: SpecialtySettingsLayer;
-  // User-слой конкретного пользователя (только для admin; не-admin не получает)
-  user?: SpecialtySettingsLayer;
-  // Контекст user-слоя в ответе (admin): чьими настройками заполнено .user
-  userId?: string;
   presets: ScopedPreset[];
 }
 
@@ -2568,7 +2762,8 @@ export interface SpendOverviewResponse {
   rub?: { total: number; requests: number } | null;
   byDay: SpendDayPoint[];
   cards: {
-    users: SpendCardRow[];
+    // Разрез по пользователям бэк кладёт только в ответ scope=all — в scope=mine поля нет вовсе
+    users?: SpendCardRow[];
     projects: SpendCardRow[];
     models: SpendCardRow[];
     chats: SpendCardRow[];
@@ -2989,4 +3184,49 @@ export interface VideoChannelsResponse {
 export interface VideoFeedResponse {
   error: VideoError | null;
   items: VideoItem[];
+}
+
+// ---------- Десктопный агент (ADR-008) ----------
+
+// Устройство владельца из GET /api/devices. Отпечаток наружу урезан до 12 символов —
+// он служит человеку приметой «это та самая машина», а не проверкой.
+export interface DesktopDevice {
+  id: string;
+  name: string;
+  fingerprint: string;
+  clientVersion?: string | null;
+  createdAt: string;
+  lastSeenAt?: string | null;
+  revoked: boolean;
+  revokedAt?: string | null;
+  tokenVersion: number;
+}
+
+// Заявка на сопряжение: код из 8 символов живёт 5 минут и принадлежит ЭТОЙ веб-сессии.
+// hostFingerprint — отпечаток машины самого сервера: клиент на ней сопрягаться отказывается
+export interface DesktopPairingCode {
+  code: string;
+  expiresAt: string;
+  attemptsLeft: number;
+  hostFingerprint?: string;
+}
+
+// Сеанс рук глазами веб-морды (GET /api/devices/hands/chat/{id}).
+// facetRefusal — почему грань чату не выдана; null — выдана
+export interface DesktopHandsChatStatus {
+  active: boolean;
+  session: DesktopHandsSessionView | null;
+  requestedAt?: string | null;
+  facetRefusal?: string | null;
+}
+
+export interface DesktopHandsSessionView {
+  chatSessionId: string;
+  chat?: string | null;
+  // Имя устройства, которому отданы руки
+  device?: string | null;
+  startedAt: string;
+  expiresAt?: string | null;
+  idleDeadlineAt?: string | null;
+  hardDeadlineAt?: string | null;
 }

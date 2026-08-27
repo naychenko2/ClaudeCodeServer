@@ -9,11 +9,11 @@ import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { useMe, refreshMe } from '../../lib/defaultPersona';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
-import { Button, ConfirmDialog, IntroDot, IslandScaffold } from '../../components/ui';
+import { Button, ConfirmDialog, IntroDot, IslandScaffold, BackButton } from '../../components/ui';
+import { PillSwitch } from '../../components/Toolbar';
 import { PageCanvas } from '../../components/ui/PageCanvas';
 import { PersonaAvatar } from './PersonaAvatar';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -31,9 +31,45 @@ import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { PersonasHub } from './PersonasHub';
+import { PersonasSpecialties } from './PersonasSpecialties';
+import { useSpecialtyCatalog } from '../../lib/specialties';
+
+// Утилита пуша URL для specialties: hash вида
+//   #/personas/specialties
+//   #/personas/specialties/{roleKey}
+//   #/personas/specialties/{roleKey}/edit
+// history.state остаётся валидным NavSnapshot с personaView='specialties' и
+// дополнительными полями specialtyKey/specialtyEdit (расширение NavSnapshot
+// типа для под-адресов раздела). Парсится в PersonasPage.onPop и в consume().
+// Прямая запись через history.pushState: toHash в nav.ts не знает про под-
+// адреса specialties/{roleKey} (его контракт — общий), а здесь нам нужен
+// кастомный URL с двумя сегментами и опциональным /edit.
+function pushSpecialtiesUrl(
+  roleKey: string | null, viewMode: 'list' | 'role' | 'edit' | null,
+): void {
+  let hash = '#/personas/specialties';
+  if (roleKey) hash = `#/personas/specialties/${encodeURIComponent(roleKey)}`;
+  if (viewMode === 'edit' && roleKey) hash = `#/personas/specialties/${encodeURIComponent(roleKey)}/edit`;
+  const state: Record<string, unknown> = { screen: 'personas', personaView: 'specialties' };
+  if (roleKey) state.specialtyKey = roleKey;
+  if (viewMode === 'edit') state.specialtyEdit = true;
+  window.history.pushState(state, '', hash);
+}
+
+// Парсит под-адрес specialties из текущего hash: возвращает роль и viewMode.
+// null — это не под-адрес specialties (другой раздел / старая форма).
+function parseSpecialtiesHash(): { roleKey: string | null; viewMode: 'list' | 'role' | 'edit' } | null {
+  const h = window.location.hash;
+  const m = h.match(/^#\/personas\/specialties(?:\/([^/?]+))?(\/edit)?$/);
+  if (!m) return null;
+  const roleKey = m[1] ? decodeURIComponent(m[1]) : null;
+  const viewMode: 'list' | 'role' | 'edit' = m[2] ? 'edit' : (roleKey ? 'role' : 'list');
+  return { roleKey, viewMode };
+}
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
+import { useSpecialtiesCoverage } from './useSpecialtiesCoverage';
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -57,22 +93,48 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Вкладка студии, на которую нужно сразу открыться (бэйдж автоматизации в чате) —
   // одноразовая, сбрасывается любым обычным выбором персоны из списка
   const [pendingView, setPendingView] = useState<PersonaView | null>(null);
-  const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
+  // На мобиле раздел «Специальности» рисуется только в режиме карточки (см. body ниже),
+  // поэтому прямой заход/F5 по хешу specialties обязан стартовать с 'card' — иначе
+  // диплинк открывал список персон вместо запрошенного экрана.
+  const [mobileView, setMobileView] = useState<'list' | 'card'>(
+    () => parseSpecialtiesHash() !== null ? 'card' : 'list');
   // Режим создания новой персоны: мастер прямо в контентной зоне
   const [creating, setCreating] = useState(false);
+  // Режим центральной зоны: 'hub' (витрина), 'studio' (карточка персоны), 'create' (мастер),
+  // 'specialties' (настройка специальностей). Не четвёртая ось навигации — вариант
+  // содержимого того же центра; рельса слева и список персон остаются на месте.
+  const [specialtiesMode, setSpecialtiesMode] = useState(() => parseSpecialtiesHash() !== null);
+  // Под-адрес specialties: roleKey + viewMode. Под-адрес — отдельная запись
+  // history.state, чтобы кнопка «Назад» возвращала на уровень выше, а не
+  // выкидывала из раздела. Инициализация — из текущего hash.
+  const initialSpec = parseSpecialtiesHash();
+  const [specialtyRoleKey, setSpecialtyRoleKey] = useState<string | null>(initialSpec?.roleKey ?? null);
+  const [specialtyViewMode, setSpecialtyViewMode] = useState<'list' | 'role' | 'edit'>(
+    initialSpec?.viewMode ?? 'list',
+  );
   // Проекты — чтобы показать имя/зону проектной персоны и открыть её проект в «Поговорить»
   const [projects, setProjects] = useState<Project[]>([]);
   // Идёт создание чата по кнопке «Поговорить»
   const [talking, setTalking] = useState(false);
 
-  // Карточка-приглашение «знакомство» на мобиле (фича default-personas-onboarding,
-  // п.5.1.2) — PersonasHub в мобильную ветку не попадает вовсе, без этой точки рендера
-  // знакомство на мобиле необнаружимо. Живёт над списком, а не внутри PersonaList —
-  // список переиспользуется панелью «Команда» проекта, где личное приглашение не к месту.
-  const introOnboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Карточка-приглашение «знакомство» на мобиле (п.5.1.2) — PersonasHub в мобильную
+  // ветку не попадает вовсе, без этой точки рендера знакомство на мобиле необнаружимо.
+  // Живёт над списком, а не внутри PersonaList — список переиспользуется панелью
+  // «Команда» проекта, где личное приглашение не к месту.
   const me = useMe();
+  // Прямой хеш .../edit для не-админа режется в PersonasSpecialties (effectiveViewMode)
+  // — он сам даунгрейдит до 'role' при !isAdmin. Здесь эффект НЕ нужен: он бы дал
+  // лишний ре-рендер и переписал URL, а URL-сторона уже валидна.
   const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
-  const showMobileInvite = isMobile && me.loaded && introOnboardingOn && me.needsOnboarding && !!defaultPersona;
+  const showMobileInvite = isMobile && me.loaded && me.needsOnboarding && !!defaultPersona;
+  // Бейдж охвата «N из M» на переключателе режима — считаем по стартовому слою
+  // (см. useSpecialtiesCoverage). На переключателе виден и до открытия экрана.
+  const specialtiesCoverage = useSpecialtiesCoverage(me.role === 'admin');
+  // Каталог ролей — для подписи в мобильной шапке экрана при открытой роли.
+  const specialtyCatalog = useSpecialtyCatalog();
+  const mobileSpecialtyLabel = specialtyRoleKey
+    ? specialtyCatalog?.find(r => r.key === specialtyRoleKey)?.label ?? null
+    : null;
   // Отклик на тап «Выбрать другого ассистента» (Д-3): scrollIntoView контейнера здесь
   // бесполезен — прокрутка живёт внутри самого PersonaList, а контейнер и так во вьюпорте,
   // поэтому браузер ничего не делал, и тап выглядел мёртвой кнопкой. Короткая рамка C.accent
@@ -132,11 +194,36 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     return () => window.removeEventListener('cc-open-persona', consume);
   }, []);
 
-  // Back/forward браузера внутри раздела «Персоны»
+  // Back/forward браузера внутри раздела «Персоны». Восстанавливаем и выбор персоны,
+  // и режим «Специальности» — иначе popstate по «#/personas/specialties» гасил бы
+  // состояние specialtiesMode, и кнопка «Назад» возвращала бы не туда. Под-адрес
+  // specialties/{roleKey} восстанавливается из history.state (pushSpecialtiesUrl
+  // сохраняет specialtyKey и specialtyEdit в state), с фолбэком на парсинг hash.
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
-      const s = e.state as NavSnapshot | null;
-      if (s?.screen === 'personas') {
+      const s = e.state as (NavSnapshot & { specialtyKey?: string; specialtyEdit?: boolean }) | null;
+      // Сначала пробуем state: он хранит то, что записал pushSpecialtiesUrl.
+      // Затем — парсим hash напрямую: popstate иногда срабатывает без
+      // восстановленного state, и тогда единственный надёжный источник —
+      // window.location.hash.
+      let roleKey: string | null = s?.specialtyKey ?? null;
+      let edit = !!s?.specialtyEdit;
+      const parsed = parseSpecialtiesHash();
+      if (parsed) {
+        roleKey = parsed.roleKey;
+        edit = parsed.viewMode === 'edit';
+      }
+      if (s?.screen === 'personas' && (s.personaView === 'specialties' || parsed)) {
+        setSpecialtiesMode(true);
+        setCreating(false); setSelectedId(null);
+        // 'card' — как в openSpecialties: на мобиле раздел живёт только в этом режиме.
+        setMobileView('card');
+        setSpecialtyRoleKey(roleKey);
+        setSpecialtyViewMode(edit ? 'edit' : (roleKey ? 'role' : 'list'));
+      } else if (s?.screen === 'personas') {
+        setSpecialtiesMode(false);
+        setSpecialtyRoleKey(null);
+        setSpecialtyViewMode('list');
         setSelectedId(s.persona ?? null);
         setMobileView(s.persona ? 'card' : 'list');
       }
@@ -156,22 +243,85 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     }
   }, [selectedId, allPersonas, personas]);
 
+  // Переключатель режима центра: hub ↔ specialties. Режим студии/создания не имеет
+// отношения к переключателю — там выбрана персона или идёт мастер. PillSwitch
+// не принимает ref напрямую (внутри несколько кнопок), поэтому возвращаем фокус
+// через обёртку: первый button внутри div с ref — сегмент «Персоны» при выходе
+// из specialties.
+  const modeSwitcherRef = useRef<HTMLDivElement | null>(null);
+  const focusModeSwitcher = () => {
+    const btn = modeSwitcherRef.current?.querySelector('button');
+    if (btn instanceof HTMLButtonElement) btn.focus();
+  };
+  const openSpecialties = () => {
+    if (specialtiesMode) return;
+    setSpecialtiesMode(true);
+    // mobileView='card': на мобиле раздел рисуется только в режиме карточки
+    // (см. body ниже), и со списком вкладка «Специальности» переключалась,
+    // а на экране оставался хаб персон.
+    setCreating(false); setSelectedId(null); setMobileView('card');
+    setSpecialtyRoleKey(null);
+    setSpecialtyViewMode('list');
+    pushSpecialtiesUrl(null, 'list');
+  };
+  // Переходы внутри specialties — навигация по под-адресам.
+  const navigateSpecialtiesRole = (key: string) => {
+    setSpecialtyRoleKey(key);
+    setSpecialtyViewMode('role');
+    pushSpecialtiesUrl(key, 'role');
+  };
+  const navigateSpecialtiesEdit = (key: string) => {
+    setSpecialtyRoleKey(key);
+    setSpecialtyViewMode('edit');
+    pushSpecialtiesUrl(key, 'edit');
+  };
+  const navigateSpecialtiesList = () => {
+    setSpecialtyRoleKey(null);
+    setSpecialtyViewMode('list');
+    pushSpecialtiesUrl(null, 'list');
+  };
+  const closeSpecialties = () => {
+    if (!specialtiesMode) return;
+    setSpecialtiesMode(false);
+    // Намеренно НЕ делаем navReplace: иначе системная кнопка «Назад» в браузере
+    // вернёт в specialties (текущая запись заменилась бы на hub, а prev — specialties).
+    // Без replace текущая запись остаётся #/personas/specialties, а стейт уже hub —
+    // браузерный popstate вытащит предыдущий снапшот (часто тоже #/personas) и
+    // state не дёрнется. Фокус возвращаем на сегмент «Персоны» переключателя.
+    window.setTimeout(focusModeSwitcher, 0);
+  };
+
   // view — опционально сразу открыть конкретную вкладку студии (бэйдж автоматизации
   // в чате, клик по событию памяти в ленте активности хаба и т.п.)
+  // Навигация: если пришли из specialties (через срез «кто работает» или сайдбар),
+  // делаем navReplace — иначе кнопка «Назад» вернёт в specialties, а не в hub.
+  // В обычном сценарии (hub → studio) — navPush, как было.
   const selectPersona = (id: string, view?: PersonaView) => {
     setCreating(false);
+    setSpecialtiesMode(false);
     setSelectedId(id); setMobileView('card'); setPendingView(view ?? null);
-    navPush({ screen: 'personas', persona: id });
+    // Переход к проектной/не-глобальной персоне из среза в режиме specialties — в дефолтном
+    // «Глобальные» её нет в списке, страж ниже молча сбросил бы выбор. Переключаем listMode
+    // на 'all', чтобы персону стало видно. В диплинк-ветке выше это уже сделано в consume().
+    const target = allPersonas.find(p => p.id === id);
+    if (target && target.scope !== 'global') setListMode('all');
+    if (specialtiesMode) navReplace({ screen: 'personas', persona: id });
+    else navPush({ screen: 'personas', persona: id });
   };
   const clearSelection = () => {
     setCreating(false);
+    // Очистка выбора из студии/создания — в hub. Если были в specialties, тоже сбрасываем.
+    if (specialtiesMode) closeSpecialties();
     setSelectedId(null); setMobileView('list'); setPendingView(null);
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
-  // Кнопка «Новая персона» — мастер создания в контентной зоне
+  // Кнопка «Новая персона» — мастер создания в контентной зоне. Та же логика
+  // навигации: из specialties — replace, иначе push.
   const startCreate = () => {
+    setSpecialtiesMode(false);
     setSelectedId(null); setCreating(true); setMobileView('card');
-    if (getNav()?.persona) navReplace({ screen: 'personas' });
+    if (specialtiesMode) navReplace({ screen: 'personas' });
+    else if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
 
   // Удаление в два шага: запрос подтверждения (диалог) → само удаление.
@@ -235,6 +385,38 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     ),
   };
 
+  // Шапка центральной зоны: переключатель режима (hub ↔ specialties).
+  // В студии/создании переключатель скрыт — выбрана персона или идёт мастер,
+  // переключаться некуда. Бейдж охвата «N из M» живёт на неактивном сегменте,
+  // чтобы приглашать заглянуть (макет v4: «это и есть точка входа»).
+  const showModeSwitch = !creating && !selected;
+
+  const modeSwitcher = showModeSwitch ? (
+    <div style={{ marginBottom: SP.lg }}>
+      <div ref={modeSwitcherRef} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        <PillSwitch<'hub' | 'specialties'>
+          value={specialtiesMode ? 'specialties' : 'hub'}
+          onChange={v => v === 'specialties' ? openSpecialties() : closeSpecialties()}
+          options={[
+            { value: 'hub', label: 'Персоны' },
+            { value: 'specialties', label: 'Специальности',
+              ...(specialtiesCoverage ? { title: `Охват специальностей: ${specialtiesCoverage}` } : {}) },
+          ]}
+          // PillSwitch рендерит бейдж через стандартный слот — нам нужен кастомный,
+          // поэтому вешаем его рядом с подписью через обёртку ниже.
+          persistKey="cc_personas_mode"
+        />
+        {specialtiesCoverage && (
+          <span style={{
+            fontFamily: 'JetBrains Mono, monospace', fontSize: FS.xs, fontWeight: 700,
+            color: C.textSecondary, background: C.bgSelected,
+            padding: '2px 8px', borderRadius: 12,
+          }}>{specialtiesCoverage}</span>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   const centerPane = creating
     ? <PersonaCreatePane
         projects={projects}
@@ -252,9 +434,18 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onDelete={() => onDelete(selected)}
         onTalk={() => talk(selected)}
         onOpenSession={openSession}
-        onBack={isMobile ? clearSelection : undefined}
+        onOpenSpecialties={openSpecialties}
+        onBack={clearSelection}
         hero={!isMobile}
         isMobile={isMobile} />
+    : specialtiesMode
+    ? <PersonasSpecialties
+        roleKey={specialtyRoleKey}
+        viewMode={specialtyViewMode}
+        onNavigateList={navigateSpecialtiesList}
+        onNavigateRole={navigateSpecialtiesRole}
+        onNavigateEdit={navigateSpecialtiesEdit}
+      />
     : <PersonasHub
         personas={personas}
         talking={talking}
@@ -274,10 +465,69 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const [mobileActivityOpen, setMobileActivityOpen] = useState(false);
 
   const body = isMobile ? (
-    (mobileView === 'card' && hasContent)
-      ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
+    (mobileView === 'card' && (hasContent || specialtiesMode))
+      ? (
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
+          {/* На мобиле в режиме specialties — явная кнопка «Назад» слева в шапке
+              экрана (макет v4: 360px). Возврат в hub вызывает closeSpecialties(false),
+              чтобы кнопка «Назад» браузера тоже отрабатывала корректно. */}
+          {specialtiesMode && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: SP.sm,
+              padding: `${SP.sm}px ${SP.md}px`,
+              borderBottom: `1px solid ${C.borderLight}`,
+              background: C.bgWhite, flex: 'none',
+            }}>
+              <BackButton
+                onClick={() => closeSpecialties()}
+                title="Назад в раздел Персоны"
+                style={{
+                  fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+                }}
+              >
+                <span>Назад</span>
+              </BackButton>
+              <div style={{
+                fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 600,
+                color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap', flex: 1, minWidth: 0,
+              }}>
+                {mobileSpecialtyLabel ?? 'Специальности'}
+              </div>
+            </div>
+          )}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+            {centerPane}
+          </div>
+        </div>
+      )
       : (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
+          {/* На мобиле в режиме hub переключатель живёт над списком персон —
+              тот же ряд, что и приглашение «Познакомиться». Бейдж охвата — справа от
+              подписи, чтобы приглашать заглянуть. */}
+          {showModeSwitch && (
+            <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+                <PillSwitch<'hub' | 'specialties'>
+                  value={specialtiesMode ? 'specialties' : 'hub'}
+                  onChange={v => v === 'specialties' ? openSpecialties() : closeSpecialties()}
+                  options={[
+                    { value: 'hub', label: 'Персоны' },
+                    { value: 'specialties', label: 'Специальности' },
+                  ]}
+                  persistKey="cc_personas_mode"
+                />
+                {specialtiesCoverage && (
+                  <span style={{
+                    fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700,
+                    color: C.textSecondary, background: C.bgSelected,
+                    padding: '2px 8px', borderRadius: 12,
+                  }}>{specialtiesCoverage}</span>
+                )}
+              </div>
+            </div>
+          )}
           {showMobileInvite && defaultPersona && (
             <div style={mobileInviteCard}>
               <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
@@ -328,10 +578,15 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       centerBare
       // Компенсация перекоса зон — только для хаба: его сетка ограничена
       // CONTENT_MAX_W и без компенсации съезжает вслед за центром, стоит открыть
-      // панель с одной стороны. Студия и создание персоны резиновые — им нечего
-      // компенсировать, ширина не передаётся
-      centerContentWidth={hasContent ? undefined : CONTENT_MAX_W}
-      center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
+      // панель с одной стороны. Студия, создание персоны и раздел «Специальности»
+      // резиновые — им нечего компенсировать, ширина не передаётся.
+      centerContentWidth={hasContent || specialtiesMode ? undefined : CONTENT_MAX_W}
+      center={
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {modeSwitcher}
+          {centerPane}
+        </div>
+      }
     />
   );
 
@@ -376,7 +631,7 @@ function PersonaCreatePane({ projects, onOpenStudio, onStartChat, onCancel, onBa
 // Студия персоны: центральная область = обзор-визитка (дефолт), инлайн-форма
 // профиля ИЛИ долгая память. Чата здесь нет — разговор живёт среди обычных
 // чатов (кнопка «Поговорить»).
-function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onBack, isMobile, hero }: {
+function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onOpenSpecialties, onBack, isMobile, hero }: {
   persona: Persona;
   projects: Project[];
   talking: boolean;
@@ -385,6 +640,8 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   onDelete: () => void;
   onTalk: () => void;
   onOpenSession: (s: Session) => void;
+  // Мостик T9 — кнопка «Специальность: … →» в PersonaPreview
+  onOpenSpecialties: () => void;
   onBack?: () => void;
   isMobile: boolean;
   // Стиль Islands (десктоп): тулбар — заголовок раздела на холсте, контент — остров
@@ -423,11 +680,10 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
   const accent = AGENT_COLORS[liveColor ?? persona.avatar?.color ?? ''] ?? C.accent;
 
-  // Смена дефолт-персоны (фича default-personas-onboarding): глобальную можно назначить
-  // личным дефолтом из меню тулбара; проектную здесь не трогаем — её дефолт живёт в проекте
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Смена дефолт-персоны: глобальную можно назначить личным дефолтом из меню тулбара;
+  // проектную здесь не трогаем — её дефолт живёт в проекте
   const me = useMe();
-  const isDefault = onboardingOn && !isProjectScope && me.defaultPersonaId === persona.id;
+  const isDefault = !isProjectScope && me.defaultPersonaId === persona.id;
   // Кандидат ждёт подтверждения: смена СУЩЕСТВУЮЩЕГО дефолта — только через диалог
   // (защита от случайного клика мимо пункта меню); первое назначение — сразу.
   const [confirmDefault, setConfirmDefault] = useState(false);
@@ -474,13 +730,14 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
       </div>
     // Профиль — read-only визитка со сводкой и недавними разговорами
     : <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaPreview persona={persona} accent={accent} talking={talking}
+        <PersonaPreview persona={persona} accent={accent} talking={talking} zoneLabel={zoneLabel}
           onTalk={onTalk} onOpenSession={onOpenSession}
           onEditProfile={() => setEditing(true)}
           onOpenKnowledge={() => goView('knowledge')}
           onOpenTasks={() => goView('tasks')}
           onOpenAutomation={() => goView('automation')}
-          onOpenMemory={() => goView('memory')} isMobile={isMobile} />
+          onOpenMemory={() => goView('memory')}
+          onOpenSpecialties={onOpenSpecialties} isMobile={isMobile} />
       </div>;
 
   return (
@@ -500,7 +757,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         onTalk={onTalk}
         onDelete={onDelete}
         isDefault={isDefault}
-        onMakeDefault={onboardingOn && !isProjectScope ? requestMakeDefault : undefined}
+        onMakeDefault={!isProjectScope ? requestMakeDefault : undefined}
         onSave={() => void formRef.current?.save()}
         onBack={onBack}
         isMobile={isMobile}

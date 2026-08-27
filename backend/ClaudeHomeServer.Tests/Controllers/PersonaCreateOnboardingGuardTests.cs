@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -29,11 +28,6 @@ public class PersonaCreateOnboardingGuardTests : IDisposable
     }
 
     public void Dispose() => _factory.Dispose();
-
-    private async Task SetFlagAsync(bool enabled) =>
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled }))
-        .EnsureSuccessStatusCode();
 
     private async Task<JsonElement> MeAsync() => JsonSerializer.Deserialize<JsonElement>(
         await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
@@ -65,7 +59,7 @@ public class PersonaCreateOnboardingGuardTests : IDisposable
     [Fact]
     public async Task UserОнбординг_ЖиваяЗаготовка_Create_400()
     {
-        await SetFlagAsync(true); // провижнит заготовку: AssistantPersonaId резолвится в живую
+        // Заготовку завёл стартовый проход провижна: AssistantPersonaId резолвится в живую
         var sessionId = await StartUserOnboardingAsync();
 
         var response = await CreatePersonaFromSessionAsync(sessionId, new { name = "Дубликат" });
@@ -77,7 +71,6 @@ public class PersonaCreateOnboardingGuardTests : IDisposable
     [Fact]
     public async Task UserОнбординг_МёртваяЗаготовка_Create_200()
     {
-        await SetFlagAsync(true);
         var sessionId = await StartUserOnboardingAsync();
         var userId = (await MeAsync()).GetProperty("userId").GetString()!;
 
@@ -95,7 +88,7 @@ public class PersonaCreateOnboardingGuardTests : IDisposable
     [Fact]
     public async Task ProjectОнбординг_ЖиваяЗаготовка_Create_200()
     {
-        await SetFlagAsync(true); // провижнит личный дефолт — нужен для старта проектного знакомства
+        // Личный дефолт (нужен для старта проектного знакомства) есть от стартового прохода
         await EnsureHomeConfiguredAsync();
 
         var dir = Path.Combine(_tempDir, "proj_" + Guid.NewGuid().ToString("N")[..8]);

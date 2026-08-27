@@ -59,10 +59,11 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public bool AllowInWorkLoop { get; init; }
 
-    // Ключ HttpContext.Items: квота расходуется здесь, в OnActionExecuting, ДО того как
-    // действие реально что-то сделало — храним, за какую (сессия, владелец) она списана,
-    // чтобы OnActionExecuted мог вернуть единицу, если действие не состоялось (m3, второй
-    // проход Глеба: 404/400 не должны жечь бюджет команды быстрее, чем идёт реальная работа).
+    // Ключ HttpContext.Items: квота расходуется в OnActionExecuting, ДО того как действие
+    // реально что-то сделало — флаг «списана» даёт OnActionExecuted вернуть единицу, если
+    // действие не состоялось (m3, второй проход Глеба: 404/400 не должны жечь бюджет
+    // команды быстрее, чем идёт реальная работа). Сессия и владелец не меняются между
+    // executing/executed — их refund берёт из того же запроса.
     private const string ConsumedRunKey = "TeamImplementRunConsumed";
 
     // Отдельный ключ квоты цикла: возврат обязан идти ровно в ту квоту, что была списана
@@ -71,76 +72,23 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     public void OnActionExecuting(ActionExecutingContext context)
     {
         var http = context.HttpContext;
-        // Заголовка нет — запрос не от нашего MCP (фронт, интеграция): ограничение не наше дело
-        if (http.Request.Headers[CallerHeader].FirstOrDefault() is not { Length: > 0 } callerSessionId)
+        // REST-путь без заголовка — запрос не от нашего MCP (фронт, интеграция):
+        // ограничение не наше дело, guard фейл-опенит (историческое поведение фильтра)
+        var decision = DelegatedTurnGate.Decide(
+            http.RequestServices.GetService<SessionManager>(),
+            http.User.FindFirstValue(JwtRegisteredClaimNames.Sub),
+            http.Request.Headers[CallerHeader].FirstOrDefault(),
+            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement, AllowInWorkLoop);
+        if (decision.Allowed)
+        {
+            // Списанную квоту запоминаем для возврата в OnActionExecuted при неудаче
+            if (decision.TeamQuotaConsumed) http.Items[ConsumedRunKey] = true;
+            if (decision.WorkLoopQuotaConsumed) http.Items[ConsumedWorkLoopRunKey] = true;
             return;
-        if (http.RequestServices.GetService<SessionManager>() is not { } sessions) return;
-        if (http.User.FindFirstValue(JwtRegisteredClaimNames.Sub) is not { Length: > 0 } userId) return;
-
-        var turn = sessions.GetActiveTurnDelegation(callerSessionId, userId);
-        var delegated = IsDelegated(turn);
-
-        // Квота вместо запрета — на ЛЮБОМ неделегированном ходу штаба, а не только на
-        // реакционном: обычный ход координатора запускает исполнителей той же кнопкой, и
-        // мимо бюджета он не должен идти. Разрешение сразу расходует единицу — счёт ведёт
-        // бэкенд в точке запуска. Вердикт NotTeamMode = чат не штаб: решает прежний запрет.
-        if (!delegated && AllowInTeamImplement)
-        {
-            var (verdict, reason) = sessions.TryConsumeTeamImplementRun(callerSessionId, userId);
-            if (verdict == SessionManager.TeamRunQuota.Allowed)
-            {
-                http.Items[ConsumedRunKey] = (callerSessionId, userId);
-                return;
-            }
-            if (verdict == SessionManager.TeamRunQuota.Exhausted)
-            {
-                context.Result = new ObjectResult(new
-                {
-                    error = $"{action} недоступно: {reason}. Доложи человеку сводку и дождись "
-                        + "его решения (подтвердить план, добавить бюджет или завершить итерацию).",
-                })
-                { StatusCode = StatusCodes.Status403Forbidden };
-                return;
-            }
         }
 
-        // Квота вместо запрета в цикле «до готово» — на ЛЮБОМ неделегированном ходу чата
-        // с циклом: ход доклада исполнителя — тот самый случай, ради которого снимается
-        // запрет, а «чистый» ход не должен обходить счётчик. Вердикт NotInLoop = чат не
-        // в цикле: проваливаемся в прежний запрет.
-        if (!delegated && AllowInWorkLoop)
-        {
-            var (verdict, reason) = sessions.TryConsumeWorkLoopRun(callerSessionId, userId);
-            if (verdict == SessionManager.WorkLoopRunQuota.Allowed)
-            {
-                http.Items[ConsumedWorkLoopRunKey] = (callerSessionId, userId);
-                return;
-            }
-            if (verdict == SessionManager.WorkLoopRunQuota.Exhausted)
-            {
-                context.Result = new ObjectResult(new
-                {
-                    error = $"{action} недоступно: {reason}. Доложи человеку сводку и дождись "
-                        + "его решения (остановить цикл или запустить оставшиеся задачи руками).",
-                })
-                { StatusCode = StatusCodes.Status403Forbidden };
-                return;
-            }
-        }
-
-        if (!delegated && !IsSuppressedExecutorTurn(turn, AlsoWhenExecutorSuppressed)) return;
-
-        context.Result = new ObjectResult(new
-        {
-            error = delegated
-                ? $"{action} недоступно на делегированном ходу: этот ход инициирован другим "
-                    + "чатом, и цепочка делегирования дальше не идёт. Верни результат тому, кто "
-                    + "тебя позвал — решение примет он или пользователь."
-                : $"{action} недоступно на этом ходу: ты отвечаешь на доклад исполнителя, и "
-                    + "запуск новой сессии отсюда закольцевал бы «доклад → запуск → доклад». "
-                    + "Если запустить действительно нужно — попроси пользователя.",
-        })
-        { StatusCode = StatusCodes.Status403Forbidden };
+        context.Result = new ObjectResult(new { error = decision.DenyText })
+            { StatusCode = StatusCodes.Status403Forbidden };
     }
 
     public void OnActionExecuted(ActionExecutedContext context)
@@ -160,12 +108,16 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
                 _ => false,
             };
         if (!failed) return;
-        if (context.HttpContext.RequestServices.GetService<SessionManager>() is not { } sessions) return;
+        var http = context.HttpContext;
+        if (http.RequestServices.GetService<SessionManager>() is not { } sessions) return;
+        var callerSessionId = http.Request.Headers[CallerHeader].FirstOrDefault();
+        if (string.IsNullOrEmpty(callerSessionId)) return;
+        if (http.User.FindFirstValue(JwtRegisteredClaimNames.Sub) is not { Length: > 0 } userId) return;
 
-        if (context.HttpContext.Items[ConsumedRunKey] is (string sessionId, string userId))
-            sessions.RefundTeamImplementRun(sessionId, userId);
-        if (context.HttpContext.Items[ConsumedWorkLoopRunKey] is (string loopSessionId, string loopUserId))
-            sessions.RefundWorkLoopRun(loopSessionId, loopUserId);
+        if (http.Items[ConsumedRunKey] is true)
+            sessions.RefundTeamImplementRun(callerSessionId, userId);
+        if (http.Items[ConsumedWorkLoopRunKey] is true)
+            sessions.RefundWorkLoopRun(callerSessionId, userId);
     }
 
     // Решение вынесено из фильтра, чтобы проверяться таблицей без HttpContext и DI
@@ -177,4 +129,116 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     // Итоговое решение: запретить действие на этом ходу
     internal static bool ShouldDeny(TurnDelegationState turn, bool alsoWhenExecutorSuppressed) =>
         IsDelegated(turn) || IsSuppressedExecutorTurn(turn, alsoWhenExecutorSuppressed);
+}
+
+/// <summary>Решение гейта по одному действию: разрешено (возможно, со списанной квотой) либо отказ с текстом.</summary>
+internal sealed record DelegatedTurnGateDecision
+{
+    public required bool Allowed { get; init; }
+
+    /// <summary>Текст отказа (тело 403 у REST / content-ошибка у http-тулсета); null при Allowed.</summary>
+    public required string? DenyText { get; init; }
+
+    /// <summary>Разрешение оплачено квотой «Командной реализации» — вернуть её при неудачном действии.</summary>
+    public bool TeamQuotaConsumed { get; init; }
+
+    /// <summary>Разрешение оплачено квотой цикла «до готово» — вернуть её при неудачном действии.</summary>
+    public bool WorkLoopQuotaConsumed { get; init; }
+
+    public static DelegatedTurnGateDecision Pass { get; } = new() { Allowed = true, DenyText = null };
+}
+
+/// <summary>
+/// Единая точка решения анти-рекурсии делегирования для ДВУХ путей вызова: MVC-фильтра
+/// <c>[DenyOnDelegatedTurn]</c> (REST: UI и stdio-ветка отката) и http-тулсетов MCP
+/// (ADR-012, фаза 2): MVC-атрибут на <c>McpTransportController</c> не применяется вовсе —
+/// тулсет зовёт сервисы через DI в обход конвейера фильтров, поэтому проверка обязана жить
+/// в самом тулсете, а тексты и порядок — здесь, чтобы пути не разошлись.
+///
+/// Семантика fail-open у путей разная и это осознанно: REST-запрос без заголовка — чужой
+/// клиент (фронт, интеграция), ограничение не его касается; http-вызов без вызывателя —
+/// аномалия (конфиг хода кладёт заголовок всегда), и пропуск стоил бы платного цикла
+/// «доклад → запуск → доклад» — <paramref name="failOpenWhenUnknown"/>=false даёт отказ.
+/// </summary>
+internal static class DelegatedTurnGate
+{
+    public static DelegatedTurnGateDecision Decide(
+        SessionManager? sessions, string? ownerId, string? callerSessionId,
+        string action, bool alsoWhenExecutorSuppressed,
+        bool allowInTeamImplement, bool allowInWorkLoop,
+        bool failOpenWhenUnknown = true)
+    {
+        if (string.IsNullOrEmpty(callerSessionId) || sessions is null || string.IsNullOrEmpty(ownerId))
+            return failOpenWhenUnknown
+                ? DelegatedTurnGateDecision.Pass
+                : new DelegatedTurnGateDecision
+                {
+                    Allowed = false,
+                    DenyText = $"{action} недоступно: вызов пришёл без сессии-вызывателя — "
+                        + "отказ по построению.",
+                };
+
+        var turn = sessions.GetActiveTurnDelegation(callerSessionId, ownerId);
+        var delegated = DenyOnDelegatedTurnAttribute.IsDelegated(turn);
+
+        // Квота вместо запрета — на ЛЮБОМ неделегированном ходу штаба, а не только на
+        // реакционном: обычный ход координатора запускает исполнителей той же кнопкой, и
+        // мимо бюджета он не должен идти. Разрешение сразу расходует единицу — счёт ведёт
+        // бэкенд в точке запуска. Вердикт NotTeamMode = чат не штаб: решает прежний запрет.
+        if (!delegated && allowInTeamImplement)
+        {
+            var (verdict, reason) = sessions.TryConsumeTeamImplementRun(callerSessionId, ownerId);
+            if (verdict == SessionManager.TeamRunQuota.Allowed)
+                return new DelegatedTurnGateDecision
+                    { Allowed = true, DenyText = null, TeamQuotaConsumed = true };
+            if (verdict == SessionManager.TeamRunQuota.Exhausted)
+                return Deny(QuotaExhaustedText(action, reason,
+                    "Доложи человеку сводку и дождись его решения "
+                    + "(подтвердить план, добавить бюджет или завершить итерацию)."));
+        }
+
+        // Квота вместо запрета в цикле «до готово» — на ЛЮБОМ неделегированном ходу чата
+        // с циклом: ход доклада исполнителя — тот самый случай, ради которого снимается
+        // запрет, а «чистый» ход не должен обходить счётчик. Вердикт NotInLoop = чат не
+        // в цикле: проваливаемся в прежний запрет.
+        if (!delegated && allowInWorkLoop)
+        {
+            var (verdict, reason) = sessions.TryConsumeWorkLoopRun(callerSessionId, ownerId);
+            if (verdict == SessionManager.WorkLoopRunQuota.Allowed)
+                return new DelegatedTurnGateDecision
+                    { Allowed = true, DenyText = null, WorkLoopQuotaConsumed = true };
+            if (verdict == SessionManager.WorkLoopRunQuota.Exhausted)
+                return Deny(QuotaExhaustedText(action, reason,
+                    "Доложи человеку сводку и дождись его решения "
+                    + "(остановить цикл или запустить оставшиеся задачи руками)."));
+        }
+
+        if (!delegated && !DenyOnDelegatedTurnAttribute.IsSuppressedExecutorTurn(turn, alsoWhenExecutorSuppressed))
+            return DelegatedTurnGateDecision.Pass;
+
+        return Deny(delegated
+            ? $"{action} недоступно на делегированном ходу: этот ход инициирован другим "
+                + "чатом, и цепочка делегирования дальше не идёт. Верни результат тому, кто "
+                + "тебя позвал — решение примет он или пользователь."
+            : $"{action} недоступно на этом ходу: ты отвечаешь на доклад исполнителя, и "
+                + "запуск новой сессии отсюда закольцевал бы «доклад → запуск → доклад». "
+                + "Если запустить действительно нужно — попроси пользователя.");
+    }
+
+    /// <summary>
+    /// Возврат списанных квот при неудачном действии — симметрия OnActionExecuted фильтра:
+    /// отказ/исключение после TryConsume не должен жечь бюджет (404/400 запуска не сделали).
+    /// </summary>
+    public static void Refund(SessionManager sessions, string callerSessionId, string ownerId,
+        DelegatedTurnGateDecision decision)
+    {
+        if (decision.TeamQuotaConsumed) sessions.RefundTeamImplementRun(callerSessionId, ownerId);
+        if (decision.WorkLoopQuotaConsumed) sessions.RefundWorkLoopRun(callerSessionId, ownerId);
+    }
+
+    private static DelegatedTurnGateDecision Deny(string text) =>
+        new() { Allowed = false, DenyText = text };
+
+    private static string QuotaExhaustedText(string action, string? reason, string advice) =>
+        $"{action} недоступно: {reason}. {advice}";
 }

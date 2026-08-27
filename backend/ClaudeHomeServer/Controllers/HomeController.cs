@@ -39,7 +39,10 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
             .Select(s => ToDto(s, projectNames))
             .ToList();
         var recentItems = all
-            .Where(s => !s.IsLive() && s.Status is not SessionStatus.Orphaned)
+            // Архив режется на сервере СТРОГО ДО .Take(recent): лимит стоит до клиентского
+            // фильтра, и архивировав 10 свежих чатов, пользователь получил бы пустой блок
+            // «Недавние» (план v4, шаг 4). Это не «дефолтный GET списка» — контракт не ломается.
+            .Where(s => !s.IsLive() && s.Status is not SessionStatus.Orphaned && !s.IsArchived)
             .Take(recent)
             .Select(s => ToDto(s, projectNames))
             .ToList();
@@ -64,7 +67,10 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         s.Tags,
         s.Participants,
         s.ExpiresAfterMinutes,
-        s.LastReadAt);
+        s.LastReadAt,
+        // Готовый признак архива — считает СЕРВЕР: сравнение updatedAt <= archivedAt на
+        // фронте было бы второй копией правила плюс миганием на равных таймстемпах
+        s.IsArchived);
 }
 
 // Строка сводки: сессия + имя проекта (чтобы фронт не тянул список проектов отдельно).
@@ -90,4 +96,7 @@ public record HomeSessionDto(
     int? ExpiresAfterMinutes,
     // Серверная отметка прочтения (синк между устройствами); дефолт — чтобы не ломать
     // конструирование именованными аргументами в тестах
-    DateTime? LastReadAt = null);
+    DateTime? LastReadAt = null,
+    // В архиве ли чат — готовый bool с сервера (ветку active сервер не режет, фронт
+    // применяет matchChatFilter к HomeSessionInfo). Дефолт — по той же причине
+    bool Archived = false);

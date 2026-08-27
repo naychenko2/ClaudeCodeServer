@@ -326,6 +326,10 @@ public sealed class PersonaAgentFileSync
             _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
             _bindings.EffectiveToolEnabled(ownerId, persona, "tasks"),
             _bindings.EffectiveToolEnabled(ownerId, persona, "notes"),
+            // Граф кода: только явная активная привязка, а НЕ ServerToolEnabled с его
+            // дефолтом «включено» — у файлового сабагента allow-list deny-by-default
+            // (см. PersonaBindingsService.ToolBindingActive)
+            _bindings.ToolBindingActive(persona, "codegraph"),
             _bindings.BuildSubagentIndex(ownerId, persona),
             // Персона без своей модели идёт своим уровнем, без уровня — тиром назначения
             // «сабагенты-консультанты»; резолвер может вернуть и модель стороннего

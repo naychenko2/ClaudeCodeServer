@@ -33,7 +33,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
   const pulseColor = planning ? C.plan : C.accent;
   // Цвет колец «Эхо»: нейтральный smoke по умолчанию, plan — в режиме планирования
   const ringColor = planning ? C.plan : C.smoke;
-  // Лицо индикатора = релевантная персона контекста (фича default-personas-onboarding).
+  // Лицо индикатора = релевантная персона контекста.
   // Аватар 28px с расходящимися кольцами «Эхо» поверх.
   const facePersona = useContextPersona();
 
@@ -106,8 +106,8 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
           overflow нулевой — ResizeObserver на contentRef не дёргается, scrollHeight ленты
           стабилен. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: ECHO_FACE_H }}>
-        {/* Лицо: аватар релевантной персоны (фича default-personas-onboarding),
-            fallback — логотип «AI Home» маской (тонируется под тему/режим) */}
+        {/* Лицо: аватар релевантной персоны, fallback — логотип «AI Home»
+            маской (тонируется под тему/режим) */}
         {facePersona ? faceBox(
           <span style={{
             position: 'absolute', inset: 0, display: 'block',

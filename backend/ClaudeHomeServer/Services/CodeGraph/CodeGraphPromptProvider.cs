@@ -1,12 +1,14 @@
 using System.Collections.Concurrent;
 using System.Text;
+using ClaudeHomeServer.Services.CodeGraph.Core;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
 /// <summary>
-/// Per-ход провайдер slice top-10 god-nodes Code Graph в системный промпт хода
-/// (ADR вариант A — per-ход slice в --append-system-prompt). Граф кода иначе невидим
-/// Claude CLI; compact-список хабов по связности закрывает «холодный старт понимания кода».
+/// Per-ход провайдер slice Code Graph в системный промпт хода (ADR вариант A — per-ход
+/// slice в --append-system-prompt): две секции — «хабы» (точки входа в код) и «словарь»
+/// (константы, импортируемые повсюду, свёрнутые по файлам). Граф кода иначе невидим
+/// Claude CLI; compact-список закрывает «холодный старт понимания кода».
 ///
 /// Источник — CodeGraphService.GetSnapshotAsync. Кэш slice по сигнатуре (mtime graph.json,
 /// 1:1 со сменой BuiltAt): граф не грузится каждый ход, slice пересчитывается только при
@@ -18,6 +20,12 @@ public sealed class CodeGraphPromptProvider
     private readonly ILogger<CodeGraphPromptProvider> _log;
 
     private const int TopN = 10;
+
+    // Секция «словарь»: порог degree тот же, что у god-узлов; рамки — до 5 файлов по 6 имён,
+    // чтобы словарь не разворачивался обратно в многострочный топ.
+    private const int DictionaryMinDegree = 10;
+    private const int DictionaryMaxFiles = 5;
+    private const int DictionaryMaxNames = 6;
 
     // Per-rootPath кэш slice. Сигнатура (mtime graph.json) та же → граф не перестраивался →
     // sliceBase актуален; isStale досчитывается дёшево при каждом вызове (см. GetSliceAsync).
@@ -99,13 +107,13 @@ public sealed class CodeGraphPromptProvider
         }
     }
 
-    // Склеить slice из снимка: top-N god-узлов (FQN + sourceFile + degree) + ссылка на полный граф.
-    // God-узлы берём из готового поля снимка (отсортированы по degree; порог minDegree задан графом);
-    // degree для отображения досчитываем по рёбрам (контракт REST v1 не несёт degree наружу).
+    // Склеить slice из снимка: две секции — «хабы» (top god-узлов с метрикой «используют
+    // N файлов») и «словарь» (константы одной строкой на файл) + ссылка на полный граф.
+    // God-узлы берём из готового поля снимка (отсортированы по degree, константы исключены
+    // в CodeGraph.GodNodes); degree и файлы-импортёры досчитываем по рёбрам (контракт REST
+    // v1 не несёт degree наружу).
     private static string? RenderSlice(CodeGraphSnapshotDto snap)
     {
-        if (snap.GodNodes.Count == 0) return null;
-
         var degree = new Dictionary<string, int>(snap.Edges.Count, StringComparer.Ordinal);
         foreach (var e in snap.Edges)
         {
@@ -117,31 +125,90 @@ public sealed class CodeGraphPromptProvider
         foreach (var n in snap.Nodes)
             nodeById[n.Id] = n;
 
-        var rows = new List<(GraphNodeDto Node, int Degree)>();
+        var rows = new List<(GraphNodeDto Node, int Degree, int Files)>();
         foreach (var id in snap.GodNodes)
         {
             if (rows.Count >= TopN) break;
             if (!nodeById.TryGetValue(id, out var node)) continue;
-            rows.Add((node, degree.GetValueOrDefault(id)));
+            rows.Add((node, degree.GetValueOrDefault(id), ImporterFiles(id, snap, nodeById)));
         }
-        if (rows.Count == 0) return null;
+
+        // Словарь: константы с высоким degree сворачиваем по файлам — знание «цвета только
+        // из design.ts» полезно модели, но не должно занимать строки топа хабов.
+        var dictionary = snap.Nodes
+            .Where(n => NodeKinds.IsConstant(n.Kind) && degree.GetValueOrDefault(n.Id) >= DictionaryMinDegree)
+            .GroupBy(n => n.SourceFile)
+            .OrderByDescending(g => g.Sum(n => degree.GetValueOrDefault(n.Id)))
+            .Take(DictionaryMaxFiles)
+            .ToList();
+
+        if (rows.Count == 0 && dictionary.Count == 0) return null;
 
         var sb = new StringBuilder();
         sb.AppendLine("## Структура кода проекта (Code Graph)");
-        sb.AppendLine($"Базовые хабы по связности (top-{rows.Count}):");
-        foreach (var (node, deg) in rows)
+        if (rows.Count > 0)
         {
-            var name = string.IsNullOrWhiteSpace(node.FullyQualifiedName)
-                ? node.Label
-                : node.FullyQualifiedName;
-            sb.AppendLine($"• {name} ({node.SourceFile}) — {deg} связей");
+            sb.AppendLine("Хабы (точки входа в код):");
+            foreach (var (node, deg, files) in rows)
+            {
+                var name = string.IsNullOrWhiteSpace(node.FullyQualifiedName)
+                    ? node.Label
+                    : node.FullyQualifiedName;
+                // «используют N файлов» честнее сырого degree: разворот «файл::*» надувает
+                // in-degree (784 ребра у токена C = всего 332 файла). У хаба без входящих — degree.
+                var metric = files > 0
+                    ? $"используют {files} {PluralFiles(files)}"
+                    : $"{deg} связей";
+                sb.AppendLine($"• {name} ({node.SourceFile}) — {metric}");
+            }
         }
-        // Куда идти за остальным графом. Раньше здесь стояли панель «Граф» и REST-эндпоинт —
-        // обе двери для агента закрыты (панель для человека, ключа к REST у него нет).
-        sb.Append("Остальной граф — инструменты codegraph_find (найти тип по имени), "
-                  + "codegraph_neighbors (связи типа: кто зависит и от чего), "
-                  + "codegraph_hubs (хабы по связности).");
-        return sb.ToString();
+        if (dictionary.Count > 0)
+        {
+            sb.AppendLine("Словарь (импортируется повсюду, навигации нет):");
+            foreach (var file in dictionary)
+            {
+                var names = string.Join("/", file.Select(n => n.Label).Take(DictionaryMaxNames));
+                var rest = file.Count() - DictionaryMaxNames;
+                if (rest > 0) names += $" +{rest}";
+                sb.AppendLine($"{Path.GetFileName(file.Key)} ({names})");
+            }
+        }
+        // Сценарные правила «когда звать граф» раньше жили здесь хвостом slice — с ADR-011
+        // (шаг 3) они переехали в отдельную статичную секцию хода CodeNavigationPrompts:
+        // единый блок трёх уровней (codegraph / LSP / Grep), виден и без построенного
+        // графа. Slice — только данные: хабы и словарь.
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Уникальные файлы-импортёры узла по входящим рёбрам: у TS id источника «файл::имя»
+    /// (файл — префикс), у C# — SourceFile узла-источника. Считается на лету, хранить нечего.
+    /// </summary>
+    private static int ImporterFiles(string nodeId, CodeGraphSnapshotDto snap,
+        Dictionary<string, GraphNodeDto> nodeById)
+    {
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in snap.Edges)
+        {
+            if (!string.Equals(e.Target, nodeId, StringComparison.Ordinal)) continue;
+            if (nodeById.TryGetValue(e.Source, out var src) && !string.IsNullOrEmpty(src.SourceFile))
+                files.Add(src.SourceFile);
+            else if (e.Source.Contains("::"))
+                files.Add(e.Source[..e.Source.LastIndexOf("::")]);
+            else
+                files.Add(e.Source);
+        }
+        return files.Count;
+    }
+
+    // Русская плюрализация: 1 файл / 2 файла / 5 файлов.
+    private static string PluralFiles(int n)
+    {
+        var mod10 = n % 10;
+        var mod100 = n % 100;
+        if (mod10 == 1 && mod100 != 11) return "файл";
+        if (mod10 is >= 2 and <= 4 && mod100 is < 12 or > 14) return "файла";
+        return "файлов";
     }
 
     // Пометка «slice не от твоего дерева»: чат в отдельном worktree правит свою ветку, а

@@ -4,6 +4,7 @@ import type { FileEntry } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, R, SP, MODAL_W } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { Button, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
@@ -23,6 +24,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload 
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const isMobile = useIsMobile();
+  const canFocus = useListAutoFocus();
   // Загрузка с устройства: пикер после неё НЕ закрываем — можно добавить ещё файлов,
   // прикреплённое видно по счётчику «Выбрано» внизу
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +88,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload 
       )}
       <div style={{ marginBottom: SP.sm }}>
         <input
-          autoFocus
+          autoFocus={canFocus}
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Поиск по имени файла…"

@@ -39,6 +39,26 @@ function makeLayeredGraph(): CodeGraph {
   };
 }
 
+// Снимок с обоими языками: часть типов C#, часть — TS/React. sourceFile — .ts/.tsx
+// для TS-узла и .cs для C#-узла, на этом сигнале висит nodeLanguage()
+function makeMixedLangGraph(): CodeGraph {
+  const nodes = [
+    node('csA', 'A.Services.Foo', 'Foo.cs'),
+    node('csB', 'A.Services.Bar', 'Bar.cs'),
+    node('tsX', 'B.Components.Foo', 'Foo.tsx'),
+    node('tsY', 'B.Hooks.useBar', 'Bar.ts'),
+  ];
+  return {
+    nodes,
+    edges: [
+      { source: 'csA', target: 'csB', relation: 'Calls', confidence: 'Extracted' },
+      { source: 'tsX', target: 'csA', relation: 'References', confidence: 'Extracted' },
+    ],
+    godNodes: ['csA', 'tsX'],
+    metadata: { nodeCount: nodes.length, edgeCount: 2, fileCount: 4, isStale: false },
+  };
+}
+
 describe('layerOf', () => {
   it('фиксированный порядок: Tests раньше точек входа раньше Services раньше Models/Protocol', () => {
     expect(layerOf('A.Tests')).toBe(0);
@@ -185,6 +205,27 @@ describe('buildOverviewScene — обратные рёбра (нарушение
     expect(scene.byKey.get(b.toKey)?.label).toBe('Services');
     // остальные три ребра идут «сверху вниз» (или горизонтально) — не нарушение
     expect(scene.bundles.filter(bb => !bb.isBack)).toHaveLength(3);
+  });
+});
+
+describe('buildOverviewScene — знаменатели сводки по языковому фильтру (M3)', () => {
+  // StatusBar «N типов свёрнуты» должен считать по ВИДИМЫМ узлам — иначе при
+  // выключенном C# число завышается на размер скрытого языка
+  it('totalTypeCount учитывает языковой фильтр', () => {
+    const g = makeMixedLangGraph();                  // 2 C# + 2 TS
+    const expanded = defaultExpandedGroups(g.nodes);
+    const scene = buildOverviewScene(g, {
+      expanded, typesGroup: null,
+      languages: { csharp: false, typescript: true },
+    });
+    expect(scene.totalTypeCount).toBe(2);             // только TS
+  });
+
+  it('без языкового фильтра знаменатель равен полному снимку', () => {
+    const g = makeMixedLangGraph();
+    const expanded = defaultExpandedGroups(g.nodes);
+    const scene = buildOverviewScene(g, { expanded, typesGroup: null });
+    expect(scene.totalTypeCount).toBe(g.nodes.length);
   });
 });
 

@@ -170,28 +170,99 @@ export function FileLink({ path, onOpen, mono, children }: {
 // Служебные маркеры протоколов — не для глаз: завершение цикла «до готово»
 // (<promise>ГОТОВО</promise>, слово-обещание конфигурируемо на бэкенде) и протокол
 // «Командной реализации» — <team:work>постановка</team>, <escalate:вид>…</escalate>.
-const SERVICE_MARKERS = /<promise>[\s\S]*?<\/promise>|<team:work>[\s\S]*?<\/team>|<escalate:[a-z]+>[\s\S]*?<\/escalate>/gi;
-// Незакрытый маркер в хвосте — ход ещё стримится, закрывающий тег придёт позже;
-// без этого пользователь успевает прочитать «<team:work>Создать …» целиком
-const OPEN_MARKER = /<(?:promise|team:work|escalate:[a-z]+)>[\s\S]*$/i;
+// Парные маркеры ищем ПОЗИЦИОННО: [открывающий тег, закрывающий тег], обе границы — вне
+// код-фрагментов, и вырезаем диапазон [openStart, closeEnd) из исходного текста целиком,
+// вместе с вложенным кодом: fenced-блок внутри <team:work> не разрывает пару (рез по
+// сегментам показывал код-фенс и хвост постановки как обычный текст). Та же семантика,
+// что у бэкенда (SessionManager.FindPairedMarkerOutsideCode + StripTeamProtocolMarkers):
+// зачистка и разбор не расходятся. Закрытие по имени (</team:work>, </escalate:check>)
+// терпим — как и парсер бэкенда.
+const PAIRED_MARKERS: ReadonlyArray<readonly [RegExp, RegExp]> = [
+  [/<escalate:[a-z]+>/i, /<\/escalate(?::\w+)?>/i],
+  [/<team:work>/i, /<\/team(?::work)?>/i],
+  [/<promise>/i, /<\/promise>/i],
+];
+// Незакрытый открывающий тег в хвосте — ход ещё стримится, закрывающий тег придёт позже;
+// без этого пользователь успевает прочитать «<team:work>Создать …» целиком. Хвост прячем
+// до конца текста (включая код-блок внутри незакрытой постановки), а не до фенса.
+const OPEN_TAGS = /<(?:promise|team:work|escalate:[a-z]+)>/gi;
+// Осиротевший закрывающий тег без пары (повторное закрытие, цитата закрытия отдельно от
+// открытия) — служебный синтаксис протокола, человеку не место ни в какой форме
+// (симметрично OrphanCloserRegex бэкенда)
+const ORPHAN_CLOSERS = /<\/team(?::work)?>|<\/escalate(?::\w+)?>|<\/promise>/gi;
 // Код-фрагменты (```блок``` и `инлайн`) — зона, где маркер остаётся как есть: там его
 // цитируют, объясняя протокол. Так же его игнорируют и детекторы бэкенда
-// (SessionManager.ParseWorkMarker / ParseEscalationMarker / проверка promise)
+// (SessionManager.ParseWorkMarker / ParseEscalationMarker / проверка promise).
+// Незакрытый фенс тянем до конца текста — стрим ещё не дописал закрывающие ```.
 const CODE_SPANS = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;
 
-function stripOutsideCode(chunk: string): string {
-  return chunk.replace(SERVICE_MARKERS, '').replace(OPEN_MARKER, '');
+// matchAll требует флаг g; теги выше объявлены без него, чтобы не таскать lastIndex
+function global(re: RegExp): RegExp {
+  return new RegExp(re.source, re.flags + 'g');
+}
+
+function codeRanges(text: string): [number, number][] {
+  return [...text.matchAll(CODE_SPANS)].map(m => [m.index, m.index + m[0].length] as [number, number]);
+}
+
+function outsideCode(ranges: [number, number][], start: number, end: number): boolean {
+  return !ranges.some(([s, e]) => start < e && end > s);
+}
+
+// Первый парный маркер, у которого ОБА тега вне код-фрагментов: границы [openStart, closeEnd).
+function findPairedOutsideCode(text: string, open: RegExp, close: RegExp): [number, number] | null {
+  const ranges = codeRanges(text);
+  for (const om of text.matchAll(global(open))) {
+    const openStart = om.index;
+    const openEnd = openStart + om[0].length;
+    if (!outsideCode(ranges, openStart, openEnd)) continue;
+    for (const cm of text.matchAll(global(close))) {
+      if (cm.index < openEnd) continue;
+      if (outsideCode(ranges, cm.index, cm.index + cm[0].length))
+        return [openStart, cm.index + cm[0].length];
+    }
+  }
+  return null;
+}
+
+function stripPairedMarkers(text: string): string {
+  for (const [open, close] of PAIRED_MARKERS) {
+    for (;;) {
+      const found = findPairedOutsideCode(text, open, close);
+      if (!found) break;
+      text = text.slice(0, found[0]) + text.slice(found[1]);
+    }
+  }
+  return text;
+}
+
+function stripOrphanClosers(text: string): string {
+  const ranges = codeRanges(text);
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(ORPHAN_CLOSERS)) {
+    if (!outsideCode(ranges, m.index, m.index + m[0].length)) continue;
+    out += text.slice(last, m.index);
+    last = m.index + m[0].length;
+  }
+  return out + text.slice(last);
+}
+
+// Пары уже вырезаны выше: оставшийся открывающий тег вне кода — маркер ещё не закрылся.
+// Прячем с него и до конца текста: тело маркера — постановка, не для глаз.
+function stripUnresolvedOpenTail(text: string): string {
+  const ranges = codeRanges(text);
+  for (const m of text.matchAll(OPEN_TAGS)) {
+    if (outsideCode(ranges, m.index, m.index + m[0].length))
+      return text.slice(0, m.index);
+  }
+  return text;
 }
 
 export function stripServiceMarkers(text: string): string {
-  let out = '';
-  let last = 0;
-  for (const m of text.matchAll(CODE_SPANS)) {
-    out += stripOutsideCode(text.slice(last, m.index)) + m[0];
-    last = m.index + m[0].length;
-  }
-  out += stripOutsideCode(text.slice(last));
-  return out.replace(/\n{3,}/g, '\n\n').trim();
+  return stripUnresolvedOpenTail(stripOrphanClosers(stripPairedMarkers(text)))
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 const REMARK_PLUGINS = [remarkGfm];

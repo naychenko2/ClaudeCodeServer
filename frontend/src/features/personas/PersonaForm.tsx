@@ -3,7 +3,7 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
 import { api } from '../../lib/api';
-import { useSpecialtyCatalog } from '../../lib/specialties';
+import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
  import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
@@ -286,9 +286,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     }
     const cellOfRec = (r: { tierStrong?: string | null; tierMedium?: string | null; tierWeak?: string | null } | null | undefined) =>
       (t === 'strong' ? r?.tierStrong : t === 'medium' ? r?.tierMedium : r?.tierWeak) || '';
+    // Волна 4 убрала owner/user-слои — действующая запись специальности живёт
+    // в одном global-слое; defaultSpecialty — на нём же. effectiveSpecialtyRecord
+    // оставлен ради совместимости сигнатуры в lib/specialties.ts, второй аргумент
+    // передаём тем же слоем (owner-цепочка → global).
     const rec = specialty !== 'none' && specSettings
-      ? effectiveSpecialtyRecord(specSettings.global, specSettings.owner, specialty) : null;
-    const defRec = specSettings?.owner.defaultSpecialty ?? specSettings?.global.defaultSpecialty ?? null;
+      ? effectiveSpecialtyRecord(specSettings.global, specSettings.global, specialty) : null;
+    const defRec = specSettings?.global.defaultSpecialty ?? null;
     const fromSpec = cellOfRec(rec) || cellOfRec(defRec);
     if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
     return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';
@@ -1204,23 +1208,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             aria-label="Специальность"
           >
             <option value="none">Не задана</option>
-            {specialtyCatalog
-              ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
-                <option key={e.key} value={e.key}>{e.label}</option>
-              ))
-              : (<>
-                <option value="analyst">Аналитик</option>
-                <option value="planner">Планировщик</option>
-                <option value="reviewer">Ревьюер</option>
-                <option value="executor">Исполнитель</option>
-                <option value="secretary">Секретарь</option>
-                <option value="coordinator">Координатор</option>
-                <option value="mentor">Ментор</option>
-                <option value="designer">Дизайнер</option>
-                <option value="consultant">Консультант</option>
-                <option value="librarian">Библиотекарь</option>
-                <option value="tester">Тестировщик</option>
-              </>)}
+            {specialtyCatalog?.filter(e => e.key !== 'none').map(e => (
+              <option key={e.key} value={e.key}>{specialtyLabel(specialtyCatalog, e.key)}</option>
+            ))}
           </select>
           {templateNote && (
             <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>

@@ -17,7 +17,7 @@
 // проект — git-репозиторий. Тумблер opt-out DossierOptOutButton живёт в шапке
 // чата и сюда не ходит.
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, Download, File as FileIcon, GitCompare, History, Info,
   Lightbulb, MessageCircle, Search, Upload, X,
@@ -57,6 +57,23 @@ const RECENT_DAYS = 30;
 // card-top (8). Не из шкалы SP — это расчётное выравнивание, как marginTop аватара.
 const AVATAR_INDENT = 34;
 
+// Тексты панели — в одном месте файла. Подсказка автовыгрузки появляется по тому же
+// гейту, что у кнопок выгрузки (флаг change-dossiers-recall включён и проект —
+// git-репозиторий), но текст выбирается по причине гейта фона (autoExport из
+// /dossiers/export/status): после сужения автовыгрузки «ветка заведомо наша» фон
+// молчит при чужом tip, одной origin-ветке и общей папке — общая фраза «выгружается
+// само» там врала бы. active дополнительно объясняет, почему конспекты обсуждений не
+// приезжают сами: после правки «Автовыгрузка не должна молча тратить модель на
+// конспекты» фон везёт только записи, конспекты снимаются явной командой человека.
+const T = {
+  autoExportHint: {
+    active: 'Решения выгружаются в ветку сами; конспекты обсуждений снимаются по кнопке «Выгрузить»',
+    foreignTip: 'Выгрузка только по кнопке: историю этого проекта ведёт не только эта машина',
+    originOnly: 'Выгрузка только по кнопке: ветка истории пока есть только в репозитории',
+    sharedFolder: 'Выгрузка только по кнопке: папку проекта использует ещё один пользователь',
+  },
+} as const;
+
 function monthKey(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -67,6 +84,11 @@ function monthLabel(iso: string): string {
 }
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+// Только время (HH:mm): «снято 14:32» под метастрокой own-записи. У импортированных
+// capturedAt == null — строку не рисуем, форматтер тут ни при чём.
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -254,6 +276,14 @@ function DossierCard({ entry, author, open, onToggle, onOpenChat, onOpenTask, on
               </>
             )}
           </div>
+          {/* Время снятия — только у own-записей (у импортированных capturedAt == null,
+              см. ChangeDossier и блок Г спринта): импортированные живут без метки
+              времени, и строка для них была бы чужой пустышкой. */}
+          {entry.capturedAt && (
+            <p style={{ margin: `${SP.xxs}px 0 0`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+              снято {formatTime(entry.capturedAt)}
+            </p>
+          )}
           {previewLine && (
             <p style={{
               margin: `${SP.xs}px 0 0`, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.4,
@@ -390,6 +420,10 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   }
 
   const [entries, setEntries] = useState<DossierEntry[] | null>(null);
+  // Метрика охвата (блок В): окно periodDays, всего коммитов и паспортов в выдаче.
+  // null — ответ пришёл без coverage (старая сборка бэка) или запрос ещё не ушёл;
+  // subheader тогда просто не рисует строку «Охвачено N из M».
+  const [coverage, setCoverage] = useState<{ periodDays: number; commits: number; dossiers: number } | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const [personas, setPersonas] = useState<Map<string, Persona>>(new Map());
@@ -402,10 +436,16 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   //   флаг change-dossiers-recall включён
   //   И проект — git-репозиторий (isGitRepo из /dossiers/export/status)
   // sharedFolder приезжает тем же запросом и подсовывается модалке для выноски.
-  // Этап 4 — кнопка импорта использует тот же гейт; вызов одного и того же
-  // /export/status не дублируем, импорт всегда возможен там же, где разрешён экспорт.
+  // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет,
+  // импорт из неё бессмыслен, и «Загрузить» гейтим отдельно от «Выгрузить» —
+  // выгрузить можно и когда ветки ещё нет, именно так она и создаётся.
   const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
-  const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean } | null>(null);
+  const [exportStatus, setExportStatus] = useState<{
+    isGitRepo: boolean;
+    sharedFolder: boolean;
+    hasDossierBranch: boolean;
+    autoExport: keyof typeof T.autoExportHint | null;
+  } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -419,25 +459,37 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     let cancelled = false;
     api.dossiers.exportStatus(project.id)
       .then(s => { if (!cancelled) setExportStatus(s); })
-      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false }); });
+      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false, hasDossierBranch: false, autoExport: null }); });
     return () => { cancelled = true; };
   }, [project.id, recallEnabled]);
 
   const showExportButton = recallEnabled && exportStatus?.isGitRepo === true;
+  // Импорт дополнительно требует существующую ветку ccs/dossiers/v1: без неё
+  // «Загрузить» упрётся в «Загружать пока нечего». «Выгрузить» этой зависимости
+  // не имеет — выгрузка как раз и создаёт ветку.
+  const showImportButton = showExportButton && exportStatus?.hasDossierBranch === true;
   const hasHeader = useHasPanelHeader();
+
+  // Стабильные onClose для диалогов — иначе каждая перерисовка панели (например,
+  // обновление useNow в этом же компоненте) даёт свежую стрелочную функцию,
+  // Modal пересоздаёт обработчик Escape и ререндерит IconButton без нужды.
+  const closeExport = useCallback(() => setExportOpen(false), []);
+  const closeImport = useCallback(() => setImportOpen(false), []);
 
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс перед новым запросом (сменился фильтр/проект) — иначе список чужого фильтра мигнёт перед загрузкой
     setEntries(null);
     setLoadError(false);
+    setCoverage(null);
     api.dossiers.list(project.id, fileFilter ? { file: fileFilter } : undefined)
-      .then(list => {
+      .then(res => {
         if (cancelled) return;
         // archived показываем только по явному запросу (заметка с текстами) —
         // в общем списке им не место
-        const visible = list.filter(e => e.status !== 'archived');
+        const visible = res.entries.filter(e => e.status !== 'archived');
         setEntries(visible);
+        setCoverage(res.coverage ?? null);
         setOpenId(visible[0]?.id ?? null);
       })
       .catch(() => { if (!cancelled) { setEntries([]); setLoadError(true); } });
@@ -514,6 +566,26 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
         {fileFilter ? 'Зачем менялся этот файл и что при этом решили' : 'История решений по проекту'}
       </p>
+      {/* Метрика охвата (блок В): показываем, только если бэк прислал coverage и
+          коммитов в окне больше нуля — иначе строка «0 из 0» создаёт шум и ни о чём
+          не говорит (нет окна — нечего мерить). */}
+      {coverage && coverage.commits > 0 && (
+        <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          Охвачено {coverage.dossiers} из {coverage.commits} коммитов за неделю
+        </p>
+      )}
+      {/* Подсказка автовыгрузки: тот же гейт видимости, что у кнопок «Выгрузить»/
+          «Загрузить» (showExportButton) — фича включена и проект — git-репозиторий.
+          Текст — по причине гейта фона (autoExport): общая фраза «выгружается само»
+          врала бы, когда фон молчит (чужой tip, одна origin-ветка, общая папка) —
+          человек ждал бы выгрузки, которой не будет. Тексты — T.autoExportHint
+          в начале файла; при неизвестной/отсутствующей причине — active (старое
+          поведение подсказки). */}
+      {showExportButton && (
+        <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          {T.autoExportHint[exportStatus?.autoExport ?? 'active']}
+        </p>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
         {fileFilter ? (
           <span style={{ ...chipStyle, background: C.accentLight, borderColor: 'transparent', color: C.accent }}>
@@ -536,35 +608,6 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           <Search size={11} strokeWidth={ICON_STROKE} />
           sha или текст
         </button>
-        {/* Запасной вариант на случай, когда PanelHeaderSlot не сработает (мобил/вложенный
-            контекст): тот же chipStyle, что у соседних чипов, иконка + короткая подпись.
-            Импорт стоит СЛЕВА от выгрузки — пара «забрать / отдать» по направлению стрелок. */}
-        {showExportButton && !hasHeader && (
-          <>
-            <button
-              onClick={() => setImportOpen(true)}
-              title="Загрузить из репозитория"
-              style={{
-                ...chipStyle, cursor: 'pointer', color: C.textHeading,
-                background: C.bgCard, border: `1px solid ${C.border}`,
-              }}
-            >
-              <Download size={11} strokeWidth={ICON_STROKE} />
-              Загрузить
-            </button>
-            <button
-              onClick={() => setExportOpen(true)}
-              title="Выгрузить в репозиторий"
-              style={{
-                ...chipStyle, cursor: 'pointer', color: C.textHeading,
-                background: C.bgCard, border: `1px solid ${C.border}`,
-              }}
-            >
-              <Upload size={11} strokeWidth={ICON_STROKE} />
-              Выгрузить
-            </button>
-          </>
-        )}
       </div>
       {searchOpen && (
         <div style={{ marginTop: SP.sm, display: 'flex', gap: SP.xs, alignItems: 'center' }}>
@@ -580,95 +623,79 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     </div>
   );
 
-  // Загрузка — скелетон повторяет форму карточки, чтобы список не «прыгал»
+  // Тело панели вычисляется один раз и используется в ЕДИНОМ return ниже —
+  // так и кнопки тулбара, и диалоги импорта/экспорта монтируются один раз и
+  // остаются в дереве во всех состояниях (загрузка/ошибка/пусто/пустой поиск/
+  // непустой список). Раньше каждый ранний return уносил с собой PanelHeaderSlot
+  // и весь JSX диалогов: в пустой истории кнопки «Загрузить»/«Выгрузить»
+  // исчезали, а сами диалоги (запланированные ниже на :758-776) существовали
+  // каждый в своём экземпляре панели — при двойном монтировании конфликтовали.
+  let body: ReactNode;
+
   if (entries === null) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-        {subheader}
-        {exclusionNote}
-        <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px` }}>
-          <SkeletonCard /><SkeletonCard /><SkeletonCard />
-        </div>
+    // Загрузка — скелетон повторяет форму карточки, чтобы список не «прыгал»
+    body = (
+      <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px` }}>
+        <SkeletonCard /><SkeletonCard /><SkeletonCard />
       </div>
     );
-  }
-
-  if (loadError) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-        {subheader}
-        {exclusionNote}
-        <EmptyState
-          compact
-          icon={<AlertTriangle size={20} strokeWidth={ICON_STROKE} />}
-          title="Не удалось загрузить историю решений"
-          subtitle="Проверьте соединение и попробуйте ещё раз."
-          action={<Button variant="secondary" size="sm" onClick={() => setReloadTick(t => t + 1)}>Повторить</Button>}
-        />
-      </div>
+  } else if (loadError) {
+    body = (
+      <EmptyState
+        compact
+        icon={<AlertTriangle size={20} strokeWidth={ICON_STROKE} />}
+        title="Не удалось загрузить историю решений"
+        subtitle="Проверьте соединение и попробуйте ещё раз."
+        action={<Button variant="secondary" size="sm" onClick={() => setReloadTick(t => t + 1)}>Повторить</Button>}
+      />
     );
-  }
-
-  if (entries.length === 0) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-        {subheader}
-        {exclusionNote}
-        {fileFilter ? (
-          <EmptyState
-            compact
-            icon={<FileIcon size={20} strokeWidth={ICON_STROKE} />}
-            title="Этот файл ещё не меняли из чата"
-            subtitle="История решений собирается с момента включения — для старого кода её нет."
-          />
-        ) : (
-          <EmptyState
-            compact
-            icon={<Lightbulb size={20} strokeWidth={ICON_STROKE} />}
-            title="Здесь появится история решений"
-            subtitle="Когда код меняют из чата или задачи, AI Home сохранит, зачем это делалось и что при этом решили. Дальше — просто работайте как обычно."
-          />
-        )}
-      </div>
+  } else if (entries.length === 0) {
+    body = fileFilter ? (
+      <EmptyState
+        compact
+        icon={<FileIcon size={20} strokeWidth={ICON_STROKE} />}
+        title="Этот файл пока не попадал в историю решений"
+        subtitle="Она собирается автоматически из коммитов с трейлером чата."
+      />
+    ) : (
+      <EmptyState
+        compact
+        icon={<Lightbulb size={20} strokeWidth={ICON_STROKE} />}
+        title="Здесь появится история решений"
+        subtitle="Когда код меняют из чата или задачи, AI Home сохранит, зачем это делалось и что при этом решили. Дальше — просто работайте как обычно."
+        // В пустой истории без фильтра по файлу даём кнопку загрузки из репозитория:
+        // для нового проекта без своих записей и без ветки ccs/dossiers/v1 иначе
+        // человек видит только заголовок и не понимает, как подтянуть историю
+        // коллег. Кнопка открывает тот же диалог импорта, что и иконка в шапке —
+        // она уже под рукой у того, кто догадался навести курсор; здесь — для тех,
+        // кто ищет подсказку в теле панели.
+        action={showImportButton ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<Download size={12} strokeWidth={ICON_STROKE} />}
+            title="Загрузить из репозитория"
+            onClick={() => setImportOpen(true)}
+          >
+            Загрузить из репозитория
+          </Button>
+        ) : undefined}
+      />
     );
-  }
-
-  // Поиск по sha/тексту съел весь список — без этого состояния тело панели
-  // рендерилось бы пустым, и было бы не отличить от зависшей загрузки (ревью Майи)
-  if (filtered && filtered.length === 0) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-        {subheader}
-        {exclusionNote}
-        <EmptyState
-          compact
-          icon={<Search size={20} strokeWidth={ICON_STROKE} />}
-          title={`Ничего не найдено по «${query.trim()}»`}
-          subtitle="Проверьте sha коммита или часть текста записи."
-          action={<Button variant="secondary" size="sm" onClick={() => setQuery('')}>Сбросить поиск</Button>}
-        />
-      </div>
+  } else if (filtered && filtered.length === 0) {
+    // Поиск по sha/тексту съел весь список — без этого состояния тело панели
+    // рендерилось бы пустым, и было бы не отличить от зависшей загрузки (ревью Майи)
+    body = (
+      <EmptyState
+        compact
+        icon={<Search size={20} strokeWidth={ICON_STROKE} />}
+        title={`Ничего не найдено по «${query.trim()}»`}
+        subtitle="Проверьте sha коммита или часть текста записи."
+        action={<Button variant="secondary" size="sm" onClick={() => setQuery('')}>Сбросить поиск</Button>}
+      />
     );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {subheader}
-      {exclusionNote}
-      {/* Кнопки тулбара (ADR §6): только когда у панели есть шапка. Без pinned —
-          ни одна из них не главное действие панели, в покое шапка должна оставаться
-          чистой. Импорт (Download) ставится слева от выгрузки (Upload) — пара
-          «забрать / отдать» читается по направлению стрелок. */}
-      {showExportButton && hasHeader && (
-        <PanelHeaderSlot side="right">
-          <IconButton size="sm" title="Загрузить из репозитория" onClick={() => setImportOpen(true)}>
-            <Download size={14} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          <IconButton size="sm" title="Выгрузить в репозиторий" onClick={() => setExportOpen(true)}>
-            <Upload size={14} strokeWidth={ICON_STROKE} />
-          </IconButton>
-        </PanelHeaderSlot>
-      )}
+  } else {
+    body = (
       <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px ${SP.lg}px` }}>
         {recent.map((entry, i) => (
           <div key={entry.id}>
@@ -729,18 +756,59 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           );
         })}
       </div>
+    );
+  }
+
+  return (
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        {subheader}
+        {exclusionNote}
+        {/* Кнопки тулбара (ADR §6): только когда у панели есть шапка. Без pinned —
+            ни одна из них не главное действие панели, в покое шапка должна оставаться
+            чистой. Импорт (Download) ставится слева от выгрузки (Upload) — пара
+            «забрать / отдать» читается по направлению стрелок. Импорт гейтится
+            отдельно (showImportButton): пока ветки ccs/dossiers/v1 ещё нет, чип
+            «Загрузить» не показывается — одиночка упрётся в «Загружать пока нечего».
+            «Выгрузить» показывается по showExportButton: выгрузить можно и до создания
+            ветки, именно так она и появляется.
+            Слот поднят выше ранних return — теперь кнопки доступны во всех состояниях
+            панели (загрузка/ошибка/пусто/пустой поиск/непустой список). */}
+        {(showImportButton || showExportButton) && hasHeader && (
+          <PanelHeaderSlot side="right">
+            {showImportButton && (
+              <IconButton size="sm" title="Загрузить из репозитория" onClick={() => setImportOpen(true)}>
+                <Download size={14} strokeWidth={ICON_STROKE} />
+              </IconButton>
+            )}
+            {showExportButton && (
+              <IconButton size="sm" title="Выгрузить в репозиторий" onClick={() => setExportOpen(true)}>
+                <Upload size={14} strokeWidth={ICON_STROKE} />
+              </IconButton>
+            )}
+            {/* В DesktopWorkspace PanelZone всегда завёрнут в PanelShell, который даёт hasHeader=true,
+                поэтому fallback-ветка !hasHeader удалена как недостижимая. На мобильной раскладке
+                PanelShell тоже присутствует. */}
+          </PanelHeaderSlot>
+        )}
+        {body}
+      </div>
+      {/* Диалоги монтируются в единственном экземпляре на панель. Условный рендеринг
+          открытого диалога (exportOpen/importOpen) гарантирует, что в один момент
+          времени в DOM жива максимум одна модалка — закрытая размонтируется, а её
+          место освободится. */}
       {showExportButton && (
         <DossierExportDialog
           open={exportOpen}
-          onClose={() => setExportOpen(false)}
+          onClose={closeExport}
           projectId={project.id}
           sharedFolder={exportStatus?.sharedFolder === true}
         />
       )}
-      {showExportButton && (
+      {showImportButton && (
         <DossierImportDialog
           open={importOpen}
-          onClose={() => setImportOpen(false)}
+          onClose={closeImport}
           projectId={project.id}
           // Импорт добавил записи — дёргаем список, чтобы они появились с бейджем
           // «Из репозитория» и парами по коммитам. Дёргается на закрытии success/nothing,
@@ -748,6 +816,6 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           onSuccess={() => setReloadTick(t => t + 1)}
         />
       )}
-    </div>
+    </>
   );
 }

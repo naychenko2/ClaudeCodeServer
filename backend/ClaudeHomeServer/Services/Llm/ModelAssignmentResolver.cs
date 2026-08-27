@@ -93,10 +93,23 @@ public sealed class ModelAssignmentResolver(
     /// не tier:*) достраивает хвост тира своего слота — шаги развёрнутой цепочки слота ПОСЛЕ
     /// позиции M (или вся цепочка, если M в ней не найдена). Пресет/tier-маршруты уже разворачиваются
     /// в полную цепочку выше, хвост им не нужен. Без хвоста (пустой слот) после пула — честная
-    /// ошибка, автоподбора больше нет.
+    /// ошибка, автоподбора больше нет. Без персоны хвост строится по общему слоту владельца.
     /// </summary>
     public IReadOnlyList<string> ResolveChain(string usageKey, string? explicitModel = null, string? ownerId = null)
+        => ResolveChain(usageKey, explicitModel, ownerId, persona: null);
+
+    /// <summary>
+    /// Та же цепочка, но достройка хвоста тира идёт по УЗКИМ матрицам персоны
+    /// (персона → специальность → слоты владельца). Стартовая модель чата резолвится
+    /// с матрицами (PersonaModel замораживается в Session.Model), поэтому и хвост обязан
+    /// браться из того же пресета — иначе у персоны со своей матрицей цепочка обрубалась
+    /// на хвост общего слота владельца (инцидент 2026-08-26: дизайнер стартовала на kimi-k3
+    /// из своего пресета, а хвост взялся из общего «Мощного», где после kimi шёл только
+    /// мёртвый deepseek). Без персоны поведение прежнее — общий слот владельца.
+    /// </summary>
+    public IReadOnlyList<string> ResolveChain(string usageKey, string? explicitModel, string? ownerId, Persona? persona)
     {
+        IReadOnlyList<TierMatrix> matrices = persona is null ? [] : PersonaMatrices(persona, ownerId);
         var action = LocalActionCatalog.Find(usageKey);
         var agentic = action?.Agentic ?? false;
         var route = ResolveRawRoute(usageKey, explicitModel, ownerId, action);
@@ -105,9 +118,9 @@ public sealed class ModelAssignmentResolver(
         // Явная конкретная модель → достроить хвост тира (волна 1): цепочка есть у любого хода.
         if (IsConcreteModelRoute(route))
         {
-            var tier = TierOfModel(route, ownerId)
+            var tier = TierOfModelWithMatrices(route, ownerId, matrices)
                 ?? (action is null ? ModelTier.Medium : LocalActionCatalog.EffectiveDefaultTier(action));
-            AppendSlotTail(chain, route!, tier, ownerId, agentic);
+            AppendSlotTail(chain, route!, tier, ownerId, agentic, matrices);
         }
 
         return chain;
@@ -121,12 +134,21 @@ public sealed class ModelAssignmentResolver(
     /// реверс-эвристику тира»: сравнение идёт по развёрнутым шагам, а не по литералу слота.
     /// </summary>
     public ModelTier? TierOfModel(string? model, string? ownerId)
+        => TierOfModelWithMatrices(model, ownerId, []);
+
+    // Тот же реверс, но по узким матрицам персоны (персона → специальность → слоты):
+    // превью чата с персоной обязано совпадать с достройкой хвоста в бою (перегрузка
+    // ResolveChain с персоной зовёт ту же точку).
+    public ModelTier? TierOfModel(string? model, string? ownerId, Persona? persona)
+        => TierOfModelWithMatrices(model, ownerId, persona is null ? [] : PersonaMatrices(persona, ownerId));
+
+    private ModelTier? TierOfModelWithMatrices(string? model, string? ownerId, IReadOnlyList<TierMatrix> matrices)
     {
         if (string.IsNullOrWhiteSpace(model)) return null;
         var m = model.Trim();
         foreach (var tier in TierOrder)
         {
-            var slot = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
+            var slot = userTiers?.ModelFor(tier, ownerId, matrices) ?? appSettings.TierModel(tier);
             if (string.IsNullOrWhiteSpace(slot)) continue;
             var slotChain = ExpandRouteToModels(slot, ownerId, agentic: false);
             if (slotChain.Any(s => string.Equals(s, m, StringComparison.OrdinalIgnoreCase)))
@@ -152,9 +174,11 @@ public sealed class ModelAssignmentResolver(
     // Хвост цепочки тира после явной модели (волна 1): шаги развёрнутой цепочки слота тира ПОСЛЕ
     // позиции модели (если она в цепочке) либо вся цепочка (если модели в ней нет). Пустой слот —
     // хвоста нет: после пула честная ошибка, без магии автоподбора. Дедуп — существующий AddIfNew.
-    private void AppendSlotTail(List<string> chain, string model, ModelTier tier, string? ownerId, bool agentic)
+    // matrices — узкие матрицы персоны (пустой список = общий слот владельца, как раньше).
+    private void AppendSlotTail(List<string> chain, string model, ModelTier tier, string? ownerId, bool agentic,
+        IReadOnlyList<TierMatrix> matrices)
     {
-        var slot = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
+        var slot = userTiers?.ModelFor(tier, ownerId, matrices) ?? appSettings.TierModel(tier);
         if (string.IsNullOrWhiteSpace(slot)) return;
         var slotChain = ExpandRouteToModels(slot, ownerId, agentic);
         var m = model.Trim();

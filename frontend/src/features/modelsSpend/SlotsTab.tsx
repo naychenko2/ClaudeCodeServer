@@ -10,14 +10,15 @@ import { RoutePicker } from '../../components/RoutePicker';
 import { ChainStepsEditor } from '../../components/ChainStepsEditor';
 import {
   chainSummary, isPresetRoute, presetIdOf, presetRoute,
-  presetValueLabel, usePresets, invalidateEffectiveLines,
+  presetValueLabel, usePresets, useSpecialtySettings, invalidateEffectiveLines,
 } from '../../lib/presets';
+import type { LayerReducer } from '../../lib/presets';
 import { api, type ModelTiers } from '../../lib/api';
 import { cloneLayer, newPresetId } from '../../lib/specialties';
 import { loadModels, modelLabel, providerLabel, modelProvider, type ModelOption } from '../../lib/models';
 import { C, FS, R, SP } from '../../lib/design';
 import { showToast } from '../../lib/toast';
-import type { AppSettings, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import type { AppSettings } from '../../types';
 import { EffectiveLine } from '../../components/EffectiveLine';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
 
@@ -32,12 +33,17 @@ interface SlotsTabProps {
   data: ProviderData;
   contextUserId: string | null;
   onContextUserId: (id: string | null) => void;
-  settings: SpecialtySettingsResponse | null;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   savingScope: 'global' | 'owner' | 'user' | null;
-  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+  // Контекст активной записи на стороне модалки — для user-scope сверяемся с contextUserId,
+  // иначе чужой user-слой блокирует правку слотов.
+  savingUserId: string | null;
+  // Контракт редьюсерный (см. presets.saveLayer). Стор сам читает текущий слой,
+  // вызывает reducer и шлёт PUT; для user-scope пробрасывается contextUserId.
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
   meUserId: string | null;
   // A2: запрос на запуск черновика новой цепочки (от requestNewPreset() из RoutePicker).
   // Раскрываем первую карточку, чтобы человек сразу увидел редактор.
@@ -45,7 +51,7 @@ interface SlotsTabProps {
   onPendingDraftConsumed?: () => void;
 }
 
-export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settings, models,
+export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, models,
   tierModels, ollamaModel, savingScope, onSaveLayer, meUserId,
   pendingDraft, onPendingDraftConsumed }: SlotsTabProps) {
   const presets = usePresets();
@@ -106,6 +112,10 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraft]);
+
+  // ADR-012 снял owner/user-слои специальностей: GET /specialties/settings/user/{id}
+  // на бэкенде больше нет, и прежняя подгрузка user-слоя давала 404 на каждый выбор
+  // пользователя в модалке. Пресеты живут только в общем слое — догружать нечего.
 
   // Сохранение слота: личный/пользовательский — через свои эндпоинты, общий — через /api/settings.
   function saveTier(t: TierKey, model: string) {
@@ -271,9 +281,9 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
             models={models}
             tierModels={tierModels}
             ollamaModel={ollamaModel}
-            settings={settings}
             savingScope={savingScope}
             isAdmin={isAdmin}
+            contextUserId={contextUserId}
             onSaveLayer={onSaveLayer}
             onToggle={() => requestToggle(t)}
             onPickRoute={v => saveTier(t, v)}
@@ -365,10 +375,14 @@ interface SlotCardProps {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
-  settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+  contextUserId: string | null;
+  // Контракт редьюсерный (см. presets.saveLayer). userId не пробрасывается здесь:
+  // для slot-правок user не пишется напрямую через SlotCard, цепочка в user-слое
+  // записывается через ChainEditor, который уже получает contextUserId от родителя.
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
   onToggle: () => void;
   onPickRoute: (v: string) => void;
   // A4: редактор цепочки публикует наружу «грязный» флаг, чтобы родитель мог
@@ -377,8 +391,8 @@ interface SlotCardProps {
 }
 
 function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, totalActions,
-  presets, models, tierModels, ollamaModel, settings, savingScope, isAdmin, onSaveLayer,
-  onToggle, onPickRoute, onDirtyChange }: SlotCardProps) {
+  presets, models, tierModels, ollamaModel, savingScope, isAdmin, contextUserId,
+  onSaveLayer, onToggle, onPickRoute, onDirtyChange }: SlotCardProps) {
   const presetId = presetIdOf(model);
   const scoped = presetId ? presets.find(p => p.id.toLowerCase() === presetId.toLowerCase()) ?? null : null;
   const preset = scoped;
@@ -483,9 +497,9 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
-          settings={settings}
           savingScope={savingScope}
           isAdmin={isAdmin}
+          contextUserId={contextUserId}
           onSaveLayer={onSaveLayer}
           onPickRoute={onPickRoute}
           onDirtyChange={onDirtyChange}
@@ -497,7 +511,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
 
 // === Редактор цепочки внутри слота ===
 function ChainEditor({ tier: t, model, preset, broken, presets, models, tierModels, ollamaModel,
-  settings, savingScope, isAdmin, onSaveLayer, onPickRoute, onDirtyChange }: {
+  savingScope, isAdmin, contextUserId, onSaveLayer, onPickRoute, onDirtyChange }: {
   tier: TierKey;
   model: string;
   preset: ReturnType<typeof usePresets>[number] | null;
@@ -506,14 +520,19 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
-  settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+  contextUserId: string | null;
+  // Контракт редьюсерный (см. presets.saveLayer). userId для user-scope пробрасываем
+  // из родителя (SlotCard получает contextUserId от модалки).
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
   onPickRoute: (v: string) => void;
   // A4: редактор шлёт «грязный» флаг наверх, чтобы SlotCard не дал свернуть молча
   onDirtyChange?: (dirty: boolean) => void;
 }) {
+  // Снимок слоя берём сами из стора — снаружи не получаем (структурный запрет).
+  const settings = useSpecialtySettings();
   // Черновик шагов: правится локально, пока не «Сохранить». Инициализируем шагами пресета.
   const presetSteps = preset?.steps ?? [];
   const [draft, setDraft] = useState<string[]>(presetSteps);
@@ -522,36 +541,42 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   // A4: публикуем dirty наверх, чтобы SlotCard не схлопнул карточку молча
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
+  // Контекст для RoutePicker.presetCreation: редьюсерный контракт (см. presets.saveLayer),
+  // userId пробрасываем из родителя для user-scope.
+  const presetCreationCtx = settings ? {
+    models, savingScope,
+    contextUserId,
+    onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+      userId?: string | null) => onSaveLayer(scope, reducer, userId),
+  } : undefined;
+
   // Самоссылка: шаг «уровень T» внутри пресета, разворачивающегося из этого же слота
   const selfRef = preset ? preset.steps.some(s => routeTier(s) === t) : false;
 
-  // Сохранить: записать обновлённые шаги в пресет (если он свой/админ правит общий)
-  const canSavePreset = preset != null && (preset.scope === 'owner' || isAdmin);
+  // Сохранить: записать обновлённые шаги в пресет. После ADR-012 пресеты живут только
+  // в общем слое, писать в него может лишь админ — личных цепочек больше нет.
+  const canSavePreset = preset != null && isAdmin;
   // Правка общей цепочки админом — с подтверждением: изменение увидят все пользователи
   const [confirmSharedEdit, setConfirmSharedEdit] = useState(false);
   // Собственно запись шагов в слой — вынесено, чтобы диалог подтверждения мог его вызвать
   const commitSavePreset = () => {
-    if (!preset || !settings) return;
+    if (!preset) return;
     if (draft.length === 0) return; // пустую цепочку бэкенд отклонит
-    const scope = preset.scope;
-    const baseLayer = settings[scope];
-    if (!baseLayer) return;
-    const next = cloneLayer(baseLayer);
-    const p = next.presets.find(x => x.id === preset.id);
-    if (p) p.steps = draft;
+    if (!settings?.global) return;
     // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
     // только чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
-    void onSaveLayer(scope, next).catch(() => {});
+    void onSaveLayer('global', (cur) => {
+      const next = cloneLayer(cur);
+      const p = next.presets.find(x => x.id === preset.id);
+      if (p) p.steps = draft;
+      return next;
+    }).catch(() => {});
   };
   const savePreset = () => {
-    if (!preset || !dirty || !canSavePreset || !settings) return;
+    if (!preset || !dirty || !canSavePreset) return;
     if (draft.length === 0) return;
-    // Админ и общая цепочка — сначала диалог «Сохранить для всех», иначе сразу запись
-    if (isAdmin && preset.scope === 'global') {
-      setConfirmSharedEdit(true);
-      return;
-    }
-    commitSavePreset();
+    // Цепочка общая всегда — сначала диалог «Сохранить для всех», потом запись
+    setConfirmSharedEdit(true);
   };
 
   // Сохранить как пресет: новый пресет из черновика + перепривязка слота на него. Слой —
@@ -560,15 +585,16 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   // общем слоте, ни тем более в слоте другого пользователя (MAJOR 2, ревью d23231bd)
   const saveAsPreset = () => {
     if (!settings || draft.length === 0) return;
-    const targetScope: 'global' | 'owner' | 'user' = isAdmin ? 'global' : 'owner';
     const copy = { id: newPresetId(), name: `${preset?.name ?? 'Цепочка'} (копия)`,
       description: preset?.description ?? null, steps: draft };
-    const next = cloneLayer(settings[targetScope]);
-    next.presets.push(copy);
     // Перепривязка слота — только после записи слоя. Иначе PUT тира уходит параллельно и,
     // в отличие от мест, ссылку на пресет не валидирует вовсе: упавшая запись слоя оставила
     // бы слот указывающим на несуществующий пресет — молча, у всех (MAJOR 1, ревью 03607845)
-    void onSaveLayer(targetScope, next)
+    void onSaveLayer('global', (cur) => {
+      const next = cloneLayer(cur);
+      next.presets.push(copy);
+      return next;
+    })
       .then(() => onPickRoute(presetRoute(copy.id)))
       .catch(() => {});
   };
@@ -628,12 +654,11 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           tierModels={tierModels}
           ollamaModel={ollamaModel}
           showPresets
-          // 'global' у админа (и для общего слота, и для чужого контекста пользователя) —
-          // личный пресет админа не годится ни туда: свой слот у остальных пользователей
-          // читает Global.Presets, а чужой личный слот резолвится в ЕГО owner-пресетах,
-          // где созданного админом пресета тоже нет (MAJOR 2, ревью d23231bd)
-          presetScope={isAdmin ? 'global' : undefined}
-          presetCreation={{ settings, savingScope, onSaveLayer }}
+          // Пресеты после ADR-012 живут только в общем слое — и список выбора, и слой
+          // inline-созданной цепочки всегда 'global'. Прежний `undefined` у не-админа
+          // отправлял черновик в снятый owner-слой → PUT /settings/global → 403 молча.
+          presetScope="global"
+          presetCreation={presetCreationCtx}
           busy={savingScope !== null}
           placeholder="не задана — выберет Claude Code сам"
           onChange={onPickRoute}

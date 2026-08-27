@@ -3,7 +3,6 @@ using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -204,6 +203,72 @@ public class LlmProviderRegistryTests
         env["ANTHROPIC_DEFAULT_SONNET_MODEL"].Should().Be("deepseek-v4-flash");
         env["ANTHROPIC_DEFAULT_HAIKU_MODEL"].Should().Be("deepseek-v4-flash");
         env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
+    }
+
+    // Окно контекста уходит в CLI явно: id сторонних моделей он не знает и без этого
+    // держит сессию в 200k (ранний auto-compact при реальном окне до 1M)
+    [Fact]
+    public void BuildCliEnv_МодельИзКаталога_СтавитОкноКонтекста()
+    {
+        var env = Create(new() { ["LlmProviders:deepseek:Models:0:ContextWindow"] = "1048576" })
+            .BuildCliEnv("deepseek-v4-pro")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
+    }
+
+    // Id с суффиксом окна (glm-5.2[1m], MiniMax-M3[1m]) — обычная запись каталога,
+    // матчится как есть
+    [Fact]
+    public void BuildCliEnv_МодельССуффиксомОкна_СтавитОкноКонтекста()
+    {
+        var env = Create(new()
+        {
+            ["LlmProviders:glm:ApiKey"] = "zai-key",
+            ["LlmProviders:glm:Models:0:ContextWindow"] = "200000",
+            ["LlmProviders:glm:Models:1:Id"] = "glm-5.2[1m]",
+            ["LlmProviders:glm:Models:1:ContextWindow"] = "1048576",
+        }).BuildCliEnv("glm-5.2[1m]")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
+    }
+
+    // Модель не из каталога (резолв по префиксу, окно неизвестно) — fail-open,
+    // ключа нет и окно определяет сам CLI
+    [Fact]
+    public void BuildCliEnv_МодельНеИзКаталога_БезОкнаКонтекста()
+    {
+        var env = Create().BuildCliEnv("deepseek-reasoner-next")!;
+        env["ANTHROPIC_MODEL"].Should().Be("deepseek-reasoner-next");
+        env.Should().NotContainKey("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+    }
+
+    // ─── Окно контекста родного Claude (подписка) ────────────────────────────
+    // Суффикс [1m] живёт только во флаге --model и внутрь сабагента не передаётся: без
+    // явного объявления CLI ведёт сабагента в предполагаемых 200k, и обрывы жмутся к этой
+    // границе. Значение считается по модели, которая РЕАЛЬНО уедет в --model.
+
+    [Fact]
+    public void ClaudeContextWindow_МодельССуффиксом_Окно1M()
+    {
+        LlmProviderRegistry.ClaudeContextWindow("opus[1m]").Should().Be(1_000_000);
+        LlmProviderRegistry.ClaudeContextWindow("claude-opus-5[1m]").Should().Be(1_000_000);
+        LlmProviderRegistry.ClaudeContextWindowValue("opus[1m]").Should().Be("1000000");
+    }
+
+    [Fact]
+    public void ClaudeContextWindow_БезСуффикса_Штатные200k()
+    {
+        LlmProviderRegistry.ClaudeContextWindow("opus").Should().Be(200_000);
+        LlmProviderRegistry.ClaudeContextWindow("claude-opus-5").Should().Be(200_000);
+        // Модель не задана (слот пуст, решает CLI) — безопасное 200k
+        LlmProviderRegistry.ClaudeContextWindow(null).Should().Be(200_000);
+    }
+
+    // Ключ уже в ProviderEnvKeys — значение с машины (мастер-рубильник, забытый setx)
+    // вычищается на каждом запуске и не подменяет наше объявление
+    [Fact]
+    public void ProviderEnvKeys_СодержитОкноКонтекста()
+    {
+        LlmProviderRegistry.ProviderEnvKeys.Should().Contain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+        Create().EnvKeysToClear.Should().Contain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
     }
 
     [Fact]

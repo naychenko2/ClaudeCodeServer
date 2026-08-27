@@ -30,6 +30,38 @@ internal static class TranscriptProbe
         return null;
     }
 
+    // Целостность хвоста транскрипта (КР-наблюдаемость, этап 3): последняя непустая строка
+    // JSONL обязана парситься и быть непустым объектом. Оборванная запись (kill посреди
+    // записи файла) даёт недописанную строку — такой транскрипт нельзя продолжать через
+    // --resume. Хвост читается тем же способом, что LastUserText: у длинных сессий файл —
+    // десятки МБ, целиком его не читаем.
+    public static bool IsTailIntact(string transcriptPath)
+    {
+        try
+        {
+            using var fs = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var tail = new byte[Math.Min(256 * 1024, fs.Length)];
+            fs.Seek(-tail.Length, SeekOrigin.End);
+            fs.ReadExactly(tail);
+
+            var lines = System.Text.Encoding.UTF8.GetString(tail).Split('\n');
+            for (var i = lines.Length - 1; i >= 0; i--)
+            {
+                var line = lines[i].TrimEnd('\r');
+                if (line.Length == 0) continue;
+                using var doc = JsonDocument.Parse(line);
+                return doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.EnumerateObject().Any();
+            }
+            return true; // файл из пустых строк — целостности не нарушена
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[TranscriptProbe] Не удалось проверить хвост транскрипта {transcriptPath}: {ex.Message}");
+            return false;
+        }
+    }
+
     // Текст последнего user-сообщения транскрипта (content-строка; массивы блоков — вложения —
     // не сравнить со стартовым текстом хода, возвращаем null). null и при любой ошибке ФС —
     // вызывающий трактует как «текста нет» и не skip'ает submit (безопасная сторона).

@@ -1,9 +1,15 @@
 # .NET
 backend/**/bin/
 backend/**/obj/
+tools/**/bin/
+tools/**/obj/
+client/**/bin/
+client/**/obj/
 *.user
 .vs/
 data/
+# Отчёты dotnet test (--logger trx и т.п.) — локальный прогон, не артефакт репозитория
+TestResults/
 
 # Артефакты публикации и TLS-сертификаты
 publish/
@@ -13,8 +19,10 @@ backend/publish_staging/
 certs/
 domain/
 
-# Собранный фронтенд внутри backend (копируется при публикации)
-backend/ClaudeHomeServer/wwwroot/assets/
+# Собранный фронтенд — артефакт сборки, в репо не живет: прод получает wwwroot из
+# frontend/dist агент выкатки (deploy-agent.ps1) или docker-образ; дев-стенд (dotnet run)
+# отдаёт frontend/dist напрямую. Слепок в репе однажды уже приняли за «фикс не выкатан».
+backend/ClaudeHomeServer/wwwroot/
 backend/wwwroot/
 
 # Node / Frontend
@@ -71,6 +79,9 @@ Thumbs.db
 !frontend/public/apple-touch-icon-*.png
 !docs/assets/screenshots/*.png
 *.jpg
+# Аватарки ролей раздела «Специальности» — комплект лежит в репозитории,
+# без него RoleAvatar уходит в фолбэк с глифом
+!frontend/src/assets/specialties/*.jpg
 *.log
 onlyoffice/local.json
 
@@ -96,6 +107,8 @@ api.txt
 
 # Локальные одноразовые скрипты (замеры, пробы) — у каждого свои
 *.local.mjs
+# Разовые проверочные скрипты к фиче «Архив чатов» — уже отработали, в репо не нужны
+frontend/e2e-archive-*.mjs
 
 # Планы командных механик — рабочие артефакты сессии (папка на каждый прогон, имя с id чата).
 # Итог работы живёт в коммитах и документации, сами планы ценности вне прогона не имеют
@@ -112,6 +125,17 @@ docs/plans/
 backend/.tmpbuild/
 backend/.vite/
 test-results/
+# Кеш vitest, запущенного из корня репо (появляется от прогонов фронтовых тестов с корня)
+/node_modules/
 
 # Планы plan-mode сессий (выход из планирования пишет сюда); итог работы живёт в коммитах
 .claude/plans/
+
+# Спайк браузерного канала: сырые дампы срезов (результаты — в отчёте и summary)
+tools/browser-spike/results/raw/
+
+# Сгенерированный манифест native messaging host (абсолютные пути — при установке)
+tools/browser-spike/host/com.ccs.browser_spike.json
+# Chrome for Testing: сборка и лог спайка
+tools/browser-spike/cft/
+tools/browser-spike/cft.zip

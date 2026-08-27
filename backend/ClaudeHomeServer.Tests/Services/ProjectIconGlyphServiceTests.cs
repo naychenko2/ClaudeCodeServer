@@ -5,7 +5,6 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.ProjectIcons;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Logging;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -22,13 +21,16 @@ public class ProjectIconCatalogTests
         Assert.Equal("Проекты", action.Group);
         Assert.Equal(CheapProfile.Large, action.Profile);
         Assert.False(action.DefaultLocal);
-        Assert.Equal(ModelTier.Strong, LocalActionCatalog.EffectiveDefaultTier(action!));
+        // Medium: после вырезания генерации path'ов задача — назвать имя из набора
+        // (Strong поднимался 2026-08-17 под рисование)
+        Assert.Equal(ModelTier.Medium, LocalActionCatalog.EffectiveDefaultTier(action!));
         Assert.True(LocalActionCatalog.IsKnown("project-icon"));
     }
 
     // Собственный лимит ожидания облака для места (прод 17.08: сильная модель отвечает
     // 52–126 с, профиль Large давал 300 с и держал зависший вызов пять минут) — задаче
-    // «таймаут сильной модели» значение 180 с обязано быть закреплено явно
+    // «таймаут сильной модели» значение 180 с обязано быть закреплено явно. Двухходовая
+    // схема (ревизия 20.08) удваивает время подбора, но 180 с покрывают и её
     [Fact]
     public void МестоЗначокПроекта_СобственныйЛимитОблака180с()
     {
@@ -40,56 +42,30 @@ public class ProjectIconCatalogTests
 }
 
 
-// Разбор и валидация ответа модели по контракту ADR-009: имя только из белого списка,
-// пути — алфавит/форма чисел/синтаксис/габарит, взаимоисключительность видов и сборка
-// SVG только на сервере. Критерий задачи: подставной ответ с сырой разметкой или именем
-// вне белого списка = пустой результат, а не значок.
+// Разбор и валидация ответа модели по контракту ADR-009: имя только из белого списка.
+// Рисованные пути вырезаны: ответ с paths вместо имени — негодный кандидат, при нуле
+// годных — пустой результат (фолбэк на инициалы), а не значок.
 public class ProjectIconGlyphServiceTests
 {
-    // Нарисованные пути — в габарите контракта [-4, 28]: пример из ADR-009 §2.2 с
-    // координатами -5/-6 его же лимиту §3.4 не удовлетворяет, здесь данные годные
-    private const string ValidPathsJson =
-        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"paths":["M3 21h18","M6 21V9l6-4 6 4v12","M10 21v-4h4v4"]},{"paths":["M4 18l5-4 4 4 7-4","M16 8h4v4"]}]}""";
+    private const string ValidNamesJson =
+        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"name":"wallet"},{"name":"rocket"}]}""";
 
     [Fact]
-    public void ГодныйОтвет_ДаДоЧетырёхКандидатовВперемешку()
+    public void ГодныйОтвет_ДоЧетырёхИмён()
     {
-        var result = ProjectIconGlyphService.Parse(ValidPathsJson);
+        var result = ProjectIconGlyphService.Parse(ValidNamesJson);
 
         Assert.True(result.Ok);
         Assert.Equal(4, result.Candidates.Count);
-        // Виды вперемешку: два имени + два нарисованных, порядок модели сохранён
-        Assert.Equal(["piggy-bank", "chart-line"],
-            result.Candidates.Take(2).Select(c => c.Name));
-        Assert.All(result.Candidates.Skip(2), c => Assert.False(c.IsNamed));
-        Assert.All(result.Candidates.Skip(2), c => Assert.NotNull(c.Paths));
-    }
-
-    // Габарит считается по фактическим точкам, а не по каждому числу: модель законно
-    // пишет отрицательные сдвиги относительных команд (l6-5), пока точки в холсте —
-    // живая выборка сильной модели 17.08 показала, что «каждое число [-4,28]» выкашивало
-    // до половины рисунков целиком
-    [Theory]
-    [InlineData("M6 21V9l6-5 6 5v12")]          // пример из ADR-009 §2.2 (дельта -5)
-    [InlineData("M12 14c0-2 1-4 3-5")]          // кривая с отрицательными дельтами
-    [InlineData("M12 22v-8")]
-    [InlineData("M12 12l-6-4")]
-    [InlineData("M0 0c.5 1 1.5 1 2 0")]         // ведущая точка — форма SVG
-    [InlineData("M4 12a8 8 0 0 1 16 0")]        // дуга с флагами 0/1
-    [InlineData("M2 2 20 2 20 20")]             // повторная пара M = неявный L
-    [InlineData("M0 0L10 10L0 10Z")]            // Z-возврат к старту субпоя
-    [InlineData("M0 0c1 1 2 1 3 0s2-1 3 0")]    // S после C с отражением
-    public void ОтрицательныеСдвигиИДробиБезНуля_ВалидныПоФактическимТочкам(string d)
-    {
-        Assert.True(ProjectIconGlyphService.IsValidPath(d));
-        Assert.True(ProjectIconGlyphService.Parse(
-            "{\"glyphs\":[{\"paths\":[\"" + d + "\"]}]}").Ok);
+        Assert.Equal(["piggy-bank", "chart-line", "wallet", "rocket"],
+            result.Candidates.Select(c => c.Name));
+        Assert.Null(result.FailReason);
     }
 
     [Fact]
     public void ОтветВМаркдаунЗаборе_Разбирается()
     {
-        var result = ProjectIconGlyphService.Parse("```json\n" + ValidPathsJson + "\n```");
+        var result = ProjectIconGlyphService.Parse("```json\n" + ValidNamesJson + "\n```");
 
         Assert.True(result.Ok);
         Assert.Equal(4, result.Candidates.Count);
@@ -128,8 +104,32 @@ public class ProjectIconGlyphServiceTests
 
         Assert.True(result.Ok);
         Assert.Equal(["haze", "x"], result.Candidates.Select(c => c.Name).ToList());
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("haze", null));
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("x", null));
+        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("haze"));
+        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("x"));
+    }
+
+    // Модель ещё может слать рисованные пути (ветка вырезана) — они отбрасываются как
+    // негодные кандидаты, годные имена из того же ответа остаются
+    [Fact]
+    public void ПутиВместоИмени_НегодныйКандидатГодныеИменаОстаются()
+    {
+        var result = ProjectIconGlyphService.Parse(
+            """{"glyphs":[{"paths":["M3 21h18"]},{"name":"wallet"},{"name":"nope"}]}""");
+
+        Assert.True(result.Ok);
+        var candidate = Assert.Single(result.Candidates);
+        Assert.Equal("wallet", candidate.Name);
+    }
+
+    [Fact]
+    public void ТолькоПути_ОтказПустымРезультатом()
+    {
+        var result = ProjectIconGlyphService.Parse(
+            """{"glyphs":[{"paths":["M3 21h18","M6 21V9l6-4 6 4v12"]}]}""");
+
+        Assert.False(result.Ok);
+        Assert.Empty(result.Candidates);
+        Assert.Equal("glyph-shape:paths", result.FailReason);
     }
 
     [Fact]
@@ -143,61 +143,15 @@ public class ProjectIconGlyphServiceTests
     }
 
     [Theory]
-    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""")]      // оба поля сразу
-    [InlineData("""{"glyphs":[{}]}""")]                                          // ни одного
-    [InlineData("""{"glyphs":[{"paths":[]}]}""")]                                // пустой список путей
-    [InlineData("""{"glyphs":[{"paths":["M0 0","M2 2","M4 4","M6 6","M8 8","M10 10","M12 12","M14 14","M16 16","M18 18","M20 20","M22 22","M23 23"]}]}""")] // больше 12 путей
-    [InlineData("""{"glyphs":[{"paths":["M0 0e5 5"]}]}""")]                      // экспонента
-    [InlineData("""{"glyphs":[{"paths":["M100 100h1"]}]}""")]                    // габарит: 100 вне [-4, 28]
-    [InlineData("""{"glyphs":[{"paths":["L0 0h1"]}]}""")]                        // первая команда не M
-    [InlineData("""{"glyphs":[{"paths":["M0 0h"]}]}""")]                         // арность H не соблюдена
-    [InlineData("""{"glyphs":[{"paths":["M0 0h1.234"]}]}""")]                    // три знака после точки
+    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""")]   // paths и имя вместе
+    [InlineData("""{"glyphs":[{}]}""")]                                       // ни одного поля
+    [InlineData("""{"glyphs":[{"paths":[]}]}""")]                             // пустой список путей
     public void НегодныеКандидаты_Отбрасываются(string raw)
     {
         var result = ProjectIconGlyphService.Parse(raw);
 
         Assert.False(result.Ok);
         Assert.Empty(result.Candidates);
-    }
-
-    [Fact]
-    public void ПутьДлиннееЛимита_КандидатОтброшен()
-    {
-        // Алфавит валиден (M/l и цифры), но строка длиннее 256 символов
-        var longPath = "M0 0" + new string('l', 260);
-        var result = ProjectIconGlyphService.Parse(
-            "{\"glyphs\":[{\"paths\":[\"" + longPath + "\"]}]}");
-
-        Assert.False(result.Ok);
-        Assert.Empty(result.Candidates);
-        Assert.Equal($"path-length:264>{ProjectIconGlyphService.MaxPathLength}", result.FailReason);
-    }
-
-    [Fact]
-    public void СуммарнаяДлинаПутейСверхЛимита_ПричинаСЛимитомИЗначением()
-    {
-        // Пилообразное движение (точки в холсте, команды в лимите) даёт 224 символа на
-        // путь × 4 = 896 > 768: ни один путь по отдельности лимит не ломает — только сумма
-        var d = "M0 0" + string.Concat(Enumerable.Repeat("l10.5 10.5l-10.5 -10.5", 10));
-        Assert.Equal(224, d.Length);
-        Assert.True(ProjectIconGlyphService.IsValidPath(d));
-        var result = ProjectIconGlyphService.Parse(
-            "{\"glyphs\":[{\"paths\":[\"" + d + "\",\"" + d + "\",\"" + d + "\",\"" + d + "\"]}]}");
-
-        Assert.False(result.Ok);
-        Assert.Equal($"path-total:896>{ProjectIconGlyphService.MaxPathsTotalLength}", result.FailReason);
-    }
-
-    [Fact]
-    public void НеОтданНиОдинГодный_ПорогОдин()
-    {
-        // Один годный из смеси с мусором — уже успех (ADR-009 §3: порог годности один)
-        var result = ProjectIconGlyphService.Parse(
-            """{"glyphs":[{"paths":["<script>"]},{"name":"wallet"},{"name":"nope"}]}""");
-
-        Assert.True(result.Ok);
-        var candidate = Assert.Single(result.Candidates);
-        Assert.Equal("wallet", candidate.Name);
     }
 
     [Fact]
@@ -225,29 +179,13 @@ public class ProjectIconGlyphServiceTests
     }
 
     // Причины отказа различимы по классам (задача «логи причин отказа»): код называет,
-    // что именно не прошло; по лимитам — ещё и значение с границей
+    // что именно не прошло
     [Theory]
     [InlineData("""{"glyphs":[]}""", "no-glyphs")]
-    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""", "glyph-shape:both")]
     [InlineData("""{"glyphs":[{}]}""", "glyph-shape:none")]
     [InlineData("""{"glyphs":[{"name":"nope"}]}""", "name-out:nope")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0","M2 2","M4 4","M6 6","M8 8","M10 10","M12 12","M14 14","M16 16","M18 18","M20 20","M22 22","M23 23"]}]}""", "path-count:13>12")]
-    [InlineData("""{"glyphs":[{"paths":["M29 0h1"]}]}""", "path-coord:29>28")]
-    [InlineData("""{"glyphs":[{"paths":["M-5 0h1"]}]}""", "path-coord:-5<-4")]
-    // габарит — по фактическим точкам: дельта относительной команды, уводящая точку за холст
-    [InlineData("""{"glyphs":[{"paths":["M0 0l30 0"]}]}""", "path-coord:30>28")]
-    [InlineData("""{"glyphs":[{"paths":["M20 20l0 -30"]}]}""", "path-coord:-10<-4")]
-    // контрольная точка C за допуском
-    [InlineData("""{"glyphs":[{"paths":["M0 0C30 0 2 2 2 2"]}]}""", "path-coord:30>28")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0a-1 1 0 0 1 2 0"]}]}""", "path-radius:-1<0")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0a29 29 0 0 1 2 0"]}]}""", "path-radius:29>28")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0a1 1 0 2 1 2 0"]}]}""", "path-arc-flag:2")]
-    [InlineData("""{"glyphs":[{"paths":["M100 100h1"]}]}""", "path-number:100")]   // 3 цифры ломают форму раньше габарита
-    [InlineData("""{"glyphs":[{"paths":["M0 0e5 5"]}]}""", "path-char:e")]
-    [InlineData("""{"glyphs":[{"paths":["L0 0h1"]}]}""", "path-start:L")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0h"]}]}""", "path-arity:h")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0h1.234"]}]}""", "path-number:1.234")]
-    [InlineData("""{"glyphs":[{"paths":[]}]}""", "no-paths")]
+    [InlineData("""{"glyphs":[{"paths":["M0 0h1"]}]}""", "glyph-shape:paths")]
+    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""", "glyph-shape:paths")]
     public void ПричинаОтказа_КлассИЗначение(string raw, string expected)
     {
         var result = ProjectIconGlyphService.Parse(raw);
@@ -260,32 +198,10 @@ public class ProjectIconGlyphServiceTests
     public void ValidateGlyph_ПовторнаяВалидацияТойЖеТочкойВхода()
     {
         // icon/select присылает значок телом — валидация та же, что для модели (ADR-009 §8)
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("wallet", null));
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph("нет-такого", null));
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph("wallet", ["M3 21h18"]));   // оба вида
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph(null, null));
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph(null, new[] { "M3 21h18", "M4 4h6v6" }));
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph(null, new[] { "M3 21h18", "<b>" }));
-    }
-
-    [Fact]
-    public void GlyphSvg_СобираетсяБезРазметкиОтМодели()
-    {
-        var svg = GlyphSvg.Build(["M3 21h18", "M6 21V9l6-5 6 5v12"]);
-
-        // Шаблонные атрибуты совпадают с ICON_PROPS фронта: штрих, толщина 2, currentColor.
-        // Порядок атрибутов у XmlWriter не гарантирован (xmlns может уехать не первым) —
-        // проверяем состав, а не последовательность
-        Assert.StartsWith("<svg ", svg);
-        Assert.Contains("xmlns=\"http://www.w3.org/2000/svg\"", svg);
-        Assert.Contains("viewBox=\"0 0 24 24\"", svg);
-        Assert.Contains("fill=\"none\"", svg);
-        Assert.Contains("stroke=\"currentColor\"", svg);
-        Assert.Contains("stroke-width=\"2\"", svg);
-        Assert.Contains("stroke-linecap=\"round\"", svg);
-        Assert.Contains("stroke-linejoin=\"round\"", svg);
-        Assert.Equal(2, svg.Split("<path").Length - 1);
-        Assert.DoesNotContain("<text", svg);
+        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("wallet"));
+        Assert.Null(ProjectIconGlyphService.ValidateGlyph("нет-такого"));
+        Assert.Null(ProjectIconGlyphService.ValidateGlyph(null));
+        Assert.Null(ProjectIconGlyphService.ValidateGlyph("  "));
     }
 
     [Fact]
@@ -302,6 +218,380 @@ public class ProjectIconGlyphServiceTests
         Assert.Contains("x", LucideGlyphs.All);
         Assert.Contains("haze", LucideGlyphs.All);
         Assert.NotEmpty(LucideGlyphs.All);
+    }
+}
+
+// Ход слов двухходовой схемы (мера 1, ревизия 20.08.2026): модель называет слова-понятия,
+// реальные имена по ним отбирает сервер
+public class ProjectIconWordsParsingTests
+{
+    [Fact]
+    public void КонтрактПервогоХода_СловаНормализуются()
+    {
+        var (words, reason) = ProjectIconGlyphService.ParseWords(
+            """{"words":["Lighthouse","sea","Traffic Light","Traffic-Light","маяк"]}""");
+
+        Assert.Null(reason);
+        // Регистр вниз, фраза — и дефисным написанием, и частями; не-латиница отсекается
+        Assert.Equal(["lighthouse", "sea", "traffic-light", "traffic", "light"], words);
+    }
+
+    [Fact]
+    public void ХвостСверхВосьми_Обрезается()
+    {
+        var raw = "{\"words\":[" + string.Join(",", Enumerable.Range(1, 10).Select(i => $"\"word{i}\"")) + "]}";
+
+        var (words, reason) = ProjectIconGlyphService.ParseWords(raw);
+
+        Assert.Null(reason);
+        Assert.Equal(ProjectIconGlyphService.MaxWords, words.Count);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("мусор без json")]
+    [InlineData("""{"nope": 1}""")]
+    [InlineData("""{"words":"строка вместо массива"}""")]
+    public void НеJson_ПричинаBadJson(string? raw)
+    {
+        var (words, reason) = ProjectIconGlyphService.ParseWords(raw);
+
+        Assert.Empty(words);
+        Assert.Equal("bad-json", reason);
+    }
+
+    [Theory]
+    [InlineData("""{"words":[]}""")]
+    [InlineData("""{"words":[42,null]}""")]
+    [InlineData("""{"words":["маяк"]}""")]   // кириллица не нормализуется в латиницу
+    [InlineData("""[{"words":[]}]""")]
+    public void СловаНеИзвлечены_ПричинаNoWords(string raw)
+    {
+        var (words, reason) = ProjectIconGlyphService.ParseWords(raw);
+
+        Assert.Empty(words);
+        Assert.Equal("no-words", reason);
+    }
+}
+
+// Отбор меню (мера 1): из слов-понятий — реальные имена набора, точным совпадением
+// и подстрокой в обе стороны, с добором общеупотребимых
+public class ProjectIconMenuTests
+{
+    [Fact]
+    public void СловоЯвляетсяИменем_ТочноеВхождение()
+    {
+        var menu = ProjectIconGlyphService.SelectMenu(["wallet"]);
+
+        Assert.Contains("wallet", menu);
+        // Подстрока в обе стороны: wallet-2, wallet-cards, wallet-minimal тоже в наборе
+        Assert.True(menu.Count >= ProjectIconGlyphService.MenuMinimum);
+        Assert.All(menu, name => Assert.True(LucideGlyphs.Contains(name)));
+    }
+
+    [Fact]
+    public void СловоНеИмя_НаходятсяРеальныеИменаПоПодстроке()
+    {
+        // lighthouse сам по себе не иконка — имя находится ВНУТРИ слова («house»)
+        var menu = ProjectIconGlyphService.SelectMenu(["lighthouse"]);
+
+        Assert.Contains("house", menu);
+        Assert.All(menu, name => Assert.True(LucideGlyphs.Contains(name)));
+    }
+
+    [Fact]
+    public void СловаПонятийМаяка_МенюИзРеальныхИмён()
+    {
+        // Типичный ответ хода слов для проекта про маяк: часть слов — не иконки
+        // (lighthouse, tower, sea, coast — таких имён в наборе нет). Меню всё равно
+        // собирается из реальных имён: точные (navigation, compass), подстрока
+        // (house внутри lighthouse, radio-tower/tower-control для tower)
+        var menu = ProjectIconGlyphService.SelectMenu(
+            ["lighthouse", "tower", "sea", "navigation", "compass", "coast"]);
+
+        Assert.True(menu.Count >= ProjectIconGlyphService.MenuMinimum);
+        Assert.Contains("navigation", menu);
+        Assert.Contains("compass", menu);
+        Assert.Contains("house", menu);
+        Assert.All(menu, name => Assert.True(LucideGlyphs.Contains(name)));
+    }
+
+    [Fact]
+    public void ПустыеСлова_МенюИзОбщеупотребимыхНеМеньшеЧетырёх()
+    {
+        var menu = ProjectIconGlyphService.SelectMenu([]);
+
+        Assert.True(menu.Count >= ProjectIconGlyphService.MenuMinimum);
+        Assert.All(menu, name => Assert.True(LucideGlyphs.Contains(name)));
+    }
+
+    [Fact]
+    public void МенюОграниченоИДетерминировано()
+    {
+        var a = ProjectIconGlyphService.SelectMenu(["star", "light"]);
+        var b = ProjectIconGlyphService.SelectMenu(["star", "light"]);
+
+        Assert.True(a.Count <= ProjectIconGlyphService.MenuCap);
+        Assert.Equal(a, b);
+
+        // Повтор в одном процессе поймал бы даже случайный порядок HashSet (он стабилен
+        // внутри процесса), поэтому проверяем сам ИСТОЧНИК детерминизма: имена одного
+        // слова идут по возрастанию, а не как лягут в набор
+        var single = ProjectIconGlyphService.SelectMenu(["wallet"]);
+        Assert.Equal(single.OrderBy(n => n, StringComparer.Ordinal), single);
+    }
+
+    // Обратная подстрока — только по границе слова. Живая приёмка 20.08.2026: «scarf»
+    // давал «car» куском из середины, и грид показывал машину для проекта про шарф
+    [Theory]
+    [InlineData("scarf", "car")]      // кусок середины — не смысл
+    [InlineData("hearth", "ear")]
+    [InlineData("search", "arch")]
+    public void ОбратнаяПодстрокаИзСередины_НеСчитаетсяСовпадением(string word, string junk)
+    {
+        var menu = ProjectIconGlyphService.SelectMenu([word]);
+
+        Assert.DoesNotContain(junk, menu);
+    }
+
+    [Fact]
+    public void ОбратнаяПодстрокаПоГранице_ОстаётсяСовпадением()
+    {
+        // Составное слово: имя стоит концом («lighthouse» → «house») либо началом
+        Assert.Contains("house", ProjectIconGlyphService.SelectMenu(["lighthouse"]));
+        Assert.Contains("book", ProjectIconGlyphService.SelectMenu(["bookshelf"]));
+    }
+
+    // Прямая подстрока — тоже по границе, а не куском середины имени. Ревью 20.08.2026:
+    // «hive» (улей) тянул «archive», «rain» — «brain», «over» — «clover». Тот же класс
+    // мусора, что «scarf» → «car», только с другой стороны
+    [Theory]
+    [InlineData("hive", "archive")]
+    [InlineData("rain", "brain")]
+    [InlineData("over", "clover")]
+    public void ПрямаяПодстрокаИзСерединыИмени_НеСчитаетсяСовпадением(string word, string junk)
+    {
+        var menu = ProjectIconGlyphService.SelectMenu([word]);
+
+        Assert.DoesNotContain(junk, menu);
+    }
+
+    [Fact]
+    public void ПрямаяПодстрокаПоГраницеСегмента_ОстаётсяСовпадением()
+    {
+        // Слово начинает имя либо его дефисный сегмент — имя уточняет понятие
+        Assert.Contains("lightbulb", ProjectIconGlyphService.SelectMenu(["light"]));
+        Assert.Contains("wallet-cards", ProjectIconGlyphService.SelectMenu(["wallet"]));
+        Assert.Contains("folder-archive", ProjectIconGlyphService.SelectMenu(["archive"]));
+    }
+
+    // Слова понятны, но в наборе нет ничего по смыслу («шарф ручной вязки», «самовар»):
+    // добор общеупотребимыми выдавал бы четыре случайных значка за подбор. Пустое меню —
+    // правильный ответ, проект честно остаётся на инициалах
+    [Fact]
+    public void СловаБезСовпадений_МенюПустоеБезДобора()
+    {
+        var menu = ProjectIconGlyphService.SelectMenu(["samovar", "kettlewarmer"]);
+
+        Assert.Empty(menu);
+    }
+
+    // Многодетное слово не должно съедать меню целиком: «book» содержится в 39 именах
+    // набора при MenuCap = 24. Если совпадения не раскладывать по кругу, остальные
+    // понятия не дойдут до модели, и грид покажет четыре вариации одной иконки
+    [Fact]
+    public void МногодетноеСлово_НеВытесняетОстальныеПонятия()
+    {
+        var menu = ProjectIconGlyphService.SelectMenu(["book", "coffee", "music"]);
+
+        Assert.Contains(menu, n => n.Contains("book", StringComparison.Ordinal));
+        Assert.Contains(menu, n => n.Contains("coffee", StringComparison.Ordinal));
+        Assert.Contains(menu, n => n.Contains("music", StringComparison.Ordinal));
+        Assert.All(menu, name => Assert.True(LucideGlyphs.Contains(name)));
+    }
+}
+
+// Двухходовая схема «меню вместо памяти» (мера 1) и повтор с подсказкой (мера 2):
+// ход слов → отбор реальных имён сервером → ход выбора из меню → ровно один повтор
+// при нуле годных, без цикла
+public class ProjectIconTwoStepFlowTests
+{
+    // wallet даёт меню [wallet, wallet-2, wallet-cards, wallet-minimal] — точное
+    // совпадение плюс подстрока; money и savings в наборе не встречаются
+    private const string WordsWallet = """{"words":["wallet","money","savings"]}""";
+
+    [Fact]
+    public async Task ДвухХодовыйПодбор_СловаЗатемВыборИзМеню()
+    {
+        var cheap = new SequencedCheap(WordsWallet,
+            """{"glyphs":[{"name":"wallet"},{"name":"wallet-minimal"}]}""");
+        var logger = new CaptureLogger();
+
+        var result = await new ProjectIconGlyphService(cheap, logger)
+            .SuggestAsync("Копилка", null, "user-1");
+
+        Assert.True(result.Ok);
+        Assert.Equal(["wallet", "wallet-minimal"], result.Candidates.Select(c => c.Name));
+        Assert.Equal(2, cheap.Prompts.Count);
+        // Ход выбора получил меню: оба выбранных имени в него входили
+        Assert.Contains("wallet", cheap.Prompts[1]);
+        Assert.Contains("wallet-minimal", cheap.Prompts[1]);
+        // Ход слов меню не несёт — он спрашивает понятия
+        Assert.Contains("\"words\"", cheap.Prompts[0]);
+        Assert.DoesNotContain("wallet-minimal", cheap.Prompts[0]);
+    }
+
+    [Fact]
+    public async Task ПервыйХодСловНеУдался_ПодборПродолжаетсяНаОбщемМеню()
+    {
+        var cheap = new SequencedCheap("мусор без json",
+            """{"glyphs":[{"name":"rocket"},{"name":"star"}]}""");
+        var logger = new CaptureLogger();
+
+        var result = await new ProjectIconGlyphService(cheap, logger)
+            .SuggestAsync("Проект", null, "user-1");
+
+        // Слова не разобраны — меню собрано из общеупотребимых имён, подбор не умер
+        Assert.True(result.Ok);
+        Assert.Equal(["rocket", "star"], result.Candidates.Select(c => c.Name));
+        Assert.Equal(2, cheap.Prompts.Count);
+        Assert.Contains(logger.Entries, e => e.Message.Contains("ход слов отвергнут"));
+    }
+
+    [Fact]
+    public async Task МодельНеОтветилаНаПервомХоде_ПовторовНет()
+    {
+        var cheap = new SequencedCheap(new string?[] { null });
+
+        var result = await new ProjectIconGlyphService(cheap, new CaptureLogger())
+            .SuggestAsync("Проект", null, "user-1");
+
+        Assert.Equal("no-model", result.FailReason);
+        var prompt = Assert.Single(cheap.Prompts);   // второй ход не запускался
+        Assert.Contains("\"words\"", prompt);
+    }
+
+    [Fact]
+    public async Task МодельНеОтветилаНаВторомХоде_ТретийХодНеЗапускается()
+    {
+        var cheap = new SequencedCheap(WordsWallet, null);
+
+        var result = await new ProjectIconGlyphService(cheap, new CaptureLogger())
+            .SuggestAsync("Проект", null, "user-1");
+
+        Assert.Equal("no-model", result.FailReason);
+        Assert.Equal(2, cheap.Prompts.Count);
+    }
+
+    [Fact]
+    public async Task ВыборВнеМеню_ОтбраковываетсяДажеДляРеальногоИмени()
+    {
+        // stethoscope существует в lucide, но в собранное меню не входит: выбор из памяти
+        // разрушает меру 1 и отбраковывается, как чужое имя
+        var cheap = new SequencedCheap(WordsWallet,
+            """{"glyphs":[{"name":"stethoscope"}]}""",
+            """{"glyphs":[{"name":"wallet"}]}""");
+
+        var result = await new ProjectIconGlyphService(cheap, new CaptureLogger())
+            .SuggestAsync("Клиника", null, "user-1");
+
+        Assert.True(result.Ok);
+        var candidate = Assert.Single(result.Candidates);
+        Assert.Equal("wallet", candidate.Name);
+        Assert.Equal(3, cheap.Prompts.Count);
+        // В повторе отбракованное имя перечислено
+        Assert.Contains("stethoscope", cheap.Prompts[2]);
+    }
+
+    [Fact]
+    public async Task ПромахНаВыборе_ПовторДаётГодноеИмя()
+    {
+        var cheap = new SequencedCheap(WordsWallet,
+            """{"glyphs":[{"name":"super-kitty"},{"name":"nope"}]}""",
+            """{"glyphs":[{"name":"wallet"},{"name":"wallet-2"}]}""");
+        var logger = new CaptureLogger();
+
+        var result = await new ProjectIconGlyphService(cheap, logger)
+            .SuggestAsync("Копилка", null, "user-1");
+
+        Assert.True(result.Ok);
+        Assert.Equal(["wallet", "wallet-2"], result.Candidates.Select(c => c.Name));
+        Assert.Equal(3, cheap.Prompts.Count);   // повтор ровно один
+        // Подсказка повтора перечисляет отбракованное
+        Assert.Contains("super-kitty", cheap.Prompts[2]);
+        Assert.Contains("nope", cheap.Prompts[2]);
+        Assert.Contains(logger.Entries, e => e.Message.Contains("повтор"));
+    }
+
+    // В наборе нет ничего по смыслу проекта: ход выбора не запускается вовсе — выбирать
+    // не из чего, а четыре случайных значка хуже честных инициалов
+    [Fact]
+    public async Task НетИконокПоСмыслу_ХодВыбораНеЗапускается()
+    {
+        var cheap = new SequencedCheap("""{"words":["samovar","kettlewarmer"]}""");
+        var logger = new CaptureLogger();
+
+        var result = await new ProjectIconGlyphService(cheap, logger)
+            .SuggestAsync("Самовар", null, "user-1");
+
+        Assert.False(result.Ok);
+        Assert.Equal("no-glyphs", result.FailReason);
+        Assert.Single(cheap.Prompts);   // только ход слов, второго нет
+        Assert.Contains(logger.Entries, e => e.Message.Contains("нет иконок по смыслу"));
+    }
+
+    // Подсказка повтора не должна врать: имя вне белого списка и настоящее имя мимо меню —
+    // разные причины, и называть их надо разными словами (ревью 20.08.2026)
+    [Fact]
+    public async Task ПодсказкаПовтора_РазличаетВыдуманноеИмяИИмяМимоМеню()
+    {
+        // stethoscope существует в lucide, но в меню по словам про кошелёк не входит;
+        // super-kitty не существует вовсе
+        var cheap = new SequencedCheap(WordsWallet,
+            """{"glyphs":[{"name":"stethoscope"},{"name":"super-kitty"}]}""",
+            """{"glyphs":[{"name":"wallet"}]}""");
+
+        var result = await new ProjectIconGlyphService(cheap, new CaptureLogger())
+            .SuggestAsync("Клиника", null, "user-1");
+
+        Assert.True(result.Ok);
+        var retryPrompt = cheap.Prompts[2];
+        // Про выдуманное — «в наборе НЕТ», про настоящее вне меню — «есть, но не предлагалось»
+        Assert.Contains("super-kitty — таких имён в наборе НЕТ", retryPrompt);
+        Assert.Contains("Имена stethoscope в наборе есть", retryPrompt);
+        Assert.DoesNotContain("stethoscope — таких имён в наборе НЕТ", retryPrompt);
+    }
+
+    // На узком меню модель легко назовёт имя дважды: две одинаковые плитки в гриде
+    // выглядят поломкой и занимают место осмысленного варианта
+    [Fact]
+    public async Task ДубликатыВОтветеМодели_СхлопываютсяВОдногоКандидата()
+    {
+        var cheap = new SequencedCheap(WordsWallet,
+            """{"glyphs":[{"name":"wallet"},{"name":"wallet"},{"name":"wallet-2"}]}""");
+
+        var result = await new ProjectIconGlyphService(cheap, new CaptureLogger())
+            .SuggestAsync("Копилка", null, "user-1");
+
+        Assert.Equal(["wallet", "wallet-2"], result.Candidates.Select(c => c.Name));
+    }
+
+    [Fact]
+    public async Task НольГодныхПослеПовтора_ФолбэкНаИнициалыБезОшибки()
+    {
+        var cheap = new SequencedCheap(WordsWallet,
+            """{"glyphs":[{"name":"super-kitty"}]}""",
+            """{"glyphs":[{"name":"another-fake"}]}""");
+
+        // Не исключение, а пустой результат: вызывающий оставляет проект на инициалах
+        var result = await new ProjectIconGlyphService(cheap, new CaptureLogger())
+            .SuggestAsync("Проект", null, "user-1");
+
+        Assert.False(result.Ok);
+        Assert.Empty(result.Candidates);
+        Assert.Equal("name-out:another-fake", result.FailReason);
+        Assert.Equal(3, cheap.Prompts.Count);   // повтор ровно один, цикла нет
     }
 }
 
@@ -433,84 +723,134 @@ public class ProjectIconTimeoutTests
     }
 }
 
-// Причина отказа обязана уходить уровнем Warning: файловый лог прода режет Information,
-// и диагностика «почему значок не подобрался» должна доходить до файла (задача команды).
-// Все четыре класса отказа провоцируются подставной моделью и проверяются по одной
-// строке лога с именем проекта и конкретной причиной.
+// Причины отказа и диагностика двухходовки обязаны уходить уровнем Warning: файловый лог
+// прода режет Information, а диагностика «почему значок не подобрался» должна доходить
+// до файла вместе с именем проекта (задача команды)
 public class ProjectIconGlyphLoggingTests
 {
-    private sealed class CaptureLogger : ILogger<ProjectIconGlyphService>
-    {
-        public List<(LogLevel Level, string Message)> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
-            Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception)));
-    }
-
-    // Ответ модели решается подставной функцией (null = модель «недоступна»)
-    private sealed class StubCheap(Func<string, string?> answer) : ICheapTextRunner
-    {
-        public bool UsesLocal(string actionKey) => false;
-        public string DescribeRoute(string actionKey, string? fallbackModel) => "test";
-
-        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(answer(prompt) ?? throw new InvalidOperationException("модель недоступна"));
-
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-            throw new NotImplementedException();
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
-            string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
-            object? jsonFormat = null, CancellationToken ct = default) => throw new NotImplementedException();
-    }
-
-    private static ProjectIconGlyphService Service(
-        CaptureLogger log, Func<string, string?> answer) => new(new StubCheap(answer), log);
+    private const string Words = """{"words":["wallet"]}""";
 
     [Fact]
-    public async Task ЧетыреПричиныОтказа_КаждаяОтдельнойСтрокойWarningСИменемПроекта()
+    public async Task ПричиныОтказа_РазличимыВЛогеСИменемПроекта()
     {
-        var logger = new CaptureLogger();
-        var owner = "user-1";
+        // (1) модель не ответила уже на ходе слов
+        var noModel = new CaptureLogger();
+        await Service(noModel, new SequencedCheap(new string?[] { null }))
+            .SuggestAsync("Проект Альфа", null, "user-1");
 
-        // (1) модель не ответила
-        await Service(logger, _ => null).SuggestAsync("Проект Альфа", null, owner);
-        // (2) ответ не разобрался как JSON
-        await Service(logger, _ => "мусор без json").SuggestAsync("Проект Бета", null, owner);
-        // (3) имя вне белого списка
-        await Service(logger, _ => """{"glyphs":[{"name":"super-kitty"}]}""")
-            .SuggestAsync("Проект Гамма", null, owner);
-        // (4) путь не прошёл лимит: габарит 29 при границе 28
-        await Service(logger, _ => """{"glyphs":[{"paths":["M29 0h1"]}]}""")
-            .SuggestAsync("Проект Дельта", null, owner);
+        // (2) ответ не разобрался как JSON — и на выборе, и на повторе
+        var badJson = new CaptureLogger();
+        await Service(badJson, new SequencedCheap(Words, "мусор без json", "мусор без json"))
+            .SuggestAsync("Проект Бета", null, "user-1");
 
-        Assert.Equal(4, logger.Entries.Count);
-        Assert.All(logger.Entries, e => Assert.Equal(LogLevel.Warning, e.Level));
-        Assert.Contains("«Проект Альфа»", logger.Entries[0].Message);
-        Assert.Contains("модель не ответила", logger.Entries[0].Message);
-        Assert.Contains("«Проект Бета»", logger.Entries[1].Message);
-        Assert.Contains("bad-json", logger.Entries[1].Message);
-        Assert.Contains("«Проект Гамма»", logger.Entries[2].Message);
-        Assert.Contains("name-out:super-kitty", logger.Entries[2].Message);
-        Assert.Contains("«Проект Дельта»", logger.Entries[3].Message);
-        Assert.Contains("path-coord:29>28", logger.Entries[3].Message);
+        // (3) имя вне меню — и на выборе, и на повторе
+        var nameOut = new CaptureLogger();
+        await Service(nameOut, new SequencedCheap(Words,
+            """{"glyphs":[{"name":"super-kitty"}]}""", """{"glyphs":[{"name":"super-kitty"}]}"""))
+            .SuggestAsync("Проект Гамма", null, "user-1");
+
+        // (4) ответ с путями вместо имени — ветка рисования вырезана
+        var paths = new CaptureLogger();
+        await Service(paths, new SequencedCheap(Words,
+            """{"glyphs":[{"paths":["M3 21h18"]}]}""", """{"glyphs":[{"paths":["M3 21h18"]}]}"""))
+            .SuggestAsync("Проект Дельта", null, "user-1");
+
+        AssertWarning(noModel, "«Проект Альфа»", "модель не ответила");
+        AssertWarning(badJson, "«Проект Бета»", "bad-json");
+        AssertWarning(nameOut, "«Проект Гамма»", "name-out:super-kitty");
+        AssertWarning(paths, "«Проект Дельта»", "glyph-shape:paths");
     }
 
     [Fact]
-    public async Task ГодныйОтвет_НеПишетСтрокуОтказаВЛог()
+    public async Task ПовторСработал_ВЛогеОтбракованныеИмена()
     {
         var logger = new CaptureLogger();
 
-        var result = await Service(logger, _ => """{"glyphs":[{"name":"wallet"}]}""")
+        var result = await Service(logger, new SequencedCheap(Words,
+            """{"glyphs":[{"name":"super-kitty"},{"name":"nope"}]}""",
+            """{"glyphs":[{"name":"wallet"}]}"""))
+            .SuggestAsync("Проект Гамма", null, "user-1");
+
+        Assert.True(result.Ok);
+        // Факт повтора и отбракованные имена — строкой Warning с именем проекта
+        var retryLine = logger.Entries.First(
+            e => e.Message.Contains("повтор") && e.Message.Contains("«Проект Гамма»"));
+        Assert.Contains("super-kitty", retryLine.Message);
+        Assert.Contains("nope", retryLine.Message);
+    }
+
+    [Fact]
+    public async Task ГодныйПодбор_ВЛогеТолькоСводкаСДлительностямиХодов()
+    {
+        var logger = new CaptureLogger();
+
+        var result = await Service(logger, new SequencedCheap(Words, """{"glyphs":[{"name":"wallet"}]}"""))
             .SuggestAsync("Проект Омега", null, "user-1");
 
         Assert.True(result.Ok);
-        Assert.Empty(logger.Entries);
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        // Никаких строк отказа — только сводка с длительностью каждого хода
+        Assert.DoesNotContain("отвергнут", entry.Message);
+        Assert.DoesNotContain("повтор", entry.Message);
+        Assert.Contains("слова", entry.Message);
+        Assert.Contains("выбор", entry.Message);
+        Assert.Contains("мс", entry.Message);
+        // Имена подобранного — в сводке: без них спорный подбор («звезда» для проекта
+        // про шарф, живая приёмка 20.08.2026) по логу неотличим от осмысленного
+        Assert.Contains("wallet", entry.Message);
     }
+
+    private static void AssertWarning(CaptureLogger logger, string project, string fragment)
+    {
+        Assert.NotEmpty(logger.Entries);
+        Assert.All(logger.Entries, e => Assert.Equal(LogLevel.Warning, e.Level));
+        Assert.Contains(logger.Entries, e => e.Message.Contains(project) && e.Message.Contains(fragment));
+    }
+
+    private static ProjectIconGlyphService Service(CaptureLogger log, ICheapTextRunner cheap) =>
+        new(cheap, log);
+}
+
+// Логгер, собирающий записи для утверждений
+internal sealed class CaptureLogger : ILogger<ProjectIconGlyphService>
+{
+    public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+        Exception? exception, Func<TState, Exception?, string> formatter)
+        => Entries.Add((logLevel, formatter(state, exception)));
+}
+
+// Последовательная подставная модель: ответы разбираются по порядку, null — модель
+// «недоступна» (исключение). Лишний ход сверх ожидаемых упирается в «ответы исчерпаны» —
+// так требование «без цикла» проверяется самим тестом
+internal sealed class SequencedCheap(params string?[] answers) : ICheapTextRunner
+{
+    private readonly Queue<string?> _answers = new(answers);
+
+    public List<string> Prompts { get; } = [];
+
+    public bool UsesLocal(string actionKey) => false;
+    public string DescribeRoute(string actionKey, string? fallbackModel) => "test";
+
+    public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+        string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+    {
+        Prompts.Add(prompt);
+        if (_answers.Count == 0)
+            throw new InvalidOperationException("ответы исчерпаны — сервис делает лишний ход");
+        return Task.FromResult(_answers.Dequeue() ?? throw new InvalidOperationException("модель недоступна"));
+    }
+
+    public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
+        throw new NotImplementedException();
+    public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+        CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
+        string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
+        object? jsonFormat = null, CancellationToken ct = default) => throw new NotImplementedException();
 }

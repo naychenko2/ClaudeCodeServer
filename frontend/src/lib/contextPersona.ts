@@ -1,11 +1,10 @@
-// Резолвер «релевантной персоны» для лица продукта (фича default-personas-onboarding):
-// персона открытого чата → дефолт-персона проекта (в контексте проекта) → личная
-// дефолт-персона; null — нейтральные иконки (fallback до онбординга или при выключенном
-// флаге). Используется аватарами в AiLauncher / EmptyState / ChatItemView.
+// Резолвер «релевантной персоны» для лица продукта: персона открытого чата →
+// дефолт-персона проекта (в контексте проекта) → личная дефолт-персона; null —
+// нейтральные иконки (fallback до онбординга). Используется аватарами
+// в AiLauncher / EmptyState / ChatItemView.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import type { Persona, Project } from '../types';
-import { useFeature, FLAGS } from './featureFlags';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from './personas';
 import { useMe } from './defaultPersona';
 import { useChatPersonaId } from './ai/chatContext';
@@ -40,15 +39,12 @@ function useNavProjectDefault(): string | null {
 // Семантика полей opts: undefined — «не знаю, возьми из глобального стора»,
 // null — «знаю, что на этом уровне персоны нет» (уровень пропускается).
 export function useContextPersona(opts?: { personaId?: string | null; projectDefaultId?: string | null }): Persona | null {
-  const enabled = useFeature(FLAGS.defaultPersonasOnboarding);
   usePersonasVersion();
   const me = useMe();
   const chatPersonaId = useChatPersonaId();
   const navProjectDefault = useNavProjectDefault();
   // Стор персон мог быть ещё не загружен (аватары вне раздела персон) — подтягиваем
-  useEffect(() => { if (enabled) void ensurePersonasLoaded(); }, [enabled]);
-
-  if (!enabled) return null;
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   // 1) персона открытого чата
   const chatId = opts?.personaId !== undefined ? opts.personaId : chatPersonaId;

@@ -5,7 +5,6 @@ import { AGENT_COLORS } from '../AgentSelector';
 import { projectColor } from '../../lib/tasks';
 import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
 import { api } from '../../lib/api';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 
 // Фон страницы под островами (Islands): два декоративных слоя поверх bgMain —
 // мягкий нимб (accent-свечение) и дудл-паттерн в тематике продукта (терминал,
@@ -18,11 +17,10 @@ import { useFeature, FLAGS } from '../../lib/featureFlags';
 // (иначе слои zIndex:-1 провалятся под его собственный background).
 // pointer-events: none — клики, сплиттеры и DnD не задеваются.
 //
-// Свой фон проекта (фича project-backgrounds, ADR-008). Когда передан project И флаг
-// включён, два входа берутся от проекта, а не из дизайн-системы: источник маски —
-// сгенерированный по смыслу проекта тайл (URL), а цвет туши и верхнего нимба — цвет
-// проекта из палитры. Без project/флага — стандартный дудл-тайл и нативные переменные
-// холста. Пустого экрана без фона не бывает ни в одном состоянии: до готовности
+// Свой фон проекта (ADR-008). Когда передан project, два входа берутся от проекта,
+// а не из дизайн-системы: источник маски — сгенерированный по смыслу проекта тайл
+// (URL), а цвет туши и верхнего нимба — цвет проекта из палитры. Без project —
+// стандартный дудл-тайл и нативные переменные холста. Пустого экрана без фона не бывает ни в одном состоянии: до готовности
 // тайла, во время генерации и при её падении всегда показывается стандартный дудл.
 
 // Тайл 260×260: 12 дудлов + разбросанные мелочи, лёгкий разворот у каждого —
@@ -92,10 +90,10 @@ function hexToRgb(hex: string): string {
 }
 
 export const CanvasBackdrop = memo(function CanvasBackdrop({ project }: { project?: Project }) {
-  const themed = useFeature(FLAGS.projectBackgrounds) && !!project;
+  const themed = !!project;
 
   // Тема — реактивно: альфа верхнего нимба в тёмной чуть ниже (как у accent-радиала в
-  // theme.css), чтобы цвет проекта не тяжелел экран на тёмном (критерий снятия флага).
+  // theme.css), чтобы цвет проекта не тяжелел экран на тёмном.
   const isDark = useSyncExternalStore(subscribeThemeMode, getEffectiveTheme, getEffectiveTheme) === 'dark';
 
   // Источник маски: URL тайла проекта (только при generated). mask-image не даёт

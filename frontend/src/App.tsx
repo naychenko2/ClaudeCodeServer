@@ -19,15 +19,13 @@ import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { resetAiAwaiting } from './lib/ai/awaiting'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
-import { initConnectivity, becameVisibleRecently } from './lib/offline'
+import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
-import { showToast } from './lib/toast'
-import { isDeployInProgress } from './lib/deployState'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged, onMessage } from './lib/signalr'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
@@ -35,7 +33,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags, getFlag, FLAGS } from './lib/featureFlags'
+import { setAllFlags } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallEntry, getWallReturn, isWallActive, setWallActive, setWallEntry, setWallReturn } from './lib/wallMode'
@@ -235,15 +233,13 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
-  // Знакомство (фича default-personas-onboarding) — overlay поверх обычной навигации,
-  // план §4, п.4.5. Без projectId — личное, с { projectId } в detail — проектное (в паре
-  // с 4.3 это единственный способ показать интервью: гейта, который его открывал бы
-  // автоматически, больше нет — только приглашение, волна 5). При выключенном флаге
-  // маршрут инертен: диплинк #/intro уводит на главную вместо открытия.
+  // Знакомство — overlay поверх обычной навигации, план §4, п.4.5. Без projectId —
+  // личное, с { projectId } в detail — проектное (в паре с 4.3 это единственный способ
+  // показать интервью: гейта, который его открывал бы автоматически, больше нет —
+  // только приглашение, волна 5).
   const [introCtx, setIntroCtx] = useState<{ projectId?: string } | null>(null)
   useEffect(() => {
     const open = (e: Event) => {
-      if (!getFlag(FLAGS.defaultPersonasOnboarding)) return
       const detail = (e as CustomEvent<{ projectId?: string }>).detail ?? {}
       setIntroCtx(detail)
       if (!(window.history.state as { introOverlay?: boolean } | null)?.introOverlay) {
@@ -251,10 +247,7 @@ export default function App() {
       }
     }
     window.addEventListener(OPEN_INTRO_EVENT, open)
-    if (initialHash?.intro) {
-      if (getFlag(FLAGS.defaultPersonasOnboarding)) open(new Event(OPEN_INTRO_EVENT))
-      else navReplace({ screen: 'home' })
-    }
+    if (initialHash?.intro) open(new Event(OPEN_INTRO_EVENT))
     return () => window.removeEventListener(OPEN_INTRO_EVENT, open)
   }, [])
 
@@ -316,13 +309,12 @@ export default function App() {
 
   // Форк чата от лица другой персоны (кнопка «Сменить персону» в чате) для глобальной
   // персоны: переключаемся в раздел «Чаты», где ChatsPage откроет новый чат по id.
+  // Канал общий с уведомлениями проактивных персон (#/chats/{id}) — все они зовут
+  // openChatById с одним и тем же контрактом.
   useEffect(() => {
     const open = (e: Event) => {
       const chatId = (e as CustomEvent<{ chatId?: string }>).detail?.chatId
-      if (chatId) localStorage.setItem('cc_open_chat', chatId)
-      localStorage.setItem(HUB_TAB_KEY, 'chats')
-      setHubTab('chats')
-      navToSection({ screen: 'chats', chatId })
+      if (chatId) openChatById(chatId)
     }
     window.addEventListener('cc-open-chat', open)
     return () => window.removeEventListener('cc-open-chat', open)
@@ -399,25 +391,10 @@ export default function App() {
     setProject(fresh)
   }), [])
 
-  // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн
-  // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже).
-  // «Тихое окно»: восстановление в первые секунды после возврата вкладки в видимость
-  // не озвучиваем — это фоновый разрыв сокета (планшет заморозил вкладку при
-  // переключении приложений), пользователь его не видел, и тост на каждый возврат
-  // в приложение был бы спамом.
-  // Выкатка — тоже «тихое окно», и по той же причине: обрыв там не аварийный, а
-  // запланированный, пользователь смотрит на заставку публикации. Тост «Связь восстановлена»
-  // посреди неё сообщал бы о беде, которой не было. Флаг снимается вместе с концом выкатки,
-  // так что настоящий разрыв после неё озвучится как обычно.
-  const wasOfflineRef = useRef(false)
-  useEffect(() => {
-    if (!online) { wasOfflineRef.current = true; return }
-    if (wasOfflineRef.current) {
-      wasOfflineRef.current = false
-      if (!becameVisibleRecently() && !isDeployInProgress()) showToast('Связь восстановлена', 'Обновляем…')
-    }
-  }, [online])
-
+  // Связь: возврат offline → online теперь тихий. Маркер у аватарки
+  // (useConnectionDisplayState) сам показывает состояние с гистерезисом
+  // ~3с, об офлайне уже сообщает заглушка композера. Тост «Связь восстановлена»
+  // убран — на нестабильном WiFi он вылетал на каждый блип и раздражал.
   useEffect(() => { initConnectivity() }, [])
 
   // UI-инспектор (admin-only): хоткей Ctrl+Alt+I регистрируется один раз, admin-флаг
@@ -441,9 +418,8 @@ export default function App() {
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
-        // Стор дефолт-персоны/онбординга (фича default-personas-onboarding) — от него
-        // живут гейт первого входа и резолвер аватаров. Кормим ПОСЛЕ setAllFlags,
-        // чтобы needsOnboarding не сработал раньше, чем известен флаг
+        // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
+        // и резолвер аватаров
         if (me) setMeFromServer(me)
         // Имя могли поправить в профиле после логина — подхватываем без перевхода
         const fresh = me?.displayName?.trim() || undefined
@@ -509,6 +485,19 @@ export default function App() {
     if (seed.screen === 'personas' && initialHash?.screen === 'personas') seed.persona = initialHash.personaId ?? null
     // Диплинк #/knowledge/{id}: сохраняем базу знаний в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'knowledge' && initialHash?.screen === 'knowledge') seed.knowledge = initialHash.knowledgeId ?? null
+    // Диплинк #/personas/specialties[/{roleKey}]: сохраняем personaView, иначе сид затрёт
+    // под-адрес specialties и F5/прямой URL сбросит адрес на #/personas
+    if (seed.screen === 'personas' && initialHash?.screen === 'personas' && initialHash.personaView) seed.personaView = initialHash.personaView
+    // Диплинк #/personas/specialties/{roleKey}[/edit] — toHash в nav.ts не умеет в под-адреса
+    // (контракт общего NavSnapshot), и обычный navReplace ниже обрезал бы URL до #/personas/specialties.
+    // Прямая запись через history.replaceState с текущим hash сохраняет и URL, и state;
+    // ровно так же поступает pushSpecialtiesUrl в PersonasPage при навигации по под-адресам.
+    const specialtiesSubHash = window.location.hash.match(/^#\/personas\/specialties\/[^/?]+(\/edit)?$/)
+    if (specialtiesSubHash && !initialHash?.history) {
+      window.history.replaceState(seed, '', specialtiesSubHash[0])
+      window.dispatchEvent(new Event('cc-nav-change'))
+      return
+    }
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
     // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL
@@ -726,7 +715,7 @@ export default function App() {
         if (hubTab !== 'projects' || project) switchHubTab('projects')
         return
       }
-      // Маппинг экранов хаба → HubTabValue
+      // Маппинг экранов хаба → HubTabValue.
       let next: HubTabValue | null = null
       switch (target.screen) {
         case 'home': next = 'home'; break
@@ -893,7 +882,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' }
+      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -1110,6 +1099,15 @@ export default function App() {
         })
         .catch(() => {})
     }
+  }
+  // Открытие внепроектного чата по id: переключаем раздел на «Чаты» и кладём id в
+  // cc_open_chat — ChatsPage подхватит при монтировании. Канал общий с форком чата
+  // (cc-open-chat) и уведомлениями проактивных персон.
+  const openChatById = (chatId: string) => {
+    localStorage.setItem('cc_open_chat', chatId)
+    localStorage.setItem(HUB_TAB_KEY, 'chats')
+    setHubTab('chats')
+    navToSection({ screen: 'chats', chatId })
   }
   // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).

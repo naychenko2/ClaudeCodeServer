@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
@@ -51,6 +51,31 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
         items["analyst"].GetProperty("template").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // Значок и цвет роли фронт берёт с сервера (свой каталог иконок он больше не держит):
+    // поля есть у ВСЕХ записей каталога, непусты у всех ролей, кроме «Не задана».
+    [Fact]
+    public async Task List_ЗначокИЦвет_ЕстьУВсехЗаписей()
+    {
+        var items = (await (await _user.GetAsync("/api/specialties")).Content
+            .ReadFromJsonAsync<JsonElement>()).EnumerateArray().ToList();
+
+        items.Should().HaveCount(15);
+        foreach (var item in items)
+        {
+            item.TryGetProperty("icon", out var icon).Should().BeTrue();
+            item.TryGetProperty("color", out var color).Should().BeTrue();
+
+            var key = item.GetProperty("key").GetString();
+            if (key == "none") continue; // «Не задана» — не роль, значка у неё нет
+            icon.GetString().Should().NotBeNullOrWhiteSpace($"у роли {key} задан значок");
+            color.GetString().Should().NotBeNullOrWhiteSpace($"у роли {key} задан цвет");
+        }
+
+        var byKey = items.ToDictionary(i => i.GetProperty("key").GetString()!);
+        byKey["backendExecutor"].GetProperty("icon").GetString().Should().Be("server");
+        byKey["backendExecutor"].GetProperty("color").GetString().Should().Be("blue");
+    }
+
     // --- Настройки: глобальные и личные ---
 
     [Fact]
@@ -73,12 +98,15 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
 
         var adminResponse = await _admin.PutAsJsonAsync("/api/specialties/settings/global", layer);
         adminResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await ResetGlobalLayer();
     }
 
+    // Настройка инстанса видна в каталоге как эффективный шаблон — одинаково всем.
     [Fact]
-    public async Task Settings_ЛичноеПереопределениеВидноВКаталоге()
+    public async Task Settings_НастройкаИнстанса_ВиднаВКаталогеВсем()
     {
-        var put = await _user.PutAsJsonAsync("/api/specialties/settings", new
+        var put = await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -90,23 +118,25 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
 
         var settings = await (await _user.GetAsync("/api/specialties/settings"))
             .Content.ReadFromJsonAsync<JsonElement>();
-        settings.GetProperty("owner").GetProperty("specialties")
-            .TryGetProperty("frontendExecutor", out var ownerEntry).Should().BeTrue();
-        ownerEntry.GetProperty("access").GetString().Should().Be("custom");
+        settings.GetProperty("global").GetProperty("specialties")
+            .TryGetProperty("frontendExecutor", out var entry).Should().BeTrue();
+        entry.GetProperty("access").GetString().Should().Be("custom");
 
-        // Эффективный шаблон в каталоге reflects личное переопределение
+        // Не-админ видит тот же эффективный шаблон в каталоге
         var items = (await (await _user.GetAsync("/api/specialties")).Content
                 .ReadFromJsonAsync<JsonElement>()).EnumerateArray()
             .ToDictionary(i => i.GetProperty("key").GetString()!);
         var template = items["frontendExecutor"].GetProperty("template");
         template.GetProperty("access").GetString().Should().Be("custom");
         template.GetProperty("disallowedTools").EnumerateArray().Single().GetString().Should().Be("Bash");
+
+        await ResetGlobalLayer();
     }
 
     [Fact]
     public async Task Settings_НеизвестнаяСпециальность_400()
     {
-        var response = await _admin.PutAsJsonAsync("/api/specialties/settings", new
+        var response = await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object> { ["no-such"] = new { access = "full" } },
             presets = Array.Empty<object>(),
@@ -114,284 +144,97 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // GET /settings отдаёт ОДИН слой: полей user и owner больше нет, у пресетов
+    // единственный scope — global (ADR-012).
     [Fact]
-    public async Task Settings_ОбъединённыйСписокПресетовСПризнакомОбщийМой()
+    public async Task Settings_ОдинСлой_БезOwnerИUser()
     {
-        // Админ задаёт общий пресет, пользователь — личный с тем же именем:
-        // личный не затирает общий, оба видны в одном списке
         await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>(),
-            presets = new[]
-            {
-                new { name = "Дешёвый фон", steps = new[] { "tier:weak" } },
-            },
+            presets = new[] { new { name = "Дешёвый фон", steps = new[] { "tier:weak" } } },
         });
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
+
+        foreach (var client in new[] { _admin, _user })
         {
-            specialties = new Dictionary<string, object>(),
-            presets = new[]
-            {
-                new { name = "Дешёвый фон", steps = new[] { "local" } },
-            },
-        });
+            var settings = await (await client.GetAsync("/api/specialties/settings"))
+                .Content.ReadFromJsonAsync<JsonElement>();
 
-        var settings = await (await _user.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        var presets = settings.GetProperty("presets").EnumerateArray().ToList();
+            settings.TryGetProperty("owner", out _).Should().BeFalse("личного слоя больше нет");
+            settings.TryGetProperty("user", out _).Should().BeFalse("слоя «пользователь» больше нет");
+            settings.GetProperty("version").GetInt32().Should().Be(5);
 
-        presets.Should().HaveCount(2, "оба набора в одном списке");
-        presets.Select(p => p.GetProperty("name").GetString()).Should().AllBeEquivalentTo("Дешёвый фон");
-        presets[0].GetProperty("scope").GetString().Should().Be("owner");
-        presets[0].GetProperty("steps")[0].GetString().Should().Be("local");
-        presets[1].GetProperty("scope").GetString().Should().Be("global");
-        presets[1].GetProperty("steps")[0].GetString().Should().Be("tier:weak");
+            var presets = settings.GetProperty("presets").EnumerateArray().ToList();
+            presets.Should().ContainSingle();
+            presets[0].GetProperty("scope").GetString().Should().Be("global");
+            presets[0].GetProperty("steps")[0].GetString().Should().Be("tier:weak");
+        }
 
-        // Слои на месте — фронт правит пресеты по слоям, признак только в общем списке
-        settings.GetProperty("global").GetProperty("presets").EnumerateArray().Should().ContainSingle();
-        settings.GetProperty("owner").GetProperty("presets").EnumerateArray().Should().ContainSingle();
-
-        // У админа свой личный слой пуст — в его списке только общий пресет
-        var adminSettings = await (await _admin.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        var adminPresets = adminSettings.GetProperty("presets").EnumerateArray().ToList();
-        adminPresets.Should().ContainSingle();
-        adminPresets[0].GetProperty("scope").GetString().Should().Be("global");
+        await ResetGlobalLayer();
     }
 
+    // Запись настроек — только админ, чтение — любой аутентифицированный.
     [Fact]
-    public async Task Settings_ПустойЛичныйСлой_СбросКГлобальным()
-    {
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
-        {
-            specialties = new Dictionary<string, object> { ["executor"] = new { access = "readOnly" } },
-            presets = Array.Empty<object>(),
-        });
-        var reset = await _user.PutAsJsonAsync("/api/specialties/settings", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = Array.Empty<object>(),
-        });
-        reset.StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var settings = await (await _user.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        settings.GetProperty("owner").GetProperty("specialties").EnumerateObject()
-            .Should().BeEmpty("пустой слой снял переопределения");
-    }
-
-    // QA-регресс: «бэкенд не отдаёт PUT /api/specialties/settings/owner — 404, только global».
-    // Маршрут раньше не существовал (UI писал короткий PUT /settings). Теперь оба
-    // маршрута живут, per-owner изоляция идёт от UserId JWT — подменить чужой слой
-    // нельзя, сбрасывается пустым слоем.
-    [Fact]
-    public async Task Settings_ЛичныйСлойМаршрутOwner_Доступен_ИИзолирован()
+    public async Task Settings_ЗаписьТолькоАдмин_ЧтениеВсем()
     {
         var layer = new
         {
-            specialties = new Dictionary<string, object>
-            {
-                ["backendExecutor"] = new { access = "custom", tools = new[] { "web" }, disallowedTools = new[] { "Bash" } },
-            },
-            presets = new[]
-            {
-                new { name = "Личный пресет владельца", steps = new[] { "tier:weak" } },
-            },
-        };
-
-        // 1) Маршрут существует и отвечает 200 (раньше был 404)
-        var put = await _user.PutAsJsonAsync("/api/specialties/settings/owner", layer);
-        put.StatusCode.Should().Be(HttpStatusCode.OK,
-            "явный маршрут per-owner должен жить наравне с коротким /settings");
-
-        // 2) Прочитанный личный слой содержит то, что записали
-        var settings = await (await _user.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        var ownerSpec = settings.GetProperty("owner").GetProperty("specialties")
-            .GetProperty("backendExecutor");
-        ownerSpec.GetProperty("access").GetString().Should().Be("custom");
-        ownerSpec.GetProperty("disallowedTools").EnumerateArray().Single().GetString().Should().Be("Bash");
-        settings.GetProperty("owner").GetProperty("presets").EnumerateArray().Should().ContainSingle();
-
-        // 3) Per-owner изоляция: админ не видит личный слой пользователя
-        var adminSettings = await (await _admin.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        adminSettings.GetProperty("owner").GetProperty("presets").EnumerateArray().Should().BeEmpty(
-            "UserId у админа свой — личный слой пользователя ему не виден");
-
-        // 4) Сброс пустым слоем снимает переопределения
-        var reset = await _user.PutAsJsonAsync("/api/specialties/settings/owner", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = Array.Empty<object>(),
-        });
-        reset.StatusCode.Should().Be(HttpStatusCode.OK);
-        var afterReset = await (await _user.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        afterReset.GetProperty("owner").GetProperty("specialties").EnumerateObject().Should().BeEmpty();
-        afterReset.GetProperty("owner").GetProperty("presets").EnumerateArray().Should().BeEmpty();
-
-        // 5) Короткий и длинный маршруты пишут ОДНО И ТО ЖЕ: после записи через короткий
-        // длинный тоже подхватывает (для UI ничего не меняется)
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
-        {
             specialties = new Dictionary<string, object> { ["executor"] = new { access = "readOnly" } },
             presets = Array.Empty<object>(),
-        });
-        var viaLong = await _user.PutAsJsonAsync("/api/specialties/settings/owner", new
-        {
-            specialties = new Dictionary<string, object> { ["executor"] = new { access = "full" } },
-            presets = Array.Empty<object>(),
-        });
-        viaLong.StatusCode.Should().Be(HttpStatusCode.OK);
-        var finalSettings = await (await _user.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        finalSettings.GetProperty("owner").GetProperty("specialties")
-            .GetProperty("executor").GetProperty("access").GetString().Should().Be("full");
-    }
-
-    // Контроль доступа после снятия флага: не-админ не пишет глобальный слой
-    // (раньше тест был «без флага → 403», теперь — «без admin-роли → 403»).
-    [Fact]
-    public async Task Settings_ГлобальныеБезAdmin_403()
-    {
-        var response = await _user.PutAsJsonAsync("/api/specialties/settings/global", new
-        {
-            specialties = new Dictionary<string, object>(),
-            presets = Array.Empty<object>(),
-        });
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, "глобальный слой — только admin");
-    }
-
-    // --- Слой «пользователь» (B9): назначение настроек конкретному пользователю ---
-
-    // Приоритет слоёв одним проходом: личный бьёт пользовательский, пользовательский
-    // бьёт глобальный; снятие слоя возвращает нижний.
-    [Fact]
-    public async Task Settings_СлойПользователь_ПриоритетЛичныйПользовательскийГлобальный()
-    {
-        var userId = GetSecondUserId();
-        var emptyLayer = new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() };
-
-        // Чистый старт: снять все три слоя
-        await _admin.PutAsJsonAsync("/api/specialties/settings/global", emptyLayer);
-        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", emptyLayer);
-        await _user.PutAsJsonAsync("/api/specialties/settings", emptyLayer);
-
-        var backendCell = new { tierStrong = "global-model" };
-        // 1) Только глобальный — все ходят им
-        await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
-        {
-            specialties = new Dictionary<string, object> { ["backendExecutor"] = backendCell },
-            presets = Array.Empty<object>(),
-        });
-        GetEffectiveStrong(userId).Should().Be("global-model");
-
-        // 2) Назначение пользователю бьёт глобальный
-        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", new
-        {
-            specialties = new Dictionary<string, object> { ["backendExecutor"] = new { tierStrong = "user-model" } },
-            presets = Array.Empty<object>(),
-        });
-        GetEffectiveStrong(userId).Should().Be("user-model",
-            "слой пользователя сильнее глобального");
-
-        // 3) Личный слой бьёт пользовательский
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
-        {
-            specialties = new Dictionary<string, object> { ["backendExecutor"] = new { tierStrong = "owner-model" } },
-            presets = Array.Empty<object>(),
-        });
-        GetEffectiveStrong(userId).Should().Be("owner-model",
-            "личный слой сильнее назначения пользователя");
-
-        // 4) Снятие личного слоя возвращает назначение пользователя
-        await _user.PutAsJsonAsync("/api/specialties/settings", emptyLayer);
-        GetEffectiveStrong(userId).Should().Be("user-model");
-
-        // 5) Снятие назначения возвращает глобальный
-        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", emptyLayer);
-        GetEffectiveStrong(userId).Should().Be("global-model");
-
-        // Уборка
-        await _admin.PutAsJsonAsync("/api/specialties/settings/global", emptyLayer);
-    }
-
-    // Эффективная strong-ячейка матрицы для пользователя — через SpecialtyMatrices стора
-    // (тот же путь, которым идёт резолв ходов UserModelTierResolver).
-    private string? GetEffectiveStrong(string userId)
-    {
-        var store = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.SpecialtySettingsStore>();
-        return store.SpecialtyMatrices(userId, ClaudeHomeServer.Models.PersonaSpecialty.BackendExecutor)
-            .FirstOrDefault()?.Strong;
-    }
-
-    // Изоляция: назначение видно только своему пользователю; назначает и снимает только
-    // админ; не-админ не читает чужие назначения, своё — читает.
-    [Fact]
-    public async Task Settings_СлойПользователь_ИзоляцияИПрава()
-    {
-        var userId = GetSecondUserId();
-        var layer = new
-        {
-            specialties = new Dictionary<string, object>
-            {
-                ["backendExecutor"] = new { tierStrong = "user-model" },
-            },
-            presets = Array.Empty<object>(),
         };
-        var emptyLayer = new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() };
 
-        // Не-админ не назначает слои пользователям
-        (await _user.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", layer)).StatusCode
-            .Should().Be(HttpStatusCode.Forbidden, "назначение — только admin");
+        (await _user.PutAsJsonAsync("/api/specialties/settings/global", layer)).StatusCode
+            .Should().Be(HttpStatusCode.Forbidden, "настройки специальностей общие — правит их админ");
+        (await _user.PutAsJsonAsync("/api/specialties/settings/fallback/global", new { maxSubstitutions = 3 }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _user.PostAsJsonAsync("/api/specialties/settings/reset/global", new { }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
-        // Админ назначает — пользователь видит назначение в своём settings.user
-        (await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", layer)).StatusCode
+        (await _user.GetAsync("/api/specialties/settings")).StatusCode
+            .Should().Be(HttpStatusCode.OK, "чтение общего слоя доступно всем");
+        (await _admin.PutAsJsonAsync("/api/specialties/settings/global", layer)).StatusCode
             .Should().Be(HttpStatusCode.OK);
-        var settings = await (await _user.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        settings.GetProperty("user").GetProperty("specialties")
-            .TryGetProperty("backendExecutor", out var userEntry).Should().BeTrue(
-                "назначение пользователю видно ему в поле user его settings");
 
-        // Изоляция: у другого пользователя (админа) поле user пустое и эффективная модель
-        // не задета назначением seconduser
-        var adminSettings = await (await _admin.GetAsync("/api/specialties/settings"))
-            .Content.ReadFromJsonAsync<JsonElement>();
-        adminSettings.GetProperty("user").GetProperty("specialties").EnumerateObject()
-            .Should().BeEmpty("UserId админа свой — назначение seconduser ему не видно");
-
-        // Не-админ читает своё назначение, чужое — нет
-        (await _user.GetAsync($"/api/specialties/settings/user/{userId}")).StatusCode
-            .Should().Be(HttpStatusCode.OK, "своё назначение пользователь читает");
-        var adminId = GetAdminUserId();
-        (await _user.GetAsync($"/api/specialties/settings/user/{adminId}")).StatusCode
-            .Should().Be(HttpStatusCode.Forbidden, "чужое назначение не-админу недоступно");
-
-        // Неизвестный пользователь — 404
-        (await _admin.GetAsync("/api/specialties/settings/user/no-such-id")).StatusCode
-            .Should().Be(HttpStatusCode.NotFound);
-
-        // Уборка
-        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", emptyLayer);
+        await ResetGlobalLayer();
     }
 
-    private string GetSecondUserId() =>
-        _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
-            .GetAll().Single(u => u.Username == TestWebApplicationFactory.SecondUsername).Id;
+    // Маршруты записи per-owner и назначения пользователю сняты вместе со слоями.
+    [Theory]
+    [InlineData("PUT", "/api/specialties/settings")]
+    [InlineData("PUT", "/api/specialties/settings/owner")]
+    [InlineData("PUT", "/api/specialties/settings/fallback/owner")]
+    [InlineData("GET", "/api/specialties/settings/user/whoever")]
+    [InlineData("PUT", "/api/specialties/settings/user/whoever")]
+    public async Task Settings_СнятыеМаршруты_НеСуществуют(string method, string route)
+    {
+        var request = new HttpRequestMessage(new HttpMethod(method), route);
+        if (method == "PUT")
+            request.Content = JsonContent.Create(new
+            {
+                specialties = new Dictionary<string, object>(),
+                presets = Array.Empty<object>(),
+            });
 
-    private string GetAdminUserId() =>
-        _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
-            .GetAll().Single(u => u.Username == TestWebApplicationFactory.TestUsername).Id;
+        // Админский клиент: 404/405 — это отсутствие маршрута, а не отказ по роли
+        var response = await _admin.SendAsync(request);
+        response.StatusCode.Should().BeOneOf([HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed],
+            $"{method} {route} снят вместе со слоями настроек");
+    }
+
+    private async Task ResetGlobalLayer() =>
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object>(),
+            presets = Array.Empty<object>(),
+        });
 
     // --- Сквозное применение шаблона к персоне ---
 
     [Fact]
     public async Task Persona_СозданиеСоСпециальностью_ПодставляетШаблон()
     {
-        // Личный шаблон: бэкенд-исполнитель — readOnly с только web
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
+        // Шаблон инстанса: бэкенд-исполнитель — readOnly с только web
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -410,12 +253,14 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
 
         persona.GetProperty("access").GetString().Should().Be("readOnly", "подставлено из шаблона");
         persona.GetProperty("tools").EnumerateArray().Single().GetString().Should().Be("web");
+
+        await ResetGlobalLayer();
     }
 
     [Fact]
     public async Task Persona_СменаСпециальности_ПодставляетИПравитсяРуками()
     {
-        await _user.PutAsJsonAsync("/api/specialties/settings", new
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -451,5 +296,7 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
         manual.GetProperty("access").GetString().Should().Be("custom");
         manual.GetProperty("disallowedTools").EnumerateArray().Single().GetString().Should().Be("Bash");
         manual.GetProperty("specialty").GetString().Should().Be("backendExecutor");
+
+        await ResetGlobalLayer();
     }
 }

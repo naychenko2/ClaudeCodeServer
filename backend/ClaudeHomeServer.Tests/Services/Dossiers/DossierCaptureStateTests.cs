@@ -104,4 +104,34 @@ public class DossierCaptureStateTests : IDisposable
         restored.Get(key).Should().Be("seen-head",
             "восстановленный из бэкапа state.json знает последний виденный HEAD — повторный захват не даст дубль");
     }
+
+    // --- Compare-and-set курсора импорта (гонка курсора, разбор консилиума 23.08) ---
+
+    [Fact]
+    public void SetIfUnchanged_ЗначениеНеМенялось_Записывает()
+    {
+        var key = DossierCaptureState.ImportKey("owner", "proj");
+
+        // Первый импорт: ключа ещё нет (expected null)
+        _state.SetIfUnchanged(key, expected: null, "tip1").Should().BeTrue(
+            "отсутствие значения — тоже «не менялось», первый курсор обязан записаться");
+        _state.Get(key).Should().Be("tip1");
+
+        _state.SetIfUnchanged(key, expected: "tip1", "tip2").Should().BeTrue();
+        _state.Get(key).Should().Be("tip2");
+    }
+
+    [Fact]
+    public void SetIfUnchanged_ЗначениеУспелоИзмениться_ОтказываетИНеЗатирает()
+    {
+        var key = DossierCaptureState.ImportKey("owner", "proj");
+        _state.Set(key, "tip-старый");
+
+        // За «долгий импорт» автовыгрузка успела пометить свой tip в том же ключе
+        _state.Set(key, "tip-наш");
+
+        _state.SetIfUnchanged(key, expected: "tip-старый", "tip-старый-прочитанный").Should().BeFalse(
+            "значение изменилось с момента чтения — слепая запись затёрла бы MarkOwnTip");
+        _state.Get(key).Should().Be("tip-наш", "пометка автовыгрузки не затёрта");
+    }
 }

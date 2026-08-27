@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { Modal, Button, IconField, WaitingIndicator } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useAiJob, runAiJob } from '../lib/aiJobStore';
+import { useListAutoFocus } from '../lib/listAutoFocus';
 import { SkillGenerateDialog } from './SkillGenerateDialog';
 
 // Контекст установки диалога определяет доступные действия:
@@ -33,6 +34,7 @@ const keyOf = (s: RegistrySkill) => `${s.source}@${s.skill}`;
 export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: Props) {
   const suggestKey = `skills-suggest:${persona ? `persona:${persona.id}` : projectId ? `project:${projectId}` : 'global'}`;
   const suggestJob = useAiJob<SuggestJobResult>(suggestKey);
+  const canFocus = useListAutoFocus();
 
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -139,7 +141,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
           <IconField
             value={query}
             onChange={setQuery}
-            autoFocus
+            autoFocus={canFocus}
             placeholder={canContextSuggest ? 'Найти навык или описать задачу…' : 'Найти навык…'}
             height={40}
             radius={R.lg}

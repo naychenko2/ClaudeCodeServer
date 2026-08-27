@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Modal } from '../../components/ui';
 import { C, FONT, FS, MODAL_W } from '../../lib/design';
@@ -6,27 +6,26 @@ import { api } from '../../lib/api';
 import { useModels } from '../../lib/models';
 import { useProviderData, type TierKey } from '../../lib/modelProvidersShared';
 import { consumeOpenRequest, consumeDraftRequest } from '../../lib/modelProvidersNav';
-import { updateSpecialtySettings } from '../../lib/presets';
-import { useSpecialtyCatalog } from '../../lib/specialties';
-import { coverageOf, pickStartScope } from './specialRules/model';
+import { reloadPresetSettings, saveLayer, useSaveState } from '../../lib/presets';
+import type { LayerReducer } from '../../lib/presets';
 import { QuotasTab } from './QuotasTab';
 import { SlotsTab } from './SlotsTab';
-import { SpecialRulesTab } from './SpecialRulesTab';
 import { ApplyTab } from './ApplyTab';
 import { ChainsTab } from './ChainsTab';
-import type { SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult } from '../../types';
 
-// Раздел «Модели и расход» (редизайн v4): одна модалка с пятью вкладками —
-// Расход / Модели / Правила / Применение / Цепочки. Названия короткие: полоса вкладок
+// Раздел «Модели и расход» (редизайн v4): одна модалка с четырьмя вкладками —
+// Расход / Модели / Применение / Цепочки. Названия короткие: полоса вкладок
 // обязана влезать в ширину модалки без горизонтального скролла. Первым идёт «Расход»:
-// раздел открывают чаще всего ради денег. Решение владельца 14.08.2026: «Особые правила» стали
-// самостоятельной вкладкой (переехали из ExceptionsBlock в SlotsTab), отдельный
-// третий слой «Пользователю…» — admin-only на «Особых правилах» и «Цепочках».
-// Прежние «Использование» и «Поставщики моделей» растворены здесь: квоты — в пятой
-// вкладке, слоты/применение — в первых трёх. Состояние слоёв специальностей и
-// контекст пользователя живут в модалке и раздаются вкладкам.
+// раздел открывают чаще всего ради денег. Решение владельца 24.08.2026: «Особые
+// правила» переехали из этой модалки в раздел «Персоны» (вкладка «Специальности»
+// центральной зоны) — модалка осталась про деньги и маршруты. Третий слой
+// «Пользователю…» — admin-only на «Цепочках». Прежние «Использование» и «Поставщики
+// моделей» растворены здесь: квоты — в последней вкладке, слоты/применение — в
+// первых трёх. Локальное состояние модалки — только вкладка и контекст
+// пользователя; слои настроек живут в модульном сторе presets.ts
+// (useSpecialtySettings + useSaveState), write-стор ключует scope+userId.
 
-type TabKey = 'quotas' | 'slots' | 'specialty' | 'apply' | 'chains';
+type TabKey = 'quotas' | 'slots' | 'apply' | 'chains';
 type Scope = 'global' | 'owner' | 'user';
 
 export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
@@ -59,84 +58,23 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
     if (consumeDraftRequest()) { setTab('slots'); setPendingDraft(true); }
   }, []);
 
-  // Настройки специальностей и пресетов: глобальный + личный слой. Нужны вкладке слотов
-  // (правка цепочки пресета, на который ссылается слот) и блоку «Исключения» (матрица).
-  const [settings, setSettings] = useState<SpecialtySettingsResponse | null>(null);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [savingScope, setSavingScope] = useState<Scope | null>(null);
+  // Слои настроек специальностей и пресетов — из модульного стора presets.ts.
+  // Снимок settings вкладки читают сами (useSpecialtySettings в точках записи —
+  // структурный запрет, чтобы ни одна точка записи не получала слой снаружи).
+  // saving/resetting/error — write-стор: флаги операций и баннер ошибки модалки.
+  const { savingScope, savingUserId, settingsError } = useSaveState();
 
-  useEffect(() => {
-    let cancelled = false;
-    api.specialties.getSettings()
-      .then(s => { if (!cancelled) { setSettings(s); updateSpecialtySettings(s); } })
-      .catch(e => { if (!cancelled) setSettingsError(e instanceof Error ? e.message : 'Не удалось загрузить настройки'); });
-    return () => { cancelled = true; };
-  }, []);
+  // Запись слоя: редьюсерная семантика (стор сам считает next из текущего снимка).
+  // Обёртка стабильна через useCallback, чтобы вкладки не перерисовывались на каждом
+  // маунте модалки. ADR-012 снял owner/user-слои: userId больше не нужен, запись всегда
+  // идёт в общий слой (PUT /specialties/settings/global, admin-only).
+  const onSaveLayer = useCallback(
+    (_scope: Scope, reducer: LayerReducer): Promise<void> =>
+      saveLayer('global', reducer, null),
+    [],
+  );
 
-  // Порядковый номер запроса на слой — правки бьют по одному слою пачкой, ответы могут
-  // прийти не в том порядке. Без счётчика устаревший ответ перезаписывал бы актуальный.
-  const saveSeqRef = useRef<{ global: number; owner: number; user: number }>({ global: 0, owner: 0, user: 0 });
-  const settingsRef = useRef<SpecialtySettingsResponse | null>(null);
-  useEffect(() => { settingsRef.current = settings; }, [settings]);
-
-  const mergeSavedLayer = (base: SpecialtySettingsResponse, scope: Scope,
-    saved: SpecialtySettingsLayer): SpecialtySettingsResponse => {
-    const merged = { ...base, [scope]: saved };
-    merged.presets = [
-      ...(merged.owner?.presets ?? []).map(p => ({ ...p, scope: 'owner' as const })),
-      ...(merged.global?.presets ?? []).map(p => ({ ...p, scope: 'global' as const })),
-      ...(merged.user?.presets ?? []).map(p => ({ ...p, scope: 'user' as const })),
-    ];
-    return merged;
-  };
-
-  // Оптимистичное сохранение слоя: применяем сразу, при ошибке откатываем. Возвращает
-  // промис PUT — вызывающие, которым важен порядок (PresetOptions.savePreset: назначить
-  // место можно только ПОСЛЕ того, как пресет реально попал на сервер), на нём ждут.
-  const handleSaveLayer = (scope: Scope, next: SpecialtySettingsLayer): Promise<void> => {
-    const prev = settings;
-    const seq = ++saveSeqRef.current[scope];
-    setSettings(s => s ? { ...s, [scope]: next } : s);
-    setSavingScope(scope);
-    setSettingsError(null);
-    const commit = (saved: SpecialtySettingsLayer) => {
-      if (saveSeqRef.current[scope] !== seq) return;
-      setSettings(s => s ? mergeSavedLayer(s, scope, saved) : s);
-      const cur = settingsRef.current;
-      if (cur) updateSpecialtySettings(mergeSavedLayer(cur, scope, saved));
-    };
-    const fail = (e: unknown) => {
-      if (saveSeqRef.current[scope] !== seq) return;
-      setSettings(prev);
-      setSettingsError(e instanceof Error ? e.message : 'Не удалось сохранить');
-    };
-    const settle = () => { if (saveSeqRef.current[scope] === seq) setSavingScope(null); };
-    const req = scope === 'global'
-      ? api.specialties.saveGlobalLayer(next).then(res => commit(res.global))
-      : scope === 'owner'
-        ? api.specialties.saveOwnerLayer(next).then(res => commit(res.owner))
-        : api.specialties.saveUserLayer(contextUserId!, next).then(res => commit(res.user));
-    return req.catch(e => { fail(e); throw e; }).finally(settle);
-  };
-
-  // Сброс исключений/слотов (серверный reset): busy держится до конца перезагрузки
-  // настроек, а не до ответа POST — иначе клик по ячейке в этом окне уйдёт PUT'ом
-  // старого слоя и воскресит только что удалённые записи.
-  const [resettingScope, setResettingScope] = useState<Scope | null>(null);
-
-  // Перечитать настройки после сброса и обновить модульный стор пресетов (без него
-  // подписи в ячейках останутся от старого снимка); invalidateEffectiveLines дёргать
-  // отдельно не нужно — updateSpecialtySettings делает это сама.
-  const onReloadSettings = (): Promise<void> =>
-    api.specialties.getSettings().then(s => { setSettings(s); updateSpecialtySettings(s); });
-
-  const onReset = (scope: Scope, key?: string): Promise<ResetResult> => {
-    setResettingScope(scope);
-    const userId = scope === 'user' ? (contextUserId ?? undefined) : undefined;
-    return api.specialties.reset(scope, key, userId)
-      .then(res => onReloadSettings().then(() => res))
-      .finally(() => setResettingScope(null));
-  };
+  const onReloadSettings = useCallback((): void => { reloadPresetSettings(); }, []);
 
   const tierModels = useMemo<Record<TierKey, string>>(() => ({
     strong: data.effectiveTierModel('strong'),
@@ -146,24 +84,9 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
 
   const ollamaModel = data.info?.model ?? undefined;
 
-  // Бейдж вкладки «Особые правила» — ОХВАТ слоя («9 из 14»), а не число заданных полей:
-  // при полном покрытии счётчик полей перестаёт нести сигнал (лист текстов, п. 5;
-  // решение владельца 14.08.2026). Считается по тому слою, на котором вкладка откроется.
-  const specialtyCatalog = useSpecialtyCatalog();
-  const specialtyBadge = useMemo(() => {
-    if (!settings || !specialtyCatalog) return null;
-    const startScope = pickStartScope(settings, specialtyCatalog, isAdmin);
-    const { configured, total } = coverageOf(settings[startScope], specialtyCatalog);
-    return configured > 0 ? `${configured} из ${total}` : null;
-  }, [settings, specialtyCatalog, isAdmin]);
-
-  const tabs: { key: TabKey; label: string; badge?: string | null }[] = [
+  const tabs: { key: TabKey; label: string }[] = [
     { key: 'quotas', label: 'Расход' },
     { key: 'slots', label: 'Модели' },
-    // «Правила» — отдельная вкладка (решение владельца 14.08.2026). Видна всем:
-    // у не-админа она открывается на слое «Только для меня» — тот же блок был раньше
-    // в «Моделях». Admin-only «Пользователю…» живёт уже внутри самой вкладки.
-    { key: 'specialty', label: 'Правила', badge: specialtyBadge },
     { key: 'apply', label: 'Применение' },
     { key: 'chains', label: 'Цепочки' },
   ];
@@ -186,12 +109,6 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
           {tabs.map(t => (
             <button key={t.key} type="button" style={tabBtnStyle(tab === t.key)} onClick={() => setTab(t.key)}>
               {t.label}
-              {t.badge && (
-                <span style={{
-                  marginLeft: 4, fontSize: FS.xs, fontWeight: 700,
-                  color: tab === t.key ? C.accent : C.textMuted,
-                }}>{t.badge}</span>
-              )}
             </button>
           ))}
         </div>
@@ -213,32 +130,14 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               data={data}
               contextUserId={contextUserId}
               onContextUserId={setContextUserId}
-              settings={settings}
               models={models}
               tierModels={tierModels}
               ollamaModel={ollamaModel}
               savingScope={savingScope}
-              onSaveLayer={handleSaveLayer}
+              savingUserId={savingUserId}
+              onSaveLayer={onSaveLayer}
               pendingDraft={pendingDraft}
               onPendingDraftConsumed={() => setPendingDraft(false)}
-            />
-          )}
-          {tab === 'specialty' && (
-            <SpecialRulesTab
-              isAdmin={isAdmin}
-              meUserId={me?.userId ?? null}
-              data={data}
-              contextUserId={contextUserId}
-              onContextUserId={setContextUserId}
-              settings={settings}
-              models={models}
-              tierModels={tierModels}
-              ollamaModel={ollamaModel}
-              savingScope={savingScope}
-              onSaveLayer={handleSaveLayer}
-              onReloadSettings={onReloadSettings}
-              resettingScope={resettingScope}
-              onReset={onReset}
             />
           )}
           {tab === 'apply' && (
@@ -247,18 +146,16 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               data={data}
               models={models}
               tierModels={tierModels}
-              settings={settings}
               savingScope={savingScope}
-              onSaveLayer={handleSaveLayer}
+              onSaveLayer={onSaveLayer}
             />
           )}
           {tab === 'chains' && (
             <ChainsTab
               isAdmin={isAdmin}
               contextUserId={contextUserId}
-              settings={settings}
               savingScope={savingScope}
-              onSaveLayer={handleSaveLayer}
+              onSaveLayer={onSaveLayer}
               onReloadSettings={onReloadSettings}
               models={models}
               tierModels={tierModels}

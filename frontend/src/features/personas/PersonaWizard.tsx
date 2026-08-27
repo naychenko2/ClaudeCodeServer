@@ -21,7 +21,7 @@ import type {
   PersonaSpecialty, PantheonTemplate, Project,
 } from '../../types';
 import { api } from '../../lib/api';
-import { useSpecialtyCatalog } from '../../lib/specialties';
+import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
 import { Toolbar, PillSwitch } from '../../components/Toolbar';
@@ -762,22 +762,9 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   <Field label="Специальность" hint="Необязательно. От специальности поля моделей наследуют значения — выбрать можно и позже.">
                     <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
                       <option value="none">Не задана</option>
-                      {specialtyCatalog
-                        ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
-                          <option key={e.key} value={e.key}>{e.label}</option>
-                        ))
-                        : (<>
-                          <option value="analyst">Аналитик</option>
-                          <option value="planner">Планировщик</option>
-                          <option value="reviewer">Ревьюер</option>
-                          <option value="executor">Исполнитель</option>
-                          <option value="secretary">Секретарь</option>
-                          <option value="coordinator">Координатор</option>
-                          <option value="mentor">Ментор</option>
-                          <option value="designer">Дизайнер</option>
-                          <option value="consultant">Консультант</option>
-                          <option value="librarian">Библиотекарь</option>
-                        </>)}
+                      {specialtyCatalog?.filter(e => e.key !== 'none').map(e => (
+                        <option key={e.key} value={e.key}>{specialtyLabel(specialtyCatalog, e.key)}</option>
+                      ))}
                     </select>
                     {templateNote && (
                       <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>

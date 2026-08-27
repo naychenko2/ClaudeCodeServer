@@ -30,7 +30,7 @@ public class ModelSettingsResetAccessTests : IClassFixture<TestWebApplicationFac
     [Fact]
     public async Task Сброс_НеизвестныйИлиПустойКлюч_400_БезЗаписи()
     {
-        await _user.PutAsJsonAsync("/api/specialties/settings/owner", new
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
         {
             specialties = new Dictionary<string, object>
             {
@@ -39,21 +39,25 @@ public class ModelSettingsResetAccessTests : IClassFixture<TestWebApplicationFac
             presets = Array.Empty<object>(),
         });
 
-        (await _user.PostAsJsonAsync("/api/specialties/settings/reset/owner", new { key = "no-such" }))
+        (await _admin.PostAsJsonAsync("/api/specialties/settings/reset/global", new { key = "no-such" }))
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await _user.PostAsJsonAsync("/api/specialties/settings/reset/owner", new { key = "" }))
+        (await _admin.PostAsJsonAsync("/api/specialties/settings/reset/global", new { key = "" }))
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await _user.GetAsync("/api/specialties/settings/reset/owner/preview?key=no-such"))
+        (await _admin.GetAsync("/api/specialties/settings/reset/global/preview?key=no-such"))
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
         var settings = await (await _user.GetAsync("/api/specialties/settings"))
             .Content.ReadFromJsonAsync<JsonElement>();
-        settings.GetProperty("owner").GetProperty("specialties").GetProperty("analyst")
+        settings.GetProperty("global").GetProperty("specialties").GetProperty("analyst")
             .GetProperty("tierStrong").GetString().Should().Be("opus", "400 ничего не пишет");
+
+        await _admin.PostAsJsonAsync("/api/specialties/settings/reset/global", new { });
     }
 
+    // reset/global чистит ОБЩИЙ слой и персон не касается; reset/owner после снятия
+    // слоёв сузился ровно до «сбросить уровни у моих персон» (ADR-012).
     [Fact]
-    public async Task Сброс_ГлобальныйScope_НеТрогаетПерсон_OwnerScope_Чистит()
+    public async Task Сброс_ГлобальныйScope_НеТрогаетПерсон_OwnerScope_ЧиститПерсон()
     {
         var persona = await (await _admin.PostAsJsonAsync("/api/personas", new
         {
@@ -65,8 +69,9 @@ public class ModelSettingsResetAccessTests : IClassFixture<TestWebApplicationFac
 
         var global = await (await _admin.PostAsJsonAsync("/api/specialties/settings/reset/global", new { }))
             .Content.ReadFromJsonAsync<JsonElement>();
-        global.GetProperty("personas").GetInt32().Should().Be(0);
-        global.GetProperty("personaNames").EnumerateArray().Should().BeEmpty();
+        global.TryGetProperty("personas", out _).Should().BeFalse(
+            "сброс общего слоя про специальности, а не про персон");
+        global.GetProperty("specialties").GetInt32().Should().BeGreaterThanOrEqualTo(0);
         (await Tier(id)).Should().Be("opus", "общий слой персон владельца не касается");
 
         var preview = await (await _admin.GetAsync("/api/specialties/settings/reset/owner/preview"))

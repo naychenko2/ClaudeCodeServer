@@ -12,9 +12,9 @@ import { GLYPHS } from '../../lib/projectGlyphs';
 import { invalidateProjectsCache } from './useAllProjects';
 
 // Черновик значка при создании проекта (проекта ещё нет — держим кандидата в памяти
-// вкладки и досылаем через selectIcon после create()). Источник данных — глиф, не blob:
-// `name` для lucide-имени, `paths` для нарисованных моделью строк d.
-export type DraftGlyph = { name?: string | null; paths?: string[] | null };
+// вкладки и досылаем через selectIcon после create()). Источник данных — `name`
+// lucide-иконки из белого списка (ADR-009 §5).
+export type DraftGlyph = { name?: string | null };
 
 // Текст ошибки подбора — дословно из продуктовой спеки (docs/product/project-icon-glyphs.md §1.3).
 const GLYPH_FAIL_MSG = 'Не удалось подобрать значок — оставили инициалы. Попробуйте ещё раз или опишите своими словами.';
@@ -139,7 +139,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
     setSuggErr('');
     try {
       if (creating) {
-        const draft: DraftGlyph = { name: c.name ?? null, paths: c.paths ?? null };
+        const draft: DraftGlyph = { name: c.name ?? null };
         onDraftGlyphChange?.(draft);
         setSuggestions(null);
         setShowSuggest(false);
@@ -148,7 +148,6 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
       }
       const updated = await api.projects.selectIcon(project.id, {
         name: c.name ?? null,
-        paths: c.paths ?? null,
       });
       applyUpdated(updated);
       setSuggestions(null);
@@ -374,15 +373,15 @@ function GlyphCandidates({ candidates, selected, projectColor, onChoose }: {
 }) {
   return (
     <>
-      {candidates.map((c, i) => {
-        const key = c.name ?? `paths-${i}`;
+      {candidates.map((c) => {
+        const key = c.name;
         const isSelected = selected != null && selected === key;
         return (
           <button
-            key={key}
+            key={key ?? 'unknown'}
             type="button"
             onClick={() => onChoose(c)}
-            aria-label={c.name ? `Значок ${c.name}` : 'Нарисованный значок'}
+            aria-label={c.name ? `Значок ${c.name}` : 'Значок'}
             style={{
               position: 'relative',
               padding: 0,
@@ -430,21 +429,10 @@ function GlyphCandidates({ candidates, selected, projectColor, onChoose }: {
   );
 }
 
-// Миниатюра глифа в плитке-кандидате: тот же путь (paths значениями d, name из GLYPHS),
-// но в крупном размере (60% от плитки-подложки, ~ 36% от плитки кандидата).
+// Миниатюра глифа в плитке-кандидате: имя lucide-значка из карты GLYPHS,
+// в крупном размере (60% от плитки-подложки, ~ 36% от плитки кандидата).
 function GlyphThumb({ candidate }: { candidate: GlyphCandidate }) {
   const stroke = 2;
-  if (candidate.paths && candidate.paths.length > 0) {
-    return (
-      <svg
-        width="60%" height="60%" viewBox="0 0 24 24"
-        fill="none" stroke="currentColor" strokeWidth={stroke}
-        strokeLinecap="round" strokeLinejoin="round" aria-hidden
-      >
-        {candidate.paths.map((d, i) => <path key={i} d={d} />)}
-      </svg>
-    );
-  }
   if (candidate.name) {
     const Named = GLYPHS[candidate.name as keyof typeof GLYPHS] as
       | ComponentType<SVGProps<SVGSVGElement> & { size?: number; strokeWidth?: number }>

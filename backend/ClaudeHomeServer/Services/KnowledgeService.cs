@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
@@ -17,7 +16,9 @@ public record DifyDocumentItem(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("indexing_status")] string IndexingStatus,
     // Текст ошибки индексации (документы в статусе error); у здоровых — null
-    [property: JsonPropertyName("error")] string? Error = null);
+    [property: JsonPropertyName("error")] string? Error = null,
+    // Объём документа в словах (для выдачи модели в MCP dify); у старых ответов — 0
+    [property: JsonPropertyName("word_count")] int WordCount = 0);
 
 public record DifyDocumentsPage(
     [property: JsonPropertyName("data")] List<DifyDocumentItem> Data,
@@ -170,6 +171,14 @@ public class KnowledgeService
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_cfg.ApiUrl) && !string.IsNullOrEmpty(_cfg.ApiKey);
 
+    // Сегмент пути к API Dify: КАЖДЫЙ id датасета/документа экранируется — иначе
+    // dot-segment-пейлоад («../../{uuid}/documents/{id}» в document_id) резолвится
+    // HttpClient'ом по RFC в чужой датасет под общим ключом workspace (блокер приёмки
+    // волны 4.1). «/» кодируется в %2F — пейлоад остаётся одним непрозрачным сегментом;
+    // настоящие UUID (латиница/цифры/«-») экранирование не меняет. Пара этому гейту —
+    // белый список формы id в DifyToolset (модель получает внятный отказ раньше HTTP)
+    private static string Seg(string id) => Uri.EscapeDataString(id);
+
     // --- Неймспейс контура (Dev/Prod на одном Dify, см. DifyOptions.Namespace) ---
     // Полное имя в Dify = "{Namespace}:{логическое имя}". Префикс добавляется при создании/
     // переименовании и срезается при листинге ТОЛЬКО здесь — потребители (классификация
@@ -192,21 +201,29 @@ public class KnowledgeService
     // Создание датасета по имени, без привязки к проекту (для заметок пользователя).
     // permission: "only_me" (личный) | "all_team_members" (публичный, общий на workspace);
     // description — необязательное описание (Dify хранит сам). Существующие вызовы
-    // (заметки/проекты) остаются на дефолте only_me.
-    public async Task<string> CreateDatasetAsync(string name, string permission = "only_me", string? description = null)
+    // (заметки/проекты) остаются на дефолте only_me. indexingTechnique — явный метод
+    // индексации ("high_quality"/"economy"); null — настройка инстанса Dify:IndexingTechnique.
+    public async Task<string> CreateDatasetAsync(string name, string permission = "only_me", string? description = null,
+        string? indexingTechnique = null)
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Dify не настроен: задайте Dify:ApiUrl и Dify:ApiKey в конфигурации");
         var payload = new Dictionary<string, object?>
         {
             ["name"] = WithNs(name),
-            ["indexing_technique"] = _cfg.IndexingTechnique,
+            ["indexing_technique"] = indexingTechnique ?? _cfg.IndexingTechnique,
             ["permission"] = permission,
         };
         if (!string.IsNullOrWhiteSpace(description)) payload["description"] = description;
         var client = CreateClient();
         var resp = await client.PostAsJsonAsync("datasets", payload);
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            // Тело в исключение: Dify на 400 отдаёт причину (напр. дубль имени), без неё
+            // диагностика создания базы невозможна
+            var errBody = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException($"Dify вернул {(int)resp.StatusCode}: {errBody}");
+        }
         var body = await resp.Content.ReadFromJsonAsync<DifyDatasetResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при создании датасета");
         return body.Id;
@@ -221,18 +238,31 @@ public class KnowledgeService
     // источник и т.п.); logic — как объединять условия ("and"/"or").
     // searchMethod (явный): "semantic_search" | "full_text_search" | "hybrid_search".
     // Если не задан — гибридный поиск с тихим фолбэком на семантический (как раньше).
+    // scoreThresholdEnabled/scoreThreshold — фильтр по минимальной релевантности
+    // (порог применяется только при scoreThresholdEnabled, как в Dify UI).
     public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
-        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and", string? searchMethod = null)
+        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and", string? searchMethod = null,
+        bool scoreThresholdEnabled = false, double scoreThreshold = 0.5)
     {
         if (!string.IsNullOrEmpty(searchMethod))
-            return await RetrieveWithMethodAsync(datasetId, query, topK, searchMethod, filters, logic);
-        try { return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search", filters, logic); }
-        catch { return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search", filters, logic); }
+            return await RetrieveWithMethodAsync(datasetId, query, topK, searchMethod, filters, logic,
+                scoreThresholdEnabled, scoreThreshold);
+        try
+        {
+            return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search", filters, logic,
+                scoreThresholdEnabled, scoreThreshold);
+        }
+        catch
+        {
+            return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search", filters, logic,
+                scoreThresholdEnabled, scoreThreshold);
+        }
     }
 
     private async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveWithMethodAsync(
         string datasetId, string query, int topK, string searchMethod,
-        IReadOnlyList<KnowledgeMetadataFilter>? filters, string logic)
+        IReadOnlyList<KnowledgeMetadataFilter>? filters, string logic,
+        bool scoreThresholdEnabled, double scoreThreshold)
     {
         var client = CreateClient();
         // retrieval_model строим словарём: metadata_filtering_conditions добавляется
@@ -242,7 +272,8 @@ public class KnowledgeService
             ["search_method"] = searchMethod,
             ["reranking_enable"] = false,
             ["top_k"] = topK,
-            ["score_threshold_enabled"] = false,
+            ["score_threshold_enabled"] = scoreThresholdEnabled,
+            ["score_threshold"] = scoreThreshold,
         };
         if (filters is { Count: > 0 })
             retrievalModel["metadata_filtering_conditions"] = new
@@ -255,7 +286,7 @@ public class KnowledgeService
                     value = f.Value ?? "",
                 }),
             };
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve",
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/retrieve",
             new { query = TrimQuery(query), retrieval_model = retrievalModel });
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
@@ -273,7 +304,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return [];
         var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        var resp = await client.GetAsync($"datasets/{Seg(datasetId)}/metadata");
         resp.EnsureSuccessStatusCode();
         var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
         return meta?.DocMetadata
@@ -341,15 +372,16 @@ public class KnowledgeService
     }
 
     public async Task<DifyDocumentInfo> IndexFileByTextAsync(
-        string datasetId, string fileName, string content, List<string>? tags = null)
+        string datasetId, string fileName, string content, List<string>? tags = null,
+        string? indexingTechnique = null, string? processRuleMode = null)
     {
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/document/create_by_text", new
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/document/create_by_text", new
         {
             name = fileName,
             text = content,
-            indexing_technique = _cfg.IndexingTechnique,
-            process_rule = new { mode = "automatic" },
+            indexing_technique = indexingTechnique ?? _cfg.IndexingTechnique,
+            process_rule = new { mode = processRuleMode ?? "automatic" },
             doc_metadata = new { tags = (tags ?? []).ToArray() },
         });
         resp.EnsureSuccessStatusCode();
@@ -376,7 +408,8 @@ public class KnowledgeService
     }
 
     public async Task<DifyDocumentInfo> IndexFileByBytesAsync(
-        string datasetId, string fileName, byte[] content, List<string>? tags = null)
+        string datasetId, string fileName, byte[] content, List<string>? tags = null,
+        string? indexingTechnique = null, string? processRuleMode = null)
     {
         var client = CreateClient();
         using var form = new MultipartFormDataContent();
@@ -388,11 +421,11 @@ public class KnowledgeService
 
         form.Add(new StringContent(System.Text.Json.JsonSerializer.Serialize(new
         {
-            indexing_technique = _cfg.IndexingTechnique,
-            process_rule = new { mode = "automatic" },
+            indexing_technique = indexingTechnique ?? _cfg.IndexingTechnique,
+            process_rule = new { mode = processRuleMode ?? "automatic" },
         })), "data");
 
-        var resp = await client.PostAsync($"datasets/{datasetId}/document/create_by_file", form);
+        var resp = await client.PostAsync($"datasets/{Seg(datasetId)}/document/create_by_file", form);
         if (!resp.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync();
@@ -405,6 +438,59 @@ public class KnowledgeService
         return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
     }
 
+    // Замена содержимого существующего документа текстом (update_by_text). name/text
+    // опциональны по отдельности (можно переименовать без перезалива), но Dify требует
+    // хотя бы одно — пустой вызов отбивается сам как 400.
+    public async Task<DifyDocumentInfo> UpdateDocumentByTextAsync(string datasetId, string documentId,
+        string? name, string? text, string? processRuleMode = null)
+    {
+        var client = CreateClient();
+        var payload = new Dictionary<string, object?>
+        {
+            ["process_rule"] = new { mode = processRuleMode ?? "automatic" },
+        };
+        if (!string.IsNullOrWhiteSpace(name)) payload["name"] = name;
+        if (!string.IsNullOrEmpty(text)) payload["text"] = text;
+        var resp = await client.PostAsJsonAsync(
+            $"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/update_by_text", payload);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException($"Dify вернул {(int)resp.StatusCode}: {errBody}");
+        }
+        var body = await resp.Content.ReadFromJsonAsync<DifyDocumentCreateResponse>()
+            ?? throw new InvalidOperationException("Пустой ответ от Dify при обновлении документа");
+        return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
+    }
+
+    // Замена файла существующего документа (update_by_file): Dify переиндексирует документ
+    // из нового файла, имя документа остаётся прежним.
+    public async Task<DifyDocumentInfo> UpdateDocumentByFileAsync(string datasetId, string documentId,
+        byte[] content, string fileName, string? processRuleMode = null)
+    {
+        var client = CreateClient();
+        using var form = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(content);
+        fileContent.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue(GetMimeType(fileName));
+        form.Add(fileContent, "file", Path.GetFileName(fileName));
+        form.Add(new StringContent(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            process_rule = new { mode = processRuleMode ?? "automatic" },
+        })), "data");
+
+        var resp = await client.PostAsync(
+            $"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/update_by_file", form);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException($"Dify вернул {(int)resp.StatusCode}: {errBody}");
+        }
+        var body = await resp.Content.ReadFromJsonAsync<DifyDocumentCreateResponse>()
+            ?? throw new InvalidOperationException("Пустой ответ от Dify при обновлении файла");
+        return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
+    }
+
     // Возвращает fieldId поля "tags" в метаданных датасета; создаёт поле если его нет
     public async Task<string> EnsureTagsFieldAsync(string datasetId)
     {
@@ -412,7 +498,7 @@ public class KnowledgeService
             return cached;
 
         var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        var resp = await client.GetAsync($"datasets/{Seg(datasetId)}/metadata");
         resp.EnsureSuccessStatusCode();
 
         var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
@@ -423,7 +509,7 @@ public class KnowledgeService
             return existing.Id;
         }
 
-        var createResp = await client.PostAsJsonAsync($"datasets/{datasetId}/metadata",
+        var createResp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/metadata",
             new { type = "string", name = "tags" });
         createResp.EnsureSuccessStatusCode();
 
@@ -439,7 +525,7 @@ public class KnowledgeService
         var fieldId = await EnsureTagsFieldAsync(datasetId);
         var tagValue = string.Join(",", tags);
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/documents/metadata", new
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/documents/metadata", new
         {
             operation_data = new[]
             {
@@ -455,15 +541,16 @@ public class KnowledgeService
     }
 
     // status — необязательный фильтр по display-статусу Dify (напр. "error" — упавшие на
-    // индексации); null — все документы. Реконсайлер зовёт метод в фоне — без настроенного
-    // Dify тихо отдаём пусто (соседние методы ведут себя так же).
+    // индексации); keyword — фильтр по вхождению в имя документа. Реконсайлер зовёт метод
+    // в фоне — без настроенного Dify тихо отдаём пусто (соседние методы ведут себя так же).
     public async Task<DifyDocumentsPage> ListDocumentsAsync(string datasetId, int page = 1, int limit = 20,
-        string? status = null)
+        string? status = null, string? keyword = null)
     {
         if (!IsConfigured) return new DifyDocumentsPage([], false, 0);
         var client = CreateClient();
-        var query = $"datasets/{datasetId}/documents?page={page}&limit={limit}";
+        var query = $"datasets/{Seg(datasetId)}/documents?page={page}&limit={limit}";
         if (!string.IsNullOrEmpty(status)) query += $"&status={Uri.EscapeDataString(status)}";
+        if (!string.IsNullOrEmpty(keyword)) query += $"&keyword={Uri.EscapeDataString(keyword)}";
         var resp = await client.GetAsync(query);
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<DifyDocumentsPage>()
@@ -519,27 +606,61 @@ public class KnowledgeService
 
     // Сегменты документа (чанки с текстом) — для просмотра содержимого. Без пагинации:
     // эндпоинт Dify не отдаёт has_more, а документы обычно разбиты на немного чанков.
-    public async Task<IReadOnlyList<DifySegmentItem>> ListSegmentsAsync(string datasetId, string documentId)
+    // keyword/status — необязательные фильтры Dify (по тексту сегмента / display-статусу).
+    public async Task<IReadOnlyList<DifySegmentItem>> ListSegmentsAsync(string datasetId, string documentId,
+        string? keyword = null, string? status = null)
     {
         if (!IsConfigured) return [];
         var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{datasetId}/documents/{documentId}/segments?limit=100");
+        var query = $"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/segments?limit=100";
+        if (!string.IsNullOrEmpty(keyword)) query += $"&keyword={Uri.EscapeDataString(keyword)}";
+        if (!string.IsNullOrEmpty(status)) query += $"&status={Uri.EscapeDataString(status)}";
+        var resp = await client.GetAsync(query);
         resp.EnsureSuccessStatusCode();
         var p = await resp.Content.ReadFromJsonAsync<DifySegmentsPage>();
         return p?.Data ?? [];
     }
 
+    // Черновик сегмента для добавления в документ: content обязателен, answer — для
+    // QA-режима, keywords — поисковые подсказки (контракт эндпоинта Dify segments).
+    public record DifySegmentDraft(string Content, string? Answer = null, IReadOnlyList<string>? Keywords = null);
+
+    // Добавление сегментов (чанков) в существующий документ — ручная досыпка знаний
+    // без переиндексации файла. Возвращает созданные сегменты с их id.
+    public async Task<IReadOnlyList<DifySegmentItem>> AddSegmentsAsync(string datasetId, string documentId,
+        IReadOnlyList<DifySegmentDraft> segments)
+    {
+        var client = CreateClient();
+        var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}/segments", new
+        {
+            segments = segments.Select(s => new
+            {
+                content = s.Content,
+                answer = s.Answer,
+                keywords = s.Keywords ?? [],
+            }),
+        });
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException($"Dify вернул {(int)resp.StatusCode}: {errBody}");
+        }
+        var body = await resp.Content.ReadFromJsonAsync<DifySegmentsPage>()
+            ?? throw new InvalidOperationException("Пустой ответ от Dify при добавлении сегментов");
+        return body.Data;
+    }
+
     public async Task DeleteDocumentAsync(string datasetId, string documentId)
     {
         var client = CreateClient();
-        var resp = await client.DeleteAsync($"datasets/{datasetId}/documents/{documentId}");
+        var resp = await client.DeleteAsync($"datasets/{Seg(datasetId)}/documents/{Seg(documentId)}");
         resp.EnsureSuccessStatusCode();
     }
 
     public async Task DeleteDatasetAsync(string datasetId)
     {
         var client = CreateClient();
-        var resp = await client.DeleteAsync($"datasets/{datasetId}");
+        var resp = await client.DeleteAsync($"datasets/{Seg(datasetId)}");
         if (resp.StatusCode != System.Net.HttpStatusCode.NoContent)
             resp.EnsureSuccessStatusCode();
     }
@@ -551,7 +672,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return;
         var client = CreateClient();
-        var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { name = WithNs(newName) });
+        var resp = await client.PatchAsJsonAsync($"datasets/{Seg(datasetId)}", new { name = WithNs(newName) });
         resp.EnsureSuccessStatusCode();
     }
 
@@ -560,7 +681,7 @@ public class KnowledgeService
     {
         if (!IsConfigured) return;
         var client = CreateClient();
-        var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { description });
+        var resp = await client.PatchAsJsonAsync($"datasets/{Seg(datasetId)}", new { description });
         resp.EnsureSuccessStatusCode();
     }
 }

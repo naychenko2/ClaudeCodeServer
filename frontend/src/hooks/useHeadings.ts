@@ -37,6 +37,16 @@ export interface DocToc {
 }
 
 // contentRef — контейнер, внутри которого отрисован markdown; deps — то, при смене чего
+// Текст заголовка без служебных врезок: поверх рендера садятся DOM-маркеры
+// (счётчик комментариев у якорного блока — см. DocComments), и их содержимое попадало
+// бы и в оглавление, и в slug якоря — переход по «#раздел» переставал находить место
+export function headingText(el: HTMLElement): string {
+  if (!el.querySelector('[data-ann-marker]')) return (el.textContent ?? '').trim();
+  const clone = el.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('[data-ann-marker]').forEach(m => m.remove());
+  return (clone.textContent ?? '').trim();
+}
+
 // оглавление пересобирается (обычно текст документа)
 export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unknown): Heading[] {
   const [headings, setHeadings] = useState<Heading[]>([]);
@@ -47,7 +57,7 @@ export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unkn
     const list: Heading[] = [];
     root.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(n => {
       const el = n as HTMLElement;
-      const text = (el.textContent ?? '').trim();
+      const text = headingText(el);
       if (text) list.push({ level: Number(el.tagName[1]), text, el });
     });
     setHeadings(list);

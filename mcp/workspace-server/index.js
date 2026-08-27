@@ -2,6 +2,12 @@
 // без внешних зависимостей — деплой не требует npm install.
 // Даёт сессии доступ ко ВСЕМ проектам владельца: список, файлы, базы знаний, единый поиск.
 //
+// ЗАМОРОЖЕН (ветка отката, ADR-012 фаза 2 волна 3): источник контракта —
+// backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs (+ .Schemas.cs); правки
+// схем/поведения обязаны ехать парой с http-веткой (сторож парности —
+// WorkspaceToolsetParityTests, оси секций сверяются с ЖИВЫМ этим файлом).
+// Файл не удалять: Mcp:HttpTransport=false возвращает wsp на stdio с этим env.
+//
 // Окружение (задаёт ClaudeSession при запуске claude):
 //   WORKSPACE_API_URL         — базовый URL бэкенда (http://127.0.0.1:5000)
 //   WORKSPACE_API_TOKEN       — сервисный JWT владельца сессии

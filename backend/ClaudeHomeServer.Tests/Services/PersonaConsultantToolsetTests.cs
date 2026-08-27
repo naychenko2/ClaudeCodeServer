@@ -81,6 +81,20 @@ public class PersonaConsultantToolsetTests
     }
 
     [Fact]
+    public void ГрафКода_ТолькоПоЯвномуФлагу()
+    {
+        // Дефолт — выключено: сервер графа ездит лишь в проектные сессии, мёртвые
+        // ссылки mcp__codegraph__* всем персонам подряд не нужны
+        PersonaConsultantToolset.Build(Make(), webAllowed: false)
+            .Should().NotContain(t => t.StartsWith("mcp__codegraph__"));
+
+        PersonaConsultantToolset.Build(Make(), webAllowed: false, codeGraphAllowed: true)
+            .Should().Contain("mcp__codegraph__codegraph_find")
+            .And.Contain("mcp__codegraph__codegraph_neighbors")
+            .And.Contain("mcp__codegraph__codegraph_hubs");
+    }
+
+    [Fact]
     public void Память_ТолькоПриВключеннойПамяти()
     {
         PersonaConsultantToolset.Build(Make(memory: false), webAllowed: false)
@@ -161,10 +175,204 @@ public class PersonaConsultantToolsetTests
     }
 
     [Fact]
+    public void IsExecutor_Designer_Full_ВозвращаетTrue()
+    {
+        var designerFull = Make(access: PersonaAccess.Full);
+        designerFull.Specialty = PersonaSpecialty.Designer;
+        PersonaConsultantToolset.IsExecutor(designerFull).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsExecutor_Designer_ReadOnly_ВозвращаетFalse()
+    {
+        var designerReadOnly = Make(access: PersonaAccess.ReadOnly);
+        designerReadOnly.Specialty = PersonaSpecialty.Designer;
+        PersonaConsultantToolset.IsExecutor(designerReadOnly).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Build_Designer_Full_СодержитWriteEditBash()
+    {
+        var designerFull = Make(access: PersonaAccess.Full);
+        designerFull.Specialty = PersonaSpecialty.Designer;
+        PersonaConsultantToolset.Build(designerFull, webAllowed: false)
+            .Should().Contain(["Write", "Edit", "Bash"]);
+    }
+
+    [Fact]
     public void PmemServerKey_НормализуетHandle()
     {
         PersonaConsultantToolset.PmemServerKey("gefest").Should().Be("pmem_gefest");
         PersonaConsultantToolset.PmemServerKey("Ana-Lyst_2").Should().Be("pmem_ana-lyst_2");
         PersonaConsultantToolset.PmemServerKey("стр@нный").Should().MatchRegex("^pmem_[a-z0-9_-]+$");
+    }
+
+    // ---- Write-MCP tests ----
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Secretary)]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Planner)]
+    [InlineData(PersonaSpecialty.Analyst)]
+    [InlineData(PersonaSpecialty.Librarian)]
+    public void NotesWrite_ТолькоУРазрешённыхСпециальностей_ПриFullИNotesWriteAllowed(PersonaSpecialty specialty)
+    {
+        var persona = Make(access: PersonaAccess.Full);
+        persona.Specialty = specialty;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            notesAllowed: true, notesWriteAllowed: true);
+
+        result.Should().Contain("mcp__notes__notes_create");
+        result.Should().Contain("mcp__notes__notes_update");
+        result.Should().Contain("mcp__notes__notes_delete");
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Reviewer)]
+    [InlineData(PersonaSpecialty.Consultant)]
+    [InlineData(PersonaSpecialty.Mentor)]
+    [InlineData(PersonaSpecialty.Tester)]
+    [InlineData(PersonaSpecialty.Executor)]
+    [InlineData(PersonaSpecialty.Designer)]
+    [InlineData(PersonaSpecialty.None)]
+    public void NotesWrite_НеПоявляетсяУНеразрешённыхСпециальностей_ДажеПриNotesWriteAllowed(PersonaSpecialty specialty)
+    {
+        var persona = Make(access: PersonaAccess.Full);
+        persona.Specialty = specialty;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            notesAllowed: true, notesWriteAllowed: true);
+
+        result.Should().NotContain("mcp__notes__notes_create");
+        result.Should().NotContain("mcp__notes__notes_update");
+        result.Should().NotContain("mcp__notes__notes_delete");
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Secretary)]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Planner)]
+    public void TasksWrite_ТолькоУРазрешённыхСпециальностей_ПриFullИTasksWriteAllowed(PersonaSpecialty specialty)
+    {
+        var persona = Make(access: PersonaAccess.Full);
+        persona.Specialty = specialty;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            tasksAllowed: true, tasksWriteAllowed: true);
+
+        result.Should().Contain("mcp__tasks__tasks_create");
+        result.Should().Contain("mcp__tasks__tasks_update");
+        result.Should().Contain("mcp__tasks__tasks_complete");
+        result.Should().Contain("mcp__tasks__tasks_delete");
+        result.Should().Contain("mcp__tasks__tasks_add_subtask");
+        result.Should().Contain("mcp__tasks__tasks_toggle_subtask");
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Analyst)]
+    [InlineData(PersonaSpecialty.Librarian)]
+    [InlineData(PersonaSpecialty.Reviewer)]
+    [InlineData(PersonaSpecialty.Consultant)]
+    [InlineData(PersonaSpecialty.Mentor)]
+    [InlineData(PersonaSpecialty.Tester)]
+    [InlineData(PersonaSpecialty.Executor)]
+    [InlineData(PersonaSpecialty.Designer)]
+    [InlineData(PersonaSpecialty.None)]
+    public void TasksWrite_НеПоявляетсяУНеразрешённыхСпециальностей_ДажеПриTasksWriteAllowed(PersonaSpecialty specialty)
+    {
+        var persona = Make(access: PersonaAccess.Full);
+        persona.Specialty = specialty;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            tasksAllowed: true, tasksWriteAllowed: true);
+
+        result.Should().NotContain("mcp__tasks__tasks_create");
+        result.Should().NotContain("mcp__tasks__tasks_update");
+        result.Should().NotContain("mcp__tasks__tasks_complete");
+        result.Should().NotContain("mcp__tasks__tasks_delete");
+        result.Should().NotContain("mcp__tasks__tasks_add_subtask");
+        result.Should().NotContain("mcp__tasks__tasks_toggle_subtask");
+    }
+
+    [Fact]
+    public void NotesWrite_НеПриReadOnlyAccess_ДажеУSecretary()
+    {
+        var persona = Make(access: PersonaAccess.ReadOnly);
+        persona.Specialty = PersonaSpecialty.Secretary;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            notesAllowed: true, notesWriteAllowed: true);
+
+        result.Should().NotContain("mcp__notes__notes_create");
+        result.Should().NotContain("mcp__notes__notes_update");
+        result.Should().NotContain("mcp__notes__notes_delete");
+    }
+
+    [Fact]
+    public void TasksWrite_НеПриReadOnlyAccess_ДажеУSecretary()
+    {
+        var persona = Make(access: PersonaAccess.ReadOnly);
+        persona.Specialty = PersonaSpecialty.Secretary;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            tasksAllowed: true, tasksWriteAllowed: true);
+
+        result.Should().NotContain("mcp__tasks__tasks_create");
+        result.Should().NotContain("mcp__tasks__tasks_update");
+        result.Should().NotContain("mcp__tasks__tasks_complete");
+        result.Should().NotContain("mcp__tasks__tasks_delete");
+        result.Should().NotContain("mcp__tasks__tasks_add_subtask");
+        result.Should().NotContain("mcp__tasks__tasks_toggle_subtask");
+    }
+
+    [Fact]
+    public void CustomСDisallowedTools_БлокируетWriteНоНеДругиеWriteИнструменты()
+    {
+        // Secretary с Custom-доступом: запрещаем только notes_create, остальные write-инструменты заметок и задач на месте
+        var persona = Make(access: PersonaAccess.Custom,
+            disallowed: ["mcp__notes__notes_create"]);
+        persona.Specialty = PersonaSpecialty.Secretary;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            notesAllowed: true, notesWriteAllowed: true,
+            tasksAllowed: true, tasksWriteAllowed: true);
+
+        // notes_create заблокирован, остальные notes-write и все tasks-write на месте
+        result.Should().NotContain("mcp__notes__notes_create");
+        result.Should().Contain("mcp__notes__notes_update");
+        result.Should().Contain("mcp__notes__notes_delete");
+        result.Should().Contain("mcp__tasks__tasks_create");
+        result.Should().Contain("mcp__tasks__tasks_update");
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Secretary)]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Planner)]
+    [InlineData(PersonaSpecialty.Analyst)]
+    [InlineData(PersonaSpecialty.Librarian)]
+    public void NotesWrite_НеДобавляетсяКогдаNotesWriteAllowedFalse_ДажеУSecretary(PersonaSpecialty specialty)
+    {
+        var persona = Make(access: PersonaAccess.Full);
+        persona.Specialty = specialty;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            notesAllowed: true, notesWriteAllowed: false);
+
+        result.Should().NotContain("mcp__notes__notes_create");
+        result.Should().NotContain("mcp__notes__notes_update");
+        result.Should().NotContain("mcp__notes__notes_delete");
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Secretary)]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Planner)]
+    public void TasksWrite_НеДобавляетсяКогдаTasksWriteAllowedFalse_ДажеУSecretary(PersonaSpecialty specialty)
+    {
+        var persona = Make(access: PersonaAccess.Full);
+        persona.Specialty = specialty;
+        var result = PersonaConsultantToolset.Build(persona, webAllowed: false,
+            tasksAllowed: true, tasksWriteAllowed: false);
+
+        result.Should().NotContain("mcp__tasks__tasks_create");
+        result.Should().NotContain("mcp__tasks__tasks_update");
+        result.Should().NotContain("mcp__tasks__tasks_complete");
+        result.Should().NotContain("mcp__tasks__tasks_delete");
+        result.Should().NotContain("mcp__tasks__tasks_add_subtask");
+        result.Should().NotContain("mcp__tasks__tasks_toggle_subtask");
     }
 }

@@ -44,7 +44,6 @@ import { useGitState, ensureGit, loadUnpushedLog, setActiveSessionForChangedBy }
 import { plural } from '../lib/spend';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
@@ -959,11 +958,10 @@ const windowWidth = useWindowWidth();
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
 
-  // Дефолт-персона проекта (руководитель, фича default-personas-onboarding): больше не
-  // гейтует рабочее пространство (знакомство — приглашение из «Персон»/настроек проекта,
-  // волна 5), но актуальное значение нужно колбэкам создания чата. Свежий дефолт проверяем
-  // с сервера: project из localStorage может не знать о поле defaultPersonaId.
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Дефолт-персона проекта (руководитель): рабочее пространство она не гейтует
+  // (знакомство — приглашение из «Персон»/настроек проекта, волна 5), но актуальное
+  // значение нужно колбэкам создания чата. Свежий дефолт проверяем с сервера:
+  // project из localStorage может не знать о поле defaultPersonaId.
   const [projectDefaultId, setProjectDefaultId] = useState<string | null | undefined>(project.defaultPersonaId);
   // Актуальное значение для колбэков создания чата: у них deps осознанно сужены,
   // и без ref они держат дефолт на момент монтирования
@@ -973,7 +971,6 @@ const windowWidth = useWindowWidth();
     if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
   }, [project.defaultPersonaId]);
   useEffect(() => {
-    if (!onboardingOn) return;
     let cancelled = false;
     api.projects.list()
       .then(list => {
@@ -984,7 +981,7 @@ const windowWidth = useWindowWidth();
       })
       .catch(() => { /* офлайн — работаем с тем, что знаем */ });
     return () => { cancelled = true; };
-  }, [onboardingOn, project.id]);
+  }, [project.id]);
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   useEffect(() => {
@@ -1072,7 +1069,7 @@ const windowWidth = useWindowWidth();
     if (creatingSession) return;
     setCreatingSession(true);
     try {
-      // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
+      // Чат создаётся от лица дефолт-персоны проекта
       const s = await createChatWithContextPersona(
         { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
       handleSelectSession(s);
@@ -1090,7 +1087,7 @@ const windowWidth = useWindowWidth();
     void (async () => {
       try {
         if (where === 'chat' && activeSession) { handleSelectSession(activeSession, msg); return; }
-        // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
+        // Чат создаётся от лица дефолт-персоны проекта
         const s = await createChatWithContextPersona(
           { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
         handleSelectSession(s, msg);

@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
@@ -115,7 +115,7 @@ public class TaskExecutionServiceStallTests : IDisposable
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
 
         _sut = new TaskExecutionService(_tasks, _sessions, personas, hub.Object, push, notesKb, notif,
-            NullLogger<TaskExecutionService>.Instance, config, flags: flags);
+            NullLogger<TaskExecutionService>.Instance, config);
     }
 
     public void Dispose()

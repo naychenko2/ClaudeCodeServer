@@ -196,12 +196,19 @@ public static class CompilationBuilder
     }
 
     /// <summary>
-    /// Перечисляет .cs-файлы в rootPath, обходя каталоги в глубину, но минуя
-    /// мусорные (<see cref="IgnoredDirectories"/>: .claude, bin, obj, node_modules, packages…).
+    /// Перечисляет .cs-файлы в rootPath (обёртка над <see cref="EnumerateSourceFiles"/>).
+    /// </summary>
+    public static IEnumerable<string> EnumerateCsFiles(string rootPath)
+        => EnumerateSourceFiles(rootPath, [".cs"]);
+
+    /// <summary>
+    /// Перечисляет исходники с любым из заданных расширений (".cs", ".ts", ".tsx"…) в rootPath,
+    /// обходя каталоги в глубину, но минуя мусорные (<see cref="IgnoredDirectories"/>:
+    /// .claude, bin, obj, node_modules, packages…). Один проход на все расширения.
     /// Стек вместо рекурсии AllDirectories — устойчивее к lock'ам каталога и даёт точку
     /// для отсечения мусорных подкаталогов до чтения из них.
     /// </summary>
-    public static IEnumerable<string> EnumerateCsFiles(string rootPath)
+    public static IEnumerable<string> EnumerateSourceFiles(string rootPath, IReadOnlyCollection<string> extensions)
     {
         var stack = new Stack<string>();
         stack.Push(rootPath);
@@ -214,15 +221,17 @@ public static class CompilationBuilder
             try
             {
                 subdirs = Directory.GetDirectories(dir);
-                files = Directory.GetFiles(dir, "*.cs");
+                files = Directory.GetFiles(dir);
             }
             catch (UnauthorizedAccessException) { continue; }
             catch (DirectoryNotFoundException) { continue; }
 
-            foreach (var f in files) yield return f;
+            foreach (var f in files)
+                if (extensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
+                    yield return f;
             foreach (var sd in subdirs)
             {
-                // Мусорные каталоги (кеш/зависимости/артефакты) не обходим: их .cs не относятся
+                // Мусорные каталоги (кеш/зависимости/артефакты) не обходим: их исходники не относятся
                 // к коду проекта и только раздували detect (баг прода — regex-fallback на ClaudeCodeServer).
                 if (IgnoredDirectories.Contains(Path.GetFileName(sd))) continue;
                 stack.Push(sd);

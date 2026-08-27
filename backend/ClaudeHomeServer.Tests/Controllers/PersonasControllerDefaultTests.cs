@@ -6,7 +6,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Дефолт-персоны (фича default-personas-onboarding): назначение make-default (валидация зон,
+// Дефолт-персоны: назначение make-default (валидация зон,
 // ручной путь профиль НЕ меняет) и удаление дефолтной только с преемником по той же зоне.
 public class PersonasControllerDefaultTests : IClassFixture<TestWebApplicationFactory>
 {

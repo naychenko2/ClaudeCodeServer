@@ -36,8 +36,8 @@ import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
 import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
+import { detectAutoCommand, isCancelCommand } from '../../lib/autoCommand';
 import { DelegationReportCard } from './DelegationReportCard';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
@@ -89,7 +89,9 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
   online: boolean;
   onAllow: (requestId: string) => void;
   onDeny: (requestId: string) => void;
-  onAllowAlways: (requestId: string) => void;
+  // Имя инструмента идёт вторым аргументом: скоуп разрешения — инструмент целиком,
+  // и владелец списка постоянных разрешений узнаёт его только отсюда
+  onAllowAlways: (requestId: string, toolName: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
@@ -124,7 +126,7 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
   if (item.resolved) {
     const denied = item.decision === 'denied';
     const verdict = item.decision === 'allowed' ? 'разрешено'
-      : item.decision === 'always' ? 'разрешено всегда'
+      : item.decision === 'always' ? 'разрешено всегда в этом чате'
       : denied ? 'отклонено' : 'решение принято';
     return (
       <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite }}>
@@ -186,7 +188,10 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
             </button>
           </div>
           <button
-            onClick={() => onAllowAlways(item.requestId)}
+            onClick={() => onAllowAlways(item.requestId, item.toolName)}
+            // Разрешение постоянное (переживает перезапуск) — где его снять, говорим сразу,
+            // чтобы «навсегда» не оказалось дорогой в один конец
+            title={`«${item.toolName}» будет выполняться в этом чате без вопроса. Снять — в меню режима прав над полем ввода`}
             style={{
               marginTop: 8, width: '100%', background: 'none', border: 'none',
               cursor: 'pointer', fontSize: 12, color: C.accent, padding: '4px 0',
@@ -591,7 +596,7 @@ interface ItemProps {
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
-  onAllowAlways: (id: string) => void;
+  onAllowAlways: (id: string, toolName: string) => void;
   onAnswerQuestion: (toolUseId: string, answerText: string) => void;
   onRespondPlan: (requestId: string, approve: boolean, feedback?: string) => void;
   planVersion?: number;
@@ -629,8 +634,18 @@ interface ItemProps {
   turnBoundaryKind?: 'entered' | 'returned';
   // Предложение командной механики (маркер <team-mechanic/> в этом тексте; фича
   // default-personas-onboarding): карточка с кнопкой запуска. Дедуп «одна механика —
-  // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда
-  teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; declined?: boolean; onRun: () => void };
+  // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда.
+  // В состоянии «Запущено» карточка даёт действие: onScrollToLaunch скроллит к ходу запуска,
+  // onRerun (если есть) — кнопка «Повторить» для провалившегося хода.
+  teamMechanicOffer?: {
+    offer: TeamMechanicOffer;
+    launched: boolean;
+    failed?: boolean;
+    declined?: boolean;
+    onRun: () => void;
+    onScrollToLaunch?: () => void;
+    onRerun?: () => void;
+  };
   // Предложение каркаса (маркер <project-preset key="…"/>; знакомство v2, п.4): карточка
   // с кнопками «Создать» / «Не нужно». Внутри решает, что рисовать — pending/применён/
   // отклонён/null — по переданному состоянию (берётся с DTO проекта, не из ленты).
@@ -958,9 +973,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
-  // Карточка доклада о завершении задачи (task-report-card): выключен флаг — прежний
-  // бейдж/пузырь, включён — карточка с действиями «Открыть задачу»/«Чат исполнителя»
-  const reportCard = useFeature(FLAGS.taskReportCard);
   switch (item.kind) {
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
@@ -1008,13 +1020,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const teamInfo = teamMech ? describeTeamTurn(item.text) : null;
       // QA Fold 8: авто-слэш-команды (`item.auto && !teamMech`, текст начинается с `/`)
       // больше не рисуем тяжёлой карточкой AgentMessageView — рендерим компактным
-      // разделителем по образцу ветки systemDirective. Отличаем cancel от прочих
-      // команд по подстроке (cancel-варианты семейства oh-my-claudecode:cancel*).
-      const cmdMatch = item.auto && !teamMech ? /^(\S+)/.exec(item.text.trim()) : null;
-      const isCmd = !!cmdMatch;
-      const isCancelCmd = isCmd && /cancel|stop|abort|прервать/i.test(cmdMatch![1]);
-      if (isCmd) {
-        const cmd = cmdMatch![1];
+      // разделителем по образцу ветки systemDirective. Команда — только текст с `/`
+      // в начале: прочие авто-сообщения (промпт задачи «## ЗАДАЧА…», доклад «↩ Отчёт…»)
+      // чипом не являются и идут карточкой ниже. Отличаем cancel от прочих команд по
+      // подстроке (cancel-варианты семейства oh-my-claudecode:cancel*).
+      const cmd = item.auto && !teamMech ? detectAutoCommand(item.text) : null;
+      const isCancelCmd = cmd !== null && isCancelCommand(cmd);
+      if (cmd !== null) {
         const label = isCancelCmd ? `Цикл прерван · команда «${cmd}»` : `Команда · «${cmd}»`;
         return (
           <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
@@ -1046,7 +1058,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         // Второй путь доклада: исполнитель без персоны — доклад приезжает user_message'ом
         // (viaAgent + имя чата-исполнителя). Тот же id задачи структурным полем, значит и
         // здесь карточка с действиями, а не безымянная реплика с маркером в тексте
-        const umReport = reportCard && item.delegationTaskId ? parseDelegationReport(item.text) : null;
+        const umReport = item.delegationTaskId ? parseDelegationReport(item.text) : null;
         if (umReport && item.delegationTaskId) {
           return (
             <DelegationReportCard
@@ -1180,8 +1192,11 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <TeamMechanicOfferCard
               offer={teamMechanicOffer.offer}
               launched={teamMechanicOffer.launched}
+              failed={teamMechanicOffer.failed}
               declined={teamMechanicOffer.declined}
               onRun={teamMechanicOffer.onRun}
+              onScrollToLaunch={teamMechanicOffer.onScrollToLaunch}
+              onRerun={teamMechanicOffer.onRerun}
             />
           )}
           {/* Карточка предложения каркаса проекта — «Создать» / «Не нужно» */}
@@ -1198,10 +1213,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
-      // F1/F2: доклад с id задачи под флагом — карточка с путём к результату. Лицом идёт
+      // F1/F2: доклад с id задачи — карточка с путём к результату. Лицом идёт
       // персона-исполнитель (автор реплики), а не персона чата: доклад пишет она.
       // Нет id (старая история, F5) — прежний рендер бейджем.
-      if (reportCard && report && item.delegationTaskId) {
+      if (report && item.delegationTaskId) {
         return (
           <DelegationReportCard
             report={report}
@@ -1739,7 +1754,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
           background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: C.dangerText,
         }}>
-          <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0 }} /><span>Сессия прервана — {asstName} завершился неожиданно</span>
+          <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0 }} /><span>{asstName}: сессия прервана неожиданно</span>
           {online && (
             <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.dangerBorder}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, whiteSpace: 'nowrap' }}>Повторить</button>
           )}

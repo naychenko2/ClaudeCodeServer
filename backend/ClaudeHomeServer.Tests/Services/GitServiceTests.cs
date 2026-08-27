@@ -87,6 +87,24 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         st.Untracked.Should().NotContain(f => f.Path.EndsWith('/'));
     }
 
+    // Решение по перфу листинга (27.08): untracked больше не замеряются per-file
+    // (`git diff --no-index` на каждый — секунды на проектах без .gitignore).
+    // Контракт: untracked приходят с Added/Deleted = null, tracked — с числами.
+    [Fact]
+    public async Task Status_Untracked_БезПострочнойСтатистики()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "u1.txt"), "раз\nдва\nтри\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "один\nДВА\nтри\n"); // tracked unstaged
+
+        var st = await _git.StatusAsync(null, _repo);
+
+        var untracked = st.Untracked.Should().ContainSingle(f => f.Path == "u1.txt").Which;
+        untracked.Added.Should().BeNull();
+        untracked.Deleted.Should().BeNull();
+        var modified = st.Unstaged.Should().ContainSingle(f => f.Path == "a.txt").Which;
+        modified.Added.Should().NotBeNull("tracked-файлы по-прежнему получают +N/−M");
+    }
+
     [Fact]
     public async Task Commit_Кириллица_И_Amend()
     {
@@ -103,6 +121,108 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         log2[0].Subject.Should().Be("фикс: правка файла а (уточнено)");
         log2.Count.Should().Be(log.Count);
         sha2.Should().NotBe(sha1);
+    }
+
+    // ---------- Инъекция git-опций через ref-подобные параметры (блокер приёмки волны 3.1) ----------
+
+    // branch уходит в argv как есть: элемент с ведущим «-» git разбирает как ОПЦИЮ, и
+    // «--output=<путь>» в git log перезаписывает произвольный файл мимо SafeJoin и границ
+    // проекта (воспроизведено на живом git в задаче волны 3.1). Валидация — в GitService,
+    // один слой для MCP (git_log) и REST (/git/log): проверяем и непопадание файла на диск.
+    [Fact]
+    public async Task Log_ВеткаОпция_Отвергается_И_НеСоздаётФайл()
+    {
+        var target = Path.Combine(Path.GetTempPath(),
+            "gitsvc_inject_" + Guid.NewGuid().ToString("N") + ".txt");
+
+        var act = () => _git.LogAsync(null, _repo, 5, $"--output={target}");
+
+        await act.Should().ThrowAsync<GitCommandException>()
+            .WithMessage("*Некорректная ревизия*");
+        File.Exists(target).Should().BeFalse(
+            "git не должен был выполниться вовсе — файл вне репо не создаётся и не затирается");
+    }
+
+    // Валидация не ломает штатные ревизии: имя ветки, sha и пусто (текущая)
+    [Fact]
+    public async Task Log_ВеткаИSha_ПроходятВалидацию()
+    {
+        var head = (await _git.LogAsync(null, _repo, 1))[0].Sha;
+
+        (await _git.LogAsync(null, _repo, 5, "main")).Should().NotBeEmpty("имя ветки валидно");
+        (await _git.LogAsync(null, _repo, 5, head)).Should().NotBeEmpty("sha валиден");
+        (await _git.LogAsync(null, _repo, 5)).Should().NotBeEmpty("пусто — текущая ветка");
+    }
+
+    // Тот же паттерн в соседних методах: подконтрольная строка в argv обязательна
+    // выглядеть как ref — иначе «--force» в checkout/create-branch менял бы поведение git
+    [Fact]
+    public async Task CheckoutИCreateBranch_ИмяСОпцией_Отвергается()
+    {
+        await FluentActions.Awaiting(() => _git.CheckoutAsync(null, _repo, "--force"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+        await FluentActions.Awaiting(() => _git.CreateBranchAsync(null, _repo, "-b", "main"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+        await FluentActions.Awaiting(() => _git.CreateBranchAsync(null, _repo, "ok", "--detach"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+    }
+
+    // ---------- Метрика охвата паспортов: CountRecentCommitsAsync (GET /dossiers) ----------
+
+    // Обе даты коммита в прошлом: --since фильтрует по committer date, поэтому сдвигаем
+    // и author-дату тоже — коммит честно «старый» с обеих сторон
+    private static readonly Dictionary<string, string> OldDates = new()
+    {
+        ["GIT_AUTHOR_DATE"] = "2020-01-01T12:00:00",
+        ["GIT_COMMITTER_DATE"] = "2020-01-01T12:00:00",
+    };
+
+    [Fact]
+    public async Task CountRecentCommits_Окно_Файл_И_Follow()
+    {
+        // Свежий коммит поверх фикстурного: в окне 7 суток лежат оба
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "свежий коммит");
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7)).Should().Be(2);
+
+        // Файловый фильтр: знаменатель — история одного файла (b.txt трогал только init,
+        // a.txt — init и свежий)
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "b.txt")).Should().Be(1);
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "a.txt")).Should().Be(2);
+
+        // --follow: переименование не рвёт историю файла
+        await RawGit("mv", "a.txt", "c.txt");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "переименовали a в c");
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "c.txt"))
+            .Should().Be(3, "история c.txt включает и коммиты a.txt до переименования");
+    }
+
+    // Отдельное репо с монотонной историей: корень датирован в прошлое, tip — сейчас.
+    // --since у git — traversal-эвристика по датам, рассчитанная ровно на такой порядок
+    // (старое ниже свежего); инвертированные даты она не обязана считать честно.
+    [Fact]
+    public async Task CountRecentCommits_ИсключаетКоммитыВнеОкна()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "gitsvc_since_" + Guid.NewGuid().ToString("N"));
+        _extraDirs.Add(dir);
+        Directory.CreateDirectory(dir);
+        await _git.InitAsync(null, dir);
+        await RawGitIn(dir, "config", "user.email", "test@test");
+        await RawGitIn(dir, "config", "user.name", "Тест");
+
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "старое\n");
+        await _git.StageAllAsync(null, dir);
+        await RawGitIn(dir, OldDates, "commit", "-m", "старый корень");
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "новое\n");
+        await _git.StageAllAsync(null, dir);
+        await RawGitIn(dir, "commit", "-m", "свежий коммит");
+
+        (await _git.CountRecentCommitsAsync(null, dir, days: 7))
+            .Should().Be(1, "в окне только свежий коммит, корень 2020 года исключён");
+        (await _git.CountRecentCommitsAsync(null, dir, days: 7, "a.txt"))
+            .Should().Be(1, "файловая ветка тоже отбрасывает старый коммит");
     }
 
     [Fact]
@@ -464,12 +584,111 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await _git.WorktreeRemoveAsync(null, _repo, wt);
     }
 
-    // Прямой git в произвольной папке (конфиг тестового worktree)
-    private static async Task RawGitIn(string dir, params string[] args)
+    // Прямой git в произвольной папке (конфиг тестового worktree); env — для коммитов
+    // с заданной датой (GIT_AUTHOR_DATE/GIT_COMMITTER_DATE)
+    private static Task RawGitIn(string dir, params string[] args) => RawGitIn(dir, null, args);
+
+    private static async Task RawGitIn(string dir, Dictionary<string, string>? env, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        if (env is not null)
+            foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
         await p.WaitForExitAsync();
+    }
+
+    // ---------- Ветка паспортов ccs/dossiers/v1: батчинг plumbing ----------
+
+    // Прежняя пофайловая цепочка записи ветки (до батчинга): на каждый файл свой
+    // hash-object -w --stdin + update-index --cacheinfo. Здесь — эталон для проверки
+    // эквивалентности: пишет то же множество файлов во временный индекс и возвращает
+    // дерево write-tree. Форма --cacheinfo — через пробел, как в старом коде.
+    private async Task<string> LegacyWriteTreeAsync(string root, IReadOnlyList<GitDossierFile> files)
+    {
+        var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = ".git/index.dossiers-legacy" };
+        var hostIdx = Path.Combine(root, ".git", "index.dossiers-legacy");
+        try { File.Delete(hostIdx); } catch { }
+        try
+        {
+            foreach (var f in files)
+            {
+                var blob = await _git.RunAsync(null, root, ["hash-object", "-w", "--stdin"], stdin: f.Content);
+                blob.Ok.Should().BeTrue("эталонный hash-object не должен падать: {0}", blob.Stderr);
+                var upd = await _git.RunAsync(null, root,
+                    ["update-index", "--add", "--cacheinfo", "100644", blob.Stdout.Trim(), f.Path],
+                    env: idxEnv);
+                upd.Ok.Should().BeTrue("эталонный update-index не должен падать: {0}", upd.Stderr);
+            }
+            var tree = await _git.RunAsync(null, root, ["write-tree"], env: idxEnv);
+            tree.Ok.Should().BeTrue("эталонный write-tree не должен падать: {0}", tree.Stderr);
+            return tree.Stdout.Trim();
+        }
+        finally { try { File.Delete(hostIdx); } catch { } }
+    }
+
+    private static List<GitDossierFile> MkDossierFiles(int count)
+    {
+        var files = new List<GitDossierFile>(count);
+        for (var i = 0; i < count; i++)
+        {
+            // Разнобой содержимого: кириллица, CRLF, кавычки и длинные строки — всё это
+            // обязано хешироваться побайтово одинаково в обеих цепочках
+            var body = i % 3 == 0
+                ? $"# паспорт {i}\r\n\r\nзапись с CRLF и «кавычками»\r\n"
+                : i % 3 == 1
+                    ? $"# dossier {i}\n\ntext with \"quotes\" and 'apostrophes'\n"
+                    : $"# запись {i}\n\n" + new string('д', 500) + "\n";
+            files.Add(new GitDossierFile($"dossiers/2026/08/{i:0000}-dossier-zapis-{i}.md", body));
+        }
+        return files;
+    }
+
+    // 200 файлов > бюджета чанка argv (~12К символов) → update-index уходит несколькими
+    // вызовами: проверяем, что батчинг (hash-object --stdin-paths одним процессом +
+    // чанки update-index) даёт побайтово то же дерево, что пофайловая цепочка, и не
+    // оставляет следов в рабочем дереве
+    [Fact]
+    public async Task WriteDossiersBranch_Батчинг_Даёт_То_Же_Дерево_Что_ПофайловыйПлюминг()
+    {
+        var files = MkDossierFiles(200);
+        var legacyTree = await LegacyWriteTreeAsync(_repo, files);
+
+        var result = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 200 паспортов");
+
+        result.Created.Should().BeTrue("первая запись ветки обязана создать коммит");
+        var newTree = (await _git.RunAsync(null, _repo,
+            ["rev-parse", $"{GitService.DossiersRef}^{{tree}}"])).Stdout.Trim();
+        newTree.Should().Be(legacyTree,
+            "батчинг обязан давать побайтово то же дерево, что прежняя пофайловая цепочка");
+
+        var names = (await _git.RunAsync(null, _repo,
+            ["ls-tree", "-r", "--name-only", GitService.DossiersRef])).Stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        names.Should().HaveCount(200);
+        Directory.Exists(Path.Combine(_repo, ".git", "dossiers-export-tmp")).Should()
+            .BeFalse("временная папка батчинга удаляется после экспорта");
+        (await _git.StatusAsync(null, _repo)).Untracked.Should().BeEmpty(
+            "временная папка внутри git-dir не мусорит в рабочем дереве");
+    }
+
+    // Повторный экспорт того же набора новой цепочкой — коммита нет (дерево совпало с tip);
+    // а изменение одного файла порождает ровно один новый коммит
+    [Fact]
+    public async Task WriteDossiersBranch_Батчинг_ИдемпотентенИИнкрементален()
+    {
+        var files = MkDossierFiles(60);
+        var first = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 60");
+
+        first.Created.Should().BeTrue();
+        var second = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 60 повторно");
+        second.Created.Should().BeFalse("дерево не изменилось — нового коммита быть не должно");
+        second.CommitSha.Should().Be(first.CommitSha);
+
+        files.Add(new GitDossierFile("dossiers/2026/08/0060-dossier-novyy.md", "# новый паспорт\n"));
+        var third = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 61");
+        third.Created.Should().BeTrue();
+        (await _git.RunAsync(null, _repo, ["rev-list", "--count", GitService.DossiersRef])).Stdout.Trim()
+            .Should().Be("2", "в ветке коммит первого экспорта и один добавочный");
     }
 }

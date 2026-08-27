@@ -10,14 +10,13 @@ import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { useNow } from '../../lib/useNow';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
-import { SPECIALTY_LABEL } from './automationMeta';
+import { useSpecialtyCatalog, specialtyLabel } from '../../lib/specialties';
 import { TeamMemoryPanel } from './TeamMemoryPanel';
 import { Modal, IconButton, Button, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
@@ -81,9 +80,8 @@ export function TeamCommandCenter({
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
-  // Руководитель проекта (фича default-personas-onboarding): дефолт-персона для чатов
-  // проекта. Локальный снимок — project из пропсов не обновляется по broadcast'у.
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Руководитель проекта: дефолт-персона для чатов проекта. Локальный снимок —
+  // project из пропсов не обновляется по broadcast'у.
   const [leadId, setLeadId] = useState<string | null>(project.defaultPersonaId ?? null);
   useEffect(() => { setLeadId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
   // Смена СУЩЕСТВУЮЩЕГО руководителя — только через подтверждение (страховка от
@@ -226,7 +224,7 @@ export function TeamCommandCenter({
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
               onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} isMobile={isMobile}
-              leadId={onboardingOn ? leadId : null} onMakeLead={onboardingOn ? requestMakeLead : undefined} />
+              leadId={leadId} onMakeLead={requestMakeLead} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
@@ -288,6 +286,7 @@ function OverviewPanel(props: {
   leadId: string | null; onMakeLead?: (p: Persona) => Promise<void>;
 }) {
   const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead } = props;
+  const specialtyCatalog = useSpecialtyCatalog();
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
   // Меню смены руководителя проекта
@@ -385,7 +384,7 @@ function OverviewPanel(props: {
                   <PersonaAvatar persona={p} size={32} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</div>
-                    {p.specialty && p.specialty !== 'none' && <span style={specialtyBadge}>{SPECIALTY_LABEL[p.specialty] ?? p.specialty}</span>}
+                    {p.specialty && p.specialty !== 'none' && <span style={specialtyBadge}>{specialtyLabel(specialtyCatalog, p.specialty)}</span>}
                   </div>
                   <StatusDot status={status} />
                 </button>
@@ -602,6 +601,7 @@ interface TeamSuggestResult {
 }
 
 function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onClose: () => void; onCreated: () => void; }) {
+  const specialtyCatalog = useSpecialtyCatalog();
   const teamKey = `personas:team-generate:${project.id}`;
   const teamJob = useAiJob<TeamSuggestResult>(teamKey);
   const [prompt, setPrompt] = useState('');
@@ -680,7 +680,7 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{m.role ?? 'Роль'}{m.name ? ` (${m.name})` : ''}</span>
-                      {m.specialty && <span style={specialtyBadge}>{SPECIALTY_LABEL[m.specialty] ?? m.specialty}</span>}
+                      {m.specialty && <span style={specialtyBadge}>{specialtyLabel(specialtyCatalog, m.specialty)}</span>}
                     </div>
                     {m.description && <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginTop: 2 }}>{m.description}</div>}
                   </div>

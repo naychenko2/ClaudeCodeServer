@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
@@ -37,6 +37,8 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly UsageService _usage;
     private readonly SubscriptionActivityTracker _activity;
+    // Стор паспортов сабагентов (только память): без него сток паспортов SessionManager = null
+    private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
@@ -157,7 +159,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns);
     }
 
     public void Dispose()
@@ -304,7 +306,7 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Имя", model: "opus", effort: "high");
 
         // Частичный апдейт (как togglePin/chats_update): все поля null — ничего не затирается
-        var updated = _sut.Update(session.Id, name: null, model: null, effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: null, effort: null);
 
         updated!.Name.Should().Be("Имя");
         updated.Model.Should().Be("opus");
@@ -318,7 +320,7 @@ public class SessionManagerTests : IDisposable
         var project = _projectManager.Create("UPD2", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое", model: "opus", effort: "high");
 
-        var updated = _sut.Update(session.Id, name: "Новое", model: null, effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: "Новое", model: null, effort: null);
 
         updated!.Name.Should().Be("Новое");
         updated.Model.Should().Be("opus", "модель не передавалась — не трогаем");
@@ -601,7 +603,7 @@ public class SessionManagerTests : IDisposable
         var project = _projectManager.Create("UPD3", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "opus", effort: "high");
 
-        var updated = _sut.Update(session.Id, name: "N2", model: "sonnet", effort: "low");
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: "N2", model: "sonnet", effort: "low");
 
         updated!.Name.Should().Be("N2");
         updated.Model.Should().Be("sonnet");
@@ -620,7 +622,7 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "glm-5.2", effort: "high");
         session.Provider.Should().Be("glm", "сторонняя модель на создании → ключ её провайдера");
 
-        var updated = _sut.Update(session.Id, name: null, model: "opus[1m]", effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: "opus[1m]", effort: null);
 
         updated!.Model.Should().Be("opus[1m]");
         updated.Provider.Should().Be("claude",
@@ -637,10 +639,254 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "opus", effort: "high");
         session.Provider.Should().Be("claude", "Claude-модель при пустом пуле → PrimaryKey");
 
-        var updated = _sut.Update(session.Id, name: null, model: "glm-5.2", effort: null);
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: "glm-5.2", effort: null);
 
         updated!.Model.Should().Be("glm-5.2");
         updated.Provider.Should().Be("glm");
+    }
+
+    // --- Смена провайдера в настройках чата: правило «есть ли что переносить» ---
+
+    // Корень профиля CLI родного Claude в тестах: пул подписок пуст, оверрайда провайдера
+    // нет — ходы идут в пользовательском профиле (ключ ClaudeUserProfileDir)
+    private string ClaudeProfileRoot => Path.Combine(_tempDir, "claude-profile");
+    private string GlmProfileRoot => Path.Combine(_tempDir, "claude-profiles", "glm");
+
+    // Разложить транскрипт CLI в профиле по соглашению об уплощении cwd
+    private static void PutTranscript(string configRoot, string cwd, string csid, string content)
+    {
+        var dir = Directory.CreateDirectory(
+            Path.Combine(configRoot, "projects", TranscriptMigrator.FlattenCwd(cwd))).FullName;
+        File.WriteAllText(Path.Combine(dir, csid + ".jsonl"), content);
+    }
+
+    [Fact]
+    public async Task Update_СменаПровайдераБезТранскрипта_Проходит()
+    {
+        // ClaudeSessionId выставлен (был служебный ход — kickoff онбординга, авто-приветствие),
+        // но файла транскрипта нет: переносить нечего, смена модели обязана пройти
+        var dir = MkProjectDir("prov1");
+        var project = _projectManager.Create("PROV1", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        session.ClaudeSessionId = "fake-session-id";
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        updated!.Model.Should().Be("glm-5.2");
+        updated.Provider.Should().Be("glm");
+        Sent<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().BeNull("переносить было нечего — разделитель «Продолжено на …» соврал бы");
+    }
+
+    [Fact]
+    public async Task Update_СменаПровайдераБезХодов_Проходит()
+    {
+        // Совсем свежий чат: ClaudeSessionId ещё null — переносить нечего по определению
+        var dir = MkProjectDir("prov0");
+        var project = _projectManager.Create("PROV0", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        updated!.Model.Should().Be("glm-5.2");
+        updated.Provider.Should().Be("glm");
+    }
+
+    [Fact]
+    public async Task Update_СменаПровайдераСТранскриптом_ФайлПереезжаетВПрофильЦели()
+    {
+        // Разговор реальный: транскрипт лежит в профиле исходного провайдера и обязан
+        // доехать в профиль целевого — иначе --resume начал бы с нуля
+        var dir = MkProjectDir("prov4");
+        var project = _projectManager.Create("PROV4", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        const string csid = "live-session-id";
+        session.ClaudeSessionId = csid;
+        PutTranscript(ClaudeProfileRoot, dir, csid, "{\"type\":\"user\"}\n");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        updated!.Provider.Should().Be("glm");
+        var moved = Path.Combine(GlmProfileRoot, "projects",
+            TranscriptMigrator.FlattenCwd(dir), csid + ".jsonl");
+        File.Exists(moved).Should().BeTrue("транскрипт переносится в профиль целевого провайдера");
+        File.ReadAllText(moved).Should().Be("{\"type\":\"user\"}\n");
+        Sent<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().NotBeNull("контекст переехал — разделитель «Продолжено на …» уместен");
+    }
+
+    [Fact]
+    public async Task Update_СбойПереносаТранскрипта_Отказ()
+    {
+        // Транскрипт найден, но скопировать его не удалось — молча терять контекст нельзя
+        // (тот же false отдаёт таймаут копирования живого файла). Ломаем приёмник: на месте
+        // целевого файла — папка, FileStream(FileMode.Create) её не перезапишет.
+        var dir = MkProjectDir("prov5");
+        var project = _projectManager.Create("PROV5", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        const string csid = "broken-session-id";
+        session.ClaudeSessionId = csid;
+        PutTranscript(ClaudeProfileRoot, dir, csid, "{}\n");
+        Directory.CreateDirectory(Path.Combine(GlmProfileRoot, "projects",
+            TranscriptMigrator.FlattenCwd(dir), csid + ".jsonl"));
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Не удалось перенести транскрипт*");
+        session.Provider.Should().Be("claude", "отказ переноса не меняет провайдера");
+    }
+
+    [Fact]
+    public async Task Update_ХодВПолёте_ОтказПоЖивомуПрогону()
+    {
+        // Признак занятости — живой прогон адаптера, а не Status: у свежего чата он ещё
+        // Starting, и окно между стартом хода и сменой статуса реально существует
+        var dir = MkProjectDir("prov6");
+        var project = _projectManager.Create("PROV6", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // HasLiveTurn = true
+        session.Status.Should().NotBe(SessionStatus.Working, "статус тут ни при чём — смотрим на прогон");
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Идёт ответ ассистента — дождитесь его завершения, затем смените модель");
+    }
+
+    [Fact]
+    public async Task Update_СбросНаПоУмолчанию_НеЗакрепляетМодель()
+    {
+        // «По умолчанию» при назначении места на чужого провайдера: переезд состоялся, но
+        // модель НЕ закрепляется — иначе чат перестал бы следовать назначению места
+        var dir = MkProjectDir("prov7");
+        var project = _projectManager.Create("PROV7", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.ChatNew, "glm-5.2");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "", null);
+
+        updated!.Model.Should().BeNull("выбран сброс — модель следует назначению места");
+        updated.Provider.Should().Be("glm", "назначение места ведёт на glm — там же и профиль хода");
+    }
+
+    [Fact]
+    public async Task Update_МигрирующийВызов_ПрименяетОстальныеПоля()
+    {
+        // Метод заявлен как PATCH: смена провайдера не должна съедать name/effort/tags
+        var dir = MkProjectDir("prov8");
+        var project = _projectManager.Create("PROV8", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое", model: "opus");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, "Новое", "glm-5.2", "low", ["t1"]);
+
+        updated!.Provider.Should().Be("glm");
+        updated.Name.Should().Be("Новое");
+        updated.Effort.Should().Be("low");
+        updated.Tags.Should().Equal("t1");
+    }
+
+    [Fact]
+    public async Task Update_ЧужойВладелец_НеНаходитЧат()
+    {
+        // ownerId вызывающего доезжает до MigrateProviderAsync: чужая правка — 404, а не смена
+        var dir = MkProjectDir("prov9");
+        var project = _projectManager.Create("PROV9", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+
+        var act = () => _sut.UpdateAsync(session.Id, "alien-user", null, "glm-5.2", null);
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+        session.Provider.Should().Be("claude");
+    }
+
+    [Fact]
+    public async Task Update_ХодВПолёте_ОтказПоФолбэкОркестрации()
+    {
+        // Пауза между попытками цепочки фолбэка: прогона CLI прямо сейчас нет (HasLiveTurn=false),
+        // но ход идёт — оркестратор в этот момент сам копирует транскрипт и по finally сверяет
+        // Info.Model с применённой. Смена провайдера под ним разошлась бы с его restore, поэтому
+        // занятость адаптера спрашиваем каноническим Busy, а не одним HasLiveTurn.
+        var dir = MkProjectDir("prov10");
+        var project = _projectManager.Create("PROV10", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(true);
+        SetProcess(entry, adapter.Object);
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Идёт ответ ассистента*");
+        session.Provider.Should().Be("claude", "отказ не двигает провайдера");
+    }
+
+    [Fact]
+    public async Task Update_ДесктопныйЧатНаСтороннего_Отказ()
+    {
+        // ADR-008: кадры рабочего стола из транскрипта стороннему вендору не отдаём. Гейт
+        // живёт в MigrateProviderAsync — единственной точке смены провайдера, — поэтому
+        // закрывает и настройки чата, и кнопку «Продолжить на …».
+        var dir = MkProjectDir("prov11");
+        var project = _projectManager.Create("PROV11", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+        session.DesktopChat = true;
+
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, null, "glm-5.2", null);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Десктопный чат нельзя перевести на стороннего провайдера*");
+        session.Provider.Should().Be("claude");
+    }
+
+    [Fact]
+    public async Task Update_ПереноситьНечегоПоСырымПолям_ОстальныеПоляПрименяются()
+    {
+        // Провайдеров UpdateAsync считает по эффективным моделям, а миграция — по сырым
+        // (Info.Model ?? Info.Provider). Чат на «По умолчанию», админ переставил назначение
+        // места на glm после последнего хода: смена на opus выглядит как glm → claude, а для
+        // миграции это claude → claude. Переносить нечего, и PATCH обязан примениться целиком,
+        // а не упасть в 400 вместе с именем и усилием.
+        var dir = MkProjectDir("prov12");
+        var project = _projectManager.Create("PROV12", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое");
+        session.Model.Should().BeNull("чат следует назначению места");
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.ChatNew, "glm-5.2");
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, "Новое", "opus", "low");
+
+        updated!.Model.Should().Be("opus");
+        updated.Provider.Should().Be("claude");
+        updated.Name.Should().Be("Новое");
+        updated.Effort.Should().Be("low");
+    }
+
+    [Fact]
+    public async Task Update_НеизвестнаяМодельБезПулаПодписок_Отказ()
+    {
+        // Тот же расклад, что выше, но модель — мусорная (устаревший каталог /api/models во
+        // фронте, провайдера убрали из конфига). Отказ обязан быть честным и на коробке БЕЗ
+        // ClaudeSubscriptions: предикат IsNativeClaudeModel судит по ФОРМЕ id, а форма от
+        // наличия пула не зависит. Пока проверка была под конъюнктом «текущий ключ — аккаунт
+        // пула», на пустом пуле она выключалась целиком: Pick отдавал PrimaryKey = текущий
+        // ключ, миграция отменялась как «переезжать некуда», и мусорный id молча ложился в
+        // Info.Model — каждый следующий ход падал в CLI на несуществующей модели.
+        var dir = MkProjectDir("prov13");
+        var project = _projectManager.Create("PROV13", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое");
+        session.Provider.Should().Be("claude", "пул подписок не настроен — родной Claude");
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.ChatNew, "glm-5.2");
+
+        // Префикс чужого ключа брать нельзя: "glm-…" резолвится в провайдера glm по префиксу
+        var act = () => _sut.UpdateAsync(session.Id, TestUserId, "Новое", "kimi-k3-нет-такой", null);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Модель*не найдена среди настроенных провайдеров*");
+        session.Model.Should().BeNull("отказ не закрепляет мусорную модель");
+        session.Name.Should().Be("Старое", "PATCH не применился целиком — модель проверяется первой");
     }
 
     [Fact]
@@ -1168,8 +1414,8 @@ public class SessionManagerTests : IDisposable
         session.UpdatedAt = DateTime.UtcNow.AddDays(-3);
         var before = session.UpdatedAt;
 
-        _sut.Update(session.Id, null, null, null)!.UpdatedAt.Should().Be(before);
-        _sut.Update(session.Id, "Имя", null, null)!.UpdatedAt.Should()
+        (await _sut.UpdateAsync(session.Id, TestUserId, null, null, null))!.UpdatedAt.Should().Be(before);
+        (await _sut.UpdateAsync(session.Id, TestUserId, "Имя", null, null))!.UpdatedAt.Should()
             .BeAfter(before, "правка имени — обычное изменение чата");
     }
 
@@ -1361,6 +1607,162 @@ public class SessionManagerTests : IDisposable
             TimeSpan.FromSeconds(2));
         adapter.Verify(a => a.RespondPermission("req-1", "allow"), Times.Once());
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+    }
+
+    // --- «Разрешать всегда»: список живёт на сессии, а не в памяти адаптера ---
+
+    // Инструменты «всегда разрешать» из стора для сессии session (PascalCase, как _jsonOpts)
+    private async Task<List<string?>> StoredAutoAllowAsync(string sessionId)
+    {
+        using var doc = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json")));
+        return doc.RootElement.EnumerateArray()
+            .Single(e => e.GetProperty("Id").GetString() == sessionId)
+            .GetProperty("AutoAllowTools").EnumerateArray().Select(e => e.GetString()).ToList();
+    }
+
+    [Fact]
+    public async Task RespondPermission_AllowAlways_КладётИнструментНаСессиюИСохраняетСтор()
+    {
+        // До фикса список жил в ConcurrentDictionary адаптера и обнулялся рестартом сервера,
+        // ленивым восстановлением чата и сменой собеседника — человек жал «всегда» заново
+        var session = await MkBusySessionAsync("always-perm", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+
+        _sut.GetById(session.Id)!.AutoAllowTools.Should().BeEquivalentTo(["Bash"]);
+        (await StoredAutoAllowAsync(session.Id)).Should().BeEquivalentTo(["Bash"],
+            "решение обязано пережить рестарт сервера");
+        // Само решение уходит адаптеру как есть — «allow» из allow_always делает ClaudeSession
+        adapter.Verify(a => a.RespondPermission("req-1", "allow_always"), Times.Once());
+    }
+
+    [Fact]
+    public async Task RespondPermission_AllowAlwaysПовторно_НеДублируетИнструмент()
+    {
+        var session = await MkBusySessionAsync("always-dup", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-2", "bash", new { }));
+        _sut.RespondPermission(session.Id, "req-2", "allow_always");
+
+        _sut.GetById(session.Id)!.AutoAllowTools.Should().BeEquivalentTo(["Bash"],
+            "сравнение имён — OrdinalIgnoreCase");
+    }
+
+    [Fact]
+    public async Task RespondPermission_AllowAlwaysПоЧужойКарточке_НичегоНеЗапоминает()
+    {
+        // У одного хода карточек может быть несколько (параллельные tool_use). Запомнить
+        // «всегда» по чужой карточке значило бы выдать бессрочные права не тому инструменту
+        var session = await MkBusySessionAsync("always-mismatch", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-2", "Write", new { }));
+
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+
+        _sut.GetById(session.Id)!.AutoAllowTools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RemoveAutoAllowTool_УбираетИнструментИСохраняетСтор()
+    {
+        var session = await MkBusySessionAsync("always-remove", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+        var updatedBefore = _sut.GetById(session.Id)!.UpdatedAt;
+
+        // Регистр иной — снятие всё равно обязано сработать
+        var updated = _sut.RemoveAutoAllowTool(session.Id, "bash");
+
+        updated!.AutoAllowTools.Should().BeEmpty();
+        (await StoredAutoAllowAsync(session.Id)).Should().BeEmpty();
+        updated.UpdatedAt.Should().Be(updatedBefore, "смена настройки чата — не активность");
+        _sut.RemoveAutoAllowTool(session.Id, "bash").Should().NotBeNull("снятие идемпотентно");
+        _sut.RemoveAutoAllowTool("no-such-session", "Bash").Should().BeNull();
+    }
+
+    // --- Разовая переадресация закреплённых моделей GLM (миграция каталога провайдера) ---
+
+    private IConfiguration GlmMigrationConfig() => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        }).Build();
+
+    private GlmModelAliasMigration NewGlmMigration()
+    {
+        var config = GlmMigrationConfig();
+        return new GlmModelAliasMigration(_sut,
+            ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config),
+            config, NullLogger<GlmModelAliasMigration>.Instance);
+    }
+
+    private async Task<Session> MkSessionWithModelAsync(string suffix, string? model)
+    {
+        var dir = MkProjectDir("glm_" + suffix);
+        var project = _projectManager.Create("GLM-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Model = model;
+        return session;
+    }
+
+    [Fact]
+    public async Task RemapModels_ПерепиcываетТолькоМоделиИзКарты()
+    {
+        var stale = await MkSessionWithModelAsync("stale", "glm-5.2[1m]");
+        var air = await MkSessionWithModelAsync("air", "glm-4.5-air");
+        var preset = await MkSessionWithModelAsync("preset", "preset:" + Guid.NewGuid());
+        var unknown = await MkSessionWithModelAsync("unknown", "glm-5-turbo");
+        var empty = await MkSessionWithModelAsync("empty", null);
+        var presetBefore = preset.Model;
+
+        _sut.RemapModels(GlmModelAliasMigration.Map).Should().Be(2);
+
+        stale.Model.Should().Be("glm-5.3[1m]");
+        air.Model.Should().Be("glm-4.7");
+        preset.Model.Should().Be(presetBefore, "ссылка на пресет — не id модели");
+        unknown.Model.Should().Be("glm-5-turbo", "незнакомая модель остаётся как была");
+        empty.Model.Should().BeNull();
+        (await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json")))
+            .Should().Contain("glm-5.3[1m]").And.NotContain("glm-5.2[1m]");
+    }
+
+    [Fact]
+    public async Task МиграцияGlm_ПереписываетЧатыСнимаетКопиюИСтавитМаркер()
+    {
+        var session = await MkSessionWithModelAsync("hosted", "glm-5.2[1m]");
+        // Стор на диске должен существовать до миграции — иначе копию снимать не с чего
+        _sut.SetVoiceMode(session.Id, false);
+
+        await NewGlmMigration().StartAsync(CancellationToken.None);
+
+        session.Model.Should().Be("glm-5.3[1m]");
+        File.Exists(Path.Combine(_tempDir, ".glm-model-aliases-migrated")).Should().BeTrue();
+        Directory.GetFiles(_tempDir, "sessions.json.bak-*").Should().ContainSingle(
+            "боевой стор перезаписывается только после снимка");
+    }
+
+    [Fact]
+    public async Task МиграцияGlm_ПовторныйСтарт_НичегоНеТрогает()
+    {
+        await NewGlmMigration().StartAsync(CancellationToken.None);
+        var session = await MkSessionWithModelAsync("second-run", "glm-5.2[1m]");
+
+        await NewGlmMigration().StartAsync(CancellationToken.None);
+
+        session.Model.Should().Be("glm-5.2[1m]",
+            "маркер уже стоит — повторный проход не перебивает выбор пользователя");
     }
 
     [Fact]
@@ -2097,6 +2499,155 @@ public class SessionManagerTests : IDisposable
         adapter.Verify(a => a.SendMessageAsync(
             It.Is<string>(t => t.Contains("ВЕРИФИКАЦИЯ")), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    // ─── Обрыв фонового сабагента: сквозной путь «паспорт → добивание» ────────────────
+
+    private static ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport CutBgPassport(
+        string sessionId, string agentId = "a-cut", string finishedBy = "bg_done", bool truncated = true) =>
+        new(agentId, "mark", "Волна 1", sessionId, "toolu_1",
+            DateTime.UtcNow.AddMinutes(-5), DateTime.UtcNow, 300, 20, 40, 1, 120_000, 3000,
+            truncated ? "tool_use" : "end_turn", truncated, "Bash", "claude-opus-5", 1024, 0, false,
+            finishedBy, DateTime.UtcNow);
+
+    // Сток паспортов — ровно тот делегат, что SessionManager отдаёт ватчеру сабагентов
+    private Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport> SubagentSink(string sessionId) =>
+        (Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport>)typeof(SessionManager)
+            .GetMethod("SubagentRunSinkFor", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(_sut, [sessionId])!;
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ПаспортBgDoneПослеВыходаПроцесса_УходитДобивание()
+    {
+        // Сценарий ревью: bg_done → паспорт отложен на перепроверку → координатор дописал ход →
+        // result (статус Active) → процесс CLI вышел → Dispose ватчера отдаёт паспорт с bg_done.
+        // В этот момент entry.Process — живой адаптер (он переживает выход CLI), ход не в полёте,
+        // и NoteTruncatedBgAgent обязан дойти до директивы, а не ограничиться пометкой
+        var session = await MkBusySessionAsync("bg-cut-after-exit", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id));
+
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(5));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("обрывок") && t.Contains("1/2")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ХодВПолёте_ТолькоПометка_БезВторогоХода()
+    {
+        var session = await MkBusySessionAsync("bg-cut-in-flight", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id));
+
+        // Ветка «ход идёт» выходит до планирования отправки — проверка без ожидания честная
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        entry.GetType().GetField("TruncatedBgNote")!.GetValue(entry).Should().NotBeNull();
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ОбрывСинхронногоСабагента_ЦиклДоГотовоАктивен_ОставляетПометкуВместоМолчания()
+    {
+        // Инцидент 25.08.2026 (чат «Зависание чатов практики»): синхронный Task вернул координатору
+        // обрывок вместо отчёта, добивание уступило активному циклу «до готово» — и отметка просто
+        // гасилась. Обрыв не оставлял следа ВООБЩЕ: ни директивы, ни предупреждения.
+        var session = await MkBusySessionAsync("cut-loop-note", SessionStatus.Working);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        // finishedBy=tool_result — синхронный Task: NoteTruncatedBgAgent не зовётся,
+        // отметка ждёт result хода координатора
+        SubagentSink(session.Id)(CutBgPassport(session.Id, finishedBy: "tool_result"));
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().NotBeNull();
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().BeNull();
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(0,
+            "добивание уступает циклу — у него свой протокол продолжения");
+    }
+
+    [Fact]
+    public async Task ОбрывСинхронногоСабагента_ЦиклПоднимаетСледующийХод_ПометкаУезжаетСНим()
+    {
+        // Сквозной путь: пометка обязана лечь ДО того, как цикл поднимет следующий ход,
+        // иначе опоздает ровно на ход (а на последней итерации потеряется совсем) — ради
+        // этого блок разбора обрыва стоит перед разбором цикла в OnMessageAsync
+        var session = await MkBusySessionAsync("cut-loop-carry", SessionStatus.Working);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        SubagentSink(session.Id)(CutBgPassport(session.Id, finishedBy: "tool_result"));
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(5));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("обрывок") && t.Contains("НЕ итог")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task ДобиваниеСабагента_ОбрывОпровергнутПокаПланировалось_ДирективаНеУходит()
+    {
+        var session = await MkBusySessionAsync("bg-cut-late-final", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        var cut = CutBgPassport(session.Id);
+        // Пока добивание планировалось, ватчер прислал опровержение: последний паспорт штатный
+        _subagentRuns.Record(cut with { Truncated = false, LastStopReason = "end_turn" });
+
+        var nudge = (Task)typeof(SessionManager).GetMethod("NudgeTruncatedSubagentAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(_sut, [session.Id, cut, 1])!;
+        await nudge;
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ОбрывФоновогоСабагента_ОпровергнутШтатнымОтчётом_ПометкиСняты()
+    {
+        var session = await MkBusySessionAsync("bg-cut-refuted", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        var sink = SubagentSink(session.Id);
+
+        sink(CutBgPassport(session.Id, agentId: "a-other"));
+        sink(CutBgPassport(session.Id, agentId: "a-cut"));
+        // Штатный отчёт ЧУЖОГО агента пометку a-cut не трогает
+        sink(CutBgPassport(session.Id, agentId: "a-other", truncated: false));
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+            .GetField("TruncatedSubagent")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
+
+        // Финал a-cut доехал до транскрипта позже сигнала — ватчер прислал опровержение:
+        // обе пометки сняты, ложная директива по result и префикс координатору не уйдут
+        sink(CutBgPassport(session.Id, agentId: "a-cut", truncated: false));
+        entry.GetType().GetField("TruncatedBgNote")!.GetValue(entry).Should().BeNull();
+        entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().BeNull();
     }
 
     [Fact]
@@ -4824,6 +5375,21 @@ public class SessionManagerTests : IDisposable
         var chunk3 = "</team:work> — всё по делу.";
         SessionManager.StripTeamProtocolMarkers(chunk1 + chunk2 + chunk3)
             .Should().Be("Готовлю план.  — всё по делу.");
+    }
+
+    // Хвост P19: парсер принимает код-блок внутри маркера (FindPairedMarkerOutsideCode),
+    // а зачистка раньше резала по код-блокам — сегмент до фенса оставался в ленте с
+    // буквальным <team:work> и всей постановкой, закрывающий тег съедался как осиротевший.
+    // Зачистка обязана вырезать диапазон той же позиционной находкой пары, что и разбор.
+    [Theory]
+    [InlineData("<team:work>перепиши так:\n```\nvar x = 1;\n```\nостальное как есть</team>", "")]
+    [InlineData("Погнали.\n<team:work>дамп:\n```tsx\n<Button/>\n```\nверни как есть</team:work>\nГотово.",
+        "Погнали.\n\nГотово.")]
+    [InlineData("Проверил.\n<escalate:check>вот след:\n```\nstack trace\n```\nне сходится</escalate:check>",
+        "Проверил.\n")]
+    public void StripTeamProtocolMarkers_МаркерСКодБлокомВнутри_ВырезаетсяЦеликом(string input, string expected)
+    {
+        SessionManager.StripTeamProtocolMarkers(input).Should().Be(expected);
     }
 
     [Theory]
@@ -7832,4 +8398,280 @@ public class SessionManagerTests : IDisposable
 
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
     }
+
+    // --- КР-наблюдаемость, этап 3: перезапуск зависшего хода (RestartStuckTurnAsync) ---
+
+    // Адаптер с переключаемым «живым ходом»: Interrupt в моке процесс не убивает, поэтому
+    // умирание изображаем флагом — так тест управляет моментом смерти процесса после kill.
+    private sealed class SwitchableLiveAdapter
+    {
+        public bool Alive = true;
+        public readonly Mock<ILlmSessionAdapter> Mock = new();
+
+        public SwitchableLiveAdapter(Session info)
+        {
+            Mock.SetupGet(a => a.Info).Returns(info);
+            Mock.SetupGet(a => a.HasLiveTurn).Returns(() => Alive);
+            Mock.SetupGet(a => a.HasQueuedTurn).Returns(false);
+            Mock.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>())).Returns(Task.CompletedTask);
+        }
+
+        public ILlmSessionAdapter Object => Mock.Object;
+    }
+
+    // Транскрипт сессии в регистрируемом корне проб: TranscriptProbe ищет файл по
+    // {root}/{flat-cwd}/{csid}.jsonl, а при промахе сканирует подпапки корня
+    private string WriteTranscript(string csid, string content)
+    {
+        var projDir = Path.Combine(_tempDir, "transcripts-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(projDir);
+        var path = Path.Combine(projDir, csid + ".jsonl");
+        File.WriteAllText(path, content);
+        ClaudeHomeServer.Services.WorkflowAgentParser.AddAllowedRoot(_tempDir);
+        return path;
+    }
+
+    // Штаб-сессия в форме главного сценария: режим включён, стадия «волна» с расходом
+    // бюджета и версией плана, чат «занят» (Working) без живого прогона — зависший ход
+    private async Task<Session> MkStuckTeamSessionAsync(string suffix, string? claudeSessionId = null)
+    {
+        var (session, _, _) = await MakeTeamStabAsync(suffix);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Wave;
+            t.WaveNumber = 1;
+            t.PlannedWaves = 2;
+            t.Budget.TasksUsed = 2;
+            t.Budget.RunsUsed = 2;
+            t.Budget.WavesUsed = 1;
+            t.PlanVersion = 2;
+            t.ApprovedPlanVersion = 2;
+            return true;
+        });
+        var info = _sut.GetById(session.Id)!;
+        info.Status = SessionStatus.Working;
+        info.ClaudeSessionId = claudeSessionId;
+        return info;
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЗависшийБезПрогона_ВозвращаетЧатВРаботуСТемЖеРежимом()
+    {
+        const string csid = "keep0123456789abcdef";
+        var session = await MkStuckTeamSessionAsync("turn-stuck", claudeSessionId: csid);
+
+        var result = await _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        result.Resumed.Should().BeTrue();
+        result.Message.Should().Contain("напишите сообщение",
+            "очередь пуста — текст не обещает ход, которого не будет (minor 3)");
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active,
+            "главное: в чат снова можно писать");
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage.Should().Be(TeamImplementStage.Wave, "стадия пережила перезапуск");
+        team.WaveNumber.Should().Be(1);
+        team.PlanVersion.Should().Be(2, "версия плана не сброшена");
+        team.Budget.RunsUsed.Should().Be(2, "расход бюджета не изменился");
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().Be(csid,
+            "resume-якорь цел — следующий ход продолжит разговор");
+        Sent<WorkLoopStoppedMessage>().Should().ContainSingle()
+            .Which.Reason.Should().Be("team_restart", "человек видит в ленте, что ход перезапущен вручную");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_СвободныйЧат_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-free");
+        _sut.GetById(session.Id)!.Status = SessionStatus.Active;
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Чат не занят*");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЖивойПрогонНачалсяНедавно_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-fresh");
+        var entry = GetEntry(session.Id);
+        var live = new SwitchableLiveAdapter((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);
+        SetProcess(entry, live.Object);
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Штаб работает*",
+                "живой ход с недавней активностью — честная работа, а не зависание");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_KillНеСработал_ОтказАНеМолчаливыйОбрыв()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-undying");
+        var entry = GetEntry(session.Id);
+        var live = new SwitchableLiveAdapter((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);
+        SetProcess(entry, live.Object);
+        // Ход давно молчит (гейт свежести пропускает), но процесс не умирает после kill
+        _sut.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-40);
+        var prevTimeout = _sut.KillWaitTimeout;
+        _sut.KillWaitTimeout = TimeSpan.FromMilliseconds(300);
+        try
+        {
+            var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*Не удалось остановить зависший процесс*");
+            _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
+                "недоубитый процесс не объявляется мёртвым по факту вызова kill");
+        }
+        finally { _sut.KillWaitTimeout = prevTimeout; }
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ПовторныйКликПокаИдёт_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-twice");
+        var entry = GetEntry(session.Id);
+        var live = new SwitchableLiveAdapter((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);
+        SetProcess(entry, live.Object);
+        _sut.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-40);
+        var prevTimeout = _sut.KillWaitTimeout;
+        _sut.KillWaitTimeout = TimeSpan.FromSeconds(30);
+        try
+        {
+            var first = Task.Run(() => _sut.RestartStuckTurnAsync(session.Id, startFresh: false));
+            // Первый вызов паркуется в ожидании смерти процесса: детерминированный маркер —
+            // Interrupt уже ушёл в адаптер, значит гейт повторного вызова захвачен
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!live.Mock.Invocations.Any(i => i.Method.Name == nameof(ILlmSessionAdapter.Interrupt))
+                   && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            live.Mock.Invocations.Should().Contain(i => i.Method.Name == nameof(ILlmSessionAdapter.Interrupt),
+                "первый вызов уже в фазе kill — проверка детерминирована");
+
+            Func<Task> secondCall = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+            (await secondCall.Should().ThrowAsync<InvalidOperationException>())
+                .WithMessage("*уже перезапускается*");
+
+            live.Alive = false; // процесс «умер» — первый вызов завершается штатно
+            (await first).Resumed.Should().BeTrue();
+        }
+        finally
+        {
+            live.Alive = false;
+            _sut.KillWaitTimeout = prevTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ТранскриптПовреждён_РезюмеЗапрещеноПредложеноНачатьЗаново()
+    {
+        const string csid = "dmg0123456789abcdef";
+        var session = await MkStuckTeamSessionAsync("turn-damaged", claudeSessionId: csid);
+        // Последняя строка оборвана посреди записи — как при kill в момент записи файла
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"mess");
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<SessionManager.TurnTranscriptDamagedException>()
+            .WithMessage("*повреждён*");
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
+            "повреждённый транскрипт — не повод реанимировать чат молча: человек решает");
+
+        // Человек подтвердил «начать заново»: якорь сброшен, чат вернулся в работу
+        var fresh = await _sut.RestartStuckTurnAsync(session.Id, startFresh: true);
+        fresh.Resumed.Should().BeFalse();
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().BeNull(
+            "ход начнётся заново — без --resume по повреждённому файлу");
+    }
+
+    // Major ревью: реальный таймлайн гибели на битом транскрипте — первый вызов убил
+    // процесс и вернул 409 transcript_damaged, финализация убитого прогона перевела
+    // чат в Active, а отложенная очередь умерла на --resume по тому же файлу. У
+    // свободного чата с битым якорем единственный выход — startFresh, и он обязан
+    // проходить: раньше здесь навсегда стоял «Чат не занят».
+    [Fact]
+    public async Task ПерезапускХода_СвободныйЧатСБитымТранскриптом_СпасениеStartFreshРазрешено()
+    {
+        const string csid = "resq0123456789abcd";
+        var session = await MkStuckTeamSessionAsync("turn-rescue", claudeSessionId: csid);
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"mess");
+        _sut.GetById(session.Id)!.Status = SessionStatus.Active;
+
+        var fresh = await _sut.RestartStuckTurnAsync(session.Id, startFresh: true);
+
+        fresh.Resumed.Should().BeFalse();
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active, "чат снова доступен");
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().BeNull(
+            "битый resume-якорь сброшен — новый ход не упрётся в повреждённый файл");
+    }
+
+    // Спасательная ветка — не лазейка: свободный чат с целым транскриптом startFresh
+    // не получает — обычное сообщение продолжит разговор без потери контекста
+    [Fact]
+    public async Task ПерезапускХода_СвободныйЧатСЦелымТранскриптом_СпасениеНеОткрываетДыру()
+    {
+        const string csid = "resqok0123456789ab";
+        var session = await MkStuckTeamSessionAsync("turn-rescue-ok", claudeSessionId: csid);
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n");
+        _sut.GetById(session.Id)!.Status = SessionStatus.Active;
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: true);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Чат не занят*",
+                "целый транскрипт — спасать нечего: сообщение продолжит разговор");
+    }
+
+    // Minor 4 ревью: перезапуск хода — семантика штаба (кнопка и тексты говорят
+    // «штаб»), вне «Командной реализации» — отказ; обобщение на все чаты — отдельно
+    [Fact]
+    public async Task ПерезапускХода_ВнеРежимаКР_Отказ()
+    {
+        var dir = MkProjectDir("turn-no-team");
+        var project = _projectManager.Create("turn-no-team", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.GetById(session.Id)!.Status = SessionStatus.Working;
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*штаба*");
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЦелыйТранскрипт_РезюмеРазрешено()
+    {
+        const string csid = "ok0123456789abcdef";
+        var session = await MkStuckTeamSessionAsync("turn-intact", claudeSessionId: csid);
+        WriteTranscript(csid, "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n");
+
+        var result = await _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        result.Resumed.Should().BeTrue("файл цел — продолжаем с сохранённым контекстом");
+        _sut.GetById(session.Id)!.ClaudeSessionId.Should().Be(csid);
+    }
+
+    [Fact]
+    public async Task ПерезапускХода_ЧатЖдётОтветаНаКарточку_Отказ()
+    {
+        var session = await MkStuckTeamSessionAsync("turn-waiting-card");
+        var entry = GetEntry(session.Id);
+        entry.GetType().GetField("PendingInteraction")!.SetValue(entry,
+            new PermissionRequestMessage("req-1", "Bash", new { command = "dotnet build" }));
+
+        var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ждёт вашего ответа*",
+                "ожидающая карточка — не зависание: ответ лежит в ленте чата");
+    }
+
+    // «В чат снова можно писать» (доставка отложенной очереди и приём новых сообщений
+    // после рестарта) проверяет TeamWaveRestartApiTests на фейк-фабрике адаптеров —
+    // юнит-фикстура здесь настоящая LlmSessionAdapterFactory, и реальная отправка в ней
+    // не гоняется (см. MakeRunningStabAsync в TeamWaveServiceTests).
 }

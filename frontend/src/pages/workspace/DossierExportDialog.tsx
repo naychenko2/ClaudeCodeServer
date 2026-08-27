@@ -4,8 +4,8 @@
 // Шесть состояний по макету docs/mockups/dossier-export-dialog.md:
 //  1. confirm         — обычное подтверждение
 //  2. confirmShared   — то же + предупреждение об общей папке
-//  3. loading         — запрос ушёл; диалог НЕ закрывается (иначе git-операция
-//                       оставила бы человека без ответа)
+//  3. loading         — запрос ушёл; closeOnBackdrop=false, но Escape и крестик
+//                       закрывают диалог штатно (явное намерение пользователя)
 //  4. success         — финальная карточка «выгружено N паспортов»
 //  5. empty           — финальная карточка «нечего выгружать» (бэк вернул ноль)
 //  6. error           — финальная карточка + возврат к действию с теми же кнопками
@@ -21,6 +21,7 @@ import { C, FONT, FS, MODAL_W, R, SP } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal } from '../../components/ui';
 import { api } from '../../lib/api';
+import { OfflineError, RequestTimeoutError } from '../../lib/offline';
 
 // Тексты по постановке — вынесены в константы, чтобы линтер случайно не «поправил».
 const T = {
@@ -28,12 +29,33 @@ const T = {
   warning: 'Эту папку как проект подключил ещё один пользователь. После отправки ветки историю решений увидит и он.',
   successPrefix: 'История решений выгружена в ветку ccs/dossiers/v1 — паспортов: ',
   empty: 'Всё уже выгружено — новых паспортов с прошлого раза нет.',
+  // Фолбэк для случая, когда сервер не прислал осмысленного сообщения (например,
+  // сетевой сбой без текста): пользователь всё равно видит объяснение и напоминание
+  // о неприкосновенности рабочего дерева.
   error: 'Не удалось выгрузить историю решений. Рабочее дерево не тронуто — попробуйте ещё раз.',
   btnExport: 'Выгрузить',
   btnExportPush: 'Выгрузить и отправить',
   btnCancel: 'Отмена',
   btnClose: 'Закрыть',
 } as const;
+
+// Достаём человеческое сообщение из любой ошибки request():
+//  • HTTP-ошибка бэка: тело { error: "..." } (Conflict из контроллера отдаёт ex.Message)
+//  • таймаут: RequestTimeoutError со своим текстом
+//  • сеть / офлайн-мутация: OfflineError
+//  • всё прочее — undefined, и тогда UI падает на константу T.error
+function readErrorMessage(e: unknown): string | undefined {
+  if (e instanceof RequestTimeoutError) return e.message;
+  if (e instanceof OfflineError) return e.message;
+  if (e instanceof Error) {
+    // body.error — на случай, если бэк прислал поле мимо message (по факту request()
+    // дублирует его в message, но двойная проверка дешёвая)
+    const bodyErr = (e as Error & { body?: { error?: unknown } }).body?.error;
+    if (typeof bodyErr === 'string' && bodyErr.trim()) return bodyErr;
+    if (e.message.trim()) return e.message;
+  }
+  return undefined;
+}
 
 // Ветка одна и та же во всех текстах; единый инлайн-mono-фрагмент, как у sha коммита
 // в карточках DossierHistoryPanel.
@@ -86,21 +108,32 @@ interface Props {
 
 export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: Props) {
   // Локальный phase живёт в модалке: при переоткрытии стартуем с подтверждения
-  // (не возвращаемся в success/error прошлого запуска). loading держит диалог открытым
-  // — closeOnBackdrop=false + no-op onClose внутри запроса.
+  // (не возвращаемся в success/error прошлого запуска).
   const [phase, setPhase] = useState<Phase>('confirm');
   const [lastAction, setLastAction] = useState<LastAction>('export');
   const [count, setCount] = useState(0);
+  // Текст ошибки для финальной карточки: приходит из бэка (HTTP error/Conflict) или
+  // из request() (таймаут/сеть). Пусто — рендерим константу T.error как фолбэк.
+  const [errorMessage, setErrorMessage] = useState('');
 
   // При каждом открытии сбрасываемся в подтверждение — иначе после успеха/ошибки
   // повторный клик по кнопке тулбара привёл бы к финальному состоянию прошлого запуска.
+  // sharedFolder в зависимости НЕТ: если статус общей папки придёт во время loading,
+  // эффект выдернет фазу из loading обратно в confirm и пользователь увидит второй
+  // параллельный запуск того же экспорта (m6 из ревью Глеба 20.08).
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- ресет при каждом открытии модалки
       setPhase(sharedFolder ? 'confirmShared' : 'confirm');
       setCount(0);
     }
-  }, [open, sharedFolder]);
+  }, [open]);
+
+  // Закрыт — не рендерим карточку. Эта проверка нужна на случай, когда родитель
+  // держит DossierExportDialog смонтированным постоянно (двойное монтирование
+  // панели): без неё диалог жил бы в DOM даже при open=false, плюс активный
+  // реестр Modal увидел бы «занято» и не дал открыть второй.
+  if (!open) return null;
 
   const run = async (action: LastAction) => {
     setLastAction(action);
@@ -114,14 +147,16 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
         setCount(res.count);
         setPhase('success');
       }
-    } catch {
+    } catch (e) {
+      // Показываем реальную причину (ex.Message с бэка, таймаут, сеть) — раньше при
+      // ЛЮБОМ сбое горела константа, и пользователь не мог отличить «Conflict на
+      // ветке» от обрыва связи. Фолбэк T.error остаётся на случай, когда текста нет.
+      setErrorMessage(readErrorMessage(e) ?? '');
       setPhase('error');
     }
   };
 
   const busy = phase === 'loading';
-  // no-op пока идёт запрос: закрытие посреди git-операции оставило бы без ответа.
-  const guardedClose = busy ? () => {} : onClose;
   const mainLabel = lastAction === 'exportPush' ? T.btnExportPush : T.btnExport;
 
   return (
@@ -131,7 +166,7 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
       // closeOnBackdrop=false во время запроса — иначе клик по оверлею посреди
       // git-плюминга оставил бы пользователя без ответа.
       closeOnBackdrop={!busy}
-      onClose={guardedClose}
+      onClose={onClose}
     >
       {phase === 'confirm' || phase === 'confirmShared' || phase === 'loading' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
@@ -174,7 +209,7 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
             tone="danger"
             icon={<AlertTriangle size={20} strokeWidth={ICON_STROKE} color={C.danger} />}
           >
-            {T.error}
+            {errorMessage || T.error}
           </Notice>
         </div>
       )}
@@ -185,7 +220,11 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
         {(phase === 'confirm' || phase === 'confirmShared' || phase === 'loading') && (
           <>
             <div style={{ flex: 1 }}>
-              <Button variant="ghost" size="md" fullWidth disabled={busy} onClick={onClose}>
+              {/* «Отмена» не блокируется на loading — кнопка остаётся рабочим способом
+                  выхода из диалога (второй — крестик Modal). Действие само по себе не
+                  прерывает git-операцию: Promise в run() дойдёт до конца и переведёт
+                  фазу уже на размонтированном компоненте, что безопасно. */}
+              <Button variant="ghost" size="md" fullWidth onClick={onClose}>
                 {T.btnCancel}
               </Button>
             </div>

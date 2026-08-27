@@ -189,6 +189,46 @@ public class ProjectsControllerTeamMemoryTests : IClassFixture<TestWebApplicatio
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
+    // --- Инверсия гейта (блокер 1 приёмки волны 1): «заголовок был, персона не резолвилась»
+    //     (удалена/чужой владелец) — отказ, а не молчаливое разрешение под видом «своего» вызова.
+
+    [Fact]
+    public async Task Add_ЗаголовокНесуществующегоПерсоны_Запрещено403()
+    {
+        var projectId = await CreateProjectAsync();
+        var ghostId = Guid.NewGuid().ToString();
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Post, $"/api/projects/{projectId}/team-memory", new { text = "Факт" }, ghostId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+            "живой stdio-процесс с запечённым MEMORY_PERSONA_ID удалённой персоны не должен писать в общую память");
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("не найдена");
+    }
+
+    [Fact]
+    public async Task Add_ЗаголовокЧужойПерсоны_Запрещено403()
+    {
+        var projectId = await CreateProjectAsync();
+
+        // Персона второго владельца: для нашего ключа она не резолвится — как несуществующая
+        using var other = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var resp = await other.PostAsJsonAsync("/api/personas", new { name = "Чужая персона", role = "Роль" });
+        resp.EnsureSuccessStatusCode();
+        var strangerId = JsonSerializer.Deserialize<JsonElement>(
+            await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Post, $"/api/projects/{projectId}/team-memory", new { text = "Факт" }, strangerId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        // И записи не появилось: отказ — не «тихо разрешить», стор чист
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/team-memory");
+        list.EnumerateArray().Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Update_ГлобальнаяПерсона_Запрещено403()
     {

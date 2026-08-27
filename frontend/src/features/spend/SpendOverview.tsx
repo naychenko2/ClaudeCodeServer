@@ -3,13 +3,14 @@
 // Любой клик проваливает в «Анализ» с применённым контекстом.
 import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R, SHADOW, SP } from '../../lib/design';
 import {
   DIM_LABELS, SPEND_SOURCES, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong, isGenSource,
   nodeName, sourceColor, sourceLabel,
   type SpendDim, type SpendFilter,
 } from '../../lib/spend';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
+import type { SpendEmptyKind } from './SpendScreen';
 
 export interface OverviewOpenCtx {
   filter?: SpendFilter; preset?: string; pivotDim?: string; day?: string; turnId?: string;
@@ -18,12 +19,13 @@ export interface OverviewOpenCtx {
 // Порядок серий в стеке дня (fal токенов не даёт — в стек не входит)
 const STACK_SOURCES = ['chat-turn', 'one-shot', 'free'];
 
-function Card({ title, more, onMore, col, isMobile, children }: {
-  title: string; more?: string; onMore?: () => void; col: number; isMobile: boolean; children: ReactNode;
+function Card({ title, more, onMore, col, isMobile, isTablet, children }: {
+  title: string; more?: string; onMore?: () => void; col: number; isMobile: boolean; isTablet?: boolean; children: ReactNode;
 }) {
   return (
     <div style={{
-      gridColumn: isMobile ? 'auto' : `span ${col}`,
+      // Планшет: две карточки в ряд (384px против 230px в 12-колоночной сетке)
+      gridColumn: isMobile ? 'auto' : `span ${isTablet ? (col <= 4 ? 6 : 12) : col}`,
       background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl,
       boxShadow: SHADOW.card, overflow: 'hidden', minWidth: 0,
     }}>
@@ -47,14 +49,14 @@ function Card({ title, more, onMore, col, isMobile, children }: {
 }
 
 // Строка топа: ранг, иконка, имя, полоса-доля, значение
-function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, onClick }: {
+function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, isTablet, onClick }: {
   rank: number; icon: ReactNode; name: string; meta?: string | null; share: number;
-  value: string; valueColor: string; barColor: string; onClick: () => void;
+  value: string; valueColor: string; barColor: string; isTablet?: boolean; onClick: () => void;
 }) {
   return (
     <div
       onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px', borderRadius: R.md, cursor: 'pointer' }}
+      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: isTablet ? `${SP.md}px ${SP.xs}px` : '6px 4px', borderRadius: R.md, cursor: 'pointer' }}
       onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
     >
@@ -63,7 +65,7 @@ function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, on
       <span style={{ fontSize: 12, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, fontFamily: FONT.sans }}>
         {name}
       </span>
-      {meta && <span style={{ fontSize: 10, color: C.textMuted, whiteSpace: 'nowrap', fontFamily: FONT.sans }}>{meta}</span>}
+      {meta && <span style={{ fontSize: 10, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, fontFamily: FONT.sans }}>{meta}</span>}
       <div style={{ flex: 1, height: 6, borderRadius: 3, background: C.bgSelected, overflow: 'hidden', minWidth: 36 }}>
         <div style={{ height: '100%', borderRadius: 3, width: `${Math.round(share * 100)}%`, background: barColor }} />
       </div>
@@ -74,16 +76,19 @@ function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, on
   );
 }
 
-// Карточка-топ одного разреза; клик по строке — фильтр в анализ, «разложить →» — pivot
+// Карточка-топ одного разреза; клик по строке — фильтр в анализ, «разложить →» — pivot.
+// rows может не быть вовсе: разрез, которого нет в этом ответе (users вне scope=all),
+// карточкой не рисуется
 function topCard(opts: {
-  dim: SpendDim; title: string; rows: SpendCardRow[]; col: number; isMobile: boolean;
-  onOpen: (ctx: OverviewOpenCtx) => void; limit?: number;
+  dim: SpendDim; title: string; rows: SpendCardRow[] | undefined; col: number; isMobile: boolean;
+  isTablet?: boolean; onOpen: (ctx: OverviewOpenCtx) => void; limit?: number;
 }) {
-  const rows = opts.rows.slice(0, opts.limit ?? 4);
+  // Планшет: карточка вдвое шире и высокий экран — показываем вдвое больше строк
+  const rows = (opts.rows ?? []).slice(0, opts.limit ?? (opts.isTablet ? 8 : 4));
   if (!rows.length) return null;
   const max = Math.max(1, rows[0].tokens.total, ...rows.map(r => r.tokens.total));
   return (
-    <Card key={opts.dim + opts.title} title={opts.title} more="разложить →" col={opts.col} isMobile={opts.isMobile}
+    <Card key={opts.dim + opts.title} title={opts.title} more="разложить →" col={opts.col} isMobile={opts.isMobile} isTablet={opts.isTablet}
       onMore={() => opts.onOpen({ pivotDim: opts.dim })}>
       {rows.map((r, i) => {
         const name = nodeName(opts.dim, r.key, r.name);
@@ -107,6 +112,7 @@ function topCard(opts: {
               : fmtTok(r.tokens.total)}
             valueColor={genOnly || isGen ? genColor : isFree ? C.successText : C.accent}
             barColor={barColor}
+            isTablet={opts.isTablet}
             onClick={() => opts.onOpen({ filter: { dim: opts.dim, val: r.key, label: opts.dim === 'source' ? sourceLabel(r.key) : name } })}
           />
         );
@@ -115,11 +121,12 @@ function topCard(opts: {
   );
 }
 
-export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen, onClearFilters, onClose }: {
+export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emptyKind, onOpen, onClearFilters, onClose }: {
   data: SpendOverviewResponse;
   showUsers: boolean;
   isMobile: boolean;
-  filtersActive: boolean;      // раздел открыт со срезом (фильтры/день) — иная трактовка пустоты
+  isTablet?: boolean;          // 601–1199: две карточки в ряд, больше строк, тач-цели
+  emptyKind: SpendEmptyKind;   // чем объяснять пустоту: срез / период / трат не было вообще
   onOpen: (ctx: OverviewOpenCtx) => void;
   onClearFilters: () => void;
   onClose: () => void;
@@ -127,11 +134,21 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
   const s = data.totals;
   const empty = s.total === 0 && data.falGenerations === 0 && data.turns === 0;
   if (empty) {
-    return filtersActive ? (
-      <EmptyBody pic="🔍" title="Под этот срез ничего не попало"
-        text="Такая комбинация фильтров не встречалась за период. Уберите один из фильтров."
-        action={<GhostBtn onClick={onClearFilters}>Сбросить срез</GhostBtn>} />
-    ) : (
+    if (emptyKind === 'slice') {
+      return (
+        <EmptyBody pic="🔍" title="Под этот срез ничего не попало"
+          text="Такая комбинация фильтров не встречалась за период. Уберите один из фильтров."
+          action={<GhostBtn onClick={onClearFilters}>Сбросить срез</GhostBtn>} />
+      );
+    }
+    // Период без данных — не первый запуск: кнопка «Открыть чаты» здесь увела бы из раздела
+    if (emptyKind === 'period') {
+      return (
+        <EmptyBody pic="📅" title="За этот период трат нет"
+          text="В выбранном периоде ходов не было. Попробуйте более широкий период или снимите фильтры." />
+      );
+    }
+    return (
       <EmptyBody pic="🪙" title="Трат ещё нет"
         text="Обзор оживёт после первого хода: сводка по проектам, моделям и источникам соберётся сама. Бесплатные модели тоже попадут сюда — зелёной серией."
         action={<GhostBtn onClick={onClose}>Открыть чаты</GhostBtn>} />
@@ -140,6 +157,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
 
   // График по дням: stacked-бары источников, слева от пунктира — свёрнутые дни (агрегаты)
   const dayMax = Math.max(1, ...data.byDay.map(d => d.total));
+  const chartH = isTablet ? 180 : 130;   // высота графика; множитель стека — производная от неё
   const hasAgg = data.byDay.some(d => d.aggregated);
   const bars: ReactNode[] = [];
   let sepDone = false;
@@ -165,7 +183,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
           : STACK_SOURCES.filter(k => (d.bySource[k] ?? 0) > 0).map(k => (
               <i key={k} style={{
                 display: 'block', borderRadius: 1,
-                height: Math.max(2, Math.round((d.bySource[k] ?? 0) / dayMax * 118)),
+                height: Math.max(2, Math.round((d.bySource[k] ?? 0) / dayMax * (chartH - 12))),
                 background: sourceColor(k),
               }} />
             ))}
@@ -199,9 +217,9 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
   ];
 
   // Дорогие ходы — только детальное окно; клик — паспорт хода в анализе
-  const topTurns = data.topTurns.slice(0, 4);
+  const topTurns = data.topTurns.slice(0, isTablet ? 8 : 4);
   const turnsCard = topTurns.length > 0 && (
-    <Card title="Дорогие ходы" more="в анализ →" onMore={() => onOpen({})} col={showUsers ? 6 : 12} isMobile={isMobile}>
+    <Card title="Дорогие ходы" more="в анализ →" onMore={() => onOpen({})} col={isTablet ? 12 : (showUsers ? 6 : 12)} isMobile={isMobile} isTablet={isTablet}>
       {topTurns.map((t: SpendTurnDto, i) => (
         <TopRow
           key={t.id}
@@ -213,6 +231,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
           value={fmtTok(t.tokens.total)}
           valueColor={C.accent}
           barColor={C.accent}
+          isTablet={isTablet}
           onClick={() => onOpen({
             turnId: t.id,
             filter: t.sessionId ? { dim: 'chat', val: t.sessionId, label: t.chatName ?? t.taskTitle ?? 'чат' } : undefined,
@@ -225,8 +244,8 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
     </Card>
   );
 
-  const t = (dim: SpendDim, title: string, rows: SpendCardRow[], col: number, limit?: number) =>
-    topCard({ dim, title, rows, col, isMobile, onOpen, limit });
+  const t = (dim: SpendDim, title: string, rows: SpendCardRow[] | undefined, col: number, limit?: number) =>
+    topCard({ dim, title, rows, col, isMobile, isTablet, onOpen, limit });
 
   return (
     <div style={{
@@ -263,7 +282,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
             </div>
           </div>
           <div style={{ flex: 1, minWidth: isMobile ? '100%' : 380 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 130 }}>{bars}</div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: chartH }}>{bars}</div>
             {days.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: C.textMuted, fontFamily: FONT.mono, marginTop: 4 }}>
                 <span>{fmtDate(days[0].date)}</span>
@@ -302,7 +321,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
       {t('project', data.allUsers ? 'Проекты' : 'Мои проекты', data.cards.projects, 4)}
       {t('model', data.allUsers ? 'Модели' : 'Мои модели', data.cards.models, 4)}
       {!showUsers && t('source', 'Источники', data.cards.sources, 4)}
-      {t('chat', data.allUsers ? 'Чаты и задачи' : 'Мои чаты и задачи', data.cards.chats, 6, 5)}
+      {t('chat', data.allUsers ? 'Чаты и задачи' : 'Мои чаты и задачи', data.cards.chats, 6, isTablet ? 10 : 5)}
       {showUsers && t('source', 'Источники', data.cards.sources, 6)}
       {t('persona', 'Персоны', data.cards.personas.filter(p => p.key !== ''), 6)}
       {turnsCard}

@@ -508,33 +508,23 @@ public class TaskExecutionServiceTests
         text.Should().Contain("Собрал, тесты зелёные.");
     }
 
+    // B3: пустой итог объясняется человеку, а не скобочной пометкой
     [Fact]
-    public void BuildDelegationReportText_БезИтога_Фолбэк()
-    {
-        var task = new TaskItem { Title = "Задача без итога", ResultMarkdown = null };
-
-        var text = TaskExecutionService.BuildDelegationReportText(task);
-
-        text.Should().Contain("(итог не указан)");
-    }
-
-    // B3: под флагом карточки пустой итог объясняется человеку, а не скобочной пометкой
-    [Fact]
-    public void BuildDelegationReportText_БезИтога_ПодФлагом_ЧеловеческийТекст()
+    public void BuildDelegationReportText_БезИтога_ЧеловеческийТекст()
     {
         var task = new TaskItem { Title = "Задача без итога", ResultMarkdown = "   " };
 
-        var text = TaskExecutionService.BuildDelegationReportText(task, reportCard: true);
+        var text = TaskExecutionService.BuildDelegationReportText(task);
 
         text.Should().Contain(TaskExecutionService.DelegationReportNoResult);
         text.Should().NotContain("(итог не указан)");
     }
 
-    // Экономия на докладе: длинный итог не копируется в ленту постановщика целиком —
-    // он уже лежит в задаче и читается через tasks_get, а копия оплачивается на каждом
-    // последующем ходу чата постановщика
+    // B2: хвост обрезки — подпись для человека («открыть задачу» есть действием
+    // на карточке), а не инструкция модели дёрнуть tasks_get по id. Лимит и резка по границе
+    // строки те же: тело реплики оплачивается на каждом следующем ходу чата постановщика.
     [Fact]
-    public void BuildDelegationReportText_ДлинныйИтог_ОбрезанСоСсылкойНаЗадачу()
+    public void BuildDelegationReportText_ДлинныйИтог_ЧеловеческийХвостБезId()
     {
         var task = new TaskItem
         {
@@ -544,27 +534,6 @@ public class TaskExecutionServiceTests
         };
 
         var text = TaskExecutionService.BuildDelegationReportText(task);
-
-        text.Should().Contain("пункт отчёта номер 1", "начало итога остаётся видимым");
-        text.Should().NotContain("пункт отчёта номер 60", "хвост длинного итога в ленту не идёт");
-        text.Should().Contain(task.Id, "должно быть сказано, где читать целиком");
-        text.Length.Should().BeLessThan(task.ResultMarkdown!.Length);
-    }
-
-    // B2: под флагом хвост обрезки — подпись для человека («открыть задачу» есть действием
-    // на карточке), а не инструкция модели дёрнуть tasks_get по id. Лимит и резка по границе
-    // строки те же: тело реплики оплачивается на каждом следующем ходу чата постановщика.
-    [Fact]
-    public void BuildDelegationReportText_ДлинныйИтог_ПодФлагом_ЧеловеческийХвостБезId()
-    {
-        var task = new TaskItem
-        {
-            Title = "Крупная задача",
-            ResultMarkdown = string.Join("\n", Enumerable.Range(1, 60)
-                .Select(i => $"- пункт отчёта номер {i} с некоторым пояснением")),
-        };
-
-        var text = TaskExecutionService.BuildDelegationReportText(task, reportCard: true);
 
         text.Should().Contain("пункт отчёта номер 1", "начало итога остаётся видимым");
         text.Should().NotContain("пункт отчёта номер 60", "хвост длинного итога в ленту не идёт");
@@ -574,15 +543,13 @@ public class TaskExecutionServiceTests
         text.Length.Should().BeLessThan(task.ResultMarkdown!.Length);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BuildDelegationReportText_КороткийИтог_НеРежется(bool reportCard)
+    [Fact]
+    public void BuildDelegationReportText_КороткийИтог_НеРежется()
     {
         // Резать короткий итог смысла нет: экономии ноль, а читаемость страдает
         var task = new TaskItem { Title = "Мелочь", ResultMarkdown = "Готово, тесты зелёные." };
 
-        TaskExecutionService.BuildDelegationReportText(task, reportCard)
+        TaskExecutionService.BuildDelegationReportText(task)
             .Should().EndWith("Готово, тесты зелёные.");
     }
 
@@ -599,7 +566,7 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("Тестировщик (Вера)");
         prompt.Should().Contain("Починить сборку");
         prompt.Should().Contain(task.Id);
-        prompt.Should().Contain("Отреагируй");
+        prompt.Should().Contain("Реши, что дальше");
         prompt.Should().NotContain("Готово, собрал и прогнал тесты.");
     }
 
@@ -616,18 +583,18 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("Исполнитель-Claude (без персоны)");
         prompt.Should().Contain("Починить сборку");
         prompt.Should().Contain(task.Id);
-        prompt.Should().Contain("Отреагируй");
+        prompt.Should().Contain("Реши, что дальше");
     }
 
-    // B4: под флагом постановщик не пересказывает отчёт, а решает «что дальше» — и если
+    // B4: постановщик не пересказывает отчёт, а решает «что дальше» — и если
     // решать нечего, отвечает ровно маркером молчания (ход не оставляет реплики в ленте)
     [Fact]
-    public void BuildDelegatorReactionPrompt_ПодФлагом_ПроситРешениеИМаркерМолчания()
+    public void BuildDelegatorReactionPrompt_ПроситРешениеИМаркерМолчания()
     {
         var task = new TaskItem { Title = "Починить сборку", ResultMarkdown = "Готово, собрал и прогнал тесты." };
         var executor = new Persona { Name = "Вера", Role = "Тестировщик" };
 
-        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor, reportCard: true);
+        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor);
 
         prompt.Should().Contain("Тестировщик (Вера)");
         prompt.Should().Contain(task.Id);
@@ -639,11 +606,11 @@ public class TaskExecutionServiceTests
     // Маркер в промпте — та же константа, что гасит ход, и без обратных кавычек: в код-блоке
     // (в т.ч. инлайн-`…`) он не считается активным ни стрижкой, ни HasNoReplyMarker
     [Fact]
-    public void BuildDelegatorReactionPrompt_ПодФлагом_МаркерМолчанияАктивен()
+    public void BuildDelegatorReactionPrompt_МаркерМолчанияАктивен()
     {
         var task = new TaskItem { Title = "Починить сборку" };
 
-        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor: null, reportCard: true);
+        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor: null);
 
         prompt.Should().Contain(SessionManager.NoReplyMarker);
         prompt.Should().NotContain("`" + SessionManager.NoReplyMarker + "`");

@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import type { ServerMessage, TeamPlanDecision } from '../types';
-import { setConnectionState } from './offline';
+import { confirmOffline, setConnectionState } from './offline';
 
 let connection: signalR.HubConnection | null = null;
 
@@ -34,6 +34,9 @@ export function getConnection(): signalR.HubConnection {
     // Кратковременные разрывы сети/WS теперь не мигают индикатором.
     connection.onreconnecting(() => { /* noop */ });
     // onclose — теоретический вход в offline (реконнекты исчерпаны или явный stop).
+    // Подтверждения тут сознательно НЕТ: это терминальное событие (авто-реконнект
+    // сдался либо мы сами позвали stop), ложного срабатывания класса «блип» здесь не
+    // бывает, а откладывать флаг на асинхронный пинг у заведомо мёртвого хаба незачем.
     // При текущем делегате ретраев (nextRetryDelayInMilliseconds всегда возвращает
     // число) onclose практически недостижим: реальный сигнал «хаб не поднялся»
     // приходит через ветки reject в ensureConnected ниже — таймаут ожидания
@@ -67,11 +70,18 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
   } else if (conn.state === signalR.HubConnectionState.Connecting ||
              conn.state === signalR.HubConnectionState.Reconnecting) {
     // Ждём пока не подключится; таймаут — чтобы офлайн (вечный Reconnecting) не висел бесконечно.
-    // В ветках reject поднимаем offline: зонд возврата в онлайн тикает только пока
-    // мы offline, и при неподнявшемся хабе UI должен видеть честный статус. Сценарий:
-    // Wi-Fi без интернета / captive portal / упавший бэкенд за живым реверс-прокси —
-    // navigator.onLine === true, REST-запросов нет, сокет уходит в бесконечный
-    // Reconnecting, индикатор врёт «Онлайн», а sendMessage повисает на 8с.
+    // В ветках reject просим подтверждение офлайна: зонд возврата в онлайн тикает только
+    // пока мы offline, и при неподнявшемся хабе UI должен видеть честный статус. Сценарий,
+    // ради которого ветки заведены: Wi-Fi без интернета / captive portal / упавший бэкенд
+    // за живым реверс-прокси — navigator.onLine === true, REST-запросов нет, сокет уходит
+    // в бесконечный Reconnecting, индикатор врёт «Онлайн», а sendMessage повисает на 8с.
+    // Он выживает: там /api/health либо не отвечает вовсе, либо отдаёт 502/503/504 от
+    // прокси — оба случая для confirmOffline() провал, флаг падает как раньше.
+    // Отсекается ложное срабатывание при ЖИВОМ сервере: 8с здесь легко накрывают паузу
+    // экспоненциального отката авто-реконнекта (после четвёртой попытки она сама больше
+    // 8с), и отправка, попавшая в эту паузу, красила интерфейс в офлайн на ровном месте.
+    // confirmOffline не ждём намеренно: промис ensureConnected обязан реджектнуться сразу
+    // и с тем же текстом — живой REST не делает неподнявшийся хаб успехом.
     await new Promise<void>((resolve, reject) => {
       let waited = 0;
       const timer = setInterval(() => {
@@ -80,11 +90,11 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
           resolve();
         } else if (conn.state === signalR.HubConnectionState.Disconnected) {
           clearInterval(timer);
-          setConnectionState('offline');
+          void confirmOffline();
           reject(new Error('SignalR disconnected while waiting'));
         } else if ((waited += 50) >= 8000) {
           clearInterval(timer);
-          setConnectionState('offline');
+          void confirmOffline();
           reject(new Error('SignalR connect timeout'));
         }
       }, 50);
@@ -178,8 +188,10 @@ export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   return () => conn.off('message', handler);
 }
 
-// Watcher: сервер сообщает об изменении файлов проекта (создание/правка/удаление)
-export function onFilesChanged(handler: (data: { projectId: string; paths: string[] }) => void): () => void {
+// Watcher: сервер сообщает об изменении файлов проекта (создание/правка/удаление).
+// full=true — сигнал полной пересинхронизации (массовые изменения либо сбой watcher'а):
+// paths при нём пуст, подписчик перезагружает всё, а не ждёт конкретных путей.
+export function onFilesChanged(handler: (data: { projectId: string; paths: string[]; full?: boolean }) => void): () => void {
   const conn = getConnection();
   conn.on('filesChanged', handler);
   return () => conn.off('filesChanged', handler);

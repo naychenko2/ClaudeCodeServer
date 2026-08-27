@@ -11,8 +11,8 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
 {
     // model — модель сессии/персоны: по ней резолвится провайдер и его дисциплинарный слой.
     // switched — собеседника меняли по ходу разговора; greeted — чат начат с приветствия персоны.
-    // teamMechanicsBlock — блок «Командные механики» руководителя проекта (мост в механики,
-    // фича default-personas-onboarding): собирает SessionManager.BuildTeamMechanicsBlock,
+    // teamMechanicsBlock — блок «Командные механики» руководителя проекта (мост в
+    // механики): собирает SessionManager.BuildTeamMechanicsBlock,
     // null — персона не руководитель или предложить нечего.
     // voiceMode — голосовой режим чата: в конец слоя дописывается оговорка, что голосовой
     // формат сильнее слота «Формат ответов» персоны (сам слой клеится ПОСЛЕ секций промпта

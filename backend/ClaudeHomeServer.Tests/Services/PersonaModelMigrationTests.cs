@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -75,7 +75,7 @@ public class PersonaModelMigrationTests : IDisposable
         var app = new AppSettingsService(config);
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var u1 = users.Add("u1", "password123", "user");
-        var specialty = new SpecialtySettingsStore(config, NullLogger<SpecialtySettingsStore>.Instance);
+        var specialty = ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config);
         specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Presets = { new ModelRoutePreset { Id = "p1", Name = "Каскад", Steps = ["glm-5.2", "deepseek"] } },
@@ -127,7 +127,7 @@ public class PersonaModelMigrationTests : IDisposable
         var app = new AppSettingsService(config);
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var u1 = users.Add("u1", "password123", "user");
-        var specialty = new SpecialtySettingsStore(config, NullLogger<SpecialtySettingsStore>.Instance);
+        var specialty = ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config);
         specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Specialties = { ["backendExecutor"] = new SpecialtyTemplateSettings { DefaultTier = ModelTier.Weak } },
@@ -166,7 +166,7 @@ public class PersonaModelMigrationTests : IDisposable
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var u1 = users.Add("u1", "password123", "user");
         users.SetModelTiers(u1.Id, strong: "user-opus", null, null);
-        var specialty = new SpecialtySettingsStore(config, NullLogger<SpecialtySettingsStore>.Instance);
+        var specialty = ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config);
         specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Presets = { new ModelRoutePreset { Id = "p1", Name = "Каскад", Steps = ["glm-5.2", "deepseek"] } },

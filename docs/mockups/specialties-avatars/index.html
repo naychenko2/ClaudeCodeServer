@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аватарки специальностей — комплект B</title>
+<style>
+  :root[data-theme="light"] {
+    --bg-main: #F4F0E8; --bg-card: #FBF8F2; --bg-white: #FFFFFF; --bg-inset: #EFE9DE;
+    --text-heading: #2A251F; --text-primary: #3D362E; --text-secondary: #756B5E; --text-muted: #9A8F80;
+    --accent: #D97757; --accent-light: #F4ECE1; --border: #E0D7C8; --border-light: #E8E1D4;
+    --shadow-card: 0 1px 3px rgba(42,37,31,.08);
+  }
+  :root[data-theme="dark"] {
+    --bg-main: #201C18; --bg-card: #2E2A25; --bg-white: #262320; --bg-inset: #2A2621;
+    --text-heading: #F2ECE1; --text-primary: #E4DACB; --text-secondary: #B3A897; --text-muted: #8B8071;
+    --accent: #E38A6A; --accent-light: #3A2E27; --border: #3D3830; --border-light: #34302A;
+    --shadow-card: 0 1px 3px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 24px 64px; background: var(--bg-main); color: var(--text-primary);
+    font-family: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif; font-size: 14px; line-height: 1.5;
+  }
+  h1, h2, h3 { font-family: "PT Serif", Georgia, serif; color: var(--text-heading); margin: 0; }
+  h1 { font-size: 26px; }
+  h2 { font-size: 19px; }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  .lead { color: var(--text-secondary); max-width: 70ch; margin: 8px 0 0; }
+  .themebar { display: flex; gap: 8px; margin: 20px 0 28px; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg-card); color: var(--text-primary); cursor: pointer;
+  }
+  button[data-active="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  section { margin: 0 0 40px; }
+  .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .tag {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px;
+    background: var(--accent-light); color: var(--accent); border: 1px solid var(--border-light);
+  }
+  .note { color: var(--text-secondary); margin: 6px 0 16px; max-width: 78ch; }
+  .note b { color: var(--text-heading); font-weight: 600; }
+
+  /* витрина ролей — как карточки раздела «Специальности» */
+  .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .card {
+    display: flex; gap: 12px; align-items: flex-start; padding: 14px;
+    background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px;
+    box-shadow: var(--shadow-card);
+  }
+  .av40 { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 40px; object-fit: cover;
+          border: 1px solid var(--border-light); background: var(--bg-inset); }
+  .card .t { font-weight: 600; color: var(--text-heading); }
+  .card .d { font-size: 13px; color: var(--text-secondary); }
+
+  /* крупная проба */
+  .big { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 4px; }
+  .big figure { margin: 0; text-align: center; width: 96px; }
+  .big img { width: 96px; height: 96px; border-radius: 50%; object-fit: cover;
+             border: 1px solid var(--border-light); }
+  .big figcaption { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+  /* соседство с фото-аватарками персон */
+  .mix { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap;
+         padding: 12px; background: var(--bg-inset); border-radius: 12px; }
+  .mix img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
+             border: 1px solid var(--border-light); }
+  .persona {
+    width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 600; color: #fff; font-size: 14px;
+  }
+  .mix .cap { font-size: 12px; color: var(--text-secondary); margin-right: 4px; }
+
+  /* лента 40 пкс: весь комплект подряд */
+  .strip { display: flex; gap: 10px; flex-wrap: wrap; padding: 14px; border-radius: 12px;
+           background: var(--bg-card); border: 1px solid var(--border-light); }
+  .strip img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
+               border: 1px solid var(--border-light); }
+  .sheet { width: 100%; border-radius: 12px; border: 1px solid var(--border-light); margin-top: 8px; }
+  @media (max-width: 520px) {
+    body { padding: 20px 14px 48px; }
+    .cards { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Аватарки специальностей — комплект B</h1>
+  <p class="lead">
+    Бумажная аппликация: предмет роли собран из слоёв матовой бумаги в тёплой гамме продукта.
+    Все 14 ролей каталога <code>SpecialtyCatalog</code>, имя файла — ключ роли.
+    Главный экзамен — круг 40 пкс в списке и соседство с фото-аватаркой персоны.
+  </p>
+
+  <div class="themebar">
+    <button id="btn-light" data-active="true" onclick="setTheme('light')">Светлая тема</button>
+    <button id="btn-dark" onclick="setTheme('dark')">Тёмная тема</button>
+  </div>
+
+  <section>
+    <div class="head"><h2>Витрина ролей</h2><span class="tag">круг 40 пкс, как в списке</span></div>
+    <p class="note">
+      Так специальность выглядит в перечне: знак роли слева от подписи. Палитра задана жёстко
+      (<b>#D97757</b>, <b>#C9915B</b>, <b>#E8D9C2</b>, <b>#8A5A44</b> на фоне <b>#F4F0E8</b>),
+      металла и глянца нет — силуэт держат заливки, а не контур.
+    </p>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Крупно, 96 пкс</h2></div>
+    <p class="note">Тот же комплект в размере карточки роли — видно слои бумаги и мягкую тень между ними.</p>
+    <div class="big" id="big"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Рядом с персонами</h2></div>
+    <p class="note">
+      Проверка соседства: знак роли не должен читаться как второй портрет. Слева — аватарки персон
+      (инициалы), справа — знаки специальностей.
+    </p>
+    <div class="mix" id="mix"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Экзамен списка: все 14 подряд</h2><span class="tag">40 пкс</span></div>
+    <p class="note">
+      Отбраковка шла по этой ленте. Перерисованы: <b>дизайнер</b> (в пробе гамма ушла в тёмное и на
+      кисти был металлический блик), <b>библиотекарь</b> и <b>исполнитель (фронтенд)</b> — первые
+      версии были почти в тон фона и в круге расплывались в бледное пятно; в новых основную площадь
+      держат терракота и тёплый коричневый.
+    </p>
+    <div class="strip" id="strip"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Контактный лист</h2></div>
+    <p class="note">Собирается скриптом <code>build-contact-sheet.ps1</code> из файлов
+      <code>frontend/src/assets/specialties/</code> — крупная плитка, круг 40 пкс и лента.</p>
+    <img class="sheet" src="contact-sheet.png" alt="Контактный лист комплекта">
+  </section>
+</div>
+
+<script>
+  // Роли и подписи — из SpecialtyCatalog.cs (запись none не входит)
+  const ROLES = [
+    { key: 'analyst',          title: 'Аналитик',                 desc: 'Данные, выводы и риски — без домыслов' },
+    { key: 'planner',          title: 'Планировщик',              desc: 'Задача в план по шагам: что, в каком порядке, кто' },
+    { key: 'reviewer',         title: 'Ревьюер',                  desc: 'Находки по severity и сценарии отказа' },
+    { key: 'executor',         title: 'Исполнитель (универсальный)', desc: 'Доводит задачу до конца с минимальным диффом' },
+    { key: 'secretary',        title: 'Секретарь',                desc: 'Задачи и заметки: зафиксировать, напомнить, найти' },
+    { key: 'coordinator',      title: 'Координатор',              desc: 'Распределяет работу, эскалирует блокеры' },
+    { key: 'mentor',           title: 'Наставник',                desc: 'Сначала вопросы, потом советы' },
+    { key: 'designer',         title: 'Дизайнер',                 desc: 'Макеты, дизайн-система, обе темы' },
+    { key: 'consultant',       title: 'Консультант',              desc: 'Альтернативы и компромиссы, границы знания' },
+    { key: 'librarian',        title: 'Библиотекарь',             desc: 'Про чужой код — документом и пермалинком' },
+    { key: 'tester',           title: 'Тестировщик',              desc: 'Воспроизводимость прежде вердикта' },
+    { key: 'backendExecutor',  title: 'Исполнитель (бэкенд)',     desc: 'Инварианты слоя, сборка и тесты' },
+    { key: 'frontendExecutor', title: 'Исполнитель (фронтенд)',   desc: 'Дизайн-система, мобильная ширина, ui-kit' },
+    { key: 'devopsExecutor',   title: 'Исполнитель (DevOps)',     desc: 'Воспроизводимость, откатываемость, секреты вне git' },
+  ];
+  const PERSONAS = [
+    { initials: 'МА', color: '#D97757' },
+    { initials: 'КИ', color: '#7C9A6E' },
+    { initials: 'ДЕ', color: '#6E86A8' },
+  ];
+  const SRC = k => `../../../frontend/src/assets/specialties/${k}.jpg`;
+
+  document.getElementById('cards').innerHTML = ROLES.map(r => `
+    <div class="card">
+      <img class="av40" src="${SRC(r.key)}" alt="${r.title}">
+      <div><div class="t">${r.title}</div><div class="d">${r.desc}</div></div>
+    </div>`).join('');
+
+  document.getElementById('big').innerHTML = ROLES.map(r => `
+    <figure><img src="${SRC(r.key)}" alt="${r.title}"><figcaption>${r.title}</figcaption></figure>
+  `).join('');
+
+  document.getElementById('mix').innerHTML =
+    '<span class="cap">Персоны:</span>' +
+    PERSONAS.map(p => `<div class="persona" style="background:${p.color}">${p.initials}</div>`).join('') +
+    '<span class="cap">Специальности:</span>' +
+    ROLES.map(r => `<img src="${SRC(r.key)}" alt="${r.title}">`).join('');
+
+  document.getElementById('strip').innerHTML =
+    ROLES.map(r => `<img src="${SRC(r.key)}" alt="${r.title}" title="${r.title}">`).join('');
+
+  function setTheme(t) {
+    document.documentElement.dataset.theme = t;
+    document.getElementById('btn-light').dataset.active = String(t === 'light');
+    document.getElementById('btn-dark').dataset.active = String(t === 'dark');
+  }
+</script>
+</body>
+</html>

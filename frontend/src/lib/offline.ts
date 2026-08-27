@@ -8,9 +8,12 @@
 //
 // ВХОДЫ в offline (три факта, эвристики нет):
 //   1. window 'offline' — ОС потеряла сеть.
-//   2. Сетевая ошибка fetch в catch-ветке request() — бэкенд недостижим.
-//   3. SignalR: окончательный обрыв (onclose) ИЛИ ветки reject ожидания
-//      подключения в ensureConnected() — таймаут 8с / переход в Disconnected.
+//   2. Сетевая ошибка fetch в catch-ветке request(), ПОДТВЕРЖДЁННАЯ пингом
+//      /api/health (см. pingSharedFlight) — бэкенд недостижим. Одиночный провал
+//      fetch сам по себе входом не является.
+//   3. SignalR: окончательный обрыв (onclose) — сразу, ИЛИ ветки reject ожидания
+//      подключения в ensureConnected() (таймаут 8с / переход в Disconnected) —
+//      через то же подтверждение confirmOffline().
 //      Ветки reject нужны, потому что текущий делегат ретраев nextRetryDelayInMilliseconds
 //      всегда возвращает число → onclose практически недостижим, и единственный
 //      реальный сигнал «хаб не поднялся» приходит именно отсюда.
@@ -43,20 +46,60 @@ export function subscribeOnline(fn: () => void): () => void {
   return () => _listeners.delete(fn);
 }
 
-// Отметка последнего возврата вкладки в видимость — «тихое окно» для тоста
-// «Связь восстановлена». Фоновый разрыв сокета (планшет заморозил/затроттлил вкладку
-// при переключении приложений) пользователь не наблюдал, а формальный переход
-// offline → online при заморозке вообще случается уже ПОСЛЕ разморозки — поэтому
-// привязываемся не к видимости в момент обрыва, а ко времени с момента возврата.
-// 0 = вкладка не уходила в фон с загрузки, окно не активно.
-let _lastBecameVisibleAt = 0;
-const VISIBILITY_QUIET_WINDOW_MS = 5_000;
+// === Display-состояние (с гистерезисом) ===
+//
+// Бинарный флаг _online меняется мгновенно по любому признаку (ОС-событие,
+// SignalR, успешный ответ), но UI реагирует на «не-онлайн» с задержкой:
+// иначе короткий блип (разморозка вкладки на планшете, кратковременный
+// провал WS) раскрашивает маркер как аварию, и старый тост «Связь
+// восстановлена» вылетал на каждый блип. Маркер у аватарки — пассивный,
+// блипы НЕ должны менять интерфейс.
+//
+// Переходы:
+//   online → offline:   3с устойчивой потери → 'unstable' (пунктир warning)
+//   unstable → offline: ещё 7с (10с от потери) → 'offline' (grayscale+черта)
+//   * → online:         мгновенно, без промежуточных (возврат тихий)
+//
+// Гистерезис НЕ маскирует реальный разрыв: confirmOffline() уже подтвердил
+// провал пингом /api/health, бинарный isOnline() ушёл в false, и зонд
+// возврата + signalr onreconnected поднимут его при первой возможности. 3с —
+// только пауза перед тем, как начать показывать не-онлайн-вид.
+export type ConnectionDisplayState = 'online' | 'unstable' | 'offline';
 
-// true — вкладка стала видимой только что (меньше VISIBILITY_QUIET_WINDOW_MS назад).
-// Читает App.tsx: восстановление связи в этом окне не озвучивается тостом.
-export function becameVisibleRecently(): boolean {
-  return _lastBecameVisibleAt !== 0
-    && Date.now() - _lastBecameVisibleAt < VISIBILITY_QUIET_WINDOW_MS;
+// Сколько выдерживаем устойчивую потерю связи, прежде чем показывать 'unstable'.
+// Короткий блип (разморозка вкладки, кратковременный провал WS) укладывается в
+// это окно — и НЕ красит интерфейс.
+const OFFLINE_DISPLAY_DELAY_MS = 3_000;
+// Дополнительная выдержка в 'unstable' перед переходом в 'offline'. В сумме
+// 10с от потери связи. Если в это окно уложился возврат — переход в 'offline'
+// отменяется, и пользователь видит только 'unstable' (пунктир) без эскалации.
+const UNSTABLE_TO_OFFLINE_DELAY_MS = 7_000;
+
+let _display: ConnectionDisplayState = 'online';
+let _unstableTimer: ReturnType<typeof setTimeout> | null = null;
+let _offlineTimer: ReturnType<typeof setTimeout> | null = null;
+const _displayListeners = new Set<() => void>();
+
+export function getConnectionDisplayState(): ConnectionDisplayState {
+  return _display;
+}
+
+export function subscribeConnectionDisplayState(fn: () => void): () => void {
+  _displayListeners.add(fn);
+  return () => { _displayListeners.delete(fn); };
+}
+
+function clearUnstableTimer() {
+  if (_unstableTimer !== null) { clearTimeout(_unstableTimer); _unstableTimer = null; }
+}
+function clearOfflineTimer() {
+  if (_offlineTimer !== null) { clearTimeout(_offlineTimer); _offlineTimer = null; }
+}
+
+function setDisplay(next: ConnectionDisplayState) {
+  if (_display === next) return;
+  _display = next;
+  _displayListeners.forEach(fn => fn());
 }
 
 export function setOnline(value: boolean) {
@@ -68,6 +111,34 @@ export function setOnline(value: boolean) {
   // офлайн», здесь провал вообще ничего не делает, а в online зонд не
   // запускается вовсе.
   if (value) stopProbe(); else scheduleNextProbe();
+
+  if (value) {
+    // Мгновенный возврат в online: отменяем оба таймера эскалации, маркер
+    // снимается сразу. Никаких промежуточных состояний на возврате — это и
+    // есть «тихий возврат», который заменяет тост.
+    clearUnstableTimer();
+    clearOfflineTimer();
+    setDisplay('online');
+  } else {
+    // Уход в offline: держим визуально 'online' ещё OFFLINE_DISPLAY_DELAY_MS,
+    // чтобы блип не успел покрасить интерфейс. По истечении — 'unstable', и
+    // запускается второй таймер на эскалацию до 'offline'.
+    clearUnstableTimer();
+    _unstableTimer = setTimeout(() => {
+      _unstableTimer = null;
+      // Между setOnline(false) и срабатыванием таймера могли вернуться в online:
+      // тогда setOnline(true) сбросил _unstableTimer, и мы сюда не попадём.
+      // Дополнительная проверка — защита от гонки с явным setDisplay('online').
+      if (_online) return;
+      setDisplay('unstable');
+      clearOfflineTimer();
+      _offlineTimer = setTimeout(() => {
+        _offlineTimer = null;
+        if (_online) return;
+        setDisplay('offline');
+      }, UNSTABLE_TO_OFFLINE_DELAY_MS);
+    }, OFFLINE_DISPLAY_DELAY_MS);
+  }
   _listeners.forEach(fn => fn());
 }
 
@@ -94,7 +165,7 @@ const PING_TIMEOUT_MS = 3_000;
 const MIN_FORCED_PROBE_INTERVAL_MS = 2_000;
 let _lastForcedProbeAt = 0;
 let _probeTimer: ReturnType<typeof setTimeout> | null = null;
-let _probeInFlight: Promise<void> | null = null;
+let _probeInFlight: Promise<boolean> | null = null;
 
 function scheduleNextProbe() {
   if (_probeTimer !== null || typeof window === 'undefined') return;
@@ -120,7 +191,11 @@ function fireProbeNow() {
   void runProbeTick();
 }
 
-async function probeHealth(): Promise<void> {
+// Возвращает вердикт «сервер ответил». При успехе флаг online поднимается прямо тут —
+// обоим потребителям нужно именно это. А вот ЧТО делать с провалом, решает потребитель:
+// для зонда возврата провал не значит ничего, для подтверждающего пинга из request() —
+// это санкция уводить в офлайн.
+async function probeHealth(): Promise<boolean> {
   const token = typeof localStorage !== 'undefined'
     ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
     : null;
@@ -134,14 +209,39 @@ async function probeHealth(): Promise<void> {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     // 502/503/504 от реверс-прокси при мёртвом бэкенде — НЕ «сервер достижим»
-    if (res.status === 502 || res.status === 503 || res.status === 504) return;
+    if (res.status === 502 || res.status === 503 || res.status === 504) return false;
     // Любой другой HTTP-ответ = сервер живой → поднимаем флаг.
     setOnline(true);
+    return true;
   } catch {
-    // Сетевой сбой или таймаут — провал зонда НЕ меняет состояние
+    // Сетевой сбой или таймаут — сам по себе состояние не меняет
+    return false;
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Один полёт пинга на всех потребителей. Зонд возврата и подтверждение из request()
+// живут в разных фазах (offline / online) и наперегонки не бегают, но внутри одной
+// фазы поводов много: разморозка вкладки реджектит ВСЕ in-flight запросы разом, и
+// каждый из них приходит в catch за подтверждением. Пачка провалов обязана дать
+// ОДИН /api/health, поэтому опоздавшие ждут уже летящий пинг и берут его вердикт.
+function pingSharedFlight(): Promise<boolean> {
+  if (_probeInFlight === null) {
+    _probeInFlight = probeHealth().finally(() => { _probeInFlight = null; });
+  }
+  return _probeInFlight;
+}
+
+// Подтверждение разрыва для тех, кто судит о связи по СВОЕМУ каналу: сейчас это
+// ветки reject ensureConnected() в signalr.ts. Судья один и тот же, что у request(), —
+// молчание /api/health, и решение принимается только о флаге: вызывающий волен
+// реджектить свою операцию независимо от вердикта (хаб не поднялся — это его беда,
+// даже если REST жив).
+export async function confirmOffline(): Promise<void> {
+  // Из офлайна подтверждать нечего — мы уже там, а лишний пинг только шумит.
+  if (!_online) return;
+  if (!await pingSharedFlight()) setOnline(false);
 }
 
 async function runProbeTick() {
@@ -156,8 +256,7 @@ async function runProbeTick() {
     scheduleNextProbe();
     return;
   }
-  _probeInFlight = probeHealth().finally(() => { _probeInFlight = null; });
-  await _probeInFlight;
+  await pingSharedFlight();
   // Если за время полёта подняли флаг — больше не тикаем
   if (_online) return;
   scheduleNextProbe();
@@ -300,10 +399,18 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // иначе успешная, но медленная операция уводила бы приложение в офлайн.
       const ourTimeout = timedOut && timeoutMs !== undefined;
       if (!ourTimeout) {
-        // Сетевая ошибка запроса — сразу офлайн. Эвристики нет: единственный способ
-        // узнать, что связи нет, — это не получить ответ; мутации блокируются,
-        // IDB-fallback для GET ловит OfflineError по instanceof (taskOutbox/notesOffline).
-        setOnline(false);
+        // Одиночный провал fetch — ещё не доказательство разрыва. Планшет размораживает
+        // вкладку и реджектит все висевшие в полёте запросы разом при живом сервере и
+        // нерванном сокете: прежний немедленный setOnline(false) давал ровно то мигание
+        // «Офлайн → через пару секунд снова онлайн», которым заканчивал зонд возврата.
+        // Асимметрия была в том, что провал ЗОНДА состояние не менял, а провал одного
+        // fetch менял его единолично. Теперь оба канала судят по одному факту — молчанию
+        // /api/health, — и REST становится настолько же терпелив, насколько WS
+        // (withServerTimeout 60с, onreconnecting — сознательный noop).
+        // Мутации по-прежнему блокируются, а IDB-fallback для GET ниже ловят по
+        // instanceof OfflineError (taskOutbox/notesOffline) — контракт не меняется.
+        // Гард «только из online» и сам пинг — внутри confirmOffline().
+        await confirmOffline();
       }
       // Кэш выручает GET независимо от причины обрыва — сначала пробуем его.
       // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
@@ -338,7 +445,6 @@ export function initConnectivity() {
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        _lastBecameVisibleAt = Date.now();
         // Возврат на вкладку при офлайне — форсированный тик зонда, не ждём PROBE_INTERVAL_MS
         fireProbeNow();
       }

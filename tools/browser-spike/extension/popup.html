@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 13px system-ui, sans-serif; width: 260px; margin: 8px; }
+    button { display: block; width: 100%; margin: 4px 0; padding: 6px 8px; font: inherit; text-align: left; }
+    #status { color: #666; margin-top: 8px; min-height: 16px; }
+    .group { border-top: 1px solid #ddd; padding-top: 6px; margin-top: 6px; }
+    .group h3 { font-size: 11px; margin: 2px 0; color: #555; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <div class="group">
+    <h3>Источники среза</h3>
+    <button data-s="sources_simple">sources: page-simple</button>
+    <button data-s="sources_vlist">sources: page-vlist (1500)</button>
+    <button data-s="sources_windowed">sources: windowed-список</button>
+  </div>
+  <div class="group">
+    <h3>Тихая подмена (скролл)</h3>
+    <button data-s="scroll_vlist">scroll: page-vlist</button>
+    <button data-s="scroll_windowed">scroll: windowed-список</button>
+  </div>
+  <div class="group">
+    <h3>Стабильность ключа</h3>
+    <button data-s="stab">stab: вкладка/ресайз/перерисовка</button>
+  </div>
+  <div class="group">
+    <h3>Канал</h3>
+    <button data-s="swlife">swlife: нагрузка 2 мин</button>
+    <button data-s="iframe">iframe: cross-origin</button>
+  </div>
+  <div id="status">Хост: …</div>
+  <script src="popup.js"></script>
+</body>
+</html>

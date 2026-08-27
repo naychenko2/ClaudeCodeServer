@@ -412,7 +412,12 @@ describe('applyServerMessage: team_planning', () => {
   it('start=true — teamPlanning взводится, в ленту ничего не добавляется', () => {
     const next = run([planningMsg({ start: true })]);
     expect(next.items).toEqual([]);
-    expect(next.teamPlanning).toEqual({ startedAt: expect.any(Number) });
+    expect(next.teamPlanning).toEqual({ startedAt: expect.any(Number), personaId: null });
+  });
+
+  it('start=true с personaId — взводится с этой персоной для карточки планировщика', () => {
+    const next = run([planningMsg({ start: true, personaId: 'p-planner' })]);
+    expect(next.teamPlanning).toEqual({ startedAt: expect.any(Number), personaId: 'p-planner' });
   });
 
   it('success=true — teamPlanning гасится, в ленту добавляется одна строка-итог', () => {

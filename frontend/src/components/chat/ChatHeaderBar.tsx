@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
+import { HandsBadge } from '../../features/desktop/HandsBadge';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
@@ -446,7 +447,7 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
         <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
           {estimate.fresh
             ? 'Контекст сжат — точная оценка появится после следующего хода.'
-            : `Оценка появится после первого ответа ${assistantName}.`}
+            : `${assistantName}: оценка появится после первого ответа.`}
         </div>
       )}
       {estimate.lastCompact?.post !== undefined && (
@@ -1188,6 +1189,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </span>
       </span>
     );
+    // Десктопный чат: руки, их устройство и «Стоп». Компонент сам решает, показываться
+    // ли — у обычного чата он пуст, поэтому условия типа чата здесь нет
+    slots.push(<HandsBadge key="hands" session={session} />);
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
     // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
     if (origin) slots.push(

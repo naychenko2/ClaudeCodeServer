@@ -13,8 +13,8 @@ import { modelLabel, USAGE } from './models';
 import { TIER_TITLE } from './modelTiers';
 import type { TierKey } from './modelProvidersShared';
 import { TIERS, routeTier, routeLabel } from './modelProvidersShared';
-import type { ScopedPreset, SpecialtySettingsResponse, ModelRoutePreset,
-  ModelPreviewResponse, PlacePresetRef, SubagentModelChip } from '../types';
+import type { ScopedPreset, SpecialtySettingsResponse, SpecialtySettingsLayer, ModelRoutePreset,
+  ModelPreviewResponse, PlacePresetRef, SubagentModelChip, ResetResult } from '../types';
 
 // --- Лексика preset:{id} ---
 
@@ -179,10 +179,15 @@ export function ensurePresetSettingsLoaded(): Promise<void> {
   return _loading;
 }
 
-// Перечитать с сервера (после внешних изменений)
+// Перечитать с сервера (после внешних изменений). Неразрушающая: _settings НЕ
+// обнуляется — иначе на время GET пикеры показали бы «Цепочка удалена — работает
+// настройка по умолчанию» (фикс: до того, как новый снимок доедет, подписи держатся
+// прежних пресетов; commit делает updateSpecialtySettings).
 export function reloadPresetSettings(): void {
-  _settings = null;
-  void ensurePresetSettingsLoaded();
+  setSettingsError(null);
+  void api.specialties.getSettings()
+    .then(s => { updateSpecialtySettings(s); })
+    .catch(e => { setSettingsError(e instanceof Error ? e.message : 'Не удалось перечитать'); });
 }
 
 // Точка записи для модалки «Поставщики моделей»: после оптимистичного сохранения слоя
@@ -191,6 +196,332 @@ export function updateSpecialtySettings(s: SpecialtySettingsResponse): void {
   _settings = s;
   invalidateEffectiveLines();
   emit();
+}
+
+// === Стор записи (write-стор) ===
+//
+// Поверх read-сторора (settings + userLayers) живёт write-стор: оптимистичная правка +
+// PUT + очередь ответов, ключуемая scope+userId. До этого каждая поверхность (вкладки
+// модалки, PresetOptions) держала собственные useState/useRef + mergeSavedLayer и
+// следила за собственной saveSeqRef — две правки в разных scope+userId могли гонять
+// ответы друг друга. Теперь запись живёт здесь, и баннер ошибки тоже здесь (для UI
+// модалки), а шесть точек записи просто зовут saveLayer(scope, reducer, userId?) и
+// получают промис, который резолвится после реального PUT.
+
+// Контракт записи. Редьюсер вызывается с ТЕКУЩИМ слоем (для user — из userLayers,
+// для global/owner — из settings[scope]); если слой ещё не загружен, ему приходит пустой
+// шаблон (защита от PUTа поверх пустого base, тот же инвариант, что в ChainsTab/Pure).
+// Редьюсер обязан вернуть СЛЕДУЮЩИЙ слой как чистую функцию; фиксы сортируются тут же —
+// никаких «забыли зафиксировать» сценариев.
+export type LayerReducer = (current: SpecialtySettingsLayer) => SpecialtySettingsLayer;
+
+type WriteScope = 'global' | 'owner' | 'user';
+
+// Ключ очереди ответов: пара scope+userId защищает user-слой двух разных адресатов от
+// перетирания ответов друг друга. global/owner — отдельные ключи.
+function writeKey(scope: WriteScope, userId?: string | null): string {
+  return scope === 'user' ? `user:${userId ?? ''}` : scope;
+}
+
+// Счётчики для защиты от out-of-order ответов (последний выигрывает по данным UI).
+const _writeSeq: Record<string, number> = {};
+// Цепочка ин-флайт промисов на ключ: параллельные записи ждут друг друга, чтобы
+// редьюсеры накладывались по порядку, а не «пропускали» друг друга (фикс 65d8df66).
+const _writeInFlight = new Map<string, Promise<void>>();
+// Что сейчас сохраняется и какая последняя ошибка — для UI (busy на вкладках, баннер).
+let _savingKey: string | null = null;
+let _settingsError: string | null = null;
+// Идёт ли сейчас серверный POST reset — пока флаг горит, ручные правки ждут.
+let _resettingScope: WriteScope | null = null;
+const _writeListeners = new Set<() => void>();
+
+function writeEmit(): void {
+  _writeListeners.forEach(fn => fn());
+}
+function subscribeWriteQueue(fn: () => void): () => void {
+  _writeListeners.add(fn);
+  return () => { _writeListeners.delete(fn); };
+}
+function setSaving(key: string | null): void {
+  if (_savingKey !== key) { _savingKey = key; writeEmit(); }
+}
+function setSettingsError(e: string | null): void {
+  if (_settingsError !== e) { _settingsError = e; writeEmit(); }
+}
+function setResettingScope(scope: WriteScope | null): void {
+  if (_resettingScope !== scope) { _resettingScope = scope; writeEmit(); }
+}
+
+// Слить свежий ответ сервера в стейт-стор: волна 4 убрала owner/user-слои, остался
+// один global; в нём же живёт и список пресетов. Скоуп записи по-прежнему трекаем
+// через preset.scope (теперь всегда 'global'), чтобы UI подписи не сломались.
+// Параметр scope сохранён в сигнатуре ради обратной совместимости с write-каналом,
+// но не используется — запись теперь всегда идёт в global.
+function mergeSavedLayer(base: SpecialtySettingsResponse,
+  _scope: WriteScope, saved: SpecialtySettingsLayer): SpecialtySettingsResponse {
+  const merged: SpecialtySettingsResponse = { ...base, global: saved };
+  merged.presets = [
+    ...(merged.global?.presets ?? []).map(p => ({ ...p, scope: 'global' as const })),
+  ];
+  return merged;
+}
+
+// Пустой шаблон — на случай user-слоя, который ещё не загружен (редьюсер всё равно
+// может собрать свежий слой с нуля, как это делает PresetOptions.savePreset).
+function emptyLayer(): SpecialtySettingsLayer {
+  return { specialties: {}, defaultSpecialty: null, presets: [] };
+}
+
+// Запись слоя: оптимистично применяем reducer к текущему снимку, шлём PUT, по ответу
+// фиксируем сохранённый снимок. Параллельные вызовы на одном ключе выстраиваются
+// в очередь — редьюсеры накладываются последовательно.
+//
+// С переходом на единый глобальный слой (f8e7d0e0) — запись всегда идёт в global,
+// независимо от переданного scope. Scope/userId сохранены в сигнатуре ради обратной
+// совместимости с другими волнами (ModelsSpend/SpecialRulesTab); когда они перейдут
+// на «один слой», аргументы станут неактуальными.
+//
+// ВАЖНО: коллапс на global фиксируется во ВСЕХ трёх точках — applyLocal, applySaved
+// и rollbackLocal. Иначе при входном scope='owner' ответ ложился бы в _settings.owner,
+// а mergeSavedLayer удваивал бы список пресетов в UI; при scope='user' откат дёргал бы
+// удалённый GET /settings/user/{id}.
+async function doSave(key: string, scope: WriteScope, reducer: LayerReducer,
+  userId: string | null | undefined): Promise<void> {
+  void scope;
+  const seq = ++_writeSeq[key];
+  const base: SpecialtySettingsLayer = _settings
+    ? (_settings.global as SpecialtySettingsLayer)
+    : emptyLayer();
+  const nextLayer = reducer(base);
+  applyLocal('global', nextLayer, userId);
+  setSaving(key);
+  setSettingsError(null);
+  const req = api.specialties.saveGlobalLayer(nextLayer).then(res => res.global);
+  try {
+    const saved = await req;
+    if (_writeSeq[key] !== seq) return; // устаревший ответ
+    applySaved('global', saved, userId);
+  } catch (e) {
+    if (_writeSeq[key] !== seq) return;
+    setSettingsError(e instanceof Error ? e.message : 'Не удалось сохранить');
+    // Откатить оптимистичное обновление: перечитываем серверный снимок общего слоя.
+    // Путь неразрушающий — пикеры не показывают «Цепочка удалена» посреди отката.
+    rollbackLocal('global', userId);
+  } finally {
+    if (_writeSeq[key] === seq) setSaving(null);
+  }
+}
+
+function applyLocal(scope: WriteScope, layer: SpecialtySettingsLayer,
+  userId: string | null | undefined): void {
+  if (scope === 'user') {
+    if (!userId) return;
+    _userLayers[userId] = layer;
+    _userLayerErrors.delete(userId);
+    userLayerEmit();
+    return;
+  }
+  if (!_settings) return;
+  _settings = { ..._settings, [scope]: layer };
+  invalidateEffectiveLines();
+  emit();
+}
+
+function applySaved(scope: WriteScope, saved: SpecialtySettingsLayer,
+  userId: string | null | undefined): void {
+  if (scope === 'user') {
+    if (!userId) return;
+    commitUserLayer(userId, saved);
+    return;
+  }
+  if (!_settings) return;
+  _settings = mergeSavedLayer(_settings, scope, saved);
+  invalidateEffectiveLines();
+  emit();
+}
+
+function rollbackLocal(scope: WriteScope, userId: string | null | undefined): void {
+  // Слой один: дотягиваем серверный снимок без обнуления read-стора —
+  // reloadPresetSettings внутри делает то же самое, плюс чистит ошибку.
+  void scope; void userId;
+  void api.specialties.getSettings()
+    .then(s => updateSpecialtySettings(s))
+    .catch(() => { /* ошибка уже показана */ });
+}
+
+// Публикация ошибки (для бэйджей состояния загрузки в модалке)
+export function getSettingsError(): string | null {
+  return _settingsError;
+}
+
+// Запись слоя: единственная точка PUTа из шести поверхностей. reducer получает
+// текущий слой, возвращает СЛЕДУЮЩИЙ. Промис резолвится после фиксации ответа
+// (важно для PresetOptions.savePreset — назначение места ждёт, иначе бэкенд
+// проверяет preset:{id} по снимку без только что созданного пресета → 400).
+export function saveLayer(scope: WriteScope, reducer: LayerReducer,
+  userId?: string | null): Promise<void> {
+  const key = writeKey(scope, userId);
+  const prev = _writeInFlight.get(key) ?? Promise.resolve();
+  const next = prev.then(() => doSave(key, scope, reducer, userId));
+  _writeInFlight.set(key, next);
+  next.finally(() => {
+    if (_writeInFlight.get(key) === next) _writeInFlight.delete(key);
+  });
+  return next;
+}
+
+// Серверный сброс слоя (POST /specialties/settings/reset/{scope}). После ADR-012 живут
+// только 'global' (общий слой) и 'owner' (персоны вызывающего) — reset/user удалён.
+// После успешного ответа перечитываем настройки, чтобы пикеры и подписи пресетов
+// обновились свежим снимком. Перечитка неразрушающая.
+export function resetLayer(scope: 'owner' | 'global', key?: string):
+  Promise<ResetResult> {
+  setResettingScope(scope);
+  return api.specialties.reset(scope, key)
+    .then(res => {
+      void api.specialties.getSettings().then(s => updateSpecialtySettings(s))
+        .catch(e => { setSettingsError(e instanceof Error ? e.message : 'Не удалось перечитать'); });
+      return res;
+    })
+    .finally(() => { setResettingScope(null); });
+}
+
+// Реактивный снимок write-сторора для модалки (saving/resetting/error). getSnapshot
+// возвращает один и тот же объект, пока ничего не изменилось — иначе useSyncExternalStore
+// уходит в бесконечный цикл (новый объект каждый рендер).
+interface SaveStateSnapshot {
+  savingScope: WriteScope | null;
+  savingUserId: string | null;
+  settingsError: string | null;
+  resettingScope: WriteScope | null;
+}
+let _cachedSaveState: SaveStateSnapshot = {
+  savingScope: null, savingUserId: null, settingsError: null, resettingScope: null,
+};
+function getSaveStateSnapshot(): SaveStateSnapshot {
+  const savingScope: WriteScope | null = _savingKey
+    ? (_savingKey.startsWith('user:') ? 'user' : _savingKey as WriteScope)
+    : null;
+  const savingUserId = savingScope === 'user'
+    ? (_savingKey && _savingKey.startsWith('user:') ? _savingKey.slice(5) || null : null)
+    : null;
+  const next: SaveStateSnapshot = {
+    savingScope, savingUserId,
+    settingsError: _settingsError, resettingScope: _resettingScope,
+  };
+  if (next.savingScope !== _cachedSaveState.savingScope
+    || next.savingUserId !== _cachedSaveState.savingUserId
+    || next.settingsError !== _cachedSaveState.settingsError
+    || next.resettingScope !== _cachedSaveState.resettingScope) {
+    _cachedSaveState = next;
+  }
+  return _cachedSaveState;
+}
+
+export function useSaveState(): SaveStateSnapshot {
+  return useSyncExternalStore(subscribeWriteQueue, getSaveStateSnapshot, getSaveStateSnapshot);
+}
+
+// --- Стор user-слоёв (МЁРТВЫЙ КАНАЛ после ADR-012) ---
+//
+// Слоёв больше нет: GET /specialties/settings/user/{id} удалён с бэкенда, и ни один экран
+// сюда больше не заходит (ChainsTab/SlotsTab/PresetOptions переведены на общий слой).
+// Канал оставлен только потому, что на нём висят собственные юнит-тесты
+// (__tests__/userLayers, presets, presets-user-gate, presets-queue) — он уезжает хвостовой
+// чисткой вместе с ними. НОВЫХ вызовов не добавлять: loadUserLayer сходит в 404.
+//
+// Историческая мотивация (зачем слой грузился отдельно): база для записи в чужой слой
+// бралась ТОЛЬКО отсюда — из settings.user поверх пустого fallback'а PUT затирал
+// specialties и presets реального пользователя.
+
+const _userLayers: Record<string, SpecialtySettingsLayer> = {};
+const _userLayersInflight = new Map<string, Promise<void>>();
+// Текст последней ошибки загрузки по userId — отдельным каналом, чтобы UI мог отличить
+// «слой ещё не запрашивался» (null) от «сервер ответил отказом» (строка).
+const _userLayerErrors = new Map<string, string>();
+const _userLayerListeners = new Set<() => void>();
+
+function userLayerEmit() {
+  _userLayerListeners.forEach(fn => fn());
+}
+
+function subscribeUserLayer(fn: () => void): () => void {
+  _userLayerListeners.add(fn);
+  return () => { _userLayerListeners.delete(fn); };
+}
+
+// Подтянуть слой пользователя с сервера. Идемпотентно: тот же userId возвращает тот же
+// ин-флайт промис, повторный заход после загрузки — no-op. null/пустой userId — мгновенный
+// no-op (защита от эффектов с ещё не выставленным контекстом и от PUT /.../user/null).
+export function loadUserLayer(userId: string | null | undefined): Promise<void> {
+  if (!userId) return Promise.resolve();
+  if (_userLayers[userId] !== undefined) return Promise.resolve();
+  const existing = _userLayersInflight.get(userId);
+  if (existing) return existing;
+  const p = api.specialties.getUserLayer(userId)
+    .then(r => {
+      _userLayers[userId] = r.user;
+      _userLayerErrors.delete(userId);
+    })
+    .catch(e => {
+      _userLayerErrors.set(userId, e instanceof Error ? e.message : 'Не удалось загрузить слой пользователя');
+    })
+    .finally(() => {
+      _userLayersInflight.delete(userId);
+      userLayerEmit();
+    });
+  _userLayersInflight.set(userId, p);
+  return p;
+}
+
+// Снимок user-слоя для синхронного чтения. null — слой ещё не загружен (или не запрашивался).
+export function getUserLayer(userId: string | null | undefined): SpecialtySettingsLayer | null {
+  if (!userId) return null;
+  return _userLayers[userId] !== undefined ? _userLayers[userId] : null;
+}
+
+// Загружен ли user-слой? Проверка по наличию ключа — даже пустой ответ сервера считается
+// загруженным слоем (это и есть способ отличить «нет ключа → не загружен» от «ключ есть →
+// пусто, можно класть пресет»).
+export function hasUserLayer(userId: string | null | undefined): boolean {
+  return !!userId && _userLayers[userId] !== undefined;
+}
+
+// Текст ошибки последней загрузки (или null — ошибки нет / слой ещё не грузился)
+export function getUserLayerError(userId: string | null | undefined): string | null {
+  return userId ? (_userLayerErrors.get(userId) ?? null) : null;
+}
+
+// Реактивный user-слой по userId: на маунте/смене userId сам зовёт loadUserLayer, далее
+// перерисовывается на userLayerEmit (commit/rollback/ошибка загрузки). null — слой ещё
+// не доехал.
+export function useUserLayer(userId: string | null | undefined): SpecialtySettingsLayer | null {
+  useEffect(() => { void loadUserLayer(userId); }, [userId]);
+  return useSyncExternalStore(
+    subscribeUserLayer,
+    () => userId ? getUserLayer(userId) : null,
+    () => null,
+  );
+}
+
+// Зафиксировать новый снимок user-слоя (после успешного PUT). userId обязан быть непустым
+// — иначе URL превратится в /specialties/settings/user/null, чего быть не должно ни при
+// каком состоянии UI.
+export function commitUserLayer(userId: string, layer: SpecialtySettingsLayer): void {
+  if (!userId) return;
+  _userLayers[userId] = layer;
+  _userLayerErrors.delete(userId);
+  userLayerEmit();
+  invalidateEffectiveLines();
+}
+
+// Откатить user-слой к прежнему снимку (после отказа PUT). prevLayer === undefined —
+// ключ удаляется (на случай, если до PUT ключа и не было).
+export function rollbackUserLayer(userId: string, prevLayer: SpecialtySettingsLayer | undefined): void {
+  if (!userId) return;
+  if (prevLayer !== undefined) _userLayers[userId] = prevLayer;
+  else delete _userLayers[userId];
+  userLayerEmit();
 }
 
 export function getSpecialtySettings(): SpecialtySettingsResponse | null {
@@ -284,7 +615,11 @@ function queryKey(q: PreviewQuery): string {
 // opts.tierText — готовая подпись уровня вместо разбора tierOrigin: в ячейке
 // специальности уровень — это сама строка, а не «задан задачей» (overrideTier
 // эндпоинта), поэтому там tierOrigin не показываем.
-export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?: string }): string | null {
+// opts.prefix — префикс перед строкой. По умолчанию «Сейчас пойдёт: ». Для случаев,
+// когда префикс должен отличаться (например, «Наследуется: » при пустой ячейке),
+// передают явно. Битый пресет всегда идёт под «Сейчас пойдёт: », это его семантика.
+export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?: string; prefix?: string }): string | null {
+  const prefix = opts?.prefix ?? 'Сейчас пойдёт: ';
   if (d.preset?.broken) {
     return `Сейчас пойдёт: модель по умолчанию — цепочка${d.preset.name ? ` «${d.preset.name}»` : ''} удалена`;
   }
@@ -309,15 +644,20 @@ export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?:
   };
   if (d.source && source[d.source]) parts.push(source[d.source]);
   const suffix = parts.length > 0 ? ` · ${parts.join(', ')}` : '';
-  return `Сейчас пойдёт: ${modelLabel(d.model)}${suffix}`;
+  return `${prefix}${modelLabel(d.model)}${suffix}`;
 }
 
 // Кэш сырых ответов превью: значение null — запрос завершился ошибкой
 const _previewCache = new Map<string, ModelPreviewResponse | null>();
 const _previewInflight = new Set<string>();
 const _previewListeners = new Set<() => void>();
+// Монотонный счётчик тиков превью — для usePreviewTick: getSnapshot обязан
+// возвращать меняющееся значение, иначе useSyncExternalStore не пошлёт обновление
+// подписчикам. Источник — единственный (previewEmit), других каналов нет.
+let _previewTick = 0;
 
 function previewEmit() {
+  _previewTick++;
   _previewListeners.forEach(fn => fn());
 }
 
@@ -381,6 +721,17 @@ export function useEffectiveLine(ctx: EffectiveLineContext): string | null {
   const tierText = ctx.kind === 'specialty' && ctx.tier
     ? `уровень «${TIER_TITLE[ctx.tier]}»` : undefined;
   return formatEffectiveLine(d, { tierText });
+}
+
+// MAJOR-fix этапа 4: компонент, который зависит только от факта обновления превью,
+// подписывается на этот хук вместо того чтобы держать свой срез, протухающий между
+// ре-рендерами. Никаких запросов не шлёт — только пересчитывается на previewEmit.
+export function usePreviewTick(): number {
+  return useSyncExternalStore(
+    fn => { _previewListeners.add(fn); return () => { _previewListeners.delete(fn); }; },
+    () => _previewTick,
+    () => 0,
+  );
 }
 
 export function placesWord(n: number): string {

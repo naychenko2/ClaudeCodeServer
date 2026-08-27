@@ -344,6 +344,20 @@ body {
   .cc-card-press:active { transform: none; }
 }
 
+/* Мягкая подсветка карточки остановки после клика по закреплённой полосе
+   «Практика ждёт вашего решения»: рамка + лёгкий фон на 1.5с. Outline вместо
+   border, чтобы не дёргать раскладку ленты. Анимация фона — без transform,
+   motion-reduce её глушит, а рамка остаётся как минимум зрительной обратной связью */
+.escalation-flash {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+  background-color: var(--c-accent-soft);
+  transition: background-color 0.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .escalation-flash { transition: none; }
+}
+
 /* Слой перелива поверх фона карточки, но ПОД её содержимым (z-index:0 против
    position:relative у текста и лица). Карточка с overflow:hidden сама обрежет
    его по скруглению — отдельная маска не нужна.
@@ -863,4 +877,23 @@ body {
   background: linear-gradient(90deg, var(--c-bg-selected) 25%, var(--c-bg-card) 50%, var(--c-bg-selected) 75%);
   background-size: 200% 100%;
   animation: cc-skeleton 1.4s infinite;
+}
+
+/* Маркер связи у аватарки (AvatarMenu): мягкая пульсация пунктирного кольца
+   в состоянии 'unstable' (связь шатается 3+ секунд). Скромная opacity-волна 1→0.55→1
+   за 1.4с — привлекает внимание, но не превращается в тревожный мигающий маяк. */
+@keyframes cc-conn-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+/* === Видимый focus-ring для интерактивов раздела «Специальности» ===
+   Карточка роли, чип «Инструменты», кнопка удаления привязки — кастомные
+   <button> без focus-стилей по умолчанию. Кольцо одно для всех (как у ui-кита),
+   на :focus-visible — иначе мышь кольцо не рисует, как и у других контролов. */
+.cc-role-card:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.cc-tools-row-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.cc-binding-remove:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+@media (prefers-reduced-motion: reduce) {
+  .cc-role-card, .cc-tools-row-btn, .cc-binding-remove { transition: none; }
 }

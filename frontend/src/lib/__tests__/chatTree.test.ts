@@ -119,6 +119,22 @@ describe('buildChatTreeRows', () => {
     expect(r.renderedCount).toBe(2);
   });
 
+  it('архивный родитель: видимые дети всплывают в корни, архив не считается скрытым в плоском', () => {
+    // Шаг 4 плана v4: matchChatFilter прячет архивные (archived=true), а buildChatTreeRows
+    // через filterForest «прокалывает» скрытого родителя — его видимые дети уходят
+    // уровнем выше. Множество видимых чатов одно для плоского списка и дерева.
+    const chats = [
+      mk('archivedParent', { archived: true } as Partial<Session>),
+      mk('liveChild', { parentSessionId: 'archivedParent' }),
+      mk('anotherLiveChild', { parentSessionId: 'archivedParent' }),
+    ];
+    const r = build(chats, { isVisible: c => !(c as { archived?: boolean }).archived });
+    expect(r.rows.map(x => x.chat.id)).toEqual(['liveChild', 'anotherLiveChild']);
+    expect(r.rows.every(x => x.depth === 0)).toBe(true);
+    // Плоский эквивалент: visible = chats минус архивный = 2 ребёнка
+    expect(r.renderedCount).toBe(2);
+  });
+
   it('свёрнутое поддерво остаётся в массиве (для DOM-анимации), счётчик считает всю ветку', () => {
     const chats = [
       mk('p'),

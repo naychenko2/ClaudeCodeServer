@@ -79,6 +79,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private readonly Func<string, string, IReadOnlyList<string>?, int, bool, Task>? _enqueueBypass;
     // Сигнал «оркестрация завершена» в finally → SessionManager запускает разбор Pending (null — тесты).
     private readonly Action<string>? _orchestrationDone;
+    // Жив ли наш выход в сеть (исходящий прокси). Спрашивается ТОЛЬКО при Unreachable: отличает
+    // «эндпоинт вендора недоступен» (лечится сменой пары) от «канал наружу лёг» (сменой пары не
+    // лечится — соседняя модель пойдёт тем же путём). null (тесты/без DI) — прежнее поведение.
+    private readonly IEgressProbe? _egress;
+    // Паспорта ходов: чем кончился ход и какой ценой. null (тесты) — не пишем.
+    private readonly TurnRunLog? _turnRuns;
+    // Пауза перед повтором хода при лежащем канале наружу (тесты сокращают её до миллисекунд).
+    private readonly TimeSpan _egressRetryDelay;
     // Корень профиля CLI на момент старта сессии (хостовый путь): источник для
     // переноса транскрипта и, у container-пользователя, способ вывести раскладку
     // песочных профилей (родитель = data/sandbox-profiles/{ownerId}).
@@ -116,7 +124,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Func<int>? lastContextTokens = null,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
         Action<string>? orchestrationDone = null,
-        Func<string>? contextSource = null)
+        Func<string>? contextSource = null,
+        IEgressProbe? egress = null,
+        TurnRunLog? turnRuns = null,
+        TimeSpan? egressRetryDelay = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -136,7 +147,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _persist = persist;
         _enqueueBypass = enqueueBypass;
         _orchestrationDone = orchestrationDone;
-        _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
+        _egress = egress;
+        _turnRuns = turnRuns;
+        _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
+        _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
 
     // Ход сейчас под фолбэк-оркестрацией. По этому признаку SessionManager отходит в
@@ -170,6 +184,31 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _fallbackSettings?.ResolveMaxSubstitutions(Info.OwnerId)
         ?? FallbackSettingsStore.DefaultMaxSubstitutions;
 
+    // Повторов хода при лежащем выходе в сеть — один. Предел сознательный, той же природы, что
+    // потолок добиваний сабагента: канал либо моргнул (тогда одного повтора хватает), либо лежит
+    // всерьёз — и тогда честный отказ полезнее молчаливого цикла ожидания.
+    internal const int MaxEgressRetries = 1;
+
+    // Пауза перед повтором. Наблюдаемые отказы прокси длятся секунды (рестарт/исчерпание
+    // соединений), поэтому ждать долго незачем, а бить сразу — бессмысленно.
+    internal static readonly TimeSpan EgressRetryDelay = TimeSpan.FromSeconds(5);
+
+    // Адрес канала для лога: без него «выход в сеть недоступен» не отличить от «прокси не тот».
+    // Секретов не несёт — TryParseProxy оставляет только Host:Port, креденшалы URL отбрасывает.
+    private string EgressAddress() => (_egress as EgressProbe)?.ProxyAddress ?? "канал";
+
+    // Проба канала не имеет права уронить ход: её отказ читается как «не знаем» → ведём себя
+    // как раньше (обычный Unreachable с кулдауном и цепочкой).
+    private async Task<bool> IsEgressDownAsync()
+    {
+        try { return await _egress!.IsDownAsync(_cts.Token); }
+        catch (Exception ex)
+        {
+            LogWarn($"Проба выхода в сеть не удалась ({Info.Id}): {ex.Message} — считаем канал живым");
+            return false;
+        }
+    }
+
     public Session Info => _inner.Info;
     public LlmCapabilities Capabilities => _inner.Capabilities;
     public int CurrentTurnAgentDepth => _inner.CurrentTurnAgentDepth;
@@ -199,6 +238,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         // Остановка пользователем — не ошибка доставки: фолбэк на этом ходу запрещён
         _userInterrupted = true;
+        // Разбудить ожидание повтора при лежащем канале (Cancel по уже освобождённому CTS
+        // законен только до Dispose — его мы не зовём, ход живёт до конца оркестрации)
+        FallbackTurn? turn;
+        lock (_gate) turn = _turn;
+        try { turn?.Interrupted.Cancel(); }
+        catch (ObjectDisposedException) { /* ход уже свернулся — будить некого */ }
         _inner.Interrupt();
     }
 
@@ -385,10 +430,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var substitutions = 0;
         AttemptEnd? lastEnd = null;
 
+        // Учёт для паспорта хода (TurnRunLog): чем кончился ход и какой ценой. turnOutcome
+        // ставится ПЕРЕД каждым выходом из цикла, паспорт пишется один раз в finally — так
+        // ни одна ветка выхода не остаётся неучтённой. Дефолт «cancelled» — на случай выхода
+        // по закрытию сессии, где терминала нет вовсе.
+        var startedAt = DateTime.UtcNow;
+        var turnOutcome = "cancelled";
+        var egressRetries = 0;
+        FallbackErrorClass? lastClass = null;
+
         // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
         // = план фолбэка. Есть цепочка (Count > 1) — фолбэк идёт по её шагам; нет (одноэлементная
         // или пустая) — после пула честная ошибка, автоподбора больше нет. Вычисляем один раз за ход.
-        var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
+        var chain = TrimChainForDesktop(_effectiveChain?.Invoke() ?? Array.Empty<string>());
         var chainIndex = 0;
         // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
         LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
@@ -401,7 +455,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // проверка зацикливания пойдёт по эквиваленту — пары разойдутся, и одна мёртвая пара
         // повторится до потолка (инцидент 2026-08-07).
         var currentModel = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
-        var currentKey = ProviderKeyFor(currentModel);
+        // Ключ ТЕКУЩЕЙ пары — «где ход реально идёт», а не «чей это шаг»: по нему идут
+        // MarkExhausted/MarkAuthDead и сборка env хода, а env собирается из Info.Provider.
+        // Поэтому здесь нельзя звать ProviderKeyFor: он для КАНДИДАТОВ и вправе выбрать
+        // подписку пула сам — 429 у claude-1 пометил бы исчерпанной живую claude-2.
+        var currentKey = CurrentProviderKey(currentModel);
 
         // Снимок «модели × провайдера» на старте хода. Подмены внутри хода пишутся в
         // Info.Model/Provider (процесс попытки пересобирается из них), но в finally исходные
@@ -438,15 +496,23 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (_health is not null && chain.Count > 1 && _health.IsUnavailable(currentKey))
             {
                 var stepIdx = -1;
+                // Ключ найденного шага запоминаем сразу: ProviderKeyFor у нативной модели
+                // разруливает ничью подписок через Pick (случайно), и второй вызов для той же
+                // модели мог бы отдать ДРУГУЮ подписку — проверили одну, поехали на другую.
+                string? stepKeyFound = null;
                 for (var i = 1; i < chain.Count; i++)
                 {
                     var sm = chain[i];
-                    if (!_health.IsUnavailable(ProviderKeyFor(sm))) { stepIdx = i; break; }
+                    // Здоровье кандидата — по природе его ключа (StepUnavailable): у стороннего
+                    // из реестра кулдауна, у нативного — из пула подписок. Внешнее условие про
+                    // ТЕКУЩИЙ провайдер остаётся прежним: стартовая подмена задумана для стороннего.
+                    var k = ProviderKeyFor(sm);
+                    if (!StepUnavailable(k)) { stepIdx = i; stepKeyFound = k; break; }
                 }
                 if (stepIdx > 0)
                 {
                     var stepModel = chain[stepIdx];
-                    var stepKey = ProviderKeyFor(stepModel);
+                    var stepKey = stepKeyFound!;
                     var stepRoot = ResolveRootFor(stepKey);
                     // Перенос транскрипта ДО подмены (Major, инвариант ADR-007 §4.1: Provider и свежий
                     // транскрипт — одно место). Профиль исходного провайдера (_profileRoot) → профиль
@@ -491,7 +557,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
             while (!_cts.IsCancellationRequested)
             {
-                if (_userInterrupted) { await SettleAsync(turn); return; }
+                if (_userInterrupted) { turnOutcome = "interrupted"; await SettleAsync(turn); return; }
 
                 attempted.Add((currentModel, currentKey));
 
@@ -512,7 +578,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 catch (OperationCanceledException) { return; } // сессию закрыли — оркестрация снята
                 lastEnd = end;
 
-                if (_userInterrupted) { await SettleAsync(turn); return; }
+                if (_userInterrupted) { turnOutcome = "interrupted"; await SettleAsync(turn); return; }
 
                 // Успех (нет ошибки доставки) — задержанный result уходит наружу, ход окончен.
                 // Снимаем кулдаун с провайдера ФАКТИЧЕСКОЙ попытки (currentKey): успешный ход —
@@ -523,6 +589,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (!IsDeliveryFailure(end))
                 {
                     _health?.Clear(currentKey);
+                    turnOutcome = "success";
                     await SettleAsync(turn);
                     return;
                 }
@@ -544,16 +611,67 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     InterruptedByUser = _userInterrupted,
                 };
                 var cls = TurnErrorClassifier.Classify(outcome);
+                lastClass = cls;
                 // Прерывание пользователем — нейтральный финал: без ошибки, без ротации (даже если
                 // обрыв успел классифицироваться как None по InterruptedByUser).
-                if (outcome.InterruptedByUser) { await SettleAsync(turn); return; }
+                if (outcome.InterruptedByUser) { turnOutcome = "interrupted"; await SettleAsync(turn); return; }
                 // None — неопознанная/содержательная ошибка: фолбэк НЕ запускаем (ADR fail-closed —
                 // не жечь лимиты других аккаунтов о неопознанную проблему). Но «не запускаем» ≠
                 // «всё в порядке»: ход обязан завершиться error, а не штатным finished (исходная
                 // половина P29). CLI при API-ошибке отдаёт subtype=success + is_error — без замены
                 // result на error статус становился Active, и провал маскировался. AuthFailure сюда
                 // не попадает — это отдельный класс, он эскалирует по пулу и цепочке ниже.
-                if (cls == FallbackErrorClass.None) { await FailClosedAsync(turn, end); return; }
+                if (cls == FallbackErrorClass.None) { turnOutcome = "failed"; await FailClosedAsync(turn, end); return; }
+
+                // ОТКАЗ ВЫХОДА В СЕТЬ, а не отказ провайдера. Unreachable покрывает два корня,
+                // и лечатся они противоположно: мёртвый эндпоинт вендора чинится сменой пары
+                // «модель × подписка», а мёртвый ОБЩИЙ канал наружу — не чинится ничем, кроме
+                // повтора: соседняя модель пойдёт через тот же прокси. Разводит их проба
+                // (см. EgressProbe). Разбор суток 25.08.2026: 10 из 14 показанных человеку ошибок —
+                // один ConnectionRefused сразу по трём вендорам, при этом цепочка честно жгла шаги,
+                // а сторонний провайдер получал кулдаун за чужую вину.
+                //
+                // Спрашиваем ДО блока кулдауна — именно чтобы MarkUnavailable не сработал.
+                if (cls == FallbackErrorClass.Unreachable && _egress is not null
+                    && await IsEgressDownAsync())
+                {
+                    if (egressRetries < MaxEgressRetries)
+                    {
+                        egressRetries++;
+                        LogWarn($"Выход в сеть недоступен ({EgressAddress()}, {Info.Id}): повтор {egressRetries}/{MaxEgressRetries} той же пары "
+                            + $"«{currentModel}» × «{currentKey}» через {_egressRetryDelay.TotalSeconds:0.#} с — шаги цепочки не тратим, "
+                            + "кулдаун провайдеру не ставим (канал общий, вендор ни при чём)");
+                        // Паузу рвёт и закрытие сессии, и «Стоп» пользователя: пять секунд —
+                        // это ровно тот момент, когда человек жмёт «Стоп» (ход стоит, ошибка
+                        // задержана), и заставлять его досматривать паузу незачем.
+                        using (var wait = CancellationTokenSource.CreateLinkedTokenSource(
+                                   _cts.Token, turn.Interrupted.Token))
+                        {
+                            try { await Task.Delay(_egressRetryDelay, wait.Token); }
+                            catch (OperationCanceledException) { /* решает проверка наверху цикла */ }
+                        }
+
+                        // SwallowCleanup здесь НЕ выставляем — в отличие от пути подмены. Он
+                        // глотает терминалы, а прерывание в этом окне тогда хоронит ход: exited
+                        // убитого процесса пропадает, выход по _userInterrupted отдаёт SettleAsync
+                        // ПУСТОЙ held, наружу не уходит ни result, ни exited — и чат остаётся
+                        // Working навсегда (sweep лечит только Active). Глушить нечего: терминалы
+                        // копятся в held и будут выброшены BeginAttempt следующей попытки, а при
+                        // прерывании — выпущены наружу и закроют ход штатно.
+                        //
+                        // Пара та же: attempted не растёт (HashSet), цепочка не двигается,
+                        // substitutions не тратится — это повтор, а не подмена.
+                        continue;
+                    }
+
+                    // Канал не поднялся за паузу — идти по цепочке бессмысленно: она ведёт наружу
+                    // тем же путём. Честный финал вместо перебора мёртвых шагов.
+                    LogWarn($"Выход в сеть недоступен ({EgressAddress()}, {Info.Id}): повторы исчерпаны ({egressRetries}), "
+                        + "цепочку не перебираем — все её шаги идут через тот же канал");
+                    turnOutcome = "egress_down";
+                    await FailEgressAsync(turn, end);
+                    return;
+                }
 
                 // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
                 // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
@@ -596,6 +714,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
                 {
+                    turnOutcome = "failed";
                     await FailExhaustedAsync(turn, trace, substitutions, end);
                     return;
                 }
@@ -617,6 +736,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // Прочее по числу попыток: перепробовано несколько пар — FailExhausted (список
                     // + «ни одна не ответила»); тупик сразу (нет пула и цепочки) — FailClosed:
                     // одиночный error, причина уже в ленте от ErrorMessage(ExpectResultFollows).
+                    turnOutcome = "failed";
                     if (cls == FallbackErrorClass.ContextOverflow || attempted.Count > 1)
                         await FailExhaustedAsync(turn, trace, substitutions, end);
                     else
@@ -692,6 +812,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         catch (Exception ex)
         {
             LogWarn($"Сбой оркестрации ({Info.Id}): {ex.Message}");
+            turnOutcome = "crashed";
             try
             {
                 // P31: если сбой случился после провальной попытки доставки (lastEnd есть и это
@@ -787,6 +908,41 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             // со штатным фолбэком. Drain идемпотентен (DrainInFlight гейт), пустая очередь — no-op.
             if (Interlocked.Exchange(ref _bypassRequeued, 0) == 1)
                 _orchestrationDone?.Invoke(Info.Id);
+
+            // Паспорт хода (TurnRunLog) — ровно здесь, в finally: веток выхода из цикла восемь,
+            // и писать в каждой значило бы гарантированно забыть одну. Модель/провайдер берём
+            // ДО restore (appliedModel/appliedProvider — фактическая последняя пара), иначе
+            // паспорт покажет исходную пару и потеряет самое интересное — куда ход дошёл.
+            // Диагностика не имеет права ронять ход, поэтому под try.
+            if (_turnRuns is not null)
+            {
+                try
+                {
+                    var endedAt = DateTime.UtcNow;
+                    _turnRuns.Record(new TurnRunPassport(
+                        SessionId: Info.Id,
+                        StartedAt: startedAt,
+                        EndedAt: endedAt,
+                        DurationSeconds: (int)(endedAt - startedAt).TotalSeconds,
+                        Outcome: turnOutcome,
+                        StartModel: origModel,
+                        StartProvider: origProvider,
+                        FinalModel: appliedModel,
+                        FinalProvider: appliedProvider,
+                        Attempts: attempted.Count + egressRetries,
+                        Substitutions: substitutions,
+                        EgressRetries: egressRetries,
+                        Chain: [.. chain],
+                        LastErrorClass: lastClass is { } c ? TurnErrorClassifier.WireName(c) : null,
+                        LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
+                        ContextTokens: ContextEstimate(),
+                        RecordedAt: endedAt));
+                }
+                catch (Exception ex)
+                {
+                    LogWarn($"Паспорт хода не записан ({Info.Id}): {ex.Message}");
+                }
+            }
         }
     }
 
@@ -897,6 +1053,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         if (chain.Count > 1)
         {
             var cooledIdx = -1;
+            // Ключ остывшего кандидата — тот самый, по которому его признали остывшим:
+            // ProviderKeyFor у нативной модели решает ничью подписок через Pick, и повторный
+            // вызов увёл бы fail-open на другую подписку, чем ту, что проверяли.
+            string? cooledKey = null;
             var scan = chainIndex;
             while (++scan < chain.Count)
             {
@@ -911,10 +1071,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 var checkDeclared = cls == FallbackErrorClass.ContextOverflow;
                 if (!WouldFit(stepModel, contextEstimate, checkDeclared)) continue;
                 // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
-                // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open)
-                if (_health?.IsUnavailable(stepKey) is true)
+                // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open).
+                // Здоровье считает StepUnavailable: у нативного шага его ведёт пул подписок.
+                if (StepUnavailable(stepKey))
                 {
-                    if (cooledIdx < 0) cooledIdx = scan;
+                    if (cooledIdx < 0) { cooledIdx = scan; cooledKey = stepKey; }
                     continue;
                 }
                 var dstRoot = ResolveRootFor(stepKey);
@@ -927,7 +1088,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (cooledIdx > 0)
             {
                 var cm = chain[cooledIdx];
-                var ck = ProviderKeyFor(cm);
+                var ck = cooledKey!;
                 var dstRoot = ResolveRootFor(ck);
                 if (TryMigrateTranscript(dstRoot))
                 {
@@ -951,21 +1112,71 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             ProfileRoot: dstRoot, IsProviderSwitch: true);
     }
 
-    // Ключ пары для модели шага: провайдер по модели (приоритет), затем Provider сессии —
-    // тот же порядок, что у CurrentProviderKey, но от ЗАДАННОЙ модели шага цепочки, а не Info.Model.
+    // Ключ пары для ЗАДАННОЙ модели («чей это шаг»), а не «где чат живёт сейчас» — вопросы
+    // разные, и их смешение стоило инцидента 25.08.2026: у чата на GLM нативный шаг цепочки
+    // «opus[1m]» получал ключ «glm» (модель не резолвится ни в один сторонний каталог), поэтому
+    // отсеивался вместе с кулдауном GLM, а будучи выбранным — запустил бы Opus на эндпоинте и в
+    // профиле GLM. Порядок:
+    //   — модель есть в каталоге стороннего провайдера → его ключ;
+    //   — нативная claude-модель принадлежит ПУЛУ ПОДПИСОК: остаёмся на текущей подписке, если
+    //     чат уже живёт в пуле, она ЖИВА и тянет модель (её ротацией владеет уровень 1), иначе
+    //     подписку выбирает пул (Pick учитывает исчерпание, auth-dead, тариф и утилизацию);
+    //     живость проверяем именно здесь — иначе шаг цепочки получал бы ключ подписки, только
+    //     что упёршейся в лимит, StepUnavailable признавал бы его мёртвым, и ход проскакивал
+    //     мимо живой второй подписки сразу к стороннему шагу;
+    //   — модель не задана → вопрос действительно о текущей паре (Provider сессии).
     private string ProviderKeyFor(string? model)
     {
-        var byModel = _providers?.ResolveByModel(
-            string.IsNullOrWhiteSpace(model) ? null : model)?.Key;
-        return byModel ?? (string.IsNullOrEmpty(Info.Provider)
-            ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
+        if (string.IsNullOrWhiteSpace(model))
+            return string.IsNullOrEmpty(Info.Provider) ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider;
+
+        var byModel = _providers?.ResolveByModel(model)?.Key;
+        if (byModel is not null) return byModel;
+
+        var current = Info.Provider;
+        if (!string.IsNullOrEmpty(current) && !IsExternalProvider(current)
+            && !_pool.IsExhausted(current) && !_pool.IsAuthDead(current)
+            && _pool.SupportsModel(current, model))
+            return current;
+        var picked = _pool.Pick(model);
+        return string.IsNullOrWhiteSpace(picked) ? ClaudeSubscriptionPool.PrimaryKey : picked;
     }
+
+    // Шаг цепочки «в кулдауне»? Природа ключа решает, кто ведёт его здоровье: у стороннего
+    // провайдера — ProviderHealthRegistry, у подписки пула Claude — сам пул (дублировать
+    // нельзя, инвариант ADR-007 §4.3). Без этой развилки нативный шаг цепочки считался бы
+    // «всегда живым»: реестр кулдауна подписок пула не ведёт вовсе.
+    private bool StepUnavailable(string stepKey) =>
+        IsExternalProvider(stepKey)
+            ? _health?.IsUnavailable(stepKey) is true
+            : _pool.IsExhausted(stepKey) || _pool.IsAuthDead(stepKey);
 
     // Сторонний ли провайдер (есть в реестре LlmProviderRegistry), а не подписка пула Claude.
     // Кулдаун недоступности помечает только сторонние эндпоинты — здоровье подписок пула ведёт
     // ClaudeSubscriptionPool (Major 2).
     private bool IsExternalProvider(string? key) =>
         _providers is not null && _providers.GetByKey(key ?? "") is not null;
+
+    // Десктопный чат вне межпровайдерного фолбэка (ADR-008 о десктопном агенте, «Последствия»).
+    // Шаг цепочки к стороннему провайдеру — это не «другая модель», а копия транскрипта в его
+    // профиль (TryMigrateTranscript) плюс запуск CLI с чужим ANTHROPIC_BASE_URL: кадры рабочего
+    // стола, осевшие в .jsonl, штатно уехали бы вендору. Поэтому цепочка режется до пула Claude.
+    // Первый шаг НЕ трогаем: это пара, на которой чат уже живёт (там его транскрипт), а не
+    // миграция — обрезать её значило бы не выпустить ход вовсе. Уровень 1 (ротация подписок
+    // того же пула Claude) правилом не затронут: эндпоинт и владелец данных те же.
+    // Не десктопный чат — цепочка возвращается как есть, ссылка та же.
+    private IReadOnlyList<string> TrimChainForDesktop(IReadOnlyList<string> chain)
+    {
+        if (!Info.DesktopChat || chain.Count <= 1) return chain;
+        var kept = new List<string> { chain[0] };
+        for (var i = 1; i < chain.Count; i++)
+            if (!IsExternalProvider(ProviderKeyFor(chain[i]))) kept.Add(chain[i]);
+        if (kept.Count == chain.Count) return chain;
+        // Обрезка — не аномалия, но она объясняет «почему ход не ушёл на запасную модель»:
+        // без строки в логе исчерпание цепочки в десктопном чате неотличимо от поломки.
+        LogInfo($"Десктопный чат: цепочка обрезана до пула Claude ({chain.Count} → {kept.Count} шагов) — транскрипт с кадрами рабочего стола стороннему провайдеру не отдаём");
+        return kept;
+    }
 
     // Оценка размера контекста текущего хода. Составная (собирается фабрикой): живое значение
     // (ClaudeSession.LastContextTokens — usage последнего assistant-сообщения), а при его
@@ -1036,6 +1247,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
+        // Приёмник совпал с источником: нативный шаг цепочки может резолвиться в ТЕКУЩУЮ
+        // подписку — переносить нечего, а копирование файла в себя же CopyFileShared не умеет
+        // (чтение и запись одного пути → IOException → ретраи до дедлайна 8 с, и кандидат
+        // отсеивается как «не перенеслось»). Пути приходят из разных источников, поэтому
+        // сравниваем без учёта регистра и хвостового разделителя.
+        if (string.Equals(TrimPath(_profileRoot), TrimPath(dstRoot), StringComparison.OrdinalIgnoreCase))
+            return true;
         if (ResolveCwd() is not { } cwd) return false; // папка вне монтирований песочницы
         // Транскрипта нет в источнике ВООБЩЕ: CLI умер до первой записи в .jsonl (мгновенная
         // AuthFailure — основной сценарий фолбэка: 401 приходит за ~100-400мс, CLI не успевает
@@ -1058,6 +1276,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return true;
     }
 
+    // Путь для сравнения «источник и приёмник — одна папка»: без хвостового разделителя
+    // (пути приходят из разных источников — конфиг профилей, сборка песочницы).
+    private static string TrimPath(string path) =>
+        path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
     // Обратный перенос транскрипта в профиль исходного провайдера при restore после смены типа
     // поставщика (IsProviderSwitch). Финальный ответ хода CLI записал только в профиль ПОДМЕНЫ
     // (_profileRoot); restore вернёт Info.Provider в исходный — следующий ход на --resume из
@@ -1068,6 +1291,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
+        // Шаг цепочки мог остаться в ТОЙ ЖЕ подписке — возвращать транскрипт некуда, а копия
+        // файла в себя же уходит в ретраи CopyFileShared до дедлайна (см. TryMigrateTranscript).
+        if (string.Equals(TrimPath(_profileRoot), TrimPath(dstRoot), StringComparison.OrdinalIgnoreCase))
+            return true;
         if (ResolveCwd() is not { } cwd)
         {
             LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: папка вне монтирований песочницы (src={_profileRoot}, dst={dstRoot})");
@@ -1113,12 +1340,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // финале) — своего сохранения у адаптера нет, им владеет SessionManager
     }
 
-    // Текущий ключ пары: провайдер по модели (приоритет), затем Provider сессии —
-    // тот же порядок, что у MigrateProviderAsync при вычислении currentKey
-    private string CurrentProviderKey()
+    // Текущий ключ пары «где чат/ход живёт сейчас»: провайдер по модели (приоритет), затем
+    // Provider сессии — тот же порядок, что у MigrateProviderAsync при вычислении currentKey.
+    // model — модель ТЕКУЩЕЙ пары (Info.Model либо шаг цепочки, с которого стартовал ход);
+    // выбирать подписку пула здесь запрещено (этим занят ProviderKeyFor для кандидатов).
+    private string CurrentProviderKey(string? model)
     {
         var byModel = _providers?.ResolveByModel(
-            string.IsNullOrWhiteSpace(Info.Model) ? null : Info.Model)?.Key;
+            string.IsNullOrWhiteSpace(model) ? null : model)?.Key;
         return byModel ?? (string.IsNullOrEmpty(Info.Provider)
             ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
     }
@@ -1182,6 +1411,41 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             await _downstream(m);
         await _downstream(result);
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
+            await _downstream(m);
+    }
+
+    /// <summary>
+    /// Финал «канала наружу нет»: повтор не помог, а перебирать цепочку бессмысленно — её шаги
+    /// ведут через тот же прокси. Человек читает про сеть, а не про «сервис не отвечает»: второе
+    /// толкает его менять модель, чего делать как раз не надо. Сырой текст CLI уезжает в Details.
+    /// </summary>
+    private async Task FailEgressAsync(FallbackTurn turn, AttemptEnd end)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        // ExpectResultFollows: true — не украшение, а часть контракта конца хода: по этой паре
+        // «ошибка → result» SessionManager взводит SkipNextTeamTurnEnd и разбирает конец хода
+        // штаба РОВНО ОДИН раз. Без флага командный чат получил бы две карточки эскалации и два
+        // push'а на один ход — тот самый дефект, ради которого флаг и заводился.
+        var raw = end.ErrorText ?? HeldErrorDetails(held);
+        await _downstream(new ErrorMessage(TurnFailureText.EgressDown, ExpectResultFollows: true, Details: raw));
+
+        // Финальный result — ошибочный: ход не состоялся, и статус чата обязан это показать
+        // (иначе провал маскируется штатным finished — та же половина P29, что у FailClosed).
+        var orig = held.OfType<ResultMessage>().FirstOrDefault();
+        await _downstream(orig is { Subtype: "error" }
+            ? orig
+            : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
+                orig?.Usage, orig?.TotalCostUsd,
+                ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
+        // Ошибку попытки уже заменили своей — наружу идёт только прочее (exited и т.п.)
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);
     }
 
@@ -1352,6 +1616,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         public List<ServerMessage> Held = [];
         public string? ErrorText;
         public string? RateLimitResetsAt;
+        // Прерывание хода («Стоп» / interrupt ради очереди). Живёт ровно ход, поэтому лежит
+        // здесь, а не в поле адаптера: тот переживает много ходов, а CTS одноразовый.
+        // Нужен, чтобы паузу перед повтором при лежащем канале рвал сам «Стоп».
+        public readonly CancellationTokenSource Interrupted = new();
 
         public static TaskCompletionSource<AttemptEnd> NewTcs() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);

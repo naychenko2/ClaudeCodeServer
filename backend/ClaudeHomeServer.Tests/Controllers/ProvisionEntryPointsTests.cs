@@ -1,20 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Точки вызова DefaultAssistantProvisioner.EnsureAsync (план §2.1–2.3): рубеж создания чата
-// проверен отдельно (ChatCreationPersonaGateTests); здесь — хук включения флага
-// (FeatureFlagsController.Set, план 2.2) и провижн нового пользователя (UsersController.Create,
-// план 2.3). Стартовый проход Program.cs и сама логика EnsureAsync — тонкая обёртка над уже
-// покрытым DefaultAssistantProvisionerTests (идемпотентность, гонка, профиль); отдельно не
-// перепроверяются — независимой ветвления там нет. Своя фабрика НА КАЖДЫЙ тест (не
-// IClassFixture): счётчик персон и состояние флага общего UserStore иначе текли бы
-// между фактами класса и делали бы результат зависимым от порядка выполнения.
+// Точки вызова DefaultAssistantProvisioner.EnsureAsync: рубеж создания чата проверен отдельно
+// (ChatCreationPersonaGateTests); здесь — стартовый проход Program.cs для существующих
+// пользователей и провижн нового пользователя (UsersController.Create). Сама логика EnsureAsync
+// (идемпотентность, гонка, профиль) покрыта DefaultAssistantProvisionerTests. Своя фабрика НА
+// КАЖДЫЙ тест (не IClassFixture): счётчик персон общего UserStore иначе тёк бы между фактами
+// класса и делал бы результат зависимым от порядка выполнения.
 public class ProvisionEntryPointsTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -32,59 +31,41 @@ public class ProvisionEntryPointsTests : IDisposable
             await (await _client.GetAsync("/api/personas?scope=global")).Content.ReadAsStringAsync())
             .GetArrayLength();
 
+    // Стартовый проход Program.cs — единственная точка провижна существующим пользователям:
+    // к первому же запросу дефолт есть, он же заготовка, и он ровно один.
     [Fact]
-    public async Task ХукФлага_Включение_ПровижнитРовноОднуЗаготовку()
+    public async Task СтартовыйПроход_ДаётСуществующемуПользователюРовноОднуЗаготовку()
     {
-        var before = await CountGlobalPersonasAsync();
-
-        var response = await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = true });
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-
         var me = await MeAsync();
         me.GetProperty("defaultPersonaId").ValueKind.Should().Be(JsonValueKind.String);
-        (await CountGlobalPersonasAsync()).Should().Be(before + 1,
-            "включение флага провижнит ровно одну заготовку (план 2.2)");
+        me.GetProperty("needsOnboarding").GetBoolean().Should().BeTrue(
+            "дефолт — нетронутая заготовка, знакомство ещё не пройдено");
 
-        // Повторное включение (тумблер туда-обратно) не плодит вторую — EnsureAsync идемпотентен
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-        (await CountGlobalPersonasAsync()).Should().Be(before + 1);
+        (await CountGlobalPersonasAsync()).Should().Be(1,
+            "стартовый проход идемпотентен — второй заготовки не появляется");
     }
 
+    // Новый пользователь получает заготовку прямо при заведении (UsersController.Create),
+    // без ожидания следующего старта сервера. Проверяем через стор: чужие персоны по HTTP
+    // не видны, а DTO пользователя персональных полей онбординга не содержит вовсе.
     [Fact]
-    public async Task ХукФлага_Выключение_НеТрогаетУжеПровижнутуюПерсону()
-    {
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-        var assistantId = (await MeAsync()).GetProperty("defaultPersonaId").GetString();
-
-        var response = await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = false });
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-
-        (await _client.GetAsync($"/api/personas/{assistantId}")).StatusCode.Should().Be(HttpStatusCode.OK,
-            "выключение флага не удаляет и не трогает уже созданную персону (план 3г)");
-    }
-
-    // Флаг default-personas-onboarding сегодня выключен по умолчанию в каталоге (dark launch) —
-    // EnsureAsync у нового пользователя без per-user override оказывается no-op. Тест фиксирует
-    // это поведение как регрессионную страховку: провижн нового пользователя не должен падать
-    // и не должен создавать персону, пока флаг не станет дефолтно включённым.
-    [Fact]
-    public async Task НовыйПользователь_БезДефолтноВключённогоФлага_НеПолучаетПерсону()
+    public async Task НовыйПользователь_ПолучаетЗаготовкуПриЗаведении()
     {
         var username = "guard_user_" + Guid.NewGuid().ToString("N")[..8];
         var response = await _client.PostAsJsonAsync("/api/users", new
         {
             username, password = "password12345", role = "user",
         });
-
         response.StatusCode.Should().Be(HttpStatusCode.Created);
-        var created = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
-        created.TryGetProperty("defaultPersonaId", out var dp).Should().BeFalse(
-            "DTO нового пользователя вообще не содержит персональных полей онбординга — они не публичные");
+
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var personas = _factory.Services.GetRequiredService<PersonaManager>();
+        var created = users.FindByUsername(username);
+        created.Should().NotBeNull();
+        created!.DefaultPersonaId.Should().NotBeNull("новичок сразу получает ассистента");
+        created.AssistantPersonaId.Should().Be(created.DefaultPersonaId,
+            "созданный дефолт — заготовка: оба поля совпадают, пока её не тронули");
+        personas.Get(created.DefaultPersonaId!, created.Id).Should().NotBeNull(
+            "дефолт резолвится в живую персону");
     }
 }

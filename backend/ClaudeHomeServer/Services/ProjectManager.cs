@@ -143,7 +143,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        string? color = null, List<string>? mcpServersOn = null)
+        string? color = null, List<string>? mcpServersOn = null, bool? autoImportDossiers = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -177,6 +177,7 @@ public class ProjectManager
                 ? null
                 : [.. mcpServersOn.Select(k => k.Trim().ToLowerInvariant())
                     .Where(k => k.Length > 0).Distinct(StringComparer.Ordinal)];
+        if (autoImportDossiers is not null) project.AutoImportDossiers = autoImportDossiers.Value;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;
@@ -233,7 +234,7 @@ public class ProjectManager
         return project;
     }
 
-    // Установить подобранный значок (ADR-009 §6): Kind = Glyph, Glyph = {Name|Paths, SetAt}.
+    // Установить подобранный значок (ADR-009 §6): Kind = Glyph, Glyph = {Name, SetAt}.
     // Значок обязан пройти валидацию ДО вызова (контроллер, ProjectIconGlyphService.ValidateGlyph) —
     // инвариант «валидация на входе в стор» (§11.3).
     public Project SetIconGlyph(string id, ProjectGlyph glyph)
@@ -291,10 +292,10 @@ public class ProjectManager
     /// </summary>
     /// <param name="candidatesOnly">
     /// Режим массового прогона (ADR-008 §10): забирать только проекты, которых генерация
-    /// НИКОГДА не касалась (<c>Background == null</c>), плюс протухший Pending, плюс Failed.
-    /// Failed сюда попадает единственным путём — транзиентный возврат по явному включению
-    /// флага (<c>ProjectBackgroundBackfill.IsCandidate</c> с <c>allowTransientRetry</c>);
-    /// какой именно Failed подходит, решает IsCandidate, здесь — только механика захвата.
+    /// НИКОГДА не касалась (<c>Background == null</c>), плюс протухший Pending.
+    /// Failed механика захвата пропускает, но отбор кандидатов
+    /// (<c>ProjectBackgroundBackfill.IsCandidate</c>) его не возвращает: единственный путь
+    /// Failed → прогон — тот, где он успел протухнуть в Pending.
     /// Generated/Standard не проходят — защита от перетирания чужой успешной работы.
     /// Проверка идёт под тем же локом, что и захват, — иначе кнопка «Вернуть стандартный»,
     /// нажатая между выбором кандидатов и их обработкой, была бы перетёрта прогоном.
@@ -426,6 +427,32 @@ public class ProjectManager
     }
 
     // Кастомные колонки Kanban-доски проекта; пустой список/null → дефолтные 3
+    // Тумблер грани десктопного агента в проекте (ADR-008): вторая половина оси выдачи
+    // «проект + тип чата». Гашение живых сеансов рук — забота вызывающего контроллера,
+    // здесь только состояние проекта.
+    public Project SetDesktopAgent(string id, bool enabled)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.DesktopAgentEnabled = enabled;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive): null — наследовать
+    // личный порог владельца. Диапазон валидирует контроллер, здесь сеттер, как у остальных
+    // точечных обновлений.
+    public Project SetArchiveAfterDays(string id, int? days)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.ArchiveAfterDays = days;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     public Project UpdateBoardColumns(string id, List<BoardColumn>? columns)
     {
         var project = _projects.GetValueOrDefault(id)

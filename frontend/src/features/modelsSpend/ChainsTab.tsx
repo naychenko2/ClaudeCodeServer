@@ -6,13 +6,13 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChainStepsEditor } from '../../components/ChainStepsEditor';
 import { C, FONT, FS, SP, R } from '../../lib/design';
 import { api } from '../../lib/api';
-import { isChainStepDimmed, reloadPresetSettings, stepsWord, substitutionsWord,
-  usePresets, useSubstitutionBudget } from '../../lib/presets';
+import { isChainStepDimmed, reloadPresetSettings,
+  stepsWord, substitutionsWord, usePresets, useSubstitutionBudget } from '../../lib/presets';
+import type { LayerReducer } from '../../lib/presets';
 import { newPresetId, withNewPreset } from '../../lib/specialties';
 import type { ModelOption } from '../../lib/models';
 import type { TierKey } from '../../lib/modelProvidersShared';
-import type { ModelRoutePreset, PresetUsageResponse, ScopedPreset,
-  SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import type { PresetUsageResponse, ScopedPreset, SpecialtySettingsLayer } from '../../types';
 
 // === Четвёртая вкладка раздела «Модели и расход» (спекa B1–B3, C2, C4) ===
 // Здесь живут цепочки целиком: список, бейдж слоя, диалоги создания/переименования/
@@ -21,58 +21,44 @@ import type { ModelRoutePreset, PresetUsageResponse, ScopedPreset,
 
 const HARD_MAX_STEPS = 5;
 
-type ChainScope = 'owner' | 'global' | 'user';
+// ADR-012 снял owner/user-слои: цепочка бывает только общей, писать её может лишь админ.
+// Прежние scope-ветки звали удалённые маршруты (GET /settings/user/{id},
+// PUT /settings/fallback/owner) и молча падали в 404/403.
+type ChainScope = 'global';
 
 type CreateDraft = { name: string; scope: ChainScope; steps: string[] };
 
-export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSaveLayer, onReloadSettings,
-  models, tierModels, ollamaModel }: {
+export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
+  onReloadSettings, models, tierModels, ollamaModel }: {
   isAdmin: boolean;
-  // Админ выбирает пользователя для user-слоя (нужен для создания user-цепочек)
+  // Выбранный в модалке пользователь. Для цепочек больше не значим (слой один общий) —
+  // проп остался ради единой сигнатуры вкладок модалки.
   contextUserId: string | null;
-  settings: SpecialtySettingsResponse | null;
+  // Идёт ли сейчас сохранение слоя на стороне модалки — для busy на кнопках диалогов.
   savingScope: 'global' | 'owner' | 'user' | null;
-  onSaveLayer: (scope: ChainScope, next: SpecialtySettingsLayer) => Promise<void>;
-  onReloadSettings: () => Promise<void>;
+  onSaveLayer: (scope: ChainScope, reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
+  // Неразрушающая перечитка настроек: пикеры продолжают показывать прежние цепочки,
+  // пока не пришёл новый снимок. Сигнатура void (не промис) — fire-and-forget.
+  onReloadSettings: () => void;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
 }) {
+  void contextUserId;
   const presets = usePresets();
   const budget = useSubstitutionBudget();
   const [creating, setCreating] = useState<CreateDraft | null>(null);
   // rename — редактирование имени существующей цепочки (диалог открыт)
-  const [renaming, setRenaming] = useState<{ id: string; scope: ChainScope; name: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   // deleteTarget — кого удаляем; usage подгружается отдельно (модально)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; scope: ChainScope; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteUsage, setDeleteUsage] = useState<PresetUsageResponse | null>(null);
   const [deleteUsageLoading, setDeleteUsageLoading] = useState(false);
   // Развёрнутые цепочки: показывают шаги редактором, по умолчанию свёрнуты
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // Иммутабельная правка пресета в слое через клон слоя — вынесено, чтобы не дублировать
-  // в диалогах создания/правки/удаления. Возвращает null, если пресет не найден в слое.
-  const clonePreset = (scope: ChainScope,
-    mutate: (preset: ModelRoutePreset) => ModelRoutePreset,
-    predicate: (p: ModelRoutePreset) => boolean = () => true): SpecialtySettingsLayer | null => {
-    if (!settings) return null;
-    // user-слой может быть не загружен (админ ещё не открывал вкладку «Особые правила»
-    // для этого пользователя) — тогда правка невозможна, возвращаем null
-    const base = settings[scope];
-    if (!base) return null;
-    const next = JSON.parse(JSON.stringify(base)) as SpecialtySettingsLayer;
-    const i = next.presets.findIndex(predicate);
-    if (i === -1) return null;
-    const updated = mutate({ ...next.presets[i] });
-    if (!updated) {
-      next.presets.splice(i, 1);
-    } else {
-      next.presets[i] = updated;
-    }
-    return next;
-  };
-
-  const openDelete = (target: { id: string; scope: ChainScope; name: string }) => {
+  const openDelete = (target: { id: string; name: string }) => {
     setDeleteUsage(null);
     setDeleteUsageLoading(true);
     setDeleteTarget(target);
@@ -85,39 +71,40 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
   };
 
   const handleCreate = async (draft: CreateDraft) => {
-    if (!settings) return;
-    // Общая и user-цепочка — только админ при выбранном пользователе. На уровне
-    // контрола опция уже спрята от не-админа/без контекста; эта проверка — страховка
-    // от рассинхронизации UI с правом.
-    if (draft.scope === 'global' && !isAdmin) return;
-    if (draft.scope === 'user' && (!isAdmin || !contextUserId)) return;
+    // Цепочка общая, писать может только админ. На уровне контрола кнопка уже спрятана
+    // от не-админа; проверка — страховка от рассинхронизации UI с правом.
+    if (!isAdmin) return;
     if (draft.name.trim() === '' || draft.steps.length === 0) return;
     const id = newPresetId();
-    // user-слой опционален в SpecialtySettingsResponse — если админ ещё не открыл
-    // вкладку «Особые правила» для этого пользователя, слой пуст. Клонируем пустой
-    // шаблон, withNewPreset поставит пресет в presets: [].
-    const base: SpecialtySettingsLayer = settings[draft.scope]
-      ?? { specialties: {}, defaultSpecialty: null, presets: [] };
-    const next = withNewPreset(base, id, draft.name.trim(), draft.steps);
-    await onSaveLayer(draft.scope, next);
+    // Редьюсер «над» cur (стор уже выбрал актуальный слой), дописываем пресет.
+    // После успеха стор шлёт PUT и фиксирует снимок.
+    await onSaveLayer('global', (cur) => withNewPreset(cur, id, draft.name.trim(), draft.steps));
     setCreating(null);
   };
 
-  const handleRename = async (id: string, scope: ChainScope, name: string) => {
+  const handleRename = async (id: string, name: string) => {
     const trimmed = name.trim();
     if (trimmed === '') return;
-    const next = clonePreset(scope, () => ({ id, name: trimmed, description: null, steps: presets
-      .find(p => p.id === id)?.steps ?? [] }) as ModelRoutePreset, p => p.id === id);
-    if (!next) return;
-    await onSaveLayer(scope, next);
+    const sourceSteps = presets.find(p => p.id === id)?.steps ?? [];
+    await onSaveLayer('global', (cur) => {
+      const next = JSON.parse(JSON.stringify(cur)) as SpecialtySettingsLayer;
+      const i = next.presets.findIndex(p => p.id === id);
+      if (i === -1) return cur;
+      next.presets[i] = { id, name: trimmed, description: null, steps: sourceSteps };
+      return next;
+    });
     setRenaming(null);
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget || !settings) return;
-    const next = clonePreset(deleteTarget.scope, () => null as unknown as ModelRoutePreset, p => p.id === deleteTarget.id);
-    if (!next) return;
-    await onSaveLayer(deleteTarget.scope, next);
+    if (!deleteTarget) return;
+    await onSaveLayer('global', (cur) => {
+      const next = JSON.parse(JSON.stringify(cur)) as SpecialtySettingsLayer;
+      const i = next.presets.findIndex(p => p.id === deleteTarget.id);
+      if (i === -1) return cur;
+      next.presets.splice(i, 1);
+      return next;
+    });
     setDeleteTarget(null);
     setDeleteUsage(null);
   };
@@ -125,16 +112,12 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
   // Изменение бюджета: успех → перечитать снэпшот настроек, чтобы useSubstitutionBudget
   // обновился без отдельной дороги store'а; снимаем значение нельзя — потолок задаётся
   // глобально (спека) и ползунок 1..5. Ошибка — откат через onReloadSettings.
+  // Бюджет теперь только общий: PUT /settings/fallback/owner удалён вместе с owner-слоем,
+  // поэтому у не-админа ползунка нет вовсе (прежде он давал 404 и молчаливый откат).
   const handleBudgetChange = async (next: number) => {
-    if (next === budget) return;
+    if (next === budget || !isAdmin) return;
     try {
-      // У админа — глобальный бюджет. У обычного — личный. Это даёт каждому пользователю
-      // шанс поднять бюджет лично, не дожидаясь админа (дефолт 4 покрывает цепочки из 5).
-      if (isAdmin) {
-        await api.specialties.setMaxSubstitutions('global', next);
-      } else {
-        await api.specialties.setMaxSubstitutions('owner', next);
-      }
+      await api.specialties.setMaxSubstitutions('global', next);
       reloadPresetSettings();
     } catch {
       // откат через onReloadSettings — на ошибке перечитаем прежний снэпшот
@@ -153,7 +136,7 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, paddingBottom: SP.xl }}>
-      <HeaderBlock budget={budget}
+      <HeaderBlock budget={budget} canEdit={isAdmin}
         onBudgetChange={handleBudgetChange} />
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm, flexWrap: 'wrap' }}>
@@ -163,23 +146,29 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
         }}>
           Цепочки
         </div>
-        <Button
-          size="sm"
-          variant="primary"
-          leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          onClick={() => setCreating({
-            name: '', scope: isAdmin ? 'global' : 'owner', steps: ['strong:default', 'medium:default'],
-          })}
-        >
-          Новая цепочка
-        </Button>
+        {/* Цепочка общая, пишет её только админ — не-админу кнопка гарантированно
+            вернула бы 403, поэтому её нет вовсе. */}
+        {isAdmin && (
+          <Button
+            size="sm"
+            variant="primary"
+            leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            onClick={() => setCreating({
+              name: '', scope: 'global', steps: ['strong:default', 'medium:default'],
+            })}
+          >
+            Новая цепочка
+          </Button>
+        )}
       </div>
 
       {presets.length === 0 ? (
         <EmptyState
           icon={<ChainIcon />}
           title="Цепочек пока нет"
-          subtitle="Соберите первую — она подстрахует ход, если основная модель не ответит."
+          subtitle={isAdmin
+            ? 'Соберите первую — она подстрахует ход, если основная модель не ответит.'
+            : 'Цепочки общие: их собирает администратор.'}
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
@@ -197,13 +186,15 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
               ollamaModel={ollamaModel}
               savingScope={savingScope}
               onToggleExpand={() => setExpanded(s => ({ ...s, [p.id]: !s[p.id] }))}
-              onRename={() => setRenaming({ id: p.id, scope: p.scope, name: p.name })}
-              onDelete={() => openDelete({ id: p.id, scope: p.scope, name: p.name })}
-              onSaveSteps={(steps) => {
-                const next = clonePreset(p.scope, () => ({ ...p, steps }), x => x.id === p.id);
-                if (!next) return Promise.resolve();
-                return onSaveLayer(p.scope, next).catch(() => {});
-              }}
+              onRename={() => setRenaming({ id: p.id, name: p.name })}
+              onDelete={() => openDelete({ id: p.id, name: p.name })}
+              onSaveSteps={(steps) => onSaveLayer('global', (cur) => {
+                const next = JSON.parse(JSON.stringify(cur)) as SpecialtySettingsLayer;
+                const i = next.presets.findIndex(x => x.id === p.id);
+                if (i === -1) return cur;
+                next.presets[i] = { ...p, steps };
+                return next;
+              }).catch(() => {})}
             />
           ))}
         </div>
@@ -212,7 +203,6 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
       {creating && (
         <CreateChainDialog
           draft={creating}
-          isAdmin={isAdmin}
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
@@ -227,7 +217,7 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
         <RenameChainDialog
           initialName={renaming.name}
           onCancel={() => setRenaming(null)}
-          onSubmit={(name) => handleRename(renaming.id, renaming.scope, name)}
+          onSubmit={(name) => handleRename(renaming.id, name)}
           busy={savingScope !== null}
         />
       )}
@@ -247,8 +237,12 @@ export function ChainsTab({ isAdmin, contextUserId, settings, savingScope, onSav
 }
 
 // === Подзаголовок + бюджет подмен ===
-function HeaderBlock({ budget, onBudgetChange }: {
+function HeaderBlock({ budget, canEdit, onBudgetChange }: {
   budget: number;
+  // Бюджет подмен после ADR-012 только общий (PUT /settings/fallback/global, admin-only).
+  // Не-админу показываем значение текстом: прежний ползунок звал снятый .../fallback/owner
+  // и молча откатывался.
+  canEdit: boolean;
   onBudgetChange: (v: number) => void;
 }) {
   const [showHint, setShowHint] = useState(false);
@@ -262,11 +256,17 @@ function HeaderBlock({ budget, onBudgetChange }: {
         Подмен за один ход
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <InlineSegmented
-          value={String(budget)}
-          options={options}
-          onChange={(v) => onBudgetChange(Number(v))}
-        />
+        {canEdit ? (
+          <InlineSegmented
+            value={String(budget)}
+            options={options}
+            onChange={(v) => onBudgetChange(Number(v))}
+          />
+        ) : (
+          <span style={{
+            fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700, color: C.textHeading,
+          }}>{budget}</span>
+        )}
         <span style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
           {substitutionsWord(budget)} · первый шаг — не подмена: цепочка из {budget + 1} шага
           отработает целиком
@@ -340,16 +340,13 @@ function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models,
   // Сбросить черновик при смене исходных шагов (например, после правки слоя)
   useEffect(() => { setSteps(preset.steps); setDirty(false); }, [preset.steps]);
 
-  const canEditSteps = isAdmin || preset.scope === 'owner';
+  // Цепочка общая всегда (ADR-012), править её может только админ.
+  const canEditSteps = isAdmin;
   const busy = savingScope !== null;
 
   const commitSave = () => {
     if (steps.length === 0) return;
-    if (isAdmin && preset.scope === 'global') {
-      setConfirmSharedSave(true);
-      return;
-    }
-    void onSaveSteps(steps).then(() => setDirty(false));
+    setConfirmSharedSave(true);
   };
 
   const cardDimWrap: CSSProperties = { borderRadius: R.lg, border: `1px solid ${C.border}`,
@@ -373,7 +370,7 @@ function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models,
             : <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           <span>{preset.name}</span>
         </button>
-        <ScopeBadge scope={preset.scope} />
+        <ScopeBadge />
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: FS.xs, color: C.textMuted }}>
           {stepsWord(preset.steps.length)}
@@ -498,31 +495,25 @@ function stepInlineLabel(step: string, ctx: { tierModels: Record<TierKey, string
   return step;
 }
 
-function ScopeBadge({ scope }: { scope: ChainScope }) {
-  // user-цепочка админа видна только ему — нейтральная подпись, чтобы не привлекать
-  // внимание в общем списке («Пользователю…» уже объяснён в шапке)
-  const label = scope === 'owner' ? 'Только для меня'
-    : scope === 'user' ? 'Пользователю…'
-    : 'Для всех';
-  const isOwner = scope === 'owner';
+function ScopeBadge() {
+  // Слоёв больше нет (ADR-012): любая цепочка общая — подпись одна.
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center',
       padding: '2px 8px', borderRadius: R.max,
-      background: isOwner ? C.bgSelected : C.accentLight,
-      color: isOwner ? C.textSecondary : C.accent,
+      background: C.accentLight,
+      color: C.accent,
       fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans,
     }}>
-      {label}
+      Для всех
     </span>
   );
 }
 
 // === Диалог создания цепочки (B1) ===
-function CreateChainDialog({ draft, isAdmin, models, tierModels, ollamaModel, onChange,
+function CreateChainDialog({ draft, models, tierModels, ollamaModel, onChange,
   onCancel, onSubmit, busy }: {
   draft: CreateDraft;
-  isAdmin: boolean;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
@@ -546,19 +537,6 @@ function CreateChainDialog({ draft, isAdmin, models, tierModels, ollamaModel, on
           />
         </Field>
 
-        {isAdmin && (
-          <Field label="Слой">
-            <InlineSegmented
-              value={draft.scope}
-              options={[
-                { value: 'global', label: 'Для всех' },
-                { value: 'owner', label: 'Только для меня' },
-              ]}
-              onChange={(v) => onChange({ ...draft, scope: v as 'global' | 'owner' })}
-            />
-          </Field>
-        )}
-
         <Field label="Шаги">
           <ChainStepsEditor
             steps={draft.steps}
@@ -574,8 +552,8 @@ function CreateChainDialog({ draft, isAdmin, models, tierModels, ollamaModel, on
 
         {stepNames.length > 0 && (
           <div style={{ fontSize: FS.xs, color: C.textMuted }}>
-            Будет {stepNames.length === 1 ? '1 шаг' : `${stepNames.length} шага`} в
-            {' '}{draft.scope === 'owner' ? 'слое «Только для меня»' : 'общем слое'}.
+            Будет {stepNames.length === 1 ? '1 шаг' : `${stepNames.length} шага`} в общем слое —
+            {' '}цепочку увидят все.
           </div>
         )}
 

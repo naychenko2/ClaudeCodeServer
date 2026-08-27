@@ -19,6 +19,8 @@ internal sealed class SubagentRunTally(string agentId)
     public string? ToolUseId { get; set; }
     // Ватчер подключился к уже начатому транскрипту: часть строк не прочитана никогда
     public bool Partial { get; set; }
+    // В этом прогоне ватчера Feed вызывался (были новые строки в транскрипте)
+    public bool FeedCalled { get; set; }
 
     public DateTime StartedAt { get; private set; }
     public DateTime LastActivityAt { get; private set; }
@@ -40,6 +42,7 @@ internal sealed class SubagentRunTally(string agentId)
 
     public void Feed(JsonElement root)
     {
+        FeedCalled = true;
         if (!root.TryGetProperty("type", out var t)) return;
         var type = t.GetString();
 
@@ -88,7 +91,8 @@ internal sealed class SubagentRunTally(string agentId)
         }
     }
 
-    public SubagentRunPassport Build(string? sessionId, string finishedBy, long transcriptBytes) => new(
+    public SubagentRunPassport Build(string? sessionId, string finishedBy, long transcriptBytes,
+        int cliContextWindow = 0) => new(
         AgentId: AgentId,
         AgentType: AgentType,
         Description: Description,
@@ -111,7 +115,8 @@ internal sealed class SubagentRunTally(string agentId)
         NudgeAttempts: 0,
         Partial: Partial,
         FinishedBy: finishedBy,
-        RecordedAt: DateTime.UtcNow);
+        RecordedAt: DateTime.UtcNow,
+        CliContextWindow: cliContextWindow);
 
     private static long Num(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;

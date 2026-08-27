@@ -9,7 +9,7 @@ public enum ChatOrigin { Manual, Task, Automation }
 // Режимы прав — соответствуют значениям флага --permission-mode у claude CLI
 public enum ClaudeMode { Default, AcceptEdits, Plan, Auto, DontAsk, Bypass }
 
-// Значения Session.OnboardingKind (фича default-personas-onboarding):
+// Значения Session.OnboardingKind:
 // User — онбординг первого входа (ведёт системный «Мастер настройки», персоны у сессии нет);
 // Project — онбординг проекта (ведёт личная дефолт-персона владельца).
 public static class OnboardingKinds
@@ -343,6 +343,16 @@ public class Session
     // Чат заглушён: браузерные уведомления («нужно решение» / «ход завершён») по нему не
     // показываются. Настройка ЧАТА; общее разрешение браузера — глобальный тумблер в разделе «Уведомления»
     public bool NotificationsMuted { get; set; }
+    // Инструменты, которым в ЭТОМ чате разрешено работать без карточки разрешения —
+    // след нажатий «Разрешать всегда» (SessionManager.RespondPermission). Живёт на сессии,
+    // а не в памяти адаптера: адаптер пересоздаётся рестартом сервера, ленивым восстановлением
+    // чата и сменой собеседника, и после каждого такого пересоздания человек жал «всегда»
+    // заново. Не правило проекта: «всегда» нажато в конкретном разговоре, а правило расширило
+    // бы права на все чаты проекта (и у чатов вне проекта правил нет вовсе).
+    // Скоуп — инструмент ЦЕЛИКОМ: «Bash» = любые команды в этом чате, без разбора аргументов.
+    // Сравнение имён — OrdinalIgnoreCase. Дефолт-пустой список: старые записи sessions.json
+    // читаются штатно, BackupSchema.Version не двигается (аддитивное поле формат не ломает).
+    public List<string> AutoAllowTools { get; set; } = [];
     // Голосовой режим чата: ответ озвучивается фронтом через POST /api/tts (Yandex SpeechKit).
     // Тумблер — кнопка в композере.
     public bool VoiceMode { get; set; }
@@ -356,6 +366,27 @@ public class Session
     // в data/sessions.json (он же едет в бэкапы) и в ответы API.
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsVoiceDigest => VoiceMode && VoiceStyle == VoiceStyles.Digest;
+    // Тип чата «Десктопный» (ADR-008 о десктопном агенте, флаг desktop-agent): половина оси
+    // выдачи грани desktop_* — вторая половина Project.DesktopAgentEnabled. Тип задаётся при
+    // СОЗДАНИИ чата и дальше не меняется: состав инструментов фиксируется на момент запуска CLI
+    // (BuildLaunchSignature), а переключение на живом чате перезапустило бы процесс со всеми
+    // MCP-серверами.
+    // ИНВАРИАНТ (ADR, «Последствия»): у десктопного чата собственный ClaudeSessionId — его
+    // нельзя создать из resumeSessionId и нельзя продолжить из него. Причина не в гигиене:
+    // кадры рабочего стола оседают в транскрипте CLI (.jsonl с base64), и ветвление разговора
+    // растащило бы их по чужим чатам. Само правило применяют контроллеры создания/резюма
+    // чата — здесь только признак.
+    // Второе правило — НАЖИТЫЙ транскрипт с кадрами чужому вендору не отдаём: автоматический
+    // фолбэк режет цепочку хода до пула Claude (FallbackLlmSessionAdapter.TrimChainForDesktop),
+    // ручная смена провайдера отказывает (SessionManager.MigrateProviderAsync). А вот выбор
+    // стороннего провайдера при СОЗДАНИИ чата сейчас не гейтится вовсе: явная модель в
+    // POST /api/projects/{id}/sessions, назначение места chat-new/chat-persona (фабрика
+    // адаптеров сама переписывает Provider) и смена собеседника до первого хода проводят
+    // десктопный чат на стороннего провайдера. Это известная дыра, закрывается отдельной
+    // задачей — писать здесь «стороннего провайдера у такого чата нет вовсе» было бы враньём.
+    // Дефолт false: старые записи sessions.json читаются штатно, BackupSchema.Version не
+    // двигается (аддитивное поле с дефолтом формат не ломает).
+    public bool DesktopChat { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Режим «Командная реализация»: не null — чат работает как
@@ -369,7 +400,7 @@ public class Session
     // Задача-владелец чата-исполнителя (TaskExecutionService): для отображения контекста
     // («в рамках какой задачи») на плашке чата, в шапке и в артефактах сессии.
     public string? TaskId { get; set; }
-    // Онбординг-сессия (фича default-personas-onboarding): "user" | "project" (см. OnboardingKinds),
+    // Онбординг-сессия: "user" | "project" (см. OnboardingKinds),
     // null — обычный чат. Задаёт врезку онбординг-промпта в BuildPersonaLayer и гейт
     // MCP-вызова make-default (назначить дефолт из чата может только онбординг-сессия).
     public string? OnboardingKind { get; set; }
@@ -378,6 +409,21 @@ public class Session
     // ТОЛЬКО ей, а не выбранной существующей: молчаливая дозапись прав готовой персоне —
     // тихая эскалация (как и ручная смена дефолта из настроек). Персистится в sessions.json.
     public string? OnboardingCreatedPersonaId { get; set; }
+    // --- Архив чатов (план v4): архив ПРЯЧЕТ чат, а не удаляет — история, метаданные и
+    // ClaudeSessionId целы, возврат одной кнопкой. Все поля nullable с дефолтом: старые
+    // записи sessions.json читаются штатно, BackupSchema.Version не двигается (добавление
+    // поля с дефолтом формат не ломает). Момент архивации; null — чата в архиве нет.
+    public DateTime? ArchivedAt { get; set; }
+    // Кто архивировал: "user" (пункт «Убрать в архив») | "rule" (автоправило за флагом
+    // chat-auto-archive).
+    public string? ArchivedBy { get; set; }
+    // Идентификатор прохода автоправила: откат из уведомления возвращает ровно одну пачку
+    // этого прохода, а не всю историю правила. null у ручной архивации.
+    public string? ArchiveBatchId { get; set; }
+    // Кэш сводки карточки архива (место chat-digest): строится по кнопке «Собрать сводку»,
+    // инвалидируется активностью (при UpdatedAt > ArchiveSummaryAt сводка не актуальна).
+    public string? ArchiveSummary { get; set; }
+    public DateTime? ArchiveSummaryAt { get; set; }
     // Онбординг этой сессии уже финализирован (make-default прошёл): повторный вызов из живой
     // сессии — no-op, второе событие onboarding_completed в ленту не уходит (знакомство v2, п.5).
     // Персистится в sessions.json.
@@ -445,4 +491,13 @@ public class Session
     // задачи. Вычисляется, не хранится — как Origin/ParentSessionId. Фронт объединяет его с
     // статусом Finished в чип «Готово» фильтра чатов (маппинг статусов, макет A).
     public bool TaskDone => TaskId is not null && (TaskDoneResolver?.Invoke(TaskId) ?? false);
+
+    // Чат в архиве: его архивировали (ArchivedAt) и активности после этого не было
+    // (UpdatedAt не двигался). Вычисляется, не хранится — как Origin/TaskDone. Признак
+    // ПРОИЗВОДНЫЙ, поэтому мутатора «снять архив» нет: сообщения в ленту дописываются
+    // не только ходом человека (фоновые агенты, task_notification, доклад задачи), и одна
+    // точка «старт хода» ловила бы меньшинство — а здесь любая активность (UpdatedAt >
+    // ArchivedAt) возвращает чат сама. Исключения «не-активности» (значки тем, переименование,
+    // правка name/model/effort/tags) UpdatedAt у архивного чата не двигают — см. SessionManager.
+    public bool IsArchived => ArchivedAt is DateTime archived && UpdatedAt <= archived;
 }

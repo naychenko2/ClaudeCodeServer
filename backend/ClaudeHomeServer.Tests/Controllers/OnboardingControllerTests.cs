@@ -1,13 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Онбординги (фича default-personas-onboarding): старт/резюм сессий, идемпотентность
+// Онбординги: старт/резюм сессий, идемпотентность
 // double-start, кейс удалённой сессии, 400 без личного дефолта у проектного онбординга,
 // финализация через make-default из онбординг-сессии и MCP-гейт обычного чата.
 public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory>
@@ -62,6 +63,12 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
     // (OnboardingCreatedPersonaId), и финализация досевает профиль дефолта именно ей.
     private async Task<string> CreateGlobalPersonaFromSessionAsync(string name, string sessionId)
     {
+        // Предохранитель personas_create держит, пока жива заготовка-ассистент (её заводит
+        // стартовый проход провижна). Здесь предмет теста — досев профиля персоне, созданной
+        // мастером, поэтому снимаем статус заготовки: та же деградация, что и «заготовку удалили».
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        users.SetAssistantPersona(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, null);
+
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/personas");
         request.Headers.Add("X-Caller-Session-Id", sessionId);
         request.Content = JsonContent.Create(new { name });
@@ -205,9 +212,14 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task StartProject_БезЛичногоДефолта_400()
     {
         await EnsureHomeConfiguredAsync();
-        // Второй пользователь — у него точно нет дефолт-персоны (изоляция от других тестов класса)
+        // Второй пользователь — изоляция от других тестов класса. Дефолт ему завёл стартовый
+        // проход провижна, поэтому снимаем его явно: состояние «дефолта нет» штатно
+        // (заготовку удалили), но через HTTP не воспроизводится.
         var second = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var secondId = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+        users.SetDefaultPersona(secondId, null);
         var dir = Path.Combine(_tempDir, "proj2_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var projectResp = await second.PostAsJsonAsync("/api/projects", new { name = "NoDefault", rootPath = dir });
@@ -421,10 +433,6 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task StartProject_ПослеОтказаОтКаркаса_НеЗаводитВторуюСессию()
     {
         await EnsureHomeConfiguredAsync();
-        // Эндпоинт /preset гейтится фич-флагом (404 без него) — включаем, как в соседних тестах
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         var personaId = await CreateGlobalPersonaAsync("Проводница");
         (await _client.PostAsync($"/api/personas/{personaId}/make-default", null)).EnsureSuccessStatusCode();
         var projectId = await CreateProjectAsync();

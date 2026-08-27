@@ -168,9 +168,12 @@ public record ErrorMessage(string Text, bool ExpectResultFollows = false, string
 // Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля
 // использования окна; LimitType — five_hour/seven_day/weekly; Status — allowed/allowed_warning/
 // rejected. Используется и для непрерывного индикатора, и для баннера (при warning/rejected).
+// OverageDisabledReason — причина выключенного перерасхода (out_of_credits, org_level_disabled):
+// «кончились кредиты» и «выключено организацией» — разные причины с разными действиями.
 public record RateLimitMessage(string LimitType, string? ResetsAt, string? Status = null,
     double? Utilization = null, bool IsUsingOverage = false,
-    string? OverageStatus = null, string? OverageResetsAt = null)
+    string? OverageStatus = null, string? OverageResetsAt = null,
+    string? OverageDisabledReason = null)
     : ServerMessage("rate_limit");
 
 // Граница компакции контекста: Claude свернул часть истории (system/compact_boundary).
@@ -228,6 +231,13 @@ public record StatusChangedMessage(string Status, string? LastMessage = null, in
 // и закрывают, если он открыт. SessionId — в базовом поле.
 public record ChatDeletedMessage()
     : ServerMessage("chat_deleted");
+
+// Чат убран в архив или возвращён из архива (Archived — направление): архив ПРЯЧЕТ чат,
+// а не удаляет — клиенты убирают/возвращают его в списках, но семантики «чата больше нет»
+// (как у chat_deleted — на ней строятся ChatsPage/awaiting/projectActivity) здесь нет.
+// SessionId — в базовом поле.
+public record ChatArchivedMessage(bool Archived)
+    : ServerMessage("chat_archived");
 
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
@@ -288,8 +298,8 @@ public record PersonasChangedMessage(string Action, string? PersonaId = null)
 public record TeamMemoryChangedMessage(string Action, string ProjectId, string? EntryId = null)
     : ServerMessage("team_memory_changed");
 
-// Онбординг завершён (фича default-personas-onboarding): дефолт-персона назначена из
-// онбординг-сессии. Kind — "user" | "project" (см. OnboardingKinds), PersonaId — назначенная
+// Онбординг завершён: дефолт-персона назначена из онбординг-сессии.
+// Kind — "user" | "project" (см. OnboardingKinds), PersonaId — назначенная
 // дефолт-персона, ProjectId — проект онбординг-сессии (null у пользовательского).
 // Эфемерное: в history не пишется; фронт снимает гейт по концу хода (result) или кнопке,
 // а не по этому событию mid-turn.
@@ -367,6 +377,11 @@ public record TeamPlanningMessage(
         // «Планировщик не уместил план в лимит вывода», «Планировщик вернул неразборчивый план».
         // null у Start=true и у Success=true.
         string? Failure,
+        // Персона-планировщик, чьим именем рисуется карточка «Готовит план…» в ленте:
+        // спец. может быть null (ResolvePlanner ничего не нашёл) — тогда фронт гасит
+        // карточку до безличной плашки. Default=null ради обратной совместимости со
+        // старыми событиями в истории/журнале
+        string? PersonaId = null,
         int PromptChars = 0,
         int ResponseChars = 0)
     : ServerMessage("team_planning");
@@ -398,6 +413,25 @@ public record TeamImplementMessage(
         // 0 — планов ещё не было.
         int PlanVersion = 0)
     : ServerMessage("team_implement");
+
+// Пульс волны «Командной реализации» (КР-наблюдаемость, этап 1): лёгкий ежеминутный сигнал
+// о состоянии идущей волны — бейдж «КР · волна N» живой данных не имел и пульсировал
+// одинаково при работе и при обвале исполнителей. Stage — wire-токен стадии (wave/checking),
+// Liveness — alive | quiet | dead | stalled (пороги TeamImplement:QuietMinutes/StalledMinutes).
+// Эфемерное событие: в history.json НЕ пишется, Session.UpdatedAt не двигает (по нему
+// сортировка и непрочитанность), бюджет пробуждений штаба не тратится — рассылка идёт
+// напрямую в session-группу хаба из тика TeamWaveWatchdog, минуя историю. После рестарта
+// сервера «висящего» пульса нет — первый тик сторожа ставит новый (не чаще раза в минуту).
+public record TeamWavePulseMessage(
+    string Stage,
+    int WaveNumber,
+    int PlannedWaves,
+    int TasksActive,
+    int TasksTotal,
+    DateTime LastActivityAt,
+    long QuietSeconds,
+    string Liveness)
+    : ServerMessage("team_wave_pulse");
 
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
@@ -461,6 +495,26 @@ public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
 // действует снимок старта прогона (InheritedFromId).
 public record PromptSnapshotMessage(string SnapshotId, bool Applied, string? InheritedFromId = null)
     : ServerMessage("prompt_snapshot");
+
+// Статус сеанса рук десктопного агента (ADR-008 о десктопном агенте, раздел «Сеанс рук
+// и согласие») — источник бейджа «руки на home» в шапке чата и индикатора в оболочке.
+// Эфемерное событие: в history.json не пишется (аудит действий строится отдельным
+// персистируемым типом по серверной копии кадра, это не он).
+// Active=false — сеанс погашен; поля устройства и чата остаются заполненными, иначе бейджу
+// нечего снимать. Reason — отчего погас: idle (15 минут без вызовов) | cap (потолок 2 часа) |
+// client_closed | facet_off (грань выключили в проекте) | disconnected | restart | stopped
+// (человек нажал «Стоп»); у активного — null.
+// DeviceName — ЧЕЛОВЕЧЕСКОЕ имя устройства («home», «work»), то же, что принимает параметр
+// device инструментов desktop_*: GUID устройства наружу не отдаём.
+// ChatSessionId/ChatName — чат, которому принадлежат руки. Дублируют контекст намеренно:
+// бейдж живёт и вне ленты этого чата (список чатов, шапка приложения), а базовый SessionId
+// заполняется адресом броадкаста, а не смыслом.
+// StartedAt/ExpiresAt — UTC: старт сеанса и предельный срок (минимум из «15 минут без
+// вызовов» и потолка 2 часа), по нему фронт рисует отсчёт без опроса сервера.
+public record DesktopSessionMessage(bool Active, string DeviceName, string ChatSessionId,
+    string? ChatName = null, DateTime? StartedAt = null, DateTime? ExpiresAt = null,
+    string? Reason = null)
+    : ServerMessage("desktop_session");
 
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).

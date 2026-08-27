@@ -42,7 +42,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var me = userId is null ? null : users.GetById(userId);
         var contextThresholds = me?.ContextThresholds;
         var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
-        // Дефолт-персона (фича default-personas-onboarding). Нормализация сироты на чтении:
+        // Дефолт-персона. Нормализация сироты на чтении:
         // DefaultPersonaId с несуществующей персоной отдаём как null — тогда онбординг-гейт
         // сам чинит осиротевший дефолт вместо молчаливого нарушения «остаться без дефолта нельзя».
         // ВАЖНО: здесь ТОЛЬКО чтение — провижн ассистента на GET НЕ вызывается НИКОГДА (план 2.5,
@@ -50,13 +50,12 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var defaultPersona = me?.DefaultPersonaId is { } dpid && userId is not null
             ? personas.Get(dpid, userId) : null;
         var defaultPersonaId = defaultPersona?.Id;
-        // needsOnboarding — «предложить знакомство»: флаг включён, знакомство не пройдено и
-        // дефолт — это НЕТРОНУТАЯ заготовка (DefaultPersonaId == AssistantPersonaId), причём
-        // она резолвится в ЖИВУЮ персону. Резолв, а не проверка поля на null, критичен: мёртвый
+        // needsOnboarding — «предложить знакомство»: знакомство не пройдено и дефолт —
+        // это НЕТРОНУТАЯ заготовка (DefaultPersonaId == AssistantPersonaId), причём она
+        // резолвится в ЖИВУЮ персону. Резолв, а не проверка поля на null, критичен: мёртвый
         // id (заготовку удалили) не должен ни зажигать метку, ни запирать знакомство навсегда.
-        // Полноэкранный гейт убран (план волны 4) — флаг теперь лишь зажигает карточку-приглашение.
+        // Полноэкранного гейта нет — признак лишь зажигает карточку-приглашение.
         var needsOnboarding = userId is not null
-            && flags.IsEnabled(userId, FeatureFlagKeys.DefaultPersonasOnboarding)
             && me?.IntroCompletedAt is null
             && me?.DefaultPersonaId is not null
             && me?.DefaultPersonaId == me?.AssistantPersonaId

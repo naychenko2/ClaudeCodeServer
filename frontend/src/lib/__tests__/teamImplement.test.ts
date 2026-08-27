@@ -2,7 +2,7 @@
 // числа волн (plannedWaves), а не из потолка бюджета — иначе план в 2 волны показывался
 // бы как «волна 1 из 4» (потолок maxWaves).
 import { describe, it, expect } from 'vitest';
-import type { ChatItem, ServerMessage, SessionTeamImplement, TeamEscalationKind, TeamPlan } from '../../types';
+import type { ChatItem, ServerMessage, SessionTeamImplement, TeamEscalationKind, TeamPlan, TeamWaveLiveness, TeamWavePulse, TeamWaveTask } from '../../types';
 import {
   teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
   teamEscalationTone, teamEscalationInformational, teamEscalationDetailsMarkdown,
@@ -10,6 +10,11 @@ import {
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
   teamPlanningIndicatorVisible, teamPlanningElapsedLabel, teamPlanningDoneText,
   TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT,
+  itemIdxToNodePos, computeJumpHidden,
+  teamPulseTone, teamPulseActivityLabel, teamPulseMeaning, teamPulseBadgeText,
+  teamPulseBadgeShort, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel,
+  teamWaveTasksSorted, TEAM_IMPLEMENT_SHORT_NAME,
+  isTeamWavePulseStale, TEAM_WAVE_PULSE_STALE_MS,
 } from '../teamImplement';
 import { applyServerMessage, initialChatState, type ChatState } from '../chatReducer';
 
@@ -361,5 +366,512 @@ describe('индикатор планирования: поток событий
     });
     s = applyServerMessage(s, teamImplementMsg());
     expect(visible(s)).toBe(true);
+  });
+});
+
+// === Э2: пульс волны (liveness → тон/текст, эфемерность, форматирование активности) ===
+// Маппинг liveness на тон — единственная точка для бейджа/поповера. Тест пишет
+// каждое значение как комментарий «почему именно этот тон»: alive — живой ритм,
+// quiet — спокойное предупреждение, stalled/dead — нужна реакция
+describe('пульс волны: тон и пояснения', () => {
+  const LIVENESS_TONE: Record<TeamWaveLiveness, 'work' | 'warning' | 'danger'> = {
+    alive: 'work',
+    quiet: 'warning',
+    stalled: 'danger',
+    dead: 'danger',
+  };
+  for (const liveness of ['alive', 'quiet', 'stalled', 'dead'] as const) {
+    it(`liveness=${liveness} → тон ${LIVENESS_TONE[liveness]}`, () => {
+      expect(teamPulseTone(liveness)).toBe(LIVENESS_TONE[liveness]);
+    });
+  }
+
+  it('незнакомый liveness с бэка падает в danger — лучше лишний раз предупредить', () => {
+    // Известная договорённость на бэке: «похоже, зависло» — опасный класс.
+    // Тихий default сломал бы инвариант безопасности
+    expect(teamPulseTone('unknown_liveness' as TeamWaveLiveness)).toBe('danger');
+  });
+
+  // Тон продукта — «не stalled, а похоже, зависло»: штатный сценарий (сборка, тесты)
+  // действительно занимает время, и тревожный warning тут был бы ложной тревогой.
+  // На stalled/dead тон сдвигается к опасному — там бездействие штаба уже мешает
+  it('«Что это значит» для каждого liveness — без сырых wire-токенов', () => {
+    expect(teamPulseMeaning('alive')).toBe('Штаб работает: исполнители отвечают в обычном ритме');
+    expect(teamPulseMeaning('quiet')).toContain('сборка');
+    expect(teamPulseMeaning('stalled')).toMatch(/похоже, зависло/i);
+    expect(teamPulseMeaning('dead')).toContain('остановлен');
+    // Никаких 'alive' / 'stalled' / 'dead' в тексте — продуктовый язык
+    for (const liveness of ['alive', 'quiet', 'stalled', 'dead'] as const) {
+      expect(teamPulseMeaning(liveness)).not.toMatch(/\b(alive|quiet|stalled|dead)\b/i);
+    }
+  });
+});
+
+// Подпись активности в бейдже и поповере строится по серверным секундам тишины:
+// считать по Date.now() на клиенте нельзя — дрейф часов расходился бы с бэком,
+// и «N мин назад» перестало бы совпадать с реальной тишиной на сервере
+describe('пульс волны: подпись активности по серверным quietSeconds', () => {
+  const pulse = (liveness: TeamWaveLiveness, quietSeconds: number): TeamWavePulse => ({
+    stage: 'wave', waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5,
+    lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds, liveness,
+  });
+
+  it('alive — «активность N мин назад»', () => {
+    expect(teamPulseActivityLabel(pulse('alive', 240))).toBe('активность 4 минуты назад');
+    expect(teamPulseActivityLabel(pulse('alive', 60))).toBe('активность 1 минуту назад');
+    expect(teamPulseActivityLabel(pulse('alive', 0))).toBe('активность 0 минут назад');
+  });
+
+  it('quiet — «тихо N мин» (долгая задача — норма)', () => {
+    expect(teamPulseActivityLabel(pulse('quiet', 900))).toBe('тихо 15 минут');
+    expect(teamPulseActivityLabel(pulse('quiet', 60))).toBe('тихо 1 минуту');
+  });
+
+  it('stalled — «похоже, зависло · N мин тишины»', () => {
+    expect(teamPulseActivityLabel(pulse('stalled', 2100))).toBe('похоже, зависло · 35 минут тишины');
+  });
+
+  it('dead — без чисел, «процесс остановлен»', () => {
+    // dead значит «штаб-процесс мёртв», секунды тишины тут уже не информативны
+    expect(teamPulseActivityLabel(pulse('dead', 9999))).toBe('процесс остановлен');
+  });
+
+  // Округление вниз до минуты: 119с → 1 мин, 121с → 2 мин. Иначе подпись прыгала бы
+  // каждую секунду, и человек не мог бы увидеть стабильную «4 мин назад»
+  it('quietSeconds округляются вниз до минуты', () => {
+    expect(teamPulseActivityLabel(pulse('alive', 119))).toBe('активность 1 минуту назад');
+    expect(teamPulseActivityLabel(pulse('alive', 121))).toBe('активность 2 минуты назад');
+  });
+
+  // Склонение «минуту/минуты/минут» — единая форма, чтобы «1 минуту», «2 минуты»,
+  // «25 минут» шли без опечаток
+  it('склонение числительного по русскому', () => {
+    expect(teamPulseActivityLabel(pulse('alive', 21 * 60))).toBe('активность 21 минуту назад');
+    expect(teamPulseActivityLabel(pulse('alive', 22 * 60))).toBe('активность 22 минуты назад');
+    expect(teamPulseActivityLabel(pulse('alive', 25 * 60))).toBe('активность 25 минут назад');
+    expect(teamPulseActivityLabel(pulse('alive', 11 * 60))).toBe('активность 11 минут назад');
+  });
+});
+
+// Полная подпись бейджа: «КР · волна 1 · 2/5 · активность 4 мин назад» — plannedWaves=0
+// даёт просто «волна 1» (план ещё не запускался), как в teamImplementStageLabel
+describe('пульс волны: подпись бейджа — полная и короткая формы', () => {
+  const state = {
+    stage: 'wave' as const, waveNumber: 1, plannedWaves: 2, autoWaves: true, stopped: false,
+    executorPersonaIds: [], coordinatorNoCode: true, planVersion: 0,
+    budget: {
+      tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 6, maxWaves: 4, maxRuns: 20, maxRetries: 3, maxWakeups: 3,
+    },
+  };
+  const pulse = (liveness: TeamWaveLiveness, quietSeconds = 240): TeamWavePulse => ({
+    stage: 'wave', waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5,
+    lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds, liveness,
+  });
+
+  it('полная форма содержит волну, прогресс и активность', () => {
+    expect(teamPulseBadgeText(state, pulse('alive', 240)))
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · волна 1 из 2 · 2/5 · активность 4 минуты назад`);
+  });
+
+  it('plannedWaves=0 → просто «волна 1», без «из N»', () => {
+    const s0 = { ...state, plannedWaves: 0 };
+    const p0 = { ...pulse('alive', 240), plannedWaves: 0 };
+    expect(teamPulseBadgeText(s0, p0))
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · волна 1 · 2/5 · активность 4 минуты назад`);
+  });
+
+  it('dead: «процесс остановлен» вместо «активности» в полной форме', () => {
+    expect(teamPulseBadgeText(state, pulse('dead', 9999)))
+      .toContain('процесс остановлен');
+  });
+
+  // Короткая форма для узкой ширины: без «волна N из M», чтобы строка уместилась
+  // на 320px. Главное — прогресс и активность, без номера волны и приставки
+  it('короткая форма для узкой ширины', () => {
+    expect(teamPulseBadgeShort(pulse('alive', 240)))
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · 4 минуты назад`);
+    expect(teamPulseBadgeShort(pulse('quiet', 900)))
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · тихо 15 минут`);
+    expect(teamPulseBadgeShort(pulse('stalled', 2100)))
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · похоже, зависло`);
+    expect(teamPulseBadgeShort(pulse('dead', 9999)))
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · процесс остановлен`);
+  });
+});
+
+// Список задач поповера: текст статусов, время в работе, сортировка
+describe('пульс волны: список задач в поповере', () => {
+  it('статусы подписаны текстом продуктового плана, без wire-токенов', () => {
+    expect(teamWaveTaskStatusLabel('todo')).toBe('в очереди');
+    expect(teamWaveTaskStatusLabel('inProgress')).toBe('в работе');
+    expect(teamWaveTaskStatusLabel('done')).toBe('готово');
+    for (const s of ['todo', 'inProgress', 'done'] as const) {
+      expect(teamWaveTaskStatusLabel(s)).not.toMatch(/\b(todo|inProgress|done)\b/);
+    }
+  });
+
+  // Время в работе считается от startedAt, не от пульса — время старта задачи
+  // стабильнее, чем серверные секунды тишины. «N мин в работе» — отдельный счётчик,
+  // чтобы совпадал с задачами в диспетчерской
+  it('время в работе — от startedAt до now', () => {
+    const t0 = Date.parse('2026-08-23T11:00:00Z');
+    expect(teamWaveTaskRunningLabel(
+      { id: 't1', title: '', executorPersonaId: null, status: 'inProgress', updatedAt: '', startedAt: '2026-08-23T11:00:00Z' },
+      t0 + 240_000,
+    )).toBe('4 минуты в работе');
+    expect(teamWaveTaskRunningLabel(
+      { id: 't1', title: '', executorPersonaId: null, status: 'inProgress', updatedAt: '', startedAt: '2026-08-23T11:00:00Z' },
+      t0 + 30_000,
+    )).toBe('меньше минуты в работе');
+    expect(teamWaveTaskRunningLabel(
+      { id: 't1', title: '', executorPersonaId: null, status: 'todo', updatedAt: '', startedAt: null },
+      t0,
+    )).toBe('ещё не стартовала');
+  });
+
+  // Сортировка: в работе → в очереди → завершённые. Внутри группы — по updatedAt DESC.
+  // Регрессия: до сортировки поповер показывал задачи в порядке id — выглядело случайно
+  it('сортировка: в работе первые, внутри группы — свежие выше', () => {
+    const older: TeamWaveTask = { id: 't1', title: 'old done', executorPersonaId: null, status: 'done', updatedAt: '2026-08-23T10:00:00Z', startedAt: null };
+    const newer: TeamWaveTask = { id: 't2', title: 'new done', executorPersonaId: null, status: 'done', updatedAt: '2026-08-23T11:00:00Z', startedAt: null };
+    const working: TeamWaveTask = { id: 't3', title: 'work', executorPersonaId: null, status: 'inProgress', updatedAt: '2026-08-23T09:00:00Z', startedAt: null };
+    const queued: TeamWaveTask = { id: 't4', title: 'queue', executorPersonaId: null, status: 'todo', updatedAt: '2026-08-23T12:00:00Z', startedAt: null };
+    const sorted = teamWaveTasksSorted([older, queued, working, newer]);
+    expect(sorted.map(t => t.id)).toEqual(['t3', 't4', 't2', 't1']);
+  });
+});
+
+// Эфемерность: пульс НЕ создаёт ChatItem и НЕ персистируется (живёт только в
+// ChatState.teamWavePulse). Регрессия: до фичи событие могло ошибочно квалифицироваться
+// как персистируемое — счётчик длины ленты врал бы, и перезагрузка истории «обгоняла»
+// живую ленту
+describe('пульс волны: эфемерность — событие не создаёт ChatItem и не пишется в историю', () => {
+  const waveState = (over: Partial<Extract<ServerMessage, { type: 'team_implement' }>> = {}) =>
+    ({
+      type: 'team_implement', active: true, stage: 'wave', waveNumber: 1, plannedWaves: 2,
+      autoWaves: true, coordinatorPersonaId: 'p-coord', plannerPersonaId: 'p-plan',
+      executorPersonaIds: ['p-1'], budget: null, planCardId: null, modeLocked: false,
+      ...over,
+    }) as unknown as ServerMessage;
+
+  const wavePulse = (over: Partial<Extract<ServerMessage, { type: 'team_wave_pulse' }>> = {}) =>
+    ({
+      type: 'team_wave_pulse', stage: 'wave', waveNumber: 1, plannedWaves: 2,
+      tasksActive: 2, tasksTotal: 5,
+      lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds: 240, liveness: 'alive',
+      ...over,
+    }) as unknown as ServerMessage;
+
+  it('пульс не добавляет элементов в items', () => {
+    const before: ChatState = applyServerMessage(initialChatState(), waveState());
+    const after: ChatState = applyServerMessage(before, wavePulse());
+    expect(after.items).toEqual(before.items);
+  });
+
+  it('teamWavePulse обновляется в ChatState', () => {
+    const before: ChatState = applyServerMessage(initialChatState(), waveState());
+    expect(before.teamWavePulse).toBeUndefined();
+    const after: ChatState = applyServerMessage(before, wavePulse({ liveness: 'quiet' }));
+    expect(after.teamWavePulse?.liveness).toBe('quiet');
+    expect(after.teamWavePulse?.quietSeconds).toBe(240);
+  });
+
+  it('новый пульс заменяет прежний — последнее событие выигрывает', () => {
+    let s: ChatState = applyServerMessage(initialChatState(), waveState());
+    s = applyServerMessage(s, wavePulse({ liveness: 'alive', quietSeconds: 30 }));
+    s = applyServerMessage(s, wavePulse({ liveness: 'stalled', quietSeconds: 2400 }));
+    expect(s.teamWavePulse?.liveness).toBe('stalled');
+    expect(s.teamWavePulse?.quietSeconds).toBe(2400);
+  });
+
+  // stage приходит с бэка: пульс шлётся и в финальной проверке. Раньше редьюсер
+  // хардкодил stage: 'wave' и отбрасывал всё в checking — это лишало поповер
+  // и бейдж актуального состояния при зависшей проверке
+  it('stage берётся из события, а не хардкодится', () => {
+    const after: ChatState = applyServerMessage(
+      applyServerMessage(initialChatState(), waveState()),
+      wavePulse({ stage: 'checking' }),
+    );
+    expect(after.teamWavePulse?.stage).toBe('checking');
+  });
+});
+
+// Подпись пульса различается по стадии: на проверке пишем «проверка», без номера
+// волны — иначе бейдж при зависшей проверке показывал бы чужой «волна 1/2»
+describe('teamPulseBadgeText под стадию', () => {
+  const state = {} as SessionTeamImplement;
+  const basePulse = {
+    stage: 'wave' as const, waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5,
+    lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds: 240, liveness: 'alive' as TeamWaveLiveness,
+  };
+
+  it('на волне подпись включает номер волны', () => {
+    expect(teamPulseBadgeText(state, basePulse)).toContain('волна 1 из 2');
+  });
+
+  it('на проверке подпись — «проверка», номера волны нет', () => {
+    const text = teamPulseBadgeText(state, { ...basePulse, stage: 'checking' });
+    expect(text).toContain('проверка');
+    expect(text).not.toContain('волна');
+  });
+});
+
+// Свежесть пульса (см. isTeamWavePulseStale): бейдж/поповер перестают показывать старую
+// сводку штаба, когда (а) прошло больше порога от lastActivityAt — бэк молчит дольше
+// двух тиков, (б) SignalR offline — обновлений физически нет, и текст «штаб работает»
+// стал бы ложью. Без гейта бейдж продолжал бы показывать «тихо 1 мин» при реальных
+// 5 минутах тишины, а в QA-приёмке это назвали «врёт индикатор живости»
+// Покрываем три ветви:
+//   1) свежий + онлайн — null (живой)
+//   2) протухший по времени — true (stale)
+//   3) свежий, но offline — true (SignalR мёртв, бэк не дошлёт)
+//   4) кривой lastActivityAt — false (показываем свежим, чтобы не сорваться из-за формата)
+describe('isTeamWavePulseStale: свежесть пульса', () => {
+  const basePulse = {
+    stage: 'wave' as const, waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5, quietSeconds: 60, liveness: 'alive' as TeamWaveLiveness,
+  };
+
+  it('свежий пульс при живом SignalR — не протухший', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + 30_000, true)).toBe(false);
+  });
+
+  it('свежий пульс, но прошло ровно порог — ещё не протухший (строгое сравнение)', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + TEAM_WAVE_PULSE_STALE_MS, true)).toBe(false);
+  });
+
+  it('протухший по времени (больше порога) — бэк молчит', () => {
+    const ts = 1_000_000;
+    const old = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(old, ts + TEAM_WAVE_PULSE_STALE_MS + 1, true)).toBe(true);
+  });
+
+  it('свежий по времени, но SignalR offline — всё равно протухший (обновлений не будет)', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + 1_000, false)).toBe(true);
+  });
+
+  it('кривой lastActivityAt не считается протухшим — пульс только что пришёл, формат трогать нельзя', () => {
+    const weird = { ...basePulse, lastActivityAt: 'not-a-date' };
+    expect(isTeamWavePulseStale(weird, Date.now(), true)).toBe(false);
+  });
+
+  // Кастомный порог (для тестов): свежий по дефолту, но протухший по укороченному
+  it('порог параметризован — можно сократить окно в тестах', () => {
+    const ts = 1_000_000;
+    const fresh = { ...basePulse, lastActivityAt: new Date(ts).toISOString() };
+    expect(isTeamWavePulseStale(fresh, ts + 5_000, true, 3_000)).toBe(true);
+    expect(isTeamWavePulseStale(fresh, ts + 2_000, true, 3_000)).toBe(false);
+  });
+});
+
+describe('itemIdxToNodePos (прыжок «К карточке»)', () => {
+  // Сценарий: 200 items, склеенных в блоки по 3 (tool_use). Узлов ~70, hidden
+  // по умолчанию = max(0, 70-50) = 20. Карточка эскалации в первой трети items
+  // попадает в склеенный блок действия — прыжок должен:
+  //   • не сработать «уже видно» (item-индекс 100 > 20 — но он невидим,
+  //     потому что относится к УЗЛУ 25, который скрыт);
+  //   • раздвинуть hidden так, чтобы УЗЕЛ с целевым item попал в срез;
+  //   • дать корректный УЗЕЛ-индекс для setHiddenCount.
+  const buildLongFeed = () => {
+    const nodes: Array<{ start: number }> = [];
+    let i = 0;
+    while (i < 200) {
+      const blockSize = i % 7 === 0 ? 1 : 3;
+      nodes.push({ start: i });
+      i += blockSize;
+    }
+    return { nodes, totalItems: i };
+  };
+
+  it('одиночная карточка в первой трети items — нужный УЗЕЛ не hidden', () => {
+    const { nodes } = buildLongFeed();
+    // Карточка items[100] — одиночный (i % 7 === 0 на i=98, 99, 100 → i=100 % 7 = 2,
+    // значит блок 3 элемента 100..102. Возьмём items[98] (i=98 % 7 = 0 → одиночный)
+    const targetItem = 98;
+    const nodePos = itemIdxToNodePos(nodes, targetItem);
+    expect(nodePos).toBeGreaterThanOrEqual(0);
+    // Узел не должен быть «уже видно» (hidden по умолчанию ~20, nodePos >> 20)
+    expect(nodePos).toBeGreaterThan(20);
+  });
+
+  it('цель внутри склеенного блока — берём последний узел с start <= idx', () => {
+    const { nodes } = buildLongFeed();
+    // Узлы: start 0, 1, 4, 7, 10, 13, ..., 196 — большинство блоков по 3 элемента
+    // Цель items[2] попадает в блок с start=1 (items 1..3)
+    expect(itemIdxToNodePos(nodes, 2)).toBe(1);
+    expect(itemIdxToNodePos(nodes, 3)).toBe(1);
+    // Граница блока: items[4] — это уже следующий узел
+    expect(itemIdxToNodePos(nodes, 4)).toBe(2);
+  });
+
+  it('карточка на границе окна — hidden = nodePos - 3 (не выходит за срез)', () => {
+    const { nodes } = buildLongFeed();
+    // Возьмём цель у самого края: 50 items → это примерно узел 16..17. Узел на
+    // границе должен попасть в окно (50-3=47 узлов до цели)
+    const targetItem = 49;
+    const nodePos = itemIdxToNodePos(nodes, targetItem);
+    // Раздвигаем окно так, чтобы 3 предыдущих узла остались как контекст:
+    const targetHidden = Math.max(0, nodePos - 3);
+    expect(targetHidden).toBeGreaterThanOrEqual(0);
+    expect(targetHidden).toBeLessThan(nodes.length);
+    // После раздвижения целевой узел попадает в visibleNodes.slice(targetHidden)
+    expect(nodePos).toBeGreaterThanOrEqual(targetHidden);
+  });
+
+  it('карточка в самом верху items — hidden=0 (а не отрицательное)', () => {
+    const { nodes } = buildLongFeed();
+    // items[0] — первая карточка, узел 0
+    expect(itemIdxToNodePos(nodes, 0)).toBe(0);
+    const nodePos = 0;
+    expect(Math.max(0, nodePos - 3)).toBe(0);
+  });
+
+  it('idx за пределами последнего item — берём последний узел', () => {
+    const { nodes, totalItems } = buildLongFeed();
+    expect(itemIdxToNodePos(nodes, totalItems + 50)).toBe(nodes.length - 1);
+  });
+
+  it('отрицательный idx — возвращает -1 (сигнал «нет совпадения»)', () => {
+    const { nodes } = buildLongFeed();
+    expect(itemIdxToNodePos(nodes, -1)).toBe(-1);
+  });
+
+  it('пустой массив узлов — возвращает -1', () => {
+    expect(itemIdxToNodePos([], 5)).toBe(-1);
+  });
+});
+
+describe('computeJumpHidden (аритметика окна для прыжка «К карточке»)', () => {
+  // Тест проверяет СВЯЗКУ itemIdxToNodePos → computeJumpHidden → hidden. Не
+  // отдельные функции по отдельности — именно рассинхрон между ними ломался
+  // три раза подряд. Каждое ожидание — захардкоженное число, посчитанное
+  // один раз по структуре фида. Если кто-то введёт третью координату или
+  // пересортирует формулу — эти числа изменятся, и тест сломается сразу.
+  //
+  // Это покрытие ChatPanel не заменяет (renderedNodes строит useMemo в самой
+  // панели); но саму арифметику, на которой всё держится, тест проверяет
+  // без signalr/персон и прочей обвязки
+  const W = 50;
+
+  // Паттерн фида длинной ленты: цикл из 7 items даёт 3 узла (1+3+3, push
+  // на i=7k со start=7k, потом на i=7k+1 со start=7k+1, потом на i=7k+4 со
+  // start=7k+4). Всего узлов: 86 (28 полных циклов + 2 хвостовых).
+  // Захардкоженные числа: items[60] → pos=26, items[180] → pos=77
+  const buildLongFeed = () => {
+    const n: Array<{ start: number }> = [];
+    let i = 0;
+    while (i < 200) { const sz = i % 7 === 0 ? 1 : 3; n.push({ start: i }); i += sz; }
+    return { nodes: n, totalNodes: n.length };
+  };
+
+  // Паттерн фида с exec-зоной посередине: 80 одиночных (start 0..79) +
+  // 1 узел exec-зоны (start=80) + 70 одиночных (start 130..199).
+  // Узлов: 151, defaultHidden = 101.
+  // Захардкоженные числа: items[5] → pos=5, items[100] → pos=80 (внутри зоны),
+  // items[195] → pos=146, items[199] → pos=150
+  const buildFeedWithZone = () => {
+    const nodes: Array<{ start: number }> = [];
+    for (let i = 0; i < 80; i++) nodes.push({ start: i });
+    nodes.push({ start: 80 });
+    for (let i = 130; i < 200; i++) nodes.push({ start: i });
+    return { nodes, totalNodes: nodes.length };
+  };
+
+  it('длинная лента, цель за пределами окна — раздвигаем до pos - 3', () => {
+    const { nodes, totalNodes } = buildLongFeed();
+    // items[60] → pos=26, defaultHidden=36, 26 < 36 → двигаем до 26-3=23
+    expect(itemIdxToNodePos(nodes, 60)).toBe(26);
+    expect(computeJumpHidden(26, null, totalNodes, W)).toBe(23);
+  });
+
+  it('длинная лента, цель уже видно (pos >= defaultHidden) — не двигаем', () => {
+    const { nodes, totalNodes } = buildLongFeed();
+    // items[180] → pos=77, defaultHidden=36, 77 >= 36 → не двигаем → 36
+    expect(itemIdxToNodePos(nodes, 180)).toBe(77);
+    expect(computeJumpHidden(77, null, totalNodes, W)).toBe(36);
+  });
+
+  it('currentHidden != null — учитывается при сравнении «уже видно»', () => {
+    const nodes = Array.from({ length: 70 }, (_, k) => ({ start: k * 3 }));
+    // pos=20, currentHidden=5 → 20 >= 5 → не двигаем
+    expect(computeJumpHidden(20, 5, nodes.length, W)).toBe(5);
+    // pos=2, currentHidden=5 → 2 < 5 → двигаем до max(0, -1) = 0
+    expect(computeJumpHidden(2, 5, nodes.length, W)).toBe(0);
+  });
+
+  it('nodePos < 0 — возвращает currentHidden без изменений (null или текущее)', () => {
+    expect(computeJumpHidden(-1, 5, 70, W)).toBe(5);
+    // currentHidden=null → не двигаем, оставляем null (React пропустит апдейт)
+    expect(computeJumpHidden(-1, null, 70, W)).toBeNull();
+  });
+
+  it('с exec-зоной: цель ДО зоны, за пределами окна — раздвигаем', () => {
+    const { nodes, totalNodes } = buildFeedWithZone();
+    // items[5] → pos=5, defaultHidden=101, 5 < 101 → двигаем до 2
+    expect(itemIdxToNodePos(nodes, 5)).toBe(5);
+    expect(computeJumpHidden(5, null, totalNodes, W)).toBe(2);
+  });
+
+  it('с exec-зоной: цель ВНУТРИ зоны — клик попадает в шапку склеенной группы', () => {
+    const { nodes, totalNodes } = buildFeedWithZone();
+    // items[100] и items[110] оба → pos=80 (вся exec-зона свёрнута в один узел)
+    expect(itemIdxToNodePos(nodes, 100)).toBe(80);
+    expect(itemIdxToNodePos(nodes, 110)).toBe(80);
+    // defaultHidden=101, pos=80, 80 < 101 → раздвигаем до 77
+    expect(computeJumpHidden(80, null, totalNodes, W)).toBe(77);
+  });
+
+  it('с exec-зоной: цель ПОСЛЕ зоны, далеко за окном — не двигаем', () => {
+    const { nodes, totalNodes } = buildFeedWithZone();
+    // items[195] → pos=146, 146 > defaultHidden=101 → 101
+    expect(itemIdxToNodePos(nodes, 195)).toBe(146);
+    expect(computeJumpHidden(146, null, totalNodes, W)).toBe(101);
+    // items[199] → pos=150 (последний узел), 150 > 101 → 101
+    expect(itemIdxToNodePos(nodes, 199)).toBe(150);
+    expect(computeJumpHidden(150, null, totalNodes, W)).toBe(101);
+  });
+
+  // PROPERTY-тест: при pos >= 0 результат computeJumpHidden ВСЕГДА попадает в срез
+  // renderedItems.slice(hidden), и hidden не выходит за [0, totalNodes-1]. Это
+  // единственная гарантия, ради которой вся арифметика написана — после трёх
+  // кругов ловли дефекта формула работает, но property-тест ещё и говорит,
+  // ЧТО ИМЕННО мы защищаем. Если кто-то перевернёт сравнение или поменяет
+  // знак, конкретные числа выше могут остаться зелёными, а инвариант
+  // всплывёт красным
+  it('property: hidden ∈ [0, totalNodes-1] и hidden ≤ pos при pos ≥ 0', () => {
+    const cases: Array<{ pos: number; total: number; window: number; h?: number | null }> = [
+      // Длинная лента (longFeed): 86 узлов, W=50, defaultHidden=36
+      { pos: 18, total: 86, window: 50 },   // за пределами → 15
+      { pos: 52, total: 86, window: 50 },   // уже видно → 36
+      // С exec-зоной: 151 узел, W=50, defaultHidden=101
+      { pos: 5,   total: 151, window: 50 }, // за пределами → 2
+      { pos: 80,  total: 151, window: 50 }, // внутри зоны, за пределами → 77
+      { pos: 146, total: 151, window: 50 }, // после зоны, уже видно → 101
+      { pos: 150, total: 151, window: 50 }, // край → 101
+      // С currentHidden != null
+      { pos: 20, total: 70, window: 50, h: 5 },   // уже видно → 5
+      { pos: 2,  total: 70, window: 50, h: 5 },   // за пределами → 0
+    ];
+    for (const { pos, total, window, h = null } of cases) {
+      const hidden = computeJumpHidden(pos, h, total, window);
+      if (hidden === null) {
+        // currentHidden=null && pos<0 — без изменений, цели нет
+        expect(pos).toBeLessThan(0);
+      } else {
+        expect(hidden).toBeGreaterThanOrEqual(0);
+        expect(hidden).toBeLessThan(total);
+        expect(hidden).toBeLessThanOrEqual(pos);
+      }
+    }
   });
 });

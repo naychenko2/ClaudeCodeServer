@@ -50,6 +50,43 @@ public class ClaudeRateLimitParserTests
     }
 
     [Fact]
+    public void TryParse_OverageDisabledReason_Разбирается()
+    {
+        var root = Root("""
+        {"type":"rate_limit_event","rate_limit_info":{
+            "rateLimitType":"five_hour","status":"rejected","utilization":0.9,
+            "overageDisabledReason":"org_level_disabled"}}
+        """);
+
+        ClaudeRateLimitParser.TryParse(root, out var m).Should().BeTrue();
+        m.OverageDisabledReason.Should().Be("org_level_disabled");
+    }
+
+    [Fact]
+    public void TryParse_OverageDisabledReason_SnakeCase_ТожеРазбирается()
+    {
+        var root = Root("""
+        {"type":"rate_limit_event","rate_limit_info":{
+            "rate_limit_type":"five_hour","utilization":0.9,
+            "overage_disabled_reason":"out_of_credits"}}
+        """);
+
+        ClaudeRateLimitParser.TryParse(root, out var m).Should().BeTrue();
+        m.OverageDisabledReason.Should().Be("out_of_credits");
+    }
+
+    [Fact]
+    public void TryParse_БезПричиныПерерасхода_Null()
+    {
+        var root = Root("""
+        {"type":"rate_limit_event","rate_limit_info":{"rateLimitType":"five_hour","utilization":0.5}}
+        """);
+
+        ClaudeRateLimitParser.TryParse(root, out var m).Should().BeTrue();
+        m.OverageDisabledReason.Should().BeNull();
+    }
+
+    [Fact]
     public void TryParse_БезRateLimitInfo_False()
     {
         ClaudeRateLimitParser.TryParse(Root("""{"type":"rate_limit_event"}"""), out _).Should().BeFalse();

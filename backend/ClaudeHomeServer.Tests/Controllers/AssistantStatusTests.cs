@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -22,25 +21,17 @@ public class AssistantStatusTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
-    private async Task SetFlagAsync(bool enabled) =>
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled }))
-        .EnsureSuccessStatusCode();
-
     private async Task<JsonElement> MeAsync() => JsonSerializer.Deserialize<JsonElement>(
         await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
 
-    // Включение флага провижнит заготовку (хук 2.2): Default == Assistant, живая.
-    private async Task<string> ProvisionAssistantAsync()
-    {
-        await SetFlagAsync(true);
-        return (await MeAsync()).GetProperty("defaultPersonaId").GetString()!;
-    }
+    // Заготовку заводит стартовый проход провижна (Program.cs): Default == Assistant, живая.
+    private async Task<string> AssistantIdAsync() =>
+        (await MeAsync()).GetProperty("defaultPersonaId").GetString()!;
 
     [Fact]
     public async Task Update_МеняетИмя_СнимаетСтатусЗаготовки()
     {
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
 
         var response = await _client.PutAsJsonAsync($"/api/personas/{assistantId}", new { name = "Марина" });
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -53,7 +44,7 @@ public class AssistantStatusTests : IDisposable
     [Fact]
     public async Task Update_МеняетСлотХарактера_СнимаетСтатусЗаготовки()
     {
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
 
         var response = await _client.PutAsJsonAsync($"/api/personas/{assistantId}",
             new { contract = new { character = "Ты дружелюбный помощник." } });
@@ -66,7 +57,7 @@ public class AssistantStatusTests : IDisposable
     [Fact]
     public async Task Update_МеняетТолькоЦвет_НеСнимаетСтатусЗаготовки()
     {
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
 
         var response = await _client.PutAsJsonAsync($"/api/personas/{assistantId}", new { color = "blue" });
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -78,7 +69,7 @@ public class AssistantStatusTests : IDisposable
     [Fact]
     public async Task Update_ТаЖеРольБезИзменений_НеСнимаетСтатусЗаготовки()
     {
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
         var before = JsonSerializer.Deserialize<JsonElement>(
             await (await _client.GetAsync($"/api/personas/{assistantId}")).Content.ReadAsStringAsync());
         var sameRole = before.GetProperty("role").GetString();
@@ -99,7 +90,7 @@ public class AssistantStatusTests : IDisposable
     [Fact]
     public async Task Update_ИзОнбордингСессии_НеСнимаетСтатусЗаготовки()
     {
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
         var sessionId = JsonSerializer.Deserialize<JsonElement>(
                 await (await _client.PostAsync("/api/onboarding/user/start", null)).Content.ReadAsStringAsync())
             .GetProperty("id").GetString()!;

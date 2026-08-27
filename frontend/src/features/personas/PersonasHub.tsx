@@ -7,7 +7,6 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, IntroDot } from '../../components/ui';
 import { personaTitleLines, usePersonas } from '../../lib/personas';
 import { useMe } from '../../lib/defaultPersona';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../../lib/breakpoints';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -38,14 +37,13 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
     scrollRef.current?.scrollTo({ top: 0 });
   };
 
-  // Карточка-приглашение «знакомство» (фича default-personas-onboarding, п.5.1) —
-  // единственная залитая акцентом кнопка всей фичи. allPersonas (не отфильтрованный
-  // listMode) — дефолт-персона нужна вне зависимости от переключателя «Глобальные/Все».
+  // Карточка-приглашение «знакомство» (п.5.1) — единственная залитая акцентом кнопка
+  // всей фичи. allPersonas (не отфильтрованный listMode) — дефолт-персона нужна вне
+  // зависимости от переключателя «Глобальные/Все».
   const me = useMe();
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const allPersonas = usePersonas();
   const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
-  const showInvite = me.loaded && onboardingOn && me.needsOnboarding && !!defaultPersona;
+  const showInvite = me.loaded && me.needsOnboarding && !!defaultPersona;
   const assistantsSectionRef = useRef<HTMLElement>(null);
   const goToAssistantsList = () => assistantsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -275,10 +273,12 @@ const activityCard: React.CSSProperties = {
 };
 const heading: React.CSSProperties = { fontFamily: FONT.serif, fontSize: 19, fontWeight: 700, color: C.textHeading };
 const subheading: React.CSSProperties = { fontSize: 12.5, color: C.textSecondary, marginTop: 4 };
-// minmax(180px, 1fr) — нижний предел держит карточки читабельными, 1fr сжимает
-// треки до фактической ширины контейнера. Иначе (minmax(200px, 1fr)) витрина
-// пробивала родителя в ширину и обрезала правую карточку на 832 (round 2, N1)
-const showcaseGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 };
+// minmax(150px, 1fr) — нижний предел держит карточки читабельными (аватар 40 + имя
+// + вторичное + padding), 1fr сжимает треки до фактической ширины контейнера.
+// 180 не влезало в две колонки при 832 с открытой панелью (контейнер 362 px, надо
+// 372 — grid схлопывался в одну, карточки растягивались до 308–362 px). 150 даёт
+// две колонки на 312 px и запас на ещё более узкую панель (round 3 N1).
+const showcaseGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 };
 const assistantCard: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 9, background: C.bgWhite, border: `1px solid ${C.border}`,
   borderRadius: R.xxl, padding: 14, cursor: 'pointer', transition: 'border-color 0.15s',

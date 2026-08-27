@@ -1,24 +1,33 @@
-import { useEffect, useMemo, useState } from 'react';
-import { MessageSquare, PowerOff } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Book, CheckSquare, ChevronRight, Layers, MessageSquare, PowerOff, Zap } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
+import type { Persona, PersonaBinding, PersonaMemoryEntry, Session } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, FS, R, SP } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
+import { useContainerWidth } from '../../hooks/useContainerWidth';
+import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
-import { BindingModeBadge, BindingTypeIcon, bindingPlural, bindingsCounter } from './bindingMeta';
+import { bindingsCounter } from './bindingMeta';
 import { useBindingLabels } from './useBindingLabels';
-import { TRIGGER_META, ACTION_META, triggerDetails } from './automationMeta';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
 
 // Режим «Обзор» студии персоны: read-only визитка со сводкой — кто это,
 // как настроена (модель/возможности/память), её характер и недавние разговоры.
 // Редактирование живёт в соседнем виде «Профиль» (PersonaForm), сюда не входит.
+// Развёрнутых превью соседних вкладок здесь нет — вместо них блок «Разделы персоны»:
+// карточка-навигатор со счётчиком ведёт в саму вкладку (F11).
+
+// Порог раскладки контентной зоны — по ширине КОНТЕЙНЕРА: 380 (визитка) + 28 (зазор)
+// + 300 (лента) = 708. Уже — колонки переносятся, лента встаёт под визитку и получает
+// потолок прокрутки, иначе выдавливает характер и правила за экран.
+const STACK_W = 708;
+const STACKED_FEED_MAX_H = 280;
 
 // Подписи возможностей персоны (ключи как в PersonaForm.TOOL_OPTIONS)
 const TOOL_TITLES: Record<string, string> = {
@@ -28,13 +37,6 @@ const TOOL_TITLES: Record<string, string> = {
 };
 
 // Метаданные триггеров/действий — общие с вкладкой «Проактивность» (./automationMeta)
-
-// Подписи типов памяти для мини-бейджа у записи
-const MEMORY_TYPE_LABEL: Record<PersonaMemoryType, string> = {
-  semantic: 'факт',
-  episodic: 'эпизод',
-  procedural: 'приём',
-};
 
 // Порог, после которого длинный характер сворачивается с «Показать полностью»
 const CHARACTER_CLAMP_CHARS = 420;
@@ -48,10 +50,13 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, onOpenAutomation, onOpenMemory, isMobile }: {
+export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, onOpenAutomation, onOpenMemory, onOpenSpecialties, isMobile }: {
   persona: Persona;
   // Цвет персоны (уже разрезолвленный из палитры) — тот же, что в тулбаре
   accent: string;
+  // Зона персоны для чипа «Зона» («Глобальная» / «Проект · Название»); родитель знает
+  // имя проекта, здесь списка проектов нет
+  zoneLabel?: string;
   // Открыть существующий чат персоны (навигация — у родителя: хаб или проект)
   onOpenSession: (s: Session) => void;
   // Начать новый разговор (та же кнопка, что «Поговорить» в тулбаре)
@@ -67,6 +72,8 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   onOpenAutomation?: () => void;
   // Перейти во вкладку «Память» (долгая память персоны)
   onOpenMemory?: () => void;
+  // Перейти на экран «Специальности» (мостик T9 — «Специальность: … →»)
+  onOpenSpecialties?: () => void;
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
@@ -143,21 +150,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     ? 'Только чат'
     : Object.keys(TOOL_TITLES).filter(k => toolKeys.includes(k)).map(k => TOOL_TITLES[k]).join(' · ');
 
-  // Подпись памяти: выключена / считаем / N записей
-  const memoryText = !persona.memoryEnabled
-    ? 'Выключена'
-    : memory === null
-      ? '…'
-      : memory.length === 0
-        ? 'Включена, пока пусто'
-        : `${memory.length} ${plural(memory.length, 'запись', 'записи', 'записей')}`;
-  const memoryTitle = persona.memoryEnabled && memory && memory.length > 0
-    ? ['semantic', 'episodic', 'procedural'].map(t => {
-        const n = memory.filter(e => e.type === t).length;
-        const name = t === 'semantic' ? 'факты' : t === 'episodic' ? 'эпизоды' : 'приёмы';
-        return `${name}: ${n}`;
-      }).join(' · ')
-    : undefined;
+  // Подпись памяти для карточки-навигатора считается на месте (см. sections ниже)
 
   const shownChats = (chats ?? []).slice(0, 5);
   const moreChats = (chats?.length ?? 0) - shownChats.length;
@@ -221,38 +214,31 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       ? `Свой список${persona.disallowedTools?.length ? ` (${persona.disallowedTools.length})` : ''}`
       : 'Полный';
 
-  // === Факты-строка: модель / возможности / [умения] / память / доступ (+ происхождение из пантеона) ===
+  // === Настройки: четыре факта, у которых нет своей вкладки (остальное — в навигаторе) ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
-    { label: 'Возможности', value: toolsText },
-    {
-      label: 'Умения',
-      value: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
-    },
-    {
-      label: 'Задачи',
-      value: taskCounts.total === 0
-        ? 'нет поручений'
-        : taskCounts.active > 0
-          ? `${taskCounts.active} в работе · ${taskCounts.total} всего`
-          : `${taskCounts.total} всего`,
-    },
-    { label: 'Память', value: memoryText, title: memoryTitle },
     { label: 'Доступ', value: accessText },
-    ...(persona.templateKey
-      ? [{ label: 'Происхождение', value: 'Пантеон OmO', title: `Подключена из шаблона «${persona.templateKey}»` }]
-      : []),
+    { label: 'Возможности', value: toolsText },
+    { label: 'Зона', value: zoneLabel ?? (persona.scope === 'project' ? 'Проект' : 'Глобальная') },
   ];
   const factsRow = (
-    <div style={{ ...section, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-      {facts.map(f => (
-        <div key={f.label} title={f.title} style={factChip}>
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.textMuted }}>
-            {f.label}
-          </span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading }}>{f.value}</span>
-        </div>
-      ))}
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 12 }}>Настройки</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+        {facts.map(f => (
+          <div key={f.label} title={f.title ?? f.value} style={factChip}>
+            <span style={{ fontSize: FS.xs, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.textMuted }}>
+              {f.label}
+            </span>
+            <span style={{
+              fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {f.value}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 
@@ -327,7 +313,31 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   );
 
-  // === Правила (контракт роли, read-only): тон / всегда / никогда / формат / инструкция ===
+  // === Специальность (мостик T9 на экран «Специальности») ===
+// Показывается рядом с «Правилами» как единая точка входа: человек увидел роль персоны и
+// сразу прыгнул на вкладку с её правилами. Без специальности / с 'none' мостика нет —
+// «Любой специальности» отвечает сама карточка на вкладке.
+const specialtyCatalog = useSpecialtyCatalog();
+const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && onOpenSpecialties)
+  ? (() => {
+    const label = specialtyLabel(specialtyCatalog, persona.specialty);
+    return (
+      <div style={section}>
+        <SectionLabel style={{ marginBottom: 8 }}>Специальность</SectionLabel>
+        <button type="button" onClick={onOpenSpecialties} style={{
+          ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '7px 10px', background: C.bgWhite,
+          border: `1px solid ${C.border}`, borderRadius: R.lg,
+          fontSize: 13, fontWeight: 600, color: C.textHeading, marginTop: 0,
+        }}>
+          <span>Специальность: {label} →</span>
+        </button>
+      </div>
+    );
+  })()
+  : null;
+
+// === Правила (контракт роли, read-only): тон / всегда / никогда / формат / инструкция ===
   const contract = persona.contract;
   const hasRules = !!contract && !!(
     contract.tone?.trim() || contract.mustDo?.length || contract.mustNot?.length
@@ -377,328 +387,80 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   ) : null;
 
-  // === Знания и правила (фича persona-bindings): компактная выжимка привязок ===
-  const shownBindings = (bindings ?? []).filter(b => b.mode !== 'off').slice(0, 4);
-  const moreBindings = (bindings?.length ?? 0) - shownBindings.length;
-  const knowledgeSection = (
-    <div style={section}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <SectionLabel>Умения и правила</SectionLabel>
-        {bindings !== null && bindings.length > 0 && (
-          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
-            {bindingsCounter(bindings)}
-          </span>
-        )}
-      </div>
-
-      {bindings === null ? (
-        <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '6px 0' }}>Загружаю…</div>
-      ) : bindings.length === 0 ? (
-        // Мини-пустышка: источники не подключены
-        <div style={{
-          border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: '18px 16px',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center',
-        }}>
-          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            Источники не подключены — персона отвечает по общим знаниям.
-          </span>
-          {onOpenKnowledge && (
-            <button type="button" onClick={onOpenKnowledge} style={{ ...linkBtn, marginTop: 0 }}>
-              Подключить умения →
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
-            {shownBindings.map((b, i) => (
-              <button
-                key={b.id}
-                type="button"
-                onClick={onOpenKnowledge}
-                title="Настроить умения"
-                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-                  background: 'transparent', border: 'none', padding: '9px 14px', minHeight: 42,
-                  borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
-                  cursor: onOpenKnowledge ? 'pointer' : 'default', fontFamily: FONT.sans, boxSizing: 'border-box',
-                }}
-              >
-                <BindingTypeIcon type={b.type} size={24} />
-                <span style={{
-                  flex: 1, minWidth: 0, fontSize: 13, color: C.textPrimary,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  <span style={{ fontWeight: 600, color: C.textHeading }}>{bindingLabelOf(b)}</span>
-                  {b.condition && <span style={{ color: C.textSecondary }}> — {b.condition}</span>}
-                </span>
-                <BindingModeBadge mode={b.mode} />
-              </button>
-            ))}
-          </div>
-          {moreBindings > 0 && (
-            <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, textAlign: 'center' }}>
-              и ещё {moreBindings} {bindingPlural(moreBindings)}
-            </div>
-          )}
-          {onOpenKnowledge && (
-            <button type="button" onClick={onOpenKnowledge} style={linkBtn}>
-              Настроить умения →
-            </button>
-          )}
-        </>
-      )}
-    </div>
-  );
-
-  // === Проактивность (правила автоматизации): карточки в стиле вкладки ===
+  // === Разделы персоны: навигатор во вкладки вместо их развёрнутых превью (F11) ===
+  // Счётчик несёт ровно ту информацию, ради которой раньше разворачивали секцию.
   const automationRules = persona.automationRules ?? [];
   const enabledRulesCount = automationRules.filter(r => r.enabled).length;
-
-  const automationSection = (
+  const sections: { key: string; label: string; icon: ReactNode; counter: string; onOpen?: () => void }[] = [
+    {
+      key: 'knowledge', label: 'Умения',
+      icon: <Book size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      counter: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
+      onOpen: onOpenKnowledge,
+    },
+    {
+      key: 'automation', label: 'Проактивность',
+      icon: <Zap size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      counter: automationRules.length === 0
+        ? 'нет правил'
+        : enabledRulesCount === automationRules.length
+          ? `${automationRules.length} ${plural(automationRules.length, 'правило', 'правила', 'правил')}`
+          : `${automationRules.length} ${plural(automationRules.length, 'правило', 'правила', 'правил')} · ${enabledRulesCount} активно`,
+      onOpen: onOpenAutomation,
+    },
+    {
+      key: 'memory', label: 'Память',
+      icon: <Layers size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      counter: !persona.memoryEnabled
+        ? 'выключена'
+        : memory === null
+          ? '…'
+          : memory.length === 0
+            ? 'пока пусто'
+            : `${memory.length} ${plural(memory.length, 'запись', 'записи', 'записей')}`,
+      onOpen: onOpenMemory,
+    },
+    {
+      key: 'tasks', label: 'Задачи',
+      icon: <CheckSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      counter: taskCounts.total === 0
+        ? 'нет поручений'
+        : taskCounts.active > 0
+          ? `${taskCounts.active} в работе · ${taskCounts.total} всего`
+          : `${taskCounts.total} всего`,
+      onOpen: onOpenTasks,
+    },
+  ];
+  const sectionsNav = (
     <div style={section}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <SectionLabel>Проактивность</SectionLabel>
-        {automationRules.length > 0 && (
-          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
-            {enabledRulesCount === automationRules.length
-              ? `${automationRules.length} ${plural(automationRules.length, 'правило', 'правила', 'правил')}`
-              : `${automationRules.length} ${plural(automationRules.length, 'правило', 'правила', 'правил')} · ${enabledRulesCount} активно`}
-          </span>
-        )}
+      <SectionLabel style={{ marginBottom: 12 }}>Разделы персоны</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+        {sections.map(s => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={s.onOpen}
+            title={`${s.label}: ${s.counter}`}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = accent; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}
+            style={navCard(!!s.onOpen)}
+          >
+            <span style={navCardIcon}>{s.icon}</span>
+            <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+              <span style={{ display: 'block', fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>
+                {s.label}
+              </span>
+              <span style={{
+                display: 'block', fontSize: 11.5, color: C.textMuted,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {s.counter}
+              </span>
+            </span>
+            <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} />
+          </button>
+        ))}
       </div>
-
-      {automationRules.length === 0 ? (
-        <div style={miniEmpty}>
-          <span style={miniEmptyText}>
-            Правил нет — персона откликается только на ваши сообщения.
-          </span>
-          {onOpenAutomation && (
-            <button type="button" onClick={onOpenAutomation} style={{ ...linkBtn, marginTop: 0 }}>
-              Настроить проактивность →
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {automationRules.map(rule => {
-              const meta = TRIGGER_META[rule.trigger.type] ?? TRIGGER_META.timer;
-              const act = ACTION_META[rule.action.weight]?.label ?? 'Сообщить';
-              const dim = !rule.enabled;
-              const brief = triggerDetails(rule);
-              return (
-                <div
-                  key={rule.id}
-                  onClick={onOpenAutomation}
-                  title="Открыть проактивность"
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}
-                  style={{
-                    background: C.bgWhite,
-                    border: `1px solid ${C.border}`,
-                    borderRadius: R.xl, padding: '10px 14px',
-                    cursor: onOpenAutomation ? 'pointer' : 'default',
-                    transition: 'border-color 0.15s',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span style={{
-                      width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: dim ? C.bgSelected : meta.bg,
-                      color: dim ? C.textMuted : meta.fg,
-                    }}>
-                      <meta.Icon size={16} strokeWidth={1.5} />
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
-                      <div style={{
-                        fontSize: 13.5, fontWeight: 600, color: C.textHeading,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {rule.name || 'Без названия'}
-                      </div>
-                      <div style={{
-                        fontSize: 12, color: C.textSecondary, marginTop: 1,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {meta.label}{brief ? ` · ${brief}` : ''} · {act}
-                      </div>
-                    </div>
-                    <span style={{
-                      borderRadius: 999, padding: '2px 8px', fontSize: 10.5, fontWeight: 600,
-                      letterSpacing: '0.02em', flexShrink: 0, whiteSpace: 'nowrap',
-                      background: rule.enabled ? C.accentLight : C.bgSelected,
-                      color: rule.enabled ? C.accent : C.textMuted,
-                    }}>
-                      {rule.enabled ? 'активно' : 'выкл'}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {onOpenAutomation && (
-            <button type="button" onClick={onOpenAutomation} style={linkBtn}>
-              Настроить проактивность →
-            </button>
-          )}
-        </>
-      )}
-    </div>
-  );
-
-  // === Задачи (поручения персоне-исполнителю): активные сверху ===
-  const myTasks: Task[] = allTasks.filter(t => t.personaId === persona.id);
-  const activeTasks = myTasks.filter(t => t.status !== 'done');
-  const shownTasks = activeTasks.slice(0, 3);
-  const moreTasks = activeTasks.length - shownTasks.length;
-  const tasksSection = (
-    <div style={section}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <SectionLabel>Задачи</SectionLabel>
-        {taskCounts.total > 0 && (
-          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
-            {taskCounts.total} всего{taskCounts.active > 0 ? ` · ${taskCounts.active} в работе` : ''}
-          </span>
-        )}
-      </div>
-
-      {activeTasks.length === 0 ? (
-        <div style={miniEmpty}>
-          <span style={miniEmptyText}>
-            {taskCounts.total === 0
-              ? 'Поручений нет — персона ждёт ваших сообщений в чате.'
-              : 'Активных поручений нет — всё выполнено.'}
-          </span>
-          {onOpenTasks && (
-            <button type="button" onClick={onOpenTasks} style={{ ...linkBtn, marginTop: 0 }}>
-              Все задачи →
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
-            {shownTasks.map((t, i) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={onOpenTasks}
-                title="Открыть задачи персоны"
-                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-                  background: 'transparent', border: 'none', padding: '10px 14px', minHeight: 40,
-                  borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
-                  cursor: onOpenTasks ? 'pointer' : 'default', fontFamily: FONT.sans, boxSizing: 'border-box',
-                }}
-              >
-                <span style={{
-                  flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, color: C.textPrimary,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {t.title}
-                </span>
-                {t.status === 'inProgress' && (
-                  <span style={{ fontSize: 11, fontWeight: 600, color: C.accent, flexShrink: 0 }}>в работе</span>
-                )}
-              </button>
-            ))}
-          </div>
-          {moreTasks > 0 && (
-            <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, textAlign: 'center' }}>
-              и ещё {moreTasks} {plural(moreTasks, 'задача', 'задачи', 'задач')}
-            </div>
-          )}
-          {onOpenTasks && (
-            <button type="button" onClick={onOpenTasks} style={linkBtn}>
-              Все задачи →
-            </button>
-          )}
-        </>
-      )}
-    </div>
-  );
-
-  // === Память: что персона запомнила (факты/эпизоды/приёмы) ===
-  const memoryEntries = memory ?? [];
-  const shownMemory = [...memoryEntries]
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 3);
-  const memorySection = (
-    <div style={section}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <SectionLabel>Память</SectionLabel>
-        {persona.memoryEnabled && memoryEntries.length > 0 && memoryTitle && (
-          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
-            {memoryTitle}
-          </span>
-        )}
-      </div>
-
-      {!persona.memoryEnabled ? (
-        <div style={miniEmpty}>
-          <span style={miniEmptyText}>
-            Память выключена — персона не запоминает контекст между разговорами.
-          </span>
-          {onOpenMemory && (
-            <button type="button" onClick={onOpenMemory} style={{ ...linkBtn, marginTop: 0 }}>
-              Открыть память →
-            </button>
-          )}
-        </div>
-      ) : memory === null ? (
-        <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '6px 0' }}>Загружаю…</div>
-      ) : memoryEntries.length === 0 ? (
-        <div style={miniEmpty}>
-          <span style={miniEmptyText}>
-            Включена, пока пусто — персона запомнит важное по ходу разговоров.
-          </span>
-          {onOpenMemory && (
-            <button type="button" onClick={onOpenMemory} style={{ ...linkBtn, marginTop: 0 }}>
-              Открыть память →
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
-            {shownMemory.map((m, i) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={onOpenMemory}
-                title="Открыть память"
-                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', textAlign: 'left',
-                  background: 'transparent', border: 'none', padding: '10px 14px', minHeight: 40,
-                  borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
-                  cursor: onOpenMemory ? 'pointer' : 'default', fontFamily: FONT.sans, boxSizing: 'border-box',
-                }}
-              >
-                <span style={memoryTypeBadge}>{MEMORY_TYPE_LABEL[m.type] ?? m.type}</span>
-                <span style={{
-                  flex: 1, minWidth: 0, fontSize: 13, color: C.textPrimary, lineHeight: 1.45,
-                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                }}>
-                  {m.text}
-                </span>
-              </button>
-            ))}
-          </div>
-          {onOpenMemory && (
-            <button type="button" onClick={onOpenMemory} style={linkBtn}>
-              Открыть память →
-            </button>
-          )}
-        </>
-      )}
     </div>
   );
 
@@ -782,10 +544,11 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   );
 
-  // Колонка-визитка — тот же контент, что раньше; «Недавние разговоры» остаются
-  // только на мобиле (на десктопе их накрывает лента активности справа)
+  // Колонка-визитка: базис 380 — ниже 708 в контейнере уезжает во всю ширину, лента
+  // встаёт под ней. «Недавние разговоры» остаются только на мобиле (на десктопе их
+  // накрывает лента активности)
   const mainColumn = (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
+    <div style={{ flex: '1 1 380px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div>
         {hero}
         {/* Поговорить — после описания, до фактов и настроек */}
@@ -802,16 +565,19 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         {greeting}
       </div>
       {factsRow}
-      {gatesSection}
+      {sectionsNav}
       {characterSection}
       {rulesSection}
-      {knowledgeSection}
-      {automationSection}
-      {memorySection}
-      {tasksSection}
+      {specialtyBridge}
+      {gatesSection}
       {isMobile && chatsSection}
     </div>
   );
+
+  // Раскладка — по ширине КОНТЕЙНЕРА: колонки получают базис и переносятся сами,
+  // когда обе не помещаются (порог 708 получается арифметикой, без JS-порогов по окну).
+  const [gridRef, gridWidth] = useContainerWidth<HTMLDivElement>();
+  const stacked = gridWidth !== null && gridWidth < STACK_W;
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
@@ -819,10 +585,12 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         maxWidth: isMobile ? 680 : 1020, margin: '0 auto', boxSizing: 'border-box',
         padding: isMobile ? '20px 16px 32px' : '26px 32px 40px',
       }}>
-        <div style={isMobile || activityExpanded ? undefined : previewGrid}>
+        <div ref={gridRef} style={isMobile || activityExpanded ? undefined : previewGrid}>
           {(isMobile || !activityExpanded) && mainColumn}
           {!isMobile && (
-            <aside style={activityExpanded ? { maxWidth: 760, margin: '0 auto', width: '100%' } : { width: 300, flexShrink: 0 }}>
+            <aside style={activityExpanded
+              ? { maxWidth: 760, margin: '0 auto', width: '100%' }
+              : { flex: '1 1 300px', minWidth: 0 }}>
               <PersonaActivityFeed
                 personas={[persona]}
                 items={activityItems}
@@ -831,6 +599,9 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
                 onToggleExpanded={() => setActivityExpanded(v => !v)}
                 onOpenSession={onOpenSession}
                 onOpenPersonaView={(_id, view) => { if (view === 'memory') onOpenMemory?.(); }}
+                // В стопке лента стоит под визиткой во всю ширину — без потолка она
+                // отжимает характер и правила за нижнюю кромку
+                scrollMaxHeight={stacked && !activityExpanded ? STACKED_FEED_MAX_H : undefined}
               />
             </aside>
           )}
@@ -840,9 +611,11 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   );
 }
 
-// Строка-раскладка визитки на десктопе: колонка контента + лента активности 300px
-// (тот же приём, что hubGrid в PersonasHub)
-const previewGrid: React.CSSProperties = { display: 'flex', gap: 28, alignItems: 'flex-start' };
+// Строка-раскладка визитки на десктопе: визитка и лента активности с базисами —
+// переносятся сами, когда вдвоём не помещаются (тот же приём, что hubGrid в PersonasHub)
+const previewGrid: React.CSSProperties = {
+  display: 'flex', gap: 28, alignItems: 'flex-start', flexWrap: 'wrap',
+};
 
 // Плоская секция с разделителем сверху — тот же паттерн, что в PersonaForm
 const section: React.CSSProperties = {
@@ -860,20 +633,21 @@ const linkBtn: React.CSSProperties = {
   fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, padding: 0, marginTop: 8,
 };
 
-// Мини-пустышка для обзорных секций (Активность/Задачи/Память) — пунктирная рамка
-const miniEmpty: React.CSSProperties = {
-  border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: '18px 16px',
-  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center',
-};
-const miniEmptyText: React.CSSProperties = {
-  fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
-};
-
-// Бейдж типа записи памяти (факт/эпизод/приём)
-const memoryTypeBadge: React.CSSProperties = {
-  fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase',
-  color: C.textMuted, fontFamily: FONT.sans, background: C.bgSelected, borderRadius: R.sm,
-  padding: '3px 8px', flexShrink: 0, marginTop: 1,
+// Карточка-навигатор блока «Разделы персоны»: иконка вкладки + название + счётчик + шеврон.
+// Иконка та же, что у вкладки, куда карточка ведёт — вход читается как та же сущность.
+function navCard(clickable: boolean): React.CSSProperties {
+  return {
+    display: 'flex', alignItems: 'center', gap: SP.sm + 2,
+    background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+    padding: '11px 13px', cursor: clickable ? 'pointer' : 'default',
+    fontFamily: FONT.sans, textAlign: 'left', transition: 'border-color 0.15s',
+    minWidth: 0, boxSizing: 'border-box',
+  };
+}
+const navCardIcon: React.CSSProperties = {
+  width: 30, height: 30, borderRadius: R.md, flexShrink: 0,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: C.bgSelected, color: C.textSecondary,
 };
 
 // Стили секции «Правила» — read-only текст в тоне соседних секций превью

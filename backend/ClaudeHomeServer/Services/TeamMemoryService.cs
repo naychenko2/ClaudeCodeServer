@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services;
 // него — семантический слой в Dify-датасете «{username}:team:{projectName}» (векторный retrieve со
 // скорингом, дифф по хешам, дебаунс). Без настроенного Dify — graceful degradation к полнотекстовому
 // recall по стору (Волна 1). Эталон — PersonaMemoryService/NotesKnowledgeService.
-public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant
+public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposable
 {
     // Состояние семантического слоя проекта: id датасета + entryId → { difyDocId, hash }
     private sealed class KnowledgeState
@@ -457,6 +457,43 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant
     // читаются и правятся как раньше: гейт стоит только на новом тексте.
     public const int MaxTextLength = 1000;
 
+    // Гейт записи в память команды (③-3.4, диета памяти команды, ч.3): пишет либо «свой»
+    // вызов без персоны (обычный проектный чат, ручное редактирование через UI), либо
+    // персона ЭТОГО ЖЕ проекта. Глобальные персоны и консультанты других проектов —
+    // read-only (team_memory_list/search остаются). Пара (callerPersonaId, caller) разводит
+    // два смысла null-персоны: пустой id — «персоны нет» (разрешено), непустой id при
+    // null-персоне — «не резолвилась» (удалена/чужой owner), и это отказ, а не молчаливое
+    // разрешение. Единая точка для ProjectsController (заголовок X-Caller-Persona-Id
+    // stdio-ветки) и MCP memory-сервера (http-тулсет): текст отказа читает модель,
+    // рассинхрон копий менял бы поведение веток по-разному.
+    public static string? WriteDeniedFor(string? callerPersonaId, Persona? caller, string projectId)
+    {
+        if (string.IsNullOrEmpty(callerPersonaId)) return null;
+        if (caller is null)
+            return "Персона, от имени которой идёт запись, не найдена (удалена или недоступна) — "
+                + "запись в память команды отклонена. Не меняй общую память, пока пользователь "
+                + "не уточнит актуальную персону.";
+        if (caller.Scope == PersonaScope.Project && caller.ProjectId == projectId) return null;
+        return "Запись в память команды доступна только персоне ЭТОГО проекта. Ты — "
+            + "глобальная персона или консультант другого проекта: можешь читать общую память "
+            + "(team_memory_list/team_memory_search), но не менять её. Попроси персону проекта "
+            + "записать это или предложи пользователю.";
+    }
+
+    // Гейт длины записи: в recall она всё равно обрежется (RecallTextLimit), а простыня на
+    // 2-3 КБ засоряет общий стор и Dify. current — длина уже сохранённого текста (0 при
+    // создании): запрет срабатывает только на РОСТ сверх лимита, чтобы уже раздутую запись
+    // можно было пересохранить без изменений или сократить (иначе её вообще нельзя было бы
+    // привести в порядок). null — лимит не превышен.
+    public static string? LengthViolation(string text, int current)
+    {
+        var length = text.Trim().Length;
+        if (length <= MaxTextLength || length <= current) return null;
+        return $"Запись памяти команды длиннее {MaxTextLength} символов (сейчас {length}). "
+            + "Одна запись — одна мысль: разбей на несколько коротких или сократи до сути; "
+            + "подробности держи в заметке или документе проекта.";
+    }
+
     // Гейт авто-записи (autolearn/резолвер противоречий): ручную запись контроллер уже держит
     // в MaxTextLength, но экстрактор-LLM иногда игнорирует «кратко» и отдаёт абзац — такие
     // записи реально доходили до 2-3 КБ в сторе и Dify. Порог срабатывания — 700 (не хотим
@@ -807,6 +844,10 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant
 
     // Вызывается под _kLock
     private void SaveKnowledge() => JsonFileStore.Save(_knowledgeStorePath, _kStore, JsonOpts);
+
+    // Уборка при остановке хоста (DI dispose'ит синглтон): таймеры дебаунса Dify-синка
+    // не должны переживать остановку и запускать синк по мёртвому приложению
+    public void Dispose() => _debounce.Dispose();
 }
 
 // Операция консолидации памяти команды (P4): merge — схлопнуть несколько записей одного типа

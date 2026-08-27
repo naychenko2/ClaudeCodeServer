@@ -1275,16 +1275,13 @@ export function PanelZone({
   // drawer поверх на узком; между двумя панелями — хендл ресайза высот
   const compactBody = (() => {
     if (!compact || tabletKeys.length === 0) return null;
-    // В drawеr (tabletInline=false) форсируем fill у панелей: стек одноколоночный
-    // полноэкранный, по высоте панель должна дотягиваться до низа — иначе
-    // PanelShell стоит по контенту, длинный список выпирает за кромку drawer'а,
-    // а `overflow: clip` (родитель-холст с абсолютным позиционированием) срезает
-    // низ. На широком inline-варианте правила те же, что в обычной зоне:
-    // одиночная панель у центра — по контенту, две — делят высоту.
-    const drawer = !tabletInline;
-    // Жёсткий fill на все панели в drawer'е: единое полноэкранное поведение,
-    // скролл живёт ВНУТРИ PanelShell (minHeight:0 + flex:1 у контентной зоны).
-    const multiInCol = drawer || tabletKeys.length > 1;
+    // Растягиваем панель (fill=true) только когда она делит высоту с соседом.
+    // Одна панель в drawer'е — fill=false: слот с `flex:'0 1 auto'` встаёт по
+    // контенту (как одиночная у центра на десктопе); длинный контент упрётся
+    // в `maxHeight:'100%'` слота и скроллится внутри. Раньше в drawеr'е стояло
+    // `drawer || tabletKeys.length > 1` — одиночная панель насильно тянулась на
+    // весь экран, и при коротком контенте под ней зияла пустота.
+    const multiInCol = tabletKeys.length > 1;
     const stack = (
       // minHeight:0 на стеке drawer'а — без него flex-ребёнок растёт по контенту,
       // и родитель (холст с overflow:clip) режет карточку у низа. С ним стек сам
@@ -1314,7 +1311,12 @@ export function PanelZone({
       <>
         <div onClick={() => setTabletPanels([])} style={{ position: 'absolute', inset: 0, zIndex: 14, background: windowWidth <= MOBILE_MAX ? C.overlay : 'transparent' }} />
         <div style={{
-          position: 'absolute', top: GAP, bottom: GAP, zIndex: 15,
+          // Drawер по высоте стека: `top: GAP` крепит к верху родителя, `bottom`
+          // НЕ задан — иначе drawер тянется на всю высоту родителя, и его
+          // `boxShadow: SHADOW.modal` (заметная, 24×60) выглядит как «большая
+          // карточка», даже когда внутри сидит короткая панель. `maxHeight`
+          // держит потолок — длинный контент упрётся в него и скроллится внутри.
+          position: 'absolute', top: GAP, maxHeight: `calc(100% - ${GAP * 2}px)`, zIndex: 15,
           ...(isLeft ? { left: RAIL_W + GAP } : { right: RAIL_W + GAP }),
           width: 'min(85vw, 380px)', display: 'flex', flexDirection: 'column', boxShadow: SHADOW.modal,
         }}>

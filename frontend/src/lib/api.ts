@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -9,12 +9,10 @@ export interface ModelTiers {
   weak: string | null;
 }
 
-// Кандидат значка проекта (ADR-009 §2.2): заполнено ровно одно из полей.
-// name — имя lucide-иконки из белого списка; paths — нарисованные моделью строки d.
-// Сервер валидирует оба варианта; на фронте достаточно хранить как есть.
+// Кандидат значка проекта (ADR-009 §2.2): name — имя lucide-иконки из белого списка.
+// Сервер валидирует на входе; на фронте достаточно хранить как есть.
 export interface GlyphCandidate {
   name?: string | null;
-  paths?: string[] | null;
 }
 
 
@@ -40,6 +38,55 @@ export interface DeployState {
   canLaunch: boolean;
   reason: string | null;
   status: DeployStatusFile | null;
+}
+
+// Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
+// исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
+// Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
+// отсутствующие переживаем (см. Services/Deploy/DeployState.cs).
+export interface DeployJournalStep {
+  name: string;
+  status?: string | null;   // ok | fail | running… — словарь агента, читаем как есть
+  ms: number;
+}
+
+export interface DeployJournalResult {
+  ok: boolean;
+  // succeeded | rolled_back | failed — дублирует финальную фазу
+  status: string;
+  message?: string | null;
+  releaseId?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface DeployJournalRecord {
+  id: string;
+  kind?: string | null;     // deploy | rollback
+  // queued → building → switching → verifying → succeeded | rolled_back | failed
+  phase: string;
+  ref?: string | null;
+  sha?: string | null;
+  dirty?: boolean;
+  dirtyFiles?: string[];
+  initiatedBy?: { userId?: string | null; sessionId?: string | null } | null;
+  steps?: DeployJournalStep[];
+  result?: DeployJournalResult | null;
+  startedAt?: string | null;
+}
+
+export interface DeployJournalRelease {
+  id: string;
+  sha?: string | null;
+  path?: string | null;
+  createdAt?: string | null;
+}
+
+// Ответ GET /api/deploy/status
+export interface DeployJournal {
+  enabled: boolean;
+  current: DeployJournalRecord | null;
+  history: DeployJournalRecord[];
+  releases: DeployJournalRelease[];
 }
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -274,6 +321,34 @@ export const api = {
       }),
   },
 
+  // Десктопный агент (ADR-008): устройства владельца, сопряжение и веб-половина сеанса рук.
+  // Начать сеанс отсюда нельзя ни при каких условиях — эта дверь на самом устройстве,
+  // веб-морда может только попросить (request) и остановить (handsStop).
+  devices: {
+    list: () => request<DesktopDevice[]>('/devices'),
+    // Код сопряжения: 8 символов, живёт 5 минут, принадлежит ЭТОЙ веб-сессии
+    startPairing: () => request<DesktopPairingCode>('/devices/pairing', { method: 'POST' }),
+    pairingStatus: () => request<DesktopPairingCode>('/devices/pairing'),
+    cancelPairing: () => request<void>('/devices/pairing', { method: 'DELETE' }),
+    rename: (id: string, name: string) =>
+      request<DesktopDevice>(`/devices/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify({ name }),
+      }),
+    // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
+    revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+    // Статус сеанса для бейджа «руки на …». Отдельный запрос, а не только событие ленты:
+    // событие эфемерное, и после перезагрузки страницы бейдж погас бы при живых руках
+    handsChat: (chatSessionId: string) =>
+      request<DesktopHandsChatStatus>(`/devices/hands/chat/${encodeURIComponent(chatSessionId)}`),
+    handsRequest: (chatSessionId: string) =>
+      request<{ requested: boolean; active: boolean; requestedAt?: string }>(
+        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/request`, { method: 'POST' }),
+    handsStop: (chatSessionId: string) =>
+      request<{ stopped: boolean }>(
+        `/devices/hands/chat/${encodeURIComponent(chatSessionId)}/stop`, { method: 'POST' }),
+  },
+
   providers: {
     balance: (key: string) => request<ProviderBalanceInfo>(`/providers/${key}/balance`),
     usage: (key: string) =>
@@ -347,7 +422,7 @@ export const api = {
     launch: () => request<{ previousStartedAt: string | null }>('/admin/deploy', { method: 'POST' }),
   },
 
-  // Ссылки внешнего доступа — СКВОЗНЫЕ по проектам владельца, поэтому не под /projects/{id}:
+// Ссылки внешнего доступа — СКВОЗНЫЕ по проектам владельца, поэтому не под /projects/{id}:
   // забытая открытой витрина в соседнем проекте иначе осталась бы невидимой.
   externalPreview: {
     list: () => request<{ enabled: boolean; links: ExternalPreviewLink[] }>('/preview/external-links'),
@@ -355,6 +430,16 @@ export const api = {
       request<{ revoked: number }>(`/preview/external-links/${encodeURIComponent(jti)}`, { method: 'DELETE' }),
     revokeAll: () => request<{ revoked: number }>('/preview/external-links', { method: 'DELETE' }),
   },
+
+  // Журнал выкатки из чата (ADR-010) — за ним следит карточка хода выкатки в ленте.
+  // live: true + no-store по той же причине, что и у трей-выкатки выше, и она здесь
+  // ещё важнее: сервер во время переключения ГАСНЕТ намеренно, и подставленный из
+  // офлайн-кэша прошлый ответ означал бы «прод отвечает, шаги не двигаются» — карточка
+  // рапортовала бы о живом сервере ровно тогда, когда его нет.
+  deployJournal: {
+    status: () => request<DeployJournal>('/deploy/status', { cache: 'no-store', live: true }),
+  },
+
   featureFlags: {
     get: () => request<{ definitions: FeatureFlagDefinition[]; values: Record<string, boolean> }>('/feature-flags'),
     set: (key: string, enabled: boolean) =>
@@ -365,57 +450,55 @@ export const api = {
   },
 
   // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные
-  // шаблоны прав; настройки — глобальный слой (пишет только админ), личный слой
-  // вызывающего и user-слой (только для admin, конкретный пользователь).
+  // шаблоны прав; настройки — единственный (общий) слой, пишет только админ.
+  // ADR-012 снял owner/user-слои, поэтому здесь НЕ должно быть путей
+  // settings/owner, settings/user/{id}, reset/user и fallback/owner — на бэкенде
+  // их больше нет, и любой такой вызов вернул бы 404.
   specialties: {
     list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
     getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
-    saveOwnerLayer: (layer: SpecialtySettingsLayer) =>
-      request<{ owner: SpecialtySettingsLayer }>('/specialties/settings', {
-        method: 'PUT', body: JSON.stringify(layer),
-      }),
     saveGlobalLayer: (layer: SpecialtySettingsLayer) =>
       request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {
         method: 'PUT', body: JSON.stringify(layer),
       }),
-    // User-слой конкретного пользователя (только для admin). Подтягивается отдельно
-    // от getSettings — основной ответ остаётся лёгким, admin в админке догружает
-    // слой по выбранному пользователю.
+    // МЁРТВЫЙ МАРШРУТ. Эндпоинта settings/user/{id} на бэкенде нет с ADR-012; ни один
+    // экран его больше не зовёт (см. lib/presets — канал user-слоёв остался только под
+    // своими юнит-тестами и уезжает хвостовой чисткой вместе с ними). Новых вызовов
+    // не добавлять: ответ будет 404.
     getUserLayer: (userId: string) =>
       request<{ user: SpecialtySettingsLayer; userId: string }>(`/specialties/settings/user/${encodeURIComponent(userId)}`),
-    saveUserLayer: (userId: string, layer: SpecialtySettingsLayer) =>
-      request<{ user: SpecialtySettingsLayer }>(`/specialties/settings/user/${encodeURIComponent(userId)}`, {
-        method: 'PUT', body: JSON.stringify(layer),
-      }),
     // Сброс исключений к наследованию (возврат = удаление записи слоя, а не обнуление
     // ячеек): preview — числа/имена ДО подтверждения, reset — фактическая запись.
     // key — точечный жест (одна специальность), без него — весь слой.
-    // scope='user' — только для admin, требует userId.
-    resetPreview: (scope: 'owner' | 'global' | 'user', key?: string, userId?: string) => {
+    // Скоупы — только те, что остались на бэкенде: global (общий слой) и owner
+    // (сброс персон вызывающего).
+    resetPreview: (scope: 'owner' | 'global', key?: string) => {
       const qs = new URLSearchParams();
       if (key) qs.set('key', key);
-      if (scope === 'user' && userId) qs.set('userId', userId);
       const s = qs.toString();
       return request<ResetResult>(`/specialties/settings/reset/${scope}/preview${s ? `?${s}` : ''}`);
     },
-    reset: (scope: 'owner' | 'global' | 'user', key?: string, userId?: string) => {
-      const body: { key?: string; userId?: string } = {};
+    reset: (scope: 'owner' | 'global', key?: string) => {
+      const body: { key?: string } = {};
       if (key) body.key = key;
-      if (scope === 'user' && userId) body.userId = userId;
       return request<ResetResult>(`/specialties/settings/reset/${scope}`, {
         method: 'POST', body: JSON.stringify(body),
       });
     },
     // Лимит подмен за ход (фолбэк): `null` = снять настройку слоя (наследование).
     // Управляется через ту же дорогу, что сброс — отдельных типов в index.ts нет,
-    // описаны здесь, чтобы не разъезжаться с бэком. scope='user' требует userId.
-    setMaxSubstitutions: (scope: 'owner' | 'global' | 'user', value: number | null, userId?: string) => {
-      const body: { maxSubstitutions: number | null; userId?: string } = { maxSubstitutions: value };
-      if (scope === 'user' && userId) body.userId = userId;
+    // описаны здесь, чтобы не разъезжаться с бэком. Слой один: только 'global'.
+    setMaxSubstitutions: (scope: 'global', value: number | null) => {
+      const body: { maxSubstitutions: number | null } = { maxSubstitutions: value };
       return request<{ maxSubstitutions: number }>(`/specialties/settings/fallback/${scope}`, {
         method: 'PUT', body: JSON.stringify(body),
       });
     },
+    // Каталог секций промптов и типовых профилей умений роли (фича specialty-prompt-sections):
+    // дефолты кода с лимитом 1024, метаданные секций, включённость и типовые тексты по
+    // каждой специальности, плюс дефолтные умения ролей для шага выбора цели.
+    promptSectionsCatalog: () =>
+      request<SpecialtyPromptSectionsCatalog>('/specialties/prompt-sections'),
   },
 
   projects: {
@@ -443,8 +526,16 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[] }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
+    // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
+    // сколько погасил (состав инструментов зафиксирован на запуске CLI, и запущенный ход
+    // иначе доработал бы с гранью в руках)
+    setDesktopAgent: (id: string, enabled: boolean) =>
+      request<{ project: Project; handsStopped: number }>(
+        `/projects/${encodeURIComponent(id)}/desktop-agent`,
+        { method: 'PUT', body: JSON.stringify({ enabled }) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)
     updateTags: (id: string, registry: ProjectTag[]) =>
@@ -487,7 +578,7 @@ export const api = {
       ),
     // Принять кандидата: сервер валидирует тело целиком (источник не доверен, ADR-009 §8),
     // проставляет Kind=Glyph и Glyph, возвращает обновлённый проект.
-    selectIcon: (id: string, candidate: { name?: string | null; paths?: string[] | null }) =>
+    selectIcon: (id: string, candidate: { name?: string | null }) =>
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/select`, {
         method: 'POST', body: JSON.stringify(candidate),
       }),
@@ -498,8 +589,8 @@ export const api = {
         method: 'POST', body: JSON.stringify({ kind }),
       }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
-    // --- Фон рабочего пространства (фича project-backgrounds, ADR-008 §7) ---
-    // Сгенерировать / перегенерировать фон. Тоже гейтится флагом+владением на бэке (404).
+    // --- Фон рабочего пространства (ADR-008 §7) ---
+    // Сгенерировать / перегенерировать фон. Гейтится владением на бэке (404).
     // suggestedColorKey + !colorApplied — сервер цвет не трогал (выбран руками), фронт
     // показывает диалог подтверждения; при согласии цвет меняет существующий update({color}).
     generateBackground: (id: string) =>
@@ -530,7 +621,7 @@ export const api = {
       request<Project>(`/projects/${id}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
     // Применить пресет каркаса (знакомство v2, п.4): "docs" / "dev" / "personal" — создать;
     // "none" — зафиксировать отказ. 409 → "Каркас уже применён"; 400 → неверный ключ.
-    // 404 → чужой проект или флаг выключен. Ответ — отчёт { created, skipped } (на "none" —
+    // 404 → чужой проект. Ответ — отчёт { created, skipped } (на "none" —
     // пустые массивы). На ошибке `err.status` покажет код, `err.body.error` — текст с бэка.
     applyPreset: (id: string, presetKey: string) =>
       request<{ created: string[]; skipped: { path: string; reason: string }[] }>(
@@ -787,11 +878,11 @@ export const api = {
     update: (id: string, dto: UpdatePersonaDto) =>
       request<Persona>(`/personas/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
     // successorId — преемник дефолт-персоны: без него удаление текущей дефолтной вернёт 400
-    // «выберите преемника» (фича default-personas-onboarding)
+    // «выберите преемника»
     remove: (id: string, successorId?: string) =>
       request<void>(`/personas/${encodeURIComponent(id)}${successorId ? `?successorId=${encodeURIComponent(successorId)}` : ''}`, { method: 'DELETE' }),
     // Назначить персону дефолтной: глобальную — личным дефолтом владельца, проектную —
-    // дефолтом её проекта (фича default-personas-onboarding)
+    // дефолтом её проекта
     makeDefault: (id: string) =>
       request<Persona>(`/personas/${encodeURIComponent(id)}/make-default`, { method: 'POST' }),
     // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового.
@@ -1035,6 +1126,13 @@ export const api = {
       request<{ candidates: PersonaBinding[] }>(`/personas/${encodeURIComponent(id)}/bindings/generate`, {
         method: 'POST', body: JSON.stringify({ prompt }), timeoutMs: 150_000,
       }),
+    // Применить типовые умения специальности к существующей персоне (кнопка
+    // «Применить типовые» на вкладке «Умения»). Материализует профиль роли в личные
+    // привязки поверх текущих; без специальности бэк отвечает 400.
+    applyDefaultBindings: (id: string) =>
+      request<ApplyDefaultBindingsResult>(`/personas/${encodeURIComponent(id)}/bindings/apply-defaults`, {
+        method: 'POST',
+      }),
 
     // === Проактивность/автоматизации (правила «событие → действие») ===
     automation: (id: string) =>
@@ -1081,7 +1179,7 @@ export const api = {
   search: (q: string, topK = 8) =>
     request<SearchHit[]>(`/search?q=${encodeURIComponent(q)}&topK=${topK}`),
 
-  // Онбординги (фича default-personas-onboarding): старт/резюм обязательных чат-интервью.
+  // Онбординги: старт/резюм чат-интервью знакомства.
   // Идемпотентны: живая сессия онбординга возвращается как есть, удалённая — заменяется новой
   onboarding: {
     startUser: () => request<Session>('/onboarding/user/start', { method: 'POST' }),
@@ -1098,10 +1196,12 @@ export const api = {
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки тем»)
     iconBatch: (projectId: string) =>
       request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
-    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string, desktop?: boolean) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
+        // desktop — ТИП чата (ADR-008), задаётся только при создании: из десктопного чата
+        // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string; archived?: boolean }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
@@ -1119,6 +1219,13 @@ export const api = {
     // «Задачи из чата» (флаг chat-extract-tasks): извлечь кандидатов (не создаёт)
     extractTasks: (sessionId: string) =>
       request<ExtractTasksResponse>(`/sessions/${sessionId}/extract-tasks`, { method: 'POST' }),
+    // Снять постоянное разрешение инструмента в чате («Всегда разрешать …»).
+    // Маршрут по id сессии — работает и для проектных чатов, и для чатов вне проекта.
+    // Отдаёт обновлённую сессию (как смена режима) — доборный GET не нужен
+    revokeAutoAllow: (sessionId: string, tool: string) =>
+      request<Session>(
+        `/sessions/${encodeURIComponent(sessionId)}/auto-allow?tool=${encodeURIComponent(tool)}`,
+        { method: 'DELETE' }),
     // Снять сообщение из очереди занятого чата (крестик на карточке-призраке).
     // Очередь живёт в памяти сервера — актуальный состав приходит событием pending_messages
     cancelPending: (sessionId: string, messageId: string) =>
@@ -1239,6 +1346,41 @@ export const api = {
     // дорабатывают начатое. В ленте появляется карточка остановки с «Продолжить»
     stopTeamImplement: (id: string) =>
       request<Session>(`/chats/${id}/team-implement/stop`, { method: 'PUT' }),
+    // Полный снимок пульса волны (Э2 КР-наблюдаемости): пульс + список задач +
+    // пороги liveness. Зовётся при КАЖДОМ открытии поповера бейджа — кэшировать
+    // нельзя. live: true + cache: 'no-store' по той же причине, что и у статуса
+    // выкатки: офлайн-слой кладёт GET в IndexedDB и при обрыве подставил бы
+    // прошлый ответ — поповер показывал бы «в работе, 5 мин» при мёртвой волне.
+    // Для индикатора живости это хуже, чем не показать ничего
+    getTeamWaveSnapshot: (id: string) =>
+      request<import('../types').TeamWaveSnapshot>(
+        `/chats/${id}/team-wave-snapshot`,
+        { cache: 'no-store', live: true },
+      ),
+    // Перезапуск одной под-задачи волны (КР-наблюдаемость, этап 3): та же перевыдача,
+    // что у провала хода — потолок попыток общий. 409 несёт человеческий текст
+    // (живая задача, завершена, повторный клик) — показываем его, а не пустую кнопку
+    restartTeamWaveTask: (id: string, taskId: string) =>
+      request<import('../types').TeamTaskRestartResponse>(
+        `/chats/${id}/team-wave/tasks/${taskId}/restart`,
+        { method: 'POST', live: true },
+      ),
+    // Перезапуск волны: без confirm — предупреждение о живых исполнениях (liveTasks),
+    // повтор с confirm=true останавливает их и перевыдаёт незакрытое. Done не трогается
+    restartTeamWave: (id: string, confirm: boolean) =>
+      request<import('../types').TeamWaveRestartResponse>(
+        `/chats/${id}/team-wave/restart`,
+        { method: 'POST', body: JSON.stringify({ confirm }), live: true },
+      ),
+    // Перезапуск зависшего хода штаба: kill → валидация транскрипта → новый ход с
+    // --resume, отложенные сообщения уходят. startFresh=true — «начать ход заново» при
+    // повреждённом транскрипте (409 code=transcript_damaged). Долгий: kill и ожидание
+    // смерти процесса могут занять десятки секунд
+    restartTeamWaveTurn: (id: string, startFresh = false) =>
+      request<import('../types').TeamTurnRestartResponse>(
+        `/chats/${id}/team-wave/restart-turn`,
+        { method: 'POST', body: JSON.stringify({ startFresh }), live: true, timeoutMs: 90_000 },
+      ),
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // force подтверждает потерю несохранённых правок дерева. Только проектные чаты.
@@ -1409,20 +1551,41 @@ export const api = {
       if (filter?.symbol) qs.set('symbol', filter.symbol);
       if (filter?.commit) qs.set('commit', filter.commit);
       const s = qs.toString();
-      return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
+      // Контракт GET /dossiers (ADR-004 §4, спринт «История решений» блок В):
+      // { entries, coverage }. coverage — метрика охвата за окно periodDays:
+      // знаменатель commits (с --follow при file), числитель dossiers. При сбое git
+      // числитель/знаменатель обнуляются (контракт бэка — листинг не роняется).
+      // coverage помечена опциональной: ранний ответ или альтернативная сборка бэка
+      // могут её не прислать — панель тогда просто не рисует строку охвата.
+      return request<{
+        entries: DossierEntry[];
+        coverage?: { periodDays: number; commits: number; dossiers: number } | null;
+      }>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
     },
     // Готовность проекта к экспорту (ADR-004 §6): isGitRepo гейтит кнопку в UI,
-    // sharedFolder — предупреждение о втором владельце той же папки.
+    // sharedFolder — предупреждение о втором владельце той же папки. hasDossierBranch —
+    // наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет, импорт из неё
+    // бессмыслен, кнопку «Загрузить» в UI гейтим этим признаком.
+    // autoExport — причина гейта АВТОвыгрузки: панель выбирает по ней текст подсказки
+    // (после сужения фона «ветка заведомо наша» общая фраза «выгружается само» врала
+    // бы при чужом tip / одной origin-ветке / общей папке). null у не-git проекта.
     exportStatus: (projectId: string) =>
-      request<{ isGitRepo: boolean; sharedFolder: boolean }>(
+      request<{
+        isGitRepo: boolean;
+        sharedFolder: boolean;
+        hasDossierBranch: boolean;
+        autoExport: 'active' | 'foreignTip' | 'originOnly' | 'sharedFolder' | null;
+      }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
     // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
     // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:
     // count подставляется в текст успеха, nothingToExport переключает на состояние «пусто».
+    // timeoutMs 120 с: plumbing-экспорт на большой истории (~38 с на 217 паспортов
+    // наблюдалось на проде) — дефолтные 30 с обрывали запрос, хотя сервер ещё работал.
     exportRun: (projectId: string, push: boolean) =>
       request<{ status: 'exported' | 'nothingToExport'; count: number }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export`,
-        { method: 'POST', body: JSON.stringify({ push }) }),
+        { method: 'POST', body: JSON.stringify({ push }), timeoutMs: 120_000 }),
     // Импорт «Историй решений» из ветки ccs/dossiers/v1 (этап 4): читает ветку
     // plumbing-командами и кладёт записи в стор с origin='imported' и importedAuthor.
     // added — реально добавленные, skipped — остальные записи index.json

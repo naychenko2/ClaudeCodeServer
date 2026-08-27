@@ -49,7 +49,7 @@ public class ProxyController(IHttpClientFactory httpClientFactory) : ControllerB
             return;
         }
 
-        var client = httpClientFactory.CreateClient("proxy");
+        var client = httpClientFactory.CreateClient("media-proxy");
         var upstream = new HttpRequestMessage(HttpMethod.Get, url);
 
         // Пробрасываем Range для поддержки seek в видео

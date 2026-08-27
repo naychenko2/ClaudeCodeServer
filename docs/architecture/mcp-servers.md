@@ -3,12 +3,26 @@
 > Подробная документация. Выжимка и общий механизм подключения — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «MCP-серверы». Читать перед правками в `mcp/*/index.js` и `BuildTurnMcpConfig`.
 
-Все серверы — по одному файлу `mcp/{имя}-server/index.js`: чистый Node (stdio JSON-RPC,
-**без зависимостей**, npm install не нужен). Подключение per-ход: `ClaudeSession.BuildTurnMcpConfig`
-каждый ход собирает временный MCP-конфиг (серверы из `McpConfigPath` + продуктовые) и передаёт
-env с адресом API и сервисным JWT владельца. Серверы других подсистем описаны в своих доках:
-notes/memory/personas — [personas.md](personas.md) и [knowledge.md](knowledge.md), widgets —
-[features.md](features.md).
+Транспорта два. Исторически серверы были файлами `mcp/{имя}-server/index.js` (чистый Node,
+stdio JSON-RPC, **без зависимостей**), CLI поднимал их процессом на каждый ход. Переезд на
+**MCP-over-HTTP внутри Kestrel** ([ADR-012](../adr/ADR-012-mcp-over-http-transport.md))
+завершён (фаза 2, 2026-08): такой сервер живёт тулсетом в `Services/Mcp/Http`, отвечает по
+`POST /mcp/{name}[/{хвост}]` и процесса не требует вовсе. Переехали все девять продуктовых:
+`widgets` (фаза 1), `memory` вместе со всеми `pmem_*` (волна 1 — параметризованный маршрут
+`/mcp/memory/{personaId}/{projectId}`), `tasks`/`notes`/`personas` (волна 2 — хвост маршрута
+`/mcp/{name}/{sessionId}`), `wsp`/`codegraph`/`notifications` (волна 3) и `dify` (волна 4 —
+его объявление перенесено в код из внешнего конфига `McpConfigPath`: ключ и адрес берутся из
+секции `Dify` appsettings, тулсет ходит во внешний Dify напрямую через `KnowledgeService`,
+ключ не покидает бэкенд). На stdio остался только `desktop` (capability-токен, отдельный
+канал — ADR-008) и внешние модули. stdio-файлы переехавших (`mcp/*-server/index.js` и
+`mcp-dify/src`) заморожены как ветки отката (`Mcp:HttpTransport=false` возвращает всё на
+stdio прежним env).
+
+Подключение per-ход общее: `ClaudeSession.BuildTurnMcpConfig` каждый ход собирает временный
+MCP-конфиг (продуктовые http-узлы с сервисным JWT владельца в `Authorization`; при откате —
+прежние stdio-узлы с env; сторонние серверы из `McpConfigPath` едут как есть). Серверы других
+подсистем описаны в своих доках: notes/memory/personas — [personas.md](personas.md) и
+[knowledge.md](knowledge.md), widgets — [features.md](features.md).
 
 ## Сервер задач (mcp/tasks-server)
 
@@ -105,6 +119,31 @@ periodEnd}, credits:{available,subscription,extra}, spend:{last24h,last7d,last30
 `image|video/upload` — и generated, и uploaded) и `glifusercontent.com` (рендеры `/i:r/…`) —
 оба в белом списке `ProxyController.AllowedHosts` (подтверждены живым `get_project`).
 
+## Свои серверы поверх HTTP (Services/Mcp/Http, ADR-012)
+
+Продуктовый сервер может жить **внутри бэкенда**, без процесса node: тулсет описывает схемы
+(`IMcpToolset` → `McpToolsetRegistry`), а общий `McpTransportController` отдаёт
+`initialize`/`tools/list`/`tools/call`/`ping` по `POST /mcp/{name}`. Первым переехал `widgets`;
+решение целиком, замер и отвергнутые варианты — [ADR-012](../adr/ADR-012-mcp-over-http-transport.md).
+Рабочие правила, которые легко нарушить:
+
+- **Транспорт только `http`, адрес — из `ResolveTasksApiUrl(ownerId)`** плюс `/mcp/<name>`.
+  Схема не `http` (например, явный https-`McpTasksApiUrl` — см. «Грабли HTTPS-деплоя» ниже)
+  или выключенный рубильник `Mcp:HttpTransport` ⇒ сервер объявляется прежним stdio-способом
+  плюс WARN. Fail-closed: по https CLI молча теряет инструмент.
+- **Эндпоинт под `[Authorize]`, владелец — из claim `sub`.** Kestrel на бою слушает публичный
+  домен, `/mcp/*` доступен снаружи; ни URL, ни тело, ни заголовки на владельца не влияют.
+- **`NO_PROXY` ставит бэкенд на каждый ход** (обе формы, дополняя унаследованное): по
+  локальному адресу теперь ходит сам CLI, и через прокси запрос падает 503
+  `CLIENT_HTTP_NOT_IMPLEMENTED`.
+- **Заголовки шлёт КЛИЕНТ**: что не положено статикой в `headers` конфига, до бэкенда не
+  доедет. `X-Caller-Session-Id` (гейты по сессии + журнал вызовов) кладётся туда явно, имя
+  инструмента для журнала контроллер достаёт из тела JSON-RPC.
+- **SSE не поддержан**: `GET` отвечает 405, и это штатная проба клиента — в статистику отказов
+  она не идёт.
+- Транспорт входит в отпечаток состава (`shapes`), поэтому переключение рубильника корректно
+  перезапускает живой процесс CLI.
+
 ## Инвариант: состав инструментов не зависит от хода
 
 **Набор `tools/list` MCP-сервера обязан быть одинаковым на всех ходах сессии.** Ключи серверов
@@ -148,9 +187,57 @@ CLI. Стоит составу зависеть от свойства хода �
 Практическое следствие — у `pmem_*` (память персон-консультантов, по серверу на персону):
 сколько персон объявлено ходу, столько и процессов `node`. Замер на боевом: 14 персон →
 14 процессов ≈ 610 МБ, и так на КАЖДЫЙ ход. Экономить отказом от `alwaysLoad` бессмысленно —
-цена платится за само объявление сервера в конфиге. Уменьшить можно только числом объявленных
-серверов (сузить состав персон либо схлопнуть память в один сервер с инструментами вида
-`memory_recall_<handle>`); осознанно оставлено как есть — цена признана приемлемой.
+цена платится за само объявление сервера в конфиге.
+
+**Важно: это верно только для stdio-транспорта.** Прежняя редакция доки заканчивалась выводом
+«уменьшить можно только числом объявленных серверов» — он снят
+[ADR-012](../adr/ADR-012-mcp-over-http-transport.md). Объявление сервера равно процессу лишь
+потому, что запись конфига — это команда запуска; у сервера на `type: http` процесса нет
+вовсе. Замер переезда: конфиг из двух серверов даёт 5 node-процессов в дереве CLI, тот же
+конфиг с `widgets` по http — 4. Схлопывание памяти консультантов в один сервер с именами вида
+`memory_recall_<handle>` рассмотрено и отвергнуто там же (правило именования + рост числа
+инструментов в контексте хода).
+
+**Память на http-транспорте (фаза 2, волна 1).** `memory` и все `pmem_<handle>` — один тулсет
+`MemoryToolset` в Kestrel: записей серверов в конфиге хода столько же (файлы агентов персон
+ссылаются по ключу `mcpServers: [pmem_<handle>]`, имена инструментов не меняются), но каждая
+объявлена `type: http` на свой `POST /mcp/memory/{personaId}/{projectId}` — процессов `node`
+ноль вместо N+1 на ход. Персона и проект едут в ПУТИ (конфиг хода — наш код, тело контролирует
+модель), а право на них тулсет проверяет на каждый вызов по владельцу из claim `sub` сервисного
+JWT: чужая персона или проект — отказ текстом, а не пустая память. Вызовы идут напрямую в
+сервисы (PersonaMemoryService/TeamMemoryService/DossierStore), без HTTP-петли через Kestrel;
+гейт записи команды и лимит длины записи вынесены в `TeamMemoryService.WriteDeniedFor` /
+`LengthViolation` — общие для REST и MCP. `mcp/memory-server/index.js` заморожен как ветка
+отката (`Mcp:HttpTransport=false`), паритет состава держит `MemoryToolsetParityTests`.
+
+**tasks/notes/personas на http-транспорте (фаза 2, волна 2).** Три сервера — тулсеты
+`TasksToolset`/`NotesToolset`/`PersonasToolset` на `POST /mcp/{name}/{sessionId}`: хвост несёт
+СЕССИЮ-ВЫЗЫВАТЕЛЬ (эквивалент env `*_SESSION_ID`/`*_PROJECT_ID`/`*_EXTRA_*` stdio-ветки), по ней
+тулсет резолвит проект чата, персону и её привязки — ЖИВЫМИ формулами
+(`SessionManager.TasksMcpEnabled`/`PersonasEnabled`/`ConsultantsEnabled`,
+`PersonaBindingsService.SectionEnabled`) на каждый tools/list и tools/call. Сессия обязана
+принадлежать владельцу токена (`GetOwned`): чужая — отказ и пустой состав. Состав зависит только
+от свойств сессии (не хода!): модули `NOTES_ANNOTATIONS`/`PERSONAS_MANAGE`/`PERSONAS_AUTOMATION`
+и `persona_ask` — по живой персоне/чату; `PERSONAS_MENTIONS` на http не учитывает файловых
+сабагентов хода (свойство хода из состава убрано, защита — пер-вызовный гейт).
+
+**Гейт делегирования на http-пути** — `DelegatedTurnGate` (общая точка решения с
+`[DenyOnDelegatedTurn]`, тексты и квоты не могут разъехаться): MVC-фильтр на
+`McpTransportController` не применяется вовсе, тулсет зовёт сервисы через DI. Два отличия
+http-пути: гейт идёт по сессии из ХВОСТА (изолирована по владельцу токена; заголовку от клиента
+доверять нельзя) и **fail-closed без вызывателя** — у REST фейл-опен при отсутствии заголовка
+осознан (чужой клиент), у http его кладёт наш конфиг всегда. Квоты team-implement/work-loop
+сохранились вместе с возвратом при неудачном действии; `tasks_run_executor`, `persona_ask`,
+`personas_set_default` гейтятся на вызове — тест `TasksHttpDelegationGateTests`.
+
+Оркестрация CRUD персон вынесена в `PersonasCrudService` (общий для REST-контроллера и
+PersonasToolset): оркестрация Create/Update/Delete/MakeDefault/привязок/аватара/ai_team жила в
+приватных методах контроллера и была нужна двум потребителям — дублирование рассинхронило бы
+ветки. `mcp/{tasks,notes,personas}-server/index.js` заморожены, паритеты —
+`{Tasks,Notes,Personas}ToolsetParityTests`. Токен всем трём контекстам доставляется
+`TokenFactory` (как widgets/memory), откат `Mcp:HttpTransport=false` возвращает stdio с прежним
+env. Разбор per-turn флагов волны (что свойство сессии, а что хода — таблица для `wsp` волны 3) —
+[ADR-012](../adr/ADR-012-mcp-over-http-transport.md), раздел «Фаза 2, волна 2».
 
 ## Диета состава по данным использования
 

@@ -5,21 +5,32 @@ import { ChainStepsEditor } from './ChainStepsEditor';
 import { Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { C, FONT, FS } from '../lib/design';
-import { chainSummary, findPreset, presetIdOf, presetRoute, usePresets, type ChainLabelContext } from '../lib/presets';
+import { chainSummary, findPreset, getSpecialtySettings,
+  presetIdOf, presetRoute, usePresets, type ChainLabelContext, type LayerReducer } from '../lib/presets';
 import { requestNewPreset } from '../lib/modelProvidersNav';
 import { newPresetId, withNewPreset } from '../lib/specialties';
+import { showToast } from '../lib/toast';
 import type { ModelOption } from '../lib/models';
-import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
+import type { SpecialtySettingsLayer } from '../types';
 
 // Доступ к слоям специальностей для inline-сборки цепочки (см. RoutePicker.presetCreation).
 // Без него «Собрать цепочку…» ведёт себя по-старому — открывает раздел (PersonaForm).
+// Снимок слоёв берётся из стора lib/presets.ts через getSpecialtySettings()/getUserLayer()
+// — наружу проп settings не отдаём, чтобы панели записи не получали слой снаружи.
 export interface PresetCreationCtx {
   models: ModelOption[];
-  settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | 'user' | null;
-  // Промис — вызывающий (PresetOptions.savePreset) ждёт резолва PUT слоя, прежде чем
-  // назначать место на новый пресет (гонка «создать → назначить», MAJOR 1, ревью d23231bd)
-  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
+  // Контекст user-слоя (admin-only). Задан — запись в 'user'-scope берёт базу из
+  // userLayers[contextUserId] и отказывается без записи, если слой не загружен.
+  // Не задан — 'user'-scope запись невозможна.
+  contextUserId?: string | null;
+  // Запись через редьюсер (см. presets.saveLayer): стор сам читает текущий слой и
+  // шлёт PUT в нужный scope+userId. Промис резолвится ПОСЛЕ фиксации (вызывающий —
+  // PresetOptions.savePreset — ждёт, прежде чем назначать место на новый пресет,
+  // иначе бэкенд проверяет preset:{id} по снимку без ещё не записанного → 400,
+  // MAJOR 1 ревью d23231bd).
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', reducer: LayerReducer,
+    userId?: string | null) => Promise<void>;
   // Когда сборка цепочки — не единственная правка слоя (матрица «Исключений»: тут же
   // пишется ячейка тем же PUT) — потребитель подключает onCreated и сам ОДНИМ onSaveLayer
   // фиксирует и пресет, и свою правку на том же клоне layer. Без onCreated — старое
@@ -65,21 +76,27 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   // на месте, а не открывает раздел заново). Проверяем editing первым, чтобы состояние
   // не зависело от гонки с presets.length (см. ниже)
   if (editing && creation) {
-    const targetScope: 'global' | 'owner' | 'user' = scope ?? 'owner';
+    // ADR-012: слой один — общий. Прежний `scope ?? 'owner'` уводил черновик не-админа
+    // в снятый owner-слой, PUT всё равно шёл в /settings/global и возвращал 403, а пустой
+    // catch съедал сообщение — кнопка выглядела мёртвой.
+    const targetScope = 'global' as const;
     const savePreset = () => {
-      if (!creation.settings || draft.length === 0) return;
+      const settings = getSpecialtySettings();
+      if (!settings || draft.length === 0) return;
       const name = draftName.trim();
       // Пустое имя — отказ без записи: мини-валидация на клиенте, чтобы не получить
       // пресет с пустым именем
       if (name === '') return;
-      // user-слой может быть ещё не загружен (админ открыл редактор раньше вкладки
-      // «Особые правила»); без базы положить пресет некуда — отказ без записи
-      const base = creation.settings[targetScope];
-      if (!base) return;
       const id = newPresetId();
-      const next = withNewPreset(base, id, name, draft);
+      // Редьюсер: в cur уже лежит актуальный слой (store сделал выборку под scope+userId),
+      // дописываем новый пресет и возвращаем. inline-редактор лишь собирает идентификатор
+      // и шаги; неважно, какой cur пришёл — мы стартуем «над» ним.
+      const reducer = (cur: SpecialtySettingsLayer) => withNewPreset(cur, id, name, draft);
       if (creation.onCreated) {
-        creation.onCreated(id, targetScope, next);
+        // Сборка — не единственная правка слоя: потребитель сам упакует пресет+ячейку
+        // в один редьюсер (см. SpecialRulesTab.applyCreatedPreset).
+        const layer = withNewPreset(settings.global, id, name, draft);
+        creation.onCreated(id, targetScope, layer);
         setEditing(false);
         setDraftName('');
       } else {
@@ -88,9 +105,13 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
         // preset:{id} по снимку без ещё не записанного пресета → 400 (MAJOR 1).
         // Редактор закрываем тоже по успеху: на отказе черновик из нескольких шагов
         // должен остаться на месте, иначе собирать цепочку заново
-        creation.onSaveLayer(targetScope, next)
+        creation.onSaveLayer(targetScope, reducer, null)
           .then(() => { onPick(presetRoute(id)); setEditing(false); setDraftName(''); })
-          .catch(() => {});
+          .catch((e: unknown) => {
+            // Видимое сообщение вместо молчаливого отказа: цепочки правит только админ,
+            // и без него кнопка «Сохранить» просто ничего не делала.
+            showToast('Цепочка', e instanceof Error ? e.message : 'Не удалось сохранить цепочку');
+          });
       }
     };
     const busy = creation.savingScope !== null;

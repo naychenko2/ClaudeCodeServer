@@ -21,7 +21,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
 import { useRequestPanelFill } from '../../pages/workspace/panelFill';
 import { CodeGraphMiniMap } from './CodeGraphMiniMap';
-import { focusNeighbours, graphDegree, isTestSourceFile } from './graphFocus';
+import { focusNeighbours, graphDegree, isTestSourceFile, nodeLanguage, type NodeLanguage } from './graphFocus';
 import {
   EDGE_COLOR, EDGE_BG, KIND_COLOR, KIND_RING, KIND_GLYPH, RELATION_LABEL,
 } from './graphTokens';
@@ -82,32 +82,75 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
     return s.data.nodes.find(n => n.id === s.selectedId) ?? null;
   }, [s.selectedId, s.data]);
 
-  // Поиск: узлы, чей label или FQN содержит запрос
+  // Поиск: узлы, чей label или FQN содержит запрос — через тот же предикат
+  // nodeLanguage, что холсты: выключенный язык в результатах не выпадает, иначе
+  // «нашёл тип» оборачивается «а его тут нет»
   const searchResults = useMemo(() => {
     if (!s.query.trim() || !s.data) return [];
     const q = s.query.trim().toLowerCase();
-    return s.data.nodes.filter(n =>
-      n.label.toLowerCase().includes(q) || n.fullyQualifiedName.toLowerCase().includes(q)
-    );
-  }, [s.query, s.data]);
+    const langs = { csharp: s.langCSharp, typescript: s.langTypeScript };
+    return s.data.nodes.filter(n => {
+      if (!langs[nodeLanguage(n.sourceFile)]) return false;
+      return n.label.toLowerCase().includes(q) || n.fullyQualifiedName.toLowerCase().includes(q);
+    });
+  }, [s.query, s.data, s.langCSharp, s.langTypeScript]);
 
-  // Счётчики скрытых узлов — для сводки активных фильтров
+  // Счётчики скрытых узлов — для сводки активных фильтров. Язык применяется
+  // первым: «скрыто тестов» должно говорить про видимые сейчас тесты, иначе
+  // число скачет от включения соседнего языка
   const hiddenTestCount = useMemo(() => {
     if (!s.hideTestNodes || !s.data) return 0;
-    return s.data.nodes.filter(n => isTestSourceFile(n.sourceFile)).length;
-  }, [s.hideTestNodes, s.data]);
+    const langs = { csharp: s.langCSharp, typescript: s.langTypeScript };
+    return s.data.nodes.filter(n => langs[nodeLanguage(n.sourceFile)] && isTestSourceFile(n.sourceFile)).length;
+  }, [s.hideTestNodes, s.data, s.langCSharp, s.langTypeScript]);
 
   const hiddenOrphanCount = useMemo(() => {
     if (!s.hideOrphanNodes || !s.data) return 0;
-    const deg = new Map<string, number>();
-    for (const e of s.data.edges) { deg.set(e.source, (deg.get(e.source) ?? 0) + 1); deg.set(e.target, (deg.get(e.target) ?? 0) + 1); }
-    return s.data.nodes.filter(n => !deg.has(n.id) || deg.get(n.id) === 0).length;
-  }, [s.hideOrphanNodes, s.data]);
+    const langs = { csharp: s.langCSharp, typescript: s.langTypeScript };
+    // Сирота среди видимого: нет ни одного видимого соседа (выключенный C# не
+    // считается опорой — иначе TS-узел с одними C#-связями был бы не сиротой
+    // при выключенном C#, и «скрыть сироты» не убирал бы его с холста)
+    const visibleDeg = new Map<string, number>();
+    const byId = new Map(s.data.nodes.map(n => [n.id, n]));
+    for (const e of s.data.edges) {
+      const a = byId.get(e.source); const b = byId.get(e.target);
+      if (!a || !b) continue;
+      if (!langs[nodeLanguage(a.sourceFile)] || !langs[nodeLanguage(b.sourceFile)]) continue;
+      visibleDeg.set(e.source, (visibleDeg.get(e.source) ?? 0) + 1);
+      visibleDeg.set(e.target, (visibleDeg.get(e.target) ?? 0) + 1);
+    }
+    return s.data.nodes.filter(n => langs[nodeLanguage(n.sourceFile)] && !visibleDeg.has(n.id)).length;
+  }, [s.hideOrphanNodes, s.data, s.langCSharp, s.langTypeScript]);
+
+  // Счётчики узлов по языку: считаем по полному снимку (все языки), чтобы подпись
+  // «C# · 1203» показывала реальный размер категории в графе, а не сколько осталось
+  // после фильтра (это и есть «что выключили»).
+  const langCounts = useMemo(() => {
+    const c = { csharp: 0, typescript: 0 };
+    if (s.data) for (const n of s.data.nodes) c[nodeLanguage(n.sourceFile)]++;
+    return c;
+  }, [s.data]);
+
+  // god-узлы с учётом языкового фильтра — список из бэка по полному графу, и
+  // выключенный C# не должен приводить TS-узел в топ связности (M1)
+  const visibleGodNodes = useMemo(() => {
+    if (!s.data) return [] as CodeGraphNode[];
+    const langs = { csharp: s.langCSharp, typescript: s.langTypeScript };
+    const byId = new Map(s.data.nodes.map(n => [n.id, n]));
+    const out: CodeGraphNode[] = [];
+    for (const id of s.data.godNodes) {
+      const n = byId.get(id);
+      if (!n) continue;
+      if (!langs[nodeLanguage(n.sourceFile)]) continue;
+      out.push(n);
+    }
+    return out;
+  }, [s.data, s.langCSharp, s.langTypeScript]);
 
   const disabled = s.status === 'loading' || s.status === 'building';
   const empty = s.status === 'empty';
   const allRelations = s.filters.Calls && s.filters.Implements && s.filters.References;
-  const filtersOn = !allRelations || s.hideTestNodes || s.hideOrphanNodes;
+  const filtersOn = !allRelations || s.hideTestNodes || s.hideOrphanNodes || !s.langCSharp || !s.langTypeScript;
   const isStale = !!s.data?.metadata.isStale;
 
   if (s.status === 'building') {
@@ -212,6 +255,18 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
       {/* Меню фильтров: что скрыть на холсте и какие связи показывать */}
       {filtersAnchor && (
         <Menu anchor={filtersAnchor} minWidth={240} maxHeight={320} onClose={() => setFiltersAnchor(null)}>
+          {/* Языки — главный раздел: «С# (.NET)» и «TS/React». Счётчики из полного
+              снимка, чтобы выключенная категория сразу читалась по своему размеру.
+              Последний включённый язык стор не даёт снять — no-op без побочных эффектов */}
+          <MenuItem
+            label={<CheckLabel on={s.langCSharp}>C# (.NET) · {langCounts.csharp}</CheckLabel>}
+            onClick={() => a.toggleLanguage('csharp')}
+          />
+          <MenuItem
+            label={<CheckLabel on={s.langTypeScript}>TS/React · {langCounts.typescript}</CheckLabel>}
+            onClick={() => a.toggleLanguage('typescript')}
+          />
+          <MenuSep />
           <MenuItem
             label={<CheckLabel on={s.hideTestNodes}>Скрыть тесты{s.hideTestNodes ? ` · ${hiddenTestCount}` : ''}</CheckLabel>}
             onClick={() => a.toggleHideTestNodes()}
@@ -307,6 +362,8 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
           }}>
             <span style={{ flex: 1, minWidth: 0 }}>
               {[
+                !s.langCSharp ? `C# скрыт · ${langCounts.csharp}` : null,
+                !s.langTypeScript ? `TS скрыт · ${langCounts.typescript}` : null,
                 s.hideTestNodes ? `тесты скрыты · ${hiddenTestCount}` : null,
                 s.hideOrphanNodes ? `сироты скрыты · ${hiddenOrphanCount}` : null,
                 !allRelations ? `связи: ${GRAPH_RELATIONS.filter(r => s.filters[r]).length} из 3` : null,
@@ -333,7 +390,9 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
             {/* Раскрытый хвост: то, что не поместилось на холст и ушло в заглушку «+N» */}
             {s.focusTail && (
               <FocusTail graph={s.data} centerId={s.selectedId} side={s.focusTail}
-                filters={s.filters} hideTests={s.hideTestNodes} degree={degree}
+                filters={s.filters} hideTests={s.hideTestNodes}
+                languages={{ csharp: s.langCSharp, typescript: s.langTypeScript }}
+                degree={degree}
                 onSelect={a.refocus}
                 onClose={() => a.setFocusTail(null)} />
             )}
@@ -351,18 +410,17 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
           {s.legendOpen && (
             <div style={{ padding: `0 ${SP.md}px ${SP.md}px` }}>
               {/* Легенда типов */}
-              {(['Class', 'Interface', 'Struct', 'Enum'] as const).map(k => (
+              {(['Class', 'Interface', 'Struct', 'Enum', 'Component', 'Hook', 'UiPrimitive', 'Util'] as const).map(k => (
                 <LegendRow key={k} color={KIND_RING[k]} glyph={KIND_GLYPH[k]} label={k} />
               ))}
               {/* god-узлы: порог minDegree=10 даёт 140 узлов, показываем топ-15 пока бэкенд не поправлен */}
-              {s.data && s.data.godNodes.length > 0 && (
+              {visibleGodNodes.length > 0 && (
                 <>
                   <div style={{ ...sectionTitleStyle, marginTop: SP.sm, marginBottom: SP.xs }}>
                     God-узлы <Dot color={C.accent} size={7} />
                   </div>
-                  {s.data.godNodes.slice(0, GOD_LIMIT).map(id => {
-                    const node = s.data!.nodes.find(n => n.id === id);
-                    if (!node) return null;
+                  {visibleGodNodes.slice(0, GOD_LIMIT).map(node => {
+                    const id = node.id;
                     return (
                       <Row key={id} onClick={() => a.select(id)} active={id === s.selectedId}>
                         <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0, boxShadow: `0 0 0 3px ${C.accentLight}` }} />
@@ -399,19 +457,20 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
 // === Хвост соседей фокуса ===
 // Холст показывает 16 соседей на сторону, остальные — в заглушке «+N».
 // Клик по заглушке раскрывает здесь ПОЛНЫЙ список стороны с переходом по клику.
-function FocusTail({ graph, centerId, side, filters, hideTests, degree, onSelect, onClose }: {
+function FocusTail({ graph, centerId, side, filters, hideTests, languages, degree, onSelect, onClose }: {
   graph: CodeGraph;
   centerId: string;
   side: 'in' | 'out';
   filters: Record<CodeGraphRelation, boolean>;
   hideTests: boolean;
+  languages: Record<NodeLanguage, boolean>;
   degree?: Map<string, number>;
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
   const list = useMemo(
-    () => focusNeighbours(graph, centerId, side, { filters, hideTests, degree }),
-    [graph, centerId, side, filters, hideTests, degree],
+    () => focusNeighbours(graph, centerId, side, { filters, hideTests, languages, degree }),
+    [graph, centerId, side, filters, hideTests, languages, degree],
   );
 
   return (
@@ -584,12 +643,14 @@ function RelEmpty() {
   return <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `${SP.xxs}px ${SP.sm}px` }}>нет</div>;
 }
 
-// Фон kind-бейджа — soft-подложка под цвет типа (для контраста цветной точки)
+// Фон kind-бейджа — soft-подложка под цвет типа (для контраста цветной точки).
+// TS-Kind'ы наследуют семантику C#-видов: Hook ≈ Interface (info), UiPrimitive ≈
+// Struct (success), Util ≈ Enum (plan), Component ≈ Class (нейтральный)
 function EDGE_BG_forKind(kind: keyof typeof KIND_COLOR): string {
-  if (kind === 'Interface') return EDGE_BG.Calls;       // info
-  if (kind === 'Struct') return EDGE_BG.Implements;     // success
-  if (kind === 'Enum') return EDGE_BG.References;       // plan
-  return C.bgSelected;                                   // Class — нейтральный
+  if (kind === 'Interface' || kind === 'Hook') return EDGE_BG.Calls;
+  if (kind === 'Struct' || kind === 'UiPrimitive') return EDGE_BG.Implements;
+  if (kind === 'Enum' || kind === 'Util') return EDGE_BG.References;
+  return C.bgSelected;
 }
 
 // Парсинг sourceLocation ("line 6" / "6:12" / "6") → номер строки или undefined

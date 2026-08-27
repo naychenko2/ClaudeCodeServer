@@ -1,0 +1,88 @@
+<Window x:Class="AiHomeDesktop.App.Shell.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="AI Home Desktop"
+        Width="1180" Height="820" MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgMain}">
+    <!--
+        Окно оболочки: веб-морда сервера в WebView2 плюс строка состояния. Второго
+        интерфейса клиент не пишет — в WebView2 та же самая веб-морда, что в браузере.
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <wv2:WebView2 x:Name="Web" Visibility="Collapsed" />
+
+            <!-- Загрузка: пока WebView2 поднимает окружение и грузит страницу -->
+            <Border x:Name="LoadingPane" Background="{StaticResource BgMain}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Style="{StaticResource H1}" HorizontalAlignment="Center" Text="AI Home" />
+                    <TextBlock x:Name="LoadingText" Style="{StaticResource Muted}" Margin="0,10,0,0"
+                               HorizontalAlignment="Center" Text="Открываю веб-морду…" />
+                </StackPanel>
+            </Border>
+
+            <!-- Ошибка: сервер не ответил. Клиент при этом жив, канал продолжает попытки -->
+            <Border x:Name="LoadErrorPane" Visibility="Collapsed" Background="{StaticResource BgMain}">
+                <Border MaxWidth="520" VerticalAlignment="Center" HorizontalAlignment="Center"
+                        Background="{StaticResource BgCard}"
+                        BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                        CornerRadius="14" Padding="26">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H1}" Text="Сервер не отвечает" />
+                        <TextBlock x:Name="LoadErrorText" Style="{StaticResource Muted}" Margin="0,10,0,0"
+                                   Text="Веб-морда не открылась. Клиент остаётся на связи и продолжает попытки сам." />
+                        <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                            <Button Style="{StaticResource PrimaryButton}" Content="Повторить" Click="OnRetryClick" />
+                            <Button Style="{StaticResource GhostButton}" Margin="10,0,0,0"
+                                    Content="Сопрячь заново" Click="OnRepairClick" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Border>
+
+            <!-- Сопряжение: пока устройства нет, веб-морду показывать нечему -->
+            <ContentControl x:Name="PairingHost" Visibility="Collapsed" />
+        </Grid>
+
+        <Border Grid.Row="1" Background="{StaticResource BgPanel}"
+                BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0"
+                Padding="16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="StatusDot" Width="9" Height="9" VerticalAlignment="Center"
+                             Fill="{StaticResource TextMuted}" />
+                    <TextBlock x:Name="StatusText" Style="{StaticResource Body}" FontSize="13"
+                               Margin="8,0,0,0" VerticalAlignment="Center" Text="Не сопряжено" />
+                    <TextBlock x:Name="StatusDetail" Style="{StaticResource Muted}" FontSize="12"
+                               Margin="10,0,0,0" VerticalAlignment="Center" MaxWidth="420"
+                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                </StackPanel>
+
+                <!-- Шов сеанса рук: очередь заявок, «Начать сеанс», «Стоп».
+                     Кнопки старта у оболочки нет намеренно — эта дверь одна и она на устройстве -->
+                <ContentControl x:Name="HandsHost" Grid.Column="1" Margin="16,0" VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="RepairButton" Style="{StaticResource GhostButton}"
+                            Content="Сопрячь заново" Click="OnRepairClick" Visibility="Collapsed" />
+                    <Button Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                            Content="Скрыть в трей" Click="OnHideClick"
+                            ToolTip="Окно уходит в трей, клиент остаётся на связи. Жизнь в трее закрытием окна не считается: сеанс рук от этого не гаснет — его гасит «Стоп» или выход из клиента." />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

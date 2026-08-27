@@ -28,6 +28,11 @@ function jsonResponse(data: unknown, status = 200) {
   };
 }
 
+// Ответ /api/health — NoContent, как реальный HealthController
+function healthResponse(status = 204) {
+  return { ok: status >= 200 && status < 300, status, statusText: `HTTP ${status}`, json: async () => ({}), text: async () => '' };
+}
+
 let offline: typeof import('../offline');
 let fetchMock: ReturnType<typeof vi.fn>;
 let dispatched: string[];
@@ -81,7 +86,7 @@ describe('request: network-first', () => {
 
     expect(data).toEqual({ cached: true });
     expect(idbGet).toHaveBeenCalledWith('/projects');
-    // Сетевая ошибка → сразу офлайн, без промежуточных состояний
+    // Сеть молчит и на запросе, и на подтверждающем пинге → офлайн
     expect(offline.isOnline()).toBe(false);
   });
 
@@ -147,10 +152,90 @@ describe('request: свой таймаут', () => {
     const promise = offline.request('/projects', { method: 'POST', body: '{}' });
     const assertion = expect(promise).rejects.toThrowError(offline.OfflineError);
     await vi.advanceTimersByTimeAsync(30_000);
+    // Подтверждающий пинг тоже висит до своего abort'а (PING_TIMEOUT_MS=3с) — сервер молчит
+    await vi.advanceTimersByTimeAsync(3_000);
     await assertion;
 
     // 30-сек дефолтный таймаут без явного timeoutMs — зависший запрос это пропажа связи
     expect(offline.isOnline()).toBe(false);
+  });
+});
+
+// --- Подтверждающий пинг перед уходом в офлайн ---
+// Раньше ЛЮБОЙ единичный провал fetch единолично ставил офлайн, а зонд через
+// секунды возвращал онлайн — на планшете это давало мигание индикатора при
+// разморозке вкладки (браузер реджектит все in-flight запросы разом).
+describe('request: подтверждение офлайна пингом', () => {
+  // /api/health отвечает, всё остальное — сетевая ошибка
+  function serverAliveButRequestFails() {
+    fetchMock.mockImplementation((url: string) =>
+      url === '/api/health'
+        ? Promise.resolve(healthResponse(204))
+        : Promise.reject(new TypeError('failed to fetch')));
+  }
+
+  it('одиночный провал fetch при живом сервере НЕ уводит в офлайн', async () => {
+    serverAliveButRequestFails();
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+
+    const data = await offline.request('/projects');
+
+    // Кэш всё равно выручает (ответа-то не было), но состояние связи не мигает
+    expect(data).toEqual({ cached: true });
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ method: 'GET' }));
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('мутация при живом сервере: OfflineError отдаётся, но офлайн не включается', async () => {
+    serverAliveButRequestFails();
+
+    await expect(offline.request('/projects', { method: 'POST', body: '{}' }))
+      .rejects.toThrowError(offline.OfflineError);
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('пачка параллельных провалов даёт ОДИН пинг (общий полёт)', async () => {
+    let pings = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/health') { pings++; return Promise.resolve(healthResponse(204)); }
+      return Promise.reject(new TypeError('failed to fetch'));
+    });
+    idbGet.mockResolvedValue({ data: {}, savedAt: 1 });
+
+    await Promise.all([offline.request('/a'), offline.request('/b'), offline.request('/c')]);
+
+    expect(pings).toBe(1);
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('молчит и пинг — уходим в офлайн (прежнее поведение при реальном разрыве)', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue(undefined);
+
+    await expect(offline.request('/projects')).rejects.toThrowError(offline.OfflineError);
+    expect(offline.isOnline()).toBe(false);
+  });
+
+  it('502 от прокси на пинге = бэкенд мёртв → офлайн', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      url === '/api/health'
+        ? Promise.resolve(healthResponse(502))
+        : Promise.reject(new TypeError('failed to fetch')));
+    idbGet.mockResolvedValue(undefined);
+
+    await expect(offline.request('/projects')).rejects.toThrowError(offline.OfflineError);
+    expect(offline.isOnline()).toBe(false);
+  });
+
+  it('в офлайне провалившийся GET пинг не шлёт (подтверждать нечего)', async () => {
+    offline.setOnline(false);
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+
+    await offline.request('/projects');
+
+    // Ровно один fetch — сам запрос; /api/health не дёргался
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -229,44 +314,15 @@ describe('setConnectionState: совместимость с signalr.ts', () => {
   });
 });
 
-describe('becameVisibleRecently: тихое окно после возврата вкладки', () => {
-  // Достаём visibilitychange-хендлер, зарегистрированный initConnectivity в застабленном
-  // document, — тесты гоняют реальный обработчик, а не переизобретают его логику
-  function visibilityHandler(doc: { addEventListener: ReturnType<typeof vi.fn> }): () => void {
-    const call = doc.addEventListener.mock.calls.find(([ev]) => ev === 'visibilitychange');
-    expect(call).toBeDefined();
-    return call![1] as () => void;
-  }
-
-  it('вкладка не уходила в фон — окно не активно, тост не глушится', () => {
-    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn() });
-    offline.initConnectivity();
-    expect(offline.becameVisibleRecently()).toBe(false);
-  });
-
-  it('возврат вкладки открывает окно; спустя 5с оно закрывается', () => {
-    const doc = { visibilityState: 'hidden', addEventListener: vi.fn() };
-    vi.stubGlobal('document', doc);
-    offline.initConnectivity();
-    const handler = visibilityHandler(doc);
-
-    doc.visibilityState = 'visible';
-    handler();
-    expect(offline.becameVisibleRecently()).toBe(true);
-
-    // Восстановление позже тихого окна (пользователь наблюдал офлайн) — тост уместен
-    vi.advanceTimersByTime(5_100);
-    expect(offline.becameVisibleRecently()).toBe(false);
-  });
-
-  it('уход вкладки в фон отметку не ставит', () => {
-    const doc = { visibilityState: 'hidden', addEventListener: vi.fn() };
-    vi.stubGlobal('document', doc);
-    offline.initConnectivity();
-    const handler = visibilityHandler(doc);
-
-    handler(); // visibilitychange при hidden — уход в фон
-    expect(offline.becameVisibleRecently()).toBe(false);
+describe('becameVisibleRecently: удалён (тост упразднён)', () => {
+  // В задаче «Заменить тост „Связь восстановлена" маркером связи» (60c98a33)
+  // утилита больше не нужна: нижестоящий потребитель (App.tsx) убран. Сам
+  // паттерн «тихое окно» больше не востребован — display-состояние само
+  // гасит блипы через гистерезис 3с. Тест-страховка на случай регрессии:
+  // экспорт из offline.ts убран, и попытка вызвать должна падать по TS.
+  it('утилита не экспортируется — ожидаем TS-ошибку компиляции', () => {
+    // @ts-expect-error — намеренно: экспорт удалён
+    expect((offline as { becameVisibleRecently?: () => boolean }).becameVisibleRecently).toBeUndefined();
   });
 });
 
@@ -306,11 +362,6 @@ describe('initConnectivity: ОС-события без пинга', () => {
 // из них не сработало (хаб не стартован, экран логина, авиарежим включился
 // без window-события) — поднимает флаг зонд.
 describe('зонд возврата', () => {
-  // fetch-заглушка для /api/health — NoContent как реальный HealthController
-  function healthResponse(status = 204) {
-    return { ok: status >= 200 && status < 300, status, statusText: `HTTP ${status}`, json: async () => ({}), text: async () => '' };
-  }
-
   it('из офлайна успешный GET через request() поднимает флаг', async () => {
     offline.setOnline(false);
     expect(offline.isOnline()).toBe(false);
@@ -461,5 +512,120 @@ describe('зонд возврата', () => {
     handler();
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// --- Display-состояние (с гистерезисом) ---
+// Бинарный isOnline() реагирует мгновенно, а UI-маркер у аватарки
+// (useConnectionDisplayState) — с задержкой, чтобы короткий блип (разморозка
+// вкладки на планшете) не красил интерфейс. Маркер заменил тост «Связь
+// восстановлена», который вылетал на каждый блип и раздражал.
+//
+// Переходы:
+//   online → offline:   3с устойчивой потери → 'unstable' (пунктир warning)
+//   unstable → offline: ещё 7с (10с от потери) → 'offline' (grayscale+черта)
+//   * → online:         мгновенно (возврат тихий)
+describe('display-состояние: гистерезис и тихий возврат', () => {
+  it('на старте — online', () => {
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('setOnline(false): 3с удерживаем online визуально (блип не красит)', () => {
+    offline.setOnline(false);
+    // Бинарный isOnline() падает сразу, а display-состояние — нет
+    expect(offline.isOnline()).toBe(false);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // 2.9с — всё ещё online
+    vi.advanceTimersByTime(2_900);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // 3.1с — переход в unstable
+    vi.advanceTimersByTime(200);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+  });
+
+  it('блип online→offline→online за <3с: display-состояние не успело смениться', () => {
+    offline.setOnline(false);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    vi.advanceTimersByTime(1_000);
+    offline.setOnline(true);
+    // Никаких промежуточных переходов: возврат в online отменил таймер
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // До 3с с момента ухода в offline: даже если дойдёт таймер, ничего не произойдёт
+    vi.advanceTimersByTime(5_000);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('unstable продолжается 7с → переход в offline (10с от потери)', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(3_000);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+
+    vi.advanceTimersByTime(6_900);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+
+    vi.advanceTimersByTime(200);
+    expect(offline.getConnectionDisplayState()).toBe('offline');
+  });
+
+  it('возврат online из unstable: мгновенный, таймер эскалации отменяется', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(3_000);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+
+    // Возврат на отметке 5с (до эскалации в offline)
+    vi.advanceTimersByTime(2_000);
+    offline.setOnline(true);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // Если бы таймер эскалации не отменился, на 10с был бы скачок в offline
+    vi.advanceTimersByTime(20_000);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('возврат online из offline: мгновенный (без промежуточного unstable)', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(10_100);
+    expect(offline.getConnectionDisplayState()).toBe('offline');
+
+    offline.setOnline(true);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('повторный setOnline(false) во время таймера не сбрасывает отсчёт (идемпотентность)', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(1_000);
+    // Дубль входа в offline: _online не меняется, но и таймер гистерезиса не перезапускается
+    offline.setOnline(false);
+    vi.advanceTimersByTime(2_100);
+    // С момента ПЕРВОГО setOnline(false) прошло 3.1с → должно сработать
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+  });
+
+  it('подписчики display-состояния уведомляются о переходах', () => {
+    const fn = vi.fn();
+    const unsub = offline.subscribeConnectionDisplayState(fn);
+
+    offline.setOnline(false);
+    expect(fn).toHaveBeenCalledTimes(0); // мгновенного перехода display нет (гистерезис)
+    vi.advanceTimersByTime(3_000);
+    expect(fn).toHaveBeenCalledTimes(1); // → unstable
+    vi.advanceTimersByTime(7_000);
+    expect(fn).toHaveBeenCalledTimes(2); // → offline
+
+    offline.setOnline(true);
+    expect(fn).toHaveBeenCalledTimes(3); // → online
+
+    // Дубль значения — не уведомляем
+    offline.setOnline(true);
+    expect(fn).toHaveBeenCalledTimes(3);
+
+    unsub();
+    offline.setOnline(false);
+    vi.advanceTimersByTime(3_000);
+    expect(fn).toHaveBeenCalledTimes(3); // отписались — уведомлений нет
   });
 });

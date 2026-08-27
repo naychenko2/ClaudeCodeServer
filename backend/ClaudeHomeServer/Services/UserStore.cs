@@ -76,7 +76,7 @@ public class UserStore
             "╚══════════════════════════════════════════════╝", generatedPassword);
     }
 
-    // Миграция IntroCompletedAt (фича default-personas-onboarding). Load бежит на КАЖДОМ
+    // Миграция IntroCompletedAt (знакомство с ассистентом). Load бежит на КАЖДОМ
     // старте, поэтому условие обязано быть точным: пользователь с дефолтом, но без признака
     // знакомства и без заготовки-ассистента считаются уже прошедшими знакомство — им
     // авто-ассистент не предлагают. Третье слагаемое (AssistantPersonaId == null) критично:
@@ -447,7 +447,7 @@ public class UserStore
     }
 
     /// <summary>
-    /// Личная дефолт-персона пользователя (фича default-personas-onboarding); null — сброс.
+    /// Личная дефолт-персона пользователя; null — сброс.
     /// Возвращает false если пользователь не найден.
     /// </summary>
     public bool SetDefaultPersona(string id, string? personaId)
@@ -479,7 +479,7 @@ public class UserStore
     }
 
     /// <summary>
-    /// Id заготовки-ассистента пользователя (фича default-personas-onboarding); null — сброс.
+    /// Id заготовки-ассистента пользователя; null — сброс.
     /// Возвращает false если пользователь не найден.
     /// </summary>
     public bool SetAssistantPersona(string id, string? personaId)
@@ -522,6 +522,40 @@ public class UserStore
             if (user is null) return false;
 
             user.ContextThresholds = thresholds;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Личный порог автоправила архивации чатов (флаг chat-auto-archive; null — сброс:
+    /// правило для чатов вне проектов и наследуемый дефолт проектов не настроено).
+    /// </summary>
+    public bool SetArchiveAfterDays(string id, int? days)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.ArchiveAfterDays = days;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Момент первого прохода автоправила архивации (кнопка «Применить сейчас»):
+    /// до него фоновый тик владельца не архивирует ничего.
+    /// </summary>
+    public bool SetArchiveRuleFirstRunAt(string id, DateTime? atUtc)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.ArchiveRuleFirstRunAt = atUtc;
             Save();
             return true;
         }

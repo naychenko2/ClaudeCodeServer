@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
@@ -184,6 +185,26 @@ public class LlmProviderRegistry
     public static bool IsClaudeTierWindowAlias(string? model) =>
         !string.IsNullOrWhiteSpace(model) && ClaudeTierWindowAlias.IsMatch(model.Trim());
 
+    // Окно контекста РОДНОГО Claude, которое объявляем CLI (CLAUDE_CODE_MAX_CONTEXT_TOKENS).
+    // Считается по модели, КОТОРАЯ РЕАЛЬНО УЕДЕТ В --model, т.е. уже после
+    // ClaudeSubscriptionPool.ResolveWindowAlias: суффикс [1m] у тир-алиаса срезается, когда
+    // в пуле нет живого кандидата с доступом к 1M, и объявить в этом случае 1M хуже, чем не
+    // объявлять ничего — CLI не сожмёт контекст вовремя и ход упадёт «Prompt is too long»
+    // вместо компакта. Зачем объявлять вообще: суффикс окна живёт только во флаге --model и
+    // внутрь сабагента не передаётся (в транскрипте agent-*.jsonl модель идёт без суффикса) —
+    // CLI ведёт сабагента в предполагаемых 200k, и точки его обрывов жмутся к этой границе.
+    // Значение env наследуется всеми ходами процесса, включая сабагентов.
+    public const int ClaudeWindow1M = 1_000_000;
+    public const int ClaudeWindowDefault = 200_000;
+
+    public static int ClaudeContextWindow(string? cliModel) =>
+        !string.IsNullOrWhiteSpace(cliModel)
+        && cliModel.Contains("[1m]", StringComparison.OrdinalIgnoreCase)
+            ? ClaudeWindow1M : ClaudeWindowDefault;
+
+    public static string ClaudeContextWindowValue(string? cliModel) =>
+        ClaudeContextWindow(cliModel).ToString(CultureInfo.InvariantCulture);
+
     public LlmCapabilities CapabilitiesFor(string? model) =>
         ResolveByModel(model) is { } p ? CapabilitiesOf(p) : LlmCapabilitiesCatalog.Claude;
 
@@ -227,6 +248,7 @@ public class LlmProviderRegistry
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
     ];
 
     // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true
@@ -267,6 +289,20 @@ public class LlmProviderRegistry
             ["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
         };
+        // Реальное окно контекста модели. Id сторонних моделей CLI не знает и тогда считает
+        // окно равным 200k, запуская auto-compact на ~167k при реальном окне до 1M; сам он об
+        // этом и предупреждает: «"kimi-k3" is not a model this version of Claude Code
+        // recognizes, so auto-compact will keep this session within 200k tokens (the context
+        // window it assumes). If the model accepts more, append [1m] to the model name for 1M,
+        // or set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window». Берём окно из каталога
+        // провайдера — системно, вместо суффикса [1m] у каждой модели. Модели в каталоге нет
+        // или окно не задано — ключ НЕ ставим (fail-open: пусть CLI решает сам, как раньше).
+        // Завышать значение нельзя: тогда CLI не сожмёт контекст вовремя и ход упадёт с
+        // ошибкой лимита вместо компакта — числа каталога проверяются живой пробой.
+        var contextWindow = p.FindModel(main)?.ContextWindow ?? 0;
+        if (contextWindow > 0)
+            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = contextWindow.ToString(CultureInfo.InvariantCulture);
+
         foreach (var (k, v) in p.ExtraEnv)
             env[k] = v;
         return env;
@@ -548,6 +584,33 @@ public class LlmProviderRegistry
         model.Equals("opus", StringComparison.OrdinalIgnoreCase)
         || model.Equals("sonnet", StringComparison.OrdinalIgnoreCase)
         || model.Equals("haiku", StringComparison.OrdinalIgnoreCase);
+
+    // Модель РОДНОГО Claude (подписка), а не неизвестный id. Нужна там, где null от
+    // ResolveByModel надо прочитать однозначно: он означает и «родной Claude», и «такой
+    // модели нет ни у одного провайдера» — а последствия у этих двух случаев разные
+    // (переезд на подписку против честного отказа). Форма id: пусто (решает CLI), алиас
+    // каталога default/opus/sonnet/haiku (в т.ч. с суффиксом окна opus[1m]) и полный
+    // id Anthropic claude-* (claude-fable-5[1m] и пр.). Знание о форме id живёт здесь же,
+    // рядом с остальными разборщиками алиасов.
+    //
+    // Две оговорки для того, кто будет править:
+    // 1) Корректность держится на ПОРЯДКЕ вызовов — ResolveByModel зовётся ПЕРЕД этим
+    //    предикатом (SessionManager.MigrateProviderAsync). Сторонний провайдер, объявивший
+    //    модель с id claude-* или перехвативший алиас, резолвится в себя, и до предиката
+    //    управление не доходит; переставленные местами проверки дадут ложноположительные.
+    // 2) Список форм — ручная копия ModelCatalogService.Fallback: реальный каталог родных
+    //    моделей приходит от живого CLI (QueryCliAsync → models[].value), а сюда он не
+    //    заглядывает. Появился новый алиас в каталоге CLI — дописать и здесь, иначе выбор
+    //    родной модели из выпадающего списка даст ложное «модель не найдена».
+    public static bool IsNativeClaudeModel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return true;
+        var m = model.Trim();
+        return m.Equals(DefaultClaudeModel, StringComparison.OrdinalIgnoreCase)
+            || IsClaudeTierAlias(m)
+            || IsClaudeTierWindowAlias(m)
+            || m.StartsWith("claude-", StringComparison.OrdinalIgnoreCase);
+    }
 
     // Стоимость хода по ценам конфига модели. CLI на чужом эндпоинте считает
     // total_cost_usd по ценам Anthropic — доверять ему нельзя, пересчитываем сами.

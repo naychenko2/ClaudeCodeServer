@@ -34,7 +34,7 @@ export function RecentSessionsWidget({ recent, onHubTab }: {
     if (creating) return;
     setCreating(true);
     try {
-      // Под флагом default-personas-onboarding — от лица личной дефолт-персоны
+      // Чат создаётся от лица личной дефолт-персоны
       const chat = await createChatWithContextPersona();
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
     } catch {

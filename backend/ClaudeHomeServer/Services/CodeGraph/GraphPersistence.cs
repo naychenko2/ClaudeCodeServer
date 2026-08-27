@@ -84,7 +84,9 @@ public sealed class GraphPersistence
             var dto = ToDto(graph);
             dto.BuiltAt = DateTimeOffset.UtcNow.ToString("O");
             dto.FileCount = CountSourceFiles(rootPath);
-            var json = JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
+            // Без отступов: pretty-print кратно раздувает файл (76k узлов → 67 МБ вместо ~15),
+            // а его читают только код (QueryService/промпт-slice), не человек.
+            var json = JsonSerializer.Serialize(dto);
 
             // Атомарная запись: temp-файл + rename
             var tempFile = Path.Combine(dir, $"graph.{Guid.NewGuid()}.tmp");

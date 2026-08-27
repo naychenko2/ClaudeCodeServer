@@ -24,29 +24,12 @@ function componentForName(name: string | null | undefined): LucideIcon | null {
   return (GLYPHS as Record<string, LucideIcon | undefined>)[name] ?? null;
 }
 
-// Глиф рисуется данными: пути уходят ЗНАЧЕНИЕМ атрибута d (JSX экранирует сам —
-// никакого dangerouslySetInnerHTML, ADR-009 §4). Имя значка из белого списка превращается
-// в lucide-компонент: тот же путь через props.
+// Глиф берётся именем из белого списка lucide (ADR-009 §5) — путь проходит через lucide-компонент.
 function ProjectGlyph({ project, size }: { project: Project; size: number }) {
   const glyph = project.icon?.glyph;
   const inner = size * GLYPH_RATIO;
   const offset = (size - inner) / 2;
   const stroke = size < 16 ? STROKE_SMALL : STROKE_BIG;
-  if (glyph?.paths && glyph.paths.length > 0) {
-    return (
-      <svg
-        width={inner} height={inner} viewBox="0 0 24 24"
-        x={offset} y={offset}
-        fill="none" stroke="currentColor" strokeWidth={stroke}
-        strokeLinecap="round" strokeLinejoin="round"
-        aria-hidden
-      >
-        {glyph.paths.map((d, i) => (
-          <path key={i} d={d} />
-        ))}
-      </svg>
-    );
-  }
   const Named = componentForName(glyph?.name);
   if (Named) {
     return (
@@ -62,7 +45,7 @@ function ProjectGlyph({ project, size }: { project: Project; size: number }) {
 
 // Единая иконка проекта (по образцу PersonaAvatar, но КВАДРАТНАЯ со скруглением —
 // чтобы отличаться от круглых персон). Три состояния:
-//   1. kind === 'glyph' и glyph валидный (есть name из карты или непустые paths)
+//   1. kind === 'glyph' и glyph валидный (name из карты)
 //      → плитка projectMainColor + белый штриховой глиф (currentColor, значок сам
 //      перекрашивается при смене цвета/темы, регенерации не нужно).
 //   2. muted=true (спящий ряд) — плитка заменяется бледным контуром, глиф в C.textMuted.
@@ -75,16 +58,14 @@ export function ProjectIcon({ project, size = 40, radius, muted }: { project: Pr
     position: 'relative',
   };
 
-  // Условие показа значка — положительное (kind === 'glyph'). НИКОГДА !== 'initials':
-  // старая запись с числовым Kind = 1 (бывший Image) должна попасть в инициалы, а не
-  // в ветку значка, которого нет (ADR-009 §7).
+  // Условие показа значка — положительное (kind === 'glyph' И имя есть в карте).
+  // НИКОГДА !== 'initials': старая запись с числовым Kind = 1 (бывший Image) должна
+  // попасть в инициалы, а не в ветку значка, которого нет (ADR-009 §7).
   const showGlyph = size >= GLYPH_MIN_PX
     && project.icon?.kind === 'glyph'
     && !!project.icon.glyph
-    && (
-      (project.icon.glyph.name != null && project.icon.glyph.name !== '')
-      || (project.icon.glyph.paths != null && project.icon.glyph.paths.length > 0)
-    );
+    && project.icon.glyph.name != null
+    && project.icon.glyph.name !== '';
 
   if (showGlyph && muted) {
     return (

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
+import { archiveApi } from '../api/chats';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
@@ -26,6 +27,7 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
+import { isArchivedChat } from '../lib/chatFilters';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -172,7 +174,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (creating) return;
     setCreating(true);
     try {
-      // Под флагом default-personas-onboarding чат создаётся от лица личной дефолт-персоны
+      // Чат создаётся от лица личной дефолт-персоны
       const chat = await createChatWithContextPersona();
       setChats(prev => [chat, ...prev]);
       selectChat(chat);
@@ -185,8 +187,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   const activeChat = chats.find(c => c.id === activeId) ?? null;
 
-  // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
-  const unreadCount = useUnreadChatCount(chats);
+  // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead. Считаем по
+  // СЫРОМУ массиву (без filter()) — matchChatFilter в ChatList прячет архивные,
+  // и без ручного отсечения бейдж рельсы показывал бы «1» от скрытого архивного
+  // чата, пока пользователь не откроет раздел «Архив». Фильтр архивных — узкий
+  // type guard isArchivedChat из chatFilters (готовый bool с сервера).
+  const unreadCount = useUnreadChatCount(chats.filter(c => !isArchivedChat(c)));
 
   // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
   // берутся по одной сессии.
@@ -248,12 +254,24 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (activeId === id) backToList();
   };
 
+  // Убрать чат в архив или вернуть из архива. После успеха обновляем запись в списке —
+  // matchChatFilter сам уберёт карточку из обычного списка, если чат теперь архивный.
+  // 409 «в чате идёт ход» ловим и показываем тостом серверный текст.
+  const handleArchive = async (chat: Session, archived: boolean) => {
+    try {
+      const updated = await archiveApi.setArchived(chat.id, archived);
+      setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+    } catch (e) {
+      showToast('Архив чата', e instanceof Error ? e.message : 'Не удалось изменить архив');
+    }
+  };
+
   // Сайдбар: ChatList в режиме bare — без своей PanelShell (LeftPanelStack
   // оборачивает в свой PanelShell). Иначе двойной заголовок/обёртка.
   // chats.length === 0 → sidebar=null: IslandScaffold тогда не рендерит сайдбар,
   // центральная область занимает всю ширину.
   const sidebar = chats.length > 0 ? (
-    <ChatList bare chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
+    <ChatList bare chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} onArchive={handleArchive} workflowRunningFor={workflowRunningFor ?? undefined} />
   ) : null;
 
   // === Мобильная раскладка: список ИЛИ полноэкранный чат (не две панели) ===
@@ -293,7 +311,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           <>
             <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '12px 16px 14px' }}>
-              <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} isMobile workflowRunningFor={workflowRunningFor ?? undefined} />
+              <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} onArchive={handleArchive} isMobile workflowRunningFor={workflowRunningFor ?? undefined} />
             </div>
           </>
         )}

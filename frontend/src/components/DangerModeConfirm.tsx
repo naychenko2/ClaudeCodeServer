@@ -27,6 +27,9 @@ export function DangerModeConfirm({ mode, assistantName = 'Ассистент', 
       width={MODAL_W.confirm}
       onClose={onCancel}
       closeOnBackdrop
+      // Своя иконка-бейдж + заголовок внутри тела модалки — встроенный крестик
+      // дал бы лишний одинокий ряд на мобиле и сдвинул контент вниз.
+      hideCloseButton
       footer={
         <ModalActions
           confirmLabel="Включить режим"

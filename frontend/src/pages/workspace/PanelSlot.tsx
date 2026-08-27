@@ -31,6 +31,12 @@ export function PanelSlot({ weight = 1, fill = true, slotRef, children }: {
         // (там плавность вообще вредна — слот отставал бы от курсора).
         flex: fill ? `${weight} 1 0` : '0 1 auto',
         minHeight: fill ? PANEL_MIN_H : 0,
+        // maxHeight: 100% пропихивает ограничение сверху вниз через всю цепочку
+        // до скролл-элемента панели. Без него при fill=false (одна панель в
+        // drawer'е планшета) высота слота берётся по контенту, а у Island'а
+        // maxHeight: 100% от auto-родителя = auto, и внутренний overflow:auto
+        // не срабатывает — длинный список тянет карточку за кромку drawer'а.
+        maxHeight: '100%',
         display: 'flex', flexDirection: 'column', minWidth: 0,
       }}
     >

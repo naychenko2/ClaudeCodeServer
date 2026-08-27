@@ -1034,10 +1034,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     else revealPanelKey('toc');
   };
 
-  // Тумблер «История решений» в шапке diff-просмотра — тем же каналом, что «Оглавление»
-  // выше. Только в diff (мокап: «кнопка в шапке diff-просмотра»).
+  // Тумблер «Почему менялся этот файл» — открывает панель «История решений» с
+  // фильтром по текущему файлу (activeFilePath в DossierHistoryPanel подтягивается
+  // из openFile автоматически). Видна на любой вкладке, кроме мобильной раскладки
+  // (там панель dossiers не работает) и хост-режима (файл вне проекта — dossiers
+  // завязан на project.id).
   const dossiersPanelOpen = zoneOf(panelZones, 'dossiers') !== null;
-  const dossiersToggleVisible = tab === 'diff' && !isMobile;
+  const dossiersToggleVisible = !isHostMode && !isMobile;
   const toggleDossiersPanel = () => {
     if (dossiersPanelOpen) closePanelKey('dossiers');
     else revealPanelKey('dossiers');
@@ -1288,7 +1291,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       });
     }
     if (dossiersToggleVisible) {
-      const dossiersTitle = dossiersPanelOpen ? 'Скрыть историю решений' : 'История решений';
+      const dossiersTitle = dossiersPanelOpen ? 'Скрыть историю решений' : 'Почему менялся этот файл';
       secondary.push({
         key: 'dossiers',
         node: (
@@ -1416,8 +1419,31 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const fixedLeftRef = useRef<HTMLDivElement>(null);
   const badgesRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
+  // Тулбар FileViewer меряет ширины трёх блоков через ResizeObserver: имя файла
+  // (fixedLeftRef) и бейджи (badgesRef) зависят от контента, и номиналами их не
+  // описать. Этап 1 composer-strip-priority перевёл useToolbarOverflow на номиналы
+  // (композер — фиксированные блоки), здесь оставил замер как было: петли тут нет,
+  // все блоки flexShrink:0, и замер не «сжимает» ничего с самого себя.
+  const [blockWidths, setBlockWidths] = useState({ left: 0, badges: 0, right: 0 });
+  useEffect(() => {
+    const read = () => setBlockWidths({
+      left: fixedLeftRef.current?.offsetWidth ?? 0,
+      badges: badgesRef.current?.offsetWidth ?? 0,
+      right: rightRef.current?.offsetWidth ?? 0,
+    });
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    if (fixedLeftRef.current) ro.observe(fixedLeftRef.current);
+    if (badgesRef.current) ro.observe(badgesRef.current);
+    if (rightRef.current) ro.observe(rightRef.current);
+    return () => ro.disconnect();
+  }, []);
   const visibleCount = useToolbarOverflow({
-    stripRef, fixedLeftRef, badgesRef, rightRef,
+    stripRef,
+    leftBlock: blockWidths.left,
+    badgesWidth: blockWidths.badges,
+    rightWidth: blockWidths.right,
     count: collapsible.length,
     enabled: true,
     itemWidth: iconBox,
@@ -1442,20 +1468,30 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const commentsChipVisible = showChips && !!commentCounts && commentCounts.total > 0 && !editing && tab === 'file';
 
   // Колонка документа: свойства сверху, панель комментариев под ними (приезжает порталом
-  // в sideEl). Живёт, пока есть хоть один блок — пустая рамка сбоку документу ни к чему
-  const docSide = (docProps.type || (commentCounts?.total ?? 0) > 0) ? (
+  // в sideEl). Живёт, пока есть хоть один блок — пустая рамка сбоку документу ни к чему.
+  // Режим выбирается по комментариям: они — длинный живой список, ему нужна своя полоса;
+  // одни свойства — низкая карточка, её текст спокойно обтекает
+  const hasComments = (commentCounts?.total ?? 0) > 0;
+  const docSide = (docProps.type || hasComments) ? (
     <aside style={stackSide ? {
       // Под текстом: отступы минимальные, чтобы свёрнутые секции остались двумя
       // строками, а не полосой пустоты
       width: '100%', marginTop: 12,
       borderTop: `1px solid ${C.border}`, paddingTop: 4,
+    } : hasComments ? {
+      // Есть комментарии — колонка в потоке, справа от текста (не плавающая):
+      // панель не перекрывает контент, sticky держит её в вьюпорте на длинных
+      // документах. Компактная ступень (сплит с чатом): 224px вместо 290 — секции
+      // свёрнуты в заголовки, этой ширины хватает, а документу остаётся больше
+      width: sideCompact ? 224 : 290, flex: 'none',
+      position: 'sticky', top: SP.xs,
+      maxHeight: 'calc(100vh - 150px)', overflowY: 'auto',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      padding: '10px 12px', boxShadow: SHADOW.card,
     } : {
-      // Липкая накладка: колонка плывёт справа (текст её обтекает), но при прокрутке
-      // остаётся в правом верхнем углу. Ниже зоны обтекания текст идёт во всю ширину
-      // и уходит ПОД колонку — поэтому фон непрозрачный, а рамка с тенью читаются
-      // как наложенная карточка, а не как часть документа.
-      // Компактная ступень (сплит с чатом): 224px вместо 290 — секции свёрнуты в
-      // заголовки, этой ширины хватает, а документу остаётся больше
+      // Только свойства — липкая накладка: карточка плывёт справа, текст её обтекает
+      // и ниже идёт во всю ширину под неё — поэтому фон непрозрачный, а рамка с тенью
+      // читаются как наложенная карточка, а не как часть документа
       float: 'right', width: sideCompact ? 224 : 290, marginLeft: 18, marginBottom: 12,
       position: 'sticky', top: SP.xs, zIndex: 1,
       maxHeight: 'calc(100vh - 150px)', overflowY: 'auto',
@@ -1463,7 +1499,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       padding: '10px 12px', boxShadow: SHADOW.card,
     }}>
       <DocPropsPanel state={docProps} />
-      <div ref={setSideEl} />
+      {/* Контейнер портала нужен только в режиме колонки: без комментариев панели нет */}
+      {hasComments && <div ref={setSideEl} />}
     </aside>
   ) : null;
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
@@ -1983,22 +2020,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
                   : isMarkdown
                   ? (
-                    // Свойства и комментарии — ОДНОЙ колонкой справа (на узком просмотрщике
-                    // блоком под текстом), свойства сверху. Панель комментариев уезжает сюда
+                    // Свойства и комментарии — ОДНИМ блоком справа (на узком просмотрщике
+                    // под текстом), свойства сверху. Панель комментариев уезжает в блок
                     // порталом (panelTarget), иначе она рисует собственный сайдбар и рядом
                     // с документом оказывается две колонки.
                     //
-                    // Колонка ПЛАВАЮЩАЯ, а не второй колонкой флекса: свёрнутые секции — это
-                    // две строки заголовков, и в двухколоночной раскладке весь текст ниже
-                    // всё равно жался бы в остаток ширины, оставляя справа пустую полосу
-                    // до самого конца документа. Обтекание пускает текст под колонку.
-                    // flow-root — чтобы контейнер учитывал высоту флоата (замена clearfix)
-                    <div style={{ display: 'flow-root' }}>
-                      {/* Плавающая колонка обязана стоять в разметке ДО текста, который её
-                          обтекает; уехав под текст (узкий просмотрщик), она встаёт после
-                          него — там же, где её ждут глазами */}
-                      {!stackSide && docSide}
-                      <div style={{ minWidth: 0 }}
+                    // Раскладку определяет НАЛИЧИЕ КОММЕНТАРИЕВ:
+                    // — есть комментарии: колонка в потоке (flex-рядок), текст не обтекает
+                    //   и не уходит под панель;
+                    // — только свойства: плавающая карточка (float, контейнер flow-root —
+                    //   замена clearfix), текст обтекает и ниже идёт во всю ширину.
+                    <div style={hasComments
+                      ? { display: 'flex', alignItems: 'flex-start', gap: 18 }
+                      : { display: 'flow-root' }}>
+                      {/* Плавающая карточка обязана стоять в разметке ДО текста, который её
+                          обтекает */}
+                      {!hasComments && !stackSide && docSide}
+                      <div style={hasComments ? { flex: 1, minWidth: 0 } : { minWidth: 0 }}
                         data-selection-scope="doc" data-selection-priority="2">
                         <DocCommentedMarkdown
                           scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
@@ -2016,8 +2054,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                             return target ? api.files.fileUrl(project.id, target) : undefined;
                           } }}
                         />
+                        {/* На узком просмотрщике блок уезжает под текст — там же,
+                            где его ждут глазами */}
+                        {stackSide && docSide}
                       </div>
-                      {stackSide && docSide}
+                      {hasComments && !stackSide && docSide}
                     </div>
                   )
                   : <div data-selection-scope="doc" data-selection-priority="2"><SyntaxHighlighter

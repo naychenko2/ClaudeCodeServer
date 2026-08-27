@@ -89,6 +89,10 @@ public static class LocalActionCatalog
     public const string TaskDedup = "task-dedup";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
+    // Сводка карточки архива чата (шаг 5 плана «Архив чатов» v4): 2–3 предложения по кнопке
+    // «Собрать сводку», кэшируется в Session.ArchiveSummary. Не путать с SessionSummary —
+    // «Итогом сессии», который выносится заметкой и трогать который нельзя
+    public const string ChatDigest = "chat-digest";
     public const string NotificationSummary = "notification-summary";
     public const string GitCommitMsg = "git-commit-msg";
     public const string GitStashName = "git-stash-name";
@@ -110,10 +114,13 @@ public static class LocalActionCatalog
     public const string IncidentExplain = "incident-explain";
     // Паспорта изменений (ADR-004, этап 1): выжимка «зачем/решения/отказы/грабли» на коммит
     public const string DossierSummary = "dossier-summary";
+    // Конспект обсуждения (ADR-004 §6): структурированный протокол чата для discussions/
+    // в ветке решений — НЕ дословный транскрипт
+    public const string DiscussionDigest = "discussion-digest";
     // Фон проекта (ADR-008): JSON со списком фигур дудла и ключом цвета палитры
     public const string ProjectBackground = "project-background";
-    // Значок проекта (ADR-009): имя иконки из белого списка lucide либо нарисованные
-    // моделью path'ы в viewBox 24; разметку собирает сервер (GlyphSvg.Build)
+    // Значок проекта (ADR-009): имя иконки из белого списка lucide — разметки от модели
+    // не приходит никогда. Место обслуживает ОБА хода подбора (слова → выбор из меню)
     public const string ProjectIcon = "project-icon";
 
     // Дефолты профилей. Переопределяются
@@ -202,6 +209,10 @@ public static class LocalActionCatalog
         new(TaskDedup, "Поиск дублей задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
+        // Сводка карточки архива: сырьё то же (транскрипт чата), а ответ — 2–3 предложения
+        // для карточки списка, поэтому Small вместо Large «Сводки сессии»: переплачивать
+        // профилем за три строки незачем
+        new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
         new(NotificationSummary, "Суть уведомления", "Уведомления", CheapProfile.Small, DefaultLocal: true),
         new(GitCommitMsg, "Commit-сообщения", "Git", CheapProfile.Text, DefaultLocal: true),
         new(GitStashName, "Названия стэшей", "Git", CheapProfile.Small, DefaultLocal: true),
@@ -229,6 +240,15 @@ public static class LocalActionCatalog
         // обязателен, Text/Small молча обрежут хвост промпта (num_ctx Ollama) и дадут
         // выдуманную выжимку, ради борьбы с которой заведён отдельный флаг recall.
         new(DossierSummary, "Выжимка паспорта изменения", "Паспорта изменений", CheapProfile.Large, DefaultLocal: true),
+        // Конспект обсуждения для ветки решений (ADR-004 §6): сырьё — лента чата ЦЕЛИКОМ
+        // (до 40 000 символов) — больше, чем у выжимки паспорта (дельта одного коммита),
+        // поэтому Large обязателен и острее: меньший профиль молча обрежет хвост промпта
+        // (num_ctx Ollama) и конспект потеряет развязку обсуждения. DefaultLocal: false —
+        // в отличие от паспорта конспект уезжает в git и уходит push'ом наружу/соседям по
+        // общей папке, переписать опубликованное нельзя: «лицо продукта», как Changelog
+        // и DailyBriefing. Явный Tier не нужен: Large → средний слот (EffectiveDefaultTier).
+        new(DiscussionDigest, "Конспект обсуждения", "Паспорта изменений", CheapProfile.Large,
+            DefaultLocal: false),
         // Фон проекта: 8–14 фигур дудла — это 2–4 КБ JSON, на Small/Text потолок вывода
         // обрежет ответ на полуслове и даст неотличимый от таймаута «bad-json». Локаль
         // выключена намеренно (решение владельца): рисование SVG не текстовая задача, а
@@ -239,15 +259,16 @@ public static class LocalActionCatalog
         // Значок проекта: Large — в промпт уходит весь белый список имён lucide, а на
         // Small/Text потолок контекста обрежет его и модель начнёт выдумывать
         // несуществующие имена. Локаль выключена по той же причине, что у фона:
-        // рисование SVG — не текстовая задача. Тир Strong — решение владельца
-        // (2026-08-17), поднят с Medium (ADR-009 §9).
-        // Собственный лимит облака 180 с (прод 17.08): сильная модель отвечает 52–126 с,
+        // рисование SVG — не текстовая задача. Тир Medium: после вырезания генерации
+        // path'ов задача сводится к называнию имени из набора, Medium справляется
+        // (Strong поднимался 2026-08-17 под рисование, ADR-009 §9).
+        // Собственный лимит облака 180 с (прод 17.08): сильная модель отвечала 52–126 с,
         // а потолок профиля Large в 300 с оставлял зависший вызов висеть пять минут —
         // миграция значков на таком вызове стояла в полдня (Узбекистан/Общие вопросы,
         // no-model). 180 с покрывает наблюдаемые ответы с запасом и не трогает общий
         // потолок профиля для остальных Large-мест.
         new(ProjectIcon, "Значок проекта", "Проекты", CheapProfile.Large,
-            DefaultLocal: false, Tier: ModelTier.Strong, CloudTimeoutMs: 180_000),
+            DefaultLocal: false, Tier: ModelTier.Medium, CloudTimeoutMs: 180_000),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

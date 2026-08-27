@@ -16,10 +16,11 @@ public class PersonaAgentFileGeneratorTests
         return new PersonaAgentFileGenerator(new PersonaPromptBuilder(new LlmProviderRegistry(config)));
     }
 
-    // Контекст генерации: дефолт — web выключен, tasks/notes включены, без привязок и пина
+    // Контекст генерации: дефолт — web/codegraph выключены, tasks/notes включены,
+    // без привязок и пина
     private static PersonaAgentFileContext Ctx(bool web = false, bool tasks = true,
-        bool notes = true, string? bindings = null, string? alias = null) =>
-        new(web, tasks, notes, bindings, alias);
+        bool notes = true, bool codegraph = false, string? bindings = null, string? alias = null) =>
+        new(web, tasks, notes, codegraph, bindings, alias);
 
     private static Persona MakePersona(string? model = null, bool memory = true,
         string? color = "purple", string? effort = null) => new()
@@ -99,6 +100,24 @@ public class PersonaAgentFileGeneratorTests
             .Should().NotContain("mcpServers");
         MakeGenerator().Generate(MakePersona(), Ctx())
             .Should().Contain("mcpServers: [pmem_gefest]");
+    }
+
+    [Fact]
+    public void ГрафКода_ИнструментыИСервер_ТолькоПоФлагуКонтекста()
+    {
+        var with = MakeGenerator().Generate(MakePersona(), Ctx(codegraph: true));
+        with.Should().Contain("mcp__codegraph__codegraph_find")
+            .And.Contain("mcp__codegraph__codegraph_neighbors")
+            .And.Contain("mcp__codegraph__codegraph_hubs");
+        with.Should().Contain("mcpServers: [pmem_gefest, codegraph]");
+
+        // Без памяти mcpServers не пропадает: codegraph объявляется сам по себе
+        MakeGenerator().Generate(MakePersona(memory: false), Ctx(codegraph: true))
+            .Should().Contain("mcpServers: [codegraph]");
+
+        var without = MakeGenerator().Generate(MakePersona(), Ctx());
+        without.Should().NotContain("mcp__codegraph__");
+        without.Should().Contain("mcpServers: [pmem_gefest]");
     }
 
     [Fact]

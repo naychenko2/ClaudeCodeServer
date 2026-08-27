@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Персонализированные «Специальности» в разделе «Персоны» · мобильная раскладка (375px)</title>
+<style>
+/* ===== Токены. Значения — из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+       Сырых значений мимо токенов в макете нет: цвета берутся только через var(--c-*),
+       размеры — через шкалы FS/SP/R ниже. Файл — мобильный вариант index.html: тот же экран,
+       но мобильный режим (класс .phone) включён всегда, без десктопного переключателя ширины. ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-smoke:#B4A899;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --canvas-ink:42,37,31; --canvas-alpha:.05;
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%, rgba(217,119,87,.13), transparent 55%),
+                radial-gradient(120% 60% at 50% 110%, rgba(110,140,120,.10), transparent 60%);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-on-dark:#FFFFFF;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-smoke:#7E7566;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --canvas-ink:237,230,219;
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%, rgba(227,138,106,.11), transparent 55%),
+                radial-gradient(120% 60% at 50% 110%, rgba(110,140,120,.08), transparent 60%);
+}
+
+* { box-sizing:border-box; }
+html, body { max-width:100%; overflow-x:hidden; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+button { font:inherit; }
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; }
+.mono  { font-family:"JetBrains Mono","Courier New",monospace; }
+svg.ic     { width:15px; height:15px; flex-shrink:0; }  /* ICON_SIZE.sm */
+svg.ic-xs  { width:12px; height:12px; flex-shrink:0; }  /* ICON_SIZE.xs */
+svg.ic-md  { width:17px; height:17px; flex-shrink:0; }  /* ICON_SIZE.md */
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:60; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:14px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:160px; }
+.seg-dev { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.seg-dev button {
+  font-size:12px; padding:6px 12px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary);
+}
+.seg-dev button.on { background:var(--c-nav-ink); color:var(--c-on-nav-ink); }
+.hintbar { padding:10px 16px 0; color:var(--c-text-muted); font-size:12px; }
+
+/* ===== Холст продукта (PageCanvas + CanvasBackdrop) — здесь всегда мобильная ширина.
+       Формула ширины повторяет min(…, calc(100% - 32px)) из index.html, но потолок ниже:
+       страница открывается как настоящий телефонный вьюпорт, а не демо-рамка внутри десктопа. ===== */
+.stage {
+  position:relative; margin:16px auto 48px; width:calc(100% - 24px); max-width:420px;
+  border:1px solid var(--c-border); border-radius:14px; overflow:hidden;
+  background:var(--c-bg-main); box-shadow:var(--shadow-island);
+}
+.canvas { position:relative; min-height:640px; }
+.canvas::before {
+  content:""; position:absolute; inset:0; pointer-events:none; background:var(--canvas-glow);
+}
+.canvas::after {
+  content:""; position:absolute; inset:0; pointer-events:none; opacity:var(--canvas-alpha);
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(var(--canvas-ink),1) 0 2px, transparent 2px),
+    radial-gradient(circle at 70% 60%, rgba(var(--canvas-ink),1) 0 2px, transparent 2px),
+    radial-gradient(circle at 45% 85%, rgba(var(--canvas-ink),1) 0 1.5px, transparent 1.5px);
+  background-size:220px 220px;
+}
+
+/* Шапка хаба */
+.hubbar {
+  position:relative; z-index:2; display:flex; align-items:center; gap:8px; height:52px; padding:0 12px;
+  background:var(--c-bg-main); border-bottom:1px solid var(--c-border);
+}
+.hubbar .tabs { display:flex; gap:4px; }
+.hubbar .tab {
+  padding:5px 10px; border-radius:9px; border:none; background:transparent; cursor:pointer;
+  font-size:12px; font-weight:600; color:var(--c-text-secondary);
+}
+.hubbar .tab.on { background:var(--c-nav-ink); color:var(--c-on-nav-ink); }
+.hubbar .spacer { flex:1; }
+.hubbar .me {
+  width:28px; height:28px; border-radius:50%; background:var(--c-accent); color:var(--c-on-accent);
+  display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;
+}
+
+/* Раскладка на мобиле: рельса (список персон) скрыта — на узком экране это отдельный
+   полноэкранный список (см. §5.2 инвентаря), сюда попадает уже выбранный экран «Специальности» */
+.scaffold { position:relative; z-index:2; padding:8px 12px 16px; }
+.center { min-width:0; }
+.colwrap { width:100%; }
+
+/* ===== Контролы: повторяют components/ui, размеры — мобильные варианты ===== */
+/* Button.tsx */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  font-weight:600; cursor:pointer; transition:background .15s, color .15s, opacity .15s;
+  border:none; background:transparent;
+}
+.btn.md { padding:11px 16px; font-size:14px; border-radius:12px; min-height:40px; }
+.btn.sm { padding:7px 13px; font-size:13px; border-radius:10px; min-height:32px; }
+.btn.xs { padding:0 9px; font-size:12px; line-height:1; border-radius:8px; height:24px; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.primary:hover { filter:brightness(1.05); }
+.btn.ghost { border:1px solid var(--c-border); color:var(--c-text-secondary); }
+.btn.ghost:hover { background:var(--c-bg-selected); }
+.btn.dashed { border:1.5px dashed var(--c-dashed); color:var(--c-accent); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.full { width:100%; }
+
+/* PillSwitch.tsx: дорожка TB.pillTrack + скользящая пилюля. На мобиле — во всю ширину,
+   сегменты растягиваются равномерно (как .phone .pill в index.html) */
+.pill { display:flex; width:100%; padding:3px; gap:2px; background:var(--c-bg-selected); border-radius:10px; }
+.pill button {
+  flex:1; justify-content:center; border:none; background:transparent; cursor:pointer; padding:8px 8px;
+  border-radius:7px; font-size:12px; font-weight:600; color:var(--c-text-secondary);
+  display:inline-flex; align-items:center; gap:6px; white-space:nowrap; transition:background .15s, color .15s;
+}
+.pill button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); }
+
+/* Badge.tsx */
+.badge {
+  display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:999px;
+  font-size:11px; font-weight:600; line-height:1.4; background:var(--c-bg-inset); color:var(--c-text-muted);
+  white-space:nowrap;
+}
+.badge.xs { padding:1px 8px; }
+.badge.accent  { background:var(--c-accent-light); color:var(--c-accent); }
+.badge.warning { background:var(--c-warning-bg);  color:var(--c-warning-text); }
+.badge.success { background:var(--c-success-bg);  color:var(--c-success-text); }
+.badge.info    { background:var(--c-info-bg);     color:var(--c-info); }
+.badge.code    { font-style:italic; }
+.dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+
+/* Toggle.tsx */
+.tgl { width:42px; height:25px; border-radius:25px; padding:3px; background:var(--c-track);
+       display:flex; align-items:center; cursor:pointer; transition:background .2s; flex-shrink:0; border:none; }
+.tgl.on { background:var(--c-accent); }
+.tgl i { width:19px; height:19px; border-radius:50%; background:var(--c-bg-white);
+         box-shadow:var(--shadow-thumb); margin-left:0; transition:margin .2s; display:block; }
+.tgl.on i { margin-left:17px; }
+
+/* Field.tsx / FIELD-токен */
+.field { display:flex; flex-direction:column; gap:6px; }
+.flabel { font-size:12px; font-weight:600; color:var(--c-text-secondary); }
+.fhint  { font-size:11px; color:var(--c-text-muted); line-height:1.5; }
+.input, .textarea, .picker {
+  width:100%; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  color:var(--c-text-heading); font-size:14px; font-family:inherit; padding:9px 12px; outline:none;
+}
+.textarea { resize:vertical; min-height:80px; line-height:1.5; }
+.input:focus, .textarea:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.input::placeholder, .textarea::placeholder { color:var(--c-text-muted); }
+/* RoutePicker: поле-кнопка с шевроном */
+.picker { display:flex; align-items:center; gap:8px; text-align:left; cursor:pointer; min-width:0; }
+.picker .val { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.picker.inherit { border-style:dashed; color:var(--c-text-muted); }
+.picker:hover { border-color:var(--c-accent); }
+.picker svg { color:var(--c-text-muted); }
+
+/* LinkAction из cards.tsx */
+.link {
+  border:none; background:none; cursor:pointer; padding:0; font-size:11px; font-weight:600;
+  color:var(--c-accent); text-decoration:underline; text-underline-offset:2px;
+}
+
+/* ===== Заголовки и текст ===== */
+h1.page { margin:0; font-size:24px; font-weight:500; line-height:1.28; letter-spacing:-.01em;
+          color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+h2.role { margin:0; font-size:20px; font-weight:700; line-height:1.3; letter-spacing:-.01em;
+          color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+.sub { font-size:12px; color:var(--c-text-secondary); line-height:1.5; }
+.sect {
+  font-size:11px; font-weight:700; color:var(--c-text-muted);
+  text-transform:uppercase; letter-spacing:.07em;
+}
+
+/* ===== Значок роли (аватар специальности) ===== */
+.rav { border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--c-on-dark); }
+.rav svg { width:52%; height:52%; }
+/* Аватар персоны — PersonaAvatar: инициалы на цвете палитры */
+.pav { border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;
+       color:var(--c-on-dark); font-weight:700; }
+
+/* ===== Карточка-строка роли в списке. На мобиле хвостовые чипы (пресеты/умения/уровни)
+   скрыты — они дублируются на детальном экране, а в строке списка только сжимают текст ===== */
+.rolerow {
+  width:100%; display:flex; align-items:center; gap:10px; text-align:left; cursor:pointer;
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  padding:11px 12px; box-shadow:var(--shadow-card); transition:border-color .15s, background .15s;
+}
+.rolerow:hover { border-color:var(--c-accent-muted); background:var(--c-bg-card); }
+.rolerow .t1 { font-size:13px; font-weight:700; color:var(--c-text-heading); }
+.rolerow .t2 { font-size:11px; color:var(--c-text-muted); line-height:1.45;
+               display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
+.rolerow .grow { flex:1; min-width:0; }
+.rolerow .tail { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.rolerow .tail .chips { display:none; }
+.chips { display:flex; gap:4px; }
+.chip {
+  font-size:11px; padding:1px 7px; border-radius:6px; background:var(--c-bg-selected);
+  color:var(--c-text-secondary); font-family:"JetBrains Mono","Courier New",monospace; white-space:nowrap;
+}
+.stack { display:flex; }
+.stack .pav { margin-left:-6px; box-shadow:0 0 0 2px var(--c-bg-white); }
+.stack .pav:first-child { margin-left:0; }
+
+/* ===== Карточка роли (визитка) и настройка ===== */
+.card {
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  box-shadow:var(--shadow-card); padding:12px;
+}
+.block { border-top:1px dashed var(--c-border); margin-top:16px; padding-top:16px; }
+.row3 { display:grid; grid-template-columns:64px minmax(0,1fr); gap:8px 12px; align-items:center; }
+.row3 .src { grid-column:1 / -1; justify-self:start; }
+/* Hero визитки и формы — как у персоны: колонкой со значком по центру на мобиле
+   (иначе значок 80 съедает половину ширины у полей узкого экрана) */
+.hero { display:flex; flex-direction:column; gap:12px; align-items:flex-start; }
+.hero > :first-child { align-self:center; }
+.hero > .btn { width:100%; }
+/* В визитке (read-only) текст под значком центрируется — как в PersonaPreview;
+   в форме этого делать нельзя: центрированные поля ввода читаются как ошибка вёрстки */
+.hero.preview .grow { text-align:center; }
+.tier { font-size:12px; color:var(--c-text-secondary); font-weight:600; }
+
+/* Строка персоны в срезе */
+.prow {
+  width:100%; display:flex; align-items:flex-start; gap:10px; text-align:left; cursor:pointer;
+  border:none; background:transparent; border-radius:8px; padding:7px 8px; transition:background .15s;
+}
+.prow:hover { background:var(--c-bg-selected); }
+.prow .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.prow .meta { font-size:12px; color:var(--c-text-secondary); }
+.prow .note { font-size:11px; color:var(--c-text-muted); }
+.prow .grow { flex:1; min-width:0; }
+.prow .line { display:block; }
+
+/* Плоская секция визитки/формы — паттерн PersonaPreview/PersonaForm:
+   без фона и рамки, разделитель сверху */
+.flat { border-top:1px solid var(--c-border-light); padding-top:20px; margin-top:20px; }
+.flat.form { padding-top:22px; margin-top:22px; }
+
+/* Сетка фактов визитки — factChip из PersonaPreview */
+.factgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr)); gap:10px; }
+.fact { display:flex; flex-direction:column; gap:3px; background:var(--c-bg-white);
+        border:1px solid var(--c-border); border-radius:10px; padding:8px 11px; min-width:0; }
+.fact .k { font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--c-text-muted); }
+/* Значение факта переносится, а не режется: «Как «Модели по умолчанию»» в узком чипе
+   не помещается в строку, а многоточие съедало бы смысл наследования */
+.fact .v { font-size:13px; color:var(--c-text-heading); line-height:1.35; overflow-wrap:break-word; }
+.fact .v.inherit { color:var(--c-text-muted); font-style:italic; }
+
+/* Карточка пресета роли — PresetCard из SpecialtyPromptSectionsPanel */
+.preset { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+          box-shadow:var(--shadow-card); overflow:hidden; }
+.preset .head { display:flex; align-items:center; gap:10px; padding:10px 12px; cursor:pointer;
+                min-height:40px; flex-wrap:wrap; }
+.preset .ttl { font-size:13px; font-weight:700; color:var(--c-text-heading); min-width:100px; }
+.preset .desc { font-size:12px; color:var(--c-text-secondary); padding:0 12px 10px;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.preset .body { background:var(--c-bg-card); border-top:1px dashed var(--c-border); padding:10px 12px 12px; }
+.preset .chev { display:flex; color:var(--c-text-muted); transition:transform .15s; }
+.preset .chev.up { transform:rotate(180deg); }
+.tag { font-size:12px; padding:5px 9px; border-radius:8px; border:1px solid var(--c-border);
+       background:var(--c-bg-white); color:var(--c-text-secondary); }
+.textarea.ro { background:var(--c-bg-selected); color:var(--c-text-secondary); cursor:not-allowed; }
+/* Текст в режиме просмотра: читается, но полем ввода не притворяется */
+.rotext { font-size:12px; color:var(--c-text-secondary); line-height:1.5; white-space:pre-wrap; }
+.emptybox { border:1px dashed var(--c-dashed); border-radius:12px; padding:14px;
+            font-size:12px; color:var(--c-text-secondary); line-height:1.5; }
+.emptybox .ttl { font-size:13px; font-weight:600; color:var(--c-text-heading); margin-bottom:4px; }
+
+/* Карточка привязки — renderBindingCard из PersonaBindingsPanel */
+.bind { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+        padding:10px 12px; transition:border-color .15s; }
+.bind:hover, .bind.open { border-color:var(--c-accent); }
+.bind .head { display:flex; align-items:center; gap:12px; cursor:pointer; }
+.bind .ttl { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.bind .cond { font-size:12px; color:var(--c-text-secondary); margin-top:1px; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; }
+.bind .cond.none { color:var(--c-text-muted); font-style:italic; }
+.bind .body { border-top:1px solid var(--c-border-light); margin-top:10px; padding-top:12px; }
+.bind .dots { width:28px; height:28px; border:none; background:transparent; border-radius:8px; cursor:pointer;
+              color:var(--c-text-muted); font-size:16px; line-height:1; }
+.bicon { width:32px; height:32px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+.bicon.knowledge { background:var(--c-info-bg);    color:var(--c-info); }
+.bicon.tool      { background:var(--c-plan-light); color:var(--c-plan); }
+.bicon.skill     { background:var(--c-warning-bg); color:var(--c-warning); }
+.bicon.notes     { background:var(--c-success-bg); color:var(--c-success-text); }
+.mode-auto   { background:var(--c-accent-light); color:var(--c-accent); }
+.mode-always { background:var(--c-info-bg);      color:var(--c-info); }
+.mode-off    { background:var(--c-bg-selected);  color:var(--c-text-muted); }
+.dellink { border:none; background:none; padding:0; cursor:pointer; font-size:12px; color:var(--c-danger-text); }
+
+/* Крупный serif-ввод главного поля — как «Роль *» в PersonaForm */
+.bigfield {
+  width:100%; border:none; outline:none; background:transparent; padding:0; line-height:1.3;
+  font-family:"PT Serif",Georgia,serif; font-size:21px; font-weight:500; color:var(--c-text-heading);
+}
+.bigfield::placeholder { color:var(--c-text-muted); }
+
+/* Плашки */
+.note-warn { font-size:11px; color:var(--c-warning-text); background:var(--c-warning-bg);
+             border-radius:8px; padding:6px 10px; line-height:1.5; }
+.note-info { font-size:12px; color:var(--c-text-secondary); background:var(--c-info-bg);
+             border-radius:8px; padding:8px 10px; line-height:1.5; }
+.empty { font-size:12px; color:var(--c-text-muted); line-height:1.5; }
+
+/* Модалка (Modal.tsx + ConfirmDialog) — на мобиле уезжает в bottom-sheet */
+.overlay {
+  position:fixed; inset:0; background:var(--c-overlay); z-index:1000;
+  display:flex; align-items:flex-end; justify-content:center; padding:0;
+}
+.overlay[hidden] { display:none; }
+.modal {
+  width:100%; max-width:100%; background:var(--c-bg-card); border-radius:20px 20px 0 0; box-shadow:var(--shadow-modal);
+  padding:20px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+}
+.modal h3 { margin:0 0 8px; font-size:16px; font-weight:700; color:var(--c-text-heading); }
+.modal p  { margin:0 0 18px; font-size:13px; color:var(--c-text-secondary); line-height:1.5; }
+.modal .acts { display:flex; gap:8px; justify-content:flex-end; }
+
+/* Прочее */
+.v { display:flex; flex-direction:column; }
+.h { display:flex; align-items:center; }
+.gap4{gap:4px}.gap8{gap:8px}.gap12{gap:12px}.gap16{gap:16px}.gap24{gap:24px}
+.wrap-h { flex-wrap:wrap; }
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt24{margin-top:24px}
+.grow{flex:1; min-width:0}
+.trunc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hidden { display:none !important; }
+.back {
+  display:inline-flex; align-items:center; gap:4px; border:none; background:none; cursor:pointer;
+  color:var(--c-text-secondary); font-size:13px; font-weight:600; padding:6px 8px 6px 0;
+}
+.back:hover { color:var(--c-text-heading); }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>«Специальности» · мобильная раскладка (375px)</h1>
+  <div class="seg-dev" role="group" aria-label="Тема">
+    <button id="th-light" class="on" onclick="setTheme('light')">Светлая</button>
+    <button id="th-dark" onclick="setTheme('dark')">Тёмная</button>
+  </div>
+</div>
+<p class="hintbar">
+  Мобильный вариант <code>index.html</code> — тот же экран, тот же код данных, но узкая раскладка
+  включена без переключателя. Кликается: строка роли → визитка роли → «Настроить» → форма и обратно.
+  Переключатель слоёв, тумблер «Показать все роли каталога», пресеты и «Применить типовые» — живые.
+</p>
+
+<div class="stage phone" id="stage">
+ <div class="canvas">
+
+  <!-- Шапка хаба верхнего уровня -->
+  <div class="hubbar">
+    <div class="tabs">
+      <button class="tab">Главная</button>
+      <button class="tab on">Персоны</button>
+      <button class="tab">Задачи</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="me">АН</div>
+  </div>
+
+  <div class="scaffold">
+    <main class="center">
+      <div class="colwrap" id="view"></div>
+    </main>
+  </div>
+
+ </div>
+</div>
+
+<!-- Подтверждение P13 -->
+<div class="overlay" id="confirm" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cf-title">
+    <h3 id="cf-title">Применить типовые умения</h3>
+    <p id="cf-text"></p>
+    <div class="acts">
+      <button class="btn sm ghost" type="button" onclick="closeConfirm()">Отмена</button>
+      <button class="btn sm primary" type="button" id="cf-ok">Применить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   Данные макета: каталог ролей (backend/Services/SpecialtyCatalog.cs),
+   персоны и переопределения по слоям. Цифры и имена — демонстрационные.
+   Логика и данные идентичны index.html — меняется только раскладка. Рельса
+   со списком персон (PersonaList) на мобиле не рендерится: по §5.2 инвентаря
+   узкий экран показывает список персон и «Специальности» как раздельные
+   полноэкранные виды, здесь — уже открытый вид «Специальности».
+   ========================================================================= */
+
+const ICONS = {
+  server:'<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+  shield:'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  palette:'<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2z"/>',
+  flask:'<path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.58 16.5h12.85"/>',
+  chart:'<line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/>',
+  book:'<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  cap:'<path d="M21.42 10.92a1 1 0 0 0-.02-1.84L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
+  notebook:'<path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9.5 8h5"/><path d="M9.5 12h5"/>',
+  share:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>',
+  checks:'<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+  hammer:'<path d="m15 12-8.5 8.5a2.12 2.12 0 1 1-3-3L12 9"/><path d="M17.64 15 22 10.64"/><path d="m20.91 11.7-1.25-1.25c-.6-.6-.93-1.4-.93-2.25v-.86L16.01 4.6a5.56 5.56 0 0 0-3.94-1.64H9l.92.82A6.18 6.18 0 0 1 12 8.4v1.56l2 2h2.47l2.26 1.91"/>',
+  monitor:'<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  box:'<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  bulb:'<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+  users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  // Иконки типов привязок — те же, что в bindingMeta.tsx
+  layers:'<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m6.08 10.37-3.5 1.6a1 1 0 0 0 0 1.81l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9a1 1 0 0 0 0-1.83l-3.5-1.59"/><path d="m6.08 15.37-3.5 1.6a1 1 0 0 0 0 1.81l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9a1 1 0 0 0 0-1.83l-3.5-1.59"/>',
+  wrench:'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  zap:'<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+};
+
+// Типы привязок — подписи, иконки и тона из BINDING_TYPE_META (bindingMeta.tsx)
+const BIND_META = {
+  knowledge:{ name:'Знания проекта', icon:'layers', aiTarget:true },
+  tool:     { name:'Инструмент',     icon:'wrench', aiTarget:true },
+  skill:    { name:'Навык',          icon:'zap',    aiTarget:false },
+  notes:    { name:'Заметки',        icon:'notebook', aiTarget:true },
+};
+const MODE_LABEL = { auto:'Авто', always:'Всегда', off:'Выкл' };
+const MODE_HINT = {
+  auto:  'Модель сама решает по условию, когда заглянуть в источник',
+  always:'Краткая выжимка подкладывается персоне в каждый ход — дороже, но надёжнее',
+  off:   'Привязка сохранена, но не используется',
+};
+// Палитра аватаров — AGENT_COLORS (components/AgentSelector.tsx)
+const AGENT_COLORS = { yellow:'#F39C12', orange:'#D97757', blue:'#3E7CA6', green:'#5E8B4E',
+  purple:'#6C5CB0', red:'#B4452F', brown:'#8A6A28', cyan:'#1A9DAF', pink:'#C2385B' };
+
+// Каталог ролей: подписи и описания — SpecialtyCatalog.All (без «Не задана»)
+const CATALOG = [
+  { key:'analyst',   label:'Аналитик',                  desc:'Данные, выводы и риски — без домыслов и без переоценки найденного', icon:'chart',    color:'blue'   },
+  { key:'planner',   label:'Планировщик',               desc:'Превращает задачу в план по шагам: что делаем, в каком порядке, кто и как проверим', icon:'checks', color:'purple' },
+  { key:'reviewer',  label:'Ревьюер',                   desc:'Находки по severity, соглашения проекта, сценарии отказа', icon:'shield',   color:'red'    },
+  { key:'executor',  label:'Исполнитель (универсальный)',desc:'Доводит задачу до конца с минимальным диффом', icon:'hammer',   color:'brown'  },
+  { key:'secretary', label:'Секретарь',                 desc:'Задачи и заметки: зафиксировать, напомнить, найти', icon:'notebook', color:'green'  },
+  { key:'coordinator',label:'Координатор',              desc:'Распределяет работу по силам и зоне персон, эскалирует блокеры', icon:'share',   color:'cyan'   },
+  { key:'mentor',    label:'Наставник',                 desc:'Сначала вопросы, потом советы: учит через понимание', icon:'cap',      color:'yellow' },
+  { key:'designer',  label:'Дизайнер',                  desc:'Макеты в docs/mockups, дизайн-система проекта, обе темы и мобильная раскладка', icon:'palette', color:'orange' },
+  { key:'consultant',label:'Консультант',               desc:'Отвечает на заданный вопрос с альтернативами и компромиссами', icon:'bulb',     color:'yellow' },
+  { key:'librarian', label:'Библиотекарь',              desc:'Отвечает про библиотеки и чужой код доказательствами: документ и пермалинк', icon:'book', color:'brown' },
+  { key:'tester',    label:'Тестировщик',               desc:'Воспроизводимость прежде вердикта: шаги, края, честный отчёт', icon:'flask',    color:'green'  },
+  { key:'backendExecutor', label:'Исполнитель (бэкенд)', desc:'Серверный исполнитель: инварианты слоя, стиль соседнего кода, сборка и тесты', icon:'server', color:'blue' },
+  { key:'frontendExecutor',label:'Исполнитель (фронтенд)',desc:'Фронтовый исполнитель: дизайн-система, мобильная ширина, ui-kit', icon:'monitor', color:'pink' },
+  { key:'devopsExecutor',  label:'Исполнитель (DevOps)', desc:'Исполнитель сборки и окружений: воспроизводимость, откатываемость, секреты вне git', icon:'box', color:'red' },
+];
+const BY_KEY = Object.fromEntries(CATALOG.map(r => [r.key, r]));
+
+// Слои. Порядок наследования: code → all → user → me
+const LAYERS = [
+  { id:'all',  label:'Для всех',           badge:'Общее'      },
+  { id:'user', label:'Пользователю Кире',  badge:'Пользователя' },
+  { id:'me',   label:'Только для меня',    badge:'Ваше'       },
+];
+
+// Переопределения персонализации по слоям
+const OVERRIDES = {
+  all:  { reviewer:{ name:'Приёмка' } },
+  user: {},
+  me:   {
+    backendExecutor:{ name:'Серверный', desc:'Наш сервер: API, миграции, фоновые задачи', icon:'server', color:'blue' },
+    librarian:{ name:'Доки', icon:'book', color:'brown' },
+  },
+};
+
+// Правила моделей по слоям (роль без записи = «без своих правил»)
+const RULES = {
+  all: { reviewer:{ strong:'Сильный — основной', medium:null, weak:null } },
+  user:{ },
+  me:  {
+    backendExecutor:{ strong:'Сильный — основной', medium:null, weak:'Слабый — быстрый' },
+    reviewer:{ strong:'Сильный — основной', medium:'Средний — экономный', weak:null },
+    designer:{ strong:null, medium:'Средний — экономный', weak:null },
+  },
+};
+
+// Пресеты роли = секции промпта специальности (SpecialtyPromptPresets, каталог v5).
+// Состав задаёт система, человек включает/выключает и правит текст.
+const PRESET_SECTIONS = [
+  { id:'history',   label:'История решений',
+    desc:'Сценарии «когда и как использовать досье» (dossier_lookup / dossier_get).' },
+  { id:'codeGraph', label:'Навигация по коду',
+    desc:'Сценарии навигации: codegraph (типы и связность), LSP (символ и позиция), Grep (текст).' },
+  { id:'processes', label:'Процессы роли (DoD)',
+    desc:'Что сделать перед сдачей результата (сборка/тесты/lint) и куда его складывать.' },
+  { id:'roleRules', label:'Правила роли',
+    desc:'Профессиональные рамки специальности, не привязанные к инструментам.' },
+];
+const PRESET_TEXT_LIMIT = 1024;   // SpecialtyPromptPresets.SectionTextLimit
+
+// Дефолты включённости — таблица из кода: история 9 ролей, граф кода 6,
+// процессы 9, правила роли — у всех
+const PRESET_DEFAULT_ON = {
+  history:['analyst','planner','reviewer','tester','executor','backendExecutor','frontendExecutor','devopsExecutor','consultant'],
+  codeGraph:['planner','reviewer','tester','backendExecutor','frontendExecutor','devopsExecutor'],
+  processes:['executor','backendExecutor','frontendExecutor','devopsExecutor','tester','planner','reviewer','secretary','librarian'],
+  roleRules:'all',
+};
+// Типовые тексты (в макете — сокращённые до одной фразы)
+const PRESET_DEFAULT_TEXT = {
+  history:'Перед тем как предлагать решение по файлу — dossier_lookup по его пути: возможно, это уже обсуждали и отвергли. Структуру кода смотри codegraph_*, историю решений — dossier_*.',
+  codeGraph:'«Где объявлен X» — codegraph_find. «Что сломается, если правлю X» — codegraph_neighbors. Текстовые вхождения и файлы вне графа — Grep.',
+  processes:'Перед сдачей: сборка и тесты затронутого слоя. Результат складывай туда, где его ждёт следующий по конвейеру, и приводи вывод проверки.',
+  roleRules:'Работай в рамках своей роли: спорь с решением, а не с оформлением, и признавай границы того, что проверено.',
+};
+// Переопределения пресетов по слоям: on — включённость, text — свой текст
+const PRESET_OVR = {
+  all:  {},
+  user: {},
+  me:   { backendExecutor:{ processes:{ text:'Перед сдачей: dotnet build + dotnet test по затронутому набору, вывод — в отчёт. Миграции — отдельным коммитом.' } } },
+};
+
+// Типовые умения (привязки) по слоям — та же модель, что у персоны:
+// тип + цель + правило «когда пользоваться» + режим. Отличие одно: цель
+// типового умения подбирает AI при создании персоны (кроме «Навыка»)
+const SKILLS = {
+  all:{}, user:{},
+  me:{
+    backendExecutor:[
+      { type:'knowledge', target:null, when:'когда правишь слой — сверься с инвариантами', mode:'auto' },
+      { type:'tool', target:'Задачи', when:'когда ведёшь работу по задаче', mode:'always' },
+    ],
+    reviewer:[
+      { type:'knowledge', target:null, when:'когда смотришь чужой код — сверяйся с соглашениями', mode:'auto' },
+      { type:'skill', target:'code-review', when:'', mode:'auto' },
+    ],
+  },
+};
+
+// Персоны владельца
+const PERSONAS = [
+  { id:'denis', name:'Денис', role:'Backend-разработчик', color:'blue',   spec:'backendExecutor', model:'Sonnet 5', tier:'сильная', manualModel:true },
+  { id:'gefest',name:'Гефест',role:'Мастер',              color:'red',    spec:'backendExecutor', model:'Sonnet 5', tier:'средняя', manualSkills:true },
+  { id:'gleb',  name:'Глеб',  role:'Код-ревьюер',         color:'purple', spec:'reviewer',        model:'Opus 5',   tier:'сильная' },
+  { id:'maya',  name:'Майя',  role:'UI/UX-дизайнер',      color:'orange', spec:'designer',        model:'Sonnet 5', tier:'средняя' },
+  { id:'vera',  name:'Вера',  role:'QA-тестер',           color:'green',  spec:'tester',          model:'Haiku 4.5',tier:'слабая'  },
+  { id:'gamma', name:'Гамма', role:'QA gamma',            color:'cyan',   spec:'tester',          model:'Haiku 4.5',tier:'слабая', manualSkills:true },
+  { id:'sofya', name:'Софья', role:'Продакт-аналитик',    color:'pink',   spec:'analyst',         model:'Sonnet 5', tier:'средняя' },
+];
+
+/* ===================== Состояние ===================== */
+const S = {
+  view:'list',        // list | role | edit
+  roleKey:null,
+  layer:'me',
+  showAll:false,      // P15
+  applied:{},         // personaId → типовые применены
+  draft:null,         // черновик формы настройки
+  openSkill:-1,       // раскрытая карточка типового умения
+  openPreset:null,    // раскрытый пресет роли
+  showOffPresets:false,
+};
+
+/* ===================== Вспомогательные ===================== */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const svg = (name, cls) =>
+  `<svg class="${cls||'ic'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]||''}</svg>`;
+const chevR = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+const chevL = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+const chevD = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+
+// Слои, действующие «ниже или на» выбранном (порядок наследования)
+const CHAIN = { all:['all'], user:['user','all'], me:['me','user','all'] };
+
+// Эффективная персонализация роли на выбранном слое + источник каждого поля.
+// cleared — поля, у которых переопределение ВЫБРАННОГО слоя снято в черновике
+// («Вернуть типовое»): значение падает на слой ниже и остаётся видимым.
+function resolve(key, layer, cleared) {
+  const base = BY_KEY[key];
+  const out = { name:base.label, desc:base.desc, icon:base.icon, color:base.color,
+                src:{ name:'code', desc:'code', icon:'code' } };
+  // идём снизу вверх: сначала нижние слои, последним — выбранный
+  const chain = CHAIN[layer].slice().reverse();
+  for (const l of chain) {
+    let o = (OVERRIDES[l] || {})[key];
+    if (!o) continue;
+    if (cleared && l === layer) {
+      o = { ...o };
+      for (const f of Object.keys(cleared)) if (cleared[f]) { delete o[f]; if (f === 'icon') delete o.color; }
+    }
+    const badge = LAYERS.find(x => x.id === l).badge;
+    if (o.name) { out.name = o.name; out.src.name = badge; }
+    if (o.desc) { out.desc = o.desc; out.src.desc = badge; }
+    if (o.icon) { out.icon = o.icon; out.color = o.color || out.color; out.src.icon = badge; }
+  }
+  return out;
+}
+function srcBadge(src) {
+  if (src === 'code') return `<span class="badge xs code" title="Значение из каталога продукта">Из кода</span>`;
+  const tone = src === 'Ваше' ? 'accent' : 'neutral';
+  return `<span class="badge xs ${tone}">${esc(src)}</span>`;
+}
+function rulesOf(key, layer) {
+  for (const l of CHAIN[layer]) { const r = (RULES[l]||{})[key]; if (r) return { r, layer:l }; }
+  return null;
+}
+function skillsOf(key, layer) {
+  for (const l of CHAIN[layer]) { const s = (SKILLS[l]||{})[key]; if (s) return s; }
+  return [];
+}
+function personasOf(key) { return PERSONAS.filter(p => p.spec === key); }
+function hasOwnRules(key, layer) { return !!((RULES[layer]||{})[key]); }
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+function roleAvatar(role, size) {
+  const c = AGENT_COLORS[role.color] || AGENT_COLORS.brown;
+  return `<span class="rav" style="width:${size}px;height:${size}px;background:${c}">${svg(role.icon,'')}</span>`;
+}
+function personaAvatar(p, size) {
+  const c = AGENT_COLORS[p.color] || AGENT_COLORS.brown;
+  return `<span class="pav" style="width:${size}px;height:${size}px;background:${c};font-size:${Math.round(size*0.4)}px">${esc(p.name[0])}</span>`;
+}
+
+/* ===================== Переключатель слоёв ===================== */
+function layerSwitch() {
+  return `
+  <div class="v gap8">
+    <div class="pill" role="group" aria-label="Слой настройки">
+      ${LAYERS.map(l => `<button type="button" class="${S.layer===l.id?'on':''}"
+          aria-pressed="${S.layer===l.id}" onclick="setLayer('${l.id}')">${esc(l.label)}</button>`).join('')}
+    </div>
+    <div class="sub">Слой определяет, кого коснётся правило.</div>
+  </div>`;
+}
+
+/* ===================== Экран 1: список специальностей ===================== */
+function viewList() {
+  const withRules = CATALOG.filter(r => rulesOf(r.key, S.layer));
+  const noRules   = CATALOG.filter(r => !rulesOf(r.key, S.layer) && personasOf(r.key).length > 0);
+  const rest      = CATALOG.filter(r => !rulesOf(r.key, S.layer) && personasOf(r.key).length === 0);
+  const covered   = withRules.length;
+
+  const noRulesCards = noRules.map(r => roleRow(r, true)).join('');
+  const restCards    = S.showAll ? rest.map(r => roleRow(r, true)).join('') : '';
+
+  return `
+  <div class="v gap16">
+    <div class="v gap8">
+      <div class="pill" role="group" aria-label="Режим раздела">
+        <button type="button">Персоны</button>
+        <button type="button" class="on" aria-pressed="true">
+          Специальности <span class="chip">${covered} из ${CATALOG.length}</span>
+        </button>
+      </div>
+      <h1 class="page">Специальности</h1>
+      <div class="sub">Роль задаёт, какие модели, доступы и инструкции получит персона по умолчанию.
+        Здесь же её можно назвать и объяснить по-своему.</div>
+    </div>
+
+    ${layerSwitch()}
+
+    <div class="v gap8">
+      ${withRules.length
+        ? withRules.map(r => roleRow(r, false)).join('')
+        : `<div class="card v gap4">
+             <span class="empty">Особых правил пока нет.</span>
+             <span class="fhint">Откройте роль — и задайте ей модели, пресеты и типовые умения.</span>
+           </div>`}
+    </div>
+
+    ${(noRulesCards || restCards) ? `
+    <div class="v gap8 mt8">
+      <div class="sect">Без своих правил</div>
+      ${noRulesCards}${restCards}
+    </div>` : ''}
+
+    <div class="h gap12 mt8" style="align-items:flex-start">
+      <button class="tgl ${S.showAll?'on':''}" role="switch" aria-checked="${S.showAll}"
+              aria-label="Показать все роли каталога" onclick="toggleAll()"><i></i></button>
+      <div class="v">
+        <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Показать все роли каталога</span>
+        <span class="fhint">Роли, по которым пока никто не работает и правил нет, — чтобы назвать их заранее.</span>
+      </div>
+    </div>
+
+    <div class="fhint mt8">
+      Список ролей задан продуктом: роли можно назвать и настроить по-своему, но добавить новую
+      или удалить нельзя — на них держится распределение работы между персонами.
+    </div>
+  </div>`;
+}
+
+function roleRow(role, unruled) {
+  const eff = resolve(role.key, S.layer);
+  const rules = rulesOf(role.key, S.layer);
+  // Стопка аватаров, бейдж «N вручную» и счёт персон в подписи — только на
+  // «Только для меня»: на «Для всех»/«Пользователю …» настройка касается
+  // персон другого владельца или всех сразу, и подмешивать сюда своих было
+  // бы враньём (тот же принцип T8, что и в срезе визитки роли).
+  const people = S.layer === 'me' ? personasOf(role.key) : [];
+  const manual = people.filter(p => (p.manualModel || (p.manualSkills && !S.applied[p.id]))).length;
+
+  const chips = rules ? ['strong','medium','weak']
+      .map(t => rules.r[t] ? `<span class="chip">${esc(rules.r[t].split(' — ')[0])}</span>` : '')
+      .filter(Boolean).join('') : '';
+
+  const sub = unruled
+    ? (people.length
+        ? `Правил нет — ${people.length} ${plural(people.length,'персона работает','персоны работают','персон работают')} по общим настройкам`
+        : S.layer === 'me' ? `Правил нет, персон по этой роли пока нет` : `Правил нет`)
+    : esc(eff.desc);
+
+  return `
+  <button class="rolerow" type="button" onclick="openRole('${role.key}')"
+          title="${esc(eff.name)} — открыть карточку роли">
+    ${roleAvatar(eff, 36)}
+    <span class="grow v">
+      <span class="h gap8 wrap-h">
+        <span class="t1 trunc">${esc(eff.name)}</span>
+        ${eff.src.name !== 'code' ? srcBadge(eff.src.name) : ''}
+        ${manual ? `<span class="badge xs warning" title="Есть персоны с ручными настройками">${manual} вручную</span>` : ''}
+      </span>
+      <span class="t2">${sub}</span>
+    </span>
+    <span class="tail">
+      <span class="chips">
+        <span class="chip" title="Включённые пресеты роли и типовые умения">${presetCount(role.key, S.layer)} из ${PRESET_SECTIONS.length} пресетов · ${skillsOf(role.key, S.layer).length} ${plural(skillsOf(role.key, S.layer).length,'умение','умения','умений')}</span>
+        ${chips}
+      </span>
+      ${people.length ? `<span class="stack">${people.slice(0,3).map(p => personaAvatar(p,22)).join('')}</span>` : ''}
+      ${chevR}
+    </span>
+  </button>`;
+}
+
+/* ===================== Экран 2: визитка роли =====================
+   Раскладка — как визитка персоны (PersonaPreview): hero + плоские секции
+   с разделителем сверху, а не набор отдельных островов. */
+function viewRole() {
+  const role = BY_KEY[S.roleKey];
+  const eff = resolve(role.key, S.layer);
+  const rules = rulesOf(role.key, S.layer);
+  const skills = skillsOf(role.key, S.layer);
+  const ruleBadge = rules ? LAYERS.find(l => l.id === rules.layer).badge : null;
+
+  return `
+  <div class="v gap12">
+    <div class="h gap8">
+      <button class="back grow" type="button" onclick="goList()" style="justify-content:flex-start">
+        ${chevL} Специальности</button>
+      <button class="btn sm primary" type="button" onclick="openEdit()">Настроить</button>
+    </div>
+
+    ${layerSwitch()}
+
+    <div class="card">
+      <!-- Hero визитки -->
+      <div class="hero preview">
+        ${roleAvatar(eff, 80)}
+        <div class="grow v gap4">
+          <h2 class="role" style="color:${AGENT_COLORS[eff.color]}">${esc(eff.name)}</h2>
+          ${eff.name !== role.label
+            ? `<div class="h gap8 wrap-h">${srcBadge(eff.src.name)}</div><div class="fhint">В системе: ${esc(role.label)}</div>`
+            : `<div class="h gap8 wrap-h">${srcBadge(eff.src.name)}</div>`}
+          <div style="font-size:14px;line-height:1.5;color:var(--c-text-secondary)">${esc(eff.desc)}</div>
+        </div>
+      </div>
+
+      <!-- Настройки: факты-чипы, как «Настройки» визитки персоны -->
+      <div class="flat">
+        <div class="h gap8" style="margin-bottom:12px">
+          <span class="sect grow">Модели по уровням</span>
+          ${rules ? srcBadge(ruleBadge) : `<span class="badge xs">Правил нет</span>`}
+        </div>
+        <div class="factgrid">
+          ${[['Сильная','strong'],['Средняя','medium'],['Слабая','weak']].map(([label,t]) => `
+            <div class="fact">
+              <span class="k">${label}</span>
+              <span class="v ${rules && rules.r[t] ? '' : 'inherit'}"
+                    title="${rules && rules.r[t] ? esc(rules.r[t]) : 'Как «Модели по умолчанию»'}">
+                ${rules && rules.r[t] ? esc(rules.r[t]) : 'Как «Модели по умолчанию»'}</span>
+            </div>`).join('')}
+        </div>
+        <div class="fhint mt8">${rules
+          ? 'Сейчас пойдёт: Opus 5 / Sonnet 5 / Haiku 4.5'
+          : 'Правил нет — персоны роли работают по «Моделям по умолчанию».'}</div>
+      </div>
+
+      <!-- Пресеты роли: секции промпта — состав задаёт система, человек включает и правит текст -->
+      <div class="flat">
+        <div class="h gap8" style="margin-bottom:12px">
+          <span class="sect grow">Пресеты для роли</span>
+          <span class="badge xs">${presetCount(role.key, S.layer)} из ${PRESET_SECTIONS.length}</span>
+        </div>
+        ${presetList(role.key, true)}
+      </div>
+
+      <!-- Типовые умения: карточки привязок, как во вкладке «Знания и правила» персоны -->
+      <div class="flat">
+        <div class="sect" style="margin-bottom:12px">Типовые умения</div>
+        ${bindList(skills)}
+      </div>
+
+      <!-- Срез -->
+      ${sliceBlock(role.key)}
+    </div>
+  </div>`;
+}
+
+/* ===== Пресеты для роли (секции промпта) ===== */
+// Эффективное состояние секции + источник: слой выше перекрывает нижний
+function presetOf(key, sectionId, layer) {
+  const on0 = PRESET_DEFAULT_ON[sectionId] === 'all' || PRESET_DEFAULT_ON[sectionId].includes(key);
+  const out = { on:on0, text:PRESET_DEFAULT_TEXT[sectionId], src:'code', own:false };
+  for (const l of CHAIN[layer].slice().reverse()) {
+    const o = ((PRESET_OVR[l] || {})[key] || {})[sectionId];
+    if (!o) continue;
+    const badge = LAYERS.find(x => x.id === l).badge;
+    if (o.on !== undefined) { out.on = o.on; out.src = badge; }
+    if (o.text !== undefined) { out.text = o.text; out.src = badge; out.own = true; }
+  }
+  return out;
+}
+function presetCount(key, layer) {
+  return PRESET_SECTIONS.filter(s => presetOf(key, s.id, layer).on).length;
+}
+
+function presetList(key, ro) {
+  const all = PRESET_SECTIONS.map(s => ({ meta:s, eff:presetOf(key, s.id, S.layer) }));
+  const on = all.filter(p => p.eff.on);
+  const off = all.length - on.length;
+  const shown = (S.showOffPresets && !ro) ? all : on;
+
+  // В просмотре выключенные пресеты не показываем вовсе: они ничего не добавляют
+  // персонам роли, а тумблера, чтобы их включить, здесь нет
+  if (!on.length && (ro || !S.showOffPresets)) {
+    return `
+    <div class="v gap8">
+      <div class="emptybox">
+        <div class="ttl">Пресеты пока не настроены</div>
+        <div>Включите пресеты и задайте текст — инструкции добавятся в промпт персон этой специальности.</div>
+        ${ro ? '' : `<button class="btn sm ghost mt8" type="button" onclick="toggleOffPresets()">Показать выключенные пресеты</button>`}
+      </div>
+    </div>`;
+  }
+
+  return `
+    <div class="v gap8">
+      ${shown.map(p => presetCard(key, p.meta, p.eff, ro)).join('')}
+      ${(off && !ro) ? `<button class="link" type="button" onclick="toggleOffPresets()" style="align-self:flex-start">
+        ${S.showOffPresets ? 'Скрыть выключенные' : `Показать выключенные (${off})`}</button>` : ''}
+      ${(off && ro) ? `<span class="fhint">Выключено пресетов: ${off} — их видно в настройке роли.</span>` : ''}
+    </div>`;
+}
+
+function presetCard(key, meta, eff, ro) {
+  const open = S.openPreset === meta.id;
+  const len = eff.text.length;
+  const cnt = len > PRESET_TEXT_LIMIT * 0.95 ? 'var(--c-danger)'
+            : len >= PRESET_TEXT_LIMIT * 0.8 ? 'var(--c-warning)' : 'var(--c-text-muted)';
+  const note = eff.src === 'code' ? 'Сейчас пойдёт: текст из кода (дефолт)'
+             : eff.src === 'Ваше' ? 'Сейчас пойдёт: ваш текст'
+             : eff.src === 'Общее' ? 'Сейчас пойдёт: текст из общего слоя (настройки администратора)'
+             : 'Сейчас пойдёт: текст из слоя пользователя (выбранного администратором)';
+
+  return `
+  <div class="preset ${open ? 'open' : ''}">
+    <div class="head" onclick="togglePreset('${meta.id}')" role="button" aria-expanded="${open}">
+      ${ro ? '' : `<span onclick="event.stopPropagation()">
+             <button class="tgl ${eff.on ? 'on' : ''}" role="switch" aria-checked="${eff.on}"
+                     aria-label="${esc(meta.label)}" onclick="togglePresetOn('${key}','${meta.id}')"><i></i></button>
+           </span>`}
+      <span class="ttl grow">${esc(meta.label)}</span>
+      ${srcBadge(eff.own ? 'Ваше' : eff.src)}
+      <span class="chev ${open ? 'up' : ''}">${chevD}</span>
+    </div>
+    <div class="desc">${esc(meta.desc)}</div>
+    ${open ? `
+    <div class="body v gap8">
+      <div class="h gap8 wrap-h">
+        <span class="tag">${eff.own ? 'Свой текст' : 'Типовой текст'}</span>
+        ${ro ? '' : `<button class="btn xs ghost" type="button" onclick="togglePresetText('${key}','${meta.id}')">
+          ${eff.own ? 'Вернуть типовой' : 'Задать свой текст'}</button>`}
+        ${ro ? '' : `<span class="mono grow" style="text-align:right;font-size:11px;color:${cnt}">${len} / ${PRESET_TEXT_LIMIT}</span>`}
+      </div>
+      ${ro
+        ? `<div class="rotext">${esc(eff.text)}</div>`
+        : `<textarea class="textarea ${eff.own ? '' : 'ro'}" ${eff.own ? '' : 'disabled'} maxlength="${PRESET_TEXT_LIMIT}"
+             style="min-height:80px;font-size:12px"
+             onchange="setPresetText('${key}','${meta.id}', this.value)">${esc(eff.text)}</textarea>`}
+      <span class="fhint">${note}</span>
+    </div>` : ''}
+  </div>`;
+}
+
+/* Список привязок + пунктирная кнопка добавления */
+function bindList(skills, where) {
+  const ro = where !== 'form';
+  return `
+    <div class="v gap8">
+      ${skills.length
+        ? skills.map((s,i) => bindCard(s,i,ro)).join('')
+        : `<div class="empty">Типовых умений нет. Добавьте — и каждая новая персона этой роли получит их сразу.</div>`}
+      ${ro ? '' : `<button class="btn sm dashed full" type="button" onclick="addSkill()">+ Добавить типовое умение</button>`}
+      <div class="fhint">Умения копируются персоне в момент создания: правка роли не меняет настройки
+        уже заведённых персон — расхождение видно ${where === 'form' ? 'в карточке роли' : 'в срезе ниже'}.</div>
+    </div>`;
+}
+
+/* Карточка привязки: свёрнутая строка + раскрытие с правкой по месту */
+function bindCard(s, i, ro) {
+  const meta = BIND_META[s.type];
+  const open = S.openSkill === i;
+  const dim = s.mode === 'off' && !open;
+  const title = meta.aiTarget
+    ? `${meta.name} — цель подберёт AI`
+    : `${meta.name}: ${s.target}`;
+
+  return `
+  <div class="bind ${open ? 'open' : ''}">
+    <div class="head" onclick="toggleSkill(${i})" role="button" aria-expanded="${open}">
+      <span class="bicon ${s.type}" style="${dim ? 'opacity:.55' : ''}">${svg(meta.icon,'ic-md')}</span>
+      <span class="grow v" style="${dim ? 'opacity:.55' : ''}">
+        <span class="ttl trunc">${esc(title)}</span>
+        ${s.when
+          ? `<span class="cond">${esc(s.when)}</span>`
+          : `<span class="cond none">Всегда под рукой — условие не задано</span>`}
+      </span>
+      <span class="h gap8" style="flex-shrink:0">
+        <span class="badge xs mode-${s.mode}">${MODE_LABEL[s.mode]}</span>
+        ${(!open && !ro) ? `<span class="dots" aria-hidden="true">⋯</span>` : ''}
+      </span>
+    </div>
+    ${open ? `
+    <div class="body v gap8">
+      <span class="flabel">Когда пользоваться</span>
+      ${ro
+        ? `<div class="rotext">${s.when ? esc(s.when) : 'Условие не задано — умение всегда под рукой.'}</div>`
+        : `<textarea class="textarea" style="min-height:60px"
+             placeholder="Например: когда спрашивают про релизы — читай CHANGELOG.md"
+             onchange="setSkillWhen(${i}, this.value)">${esc(s.when)}</textarea>`}
+      ${meta.aiTarget
+        ? `<span class="fhint">Цель у типового умения не выбирается: её подберёт AI под конкретную
+             персону в момент создания.</span>`
+        : `<span class="fhint">Навык выбирается из каталога: ${esc(s.target)}.</span>`}
+      <span class="flabel mt8">Режим</span>
+      ${ro
+        ? `<span class="badge xs mode-${s.mode}" style="align-self:flex-start">${MODE_LABEL[s.mode]}</span>`
+        : `<div class="pill" role="group" aria-label="Режим привязки">
+             ${Object.keys(MODE_LABEL).map(m => `<button type="button"
+                 class="${s.mode===m?'on':''}" aria-pressed="${s.mode===m}"
+                 onclick="setSkillMode(${i},'${m}')">${MODE_LABEL[m]}</button>`).join('')}
+           </div>`}
+      <span class="fhint">${MODE_HINT[s.mode]}</span>
+      ${ro ? '' : `<div class="h gap8 mt8" style="justify-content:space-between">
+        <button class="dellink" type="button" onclick="removeSkill(${i})">Удалить привязку</button>
+        <button class="btn xs ghost" type="button" onclick="toggleSkill(-1)">Готово</button>
+      </div>`}
+    </div>` : ''}
+  </div>`;
+}
+
+function tierRow(label, value) {
+  return `
+  <div class="row3">
+    <span class="tier">${label}</span>
+    <span class="picker ${value?'':'inherit'}">
+      <span class="val">${value ? esc(value) : '· · · Как «Модели по умолчанию» · · ·'}</span>
+      ${chevD}
+    </span>
+    <span class="src">${value ? '' : `<span class="badge xs">наследуется</span>`}</span>
+  </div>`;
+}
+
+/* ===== Срез «Кто работает по этой роли» ===== */
+function sliceBlock(key) {
+  const people = personasOf(key);
+
+  // T8: срез живёт только на слое «Только для меня»
+  if (S.layer !== 'me') {
+    return `
+    <div class="flat v gap8">
+      <div class="sect">Кто работает по этой роли</div>
+      <div class="empty">Список персон показан на слое «Только для меня»: на этом слое настройка
+        касается не ваших персон, и перечислять здесь свои было бы неправдой.</div>
+    </div>`;
+  }
+
+  if (!people.length) {
+    return `
+    <div class="flat v gap8">
+      <div class="sect">Кто работает по этой роли</div>
+      <div class="empty">По этой роли пока никто не работает. Роль назначается в профиле персоны.</div>
+    </div>`;
+  }
+
+  return `
+  <div class="flat v gap8">
+    <div class="h gap8" style="margin-bottom:4px"><span class="sect grow">Кто работает по этой роли</span>
+      <span class="badge xs">${people.length}</span></div>
+    ${people.map(p => personaRow(p)).join('')}
+  </div>`;
+}
+
+function personaRow(p) {
+  const notes = [];
+  if (p.manualModel) notes.push('модель задана вручную — правило роли не применяется');
+  if (p.manualSkills && !S.applied[p.id]) notes.push('умения настроены вручную');
+  const applied = p.manualSkills && S.applied[p.id];
+
+  return `
+  <div class="prow" role="group">
+    ${personaAvatar(p, 26)}
+    <span class="grow v">
+      <span class="line">
+        <span class="nm">${esc(p.name)}</span>
+        <span class="meta"> — ${esc(p.model)}, ${esc(p.tier)}</span>
+      </span>
+      ${notes.length ? `<span class="note">${esc(notes.join(' · '))}</span>` : ''}
+      ${applied ? `<span class="note" style="color:var(--c-success-text)">умения приведены к типовым</span>` : ''}
+    </span>
+    ${(p.manualSkills && !S.applied[p.id])
+      ? `<button class="btn xs ghost" type="button" onclick="askApply('${p.id}')">Применить типовые</button>` : ''}
+  </div>`;
+}
+
+/* ===================== Экран 3: настройка роли ===================== */
+function viewEdit() {
+  const role = BY_KEY[S.roleKey];
+  const d = S.draft;
+  const eff = resolve(role.key, S.layer, d.cleared);
+  const rules = rulesOf(role.key, S.layer);
+  const skills = skillsOf(role.key, S.layer);
+  const layerBadge = LAYERS.find(l => l.id === S.layer).badge;
+
+  const nameSrc = d.name !== null ? layerBadge : eff.src.name;
+  const descSrc = d.desc !== null ? layerBadge : eff.src.desc;
+  // Кнопка сброса нужна там, где есть что снимать: своё в черновике либо
+  // уже сохранённое переопределение текущего слоя
+  const canReset = f => (d[f] !== null) || (({ name:nameSrc, desc:descSrc })[f] === layerBadge);
+
+  return `
+  <div class="v gap12">
+    <div class="h gap8">
+      <button class="back grow" type="button" onclick="goRole()" style="justify-content:flex-start">
+        ${chevL} ${esc(eff.name)}</button>
+      <button class="btn sm ghost" type="button" onclick="goRole()">Отмена</button>
+      <button class="btn sm primary" type="button" onclick="saveDraft()">Сохранить</button>
+    </div>
+
+    ${layerSwitch()}
+
+    <div class="card">
+      <!-- Hero формы: значок роли + главное поле крупным serif, как «Роль *» у персоны -->
+      <div class="hero">
+        <span title="Значок роли задан продуктом и не настраивается">${roleAvatar(eff, 80)}</span>
+        <div class="grow v gap12">
+          <div class="v gap4">
+            <span class="flabel">Название роли</span>
+            <input class="bigfield" type="text" maxlength="40"
+                   placeholder="Как в системе: ${esc(role.label)}"
+                   value="${esc(d.name !== null ? d.name : (eff.src.name !== 'code' ? eff.name : ''))}"
+                   oninput="stashDraft('name', this.value)" onchange="setDraft('name', this.value)">
+            <div class="h gap8 wrap-h">
+              <span class="fhint grow">В системе: ${esc(role.label)} · до 40 символов</span>
+              ${srcBadge(nameSrc)}
+              ${canReset('name') ? `<button class="link" type="button" onclick="resetField('name')">Вернуть типовое</button>` : ''}
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="h gap8">
+              <span class="flabel grow">Чем занимается</span>
+              <span class="mono" style="font-size:11px;color:var(--c-text-muted)">${(d.desc !== null ? d.desc : (eff.src.desc !== 'code' ? eff.desc : '')).length} / 200</span>
+              ${srcBadge(descSrc)}
+              ${canReset('desc') ? `<button class="link" type="button" onclick="resetField('desc')">Вернуть типовое</button>` : ''}
+            </div>
+            <input class="input" type="text" maxlength="200"
+                   placeholder="${esc(role.desc)}"
+                   value="${esc(d.desc !== null ? d.desc : (eff.src.desc !== 'code' ? eff.desc : ''))}"
+                   oninput="stashDraft('desc', this.value)" onchange="setDraft('desc', this.value)">
+            <div class="fhint">Короткая строка для списка — подробные указания задайте
+              в «Инструкциях для роли».</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flat form">
+        <div class="h gap8" style="margin-bottom:12px">
+          <span class="sect grow">Модели по уровням</span>
+          ${rules ? srcBadge(LAYERS.find(l=>l.id===rules.layer).badge) : `<span class="badge xs code">Из кода</span>`}
+        </div>
+        <div class="v gap8">
+          ${['strong','medium','weak'].map((t,i) => tierRow(
+            ['Сильная','Средняя','Слабая'][i], rules ? rules.r[t] : null)).join('')}
+        </div>
+        <div class="note-warn mt12">Изменение моделей применится ко всем персонам роли, у которых
+          модель не задана вручную.</div>
+      </div>
+
+      <div class="flat form">
+        <div class="h gap8" style="margin-bottom:12px">
+          <span class="sect grow">Пресеты для роли</span>
+          <span class="badge xs">${presetCount(role.key, S.layer)} из ${PRESET_SECTIONS.length}</span>
+        </div>
+        ${presetList(role.key)}
+        <div class="fhint mt8">Текст пресета уходит в системный промпт каждой персоны этой роли —
+          и уже заведённых тоже: это не копия при создании, а живая инструкция роли.</div>
+      </div>
+
+      <div class="flat form">
+        <div class="sect" style="margin-bottom:12px">Типовые умения</div>
+        ${bindList(skills, 'form')}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ===================== Действия ===================== */
+function render() {
+  const v = document.getElementById('view');
+  v.innerHTML = S.view === 'list' ? viewList() : S.view === 'role' ? viewRole() : viewEdit();
+  v.scrollIntoView({ block:'nearest' });
+}
+function openRole(key) { S.roleKey = key; S.view = 'role'; render(); }
+function goList() { S.view = 'list'; render(); }
+function goRole() { S.view = 'role'; S.openSkill = -1; S.openPreset = null; render(); }
+function openEdit() {
+  S.draft = newDraft();
+  S.openPreset = null; S.openSkill = -1;   // смена экрана сбрасывает раскрытия
+  S.view = 'edit'; render();
+}
+function newDraft() { return { name:null, desc:null, cleared:{} }; }
+function setDraft(field, value) {
+  S.draft[field] = value === '' ? null : value;
+  render();
+}
+// Во время набора перерисовывать нельзя — слетит каретка; бейдж источника
+// и «Вернуть типовое» обновляются по выходу из поля (onchange)
+function stashDraft(field, value) { S.draft[field] = value === '' ? null : value; }
+// P6: снимает переопределение ТЕКУЩЕГО слоя — значение падает на слой ниже
+// и остаётся видимым, а не исчезает в пустоту
+function resetField(field) {
+  S.draft[field] = null;
+  S.draft.cleared[field] = true;
+  render();
+}
+function saveDraft() {
+  const d = S.draft, key = S.roleKey;
+  const o = OVERRIDES[S.layer][key] || (OVERRIDES[S.layer][key] = {});
+  const put = (f, v) => { if (v !== null) o[f] = v; else if (d.cleared[f]) delete o[f]; };
+  put('name', d.name);
+  put('desc', d.desc);
+  if (!Object.keys(o).length) delete OVERRIDES[S.layer][key];
+  goRole();
+}
+function setLayer(id) { S.layer = id; S.openSkill = -1; S.openPreset = null; if (S.view === 'edit') S.draft = newDraft(); render(); }
+
+/* Пресеты роли: тумблер, свой текст, возврат к типовому — правка идёт в текущий слой */
+function ovrFor(key, sectionId) {
+  const byRole = PRESET_OVR[S.layer][key] || (PRESET_OVR[S.layer][key] = {});
+  return byRole[sectionId] || (byRole[sectionId] = {});
+}
+function togglePreset(id) { S.openPreset = (S.openPreset === id ? null : id); render(); }
+function toggleOffPresets() { S.showOffPresets = !S.showOffPresets; render(); }
+function togglePresetOn(key, sectionId) {
+  const eff = presetOf(key, sectionId, S.layer);
+  ovrFor(key, sectionId).on = !eff.on;
+  render();
+}
+function togglePresetText(key, sectionId) {
+  const eff = presetOf(key, sectionId, S.layer), o = ovrFor(key, sectionId);
+  if (eff.own) delete o.text;            // «Вернуть типовой»
+  else o.text = eff.text;                // «Задать свой текст» — копия типового под правку
+  S.openPreset = sectionId;
+  render();
+}
+function setPresetText(key, sectionId, v) { ovrFor(key, sectionId).text = v; render(); }
+
+/* Типовые умения: правка по месту — как привязки персоны */
+function currentSkills() {
+  const key = S.roleKey;
+  for (const l of CHAIN[S.layer]) if ((SKILLS[l]||{})[key]) return { list:(SKILLS[l])[key], layer:l };
+  const list = (SKILLS[S.layer][key] = []);
+  return { list, layer:S.layer };
+}
+function toggleSkill(i) { S.openSkill = (S.openSkill === i ? -1 : i); render(); }
+function setSkillWhen(i, v) { currentSkills().list[i].when = v.trim(); render(); }
+function setSkillMode(i, m) { currentSkills().list[i].mode = m; render(); }
+function removeSkill(i) { currentSkills().list.splice(i, 1); S.openSkill = -1; render(); }
+function addSkill() {
+  const { list } = currentSkills();
+  list.push({ type:'knowledge', target:null, when:'', mode:'auto' });
+  S.openSkill = list.length - 1;
+  render();
+}
+function toggleAll() { S.showAll = !S.showAll; render(); }
+
+/* P12 → P13 */
+let pendingApply = null;
+function askApply(pid) {
+  const p = PERSONAS.find(x => x.id === pid);
+  pendingApply = pid;
+  document.getElementById('cf-text').textContent =
+    `Заменить умения персоны ${p.name} на типовые для этой роли? Её собственные настройки умений будут перезаписаны.`;
+  document.getElementById('confirm').hidden = false;
+}
+function closeConfirm() { pendingApply = null; document.getElementById('confirm').hidden = true; }
+document.getElementById('cf-ok').onclick = () => {
+  if (pendingApply) S.applied[pendingApply] = true;
+  closeConfirm(); render();
+};
+document.getElementById('confirm').addEventListener('click', e => {
+  if (e.target.id === 'confirm') closeConfirm();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeConfirm(); });
+
+/* Обвязка макета */
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.getElementById('th-light').classList.toggle('on', t === 'light');
+  document.getElementById('th-dark').classList.toggle('on', t === 'dark');
+}
+
+render();
+</script>
+</body>
+</html>

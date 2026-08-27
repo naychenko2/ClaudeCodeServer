@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "CCS Browser Spike",
+  "version": "0.1.0",
+  "description": "Спайк браузерного канала для ADR-008: срезы AX/DOMSnapshot/DOM через chrome.debugger + native messaging",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CCS browser spike"
+  },
+  "permissions": ["debugger", "nativeMessaging", "scripting", "activeTab"]
+}

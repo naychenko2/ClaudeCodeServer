@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
@@ -864,7 +864,7 @@ public class LocalActionRoutingTests
     // --- Матрицы уровней и пресеты-цепочки (ADR-007 §2, §3) ---
 
     private static SpecialtySettingsStore Specialty(IConfiguration config) =>
-        new(config, NullLogger<SpecialtySettingsStore>.Instance);
+        ClaudeHomeServer.Tests.Helpers.TestSpecialtyStore.Create(config);
 
     private static SpecialtyTemplateSettings Tmpl(string? strong = null, string? medium = null,
         string? weak = null, ModelTier? defaultTier = null) => new()
@@ -959,8 +959,9 @@ public class LocalActionRoutingTests
     }
 
     [Fact]
-    public void Resolver_ЛичнаяМатрицаСпециальности_СильнееГлобальной()
+    public void Resolver_МатрицаСпециальности_ОднаДляВсехВладельцев()
     {
+        // Слоёв у специальностей нет (ADR-012): матрица роли — контракт инстанса
         var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
         app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
         var u1 = users.Add("u1", "p", "user").Id;
@@ -969,15 +970,10 @@ public class LocalActionRoutingTests
         {
             Specialties = { ["backendExecutor"] = Tmpl(strong: "global-opus") },
         });
-        specialty.SetOwner(u1, new SpecialtySettingsLayer
-        {
-            Specialties = { ["backendExecutor"] = Tmpl(strong: "owner-opus") },
-        });
 
-        Assert.Equal("owner-opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1, ModelTier.Strong));
-        Assert.Equal("global-opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u2, ModelTier.Strong));
+        foreach (var who in new[] { u1, u2 })
+            Assert.Equal("global-opus", resolver.PersonaModel(
+                new Persona { Specialty = PersonaSpecialty.BackendExecutor }, who, ModelTier.Strong));
     }
 
     [Fact]
@@ -1098,7 +1094,7 @@ public class LocalActionRoutingTests
         // Ячейка персоны = preset:{id}, уровень из дефолта места → первый шаг цепочки.
         var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
         users.Add("u1", "p", "user");
-        specialty.SetOwner("u1", new SpecialtySettingsLayer
+        specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Presets = { Preset("p1", "opus", "glm-5.2") },
         });
@@ -1124,7 +1120,7 @@ public class LocalActionRoutingTests
         var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
         app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
         users.Add("u1", "p", "user");
-        specialty.SetOwner("u1", new SpecialtySettingsLayer
+        specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Presets = { Preset("p1", "opus", "glm-5.2", "deepseek") },
         });
@@ -1139,7 +1135,7 @@ public class LocalActionRoutingTests
         // §8 место «персона» (явная Model): Persona.Model = preset → первый шаг.
         var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
         users.Add("u1", "p", "user");
-        specialty.SetOwner("u1", new SpecialtySettingsLayer { Presets = { Preset("p1", "glm-5.2", "deepseek") } });
+        specialty.SetGlobal(new SpecialtySettingsLayer { Presets = { Preset("p1", "glm-5.2", "deepseek") } });
 
         Assert.Equal("glm-5.2", resolver.PersonaModel(
             new Persona { Model = "preset:p1" }, "u1"));
@@ -1182,7 +1178,7 @@ public class LocalActionRoutingTests
         var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
         app.Save(new AppSettings { ModelTierStrong = "slot-opus", ModelTierWeak = "slot-haiku" });
         var u1 = users.Add("u1", "p", "user");
-        specialty.SetOwner(u1.Id, new SpecialtySettingsLayer
+        specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Presets = { Preset("p1", "glm-5.2", "tier:strong", "deepseek") },
         });
@@ -1306,6 +1302,88 @@ public class LocalActionRoutingTests
         // Модель вне слота → null
         Assert.Null(resolver.TierOfModel("stranger-model", ownerId));
         Assert.Null(resolver.TierOfModel(null, ownerId));
+    }
+
+    // --- Цепочка хода с матрицами персоны (инцидент 2026-08-26) ---
+    // Дефект: стартовая модель резолвилась по матрицам специальности (замораживалась в
+    // Session.Model), а хвост цепочки брался из общего слота владельца — у персоны со
+    // своим пресетом цепочка обрубалась. Починка: перегрузка ResolveChain с персоной
+    // строит хвост по узким матрицам (персона → специальность → слоты владельца).
+
+    // Обстановка инцидента: общий слот владельца «Мощный» = [opus[1m], glm-5.3[1m], kimi-k3,
+    // deepseek-v4-pro]; специальность designer, TierStrong = preset «Сильный — Кими» =
+    // [kimi-k3, opus[1m], glm-5.3[1m]]. Личных слотов у владельца нет (падают на инстанс).
+    private static (ModelAssignmentResolver Resolver, string OwnerId, Persona Persona) BuildIncidentResolver()
+    {
+        var (resolver, appSettings, users, _, spec, _) = BuildResolverWithSpecialty();
+        appSettings.Save(new AppSettings { ModelTierStrong = "preset:powerful" });
+        spec.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets =
+            {
+                Preset("powerful", "opus[1m]", "glm-5.3[1m]", "kimi-k3", "deepseek-v4-pro"),
+                Preset("strong-kimi", "kimi-k3", "opus[1m]", "glm-5.3[1m]"),
+            },
+            Specialties = { ["designer"] = Tmpl(strong: "preset:strong-kimi") },
+        });
+        var owner = users.Add("u1", "p", "user");
+        return (resolver, owner.Id, new Persona { Specialty = PersonaSpecialty.Designer });
+    }
+
+    [Fact]
+    public void ResolveChain_ПерсонаСоСпециальностью_ЦепочкаИзМатрицыСпециальности()
+    {
+        // Персона со специальностью, чей TierStrong — пресет [A, B, C]; общий слот владельца
+        // другой ([X, Y]). Старт на A → цепочка [A, B, C] из матрицы специальности,
+        // а НЕ хвост общего слота владельца.
+        var (resolver, appSettings, users, _, spec, _) = BuildResolverWithSpecialty();
+        appSettings.Save(new AppSettings { ModelTierStrong = "preset:owner-strong" });
+        spec.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets =
+            {
+                Preset("owner-strong", "owner-x", "owner-y"),
+                Preset("spec-strong", "model-a", "model-b", "model-c"),
+            },
+            Specialties = { ["designer"] = Tmpl(strong: "preset:spec-strong") },
+        });
+        var owner = users.Add("u1", "p", "user");
+        var persona = new Persona { Specialty = PersonaSpecialty.Designer };
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatPersona, "model-a", owner.Id, persona);
+
+        chain.Should().BeEquivalentTo(new[] { "model-a", "model-b", "model-c" },
+            opts => opts.WithStrictOrdering(),
+            "хвост цепочки строится по матрице специальности, а не по общему слоту владельца");
+    }
+
+    [Fact]
+    public void ResolveChain_БезПерсоны_ХвостОбщегоСлотаВладельца()
+    {
+        // Регресс: персоны нет → поведение прежнее, хвост берётся из общего слота
+        // владельца (в обстановке инцидента после kimi-k3 остаётся только deepseek-v4-pro).
+        var (resolver, ownerId, _) = BuildIncidentResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.TasksExecutor, "kimi-k3", ownerId);
+
+        chain.Should().BeEquivalentTo(new[] { "kimi-k3", "deepseek-v4-pro" },
+            opts => opts.WithStrictOrdering(),
+            "без персоны хвост — из общего слота владельца, как до починки");
+    }
+
+    [Fact]
+    public void ResolveChain_СценарийИнцидента_DesignerСПресетомКими()
+    {
+        // Инцидент 2026-08-26: персона Майя (designer), TierStrong = preset «Сильный — Кими».
+        // Старт на kimi-k3 → цепочка обязана продолжиться opus[1m] и glm-5.3[1m] из её
+        // матрицы, а не обрубаться на хвосте общего слота «Мощный».
+        var (resolver, ownerId, persona) = BuildIncidentResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.TasksExecutor, "kimi-k3", ownerId, persona);
+
+        chain.Should().BeEquivalentTo(new[] { "kimi-k3", "opus[1m]", "glm-5.3[1m]" },
+            opts => opts.WithStrictOrdering(),
+            "цепочка строится по матрице специальности дизайнера");
     }
 
     [Fact]
@@ -1684,7 +1762,7 @@ public class LocalActionRoutingTests
     {
         var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
         users.Add("u1", "p", "user");
-        specialty.SetOwner("u1", new SpecialtySettingsLayer { Presets = { Preset("p1", "opus", "glm-5.2") } });
+        specialty.SetGlobal(new SpecialtySettingsLayer { Presets = { Preset("p1", "opus", "glm-5.2") } });
 
         var d = resolver.Preview(LocalActionCatalog.ChatPersona,
             new Persona { Specialty = PersonaSpecialty.None, TierStrong = "preset:p1" },
@@ -1784,7 +1862,7 @@ public class LocalActionRoutingTests
     {
         var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
         users.Add("u1", "p", "user");
-        specialty.SetOwner("u1", new SpecialtySettingsLayer
+        specialty.SetGlobal(new SpecialtySettingsLayer
         {
             Presets = { Preset("p1", "opus", "glm-5.2") },
             Specialties = { ["backendExecutor"] = Tmpl(strong: "preset:p1", defaultTier: ModelTier.Strong) },

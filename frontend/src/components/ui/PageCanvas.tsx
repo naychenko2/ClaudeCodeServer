@@ -32,7 +32,7 @@ export function PageCanvas({ children, style, project }: { children?: ReactNode;
     }}>
       {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём.
           project — когда есть, CanvasBackdrop красит тушь/нимб цветом проекта и
-          подключает сгенерированный тайл (фича project-backgrounds); без него —
+          подключает сгенерированный тайл проекта; без него —
           стандартный дудл, как на всех внешних экранах. */}
       <CanvasBackdrop project={project} />
       {children}

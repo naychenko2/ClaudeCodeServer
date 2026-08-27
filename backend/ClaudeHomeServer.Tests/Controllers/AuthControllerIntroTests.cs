@@ -9,11 +9,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // GET /api/auth/me — блокеры плана onboarding-optional (§2.5, принцип 3): чтение НИКОГДА
-// не провижнит персону, needsOnboarding — точная 5-AND формула, осиротевший дефолт
+// не провижнит персону, needsOnboarding — точная формула, осиротевший дефолт
 // резолвится в null на чтении. Отдельный класс (не расширение AuthControllerTests) — тесты
-// мутируют UserStore напрямую в обход HTTP-хуков, состояние per-факт не должно течь
-// в обычные auth-тесты. Флаг/дефолт/заготовку каждый тест выставляет сам — порядок фактов
-// внутри класса не гарантирован (общая фабрика на класс, как в ChatCreationPersonaGateTests).
+// мутируют UserStore напрямую, состояние per-факт не должно течь в обычные auth-тесты.
+// Дефолт/заготовку каждый тест выставляет сам — порядок фактов внутри класса не
+// гарантирован (общая фабрика на класс, как в ChatCreationPersonaGateTests).
 public class AuthControllerIntroTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -34,14 +34,12 @@ public class AuthControllerIntroTests : IClassFixture<TestWebApplicationFactory>
             .GetArrayLength();
 
     // Принцип 3 плана (§2.5): GET /me — чистое чтение, провижн вызывается ТОЛЬКО на точках
-    // записи. Флаг включаем напрямую в UserStore — минуя хук FeatureFlagsController.Set,
-    // который сам провижнит (план 2.2), иначе тест проверял бы не то поведение.
+    // записи. Дефолт и заготовку снимаем напрямую в UserStore — через HTTP их не обнулить.
     [Fact]
-    public async Task Me_ПодФлагомБезПровижна_НеСоздаётПерсонуДажеПриПовторныхЗапросах()
+    public async Task Me_БезДефолта_НеСоздаётПерсонуДажеПриПовторныхЗапросах()
     {
         var userId = (await MeAsync()).GetProperty("userId").GetString()!;
         var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(userId, FeatureFlagKeys.DefaultPersonasOnboarding, true);
         users.SetDefaultPersona(userId, null);
         users.SetAssistantPersona(userId, null);
 
@@ -53,26 +51,7 @@ public class AuthControllerIntroTests : IClassFixture<TestWebApplicationFactory>
         after.Should().Be(before, "GET /me не должен провижнить персону — мутации только на точках записи");
     }
 
-    [Fact]
-    public async Task Me_needsOnboarding_ФлагВыключен_False_ДажеПриПодходящемСостоянии()
-    {
-        var userId = (await MeAsync()).GetProperty("userId").GetString()!;
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        var personas = _factory.Services.GetRequiredService<PersonaManager>();
-
-        var persona = personas.Create(userId, "Тест-флаг", role: null, description: null, systemPrompt: null,
-            model: null, effort: null, scope: PersonaScope.Global, projectId: null, color: "orange",
-            greeting: null, memoryEnabled: true);
-        users.SetDefaultPersona(userId, persona.Id);
-        users.SetAssistantPersona(userId, persona.Id);
-        users.SetIntroCompleted(userId, null);
-        users.SetFeatureFlag(userId, FeatureFlagKeys.DefaultPersonasOnboarding, false);
-
-        (await MeAsync()).GetProperty("needsOnboarding").GetBoolean().Should().BeFalse(
-            "все слагаемые формулы сошлись, кроме флага — он выключен");
-    }
-
-    // Полный проход формулы needsOnboarding = flag && !IntroCompletedAt && Default==Assistant
+    // Полный проход формулы needsOnboarding = !IntroCompletedAt && Default==Assistant
     // && резолв в живую персону — по одному слагаемому, чтобы падение любого гасило метку.
     [Fact]
     public async Task Me_needsOnboarding_КаждоеСлагаемоеФормулыОбязательно()
@@ -87,9 +66,8 @@ public class AuthControllerIntroTests : IClassFixture<TestWebApplicationFactory>
         users.SetDefaultPersona(userId, persona.Id);
         users.SetAssistantPersona(userId, persona.Id);
         users.SetIntroCompleted(userId, null);
-        users.SetFeatureFlag(userId, FeatureFlagKeys.DefaultPersonasOnboarding, true);
 
-        // Все пять слагаемых сошлись — метка горит
+        // Все слагаемые сошлись — метка горит
         (await MeAsync()).GetProperty("needsOnboarding").GetBoolean().Should().BeTrue();
 
         // Знакомство пройдено — гаснет
@@ -113,7 +91,6 @@ public class AuthControllerIntroTests : IClassFixture<TestWebApplicationFactory>
     {
         var userId = (await MeAsync()).GetProperty("userId").GetString()!;
         var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(userId, FeatureFlagKeys.DefaultPersonasOnboarding, true);
         users.SetIntroCompleted(userId, null);
         users.SetDefaultPersona(userId, "dead-persona-id-does-not-exist");
         users.SetAssistantPersona(userId, "dead-persona-id-does-not-exist");

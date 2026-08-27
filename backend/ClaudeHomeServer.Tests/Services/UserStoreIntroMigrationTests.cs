@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Миграция IntroCompletedAt в UserStore.Load (фича default-personas-onboarding).
+// Миграция IntroCompletedAt в UserStore.Load.
 // Load бежит на КАЖДОМ старте сервера — поэтому условие обязано быть точным и
 // идемпотентным. Главный сторож: пользователь, отложивший знакомство (получил
 // заготовку), переживает рестарт БЕЗ проставления даты.

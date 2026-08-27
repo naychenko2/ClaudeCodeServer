@@ -5,9 +5,9 @@ import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '..
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
+import { FLAGS, useFeature } from '../../../lib/featureFlags';
 import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { useMe } from '../../../lib/defaultPersona';
 import { getNav } from '../../../lib/nav';
@@ -17,8 +17,11 @@ import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/G
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
+import { DesktopFacetSection } from '../../desktop/DesktopFacetSection';
 import { BackgroundSection } from './BackgroundSection';
 import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
+import { ArchiveSettings } from '../../../components/ArchiveSettings';
+import { archiveRuleApi } from '../../../api/chats';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 // Строка «Руководитель проекта не назначен» (фича default-personas-onboarding, п.5.3):
@@ -232,10 +235,15 @@ type View = 'main' | 'prompt' | 'rules';
 
 export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
   const online = useOnline();
-  // Фон проекта — только под флагом и только владельцу: участник без прав владельца фон
-  // менять не может (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем
-  // за тем же условием, чтобы не показывать недоступное действие.
-  const bgEnabled = useFeature(FLAGS.projectBackgrounds);
+  // Фон проекта — только владельцу: участник без прав владельца фон менять не может
+  // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
+  // условием, чтобы не показывать недоступное действие.
+  // Грань десктопа за флагом: без него секции нет — включать нечего, сервер откажет
+  const desktopEnabled = useFeature(FLAGS.desktopAgent);
+  // Автоправило архива (флаг chat-auto-archive): закрывает ТОЛЬКО настройку правила
+  // и кнопку «Применить сейчас». Ручной архив, раздел «Архив» и сводка карточки
+  // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
+  const autoArchiveEnabled = useFeature(FLAGS.chatAutoArchive);
   const me = useMe();
   const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
@@ -244,10 +252,16 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [iconColor, setIconColor] = useState<string | null>(project.icon?.color ?? null);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
+  const [autoImportDossiers, setAutoImportDossiers] = useState(project.autoImportDossiers ?? false);
+  // Автоимпорт на бэкенде гейтится флагом change-dossiers-recall (DossierAutoImporter):
+  // без флага включённый тумблер ничего не делает, и обещание «загружать автоматически»
+  // оборачивается тишиной. Прячем строку тем же хуком и флагом, что DossierHistoryPanel —
+  // тогда PUT уносит серверное значение (стейт не менялся).
+  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
-  // Строка «Руководитель проекта» (фича default-personas-onboarding, п.5.3) — у проекта
-  // с назначенным руководителем секции нет вовсе
-  const showLeadSection = useFeature(FLAGS.defaultPersonasOnboarding) && project.defaultPersonaId == null;
+  // Строка «Руководитель проекта» (п.5.3) — у проекта с назначенным руководителем
+  // секции нет вовсе
+  const showLeadSection = project.defaultPersonaId == null;
   const [draftPrompt, setDraftPrompt] = useState('');
   const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
   const builtinPrompt = promptParts?.find(p => p.kind === 'builtin')?.content
@@ -263,6 +277,28 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       .catch(() => {});
   }, [view, promptParts, project.id]);
 
+  // Настройка автоправила архива: личный порог и признак первого прохода
+  // (User.ArchiveAfterDays и User.ArchiveRuleFirstRunAt — оба per-user, не проект).
+  // Грузим один раз при открытии диалога под флагом: при выключенном флаге блок
+  // не рисуется и запрос слать незачем. Превью счётчика внутри ArchiveSettings
+  // ходит в свой эндпоинт с дебаунсом и сам обновляется при изменении порога.
+  const [archiveDays, setArchiveDays] = useState<number | null>(null);
+  const [archiveHasFirstRun, setArchiveHasFirstRun] = useState<boolean>(false);
+  const [archiveLoaded, setArchiveLoaded] = useState(false);
+  useEffect(() => {
+    if (!autoArchiveEnabled || archiveLoaded) return;
+    let cancelled = false;
+    archiveRuleApi.getSettings()
+      .then(r => {
+        if (cancelled) return;
+        setArchiveDays(r.archiveAfterDays);
+        setArchiveHasFirstRun(r.hasFirstRun);
+        setArchiveLoaded(true);
+      })
+      .catch(() => { if (!cancelled) setArchiveLoaded(true); });
+    return () => { cancelled = true; };
+  }, [autoArchiveEnabled, archiveLoaded]);
+
   const handleConfirm = async () => {
     setError('');
     try {
@@ -273,6 +309,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         showHiddenFiles,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
         color: iconColor ?? '',
+        autoImportDossiers,
       });
       invalidateProjectsCache(); // полка/палитра проектов подхватывают новое имя/иконку
       onSuccess(updated);
@@ -500,6 +537,20 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
           <span style={{ fontSize: 13, color: C.textPrimary }}>Скрытые файлы и папки</span>
           <Toggle checked={showHiddenFiles} onChange={setShowHiddenFiles} />
         </SettingsRow>
+        {/* Автоимпорт «Историй решений»: фоновый наблюдатель ветки ccs/dossiers/v1 (задача
+            «Авто-история 4»). Тумблер рядом с прочими тумблерами проекта — это настройка
+            поведения проекта, а не фич-флаг. Пояснение под заголовком: «решения» в пользовательских
+            текстах (см. ADR-004 §3.2), с указанием имени ветки, чтобы человек понимал, откуда
+            приедут новые записи. */}
+        {recallEnabled && (
+          <SettingsRow title="Загружать историю решений из репозитория автоматически">
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>Загружать историю решений из репозитория автоматически</div>
+              <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.4 }}>Новые записи из ветки ccs/dossiers/v1 появятся сами после git pull</div>
+            </div>
+            <Toggle checked={autoImportDossiers} onChange={setAutoImportDossiers} ariaLabel="Загружать историю решений из репозитория автоматически" />
+          </SettingsRow>
+        )}
         <SettingsRow last>
           <span style={{ fontSize: 13, color: C.textPrimary }}>
             Правила разрешений
@@ -514,8 +565,9 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
+      {desktopEnabled && <DesktopFacetSection project={project} onUpdated={onProjectUpdated} />}
       <GitHistorySection project={project} />
-      {bgEnabled && isOwner && (
+      {isOwner && (
         <BackgroundSection
           project={project}
           iconColor={iconColor}
@@ -524,6 +576,18 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         />
       )}
       <ProjectSyncToggle projectId={project.id} online={online} />
+      {/* Настройка автоправила архива (флаг chat-auto-archive). Скоуп превью —
+          чаты этого проекта: проектный ArchiveSettings всё равно опирается на личный
+          порог User.ArchiveAfterDays (он же дефолт для проектов без своего).
+          Рисуем только после загрузки настройки: иначе первоначальный null
+          мелькает состоянием «правило выключено» до прихода ответа. */}
+      {autoArchiveEnabled && archiveLoaded && (
+        <ArchiveSettings
+          initialDays={archiveDays}
+          hasFirstRun={archiveHasFirstRun}
+          projectId={project.id}
+        />
+      )}
     </Modal>
   );
 }

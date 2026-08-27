@@ -4,11 +4,12 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services;
 
 // Срез эффективных возможностей персоны для генерации файла сабагента: гейты
-// tasks/notes/web (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools)
+// tasks/notes/web (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools),
+// граф кода (ToolBindingActive — только явная активная привязка, не дефолт чатов)
 // + статический индекс привязок (BuildSubagentIndex) + алиас-тир модели для пина
 // (ModelAliasFor). Собирает PersonaAgentFileSync — генератор остаётся чистой функцией.
 public sealed record PersonaAgentFileContext(bool WebAllowed, bool TasksAllowed,
-    bool NotesAllowed, string? BindingsBlock, string? ModelAlias = null);
+    bool NotesAllowed, bool CodeGraphAllowed, string? BindingsBlock, string? ModelAlias = null);
 
 // Генерация текста файлового сабагента Claude Code (.claude/agents/{handle}.md) из персоны.
 // Чистая функция контента (без ФС) — файлами управляет PersonaAgentFileSync. Frontmatter —
@@ -38,7 +39,9 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
     public string Generate(Persona persona, PersonaAgentFileContext context)
     {
         var tools = PersonaConsultantToolset.Build(persona, context.WebAllowed,
-            context.TasksAllowed, context.NotesAllowed);
+            context.TasksAllowed, context.NotesAllowed,
+            notesWriteAllowed: context.NotesAllowed, tasksWriteAllowed: context.TasksAllowed,
+            context.CodeGraphAllowed);
         var pmemKey = PersonaConsultantToolset.PmemServerKey(persona.Handle);
 
         var sb = new StringBuilder();
@@ -57,8 +60,14 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
             sb.AppendLine($"effort: {persona.Effort.Trim()}");
         if (MapColor(persona.Avatar?.Color) is { } color)
             sb.AppendLine($"color: {color}");
-        if (persona.MemoryEnabled)
-            sb.AppendLine($"mcpServers: [{pmemKey}]");
+        // mcpServers: имена серверов из конфига хода, доступных сабагенту. pmem — своя
+        // память; codegraph — по активной Tool-привязке (сервер графа есть в конфиге
+        // только проектных сессий, поэтому ссылка появляется лишь при явной выдаче)
+        var servers = new List<string>();
+        if (persona.MemoryEnabled) servers.Add(pmemKey);
+        if (context.CodeGraphAllowed) servers.Add(PersonaConsultantToolset.CodeGraphServerKey);
+        if (servers.Count > 0)
+            sb.AppendLine($"mcpServers: [{string.Join(", ", servers)}]");
         sb.AppendLine($"maxTurns: {(PersonaConsultantToolset.IsExecutor(persona) ? ExecutorMaxTurns : MaxTurns)}");
         sb.AppendLine("---");
         sb.AppendLine();

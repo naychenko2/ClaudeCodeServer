@@ -32,6 +32,10 @@ public class TeamWaveServiceTests : IDisposable
     // под локом: бродкасты приходят и из фоновых задач
     private readonly List<ClaudeHomeServer.Protocol.NotificationMessage> _notifications = [];
     private readonly object _notificationsLock = new();
+    // Снимок всех broadcast-ов хаба с ГРУППОЙ рассылки: пульс волны обязан идти строго
+    // в группу сессии-штаба (не user_/project_-wide) — группа замыкается прокси
+    private readonly List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> _hubSends = [];
+    private readonly object _hubSendsLock = new();
 
     public TeamWaveServiceTests()
     {
@@ -52,16 +56,23 @@ public class TeamWaveServiceTests : IDisposable
 
         var hub = new Mock<IHubContext<SessionHub>>();
         var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.NotificationMessage n)
-                    lock (_notificationsLock) _notifications.Add(n);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
+        // Прокси фабрикуется ПОД ГРУППУ (замыкает её): один общий прокси не различал,
+        // в какую группу ушёл broadcast, а пульс волны адресуется строго в сессию-штаб
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns((string group) =>
+        {
+            var proxy = new Mock<IClientProxy>();
+            proxy
+                .Setup(p => p.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+                .Callback<string, object[], CancellationToken>((_, args, _) =>
+                {
+                    if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.NotificationMessage n)
+                        lock (_notificationsLock) _notifications.Add(n);
+                    if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.ServerMessage m)
+                        lock (_hubSendsLock) _hubSends.Add((group, m));
+                })
+                .Returns(Task.CompletedTask);
+            return proxy.Object;
+        });
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
@@ -167,6 +178,17 @@ public class TeamWaveServiceTests : IDisposable
     // «вводная от человека» проставляем явно, как это сделал бы запуск по сообщению человека.
     private static void SetTeamTurnFromHuman(object entry, bool value) =>
         entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
+
+    // Живой прогон CLI у чата (белый ящик, приём StubAdapter из SessionManagerTests): в entry
+    // реестра ставим адаптер с HasLiveTurn=true — реальный claude.exe в юнит-тестах не
+    // поднимается, а пульс обязан считать идущий ход активностью волны.
+    private void MarkLiveTurn(string sessionId)
+    {
+        var entry = GetEntry(sessionId);
+        var adapter = new Mock<ClaudeHomeServer.Services.Llm.ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
+    }
 
     // Штаб «после рестарта сервера» с УТВЕРЖДЁННЫМ планом на две под-задачи ОДНОЙ волны:
     // карточка плана лежит в истории на диске, аккумулятора у чата нет (оживает лениво,
@@ -1311,6 +1333,214 @@ public class TeamWaveServiceTests : IDisposable
             .Should().ContainSingle("«Перезапустить» запускает следующую волну — уже честной подписью");
     }
 
+    // --- Пульс волны (КР-наблюдаемость, этап 1) ---
+
+    private List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> HubSends()
+    {
+        lock (_hubSendsLock) return [.. _hubSends];
+    }
+
+    // Возвращаем штабу «свободный» статус: MakeRunningStabAsync держит его Working, а
+    // Working без живого прогона для пульса — мёртвый штаб (dead), что мешает проверкам
+    // тихих границ liveness.
+    private void FreeStab(string sessionId) =>
+        _sessions.GetById(sessionId)!.Status = SessionStatus.Active;
+
+    // Активность волны = max по UpdatedAt задач волны, дочерних чатов-исполнителей и
+    // старта волны: закрытие/перевыдача двигают UpdatedAt задачи, ход исполнителя —
+    // UpdatedAt его чата. Молчаливая по задачам волна жива, пока работает исполнитель.
+    [Fact]
+    public async Task Пульс_АктивностьСчитаетсяПоВсемТочкамВолны()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-activity");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = _tasks.GetById(created[0].Id)!;
+        // Вся волна молчит 45 минут — за пределами обоих порогов
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        task.UpdatedAt = aged;
+        FreeStab(session.Id);
+
+        _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!.Liveness
+            .Should().Be(WaveLiveness.Stalled);
+
+        // Дочерний чат исполнителя обновился только что — волна снова жива
+        await _sessions.CreateAsync(session.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "ход исполнителя двигает UpdatedAt его чата — это тоже активность волны");
+        snap.LastActivityAt.Should().BeOnOrAfter(DateTime.UtcNow.AddSeconds(-5));
+        snap.QuietSeconds.Should().BeLessThan(60);
+        snap.TasksTotal.Should().Be(1);
+        snap.TasksActive.Should().Be(1, "задача волны ещё не в Done");
+    }
+
+    [Theory]
+    [InlineData(-5, "alive")]
+    [InlineData(-20, "quiet")]
+    [InlineData(-45, "stalled")]
+    public async Task Пульс_ГраницыТишины(int ageMinutes, string expectedToken)
+    {
+        // Дефолтные пороги: quiet > 15 мин, stalled > 30 мин (тишина ≤ порога — прежняя
+        // ступень). Сравниваем по wire-токену: он же уходит фронту.
+        var (session, plan) = await MakeRunningStabAsync("pulse-boundary-" + -ageMinutes);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var aged = DateTime.UtcNow.AddMinutes(ageMinutes);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        _tasks.GetById(created[0].Id)!.UpdatedAt = aged;
+        FreeStab(session.Id);
+
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+
+        TeamWaveService.LivenessToken(snap.Liveness).Should().Be(expectedToken);
+        snap.QuietSeconds.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Пульс_МёртвыйШтаб_WorkingБезЖивогоПрогона()
+    {
+        // Чат заявляет работу (Working), а прогона CLI нет — ход убит сбоем и не разобран.
+        // Это обвал (dead), а не тишина: приоритет выше quiet/stalled.
+        var (session, plan) = await MakeRunningStabAsync("pulse-dead");
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var info = _sessions.GetById(session.Id)!;
+        info.Status.Should().Be(SessionStatus.Working, "предпосылка: штаб числится занятым");
+
+        var snap = _sut.BuildWaveSnapshot(info)!;
+        snap.Liveness.Should().Be(WaveLiveness.Dead,
+            "Working без живого прогона — мёртвый штаб, даже при свежей активности");
+        snap.TasksActive.Should().Be(1);
+
+        // Свободный штаб между ходами — норма волны, не dead
+        FreeStab(session.Id);
+        _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!.Liveness
+            .Should().Be(WaveLiveness.Alive);
+    }
+
+    // Сценарий A (major, ревью этапа 1): последняя задача волны, исполнитель честно
+    // собирает проект 45 минут. Все UpdatedAt-якоря статичны (двигаются только на границах
+    // ходов), но прогон CLI ребёнка жив — это активность «сейчас», а не «зависло».
+    // Родительство чата-исполнителя закрепляем через SetParent, а не вычисляемым по задаче
+    // путём: Session.TaskSourceSessionResolver статический, и параллельный тестовый класс
+    // (WebApplicationFactory со своей TaskManager) переприсваивает его себе — вычисляемый
+    // ParentSessionId флакует в null. Для пульса оба пути — один и тот же ребёнок
+    // (ParentSessionId), авто-резолв отдельно покрыт тестом активности выше.
+    [Fact]
+    public async Task Пульс_ЖивойХодИсполнителяСпасаетОтЛожногоЗависания()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-live-executor");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = _tasks.GetById(created[0].Id)!;
+        // Волна молчит 45 минут — за пределами обоих порогов
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        task.UpdatedAt = aged;
+        FreeStab(session.Id);
+        // Чат-исполнитель создан давно и молчит (UpdatedAt — с начала хода), но ход идёт
+        var child = await _sessions.CreateAsync(session.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        _sessions.SetParent(child.Id, session.Id, UserId);
+        _sessions.GetById(child.Id)!.UpdatedAt = aged;
+        MarkLiveTurn(child.Id);
+
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "живой прогон исполнителя — активность волны, даже когда все якоря UpdatedAt статичны");
+        snap.QuietSeconds.Should().BeLessThan(60);
+    }
+
+    // Сценарий B (major, ревью этапа 1): стадия Checking после закрытия волны
+    // (WaveStartedAt обнулён), ход финальной проверки идёт 45 минут. Прогон штаба жив —
+    // не dead (прогон есть) и не stalled (проверка — тоже работа команды). Заодно фикс:
+    // пульс в Checking штатен, стадия уходит в снапшот как есть.
+    [Fact]
+    public async Task Пульс_ЖивойХодФинальнойПроверкиСпасаетОтЛожногоЗависания()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-live-checking");
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var second = _tasks.GetByProject(session.ProjectId!).First(t => t.Labels.Contains("волна 2"));
+        _tasks.Update(second.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(second.Id)!);
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.Checking,
+            "предпосылка: обе волны закрыты, координатор проверяет результат");
+
+        // Всё молчит 45 минут, детей нет — единственная активность: идущий ход проверки
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        foreach (var t in _tasks.GetByProject(session.ProjectId!)) t.UpdatedAt = aged;
+        _sessions.WithTeamState(session.Id, t => { t.WaveActivityAt = aged; return true; });
+        var info = _sessions.GetById(session.Id)!;
+        info.UpdatedAt = aged;
+        info.Status = SessionStatus.Working; // ход финальной проверки идёт
+        MarkLiveTurn(session.Id);
+
+        var snap = _sut.BuildWaveSnapshot(info)!;
+
+        snap.Stage.Should().Be(TeamImplementStage.Checking, "пульс в стадии проверки штатен");
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "живой ход проверки — активность: ни dead (прогон есть), ни stalled (проверка идёт)");
+        snap.QuietSeconds.Should().BeLessThan(60);
+    }
+
+    // Инвариант эфемерности: пульс не пишется в history.json, не двигает MessageCount
+    // и Session.UpdatedAt (по нему сортировка чатов и непрочитанность).
+    [Fact]
+    public async Task Пульс_НеПишетИсториюИНеДвигаетЧат()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-ephemeral");
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        FreeStab(session.Id);
+        var before = _sessions.GetById(session.Id)!;
+        var updatedAtBefore = before.UpdatedAt;
+        var countBefore = before.MessageCount;
+        var historyBefore = await _sessions.GetHistoryAsync(session.Id);
+
+        await _sut.SendWavePulsesAsync();
+
+        var after = _sessions.GetById(session.Id)!;
+        after.UpdatedAt.Should().Be(updatedAtBefore,
+            "по UpdatedAt идут сортировка и непрочитанность — пульс их не двигает");
+        after.MessageCount.Should().Be(countBefore, "пульс — не сообщение чата");
+        (await _sessions.GetHistoryAsync(session.Id)).Should().HaveCount(historyBefore.Count,
+            "пульс эфемерный: в history.json ничего не добавляется");
+    }
+
+    // Пульс адресуется строго в session-группу своего штаба: не owner-wide (user_*),
+    // не project_*, и штаб без работающей волны пульса не получает вовсе.
+    [Fact]
+    public async Task Пульс_УходитТолькоВГруппуСвоегоШтаба()
+    {
+        var (sessionA, planA) = await MakeRunningStabAsync("pulse-hub-a");
+        await _sut.StartWaveAsync(sessionA, planA, TeamWaveTrigger.UserCommand);
+        var (sessionB, planB) = await MakeRunningStabAsync("pulse-hub-b");
+        await _sut.StartWaveAsync(sessionB, planB, TeamWaveTrigger.UserCommand);
+        // Штаб на стадии планирования: волны нет — пульса нет
+        var (sessionC, _, _) = await MakeStabAsync("pulse-hub-c");
+        FreeStab(sessionA.Id);
+        FreeStab(sessionB.Id);
+
+        await _sut.SendWavePulsesAsync();
+
+        var pulses = HubSends()
+            .Where(s => s.Message is ClaudeHomeServer.Protocol.TeamWavePulseMessage)
+            .ToList();
+        pulses.Should().HaveCount(2, "по одному пульсу на штаб с идущей волной");
+        pulses.Should().OnlyContain(p => p.Group == sessionA.Id || p.Group == sessionB.Id,
+            "пульс — в группу сессии-штаба, не в user_/project_-группы");
+        pulses.Select(p => p.Message.SessionId).Should()
+            .BeEquivalentTo([sessionA.Id, sessionB.Id]);
+        var a = (ClaudeHomeServer.Protocol.TeamWavePulseMessage)pulses
+            .Single(p => p.Message.SessionId == sessionA.Id).Message;
+        a.Stage.Should().Be("wave");
+        a.WaveNumber.Should().Be(1);
+        a.PlannedWaves.Should().Be(2);
+        a.TasksTotal.Should().Be(1);
+        a.Liveness.Should().Be("alive");
+    }
+
     // --- Приёмка, круг 2 (2026-08-17): обратная сторона гейта авто-волн ---
 
     // D1, обратная сторона: «Добавить бюджет» — явная кнопка человека, и при СНЯТЫХ
@@ -1981,6 +2211,329 @@ public class TeamWaveServiceTests : IDisposable
         _tasks.Update(added.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(added.Id)!);
         Team(session.Id).Stage.Should().Be(TeamImplementStage.Checking);
+    }
+
+    // --- КР-наблюдаемость, этап 3: перезапуск задачи/волны человеком ---
+
+    // Штаб с опубликованным планом из ДВУХ под-задач одной волны (обе розданы) и заглушенной
+    // тишиной: всё молчит дольше StalledMinutes (45 мин при пороге 30), штаб свободен —
+    // форма зависшей волны, ради которой в поповере есть кнопка перезапуска.
+    private async Task<(Session Session, TaskItem A, TaskItem B)> MakeStalledWaveAsync(string name)
+    {
+        var (session, backend, frontend) = await MakeStabAsync(name);
+        await _sessions.SetTeamImplementAutoAsync(session.Id, true, UserId);
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт","subtasks":[
+              {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
+               "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
+               "files":["backend/Controllers/TasksController.cs"],"wave":1,"doneCriteria":"отдаёт CSV"},
+              {"title":"Кнопка «Экспорт»","goal":"Кнопка в тулбаре",
+               "executorPersonaId":"{{frontend.Id}}","executorRationale":"UI — её зона",
+               "files":["frontend/src/components/Toolbar.tsx"],"wave":1,"doneCriteria":"файл скачивается"}]}
+            """;
+        var (plan, reason) = await _sessions.CreateTeamPlanAsync(session.Id, "Экспорт", UserId);
+        reason.Should().BeNull();
+        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan!,
+            TeamWaveTrigger.UserCommand);
+        created.Should().HaveCount(2, "обе под-задачи одной волны розданы разом");
+
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        foreach (var t in created) _tasks.GetById(t.Id)!.UpdatedAt = aged;
+        FreeStab(session.Id);
+        return (session, created[0], created[1]);
+    }
+
+    // Чат-исполнитель для задачи волны: linked-сессия с отметкой запуска. liveTurn=true —
+    // ещё и живой прогон (приём MarkLiveTurn): HasLiveTurnProcess — тот же предикат, которым
+    // пульс волны считает идущий ход активностью. busyStatus — статус Starting/Working/
+    // Waiting (занятое исполнение, как его видит перевыдача).
+    private async Task<Session> AttachExecutorAsync(TaskItem task, Session stab,
+        bool liveTurn = false, bool busyStatus = false)
+    {
+        var child = await _sessions.CreateAsync(stab.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        _tasks.MarkClaudeStarted(task.Id, child.Id, DateTime.UtcNow);
+        if (liveTurn) MarkLiveTurn(child.Id);
+        if (busyStatus) _sessions.GetById(child.Id)!.Status = SessionStatus.Working;
+        return _sessions.GetById(child.Id)!;
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_Проваленная_ПеревыдачаТемЖеПутём()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-failed");
+        var failed = _tasks.MarkClaudeResult(a.Id, "error")!;
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        result.Outcome.Should().Be("reissued");
+        var team = Team(session.Id);
+        team.Budget.RetriesUsed.Should().Be(1, "кнопка человека считает тот же потолок перевыдач");
+        team.Budget.RunsUsed.Should().Be(3, "старт волны (2) плюс перевыдача (1)");
+        _tasks.GetById(a.Id)!.Description.Should().Contain("Повторная попытка",
+            "исполнителю уходит та же дописка причины, что при провале хода");
+        failed.ClaudeResult.Should().Be("error");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ЖивойИсполнительСНедавнейАктивностью_ОтказСОбъяснением()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-live");
+        await AttachExecutorAsync(a, session, liveTurn: true);
+        // Прогон жив, задача обновилась только что — это работа, а не зависание
+        _tasks.GetById(a.Id)!.UpdatedAt = DateTime.UtcNow;
+
+        var act = () => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*мин назад была активность*");
+        Team(session.Id).Budget.RetriesUsed.Should().Be(0, "отказ ничего не расходует");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ЖивойНоЗависшийПрогон_ТишинаДольшеПорога_Перевыдаёт()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-hung");
+        // Прогон формально жив, но вся активность задачи — 45 минут назад (гейт пускает)
+        var child = await AttachExecutorAsync(a, session, liveTurn: true);
+        _tasks.GetById(a.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
+        child.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        result.Outcome.Should().Be("reissued");
+        result.Message.Should().Contain("попытка 2", "повторная попытка той же под-задачи");
+        _tasks.GetById(a.Id)!.Description.Should().Contain("не подавало признаков жизни",
+            "зависшему исполнителю объясняем причину перезапуска, а не провала");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_Завершённая_Отказ()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-done");
+        _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var act = () => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*уже завершена*");
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ПопыткиИсчерпаны_КарточкаВЛентуеСообщениеЧеловеку()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-cap");
+        var failed = _tasks.MarkClaudeResult(a.Id, "error")!;
+        await _sut.OnTaskFailedAsync(failed); // первая перевыдача — попытка 2, дальше потолок
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        result.Outcome.Should().Be("escalated", "вторая перевыдача той же под-задачи не даётся");
+        result.Message.Should().Contain("перевыдача не помогла");
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.Kind == TeamEscalationKind.TaskFailed);
+    }
+
+    [Fact]
+    public async Task ПерезапускЗадачи_ПовторныйКликПокаИдёт_Отказ()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-twice");
+        _tasks.MarkClaudeResult(a.Id, "error");
+        var key = "task:" + a.Id;
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id));
+            // Детерминированно ждём, что первый вызов захватил гейт (не «маленький sleep»)
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight(key) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight(key).Should().BeTrue("первый вызов держит гейт перезапуска");
+
+            Func<Task> secondCall = () => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+            (await secondCall.Should().ThrowAsync<InvalidOperationException>())
+                .WithMessage("*уже перезапускается*");
+
+            _sut.TestHoldRestart.TrySetResult();
+            (await first).Outcome.Should().Be("reissued");
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
+    }
+
+    // Гонка ревью этапа 3: задача закрылась, пока вызов держал гейт перезапуска — окно
+    // между входной проверкой статуса и перевыдачей (остановка исполнителя ждёт до 10 с).
+    // Готовую задачу не трогаем: ни «Повторная попытка» в описании, ни расход бюджета
+    [Fact]
+    public async Task ПерезапускЗадачи_ЗакрыласьПокаИдётВызов_ОтказБезРасходаИДописки()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-race");
+        _tasks.MarkClaudeResult(a.Id, "error");
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id));
+            // Гейт перезапуска захвачен — входная проверка статуса уже пройдена
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight("task:" + a.Id) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight("task:" + a.Id).Should().BeTrue("вызов внутри окна гонки");
+
+            // Задача закрывается ровно между проверкой и перевыдачей
+            _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+            _sut.TestHoldRestart.TrySetResult();
+
+            var act = async () => await first;
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*уже завершена*");
+            Team(session.Id).Budget.RetriesUsed.Should().Be(0,
+                "перевыдача закрытой задачи бюджет не списывает");
+            _tasks.GetById(a.Id)!.Description.Should().NotContain("Повторная попытка",
+                "описание готовой задачи не трогаем");
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
+    }
+
+    // NRE ревью этапа 3: задачу удалили за 10-секундное окно ожидания останова —
+    // предикат занятости обязан отвечать «не занят», а не ронять перезапуск волны
+    [Fact]
+    public async Task ЗанятостьИсполнителя_ЗадачуУдалили_ЛожьВместоNRE()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("busy-deleted");
+        await AttachExecutorAsync(a, session, busyStatus: true);
+
+        _sut.ExecutorBusyById(a.Id).Should().BeTrue("занятый исполнитель виден");
+
+        _tasks.Delete(a.Id);
+        _sut.ExecutorBusyById(a.Id).Should().BeFalse(
+            "удалённая задача занятым исполнителем не считается");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЖиваяВолна_ТребуетПодтверждения()
+    {
+        var (session, _, _) = await MakeStalledWaveAsync("restart-wave-confirm");
+        // Оживим волну: задача только что обновилась, штаб работает — liveness alive
+        foreach (var t in _tasks.GetByProject(session.ProjectId!))
+            _tasks.GetById(t.Id)!.UpdatedAt = DateTime.UtcNow;
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false);
+
+        result.RequiresConfirm.Should().BeTrue("перезапуск живой волны — только с подтверждения");
+        result.Message.Should().Contain("выглядит живой");
+        Team(session.Id).Budget.RetriesUsed.Should().Be(0, "предупреждение ничего не расходует");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЖивыеИсполнения_ПредупреждаетСписком()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-live-tasks");
+        await AttachExecutorAsync(a, session, busyStatus: true);
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false);
+
+        result.RequiresConfirm.Should().BeTrue("раздавать поверх живого исполнения молча нельзя");
+        result.LiveTasks.Should().ContainSingle().Which.Should().Be(a.Title,
+            "человек видит, ЧТО именно живо");
+        _tasks.GetById(b.Id)!.Description.Should().NotContain("Повторная попытка",
+            "без подтверждения ничего не перевыдаётся");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_Подтверждён_ОстанавливаетЗанятоеИПеревыдаётНесделанное()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-go");
+        // Занятое исполнение без живого прогона (зависший статус): Interrupt реанимирует
+        // его в Active — мок-адаптер настоящего прогона в юнит-тестах не изображает
+        var child = await AttachExecutorAsync(a, session, busyStatus: true);
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+        result.RequiresConfirm.Should().BeFalse();
+        result.Reissued.Should().Be(2, "обе незакрытые под-задачи перевыданы");
+        _sessions.GetById(child.Id)!.Status.Should().NotBe(SessionStatus.Working,
+            "занятое исполнение остановлено — иначе два агента правили бы одни файлы");
+        Team(session.Id).Budget.RetriesUsed.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЗависшаяБезЖивых_ИдётБезПодтверждения()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-stalled");
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false);
+
+        result.RequiresConfirm.Should().BeFalse("тишина дольше порога — подтверждение не нужно");
+        result.Reissued.Should().Be(2, "обе незакрытые под-задачи перевыдаются");
+        _tasks.GetById(a.Id)!.Description.Should().Contain("Повторная попытка");
+        _tasks.GetById(b.Id)!.Description.Should().Contain("Повторная попытка");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ЗакрытыеНеТрогаем()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-done");
+        _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+        result.Reissued.Should().Be(1, "перевыдаётся только незакрытое");
+        var done = _tasks.GetById(a.Id)!;
+        done.Status.Should().Be(TaskItemStatus.Done);
+        done.Description.Should().NotContain("Повторная попытка",
+            "принятая работа неприкосновенна — ни при каких условиях");
+        _tasks.GetById(b.Id)!.Description.Should().Contain("Повторная попытка");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ВсёЗакрыто_ПерезапускатьНечего()
+    {
+        var (session, a, b) = await MakeStalledWaveAsync("restart-wave-empty");
+        _tasks.Update(a.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        _tasks.Update(b.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var result = await _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+        result.RequiresConfirm.Should().BeFalse();
+        result.Reissued.Should().Be(0);
+        result.Message.Should().Contain("Незакрытых задач в волне нет");
+    }
+
+    [Fact]
+    public async Task ПерезапускВолны_ПовторныйВызовПокаИдёт_Отказ()
+    {
+        var (session, _, _) = await MakeStalledWaveAsync("restart-wave-twice");
+        var key = "wave:" + session.Id;
+        _sut.TestHoldRestart = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: false));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!_sut.RestartInFlight(key) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            _sut.RestartInFlight(key).Should().BeTrue();
+
+            var act = () => _sut.RestartWaveAsync(_sessions.GetById(session.Id)!, confirm: true);
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*уже перезапускается*");
+
+            _sut.TestHoldRestart.TrySetResult();
+            (await first).Reissued.Should().Be(2);
+        }
+        finally
+        {
+            _sut.TestHoldRestart.TrySetResult();
+            _sut.TestHoldRestart = null;
+        }
     }
 
     // Планировщик-заглушка: отдаёт заранее заданный JSON-план вместо вызова модели

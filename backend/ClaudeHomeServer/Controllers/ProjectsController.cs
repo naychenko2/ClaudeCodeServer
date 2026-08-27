@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -30,17 +30,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        // Дефолт-персона проекта (фича default-personas-onboarding). Сирота (персона удалена
-        // в обход проверки преемника) нормализуется в null — онбординг-гейт фронта сам чинит
+        // Дефолт-персона проекта. Сирота (персона удалена в обход проверки преемника)
+        // нормализуется в null — онбординг-гейт фронта сам чинит
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays };
     }
 
-    // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ (имя либо пути), разметку фронт не
-    // получает — имя рисует компонент lucide, пути уходят значением атрибута d. Поле v —
-    // версия содержимого значка для cache-busting у icon.svg (ADR-009 §8).
+    // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ — имя рисует компонент lucide фронта,
+    // разметки фронт не получает. Поле v — версия содержимого значка (ADR-009 §8).
     private static object ProjectIconDto(ProjectIcon icon) => new
     {
         icon.Kind,
@@ -48,21 +47,15 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         Glyph = icon.Glyph is null ? null : new
         {
             icon.Glyph.Name,
-            icon.Glyph.Paths,
             icon.Glyph.SetAt,
             V = GlyphVersion(icon.Glyph),
         },
     };
 
     // Первые 8 hex от SHA-256 содержимого значка: меняется вместе со значком,
-    // стабильна между рестартами (ADR-009 §8, параметр ?v= у icon.svg)
-    private static string GlyphVersion(ProjectGlyph glyph)
-    {
-        var payload = glyph.Name is not null
-            ? "n:" + glyph.Name
-            : "p:" + string.Join('\n', glyph.Paths ?? []);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..8].ToLowerInvariant();
-    }
+    // стабильна между рестартами (ADR-009 §8)
+    private static string GlyphVersion(ProjectGlyph glyph) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("n:" + glyph.Name)))[..8].ToLowerInvariant();
 
     [HttpGet("builtin-prompt")]
     public IActionResult GetBuiltinPrompt() => Ok(new { content = ProjectManager.BuiltInSystemPrompt });
@@ -106,24 +99,6 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // === Память команды проекта (③-3.4) === — общие факты/договорённости, которые recall'ят
     // все персоны команды проекта наравне с личной памятью.
 
-    // Гейт длины записи командной памяти: в recall она всё равно обрежется (RecallTextLimit),
-    // а простыня на 2-3 КБ засоряет общий стор и Dify. Ошибка объясняет, что делать дальше.
-    // current — длина уже сохранённого текста (0 при создании): запрет срабатывает только на
-    // РОСТ сверх лимита, чтобы уже раздутую запись можно было пересохранить без изменений или
-    // сократить (как PersonaManager.ExceedsContractLimit для контракта персоны) — иначе её
-    // вообще нельзя было бы привести в порядок.
-    private static bool TooLongTeamMemory(string text, int current, out object error)
-    {
-        var length = text.Trim().Length;
-        error = new
-        {
-            error = $"Запись памяти команды длиннее {TeamMemoryService.MaxTextLength} символов "
-                + $"(сейчас {length}). Одна запись — одна мысль: разбей на несколько коротких "
-                + "или сократи до сути; подробности держи в заметке или документе проекта.",
-        };
-        return length > TeamMemoryService.MaxTextLength && length > current;
-    }
-
     // Персона-вызыватель MCP-инструмента (mcp/memory-server отдаёт свой MEMORY_PERSONA_ID
     // заголовком на каждый запрос) — пусто у обычного чата проекта без персоны и у фронта
     // (UI «Командного центра» этот заголовок не шлёт вовсе, поэтому ручное управление всегда
@@ -131,26 +106,17 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // персона — не сессия, а MEMORY_PERSONA_ID у сессии меняется (смена спикера в группе).
     private const string CallerPersonaHeader = "X-Caller-Persona-Id";
 
-    // Гейт записи в память команды проекта (③-3.4, диета памяти команды, часть 3): пишет либо
-    // «свой» вызов без персоны (обычный проектный чат, ручное редактирование через UI), либо
-    // персона ЭТОГО ЖЕ проекта. Глобальные персоны и консультанты других проектов — read-only
-    // (team_memory_list/search остаются доступны, состав tools/list не меняем). Персона, которую
-    // не удалось резолвить (удалена/чужой owner) — тоже отказ, а не молчаливое разрешение.
+    // Гейт записи в память команды: правило и текст отказа — в TeamMemoryService.WriteDeniedFor
+    // (единая точка с http-тулсетом памяти), здесь только резолв вызывающей персоны из заголовка.
+    // «Заголовка нет» и «заголовок был, персона не резолвилась» (удалена/чужой владелец) —
+    // РАЗНЫЕ случаи: первый — «свой» вызов (UI, обычный проектный чат), второй обязан отказывать.
     private bool TeamMemoryWriteAllowed(string projectId, out object? error)
     {
-        error = null;
         var callerPersonaId = Request.Headers[CallerPersonaHeader].FirstOrDefault();
-        if (string.IsNullOrEmpty(callerPersonaId)) return true;
-        var caller = personas.Get(callerPersonaId, UserId);
-        if (caller is { Scope: PersonaScope.Project } && caller.ProjectId == projectId) return true;
-        error = new
-        {
-            error = "Запись в память команды доступна только персоне ЭТОГО проекта. Ты — "
-                + "глобальная персона или консультант другого проекта: можешь читать общую память "
-                + "(team_memory_list/team_memory_search), но не менять её. Попроси персону проекта "
-                + "записать это или предложи пользователю.",
-        };
-        return false;
+        var caller = callerPersonaId is { Length: > 0 } ? personas.Get(callerPersonaId, UserId) : null;
+        var denied = TeamMemoryService.WriteDeniedFor(callerPersonaId, caller, projectId);
+        error = denied is null ? null : new { error = denied };
+        return denied is null;
     }
 
     [HttpGet("{id}/team-memory")]
@@ -168,7 +134,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (p is null || p.OwnerId != UserId) return NotFound();
         if (!TeamMemoryWriteAllowed(id, out var denied)) return StatusCode(403, denied);
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
-        if (TooLongTeamMemory(req.Text, 0, out var tooLong)) return BadRequest(tooLong);
+        if (TeamMemoryService.LengthViolation(req.Text, 0) is { } tooLong) return BadRequest(new { error = tooLong });
         var entry = teamMemory.Add(UserId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
         await BroadcastTeamMemory("added", id, entry.Id);
         return Ok(entry);
@@ -183,7 +149,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var existing = teamMemory.List(UserId, id).FirstOrDefault(e => e.Id == entryId);
         if (existing is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
-        if (TooLongTeamMemory(req.Text, existing.Text.Trim().Length, out var tooLong)) return BadRequest(tooLong);
+        if (TeamMemoryService.LengthViolation(req.Text, existing.Text.Trim().Length) is { } tooLong)
+            return BadRequest(new { error = tooLong });
         var entry = teamMemory.Update(UserId, id, entryId, req.Text);
         if (entry is null) return NotFound();
         await BroadcastTeamMemory("updated", id, entryId);
@@ -257,7 +224,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var oldRoot = p.RootPath;
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.Color, req.McpServersOn);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.Color, req.McpServersOn, req.AutoImportDossiers);
 
             // Смена папки проекта: перенести запись знаний под новый ключ — иначе запись сиротеет,
             // для нового пути создаётся дубль-датасет, а mcp dify молча теряет dataset_id
@@ -282,6 +249,48 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         // папка вне песочницы либо уже занята другим проектом владельца — это ошибка ввода, не 500
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Тумблер грани десктопного агента в проекте (ADR-008, «Два уровня, которые нельзя
+    // смешивать»). Ось выдачи грани — «проект + тип чата», и это ВТОРАЯ её половина.
+    //
+    // Выключение обязано быть рубильником: состав инструментов зафиксирован на момент
+    // запуска CLI, поэтому запущенный процесс доработал бы ход с гранью в руках. Гасим
+    // сеансы рук проекта и рассылаем cancel по их вызовам — тогда снятый тумблер значит
+    // «руки убраны сейчас», а не «в следующий раз не выдадим».
+    [HttpPut("{id}/desktop-agent")]
+    public async Task<IActionResult> SetDesktopAgent(string id, [FromBody] SetDesktopAgentRequest req,
+        CancellationToken ct)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        // Включать грань можно только с поднятым флагом; выключение доступно всегда —
+        // рубильник не должен зависеть от состояния фичи, которую он гасит
+        if (req.Enabled && !flags.IsEnabled(UserId, FeatureFlagKeys.DesktopAgent))
+            return BadRequest(new { error = "Десктопный агент выключен: включите «Десктопный агент» в экспериментальных функциях" });
+
+        var updated = projects.SetDesktopAgent(id, req.Enabled);
+        var stopped = req.Enabled ? 0 : await desktopHands.CancelForProjectAsync(id, ct);
+        if (stopped > 0)
+            logger.LogInformation("Грань десктопа выключена в проекте {ProjectId}: погашено сеансов {Count}", id, stopped);
+        return Ok(new { project = WithCount(updated), handsStopped = stopped });
+    }
+
+    // Порог автоправила архивации чатов проекта (флаг chat-auto-archive, план v4 шаг 6):
+    // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
+    // личный порог владельца. Настройка за флагом: ручной архив и раздел «Архив» работают
+    // без него, поэтому и настраивать порог без флага нельзя (правило не работает).
+    [HttpPut("{id}/archive-days")]
+    public IActionResult SetArchiveDays(string id, [FromBody] SetProjectArchiveDaysRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
+            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
+        if (req.Days is not null && req.Days is not (>= 1 and <= 365))
+            return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
+        var updated = projects.SetArchiveAfterDays(id, req.Days);
+        return Ok(WithCount(updated));
     }
 
     // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)
@@ -415,18 +424,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(IconSuggestView(result));
     }
 
-    // Форма ответа подбора — общая для suggest и suggest-preview: кандидаты
-    // (имя либо пути) плюс причина пустого набора.
+    // Форма ответа подбора — общая для suggest и suggest-preview: кандидаты (имена из
+    // набора lucide) плюс причина пустого набора.
     private static object IconSuggestView(Services.ProjectIcons.ProjectIconGlyphResult result) => new
     {
-        candidates = result.Candidates.Select(c => c.IsNamed
-            ? (object)new { name = c.Name }
-            : new { paths = c.Paths }),
+        candidates = result.Candidates.Select(c => new { name = c.Name }),
         result.FailReason,
     };
 
-    // Принять значок: Kind = Glyph, Glyph = {Name|Paths}. Тело валидируется ЦЕЛИКОМ заново
-    // тем же валидатором, что и ответ модели, — клиент такой же недоверенный источник
+    // Принять значок: Kind = Glyph, Glyph = {Name, SetAt}. Имя валидируется заново тем же
+    // валидатором, что и ответ модели, — клиент такой же недоверенный источник
     // (ADR-009 §8, инвариант «валидация на входе в стор» §11.3).
     [HttpPost("{id}/icon/select")]
     public ActionResult SelectIcon(string id, [FromBody] SelectIconRequest req)
@@ -434,17 +441,18 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
 
-        var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(req.Name, req.Paths);
-        if (candidate is null)
+        var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(req.Name);
+        // Paths в теле — пережиток вырезанной ветки рисования: неоднозначное тело (имя
+        // вместе с путями или только пути) отвергаем, как и прежде «ровно одно поле»
+        if (candidate is null || req.Paths is { Count: > 0 })
             return BadRequest(new
             {
-                error = "Негодный значок: нужно ровно одно поле — name из набора либо 1–4 корректные строки d",
+                error = "Негодный значок: нужно имя иконки из набора lucide",
             });
 
         return Ok(WithCount(projects.SetIconGlyph(id, new ProjectGlyph
         {
             Name = candidate.Name,
-            Paths = candidate.Paths?.ToList(),
             SetAt = DateTime.UtcNow,
         })));
     }
@@ -469,37 +477,26 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         return Ok(WithCount(projects.SetIconKind(id, kind.Value)));
     }
-
-    // Собранный сервером SVG значка — единственная разрешённая форма значка как
-    // самостоятельного ресурса (ADR-009 §4). Только Paths-вид: Name-значок рисует фронт
-    // компонентом lucide, файла для него не существует. access_token в query — для <img>.
-    [HttpGet("{id}/icon.svg")]
-    public IActionResult IconSvg(string id)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId
-            || p.Icon.Kind != ProjectIconKind.Glyph
-            || p.Icon.Glyph?.Paths is not { Count: > 0 } paths)
-            return NotFound();
-
-        Response.Headers.CacheControl = "private, max-age=604800, immutable";
-        Response.Headers.XContentTypeOptions = "nosniff";
-        Response.Headers.ContentSecurityPolicy = "default-src 'none'";
-        return Content(Services.ProjectIcons.GlyphSvg.Build(paths), "image/svg+xml");
-    }
 }
 
 // Контракт — «prompt», как шлёт фронт (api.ts); без атрибута поле молча терялось (QA 2026-08-17)
 public record SuggestIconRequest([property: JsonPropertyName("prompt")] string? Hint);
 // Preview-подбор до создания проекта: name — черновик названия, prompt — та же подсказка
 public record SuggestIconPreviewRequest(string? Name, [property: JsonPropertyName("prompt")] string? Hint);
-public record SelectIconRequest(string? Name, List<string>? Paths);
+// Paths в select больше не принимается — поле читается только чтобы отвергнуть
+// пережиточное тело старого фронта явным 400 вместо молчаливой установки имени
+public record SelectIconRequest(string? Name, List<string>? Paths = null);
 public record SetIconModeRequest(string? Kind);
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,
     bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null);
 // McpServersOn — ключи включённых серверов личного реестра (allow-модель доступа;
 // null = не менять, пустой список = «никто не включён»).
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOn = null);
+// Enabled — грань десктопного агента в проекте (ADR-008): выключение гасит сеансы рук
+public record SetDesktopAgentRequest(bool Enabled);
+// Порог автоправила архивации проекта (дней); null — наследовать личный порог владельца
+public record SetProjectArchiveDaysRequest(int? Days);
+
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOn = null, bool? AutoImportDossiers = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
 public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

@@ -17,40 +17,85 @@ public sealed record SpecialtyTemplate(
 // Каталог специальностей персоны: машинный ключ (wire-значение), подпись для UI,
 // семейство исполнителя и дефолтный шаблон прав. Единственный источник подписей —
 // все потребители (API, планировщик команды) берут их отсюда.
+// Дефолты СЕКЦИЙ ПРОМПТОВ и типовых профилей умений живут отдельно:
+// SpecialtyPromptPresets (состав каталога v5, план «Секции промптов»).
 public static class SpecialtyCatalog
 {
     // Ключ-маркер «любая специальность» в правилах пресетов (SpecialtySettingsStore)
     public const string AnySpecialtyKey = "any";
 
+    // Icon и Color — дефолты кода, ТОЛЬКО для показа: персонализация их не
+    // переопределяет (в слое настроек полей значка и цвета нет). Значок — имя для
+    // отрисовки на фронте, цвет — ключ палитры аватаров (AGENT_COLORS фронта).
+    // Значения утверждены человеком, источник — макет персонализированных
+    // специальностей (каталог ролей в docs/mockups/personas-specialties/index.html).
+    // ВАЖНО: имя значка обязано существовать в установленном lucide-react (фронт
+    // рисует его динамическим компонентом и предпочитает серверное значение своему
+    // фолбэку); несуществующее имя даёт ошибку в консоли и пустой значок (QA B1,
+    // 25.08.2026). Сторож — SpecialtyCatalogTests (белый список LucideGlyphs).
     public sealed record Entry(
         PersonaSpecialty Specialty,
         string Key,
         string Label,
+        string Description,
         bool ExecutorFamily,
-        SpecialtyTemplate? DefaultTemplate);
+        SpecialtyTemplate? DefaultTemplate,
+        string Icon = "",
+        string Color = "");
 
     // Универсальный исполнитель переименован в подписи (данные не мигрировались),
     // профильные добавлены рядом; их подписи утверждены человеком.
     private static readonly SpecialtyTemplate ExecutorDefaultTemplate =
         new(PersonaAccess.Full, Tools: null, DisallowedTools: null);
 
+    // Описания ролей отдаются в каталог (SpecialtiesController.List) для карточек UI
+    // панели «Инструкции для роли» (этап 4 плана «Секции промптов»). Тексты утверждены
+    // человеком, источник — макет v4/прототип docs/mockups/specialty-prompt-sections.html.
     public static readonly IReadOnlyList<Entry> All =
     [
-        new(PersonaSpecialty.None, KeyOf(PersonaSpecialty.None), "Не задана", false, null),
-        new(PersonaSpecialty.Analyst, KeyOf(PersonaSpecialty.Analyst), "Аналитик", false, null),
-        new(PersonaSpecialty.Planner, KeyOf(PersonaSpecialty.Planner), "Планировщик", false, null),
-        new(PersonaSpecialty.Reviewer, KeyOf(PersonaSpecialty.Reviewer), "Ревьюер", false, null),
-        new(PersonaSpecialty.Executor, KeyOf(PersonaSpecialty.Executor), "Исполнитель (универсальный)", true, ExecutorDefaultTemplate),
-        new(PersonaSpecialty.Secretary, KeyOf(PersonaSpecialty.Secretary), "Секретарь", false, null),
-        new(PersonaSpecialty.Coordinator, KeyOf(PersonaSpecialty.Coordinator), "Координатор", false, null),
-        new(PersonaSpecialty.Mentor, KeyOf(PersonaSpecialty.Mentor), "Наставник", false, null),
-        new(PersonaSpecialty.Designer, KeyOf(PersonaSpecialty.Designer), "Дизайнер", false, null),
-        new(PersonaSpecialty.Consultant, KeyOf(PersonaSpecialty.Consultant), "Консультант", false, null),
-        new(PersonaSpecialty.Librarian, KeyOf(PersonaSpecialty.Librarian), "Библиотекарь", false, null),
-        new(PersonaSpecialty.Tester, KeyOf(PersonaSpecialty.Tester), "Тестировщик", false, null),
-        new(PersonaSpecialty.BackendExecutor, KeyOf(PersonaSpecialty.BackendExecutor), "Исполнитель (бэкенд)", true, ExecutorDefaultTemplate),
-        new(PersonaSpecialty.FrontendExecutor, KeyOf(PersonaSpecialty.FrontendExecutor), "Исполнитель (фронтенд)", true, ExecutorDefaultTemplate),
-        new(PersonaSpecialty.DevopsExecutor, KeyOf(PersonaSpecialty.DevopsExecutor), "Исполнитель (DevOps)", true, ExecutorDefaultTemplate),
+        new(PersonaSpecialty.None, KeyOf(PersonaSpecialty.None), "Не задана", "", false, null),
+        new(PersonaSpecialty.Analyst, KeyOf(PersonaSpecialty.Analyst), "Аналитик",
+            "Данные, выводы и риски — без домыслов и без переоценки найденного", false, null,
+            Icon: "chart-line", Color: "blue"),
+        new(PersonaSpecialty.Planner, KeyOf(PersonaSpecialty.Planner), "Планировщик",
+            "Превращает задачу в план по шагам: что делаем, в каком порядке, кто и как проверим", false, null,
+            Icon: "list-checks", Color: "purple"),
+        new(PersonaSpecialty.Reviewer, KeyOf(PersonaSpecialty.Reviewer), "Ревьюер",
+            "Находки по severity, соглашения проекта, сценарии отказа — спорит с решением, а не с оформлением", false, null,
+            Icon: "shield", Color: "red"),
+        new(PersonaSpecialty.Executor, KeyOf(PersonaSpecialty.Executor), "Исполнитель (универсальный)",
+            "Универсальный исполнитель: доводит задачу до конца с минимальным диффом", true, ExecutorDefaultTemplate,
+            Icon: "hammer", Color: "brown"),
+        new(PersonaSpecialty.Secretary, KeyOf(PersonaSpecialty.Secretary), "Секретарь",
+            "Задачи и заметки: зафиксировать, напомнить, найти — коротко и ничего не терять", false, null,
+            Icon: "notebook-pen", Color: "green"),
+        new(PersonaSpecialty.Coordinator, KeyOf(PersonaSpecialty.Coordinator), "Координатор",
+            "Распределяет работу по силам и зоне персон, эскалирует блокеры", false, null,
+            Icon: "share-2", Color: "cyan"),
+        new(PersonaSpecialty.Mentor, KeyOf(PersonaSpecialty.Mentor), "Наставник",
+            "Сначала вопросы, потом советы: учит через понимание, не решает за ученика", false, null,
+            Icon: "graduation-cap", Color: "yellow"),
+        new(PersonaSpecialty.Designer, KeyOf(PersonaSpecialty.Designer), "Дизайнер",
+            "Макеты в docs/mockups, дизайн-система проекта, обе темы и мобильная раскладка", false, null,
+            Icon: "palette", Color: "orange"),
+        new(PersonaSpecialty.Consultant, KeyOf(PersonaSpecialty.Consultant), "Консультант",
+            "Отвечает на заданный вопрос с альтернативами и компромиссами, признаёт границы знания", false, null,
+            Icon: "lightbulb", Color: "yellow"),
+        new(PersonaSpecialty.Librarian, KeyOf(PersonaSpecialty.Librarian), "Библиотекарь",
+            "Отвечает про библиотеки и чужой код доказательствами: документ и пермалинк", false, null,
+            Icon: "book-open", Color: "brown"),
+        new(PersonaSpecialty.Tester, KeyOf(PersonaSpecialty.Tester), "Тестировщик",
+            "Воспроизводимость прежде вердикта: шаги, края, честный отчёт о проверке", false, null,
+            Icon: "flask-conical", Color: "green"),
+        new(PersonaSpecialty.BackendExecutor, KeyOf(PersonaSpecialty.BackendExecutor), "Исполнитель (бэкенд)",
+            "Серверный исполнитель: инварианты слоя, стиль соседнего кода, сборка и тесты", true, ExecutorDefaultTemplate,
+            Icon: "server", Color: "blue"),
+        new(PersonaSpecialty.FrontendExecutor, KeyOf(PersonaSpecialty.FrontendExecutor), "Исполнитель (фронтенд)",
+            "Фронтовый исполнитель: дизайн-система, мобильная ширина, ui-kit", true, ExecutorDefaultTemplate,
+            Icon: "monitor-smartphone", Color: "pink"),
+        new(PersonaSpecialty.DevopsExecutor, KeyOf(PersonaSpecialty.DevopsExecutor), "Исполнитель (DevOps)",
+            "Исполнитель сборки и окружений: воспроизводимость, откатываемость, секреты вне git", true, ExecutorDefaultTemplate,
+            Icon: "package", Color: "red"),
     ];
 
     private static readonly Dictionary<PersonaSpecialty, Entry> BySpecialty =
@@ -79,4 +124,18 @@ public static class SpecialtyCatalog
     // (OmcPersonaRouting), git-секция (PersonaBindingsService). Tester сюда НЕ входит:
     // у него свой набор секций, исполнительские права он получает отдельным условием.
     public static bool IsExecutorKind(PersonaSpecialty specialty) => Get(specialty).ExecutorFamily;
+
+    // Write-доступ к заметкам у сабагента: секретарь/координатор/планировщик + аналитик/библиотекарь
+    public static bool CanWriteNotes(PersonaSpecialty specialty) =>
+        specialty is PersonaSpecialty.Secretary
+         or PersonaSpecialty.Coordinator
+         or PersonaSpecialty.Planner
+         or PersonaSpecialty.Analyst
+         or PersonaSpecialty.Librarian;
+
+    // Write-доступ к задачам у сабагента: секретарь/координатор/планировщик
+    public static bool CanWriteTasks(PersonaSpecialty specialty) =>
+        specialty is PersonaSpecialty.Secretary
+         or PersonaSpecialty.Coordinator
+         or PersonaSpecialty.Planner;
 }

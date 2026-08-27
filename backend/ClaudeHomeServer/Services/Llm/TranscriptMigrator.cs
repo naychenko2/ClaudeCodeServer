@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -20,7 +21,7 @@ public static class TranscriptMigrator
     // sessions.json ключ попадает не только от CLI, но и снаружи — параметром
     // resumeSessionId в POST /sessions|/chats|/personas/{id}/chats, а сам файл еще и
     // правится руками при восстановлении чатов.
-    public static bool IsSafeSessionId(string? claudeSessionId) =>
+    public static bool IsSafeSessionId([NotNullWhen(true)] string? claudeSessionId) =>
         claudeSessionId is not null && SafeSessionId.IsMatch(claudeSessionId);
 
     // Уплощение cwd по соглашению CLI: не-алфавитно-цифровые символы → '-'

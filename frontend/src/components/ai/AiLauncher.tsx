@@ -13,6 +13,7 @@ import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionC
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
 import { rankContext } from '../../lib/ai/suggest';
 import { aiOllamaAvailable } from '../../lib/ai/ollama';
@@ -108,15 +109,15 @@ export function AiLauncher() {
   const obstacleOverlap = useFabObstacleOverlap(fabRef, !open && !isMobile);
   // Компактный круг: на стене всегда, в остальных местах — когда снизу подпёрло
   const fabSmall = wallMode || obstacleOverlap;
-  // Лицо AI-хаба (фича default-personas-onboarding): «хозяин контекста», а НЕ собеседник
-  // текущего чата. personaId: null осознанно пропускает уровень «персона чата» в резолвере
+  // Лицо AI-хаба: «хозяин контекста», а НЕ собеседник текущего чата.
+  // personaId: null осознанно пропускает уровень «персона чата» в резолвере
   // (contextPersona.ts): в проекте кнопка/палитра носят лицо дефолт-персоны проекта (даже
   // если открыт чат с другой персоной), вне проекта — личной дефолт-персоны владельца;
   // null на обоих уровнях — нейтральный логотип. Та же переменная питает и лицо кнопки,
   // и лицо в шапке палитры (searchRow) — они всегда совпадают. (WaitingIndicator в ленте
   // зовёт useContextPersona() без аргументов — там персона чата правильна.)
   const facePersona = useContextPersona({ personaId: null });
-  // Точка-приглашение «знакомство» на FAB (фича default-personas-onboarding, п.5.2):
+  // Точка-приглашение «знакомство» на FAB (п.5.2):
   // только когда лицо кнопки — реально дефолт-персона владельца (в проекте с чужим
   // руководителем точки быть не должно — там речь не про личное знакомство).
   const me = useMe();
@@ -239,9 +240,12 @@ export function AiLauncher() {
     if (!open) return;
     listRef.current?.querySelector<HTMLElement>(`[data-idx="${idx}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [idx, open]);
-  // На мобиле НЕ автофокусим поле — иначе сразу выскакивает клавиатура и перекрывает
-  // список действий. Фокус (и клавиатура) — только по явному тапу пользователя.
-  useEffect(() => { if (open && !isMobile) setTimeout(() => inputRef.current?.focus(), 40); }, [open, isMobile]);
+  // На touch-устройстве НЕ автофокусим поле — иначе сразу выскакивает экранная
+  // клавиатура и перекрывает список действий. Гейт именно по типу указателя
+  // (useListAutoFocus = !useIsTouch), а не по ширине окна: планшет шире 600px
+  // страдает ровно так же. Фокус (и клавиатура) — только по явному тапу пользователя.
+  const listAutoFocus = useListAutoFocus();
+  useEffect(() => { if (open && listAutoFocus) setTimeout(() => inputRef.current?.focus(), 40); }, [open, listAutoFocus]);
 
   // Глобальный хоткей ⌘/Ctrl+K и внешнее открытие
   useEffect(() => {
@@ -619,8 +623,8 @@ export function AiLauncher() {
               <span className="cc-echo-ring cc-echo-ring--2" />
             </span>
           )}
-          {/* Лицо кнопки: аватар релевантной персоны (фича default-personas-onboarding),
-              fallback — логотип «AI Home» на весь круг. fill: аватар растягивается по
+          {/* Лицо кнопки: аватар релевантной персоны, fallback — логотип «AI Home»
+              на весь круг. fill: аватар растягивается по
               контейнеру и точно совпадает с кругом на ЛЮБОМ кадре анимации размера
               (36↔54). Покой — лёгкое приглушение (opacity 0.85, без grayscale); работа —
               дыхание (cc-fab-breathe); идея/ожидание — полное лицо. */}

@@ -101,7 +101,8 @@ public sealed class ProjectIconMigration(
         }
     }
 
-    // Один проект — один ход модели, без повторов при отказе (ADR-009 §10): не подобралось —
+    // Один проект — один вызов подбора (внутри него двухходовая схема и ровно один повтор —
+    // ADR-009 §2.4), второй попытки на уровне миграции нет (ADR-009 §10): не подобралось —
     // проект остаётся на инициалах, это не ошибка, а фолбэк
     private async Task<IconMigrationSummary> MigrateOneAsync(Project candidate, CancellationToken ct)
     {
@@ -117,20 +118,16 @@ public sealed class ProjectIconMigration(
             var result = await glyphs.SuggestAsync(project.Name, null, project.OwnerId!, ct);
             if (result.Ok)
             {
-                // Вид «имя» предпочтительнее (ADR-009 §1): готовая иконка lucide узнаётся
-                // всегда; нарисованный значок берём, только если имён модель не вернула
-                var pick = result.Candidates.FirstOrDefault(c => c.IsNamed) ?? result.Candidates[0];
-                var glyph = pick.IsNamed
-                    ? new ProjectGlyph { Name = pick.Name, SetAt = DateTime.UtcNow }
-                    : new ProjectGlyph { Paths = [.. pick.Paths!], SetAt = DateTime.UtcNow };
+                // Кандидаты — только имена из набора lucide: рисованные пути вырезаны
+                var pick = result.Candidates[0];
+                var glyph = new ProjectGlyph { Name = pick.Name, SetAt = DateTime.UtcNow };
                 if (!projects.TrySetIconGlyphMigrated(project.Id, glyph))
                 {
                     // Значок успел выбрать пользователь — его выбор главнее
                     log.LogInformation("Значок проекта «{Name}»: пропущен, значок уже стоит", project.Name);
                     return new IconMigrationSummary(0, 0);
                 }
-                log.LogInformation("Значок проекта «{Name}»: подобран {Glyph}",
-                    project.Name, pick.IsNamed ? pick.Name : "рисованный путь");
+                log.LogInformation("Значок проекта «{Name}»: подобран {Glyph}", project.Name, pick.Name);
                 return new IconMigrationSummary(1, 0);
             }
 

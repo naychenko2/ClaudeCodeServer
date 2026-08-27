@@ -7,6 +7,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Deploy;
+using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Images;
@@ -180,7 +181,18 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecrets
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallService>();
+// Конспекты обсуждений (ADR-004 §6): стор снятых конспектов + генерация через
+// CheapTextRunner (ключ discussion-digest); снимаются на экспорте, живут до ветки
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionService>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
+// Автовыгрузка паспортов в локальную ветку ccs/dossiers/v1 после захвата — singleton +
+// hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>();
+AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
+// Автоимпорт паспортов по новому tip ветки ccs/dossiers/v1 (тумблер проекта
+// AutoImportDossiers): наблюдение за веткой тиком 60 с, без fetch/pull
+AddHosted<ClaudeHomeServer.Services.Dossiers.DossierAutoImporter>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
@@ -202,6 +214,11 @@ builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
 // Время последней фактической активности аккаунта пула (живой ход / идл-пинг) —
 // делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService
 builder.Services.AddSingleton<SubscriptionActivityTracker>();
+// Сторож «чужого» setup-токена: расхождение сброса 5h-окна между setup-токеном (probe/turn)
+// и профильным логином (oauth) — алерт админам, без вывода из ротации. Шов нотификатора —
+// для юнит-тестов дедупа (как IKnowledgeAlertNotifier)
+builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>();
+builder.Services.AddSingleton<SubscriptionWindowMismatchGuard>();
 // Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
 AddHosted<SubscriptionUsageWarmupService>();
 // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
@@ -226,6 +243,8 @@ AddHostedFrom(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
 AddHosted<TeamMemoryAutolearnService>();
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 AddHosted<PersonaProjectBindingsMigration>();
+// Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
+AddHosted<ClaudeHomeServer.Services.Llm.GlmModelAliasMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
@@ -293,15 +312,15 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();
 // Фон рабочего пространства проекта: JSON от модели → собранный сервером SVG-тайл (ADR-008)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundService>();
-// Значок проекта: текстовый ход по названию → кандидаты (имя lucide | пути), разметку
-// собирает GlyphSvg (ADR-009); без состояния, синглтон как и остальные места модели
+// Значок проекта: текстовый ход по названию → кандидаты (имена из набора lucide);
+// без состояния, синглтон как и остальные места модели
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService>();
 // Разовая миграция значков существующим проектам (ADR-009 §10): бэкап → прогон → удаление
 // растровых иконок; идемпотентна, при полностью мигрированном сторе старт — чистый no-op
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigration>();
 AddHosted<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigrationService>();
-// Разовая генерация фонов существующим проектам при включении флага (ADR-008 §10) плюс
-// подстраховка на старте: прогон идемпотентен, повторный запуск ничего не перетирает
+// Разовая генерация фонов существующим проектам на старте (ADR-008 §10):
+// прогон идемпотентен, повторный запуск ничего не перетирает
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill>();
 AddHosted<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfillService>();
 // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
@@ -342,8 +361,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFa
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 // Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
-// Паспорта прогонов сабагентов: отчёт или обрыв на середине, цена прогона (только в памяти)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>();
+// Паспорта прогонов сабагентов: отчёт или обрыв на середине, цена прогона. В памяти —
+// последние 200 (их отдаёт API), на диске — data/logs/subagent-runs-*.jsonl: рестарт инстанса
+// иначе уносит с собой всю серию прогонов, по которой и ведётся разбор обрывов
+builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog.Create(
+    sp.GetRequiredService<IConfiguration>()));
+// Паспорта ходов: чем кончился каждый ход и какой ценой. Тот же приём, что у сабагентов —
+// память для API, диск для разбора «что ломалось за сутки» после рестарта инстанса
+builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.TurnRunLog.Create(
+    sp.GetRequiredService<IConfiguration>()));
+// Жив ли исходящий прокси (HTTP(S)_PROXY): отличает отказ канала наружу от отказа
+// эндпоинта вендора — при первом смена модели не лечит ничего
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IEgressProbe>(sp =>
+    new ClaudeHomeServer.Services.Llm.EgressProbe(sp.GetRequiredService<IConfiguration>()));
 // Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();
@@ -355,6 +385,41 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
 // токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
+// Продуктовые MCP-серверы поверх HTTP (ADR-012): тулсет отдаёт схемы, общий контроллер
+// McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.WidgetsToolset>();
+// Память персоны/команды (фаза 2, волна 1): один тулсет на все ключи memory и pmem_<handle> —
+// персона и проект едут хвостом маршрута /mcp/memory/{personaId}/{projectId}
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.MemoryToolset>();
+// Задачи и заметки (фаза 2, волна 2): сессия-вызыватель едет хвостом /mcp/{tasks,notes}/{sessionId},
+// по ней тулсет резолвит проект чата, персону и её привязки на каждый вызов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.TasksToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.NotesToolset>();
+// Персоны (фаза 2, волна 2): тяжёлая оркестрация CRUD — в PersonasCrudService (общий с REST),
+// тулсет — тонкий JSON-фасад над ним и сервисами; хвост маршрута — та же сессия-вызыватель
+builder.Services.AddSingleton<ClaudeHomeServer.Services.PersonasCrudService>();
+// Чаты (фаза 2, волна 3): оркестрация chats_send/chats_report_up — общая для REST и wsp-тулсета
+builder.Services.AddSingleton<ClaudeHomeServer.Services.SessionMessagingService>();
+// Знания (фаза 2, волна 3): каталог баз Dify под пользователя — общий для REST и wsp-тулсета
+builder.Services.AddSingleton<ClaudeHomeServer.Services.KnowledgeBaseCatalogService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.PersonasToolset>();
+// Волна 3 (ADR-012): рабочее пространство, граф кода и уведомления
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.WorkspaceToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.CodeGraphToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.NotificationsToolset>();
+// Базы знаний Dify (фаза 2, волна 4 — последний сервер фазы): тулсет ходит во внешний
+// Dify напрямую через KnowledgeService, ключ не покидает бэкенд; хвост — сессия-вызыватель
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.DifyToolset>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
@@ -376,6 +441,9 @@ builder.Services.AddSingleton<TeamWaveService>();
 // в стадии «волна N» навсегда
 AddHosted<TeamWaveWatchdog>();
 builder.Services.AddSingleton<SessionSummaryService>();
+// Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов»): one-shot сборка
+// по кнопке с кэшем в Session.ArchiveSummary; «Итог сессии» выше — другой маршрут
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ChatDigestService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
@@ -400,8 +468,39 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.IDeployHost,
     ClaudeHomeServer.Services.Deploy.DeployHost>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.DeployService>();
 AddHosted<ClaudeHomeServer.Services.Deploy.DeployReportService>();
+
+// === Десктопный агент (ADR-008): руки песочницы на машине пользователя ===
+// Реестр устройств и хеши их токенов — единственный стор грани; сеансы рук и живые
+// соединения канала живут только в памяти (рестарт бэкенда гасит сеанс по построению).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DevicePairingService>();
+// Отправитель команд на устройство: push в конкретное соединение хаба (групп нет)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceCommandSender,
+    ClaudeHomeServer.Services.Desktop.DeviceHubCommandSender>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCallRouter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDirectory,
+    ClaudeHomeServer.Services.Desktop.DesktopChatDirectory>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDirectory,
+    ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
+    ClaudeHomeServer.Services.Desktop.DesktopHandsNotifier>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
+    ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();
+// Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
+// первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
+// синглтон, не второй экземпляр).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
+// Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
+AddHosted<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>();
 AddHosted<TaskSchedulerService>();
 AddHosted<ChatExpiryService>();
+// Автоправило архивации чатов (флаг chat-auto-archive) — singleton + hosted: кнопка
+// «Применить сейчас» (POST /api/chats/archive-run) дёргает RunNowAsync того же инстанса
+builder.Services.AddSingleton<ChatArchiveService>();
+AddHostedFrom(sp => sp.GetRequiredService<ChatArchiveService>());
 AddHosted<ChatTurnLoggerService>();
 AddHosted<NoteExpiryService>();
 // Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
@@ -419,7 +518,12 @@ builder.Services.AddSingleton<ExternalPreviewStore>();
 builder.Services.AddSingleton<ExternalPreviewRouter>();
 // "proxy" ходит только к нашим же сервисам: dev-серверы проектов и скачивание готового
 // документа у OnlyOffice в office-callback. Egress-прокси им не нужен — см. WithoutEgressProxy.
+// Медиа-прокси /api/proxy на этом клиенте НЕ сидит — он живёт на отдельном "media-proxy" ниже:
+// прямой канал наружу душится DPI, поэтому внешние CDN обязаны идти через системный egress.
 builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
+// Внешние CDN медиа (/api/proxy): прямой канал к ним душится DPI —
+// эти запросы ОБЯЗАНЫ идти через системный egress-прокси.
+builder.Services.AddHttpClient("media-proxy");
 // Загрузка произвольных пользовательских URL (save-from-url): без авто-редиректов,
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
@@ -606,10 +710,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeAler
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>();
 AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
 
-// JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
+// JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
+// Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная
+// JwtBearer к /api/devices/* не допускается вовсе — сервисный JWT владельца лежит в env
+// каждого его хода, и на нём «ось выдачи» превратилась бы в барьер состава, а не
+// авторизации. Схемы именованные: контроллеры грани называют их явным
+// [Authorize(AuthenticationSchemes = ...)], и ни один эндпоинт не открывается «заодно».
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer()
-    .AddNegotiate();
+    .AddNegotiate()
+    // capability-токен чата: audience desktop, claims ownerId + sessionId + deviceId, TTL минуты
+    .AddDesktopCapabilityAuth()
+    // токен устройства: 256 бит, на сервере только хеш в data/devices.json
+    .AddDesktopDeviceAuth();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<JwtService>((opts, jwt) =>
     {
@@ -782,7 +895,7 @@ if (!inspectionMode)
     _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
     // Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
     _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
-    // Регистрация языковых провайдеров CodeGraph (C# для .cs файлов)
+    // Регистрация языковых провайдеров CodeGraph (C# для .cs; TS/React для .ts/.tsx)
     try
     {
         var codeGraphService = app.Services.GetRequiredService<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
@@ -790,6 +903,14 @@ if (!inspectionMode)
             app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider>>());
         codeGraphService.RegisterProvider(".cs", csProvider);
         Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .cs");
+        // TS-провайдер гоняет Node-экстрактор frontend/scripts/codegraph-extractor.mjs;
+        // без Node/скрипта тихо отдаёт пустой граф (см. TypeScriptGraphProvider).
+        var tsProvider = new ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider(
+            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider>>(),
+            app.Configuration);
+        codeGraphService.RegisterProvider(".ts", tsProvider);
+        codeGraphService.RegisterProvider(".tsx", tsProvider);
+        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .ts/.tsx");
     }
     catch (Exception ex)
     {
@@ -840,13 +961,13 @@ if (!inspectionMode)
         Console.Error.WriteLine($"[HandleMigration] миграция пропущена: {ex.Message}");
     }
 
-// Стартовый проход провижна авто-ассистента (фича default-personas-onboarding, план 2.1):
-// для каждого пользователя под включённым флагом гарантируем действующую дефолт-персону.
-// Идемпотентен (EnsureAsync не плодит дубль), поэтому гонять на каждом старте безопасно —
-// для выключенного флага это мгновенный no-op. Best-effort: сбой одного пользователя не
-// мешает старту. Синхронно (по образцу миграции handle выше) — к моменту готовности сервера
-// принимать запросы ассистент уже создан, и /api/auth/me отдаёт его без провижна на чтение
-// (инвариант плана: провижн НИКОГДА не вызывается на GET). В копии не запускаем: пишет в
+// Стартовый проход провижна авто-ассистента — ЕДИНСТВЕННАЯ точка провижна существующим
+// пользователям: для каждого гарантируем действующую дефолт-персону.
+// Идемпотентен (EnsureAsync не плодит дубль), поэтому гонять на каждом старте безопасно.
+// Best-effort: сбой одного пользователя не мешает старту. Синхронно (по образцу миграции
+// handle выше) — к моменту готовности сервера принимать запросы ассистент уже создан,
+// и /api/auth/me отдаёт его без провижна на чтение
+// (инвариант: провижн НИКОГДА не вызывается на GET). В копии не запускаем: пишет в
 // users.json/personas.json, а инспекционная копия чужие данные не трогает.
 if (!inspectionMode)
     try
@@ -1293,6 +1414,9 @@ var devDistPath = Path.GetFullPath(Path.Combine(
 var distPath = Directory.Exists(wwwrootPath) ? wwwrootPath : devDistPath;
 if (Directory.Exists(distPath))
 {
+    // Откуда реально раздаётся фронт — главный вопрос при «на стенде старый дизайн»;
+    // wwwroot в репо не живет (артефакт сборки), деву нужен свежий frontend/dist
+    app.Logger.LogInformation("Фронтенд раздаётся из {Path}", distPath);
     var fp = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(distPath);
 
     // index.html и SW-файлы — no-store: браузер всегда берёт свежую версию с сервера.
@@ -1328,6 +1452,13 @@ if (Directory.Exists(distPath))
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
+}
+else
+{
+    app.Logger.LogWarning(
+        "Фронтенд не найден: нет ни {Wwwroot} (рядом с exe), ни {Dist} (дев). " +
+        "Сервер поднимется без статики — собери фронт (cd frontend; npm run build) или выложи wwwroot",
+        wwwrootPath, devDistPath);
 }
 
 // JWKS модульных токенов (контракт §5.3) — публичный well-known, модули валидируют
@@ -1374,6 +1505,9 @@ app.MapReverseProxy(proxyPipeline =>
 app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
+// Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
+// push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
+app.MapHub<ClaudeHomeServer.Hubs.DeviceHub>("/hubs/devices");
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //

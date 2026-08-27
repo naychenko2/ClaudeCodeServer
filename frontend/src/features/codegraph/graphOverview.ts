@@ -12,7 +12,7 @@
 // Модуль чистый: без Math.random и force-симуляции — раскладка воспроизводима,
 // как в graphFocus.ts.
 import type { CodeGraph, CodeGraphNode, CodeGraphRelation } from '../../types';
-import { graphDegree, isTestSourceFile } from './graphFocus';
+import { graphDegree, isTestSourceFile, nodeLanguage, type NodeLanguage } from './graphFocus';
 import { FOCUS_VIEW_W, FOCUS_VIEW_H, FOCUS_VIEW_W_MOBILE, FOCUS_VIEW_H_MOBILE } from './graphFocus';
 
 // Размеры холста «Обзора» — те же, что у «Фокуса»: обоим нужна горизонталь под
@@ -219,6 +219,7 @@ export interface OverviewOptions {
   typesGroup: string | null;
   hideTests?: boolean;
   filters?: Record<CodeGraphRelation, boolean>;   // те же чипы связей, что у «Фокуса» — панель общая
+  languages?: Record<NodeLanguage, boolean>;       // языковой фильтр, по умолчанию оба включены
   maxItems?: number;     // потолок элементов на холсте (плотность не зависит от размера репо)
   typesLimit?: number;   // топ-N типов при раскрытии листа до типов (мобила — меньше)
 }
@@ -228,6 +229,7 @@ const TYPES_LIMIT_DEFAULT = 30;
 
 export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): OverviewScene {
   const { expanded, typesGroup, hideTests, maxItems = MAX_ITEMS_DEFAULT, typesLimit = TYPES_LIMIT_DEFAULT } = opts;
+  const langs = opts.languages ?? { csharp: true, typescript: true };
   const godSet = new Set(graph.godNodes);
   const degree = graphDegree(graph);
   // Индекс по ВСЕМ узлам, а не по видимым: скрытие тестов не должно превращать
@@ -238,6 +240,7 @@ export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): Ove
   const visible: CodeGraphNode[] = [];
   for (const n of graph.nodes) {
     if (hideTests && isTestSourceFile(n.sourceFile)) { hiddenTestCount++; continue; }
+    if (!langs[nodeLanguage(n.sourceFile)]) continue;
     visible.push(n);
   }
 
@@ -368,7 +371,9 @@ export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): Ove
     bundles: [...bundleMap.values()],
     hiddenTestCount,
     shownEdgeCount,
-    totalTypeCount: graph.nodes.length,
+    // Знаменатель «N типов свёрнуты» — про ВИДИМЫЕ типы (после языка и тестов),
+    // иначе при выключенном C# число завышено на размер скрытого языка (M3)
+    totalTypeCount: visible.length,
   };
 }
 

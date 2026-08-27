@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Длинный список — UIA spike</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 0; }
+    header { position: sticky; top: 0; background: #1f6feb; color: #fff; padding: 8px 16px; }
+    #scroll { height: 70vh; overflow-y: auto; border: 1px solid #ccc; }
+    .row { padding: 6px 12px; border-bottom: 1px solid #eee; cursor: pointer; }
+    .row:nth-child(odd) { background: #fafafa; }
+    .actions { padding: 8px 16px; }
+    button { font: inherit; }
+  </style>
+</head>
+<body>
+  <header>Длинный список — 1500 строк в прокручиваемом контейнере</header>
+  <div class="actions">
+    <button id="add">Добавить строку</button>
+    <button id="clear">Очистить</button>
+    <input id="filter" type="search" placeholder="Фильтр по тексту">
+  </div>
+  <div id="scroll"></div>
+  <script>
+    const c = document.getElementById('scroll');
+    for (let i = 0; i < 1500; i++) {
+      const d = document.createElement('div');
+      d.className = 'row';
+      d.setAttribute('role', 'listitem');
+      d.tabIndex = 0;
+      d.textContent = `Строка №${i + 1} — значение ${Math.random().toString(36).slice(2, 8)}`;
+      c.appendChild(d);
+    }
+  </script>
+</body>
+</html>

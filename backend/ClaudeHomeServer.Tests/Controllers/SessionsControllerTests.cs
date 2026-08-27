@@ -162,6 +162,36 @@ public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
         list.GetArrayLength().Should().Be(0);
     }
 
+    // Контракт для раздела «Архив»: эндпоинт НЕ фильтрует архивные на сервере — они
+    // приходят в общем списке с готовым bool isArchived, а фронт сам решает, что с ними
+    // делать (прятать в обычных списках, показывать в «Архиве»). Это сторож: любая
+    // серверная фильтрация архива здесь сломала бы раздел «Архив» (переиспользует этот
+    // эндпоинт, план «показать все архивные чаты владельца»).
+    [Fact]
+    public async Task GetAll_ArchivedSession_ReturnedWithIsArchivedTrue()
+    {
+        var projectId = await CreateProjectAsync();
+        var createResponse = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        createResponse.EnsureSuccessStatusCode();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(await createResponse.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        // Архивируем чат. Эндпоинт архива работает и для проектных сессий
+        // (GetOwned внутри резолвит владельца через проект).
+        var archiveResponse = await _client.PutAsJsonAsync($"/api/chats/{sessionId}/archived", new { archived = true });
+        archiveResponse.EnsureSuccessStatusCode();
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/sessions");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        // Архивная сессия НЕ отфильтрована на сервере — присутствует в ответе
+        body.GetArrayLength().Should().Be(1);
+        var archivedSession = body.EnumerateArray().Single(e => e.GetProperty("id").GetString() == sessionId);
+        // Точное имя готового bool-признака архива в ответе
+        archivedSession.GetProperty("isArchived").GetBoolean().Should().BeTrue();
+    }
+
     [Fact]
     public async Task Create_WithName_ReturnsSessionWithName()
     {

@@ -5,7 +5,6 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Backgrounds;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -17,7 +16,6 @@ public class ProjectBackgroundBackfillTests : IDisposable
     private readonly string _tempDir;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
-    private readonly FeatureFlagService _flags;
     private readonly User _owner;
 
     public ProjectBackgroundBackfillTests()
@@ -32,7 +30,6 @@ public class ProjectBackgroundBackfillTests : IDisposable
             })
             .Build();
         _users = new UserStore(config, new Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        _flags = new FeatureFlagService(_users);
         _projects = new ProjectManager(config, _users, new AppSettingsService(config));
         _owner = _users.Add("backfill_" + Guid.NewGuid().ToString("N")[..8], "pwd", "admin");
     }
@@ -69,8 +66,8 @@ public class ProjectBackgroundBackfillTests : IDisposable
     {
         var service = new ProjectBackgroundService(_projects, cheap,
             NullLogger<ProjectBackgroundService>.Instance);
-        return new ProjectBackgroundBackfill(_projects, service, _flags, _users,
-            new FakeLifetime(), NullLogger<ProjectBackgroundBackfill>.Instance)
+        return new ProjectBackgroundBackfill(_projects, service, _users,
+            NullLogger<ProjectBackgroundBackfill>.Instance)
         {
             RetryDelay = TimeSpan.Zero,
         };
@@ -197,14 +194,29 @@ public class ProjectBackgroundBackfillTests : IDisposable
             Directory.CreateDirectory(root);
             _projects.Create("Проект", root, second.Id, "tester");
         }
-        _users.SetFeatureFlag(_owner.Id, FeatureFlagKeys.ProjectBackgrounds, true);
-        _users.SetFeatureFlag(second.Id, FeatureFlagKeys.ProjectBackgrounds, true);
-
         var cheap = new CountingCheap(_ => Answer(), holdMs: 30);
         var summary = await Backfill(cheap).RunAllAsync();
 
         Assert.Equal(8, summary.Generated);
         Assert.True(cheap.MaxConcurrent <= 2, $"одновременных вызовов модели: {cheap.MaxConcurrent}");
+    }
+
+    [Fact]
+    public async Task RunAllAsync_идёт_по_всем_владельцам()
+    {
+        // Ни у кого ничего не «включено»: стартовый прогон обходит владельцев поголовно
+        var second = _users.Add("backfill3_" + Guid.NewGuid().ToString("N")[..8], "pwd", "user");
+        var mine = NewProject();
+        var root = Path.Combine(_tempDir, "proj3_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var theirs = _projects.Create("Проект", root, second.Id, "tester");
+        var cheap = new CountingCheap(_ => Answer());
+
+        var summary = await Backfill(cheap).RunAllAsync();
+
+        Assert.Equal(2, summary.Generated);
+        Assert.Equal(ProjectBackgroundKind.Generated, _projects.GetById(mine.Id)!.Background!.Kind);
+        Assert.Equal(ProjectBackgroundKind.Generated, _projects.GetById(theirs.Id)!.Background!.Kind);
     }
 
     [Fact]
@@ -227,6 +239,14 @@ public class ProjectBackgroundBackfillTests : IDisposable
                      ProjectBackgroundKind.Failed,
                  })
             Assert.False(ProjectBackgroundBackfill.IsCandidate(new ProjectBackground { Kind = kind }));
+
+        // Failed не кандидат независимо от причины: прогон идёт при каждом рестарте, и
+        // мёртвая модель долбилась бы в неё бесконечно. Повтор даёт только кнопка.
+        foreach (var reason in new[] { "no-model", "io", "bad-json", "rejected" })
+            Assert.False(ProjectBackgroundBackfill.IsCandidate(new ProjectBackground
+            {
+                Kind = ProjectBackgroundKind.Failed, FailReason = reason, Attempts = 1,
+            }));
     }
 
     // Failed-проект с заданной причиной и счётчиком попыток. Чередуем захват и неудачу —
@@ -243,108 +263,39 @@ public class ProjectBackgroundBackfillTests : IDisposable
     }
 
     [Fact]
-    public async Task Транзиентный_Failed_возвращается_в_прогон_при_явном_включении_флага()
+    public async Task Failed_не_возвращается_в_прогон_ни_транзиентный_ни_фатальный()
     {
-        var project = NewProject();
-        MakeFailed(project, "no-model", attempts: 2);
+        var transient = NewProject();
+        var fatal = NewProject();
+        MakeFailed(transient, "no-model", attempts: 2);
+        MakeFailed(fatal, "bad-json", attempts: 1);
         var cheap = new CountingCheap(_ => Answer());
 
-        // allowTransientRetry = true ставит только KickOff (явное включение флага)
-        var summary = await Backfill(cheap).RunAsync(_owner.Id, allowTransientRetry: true);
-
-        Assert.Equal(new BackfillSummary(1, 0, 0), summary);
-        Assert.Equal(1, cheap.Calls);
-        var saved = _projects.GetById(project.Id)!.Background!;
-        Assert.Equal(ProjectBackgroundKind.Generated, saved.Kind);
-        Assert.Equal(3, saved.Attempts);   // 2 было + одна доводочная попытка
-    }
-
-    [Fact]
-    public async Task Транзиентный_Failed_не_возвращается_со_старта_сервера()
-    {
-        var project = NewProject();
-        MakeFailed(project, "no-model", attempts: 2);
-        var cheap = new CountingCheap(_ => Answer());
-        _users.SetFeatureFlag(_owner.Id, FeatureFlagKeys.ProjectBackgrounds, true);
-
-        // Дефолтный RunAsync (как стартовый сервис) — транзиентный Failed не кандидат
-        var byRun = await Backfill(cheap).RunAsync(_owner.Id);
-        Assert.Equal(BackfillSummary.Empty, byRun);
-
-        // И через реальный стартовый путь RunAllAsync — то же: модель не дёргается
-        var byAll = await Backfill(cheap).RunAllAsync();
-        Assert.Equal(BackfillSummary.Empty, byAll);
+        // Прогон владельца — модель не дёргается вовсе
+        Assert.Equal(BackfillSummary.Empty, await Backfill(cheap).RunAsync(_owner.Id));
+        // И через реальный стартовый путь RunAllAsync — то же
+        Assert.Equal(BackfillSummary.Empty, await Backfill(cheap).RunAllAsync());
 
         Assert.Equal(0, cheap.Calls);
-        Assert.Equal(ProjectBackgroundKind.Failed, _projects.GetById(project.Id)!.Background!.Kind);
+        Assert.Equal(ProjectBackgroundKind.Failed, _projects.GetById(transient.Id)!.Background!.Kind);
+        Assert.Equal(ProjectBackgroundKind.Failed, _projects.GetById(fatal.Id)!.Background!.Kind);
     }
 
     [Fact]
-    public async Task Фатальный_Failed_не_возвращается_даже_по_флагу()
+    public async Task Потолок_attempts_не_даёт_перезабирать_протухший_Pending_бесконечно()
     {
-        var badJson = NewProject();
-        var rejected = NewProject();
-        MakeFailed(badJson, "bad-json", attempts: 1);
-        MakeFailed(rejected, "rejected", attempts: 1);
-        var cheap = new CountingCheap(_ => Answer());
-
-        var summary = await Backfill(cheap).RunAsync(_owner.Id, allowTransientRetry: true);
-
-        Assert.Equal(BackfillSummary.Empty, summary);
-        Assert.Equal(0, cheap.Calls);   // причина в модели/проекте, повтор бесполезен
-        Assert.Equal(ProjectBackgroundKind.Failed, _projects.GetById(badJson.Id)!.Background!.Kind);
-        Assert.Equal(ProjectBackgroundKind.Failed, _projects.GetById(rejected.Id)!.Background!.Kind);
-    }
-
-    [Fact]
-    public async Task Потолок_attempts_не_даёт_повторять_транзиентный_отказ_бесконечно()
-    {
+        // Единственный путь Failed обратно в прогон — протухший Pending (сервер упал в
+        // середине). Пожизненный потолок обязан остановить и его.
         var project = NewProject();
         MakeFailed(project, "no-model", attempts: 3);   // = MaxTotalAttempts
+        _projects.TryBeginBackground(project.Id);
+        _projects.GetById(project.Id)!.Background!.StartedAt = DateTime.UtcNow.AddHours(-1);
         var cheap = new CountingCheap(_ => Answer());
 
-        var summary = await Backfill(cheap).RunAsync(_owner.Id, allowTransientRetry: true);
+        var summary = await Backfill(cheap).RunAsync(_owner.Id);
 
-        Assert.Equal(BackfillSummary.Empty, summary);
+        Assert.Equal(new BackfillSummary(0, 1, 0), summary);   // кандидат взят, но пропущен
         Assert.Equal(0, cheap.Calls);
-        Assert.Equal(3, _projects.GetById(project.Id)!.Background!.Attempts);   // не вырос
-    }
-
-    [Fact]
-    public void IsCandidate_возвращает_транзиентный_Failed_только_по_флагу_и_до_потолка()
-    {
-        var transient = new ProjectBackground
-            { Kind = ProjectBackgroundKind.Failed, FailReason = "no-model", Attempts = 2 };
-
-        // Дефолт (стартовый прогон) — не кандидат, даже транзиентный
-        Assert.False(ProjectBackgroundBackfill.IsCandidate(transient));
-
-        // По флагу, ниже потолка — кандидат
-        Assert.True(ProjectBackgroundBackfill.IsCandidate(transient, allowTransientRetry: true));
-
-        // io — тоже транзиентный
-        Assert.True(ProjectBackgroundBackfill.IsCandidate(
-            new ProjectBackground { Kind = ProjectBackgroundKind.Failed, FailReason = "io", Attempts = 1 },
-            allowTransientRetry: true));
-
-        // На потолке — не кандидат
-        Assert.False(ProjectBackgroundBackfill.IsCandidate(
-            new ProjectBackground { Kind = ProjectBackgroundKind.Failed, FailReason = "no-model", Attempts = 3 },
-            allowTransientRetry: true));
-
-        // bad-json / rejected — никогда, даже по флагу и ниже потолка
-        Assert.False(ProjectBackgroundBackfill.IsCandidate(
-            new ProjectBackground { Kind = ProjectBackgroundKind.Failed, FailReason = "bad-json", Attempts = 1 },
-            allowTransientRetry: true));
-        Assert.False(ProjectBackgroundBackfill.IsCandidate(
-            new ProjectBackground { Kind = ProjectBackgroundKind.Failed, FailReason = "rejected", Attempts = 1 },
-            allowTransientRetry: true));
-
-        // Generated / Standard — никогда
-        Assert.False(ProjectBackgroundBackfill.IsCandidate(
-            new ProjectBackground { Kind = ProjectBackgroundKind.Generated }, allowTransientRetry: true));
-        Assert.False(ProjectBackgroundBackfill.IsCandidate(
-            new ProjectBackground { Kind = ProjectBackgroundKind.Standard }, allowTransientRetry: true));
     }
 
     // Ответ модели зависит от номера вызова (null = вызов падает); считает вызовы и пик
@@ -387,13 +338,5 @@ public class ProjectBackgroundBackfillTests : IDisposable
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
             object? jsonFormat = null, CancellationToken ct = default) => throw new NotImplementedException();
-    }
-
-    private sealed class FakeLifetime : IHostApplicationLifetime
-    {
-        public CancellationToken ApplicationStarted => CancellationToken.None;
-        public CancellationToken ApplicationStopping => CancellationToken.None;
-        public CancellationToken ApplicationStopped => CancellationToken.None;
-        public void StopApplication() { }
     }
 }

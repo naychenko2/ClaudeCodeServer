@@ -49,7 +49,8 @@ public sealed record GitDossiersTip(string Ref, string CommitSha, string Author,
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
 // git исполняется внутри песочницы cc-sandbox с маппингом путей, для local — на хосте.
 // Работа с remote (Forgejo) вынесена в отдельный GitServerService.
-public sealed class GitService(ILauncherFactory launchers)
+// Логгер опционален: DI подставляет реальный, а тесты конструируют сервис напрямую.
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null)
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -65,10 +66,12 @@ public sealed class GitService(ILauncherFactory launchers)
 
     // Конвенция проекта: все относительные пути — через SafeJoin (защита от traversal)
     // до передачи в git. Git и сам отвергает пути вне репо, но валидируем единообразно.
+    // Возврат — с прямыми слэшами: git ждёт POSIX-разделители, и на Linux путь с
+    // обратными молча даёт пустой вывод (log --follow) вместо ошибки.
     private static string ValidateRel(string root, string relPath)
     {
         FileService.SafeJoinPublic(root, relPath);
-        return relPath;
+        return relPath.Replace('\\', '/');
     }
 
     // Низкоуровневый запуск git. args передаются раздельно (ArgumentList — без shell,
@@ -103,13 +106,18 @@ public sealed class GitService(ILauncherFactory launchers)
 
         try
         {
+            // Читатели стартуют ДО записи stdin: hash-object --stdin-paths читает пути и
+            // печатает блобы интерливингом — если сначала залить большой stdin, не читая
+            // stdout, обе трубы забиваются и процессы встают в дедлок (коммит-сообщения
+            // этому не подвержены: git там сначала вычитывает stdin целиком и лишь потом
+            // отвечает). Конкурентное чтение снимает ограничение на объём в обе стороны.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
             if (stdin is not null)
             {
                 await proc.StandardInput.WriteAsync(stdin);
                 proc.StandardInput.Close();
             }
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(timeoutMs);
@@ -143,6 +151,26 @@ public sealed class GitService(ILauncherFactory launchers)
 
     public async Task<GitStatusDto> StatusAsync(string? ownerId, string root, CancellationToken ct = default)
     {
+        var dto = await StatusPathsAsync(ownerId, root, ct);
+        if (!dto.IsRepo) return dto;
+
+        // Обогащаем статистикой строк (+N/−M) только отслеживаемые файлы (суммарно vs HEAD).
+        // Untracked остаются с Added/Deleted = null — осознанно, см. комментарий NumstatAsync.
+        var stats = await NumstatAsync(ownerId, root, ct);
+        if (stats.Count == 0) return dto;
+        return dto with
+        {
+            Staged = ApplyStats(dto.Staged, stats),
+            Unstaged = ApplyStats(dto.Unstaged, stats),
+        };
+    }
+
+    // Лёгкий статус — те же множества путей (staged/unstaged/untracked), но БЕЗ построчной
+    // статистики: ровно один запуск `git status`. Для горячих путей вроде листинга файловой
+    // панели (FileService.GetGitStatus), которому числа не нужны. Панель «Изменения»
+    // продолжает звать полный StatusAsync.
+    public async Task<GitStatusDto> StatusPathsAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
         if (!IsGitRepo(root))
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
 
@@ -155,45 +183,25 @@ public sealed class GitService(ILauncherFactory launchers)
         var dto = ParsePorcelainV2(r.Stdout);
 
         // Признак linked worktree: в его корне `.git` — файл-ссылка (`gitdir: …`), а не папка.
-        // Ставим ДО раннего return ниже, иначе worktree с чистым деревом (но незапушенными
-        // коммитами) вернётся без флага, и UI покажет ветку вместо имени worktree.
-        dto = dto with { IsWorktree = File.Exists(Path.Combine(root, ".git")) };
-
-        // Обогащаем файлы статистикой строк (+N/−M): tracked — суммарно vs HEAD, untracked — числом строк
-        var stats = await NumstatAsync(ownerId, root, dto.Untracked.Select(f => f.Path), ct);
-        if (stats.Count == 0) return dto;
-        return dto with
-        {
-            Staged = ApplyStats(dto.Staged, stats),
-            Unstaged = ApplyStats(dto.Unstaged, stats),
-            Untracked = ApplyStats(dto.Untracked, stats),
-        };
+        // Ставим ДО раннего return в StatusAsync, иначе worktree с чистым деревом (но
+        // незапушенными коммитами) вернётся без флага, и UI покажет ветку вместо имени worktree.
+        return dto with { IsWorktree = File.Exists(Path.Combine(root, ".git")) };
     }
 
-    // Статистика строк по файлам: tracked — `git diff HEAD --numstat` (staged+unstaged суммарно vs
-    // HEAD), untracked — `git diff --no-index` по каждому. Пустой репо/нет HEAD → tracked-часть пуста
-    // (не кидаем: файлы всё равно untracked). Ключ словаря — путь файла (для rename — новый путь).
-    // Сколько неотслеживаемых файлов считаем построчно (см. комментарий в цикле ниже)
-    private const int UntrackedNumstatLimit = 200;
-
+    // Статистика строк по ОТСЛЕЖИВАЕМЫМ файлам: `git diff HEAD --numstat` (staged+unstaged
+    // суммарно vs HEAD). Пустой репо/нет HEAD → пусто (не кидаем: файлы всё равно untracked).
+    // Ключ словаря — путь файла (для rename — новый путь).
+    // Неотслеживаемые файлы чисел не получают осознанно: раньше каждый замерялся своим
+    // запуском `git diff --no-index` (до 200 процессов git на один вызов — секунды на
+    // проектах без .gitignore, а листинг файловой панели дёргал StatusAsync на каждую
+    // папку). Согласовано: у untracked цифры «+N/−M» не показываем, Added/Deleted = null —
+    // штатное значение контракта GitFileChange (int?), фронт его переживает.
     private async Task<Dictionary<string, (int add, int del, bool binary)>> NumstatAsync(
-        string? ownerId, string root, IEnumerable<string> untracked, CancellationToken ct)
+        string? ownerId, string root, CancellationToken ct)
     {
         var map = new Dictionary<string, (int, int, bool)>();
-
         var tracked = await RunAsync(ownerId, root, ["diff", "HEAD", "--numstat", "-z"], ct: ct);
         if (tracked.Ok) ParseNumstatZ(tracked.Stdout, map);
-
-        // untracked нет в `diff HEAD` — считаем по одному через --no-index (даёт числа и `-` для бинаря).
-        // Лимит: на каждый файл — свой запуск git, а с -uall новая папка разворачивается во все
-        // свои файлы (репо без .gitignore даёт их сотнями). Сверх лимита панель просто без «+N/−M».
-        foreach (var rel in untracked.Take(UntrackedNumstatLimit))
-        {
-            var r = await RunAsync(ownerId, root,
-                ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", rel], ct: ct);
-            // --no-index при различиях возвращает exit 1 — это норма, парсим stdout независимо от Ok
-            ParseNumstatZ(r.Stdout, map);
-        }
         return map;
     }
 
@@ -258,6 +266,7 @@ public sealed class GitService(ILauncherFactory launchers)
     public async Task<IReadOnlyList<GitLogEntry>> LogAsync(string? ownerId, string root, int limit = 100, string? branch = null, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
+        ValidateRevision(branch);
         // %x1f/%x1e — unit/record separators: subject может содержать что угодно
         var args = new List<string> { "log", "-n", limit.ToString(),
             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e" };
@@ -288,6 +297,29 @@ public sealed class GitService(ILauncherFactory launchers)
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
 
+    // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
+    // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история
+    // одного файла через log --follow (переживает переименования, как FileLogAsync).
+    // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
+    // листинг паспортов не должен падать из-за метрики.
+    public async Task<int> CountRecentCommitsAsync(
+        string? ownerId, string root, int days, string? relPath = null, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return 0;
+        var since = "--since=" + DateTimeOffset.UtcNow.AddDays(-days)
+            .ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(relPath))
+        {
+            var r = await RunAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
+            return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+        }
+        var log = await RunAsync(ownerId, root,
+            ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
+        return log.Ok
+            ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
+            : 0;
+    }
+
     private static List<GitLogEntry> ParseLog(string stdout)
     {
         var list = new List<GitLogEntry>();
@@ -304,6 +336,23 @@ public sealed class GitService(ILauncherFactory launchers)
     // sha валидируем формально (hex 6-40) — защита от передачи опций/ссылок вместо хеша
     private static bool IsValidSha(string sha) =>
         sha.Length is >= 6 and <= 40 && sha.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'));
+
+    // Ревизия из пользовательского ввода (ветка/тег/sha) перед попаданием в argv. ArgumentList
+    // защищает от shell-инъекции, но НЕ от инъекции опции: элемент argv, начинающийся с «-»,
+    // git разбирает как ФЛАГ — «--output=…» в git log перезаписывала произвольный файл мимо
+    // SafeJoin и границ проекта (находка приёмки волны 3.1). Отвергаем всё, что не похоже на
+    // ref по правилам git check-ref-format: ведущий «-», пробелы/управляющие, спецсимволы
+    // ревизий (~ ^ : ? * [ \), «..» внутри. Имена веток (feature/x), теги, HEAD и sha проходят.
+    private static void ValidateRevision(string? rev)
+    {
+        if (string.IsNullOrWhiteSpace(rev)) return;
+        if (rev.Length > 255
+            || rev[0] == '-'
+            || rev.Contains("..", StringComparison.Ordinal)
+            || rev.Any(c => char.IsControl(c) || c is ' ' or '~' or '^' or ':' or '?' or '*' or '[' or '\\'))
+            throw new GitCommandException(
+                $"Некорректная ревизия «{rev}»: ожидается имя ветки/тега или sha без опций");
+    }
 
     // Пути файлов, затронутых ОДНИМ коммитом (git show --name-only) — якорение паспортов
     // (DossierCaptureService). Оговорка: на merge-коммите --name-only файлов не печатает
@@ -636,8 +685,11 @@ public sealed class GitService(ILauncherFactory launchers)
         finally { sem.Release(); }
     }
 
-    public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, ["checkout", branch], ct: ct);
+    public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default)
+    {
+        ValidateRevision(branch);
+        return WriteOp(ownerId, root, ["checkout", branch], ct: ct);
+    }
 
     // ---------- Ветка паспортов ccs/dossiers/v1 (экспорт «Историй решений») ----------
 
@@ -696,17 +748,70 @@ public sealed class GitService(ILauncherFactory launchers)
             try { File.Delete(hostIdx); } catch { /* файла нет — норма */ }
             var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = idxPath };
 
+            // Батчинг экспорта: прежде запускалось по ~2 git-процесса на файл
+            // (hash-object --stdin + update-index), на 217 паспортах ~38 с. Теперь файлы
+            // раскладываются во временную папку ВНУТРИ git-dir (git её не видит в status,
+            // а маппинг container/local — тот же, что у индекса), блобы пишет один
+            // hash-object -w --stdin-paths (пути из stdin, без лимита argv), индекс
+            // собирается порциями update-index с несколькими --cacheinfo. Порции, а не
+            // один вызов: строка аргументов процесса на Windows ограничена ~32К символов,
+            // 5000 паспортов в один вызов не влезут (217 → ~4-5 вызовов вместо ~434).
+            // --no-filters обязателен: пофайловый hash-object по умолчанию применяет
+            // атрибуты (core.autocrlf, .gitattributes) — блобы разъехались бы с прежним
+            // «сырым» содержимым из stdin, и то же дерево перестало бы совпадать с tip.
+            var tmpPath = (await RunOkAsync(ownerId, root,
+                ["rev-parse", "--git-path", "dossiers-export-tmp"], ct: ct)).Stdout.Trim();
+            var hostTmp = HostGitPath(ownerId, root, tmpPath);
+            try { Directory.Delete(hostTmp, recursive: true); } catch { /* папки нет — норма */ }
+            Directory.CreateDirectory(hostTmp);
+            var tmpPosix = tmpPath.Replace('\\', '/');
+
             try
             {
-                foreach (var f in files)
+                // Раскладка: имена по порядковому индексу (чистый ASCII — безопасно для
+                // stdin); исходные пути в git не участвуют, они уходят только в update-index.
+                var utf8 = new UTF8Encoding(false);   // как прежний stdin: UTF-8 без BOM
+                var stdinPaths = new StringBuilder();
+                var rels = new List<string>(files.Count);
+                for (var i = 0; i < files.Count; i++)
                 {
-                    var rel = ValidateRel(root, f.Path).Replace('\\', '/');
-                    var blob = await RunOkAsync(ownerId, root, ["hash-object", "-w", "--stdin"],
-                        stdin: f.Content, ct: ct);
-                    await RunOkAsync(ownerId, root,
-                        ["update-index", "--add", "--cacheinfo", "100644", blob.Stdout.Trim(), rel],
-                        env: idxEnv, ct: ct);
+                    rels.Add(ValidateRel(root, files[i].Path));
+                    var tmpName = i.ToString("00000000", CultureInfo.InvariantCulture);
+                    await File.WriteAllTextAsync(Path.Combine(hostTmp, tmpName), files[i].Content, utf8, ct);
+                    stdinPaths.Append(tmpPosix).Append('/').Append(tmpName).AppendLine();
                 }
+
+                string[] shas = [];
+                if (files.Count > 0)
+                {
+                    var blobs = await RunOkAsync(ownerId, root,
+                        ["hash-object", "-w", "--no-filters", "--stdin-paths"],
+                        stdin: stdinPaths.ToString(), timeoutMs: 60_000, ct: ct);
+                    shas = blobs.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    if (shas.Length != files.Count)
+                        throw new GitCommandException(
+                            $"hash-object вернул {shas.Length} блобов вместо {files.Count}");
+                }
+
+                // update-index чанками по бюджету символов аргументов
+                const int argvBudget = 12_000;
+                var chunk = new List<string>();
+                var chunkLen = 0;
+                for (var i = 0; i < shas.Length; i++)
+                {
+                    var entry = $"100644,{shas[i]},{rels[i]}";
+                    if (chunk.Count > 0 && chunkLen + entry.Length > argvBudget)
+                    {
+                        await RunOkAsync(ownerId, root, BuildUpdateIndexArgs(chunk), env: idxEnv, ct: ct);
+                        chunk.Clear();
+                        chunkLen = 0;
+                    }
+                    chunk.Add(entry);
+                    chunkLen += entry.Length;
+                }
+                if (chunk.Count > 0)
+                    await RunOkAsync(ownerId, root, BuildUpdateIndexArgs(chunk), env: idxEnv, ct: ct);
+
                 var tree = (await RunOkAsync(ownerId, root, ["write-tree"], env: idxEnv, ct: ct))
                     .Stdout.Trim();
 
@@ -729,12 +834,22 @@ public sealed class GitService(ILauncherFactory launchers)
             }
             finally
             {
-                // Чистим за собой; неудача удаления не критична: файл в git-dir (не мусорит
-                // статус рабочего дерева), следующий запуск сносит его перед собой
+                // Чистим за собой; неудача удаления не критична: оба пути в git-dir (не
+                // мусорят статус рабочего дерева), следующий запуск сносит их перед собой
                 try { File.Delete(hostIdx); } catch { }
+                try { Directory.Delete(hostTmp, recursive: true); } catch { }
             }
         }
         finally { sem.Release(); }
+    }
+
+    // Одна порция update-index временного индекса: несколько --cacheinfo за вызов.
+    // Запись — форма «mode,sha,path» одним аргументом (документированная, неустаревшая).
+    private static List<string> BuildUpdateIndexArgs(IReadOnlyList<string> entries)
+    {
+        var args = new List<string>(entries.Count * 2 + 2) { "update-index", "--add" };
+        foreach (var e in entries) { args.Add("--cacheinfo"); args.Add(e); }
+        return args;
     }
 
     // Путь из вывода git (--git-path) в хостовый: относительный резолвим от корня репо,
@@ -760,6 +875,34 @@ public sealed class GitService(ILauncherFactory launchers)
     // (репо стянули fetch'ем/клонировали, но ветку у себя не создавали)
     private static string DossiersRemoteRef => $"refs/remotes/origin/{DossiersRef["refs/heads/".Length..]}";
 
+    // Есть ли ЛОКАЛЬНАЯ ветка паспортов: один дешёвый вызов проверки рефа —
+    // признак hasDossierBranch для exportStatus (гейт кнопки «Загрузить» в UI).
+    // Ветка считается существующей ТОЛЬКО при нулевом exit code И непустом stdout
+    // с валидным sha: без --verify rev-parse эхом вернул бы имя рефа как свободный
+    // аргумент, а потеря кода возврата в цепочке запуска не превратит отказ в «ветка
+    // есть». Факты вызова (root, exit code, stdout) пишем в лог на Information —
+    // при инцидентах вида «кнопка есть, а ветки нет» это единственный способ увидеть,
+    // что именно видел git. Незапуск/таймаут git — не ошибка статуса, а «ветки нет»
+    // (кнопка скрыта): иначе гейт лишился бы весь эндпоинт ответом 500.
+    public async Task<bool> HasDossiersBranchAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return false;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var sha = r.Stdout.Trim();
+            logger?.LogInformation(
+                "HasDossiersBranch: root='{Root}' exit={ExitCode} stdout='{Stdout}' stderr='{Stderr}'",
+                root, r.ExitCode, sha, FirstLine(r.Stderr) ?? "");
+            return r.Ok && sha.Length > 0 && IsValidSha(sha);
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogWarning(ex, "HasDossiersBranch: git-проверка не удалась, считаем ветку отсутствующей (root='{Root}')", root);
+            return false;
+        }
+    }
+
     // Резолв рефа ветки паспортов: локальная ветка, при её отсутствии — remote-tracking
     // того же имени. Возвращает имя существующего рефа либо null (ветки нет нигде).
     // --verify --quiet: отсутствующий реф — exit 1 без вывода (без --verify rev-parse
@@ -773,6 +916,37 @@ public sealed class GitService(ILauncherFactory launchers)
             if (r.Ok && IsValidSha(r.Stdout.Trim())) return refName;
         }
         return null;
+    }
+
+    // Локальный tip ветки паспортов (null — локальной ветки нет; remote-tracking мог
+    // остаться). Для гейта автовыгрузки «ветка заведомо наша» (разбор консилиума 23.08):
+    // фон обязан отличать собственный tip от чужого. Тот же вызов, что у
+    // HasDossiersBranchAsync, но возвращает sha, а не признак.
+    public async Task<string?> ResolveDossiersLocalTipAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var sha = r.Stdout.Trim();
+            return r.Ok && IsValidSha(sha) ? sha : null;
+        }
+        catch (GitCommandException) { return null; }
+    }
+
+    // Есть ли remote-tracking реф ветки паспортов (origin/ccs/dossiers/v1): ветку в
+    // репозиторий привёз fetch/pull, локальной копии нет. Признак «сироты» для гейта
+    // автовыгрузки: корневой коммит без родителя поверх origin-версии не запушить
+    // (non-fast-forward, блокер консилиума 23.08) — фон в таком случае обязан молчать.
+    public async Task<bool> HasDossiersRemoteAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return false;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRemoteRef], ct: ct);
+            return r.Ok && IsValidSha(r.Stdout.Trim());
+        }
+        catch (GitCommandException) { return false; }
     }
 
     // Список blob-файлов дерева ветки паспортов (рекурсивно, пути от корня ветки).
@@ -881,8 +1055,11 @@ public sealed class GitService(ILauncherFactory launchers)
         NetworkOp(ownerId, root, ["push"], creds, ct);
 
     // Первый push новой ветки: выставить upstream (origin/<branch>)
-    public Task PushSetUpstreamAsync(string? ownerId, string root, string branch, GitCredentials? creds = null, CancellationToken ct = default) =>
-        NetworkOp(ownerId, root, ["push", "-u", "origin", branch], creds, ct);
+    public Task PushSetUpstreamAsync(string? ownerId, string root, string branch, GitCredentials? creds = null, CancellationToken ct = default)
+    {
+        ValidateRevision(branch);
+        return NetworkOp(ownerId, root, ["push", "-u", "origin", branch], creds, ct);
+    }
 
     private async Task NetworkOp(string? ownerId, string root, string[] args, GitCredentials? creds, CancellationToken ct)
     {
@@ -911,6 +1088,7 @@ public sealed class GitService(ILauncherFactory launchers)
     {
         if (!hasUpstream && string.IsNullOrWhiteSpace(branch))
             throw new GitCommandException("Не удалось определить ветку для публикации");
+        ValidateRevision(branch);
 
         var (pre, credEnv) = CredArgs(creds);
         var env = WithCLocale(credEnv);
@@ -1075,8 +1253,12 @@ public sealed class GitService(ILauncherFactory launchers)
             await RunOkAsync(ownerId, root, ["remote", "add", "origin", url], ct: ct);
     }
 
-    public Task CreateBranchAsync(string? ownerId, string root, string name, string? from, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, from is null ? ["checkout", "-b", name] : ["checkout", "-b", name, from], ct: ct);
+    public Task CreateBranchAsync(string? ownerId, string root, string name, string? from, CancellationToken ct = default)
+    {
+        ValidateRevision(name);
+        ValidateRevision(from);
+        return WriteOp(ownerId, root, from is null ? ["checkout", "-b", name] : ["checkout", "-b", name, from], ct: ct);
+    }
 
     // ---------- Worktree ----------
     // Пути worktree в API — всегда ХОСТОВЫЕ. Git в args принимает пути ЦЕЛЕВОЙ среды
@@ -1088,6 +1270,7 @@ public sealed class GitService(ILauncherFactory launchers)
     // Checkout большой репы небыстрый — таймаут сетевого класса.
     public async Task WorktreeAddAsync(string? ownerId, string mainRoot, string worktreePath, string branch, CancellationToken ct = default)
     {
+        ValidateRevision(branch);
         var paths = launchers.ForOwner(ownerId).Paths;
         var runtimePath = paths.ToRuntime(worktreePath);
         var sem = LockFor(mainRoot);

@@ -3,6 +3,7 @@ namespace ClaudeHomeServer.Services.CodeGraph.Core;
 /// <summary>
 /// Тип узла графа кода — только объявления типов (не методы).
 /// Методы фрагментируют граф (спайк Graphify показал, что method-узлы создают шум).
+/// Последние четыре значения — TS/React-провайдер (TypeScriptGraphProvider).
 /// </summary>
 public enum NodeKind
 {
@@ -10,6 +11,33 @@ public enum NodeKind
     Interface,
     Struct,
     Enum,
+
+    /// <summary>React-компонент (function/класс с JSX-разметкой).</summary>
+    Component,
+
+    /// <summary>React-хук (use* функция).</summary>
+    Hook,
+
+    /// <summary>UI-примитив дизайн-системы (компонент из components/ui).</summary>
+    UiPrimitive,
+
+    /// <summary>Утилита: хелпер, тип — всё, что не компонент/хук.</summary>
+    Util,
+
+    /// <summary>
+    /// Экспортируемая константа — чистые данные (примитив или объект/массив без функций),
+    /// напр. токены дизайн-системы. В отличие от Util исключается из топа хабов: у данных
+    /// нет исходящих путей, degree делает их «словарём», а не точкой входа в код.
+    /// </summary>
+    Constant,
+}
+
+/// <summary>Хелперы строкового Kind (DTO снимка/запросов несут NodeKind строкой).</summary>
+public static class NodeKinds
+{
+    /// <summary>Kind — константа (старые снимки без этого вида просто не совпадут).</summary>
+    public static bool IsConstant(string? kind) =>
+        Enum.TryParse<NodeKind>(kind, out var k) && k == NodeKind.Constant;
 }
 
 /// <summary>
@@ -43,7 +71,7 @@ public record CodeGraphNode
     public required string SourceLocation { get; init; }
 
     /// <summary>
-    /// Вид типа (класс/интерфейс/структура/enum).
+    /// Вид типа: C# — класс/интерфейс/структура/enum, TS/React — component/hook/ui-примитив/util.
     /// </summary>
     public required NodeKind Kind { get; init; }
 }

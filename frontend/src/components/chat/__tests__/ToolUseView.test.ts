@@ -74,3 +74,78 @@ describe('PersonaConsultCard — шапка при прерванном аген
     expect(html).toContain('Ответ передан без текста');
   });
 });
+
+// Карточку переиспользуют консультации персон (PersonaTaskView) и агенты Workflow
+// (WorkflowBlockView) — новых пропсов они не передают и обязаны рендериться как раньше.
+// Всё новое поведение — строго под условием переданного пропса.
+describe('PersonaConsultCard — старые вызовы без новых пропсов', () => {
+  const base = {
+    question: 'Разберись в коде',
+    running: false,
+    isError: false,
+    answer: 'Готово',
+  };
+  const render = (props: Record<string, unknown>) =>
+    renderToStaticMarkup(createElement(PersonaConsultCard, { ...base, ...props }));
+
+  it('без персоны — заголовок «Агент», без чипа роли и без шеврона сворачивания', () => {
+    const html = render({ badge: null });
+    expect(html).toContain('Агент');
+    expect(html).toContain('var(--c-bg-white)');   // поверхность прежняя, не quiet
+    expect(html).not.toContain('role="button"');   // шапка не кликабельна без onCollapse
+  });
+
+  it('isError без statusLine — прежняя danger-коробка с фолбэком', () => {
+    const html = render({ isError: true, answer: '' });
+    expect(html).toContain('var(--c-danger-bg)');
+    expect(html).toContain('Не удалось получить ответ персоны');
+  });
+
+  it('running без statusLine — спиннер с подписью и italic-ожидание в теле', () => {
+    const html = render({ running: true });
+    expect(html).toContain('Консультируется…');
+    expect(html).toContain('изучает материалы и готовит ответ');
+  });
+});
+
+describe('PersonaConsultCard — ход координатора (statusLine)', () => {
+  const coord = {
+    question: '',
+    statusLine: 'Разбирает доклады волны 2',
+    running: false,
+    isError: true,
+    answer: 'Волна 2: три задачи закрыты, одна вернулась на доработку',
+    metrics: { tokens: 4200, toolUses: 4, durationMs: 12000 },
+    badge: 'координатор',
+    fallbackTitle: 'Координатор',
+  };
+  const html = () => renderToStaticMarkup(createElement(PersonaConsultCard, coord));
+
+  it('сорвавшийся ход: тело — сводка, а не danger-коробка', () => {
+    const h = html();
+    expect(h).not.toContain('var(--c-danger-bg)');
+    expect(h).not.toContain('Не удалось получить ответ персоны');
+    expect(h).toContain('Волна 2: три задачи закрыты');
+    expect(h).toContain('ошибка');   // признак сбоя несёт шапка
+  });
+
+  it('сорвавшийся ход: футер метрик на месте', () => {
+    const h = html();
+    expect(h).toContain('токенов');
+    expect(h).toContain('4 действия');
+    expect(h).toContain('12с');
+  });
+
+  it('без персоны карточка называет роль: заголовок и чип', () => {
+    const h = html();
+    expect(h).toContain('Координатор');
+    expect(h).toContain('координатор');
+  });
+
+  it('quiet + onCollapse: приглушённая поверхность и кликабельная шапка', () => {
+    const h = renderToStaticMarkup(createElement(PersonaConsultCard, { ...coord, quiet: true, onCollapse: () => {} }));
+    expect(h).toContain('var(--c-bg-card)');
+    expect(h).not.toContain('var(--c-bg-white)');
+    expect(h).toContain('role="button"');
+  });
+});

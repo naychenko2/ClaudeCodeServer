@@ -12,17 +12,15 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Провижн авто-ассистента (DefaultAssistantProvisioner, фича default-personas-onboarding).
-// Проверяет контракт из плана §2: идемпотентность, идемпотентность под гонкой, профиль
-// Coordinator/Full/personas-manage, поведение при выключенном флаге и обрыве между
-// созданием и досевом привязок.
+// Провижн авто-ассистента (DefaultAssistantProvisioner). Проверяет контракт из плана §2:
+// идемпотентность, идемпотентность под гонкой, профиль Coordinator/Full/personas-manage
+// и поведение при обрыве между созданием и досевом привязок.
 public class DefaultAssistantProvisionerTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
-    private readonly FeatureFlagService _flags;
     private readonly Mock<IHubContext<SessionHub>> _hub;
     private readonly List<ServerMessage> _broadcasts;
     private readonly DefaultAssistantProvisioner _sut;
@@ -55,11 +53,6 @@ public class DefaultAssistantProvisionerTests : IDisposable
         _bindings = new PersonaBindingsService(_personas, projects, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), _users, config,
             NullLogger<PersonaBindingsService>.Instance, mcp);
-        _flags = new FeatureFlagService(_users);
-
-        // По умолчанию флаг включён (большинство кейсов) — отдельный тест его выключает.
-        _users.SetFeatureFlag(_userId, FeatureFlagKeys.DefaultPersonasOnboarding, true);
-
         // Перехват broadcast-сообщений в группу (паттерн GlifCostPipelineTests).
         _broadcasts = [];
         _hub = new Mock<IHubContext<SessionHub>>();
@@ -74,7 +67,7 @@ public class DefaultAssistantProvisionerTests : IDisposable
         clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
         _hub.Setup(h => h.Clients).Returns(clients.Object);
 
-        _sut = new DefaultAssistantProvisioner(_users, _personas, _bindings, _flags,
+        _sut = new DefaultAssistantProvisioner(_users, _personas, _bindings,
             _hub.Object, NullLogger<DefaultAssistantProvisioner>.Instance);
     }
 
@@ -147,18 +140,6 @@ public class DefaultAssistantProvisionerTests : IDisposable
         returned.Should().NotBeNull();
         returned!.Id.Should().Be(stub.Id, "обрыв не должен плодить дубль — возвращается существующая");
         _personas.GetByOwner(_userId).Should().HaveCount(1);
-    }
-
-    [Fact]
-    public async Task EnsureAsync_ФлагВыключен_ВозвращаетNull()
-    {
-        _users.SetFeatureFlag(_userId, FeatureFlagKeys.DefaultPersonasOnboarding, false);
-
-        var persona = await _sut.EnsureAsync(_userId);
-
-        persona.Should().BeNull("при выключенном флаге провижн невозможен");
-        _personas.GetByOwner(_userId).Should().BeEmpty();
-        _broadcasts.Should().BeEmpty("без создания нет и broadcast");
     }
 
     [Fact]

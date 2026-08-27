@@ -33,6 +33,33 @@ public static class PersonaConsultantToolset
         "mcp__notes__notes_backlinks", "mcp__notes__notes_graph", "mcp__notes__notes_semantic_search",
     ];
 
+    // Write-набор заметок: секретарь/координатор/планировщик + аналитик/библиотекарь
+    public static readonly string[] NotesWrite =
+    [
+        "mcp__notes__notes_create", "mcp__notes__notes_update", "mcp__notes__notes_delete",
+    ];
+
+    // Write-набор задач: секретарь/координатор/планировщик
+    public static readonly string[] TasksWrite =
+    [
+        "mcp__tasks__tasks_create", "mcp__tasks__tasks_update", "mcp__tasks__tasks_complete",
+        "mcp__tasks__tasks_delete", "mcp__tasks__tasks_add_subtask", "mcp__tasks__tasks_toggle_subtask",
+    ];
+
+    // Ключ сервера графа кода в MCP-конфиге хода (ClaudeSession.BuildTurnMcpConfig)
+    public const string CodeGraphServerKey = "codegraph";
+
+    // Граф кода — три чтения (поиск типа, связи узла, хабы). Включается ТОЛЬКО активной
+    // Tool-привязкой codegraph (PersonaBindingsService.ToolBindingActive): сервер графа
+    // ездит в конфиг хода лишь проектных сессий, дефолт «всем» раскладывал бы мёртвые
+    // ссылки по файлам всех персон подряд
+    public static readonly string[] CodeGraphRead =
+    [
+        $"mcp__{CodeGraphServerKey}__codegraph_find",
+        $"mcp__{CodeGraphServerKey}__codegraph_neighbors",
+        $"mcp__{CodeGraphServerKey}__codegraph_hubs",
+    ];
+
     public static readonly string[] PersonasRead =
     [
         "mcp__personas__personas_list", "mcp__personas__personas_get",
@@ -82,21 +109,36 @@ public static class PersonaConsultantToolset
     // при полном профиле доступа (не-Full профиль не даёт write независимо от специальности)
     public static bool IsExecutor(Persona persona) =>
         persona.Access == PersonaAccess.Full &&
-        (SpecialtyCatalog.IsExecutorKind(persona.Specialty) || persona.Specialty == PersonaSpecialty.Tester);
+        (SpecialtyCatalog.IsExecutorKind(persona.Specialty)
+         || persona.Specialty == PersonaSpecialty.Tester
+         || persona.Specialty == PersonaSpecialty.Designer);
 
     // Полный allow-list консультанта. Custom.DisallowedTools персоны только СУЖАЕТ набор
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента
     // не зависит от профиля, рассчитанного на живой надзор. Единственное расширение —
     // специальность исполнителя (IsExecutor). Гейты tasks/notes/web — эффективные
-    // возможности персоны (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools).
+    // возможности персоны (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools);
+    // граф кода — только явная активная привязка (ToolBindingActive, см. CodeGraphRead).
     public static IReadOnlyList<string> Build(Persona persona, bool webAllowed,
-        bool tasksAllowed = true, bool notesAllowed = true)
+        bool tasksAllowed = true, bool notesAllowed = true,
+        bool notesWriteAllowed = false, bool tasksWriteAllowed = false,
+        bool codeGraphAllowed = false)
     {
         var tools = new List<string>(BuiltIn);
         if (IsExecutor(persona)) tools.AddRange(Executor);
         if (webAllowed) tools.AddRange(Web);
         if (tasksAllowed) tools.AddRange(TasksRead);
         if (notesAllowed) tools.AddRange(NotesRead);
+        // write-MCP: двойной гейт — Access != ReadOnly (Custom тоже проходит) + Specialty
+        if (notesWriteAllowed
+            && persona.Access != PersonaAccess.ReadOnly
+            && SpecialtyCatalog.CanWriteNotes(persona.Specialty))
+            tools.AddRange(NotesWrite);
+        if (tasksWriteAllowed
+            && persona.Access != PersonaAccess.ReadOnly
+            && SpecialtyCatalog.CanWriteTasks(persona.Specialty))
+            tools.AddRange(TasksWrite);
+        if (codeGraphAllowed) tools.AddRange(CodeGraphRead);
         tools.AddRange(PersonasRead);
         tools.AddRange(WspRead);
         if (persona.MemoryEnabled)

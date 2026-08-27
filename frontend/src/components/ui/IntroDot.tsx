@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { C, R } from '../../lib/design';
 
-// Точка-приглашение «знакомство не пройдено» (фича default-personas-onboarding).
+// Точка-приглашение «знакомство не пройдено».
 // Отдельный примитив, а не проп PersonaAvatar: обёртка лица на FAB (AiLauncher)
 // имеет overflow:hidden — точка внутри аватара была бы срезана. Родитель даёт
 // position:relative, примитив сам позиционируется в правый нижний угол.

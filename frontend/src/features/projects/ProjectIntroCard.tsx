@@ -15,7 +15,6 @@ import { Sparkles } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal } from '../../components/ui';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useMe } from '../../lib/defaultPersona';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { makeLead } from '../personas/TeamCommandCenter';
@@ -47,7 +46,6 @@ interface Props {
 // независимым условиям — наличию руководителя и состоянию каркаса. Если карточка
 // не нужна — возвращает null, чтобы родителю не пришлось вешать обёртку-условие.
 export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, presetKey, isMobile }: Props) {
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const me = useMe();
   // Локальный «закрыт» пишем в state, чтобы после «Позже» карточка ушла сразу же —
   // localStorage уже содержит значение, но ререндер всё равно нужен. После монтирования
@@ -82,9 +80,9 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
   const canPickFromTeam = !hasLead && team.length > 0;
 
   // Вариант 1: нет руководителя (и закрыли не «Позже» в этом виде карточки)
-  const showIntro = onboardingOn && isOwner && !hasLead && !introDismissed;
+  const showIntro = isOwner && !hasLead && !introDismissed;
   // Вариант 2: руководитель есть, но каркас не разложен (и не закрыли «Позже» в этом виде)
-  const showScaffold = onboardingOn && isOwner && hasLead && scaffoldPending && !scaffoldDismissed;
+  const showScaffold = isOwner && hasLead && scaffoldPending && !scaffoldDismissed;
 
   // Хуки должны быть выше любого условного return — иначе React считает разное
   // число хуков между рендерами и падает на «Rendered more hooks than during the previous render».

@@ -571,9 +571,8 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const below = !useTarget && !defer && (isMobile || panelBelow);
   return (
     // Панель уехала во внешний контейнер (useTarget) — своя двухколоночная раскладка тут
-    // не нужна и ВРЕДНА: flex-контейнер не обтекает плавающие блоки, а колонка свойств
-    // и комментариев у открытого файла стоит именно плавающей, чтобы текст шёл под ней,
-    // а не оставлял пустую полосу справа
+    // не нужна и ВРЕДНА: у открытого файла колонка свойств и комментариев уже стоит
+    // справа в потоке (FileViewer), вторая колонка рядом дала бы двойную полосу
     <div style={useTarget ? undefined : { display: 'flex', alignItems: 'flex-start', gap: 18 }}>
       <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp}
         style={useTarget ? { minWidth: 0 } : { flex: 1, minWidth: 0 }}>

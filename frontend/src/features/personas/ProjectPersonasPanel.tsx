@@ -45,7 +45,6 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
         selectedId={selectedId}
         onSelect={onSelect}
         onNew={onNew}
-        dashedNewButton
         teamCenter={onShowTeam ? { active: !!teamActive, onClick: onShowTeam } : undefined}
       />
     </div>

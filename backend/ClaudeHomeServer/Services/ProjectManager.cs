@@ -209,16 +209,26 @@ public class ProjectManager
     // Область документации для панели «Документы». Отдельным методом, а не параметром
     // Update: настройка узкая и приходит из самой панели, а Update и без того на девяти
     // параметрах. null у оси = вернуть её к дефолту; пустой список = «ничего отсюда».
+    // Исключения устроены иначе: null = «не трогать» (старый бандл фронта, не знающий
+    // оси, не должен стирать их своим null), [] = «убрать все».
     public Project SetDocsScope(string id, IReadOnlyList<string>? folders,
-        IReadOnlyList<string>? rootFiles, IReadOnlyList<string>? types, string? home)
+        IReadOnlyList<string>? rootFiles, IReadOnlyList<string>? types, string? home,
+        IReadOnlyList<string>? excludeFolders = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
-        project.DocsFolders = folders is null ? null : [.. Docs.DocsIndexService.NormalizeFolders(folders)];
+        List<string>? normalizedFolders = folders is null ? null : [.. Docs.DocsIndexService.NormalizeFolders(folders)];
+        project.DocsFolders = normalizedFolders;
         project.DocsRootFiles = rootFiles is null ? null : [.. Docs.DocsIndexService.NormalizeRootFiles(rootFiles)];
         project.DocsTypes = types is null ? null : [.. Docs.DocsIndexService.NormalizeTypes(types)];
         // Пустая строка — «вернуть авто-выбор README», как у color/groupId выше
         project.DocsHome = home is null ? project.DocsHome : Docs.DocsIndexService.NormalizeHome(home);
+        // Исключения нормализуются против ИТОГОВЫХ папок: правка folders здесь же
+        // выкидывает исключения, ставшие неактуальными
+        if (excludeFolders is not null)
+            project.DocsExcludeFolders =
+                [.. Docs.DocsIndexService.NormalizeExcludeFolders(excludeFolders,
+                    normalizedFolders ?? [.. Docs.DocsIndexService.DefaultScope.Folders])];
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

@@ -97,19 +97,22 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
             var file = docs.ReadScopeFile(project.RootPath);
             if (file.Scope is null)
             {
-                var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Types, req.Home);
+                var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Types, req.Home,
+                    req.ExcludeFolders);
                 return Ok(docs.Describe(saved));
             }
 
             // null оси — «вернуть к дефолту», поэтому в файл уезжает дефолтное значение.
             // Home устроен иначе (как color и groupId у проекта): null — «не менять»,
             // пустая строка — сброс к авто. Иначе запрос без home (та самая кнопка про
-            // README) стирал бы выбранную домашнюю страницу
+            // README) стирал бы выбранную домашнюю страницу. Исключения — как home:
+            // null «не менять» (старый бандл фронта не знает оси и шлёт null), [] — убрать все
             docs.WriteScopeFile(project.RootPath, new DocsScope(
                 req.Folders ?? DocsIndexService.DefaultScope.Folders,
                 req.RootFiles ?? DocsIndexService.DefaultScope.RootFiles,
                 req.Types ?? DocsIndexService.DefaultScope.Types,
-                req.Home is null ? file.Scope.Home : DocsIndexService.NormalizeHome(req.Home)));
+                req.Home is null ? file.Scope.Home : DocsIndexService.NormalizeHome(req.Home),
+                req.ExcludeFolders ?? file.Scope.ExcludeFolders));
             return Ok(docs.Describe(project));
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -176,7 +179,8 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
                     if (docs.ReadScopeFile(p.RootPath).Scope is not null)
                         docs.WriteScopeFile(p.RootPath, scope with { RootFiles = rootFiles });
                     else
-                        projects.SetDocsScope(projectId, scope.Folders, rootFiles, scope.Types, null);
+                        projects.SetDocsScope(projectId, scope.Folders, rootFiles, scope.Types, null,
+                            scope.ExcludeFolders);
                     scope = docs.ResolveScope(GetProject(projectId));
                 }
             }
@@ -422,7 +426,10 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     }
 }
 
-public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home = null);
+// ExcludeFolders устроен асимметрично к старым осям: null — «не трогать» (старый бандл
+// фронта не знает оси и не должен стирать исключения), [] — «убрать все исключения»
+public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles, List<string>? Types,
+    string? Home = null, List<string>? ExcludeFolders = null);
 
 // Folder = null или «» — корень репозитория: там тоже бывает свой .order
 public record SetDocsOrderRequest(string? Folder, List<string>? Items);

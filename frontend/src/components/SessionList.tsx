@@ -1,20 +1,17 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, MessageCircle } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
-import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
-import { showToast } from '../lib/toast';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -71,6 +68,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Раскрытая свайпом карточка (мобильная раскладка) — как в глобальном ChatList:
+  // одна максимум, закрывается скроллом/открытием другой
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
@@ -150,33 +150,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
 
-  // Кнопка десктопного чата видна, когда фича включена у человека И грань включена
-  // в этом проекте: без второй половины оси сервер откажет, а кнопка врала бы
-  const desktopReady = useFeature(FLAGS.desktopAgent) && project.desktopAgentEnabled === true;
-
   const createNew = async (): Promise<Session> => {
-    // Чат создаётся от лица дефолт-персоны проекта
+    // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
     const s = await createChatWithContextPersona(project, { mode: 'auto' });
     // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);
     return s;
-  };
-
-  // Десктопный чат (ADR-008): тип задаётся ТОЛЬКО при создании — продолжить его обычным
-  // чатом нельзя, поэтому и создаётся он отдельной дверью, а не переключателем в готовом
-  // чате. Персону сюда не подставляем: у грани своя ось выдачи «проект + тип чата».
-  const createDesktop = async () => {
-    try {
-      const s = await api.sessions.create(project.id, 'auto', undefined, undefined,
-        undefined, undefined, undefined, true);
-      setSessions(prev => [s, ...prev]);
-      onSelect(s);
-    } catch (e: unknown) {
-      // Отказ сервера показываем как есть: он называет причину (флаг, тумблер проекта)
-      showToast('Десктопный чат не создан',
-        e instanceof Error && e.message ? e.message : 'Сервер отказал', 'info');
-    }
   };
 
 
@@ -308,45 +288,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     if (activeSession?.id === updated.id) onSessionUpdated?.(updated);
   };
 
-  // === Архив чата (режим «Архивные» этого же списка) ===
-  // Чат ПРЯЧЕТСЯ, а не удаляется: история и claudeSessionId целы. Признак архива
-  // производный (ArchivedAt/UpdatedAt) — на клиенте его не вычисляем, кладём в
-  // список ответ сервера как есть. 409 «в чате идёт ход» показываем ровно тем
-  // текстом, что прислал бэкенд: он называет причину точнее нашей обёртки.
-  const handleArchive = async (s: Session, archived: boolean) => {
-    try {
-      handleSessionUpdated(await archiveApi.setArchived(s.id, archived));
-    } catch (e) {
-      showToast('Архив', e instanceof Error ? e.message : 'Не удалось изменить архив', 'info');
-    }
-  };
-
-  // Сводка карточки архива (место chat-digest): первая сборка зовёт модель,
-  // последующие отдаются из кэша. Ответ — обновлённая сессия с ArchiveSummary.
-  // Ошибку рисует список, а не подвал карточки: 409 «сводка уже собирается» и
-  // 502 «модель упала» приходят человеческим текстом.
-  const handleBuildDigest = async (s: Session) => {
-    try {
-      handleSessionUpdated(await archiveApi.buildDigest(s.id));
-    } catch (e) {
-      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
-    }
-  };
-
-  // «Сохранить в заметки» — существующий POST /api/sessions/{id}/summary. В ответе
-  // приходит заметка, а SummaryNoteId сервер проставляет самой сессии: перечитываем
-  // чат, иначе карточка покажет первые строки заметки только после поллинга (5с).
-  const handleSaveAsNote = async (s: Session) => {
-    try {
-      await saveArchiveSessionAsNote(s.id);
-      showToast('Сохранение в заметки', 'Заметка создана', 'info');
-      const fresh = await api.chats.get(s.id).catch(() => null);
-      if (fresh) handleSessionUpdated(fresh);
-    } catch (e) {
-      showToast('Сохранение в заметки', e instanceof Error ? e.message : 'Не удалось сохранить в заметки', 'info');
-    }
-  };
-
   const handleDelete = async () => {
     if (!deleteTarget) return;
     // Кнопка удаления скрыта офлайн, но сеть могла упасть между показом и кликом —
@@ -400,14 +341,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, agentsRunningIds],
   );
-  // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
-  // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
-  // подмножеству: в режиме архива бейдж иначе врал бы на весь список проекта,
-  // а в обычном — записывал в «скрытые фильтрами» убранные в архив чаты, которые
-  // сбросом фильтров не возвращаются.
-  const scoped = sessions.filter(s => isArchivedChat(s) === filters.archivedOnly);
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = scoped.length - filteredSessions.length;
+  const hiddenCount = sessions.length - filteredSessions.length;
 
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
@@ -461,18 +396,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onHover={h => setHoveredId(h ? s.id : null)}
         onDelete={() => setDeleteTarget(s)}
         tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
-        onRemoveTag={online ? name => toggleTag(s, name) : undefined}
         onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
         onEdited={handleSessionUpdated}
-        // Архив и его действия — только онлайн: офлайн-кэш отдал бы «успех» на
-        // запрос, который до сервера не доехал. Сводка и заметка рисуются подвалом
-        // карточки лишь у архивного чата (см. ChatCard), обычной карточке они
-        // ничего не меняют
-        onArchive={online ? archived => { void handleArchive(s, archived); } : undefined}
-        onBuildDigest={online ? () => handleBuildDigest(s) : undefined}
-        onSaveAsNote={online ? () => handleSaveAsNote(s) : undefined}
+        swipeOpen={openSwipeId === s.id}
+        onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
       />
     );
     // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
@@ -544,10 +473,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ChatListToolbar
         onNew={() => { void createNew(); }}
-        onNewDesktop={desktopReady ? () => { void createDesktop(); } : undefined}
         hideNew={!online}
         sessions={sessions}
         filters={filters}
@@ -560,46 +488,31 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       {/* Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
           верхний padding у него есть, и вместе с общим набегало 18px пустоты под
           шапкой. Без группировки список начинается сразу карточкой — ей нужен
-          обычный отступ, иначе она липнет к заголовку.
-          minHeight:0 нужен потому, что внешний контейнер — flex-элемент
-          контентной зоны PanelShell при fill=false (одна панель в drawer'е): без
-          явного обнуления min-height flex-элемент по умолчанию растёт до высоты
-          контента и не сжимается, а overflow:auto у скролл-дива не срабатывает,
-          потому что нет переполнения. С minHeight:0 список сжимается до
-          свободного места родителя, а длинный контент уходит в скролл. */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+          обычный отступ, иначе она липнет к заголовку. */}
+      <div
+        // Скролл закрывает раскрытую свайпом карточку (механика ChatList)
+        onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
+        // Фон явный — по той же причине, что в ChatList: прозрачные строки и липкая
+        // подпись группы держатся на том, что под ними именно bgWhite
+        style={{ flex: 1, overflowY: 'auto', background: C.bgWhite, padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
         {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
             в тулбаре панели сверху, дублировать его в empty незачем. */}
-        {loaded && scoped.length === 0 && (
-          filters.archivedOnly ? (
-            // Режим архива, а убранных чатов нет вовсе — рассказываем, откуда они
-            // берутся и что архив ничего не теряет
-            <EmptyState
-              compact
-              icon={<Archive size={20} strokeWidth={2} />}
-              title={ARCHIVE_EMPTY_TITLE}
-              subtitle={ARCHIVE_EMPTY_SUBTITLE}
-            />
-          ) : (
-            <EmptyState
-              compact
-              icon={<MessageCircle size={20} strokeWidth={2} />}
-              title="Чатов пока нет"
-              subtitle="Начните первый чат по этому проекту."
-            />
-          )
+        {loaded && sessions.length === 0 && (
+          <EmptyState
+            compact
+            icon={<MessageCircle size={20} strokeWidth={2} />}
+            title="Чатов пока нет"
+            subtitle="Начните первый чат по этому проекту."
+          />
         )}
-        {/* Чаты этой оси есть, но их скрыли фильтры. Типовой случай режима архива:
-            архивный чат выполненной задачи (taskDone) не проходит дефолтный набор
-            статусов — чип «Завершён» выключен, и список пуст при полном архиве */}
-        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && scoped.length > 0 && (
+        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
           <EmptyState
             compact
             icon={<FilterX size={20} strokeWidth={2} />}
             title="Ничего не нашлось"
-            subtitle={buildHiddenReason(scoped.length, filters.search)}
+            subtitle={buildHiddenReason(sessions.length, filters.search)}
             action={
               <ChatFilterResetActions
                 search={filters.search}
@@ -630,7 +543,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             ) : (
               dayGroups.map(g => (
                 <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-                  <ListDateDivider title={g.title} />
+                  <ListDateDivider title={g.title} plain />
                   {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
                     <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                   )))}
@@ -654,7 +567,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           flatList.map(c => renderCard(c))
         ) : dayGroups.map(g => (
           <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-            <ListDateDivider title={g.title} />
+            <ListDateDivider title={g.title} plain />
             {g.items.map(c => renderCard(c))}
           </div>
         ))}

@@ -268,6 +268,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // toolUseId вызовов Agent/Task c run_in_background и Workflow — ждём их tool_result,
         // чтобы достать id фоновой задачи
         public readonly HashSet<string> BgLaunchCandidates = [];
+        // toolUseId фоновых задач, которые и правда АГЕНТЫ: сюда пишет запуск Agent/Task с
+        // run_in_background и Workflow (HandleAssistantToolsAsync), распознанный маркер запуска
+        // в tool_result (TrackBgLaunch) и task_started с непустым subagent_type. Только по этому
+        // набору считается HasTrackedBg — значок «агенты работают» в списке чатов.
+        //
+        // Отдельный набор, а не BgLaunchCandidates: тот опустошается при переходе задачи в
+        // PendingBg, то есть ровно тогда, когда вид задачи и становится нужен. Записи не
+        // вычищаются на завершении задачи намеренно: HasTrackedBg смотрит на значения PendingBg,
+        // и id, которого там уже нет, ни на что не влияет — набор живёт в пределах прогона и
+        // измеряется единицами. Доступ под lock (PendingBg) — как у остальных наборов учёта.
+        public readonly HashSet<string> AgenticBgToolUses = [];
         // Между ходами CLI ведёт собственные ходы-продолжения (ответы на task-notification) —
         // контент после TurnDone означает, что продолжение началось. Его result не должен
         // завершать пользовательский ход (см. SkipResults)
@@ -335,14 +346,39 @@ public class ClaudeSession : ILlmSessionAdapter
         // (структурный task_notification, текстовый <task-notification>, TaskOutput), и если
         // все три прошли мимо — запись висела в PendingBg до самой смерти процесса, а значок
         // агентов горел в списке чатов часами. Снэпшот от CLI авторитетнее нашего учёта.
+        //
+        // Считаются только АГЕНТСКИЕ задачи (AgenticBgToolUses): фоновой задачей CLI считает и
+        // Bash с run_in_background, и task_started на него приходит такой же. Дев-сервер,
+        // запущенный фоном, живёт часами — с ним чат бесконечно горел «агенты работают» при
+        // пустой панели агентов (бой, 26.08). Живучесть прогона это не трогает: держать
+        // процесс ради фоновой команды по-прежнему обязаны (HasPendingBg).
         public bool HasTrackedBg
         {
-            get { lock (PendingBg) return !BgTasksEmptySnapshot && PendingBg.Count > 0; }
+            get
+            {
+                lock (PendingBg)
+                    return !BgTasksEmptySnapshot && PendingBg.Any(kv => AgenticBgToolUses.Contains(kv.Value));
+            }
         }
 
-        // Последнее опубликованное наружу значение HasPendingBg (0/1) — гейт события
-        // bg_agents_presence: список чатов интересует только переход 0↔N, а не каждая
-        // задача. Поле (а не свойство) — читается-пишется через Interlocked.Exchange
+        // Обратная половина того же учёта: живёт НЕагентская фоновая задача (Bash с
+        // run_in_background — дев-сервер, watch, длинный скрипт). Список чатов помечает такой
+        // чат тихим значком команды: без него непонятно, почему чат держит живой процесс CLI
+        // и не остывает. Пустой снэпшот CLI гасит и её — он про все задачи разом.
+        public bool HasTrackedCommandBg
+        {
+            get
+            {
+                lock (PendingBg)
+                    return !BgTasksEmptySnapshot && PendingBg.Any(kv => !AgenticBgToolUses.Contains(kv.Value));
+            }
+        }
+
+        // Последнее опубликованное наружу присутствие фона — гейт события bg_agents_presence:
+        // список чатов интересует только СМЕНА состояния, а не каждая задача. Битовая пара
+        // (1 — агенты, 2 — фоновая команда), поле (а не свойство) — читается-пишется через
+        // Interlocked.Exchange. Стартовый 0 = «фона нет»: на пустом прогоне мутации набора
+        // ничего не публикуют, как и раньше.
         public int BgPresencePublished;
 
         public static TaskCompletionSource NewTcs() =>
@@ -384,6 +420,13 @@ public class ClaudeSession : ILlmSessionAdapter
     public bool HasTrackedBg
     {
         get { var run = _run; return run is not null && run.HasTrackedBg; }
+    }
+
+    // Вторая половина того же признака: живёт фоновая КОМАНДА, а не агент (см.
+    // ILlmSessionAdapter.HasTrackedCommandBg)
+    public bool HasTrackedCommandBg
+    {
+        get { var run = _run; return run is not null && run.HasTrackedCommandBg; }
     }
 
     public bool HasPendingBg
@@ -2472,6 +2515,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
                     "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM. " +
+                    "Не жди явной просьбы: если в разговоре появился срок, дата или обязательство („завтра“, „в пятницу“, „не забыть“, „надо будет“) — " +
+                    "предложи поставить задачу-напоминание в один-два клика (dueDate/dueTime + reminderMinutes); напоминание пользователю — " +
+                    "assignee „me“, поручение себе — assignee „claude“. Часто мелькнул вопрос про планы — загляни в tasks_list, прежде чем отвечать «ничего не запланировано». " +
                     "Не путай их со встроенными TaskCreate/TaskUpdate: те ведут план ТЕКУЩЕГО хода " +
                     "(шаги работы, видны пользователю чек-листом в ленте) и в систему задач не попадают. " +
                     "Задача пользователя — только mcp__tasks__*." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
@@ -4221,6 +4267,14 @@ public class ClaudeSession : ILlmSessionAdapter
         return string.IsNullOrEmpty(taskId) ? null : (taskId, StringProp(root, "tool_use_id"), StringProp(root, "status") != "completed");
     }
 
+    // task_started про АГЕНТА, а не про фоновую команду: у сабагентской задачи CLI кладёт в
+    // событие непустой subagent_type (в живом образце — "general-purpose"), у Bash с
+    // run_in_background его нет. Признак нужен вдобавок к собственному учёту запусков: агент,
+    // поднятый мимо HandleAssistantToolsAsync (например, вложенный), иначе не зажёг бы значок.
+    // Значения task_type намеренно не разбираем — их состав не проверен на живом CLI.
+    internal static bool IsAgenticTaskStarted(JsonElement root) =>
+        !string.IsNullOrEmpty(StringProp(root, "subagent_type"));
+
     // background_tasks_changed: true — массив tasks присутствует и пуст. Единственное
     // безопасное применение этого события (см. HandleBackgroundTasksChanged) — остальные
     // его формы (непустой список) намеренно не разбираем.
@@ -4253,7 +4307,13 @@ public class ClaudeSession : ILlmSessionAdapter
         if (m.Success)
         {
             run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
-            lock (run.PendingBg) run.PendingBg[m.Groups[1].Value] = toolUseId;
+            lock (run.PendingBg)
+            {
+                run.PendingBg[m.Groups[1].Value] = toolUseId;
+                // Маркеры, по которым сюда попадают, бывают только у агента и воркфлоу —
+                // задача агентская даже если её запуск проехал мимо учёта кандидатов
+                run.AgenticBgToolUses.Add(toolUseId);
+            }
         }
         else if (candidate)
         {
@@ -4274,11 +4334,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // лока в противоположном порядке. HasPendingBg берёт лок сам, на мгновение.
     private void PublishBgPresence(CliRun run)
     {
-        var active = run.HasTrackedBg ? 1 : 0;
-        if (Interlocked.Exchange(ref run.BgPresencePublished, active) == active) return;
+        var agents = run.HasTrackedBg;
+        var command = run.HasTrackedCommandBg;
+        // Оба вида в одном гейте: у чата с агентом И дев-сервером завершение агента меняет
+        // только первый бит, и раздельные гейты слали бы два события об одном состоянии
+        var state = (agents ? 1 : 0) | (command ? 2 : 0);
+        if (Interlocked.Exchange(ref run.BgPresencePublished, state) == state) return;
         _ = Task.Run(async () =>
         {
-            try { await _onMessage(new BgAgentsPresenceMessage(active == 1)); }
+            try { await _onMessage(new BgAgentsPresenceMessage(agents, command)); }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[ClaudeSession] bg_agents_presence не разослан: {ex.Message}");
@@ -4402,6 +4466,10 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             run.PendingBg[taskId] = toolUseId;
             run.BgLaunchCandidates.Remove(toolUseId);
+            // Вид задачи: наш собственный учёт запуска (кандидат) либо subagent_type самого
+            // события. Bash с run_in_background не даёт ни того, ни другого — он остаётся в
+            // PendingBg (процесс держим), но значка агентов не зажигает
+            if (IsAgenticTaskStarted(root)) run.AgenticBgToolUses.Add(toolUseId);
             if (run.UnknownBgToolUses.Remove(toolUseId) && run.UnknownBgToolUses.Count == 0)
                 run.PendingBgUnknown = false;
         }
@@ -4580,13 +4648,19 @@ public class ClaudeSession : ILlmSessionAdapter
             if (toolName == "Workflow") toolInput = EnrichWorkflowInput(toolInput);
 
             // Кандидат в фоновые задачи прогона: Agent/Task с run_in_background или Workflow —
-            // подтверждение запуска и id задачи придут в tool_result (TrackBgLaunch)
+            // подтверждение запуска и id задачи придут в tool_result (TrackBgLaunch). Здесь же
+            // запоминаем ВИД задачи: к моменту task_started кандидат уже снят с учёта, а по
+            // самой задаче не отличить агента от Bash с run_in_background (см. AgenticBgToolUses)
             if (parentId is null && toolId.Length > 0
                 && (toolName == "Workflow"
                     || (toolName is "Agent" or "Task" && block.TryGetProperty("input", out var inputEl)
                         && inputEl.TryGetProperty("run_in_background", out var bgEl)
                         && bgEl.ValueKind == JsonValueKind.True)))
-                lock (run.PendingBg) run.BgLaunchCandidates.Add(toolId);
+                lock (run.PendingBg)
+                {
+                    run.BgLaunchCandidates.Add(toolId);
+                    run.AgenticBgToolUses.Add(toolId);
+                }
 
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }

@@ -244,7 +244,7 @@ public sealed class DevServerService : IDisposable
             if (!_servers.TryGetValue(key, out var current) || !ReferenceEquals(current, instance))
                 break;
             if (SafeHasExited(process)) break;
-            if (instance.Port != 0 && await IsPortListeningAsync(instance.Port))
+            if (instance.Port != 0 && await LoopbackResolver.IsListeningAsync(instance.Port))
             {
                 instance.Status = "started";
                 SetActivePreview(projectId, serviceId);
@@ -314,25 +314,6 @@ public sealed class DevServerService : IDisposable
         // на оба случая: «процесс не запускался» и «объект уже освобождён».
         try { return p.HasExited; }
         catch (InvalidOperationException) { return true; }
-    }
-
-    /// <summary>
-    /// Проверить, принимает ли кто-то соединения на 127.0.0.1:port. Используется и как
-    /// признак готовности своего dev-сервера, и как проба «сервис уже поднят снаружи».
-    /// Проба именно с хоста: туда же ходит preview-прокси, включая порты песочницы —
-    /// они проброшены на 127.0.0.1.
-    /// </summary>
-    public static async Task<bool> IsPortListeningAsync(int port)
-    {
-        try
-        {
-            using var client = new TcpClient();
-            var connect = client.ConnectAsync(IPAddress.Loopback, port);
-            var ok = await Task.WhenAny(connect, Task.Delay(400)) == connect;
-            if (connect.IsFaulted) _ = connect.Exception; // погасить unobserved
-            return ok && connect.IsCompletedSuccessfully && client.Connected;
-        }
-        catch { return false; }
     }
 
     /// <summary>Остановить сервис.</summary>
@@ -409,6 +390,25 @@ public sealed class DevServerService : IDisposable
             list.Add(new RunningServiceInfo(inst.ServiceId, inst.Name, inst.Port == 0 ? null : inst.Port, inst.Status, inst.Error));
         }
         return list;
+    }
+
+    /// <summary>
+    /// Фактический порт ИМЕННО ЭТОГО запущенного сервиса, либо null.
+    ///
+    /// Нужен потому, что конфигурация порта может не знать: сервис стартует с автопортом
+    /// или отдаёт порт в выводе, и в launch.json/манифесте его нет вовсе.
+    ///
+    /// В отличие от GetActivePreviewPort никаких фолбэков здесь нет намеренно: подстановка
+    /// «какого-нибудь запущенного» увела бы внешнюю ссылку на посторонний процесс.
+    /// </summary>
+    public int? GetRunningPort(string projectId, string serviceId, string userId)
+    {
+        if (_servers.TryGetValue(Key(projectId, serviceId), out var inst)
+            && inst.UserId == userId
+            && inst.Status == "started"
+            && inst.Port > 0)
+            return inst.Port;
+        return null;
     }
 
     /// <summary>Id активного для превью сервиса проекта (для владельца).</summary>

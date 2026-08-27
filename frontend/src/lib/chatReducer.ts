@@ -280,6 +280,33 @@ function lastKnownModel(items: ChatItem[]): string | null {
   return null;
 }
 
+// Внеходовая вставка — строка, попавшая в ленту НЕ из потока текущего хода: правка файла,
+// сделанная не этим чатом (человек, форматтер, соседний чат, фоновый агент — признак external
+// ставит TurnFileWatcher). Такие строки прилетают асинхронно, в любой момент чужого ответа,
+// и разрезать ими пост нельзя: ответ распадался бы на два блока со строкой посередине.
+// Поэтому для склейки дельт они «прозрачны» — текст продолжает свой блок, а строка остаётся
+// под ним. Симметрично серверу: TurnAccumulator.OnFileChanged откладывает такую запись, НЕ
+// сбрасывая текстовый буфер, иначе история после перезагрузки разъехалась бы с живой лентой.
+function isOutOfTurnInsert(item: ChatItem): boolean {
+  return item.kind === 'file_changed' && item.external === true;
+}
+
+// Индекс открытого блока основного агента (текст/размышление), к которому клеится следующая
+// дельта, или -1 (нужно начинать новый). Хвост внеходовых вставок пропускаем; всё остальное —
+// вызов инструмента, карточка, правка файла этого же чата — законный разрез, как и раньше.
+function openBlockIndex(items: ChatItem[], kind: 'text' | 'thinking'): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (isOutOfTurnInsert(it)) continue;
+    // К блоку сабагента (parentToolUseId) дельту основного агента не приклеиваем —
+    // начинаем новый элемент (тот же «разрез», что делает FlushBuffers в истории)
+    if (it.kind === 'text' || it.kind === 'thinking')
+      return it.kind === kind && !it.parentToolUseId ? i : -1;
+    return -1;
+  }
+  return -1;
+}
+
 // Последний блок сабагента данного вида у данного родителя — для дедупа эха
 // «история + live» при reconnect (см. case agent_text/agent_thinking)
 function lastAgentBlock(items: ChatItem[], kind: 'text' | 'thinking', parentToolUseId: string) {
@@ -353,12 +380,15 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'session_started', model: msg.model, mode: msg.mode, cwd: msg.cwd, toolCount: msg.toolCount, mcpServers: msg.mcpServers, turnWorktree: msg.turnWorktree }]);
 
     case 'text_delta': {
-      const last = prev.items[prev.items.length - 1];
-      // spread сохраняет прочие поля реплики (personaId — авторство).
-      // К тексту сабагента (parentToolUseId) дельту основного агента не приклеиваем —
-      // начинаем новый элемент (тот же «разрез», что делает FlushBuffers в истории).
-      if (last?.kind === 'text' && !last.parentToolUseId)
-        return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
+      // spread сохраняет прочие поля реплики (personaId — авторство). Блок ищем через
+      // openBlockIndex: он не обязан быть последним — под ним могли осесть внеходовые строки.
+      const at = openBlockIndex(prev.items, 'text');
+      if (at >= 0) {
+        const block = prev.items[at] as Extract<ChatItem, { kind: 'text' }>;
+        const items = prev.items.slice();
+        items[at] = { ...block, text: block.text + msg.text };
+        return withItems(items);
+      }
       // ts ставим на ПЕРВОЙ дельте поста — это момент, когда ассистент начал его писать
       // (тот же смысл, что у _textBufStartedAt в TurnAccumulator). Модели тут ещё нет:
       // её принесёт result в конце хода (case 'result' ниже)
@@ -426,9 +456,13 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
     }
 
     case 'thinking_delta': {
-      const last = prev.items[prev.items.length - 1];
-      if (last?.kind === 'thinking' && !last.parentToolUseId)
-        return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
+      const at = openBlockIndex(prev.items, 'thinking');
+      if (at >= 0) {
+        const block = prev.items[at] as Extract<ChatItem, { kind: 'thinking' }>;
+        const items = prev.items.slice();
+        items[at] = { ...block, text: block.text + msg.text };
+        return withItems(items);
+      }
       return withItems([...prev.items, { kind: 'thinking', text: msg.text, expanded: false }]);
     }
 

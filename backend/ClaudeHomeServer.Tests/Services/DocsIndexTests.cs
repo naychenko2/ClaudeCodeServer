@@ -74,6 +74,93 @@ public class DocsIndexTests : IDisposable
         _svc.GetIndex(_root).Should().BeEmpty();
     }
 
+    // ─── Исключения области ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Исключения_ПодпапкаВычтена_СоседниеДокументыОстались()
+    {
+        // Кейс из жизни: рабочие артефакты спайков рядом с настоящей документацией
+        Write("# План", "spikes", "2026-08-20-x", "plan.md");
+        Write("# Рабочая песочница", "spikes", "2026-08-20-x", "workdir", "AGENTS.md");
+        Write("# Карточка спайка", "spikes", "2026-08-20-x.md");
+
+        var scope = new DocsScope(["spikes"], [], ["markdown"], ExcludeFolders: ["spikes/2026-08-20-x/workdir"]);
+        var index = _svc.GetIndex(_root, scope);
+
+        index.Select(d => d.Path).Should().BeEquivalentTo(
+            ["spikes/2026-08-20-x.md", "spikes/2026-08-20-x/plan.md"]);
+    }
+
+    [Fact]
+    public void Исключения_ПрефиксВыкидываетВсеВложенное()
+    {
+        Write("# Демо-данные", "docs", "demo", "deep", "raw.md");
+        Write("# Настоящая документация", "docs", "guide.md");
+
+        var scope = new DocsScope(["docs"], [], ["markdown"], ExcludeFolders: ["docs/demo"]);
+        var index = _svc.GetIndex(_root, scope);
+
+        index.Should().ContainSingle().Which.Path.Should().Be("docs/guide.md");
+    }
+
+    [Fact]
+    public void Исключения_СменаОсиБезПравкиФайлов_ПересобираетКеш()
+    {
+        Write("# Рабочая песочница", "docs", "workdir", "AGENTS.md");
+        Write("# Документация", "docs", "guide.md");
+
+        var сОбластью = new DocsScope(["docs"], [], ["markdown"]);
+        _svc.GetIndex(_root, сОбластью).Select(d => d.Path).Should().HaveCount(2);
+
+        // Ни один файл не менялся: без исключений в ключе кеш отдал бы прежний корпус
+        var сИсключением = new DocsScope(["docs"], [], ["markdown"], ExcludeFolders: ["docs/workdir"]);
+        _svc.GetIndex(_root, сИсключением)
+            .Should().ContainSingle().Which.Path.Should().Be("docs/guide.md");
+    }
+
+    [Fact]
+    public void Исключения_Нормализация_ОтбрасываетМусор()
+    {
+        // Мусор: вне выбранных папок, совпадение с выбранной, дубль. Живое: подпапка
+        var scope = DocsIndexService.NormalizeScope(new DocsScope(
+            ["docs", "spikes"], [], ["markdown"],
+            ExcludeFolders: ["docs", "other/x", "spikes/demo", "spikes/demo", "../escape"]));
+
+        scope.ExcludeFolders.Should().BeEquivalentTo(["spikes/demo"]);
+        // После нормализации ось всегда список — потребитель не проверяет null
+        DocsIndexService.NormalizeScope(new DocsScope(["docs"], [], ["markdown"]))
+            .ExcludeFolders.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ФайлОбласти_Исключения_КруговаяЗаписьИЧтение()
+    {
+        _svc.WriteScopeFile(_root, new DocsScope(["spikes"], ["README.md"], ["markdown"],
+            ExcludeFolders: ["spikes/2026-08-20-x/workdir"]));
+
+        // Ключ только непустой: пустые исключения — дефолт оси, строка в файле была бы шумом
+        File.ReadAllText(Path.Combine(_root, ".docs"))
+            .Should().Contain("\"excludeFolders\"");
+
+        _svc.ReadScopeFile(_root).Scope!.ExcludeFolders
+            .Should().BeEquivalentTo(["spikes/2026-08-20-x/workdir"]);
+
+        // [] в файл не пишется, null читается как пустой список
+        _svc.WriteScopeFile(_root, new DocsScope(["spikes"], [], ["markdown"], ExcludeFolders: []));
+        File.ReadAllText(Path.Combine(_root, ".docs")).Should().NotContain("\"excludeFolders\"");
+        _svc.ReadScopeFile(_root).Scope!.ExcludeFolders.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Гейт_ДокументИсключённойПапки_НеОтдаётся()
+    {
+        Write("# Рабочая песочница", "docs", "workdir", "AGENTS.md");
+
+        var scope = new DocsScope(["docs"], [], ["markdown"], ExcludeFolders: ["docs/workdir"]);
+
+        _svc.GetDoc(_root, "docs/workdir/AGENTS.md", scope).Should().BeNull();
+    }
+
     // ─── Заголовки ──────────────────────────────────────────────────────────
 
     [Fact]

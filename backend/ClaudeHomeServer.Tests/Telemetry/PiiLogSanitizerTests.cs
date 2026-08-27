@@ -103,6 +103,23 @@ public class PiiLogSanitizerTests
     }
 
     [Fact]
+    public void KestrelUnhandledException_ReadsWhole()
+    {
+        // Дословное сообщение Kestrel об необработанном исключении. До открытия
+        // trace_identifier в allowlist запись в SigNoz приезжала обрубком: первый
+        // плейсхолдер со значением, второй — как есть.
+        var captured = Log(l => l.LogError(
+            "Connection id \"{ConnectionId}\", Request id \"{TraceIdentifier}\": "
+            + "An unhandled exception was thrown by the application.",
+            "0HNO3H40H5NAD", "0HNO3H40H5NAD:00000004"));
+
+        captured.Message.Should().Be(
+            "Connection id \"0HNO3H40H5NAD\", Request id \"0HNO3H40H5NAD:00000004\": "
+            + "An unhandled exception was thrown by the application.",
+            "оба плейсхолдера — opaque-идентификаторы соединения, PII в них нет");
+    }
+
+    [Fact]
     public void ChatName_DoesNotLeakIntoAttributes()
     {
         var captured = Log(l => l.LogInformation(

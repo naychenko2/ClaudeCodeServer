@@ -32,6 +32,8 @@ import { ReaderHeaderBar } from './reader/ReaderHeaderBar';
 import { ReaderBody } from './reader/ReaderBody';
 import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPanel';
 import { wsPanels } from './panelStackState';
+import { VideoCenter } from '../../features/video/VideoCenter';
+import { setVideoCenterBlocked, useVideoCenter, VIDEO_PANEL_EVENT } from '../../lib/videoStage';
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -158,7 +160,16 @@ export function DesktopWorkspace(p: Props) {
   // его поднимают проектный воркспейс (этот файл) и раздел «Чаты» (ChatsPage) —
   // у обоих есть PanelZone с compact={isTablet}. WallPage и остальные разделы
   // хаба compact не передают, и эксклюзив у них не действует.
-  const { setExclusive, markActive, closeCompactStack } = wsPanels.use();
+  const { setExclusive, markActive, closeCompactStack, reveal } = wsPanels.use();
+  // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
+  // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
+  // она, а стор только просит об этом событием.
+  useEffect(() => {
+    const show = () => reveal('video');
+    window.addEventListener(VIDEO_PANEL_EVENT, show);
+    return () => window.removeEventListener(VIDEO_PANEL_EVENT, show);
+  }, [reveal]);
+
   useEffect(() => {
     setExclusive(!!p.isTablet);
     if (p.isTablet) markActive('left');
@@ -204,6 +215,9 @@ export function DesktopWorkspace(p: Props) {
       if (p.teamCenterOpen) p.onCloseTeamCenter();
       if (p.previewOpen) p.onClosePreview();
     }
+    // Эфир трогать не надо: развёрнутый кадр занимает центр вместо ленты, но
+    // выбор чата его не гасит — кадр сворачивают сами, кнопкой или крестиком,
+    // а насильный возврат прервал бы просмотр на полуслове.
     p.onSelectSession(s, firstMessage, autoSelect);
   };
 
@@ -245,8 +259,10 @@ export function DesktopWorkspace(p: Props) {
     toc: toc ? <TocPanel toc={toc} /> : undefined,
   };
 
+  const videoCenter = useVideoCenter();
+
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
-  // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова
+  // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова.
   const chatPanel = (headerIsland: boolean) => p.activeSession ? (
     <ChatPanel
       session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat} onOpenReader={p.onOpenReader}
@@ -258,6 +274,10 @@ export function DesktopWorkspace(p: Props) {
       skills={p.skills} agents={p.agents}
       attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange}
       headerIsland={headerIsland}
+      // Действия чата из шапки, которыми владеет экран: набор стены и уход из
+      // удалённого чата (тот же колбэк, что чистит выбор после удаления в списке)
+      onAddToWall={wallOn ? () => handleAddToWall(p.activeSession!) : undefined}
+      onChatDeleted={p.onClearSession}
     />
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -292,10 +312,26 @@ export function DesktopWorkspace(p: Props) {
   // Но ленты может и не быть: пока чат не выбран, в центре стоит заставка вдвое уже,
   // и её потребность — SPLASH_W. Дашь тут CHAT_COLUMN_W — на окне ноутбука запаса
   // не останется вовсе, компенсация выродится в ноль и заставку перекосит.
-  const chatOnly = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
+  const centerFree = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
     && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
+  // Эфир и каталог занимают тот же остров, что файл и задача, — значит уступают им.
+  // Уступка живёт ОДНИМ эффектом, а не колбэком в каждом из девяти открывателей
+  // центра: те раскиданы по WorkspacePage, и один забытый вызов дал бы два острова
+  // в одном месте раскладки.
+  const videoInCenter = !!videoCenter && centerFree;
+  const chatOnly = centerFree && !videoInCenter;
   const centerContentW = chatOnly ? (p.activeSession ? CHAT_COLUMN_W : SPLASH_W) : undefined;
   const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(centerContentW);
+
+  // Занятость центра публикуем в стор видео: он и освободит остров от эфира, и
+  // погасит кнопки «развернуть в центре», пока место занято. Гасить эфир прямо
+  // отсюда было мало — центр, занятый ЗАРАНЕЕ, признак не менял, эффект молчал,
+  // а кадр, отправленный в такой центр, исчезал и с экрана, и из панели.
+  useEffect(() => {
+    setVideoCenterBlocked(!centerFree);
+    // Уходя со страницы, запрет снимаем: в «Чатах» центр видео доступен всегда
+    return () => setVideoCenterBlocked(false);
+  }, [centerFree]);
 
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
   // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух
@@ -411,6 +447,12 @@ export function DesktopWorkspace(p: Props) {
           {p.graphArea}
         </div>
       )}
+
+      {/* Видео занимает центр ЦЕЛИКОМ — и кадр, и каталог. Кадр пробовали ставить
+          вторым островом рядом с лентой, как файл: в узкой половине от него мало
+          толку, а разворачивают его как раз тогда, когда хотят смотреть, а не
+          переписываться. Фоновый просмотр закрывает панель рельсы, она рядом. */}
+      {videoInCenter && centerIsland(<VideoCenter />)}
 
       {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка.
           overflow visible: композер стоит на нижней кромке зоны, и hidden срезал бы

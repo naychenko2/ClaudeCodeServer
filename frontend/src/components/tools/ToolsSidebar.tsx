@@ -1,12 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight } from 'lucide-react'
+import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X } from 'lucide-react'
 import { C, R, FONT, FS, SP, SHADOW, Z } from '../../lib/design'
 import { Dot, EmptyState, IconButton, Button, PanelHeaderSlot, useHasPanelHeader } from '../ui'
 import { ListDateDivider } from '../ListDateDivider'
 import { ICON_STROKE } from '../ui/icons'
 import { statusColor } from '../preview/PreviewView'
 import { AddServiceDialog } from '../preview/AddServiceDialog'
+import { useExternalPreviewLinks } from '../../hooks/useExternalPreviewLinks'
+import { api } from '../../lib/api'
+import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
 import type * as ts from '../../lib/terminalSignalr'
 import type { ProjectService } from '../../types'
 
@@ -194,6 +197,40 @@ export function PreviewServiceList({
   onSelectPreview: (serviceId: string) => void
 }) {
   const [adding, setAdding] = useState(false)
+  // Ссылки внешнего доступа: список сквозной по проектам владельца, поэтому живёт здесь,
+  // а не в состоянии проекта
+  const { enabled: extEnabled, links: extLinks, refresh: refreshLinks, revoke, revokeAll } = useExternalPreviewLinks()
+  const [shareError, setShareError] = useState<string | null>(null)
+  const [shareNote, setShareNote] = useState<string | null>(null)
+  // Открытые ссылки ЭТОГО проекта — по ним у строк появляется значок и «закрыть»
+  const sharedHere = new Map(extLinks.filter(l => l.projectId === projectId).map(l => [l.serviceId, l.jti]))
+
+  const share = useCallback(async (svc: ProjectService) => {
+    setShareError(null)
+    setShareNote(null)
+    // Вкладку открываем СРАЗУ по клику, пустой: после await браузер считает открытие
+    // непрошеным и режет его блокировщиком попапов
+    const tab = window.open('about:blank', '_blank')
+    try {
+      const r = await api.projects.previewExternalLink(projectId, svc.id)
+      // Адрес нужен центральной панели — сервер его не помнит, повторно не выдать
+      saveExternalUrl(projectId, svc.id, r.url)
+      if (tab) {
+        tab.opener = null
+        tab.location.href = r.url
+      }
+      // Ссылку кладём в буфер молча: показать её второй раз негде — токен живёт в самой
+      // ссылке и на сервере не хранится, а на телефон её как-то передать надо
+      void navigator.clipboard?.writeText(r.url).catch(() => { /* буфер запрещён — не беда */ })
+      if (r.evicted.length > 0) {
+        setShareNote('Открытых ссылок стало слишком много — самая старая закрыта.')
+      }
+      void refreshLinks()
+    } catch (e) {
+      tab?.close()
+      setShareError(e instanceof Error ? e.message : 'Не удалось открыть доступ')
+    }
+  }, [projectId, refreshLinks])
   // Свёрнутые группы источников: привязаны к проекту — в разных репозиториях свои
   // наборы источников, общий список сворачивал бы то, чего в другом проекте нет
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(projectId))
@@ -209,10 +246,48 @@ export function PreviewServiceList({
   // Старый режим (вкладки этого сайдбара) шапки не имеет: там они остаются в теле.
   const inHeader = useHasPanelHeader()
   // Составные конфигурации показывают состав по именам, а приходят по id
-  const nameById = new Map(groups.flatMap(([, items]) => items).map(s => [s.id, s.name]))
+  const allServices = groups.flatMap(([, items]) => items)
+  const nameById = new Map(allServices.map(s => [s.id, s.name]))
+  const serviceById = new Map(allServices.map(s => [s.id, s]))
+  // Кто входит в состав хоть одной составной конфигурации: такие строки рисуются под
+  // своей группой, а не отдельно — иначе «All» и три его участника лежат в списке
+  // вперемешку, и связь между ними видна только в подсказке
+  const memberIds = new Set(allServices.flatMap(s => s.members ?? []))
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.sm}px ${SP.sm}px ${SP.md}px` }}>
+      {/* Открытые наружу ссылки — ВСЕ, а не только этого проекта: панель проектная, но
+          забытая витрина в соседнем проекте иначе осталась бы невидимой, а именно её
+          этот блок и должен ловить */}
+      {extEnabled && extLinks.length > 0 && (
+        <div style={{
+          marginBottom: SP.sm, padding: SP.sm, borderRadius: R.sm, background: C.warningBg,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs }}>
+            <Globe size={12} style={{ flexShrink: 0, color: C.warning }} />
+            <span style={{ flex: 1, fontSize: FS.xs, fontWeight: 600, color: C.warningText }}>
+              Открыто наружу
+            </span>
+            <Button size="xs" variant="ghost" onClick={() => { clearAllExternalUrls(); void revokeAll() }}>Закрыть все</Button>
+          </div>
+          {extLinks.map(l => (
+            <div key={l.jti} style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: '2px 0' }}>
+              <span style={{
+                flex: 1, minWidth: 0, fontSize: FS.xs, color: C.warningText,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {nameById.get(l.serviceId) ?? l.serviceId}
+                {l.projectId !== projectId && (
+                  <span style={{ color: C.textMuted }}> — {l.projectName ?? 'другой проект'}</span>
+                )}
+              </span>
+              <IconButton size="xs" variant="soft" onClick={() => { clearExternalUrl(l.projectId, l.serviceId); void revoke(l.jti) }} title="Закрыть доступ">
+                <X size={10} />
+              </IconButton>
+            </div>
+          ))}
+        </div>
+      )}
       {inHeader ? (
         <>
           <PanelHeaderSlot>
@@ -292,20 +367,69 @@ export function PreviewServiceList({
                   : undefined}
               />
             </div>
-            {!isCollapsed && items.map(svc => (
-              <ServiceRow
-                key={svc.id}
-                svc={svc}
-                memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
-                active={activePreviewId === svc.id}
-                onStart={() => onStartService(svc)}
-                onStop={() => onStopService(svc.id)}
-                onSelect={() => onSelectPreview(svc.id)}
-              />
-            ))}
+            {!isCollapsed && items.filter(svc => !memberIds.has(svc.id)).map(svc => {
+              const members = svc.members?.map(id => serviceById.get(id)).filter(m => m !== undefined) ?? []
+              return (
+                <Fragment key={svc.id}>
+                  <ServiceRow
+                    svc={svc}
+                    memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
+                    active={activePreviewId === svc.id}
+                    onStart={() => onStartService(svc)}
+                    onStop={() => onStopService(svc.id)}
+                    onSelect={() => onSelectPreview(svc.id)}
+                    shared={sharedHere.has(svc.id)}
+                    onShare={extEnabled ? () => void share(svc) : undefined}
+                    onUnshare={() => {
+                      const jti = sharedHere.get(svc.id)
+                      if (!jti) return
+                      clearExternalUrl(projectId, svc.id)
+                      void revoke(jti)
+                    }}
+                  />
+                  {members.map(member => (
+                    <ServiceRow
+                      key={member.id}
+                      svc={member}
+                      nested
+                      active={activePreviewId === member.id}
+                      onStart={() => onStartService(member)}
+                      onStop={() => onStopService(member.id)}
+                      onSelect={() => onSelectPreview(member.id)}
+                      shared={sharedHere.has(member.id)}
+                      onShare={extEnabled ? () => void share(member) : undefined}
+                      onUnshare={() => {
+                        const jti = sharedHere.get(member.id)
+                        if (!jti) return
+                        clearExternalUrl(projectId, member.id)
+                        void revoke(jti)
+                      }}
+                    />
+                  ))}
+                </Fragment>
+              )
+            })}
           </div>
         )
       })}
+
+      {shareError && (
+        <div style={{
+          marginBottom: SP.sm, padding: SP.sm, borderRadius: R.sm,
+          background: C.dangerBg, color: C.dangerText, fontSize: FS.xs, lineHeight: 1.4,
+        }}>
+          {shareError}
+        </div>
+      )}
+
+      {shareNote && (
+        <div style={{
+          marginBottom: SP.sm, padding: SP.sm, borderRadius: R.sm,
+          background: C.warningBg, color: C.warningText, fontSize: FS.xs, lineHeight: 1.4,
+        }}>
+          {shareNote}
+        </div>
+      )}
 
       {adding && (
         <AddServiceDialog
@@ -330,13 +454,19 @@ const saveCollapsed = (projectId: string, value: Set<string>) => {
   try { localStorage.setItem(collapsedKey(projectId), JSON.stringify([...value])) } catch { /* ignore */ }
 }
 
-function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
+function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare, nested }: {
   svc: ProjectService
   memberNames?: string[]
+  // Строка — участник составной конфигурации: рисуется под ней со сдвигом и направляющей
+  nested?: boolean
   active: boolean
   onStart: () => void
   onStop: () => void
   onSelect: () => void
+  // Открыт ли сервис наружу по ссылке и можно ли это менять (фича включена на сервере)
+  shared?: boolean
+  onShare?: () => void
+  onUnshare?: () => void
 }) {
   const [hover, setHover] = useState(false)
   const rowRef = useRef<HTMLDivElement>(null)
@@ -373,9 +503,15 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%',
+        display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.xxs}px ${SP.sm}px`,
-        borderRadius: R.md, border: 'none',
+        borderRadius: R.md,
+        border: 'none',
+        // Участник смещён и подпёрт направляющей: одного отступа мало, чтобы вложенность
+        // читалась с первого взгляда, а линия делает её однозначной
+        marginLeft: nested ? SP.md : 0,
+        width: nested ? `calc(100% - ${SP.md}px)` : '100%',
+        borderLeft: nested ? `1px solid ${C.borderLight}` : undefined,
         cursor: running || external || partial ? 'pointer' : 'default',
         background: active ? C.bgSelected : hover ? C.bgInset : 'transparent',
       }}
@@ -423,6 +559,24 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
           )}
         </div>
       </div>
+      {/* Открыт наружу — видно всегда, а не только под курсором: забытая витрина
+          и есть то, что этот значок должен ловить */}
+      {shared && (
+        <Globe size={12} style={{ flexShrink: 0, color: C.warning }} aria-label="открыт наружу" />
+      )}
+      {hover && onShare && (running || external) && (
+        shared
+          ? (
+            <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onUnshare?.() }} title="Закрыть доступ снаружи">
+              <GlobeLock size={12} />
+            </IconButton>
+          )
+          : (
+            <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onShare() }} title="Открыть снаружи">
+              <Globe size={12} />
+            </IconButton>
+          )
+      )}
       {hover && (
         external ? (
           <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onSelect() }} title="Показать страницу">

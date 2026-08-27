@@ -8,6 +8,9 @@ internal class TurnAccumulator
     private string? _saveKey;
     private readonly List<StoredMessage> _history;
     private readonly List<StoredMessage> _currentTurn = [];
+    // Внеходовые строки, пришедшие посреди поста (правка файла не этим чатом): попадают в
+    // ход не сразу, а следом за текстом — см. OnFileChanged и хвост FlushBuffers.
+    private readonly List<StoredMessage> _outOfTurn = [];
     private readonly Dictionary<string, StoredToolUseMessage> _pendingTools = [];
     // Для обновления решения (resolved) уже добавленных карточек вопроса/плана
     private readonly Dictionary<string, StoredAskQuestionMessage> _pendingQuestions = [];
@@ -219,22 +222,41 @@ internal class TurnAccumulator
     {
         lock (_lock)
         {
-            FlushBuffers();
+            // Правка ИЗВНЕ (человек, форматтер, соседний чат, фоновый агент — атрибуция в
+            // TurnFileWatcher) прилетает асинхронно и может застать ход посреди поста. Сбросить
+            // ради неё текстовый буфер значило бы разрезать ответ надвое: обрубок, чужая строка,
+            // продолжение отдельным пузырём. Живая лента такую строку постом не разрезает
+            // (chatReducer.openBlockIndex), поэтому и здесь запись откладывается и выкладывается
+            // ПОСЛЕ текста — при ближайшем flush'е. Правка самого хода (external=false) идёт по
+            // старому пути: она следует за своим tool_use, где текст и так уже разрезан.
+            var defer = external && _textBuf.Length > 0;
+            if (!defer) FlushBuffers();
+            var target = defer ? _outOfTurn : _currentTurn;
             // Дедуп за ход: повторная правка того же файла обновляет существующую строку
             // (дельты суммируем), а не плодит новую — иначе командные ходы (OmO, workflow)
             // спамят ленту десятками строк по одним и тем же файлам. External — по И: если
-            // хоть один вклад был от модели этого чата, строка в целом не «чужая»
-            for (var i = _currentTurn.Count - 1; i >= 0; i--)
-            {
-                if (_currentTurn[i] is StoredFileChangedMessage prev && prev.Path == path)
-                {
-                    _currentTurn[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed,
-                        prev.External && external);
-                    return;
-                }
-            }
-            _currentTurn.Add(new StoredFileChangedMessage(path, added, removed, external));
+            // хоть один вклад был от модели этого чата, строка в целом не «чужая».
+            // Ищем в обоих списках: строка по этому пути могла осесть как в ходе, так и в
+            // отложенных — иначе дедуп разъехался бы с клиентским (тот ищет по всей ленте хода).
+            if (TryMergeFileChange(_currentTurn, path, added, removed, external)) return;
+            if (TryMergeFileChange(_outOfTurn, path, added, removed, external)) return;
+            target.Add(new StoredFileChangedMessage(path, added, removed, external));
         }
+    }
+
+    // Слить правку в уже существующую строку того же файла (вызывать только под _lock).
+    private static bool TryMergeFileChange(List<StoredMessage> list, string path, int added, int removed, bool external)
+    {
+        for (var i = list.Count - 1; i >= 0; i--)
+        {
+            if (list[i] is StoredFileChangedMessage prev && prev.Path == path)
+            {
+                list[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed,
+                    prev.External && external);
+                return true;
+            }
+        }
+        return false;
     }
 
     public void OnCompactBoundary(string trigger, int? preTokens, int? postTokens)
@@ -545,6 +567,9 @@ internal class TurnAccumulator
                     result.Add(new StoredTextMessage(safe[_teamShownLength..], _personaId,
                         timestamp: _textBufStartedAt ?? NowMs()));
             }
+            // Придержанные внеходовые строки — после текста, как их покажет и flush: иначе
+            // снимок посреди хода (он же history.json при рестарте) их бы просто потерял
+            result.AddRange(_outOfTurn);
             return result;
         }
     }
@@ -605,6 +630,13 @@ internal class TurnAccumulator
             _currentTurn.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
             _thinkingBuf.Clear();
         }
+        // Строки, придержанные ради целостности поста (см. OnFileChanged), встают сразу за ним —
+        // ровно там, где их держит живая лента: текст остался единым блоком, строка под ним.
+        if (_outOfTurn.Count > 0)
+        {
+            _currentTurn.AddRange(_outOfTurn);
+            _outOfTurn.Clear();
+        }
     }
 
     private async Task FlushAsync(ChatHistoryService svc)
@@ -613,6 +645,9 @@ internal class TurnAccumulator
         {
             _history.AddRange(_currentTurn);
             _currentTurn.Clear();
+            // Ход закрыт финальным FlushBuffers — список уже пуст; чистим на случай пути,
+            // где ход обрывается мимо него (страховка от переезда строки в следующий ход)
+            _outOfTurn.Clear();
             _pendingTools.Clear();
             _pendingQuestions.Clear();
             _pendingPlans.Clear();

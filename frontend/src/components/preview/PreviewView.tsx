@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCcw, Square, Monitor, ExternalLink, ScrollText, X } from 'lucide-react'
+import { RotateCcw, Square, Monitor, ExternalLink, ScrollText, X, Globe } from 'lucide-react'
 import { C, FONT } from '../../lib/design'
 import { IconButton, Button, PillSwitch } from '../ui'
 import { PreviewLogView, type LogSource } from './PreviewLogView'
 import type { ProjectService } from '../../types'
+import { getExternalUrl } from '../../lib/externalPreviewUrls'
 
 interface Props {
   service: ProjectService
@@ -28,6 +29,11 @@ type Tab = 'preview' | 'logs'
 
 export function PreviewView({ service, projectId, onStop, onClose, services }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  // Наведение на шапку: по нему точка статуса уступает место крестику. На тач-экранах
+  // наведения не бывает вовсе, поэтому там крестик показывается всегда — иначе окно
+  // нечем было бы закрыть
+  const [headerHover, setHeaderHover] = useState(false)
+  const noHover = typeof window !== 'undefined' && window.matchMedia?.('(hover: none)').matches
   const started = service.status === 'started'
   const starting = service.status === 'starting'
   // Процесс поднят снаружи (Rider, терминал): проксировать порт можем, а останавливать
@@ -58,19 +64,44 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
     ? live.map(s => ({ id: s.id, name: s.name }))
     : own
 
-  if (started || external) ensurePreviewCookie()
-  const previewUrl = started || external ? `/preview/${projectId}/` : null
+  // Открыт доступ снаружи — показываем ИМЕННО его: там сайт живёт в корне, и всё, что
+  // ссылается на «/» (ассеты, чанки Module Federation), наконец грузится. Через префикс
+  // /preview/{id}/ такие сайты разъезжаются, и панель для них бесполезна.
+  const externalUrl = getExternalUrl(projectId, service.id)
+  // Кука cc_preview нужна только своему прокси; у поддомена своя, её ставит /__preview-auth
+  if (!externalUrl && (started || external)) ensurePreviewCookie()
+  const previewUrl = externalUrl ?? (started || external ? `/preview/${projectId}/` : null)
   const port = service.runningPort ?? service.suggestedPort
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Тулбар */}
-      <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
-        padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
-        background: C.bgPanel,
-      }}>
-        <StatusDot status={service.status} />
+      <div
+        onMouseEnter={() => setHeaderHover(true)}
+        onMouseLeave={() => setHeaderHover(false)}
+        style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
+          background: C.bgPanel,
+        }}
+      >
+        {/* Закрыть — на месте точки статуса, а не отдельной кнопкой справа: пока окно
+            не трогают, шапка занята делом (статус, имя, адрес), а действие всплывает
+            ровно тогда, когда к нему тянутся */}
+        {/* Место фиксированной ширины — под размер кнопки xs: иначе подмена точки (8px)
+            кнопкой (24px) сдвигала бы всю шапку под курсором */}
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 24, height: 24, flexShrink: 0,
+        }}>
+          {onClose && (headerHover || noHover) ? (
+            <IconButton size="xs" variant="soft" onClick={onClose} title="Закрыть окно сервиса">
+              <X size={13} />
+            </IconButton>
+          ) : (
+            <StatusDot status={service.status} />
+          )}
+        </span>
         <span style={{ fontSize: 12, fontWeight: 600, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {service.name}
         </span>
@@ -81,6 +112,15 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
         )}
         {external && (
           <span style={{ fontSize: 12, color: C.info }}>запущен снаружи</span>
+        )}
+        {/* Панель показывает не свой прокси, а поддомен — об этом надо сказать прямо:
+            иначе непонятно, почему «localhost:порт» выше и открытый наружу сайт ниже */}
+        {externalUrl && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: C.warning }}
+                title="Страница открыта через внешний доступ (поддомен)">
+            <Globe size={12} />
+            доступ снаружи
+          </span>
         )}
         <div style={{ flex: 1 }} />
         {hasLogs && (
@@ -108,7 +148,14 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
         )}
         {previewUrl && activeTab === 'preview' && (
           <>
-            <IconButton size="xs" variant="soft" onClick={() => iframeRef.current?.contentWindow?.location.reload()} title="Обновить">
+            <IconButton size="xs" variant="soft" onClick={() => {
+              const frame = iframeRef.current
+              if (!frame) return
+              // У поддомена другой origin: contentWindow.location браузер трогать запретит,
+              // поэтому перезагружаем присваиванием src
+              if (externalUrl) frame.src = frame.src
+              else frame.contentWindow?.location.reload()
+            }} title="Обновить">
               <RotateCcw size={13} />
             </IconButton>
             <IconButton size="xs" variant="soft" onClick={() => window.open(previewUrl, '_blank', 'noopener')} title="Открыть в новой вкладке">
@@ -121,11 +168,6 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
             <Square size={12} strokeWidth={2.5} style={{ marginRight: 4 }} />
             Стоп
           </Button>
-        )}
-        {onClose && (
-          <IconButton size="xs" variant="soft" onClick={onClose} title="Закрыть окно сервиса">
-            <X size={13} />
-          </IconButton>
         )}
       </div>
 

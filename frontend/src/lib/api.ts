@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -388,6 +388,28 @@ export const api = {
   // Выкатка боевого продукта трей-раннером (только админам и только при Deploy:Enabled).
   // status отвечает всегда, в том числе при выключенной фиче (enabled: false) — по нему
   // шапка решает, показывать ли пункт меню, и 404 здесь шумел бы в консоли у всех.
+  // Раздел «Видео»: эфиры телеканалов и лента подписок YouTube.
+  // live: true у списков — офлайн-кэш здесь ВРЕДЕН: у карточки канала есть поле
+  // «сейчас в эфире», и подставленный из IndexedDB ответ показывал бы передачу,
+  // которая шла полчаса назад, как текущую (тот же класс вранья, что у статуса выкатки).
+  video: {
+    providers: () => request<VideoProviderInfo[]>('/video/providers', { live: true }),
+    // refresh: true — кнопка «Обновить». Без него провайдер отдаёт из кеша (минута у
+    // программы передач, полчаса у ленты), и нажатие визуально не делало бы ничего.
+    channels: (provider: string, refresh = false) =>
+      request<VideoChannelsResponse>(
+        `/video/channels?provider=${encodeURIComponent(provider)}${refresh ? '&refresh=true' : ''}`,
+        { live: true }),
+    feed: (provider: string, channelId?: string, refresh = false) =>
+      request<VideoFeedResponse>(
+        `/video/feed?provider=${encodeURIComponent(provider)}`
+        + (channelId ? `&channelId=${encodeURIComponent(channelId)}` : '')
+        + (refresh ? '&refresh=true' : ''),
+        { live: true }),
+    youtubeAuthUrl: () => request<{ url: string }>('/video/youtube/auth-url'),
+    youtubeDisconnect: () => request<{ ok: boolean }>('/video/youtube/disconnect', { method: 'POST' }),
+  },
+
   deploy: {
     // live: true — НЕ подставлять ответ из офлайн-кэша (IndexedDB), даже когда сервер не
     // отвечает. Для этого запроса важно не только содержимое, но и сам факт ответа: продукт на
@@ -398,6 +420,15 @@ export const api = {
     // 202: команда ушла трею. previousStartedAt — начало ПРОШЛОЙ выкатки: только по смене
     // этого времени видно, что трей команду принял и начал новую (см. DeployModal).
     launch: () => request<{ previousStartedAt: string | null }>('/admin/deploy', { method: 'POST' }),
+  },
+
+// Ссылки внешнего доступа — СКВОЗНЫЕ по проектам владельца, поэтому не под /projects/{id}:
+  // забытая открытой витрина в соседнем проекте иначе осталась бы невидимой.
+  externalPreview: {
+    list: () => request<{ enabled: boolean; links: ExternalPreviewLink[] }>('/preview/external-links'),
+    revoke: (jti: string) =>
+      request<{ revoked: number }>(`/preview/external-links/${encodeURIComponent(jti)}`, { method: 'DELETE' }),
+    revokeAll: () => request<{ revoked: number }>('/preview/external-links', { method: 'DELETE' }),
   },
 
   // Журнал выкатки из чата (ADR-010) — за ним следит карточка хода выкатки в ленте.
@@ -632,6 +663,12 @@ export const api = {
     // Порт выбирает сервер по конфигурации сервиса, клиент его не передаёт.
     previewActiveExternal: (id: string, serviceId: string) =>
       request<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
+        method: 'POST', body: JSON.stringify({ serviceId }),
+      }),
+    // Внешний доступ: ссылка на сервис по отдельному поддомену. Порт, как и выше, выбирает
+    // сервер — принимать его от клиента нельзя, эндпоинт стал бы туннелем наружу.
+    previewExternalLink: (id: string, serviceId: string) =>
+      request<ExternalLinkIssued>(`/projects/${id}/preview/external-link`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     getLaunchConfig: (id: string) =>
@@ -1166,7 +1203,7 @@ export const api = {
         // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
         body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string; archived?: boolean }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
@@ -1230,19 +1267,29 @@ export const api = {
     candidates: () => request<Session[]>('/me/wall/candidates'),
   },
 
+  // Быстрые фразы композера: готовые сообщения, уходящие одним нажатием.
+  // Ресурс бэка — /api/me/quick-phrases (MyQuickPhrasesController)
+  quickPhrases: {
+    get: () => request<{ phrases: QuickPhrase[] }>('/me/quick-phrases'),
+    // Полная замена набора; ответ — итог после серверной чистки (пустые/дубли/потолок)
+    put: (phrases: QuickPhrase[]) =>
+      request<{ phrases: QuickPhrase[] }>('/me/quick-phrases', { method: 'PUT', body: JSON.stringify({ phrases }) }),
+  },
+
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
-    // id чатов (в т.ч. проектных), где прямо сейчас работают фоновые агенты. Снимок нужен
-    // потому, что событие bg_agents_presence приходит только на переходе 0↔N
-    agentsPresence: () => request<string[]>('/chats/agents-presence'),
+    // id чатов (в т.ч. проектных) с живой фоновой работой: отдельно агенты, отдельно фоновые
+    // команды Bash. Снимок нужен потому, что событие bg_agents_presence приходит только на
+    // смене состояния — открывший список позже старта иначе о нём не узнает
+    agentsPresence: () => request<{ agents: string[]; commands: string[] }>('/chats/agents-presence'),
     get: (id: string) => request<Session>(`/chats/${id}`),
     create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
       }),
-    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string; archived?: boolean }) =>
       request<Session>(`/chats/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),
@@ -1421,6 +1468,8 @@ export const api = {
           types: scope.types ?? null,
           // undefined — не трогать выбор «Начала»; '' — вернуть авто-README
           home: scope.home === undefined ? null : scope.home,
+          // undefined — не трогать исключения (старый бандл их не знает); [] — убрать все
+          excludeFolders: scope.excludeFolders ?? null,
         }),
       }),
     // Вынести текущую область в файл .docs репозитория: дальше она версионируется и

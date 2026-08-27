@@ -2,18 +2,23 @@ import { useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage, onReconnected } from './signalr';
 
-// Чаты, в которых прямо сейчас работают ФОНОВЫЕ агенты (Agent run_in_background / Workflow).
+// Чаты, в которых прямо сейчас идёт ФОНОВАЯ работа — двух разных видов:
+//   • агенты (Agent run_in_background / Workflow) — карточка светится и показывает робота;
+//   • фоновая команда (Bash с run_in_background: дев-сервер, watch) — тихий значок без
+//     свечения. Она живёт часами и о завершении не сообщает, так что «агенты работают» на
+//     ней врало бы, а молчание скрывало бы причину, по которой чат держит живой процесс CLI.
 //
-// Зачем отдельный стор, а не поле статуса сессии: пока фоновый агент работает, ход чата уже
-// завершён и статус сессии — Active, у которого нет ни свечения, ни движения. Снаружи такой
-// чат выглядел остывшим, хотя внутри процесса CLI идёт работа. Признак живёт ровно столько,
+// Зачем отдельный стор, а не поле статуса сессии: пока фон работает, ход чата уже завершён
+// и статус сессии — Active, у которого нет ни свечения, ни движения. Снаружи такой чат
+// выглядел остывшим, хотя внутри процесса CLI идёт работа. Признак живёт ровно столько,
 // сколько живёт процесс, поэтому в sessions.json ему делать нечего.
 //
-// Источник — событие bg_agents_presence (приходит ТОЛЬКО на переходе 0↔N) плюс снимок
+// Источник — событие bg_agents_presence (приходит ТОЛЬКО на смене состояния) плюс снимок
 // GET /api/chats/agents-presence: открывший список уже после старта агентов иначе не узнал
 // бы о них до самого конца работы. Снимок снимается при первом подписчике и на переподключении.
 
 let _ids: ReadonlySet<string> = new Set();
+let _commandIds: ReadonlySet<string> = new Set();
 const _listeners = new Set<() => void>();
 
 let _offMessage: (() => void) | null = null;
@@ -25,24 +30,39 @@ function emit() {
 
 // Set пересоздаём только при реальном изменении: useSyncExternalStore сравнивает
 // снимок по ссылке, и новый Set с тем же составом дал бы ререндер всего списка чатов
-function setPresence(sessionId: string, active: boolean) {
-  if (_ids.has(sessionId) === active) return;
-  const next = new Set(_ids);
-  if (active) next.add(sessionId);
+function withId(set: ReadonlySet<string>, sessionId: string, present: boolean): ReadonlySet<string> {
+  if (set.has(sessionId) === present) return set;
+  const next = new Set(set);
+  if (present) next.add(sessionId);
   else next.delete(sessionId);
-  _ids = next;
+  return next;
+}
+
+// Оба вида приходят одним событием и меняются независимо: агент закончил, а дев-сервер
+// в том же чате работает дальше. Один emit на событие — иначе подписчики дёргаются дважды
+function setPresence(sessionId: string, active: boolean, command: boolean) {
+  const nextIds = withId(_ids, sessionId, active);
+  const nextCommands = withId(_commandIds, sessionId, command);
+  if (nextIds === _ids && nextCommands === _commandIds) return;
+  _ids = nextIds;
+  _commandIds = nextCommands;
   emit();
 }
 
-function applySnapshot(ids: string[]) {
-  if (ids.length === _ids.size && ids.every(id => _ids.has(id))) return;
-  _ids = new Set(ids);
+const sameIds = (ids: string[], set: ReadonlySet<string>) =>
+  ids.length === set.size && ids.every(id => set.has(id));
+
+function applySnapshot(agents: string[], commands: string[]) {
+  if (sameIds(agents, _ids) && sameIds(commands, _commandIds)) return;
+  _ids = new Set(agents);
+  _commandIds = new Set(commands);
   emit();
 }
 
 async function fetchSnapshot() {
   try {
-    applySnapshot(await api.chats.agentsPresence());
+    const snapshot = await api.chats.agentsPresence();
+    applySnapshot(snapshot.agents ?? [], snapshot.commands ?? []);
   } catch {
     // Снимок — уточнение поверх realtime: не вышло, живём на событиях до следующей попытки
   }
@@ -51,11 +71,12 @@ async function fetchSnapshot() {
 function start() {
   void fetchSnapshot();
   _offMessage = onMessage(msg => {
-    if (msg.type === 'bg_agents_presence' && msg.sessionId) setPresence(msg.sessionId, msg.active);
+    if (msg.type === 'bg_agents_presence' && msg.sessionId)
+      setPresence(msg.sessionId, msg.active, msg.command);
     // Чат удалили — его присутствие больше не про что
-    else if (msg.type === 'chat_deleted' && msg.sessionId) setPresence(msg.sessionId, false);
+    else if (msg.type === 'chat_deleted' && msg.sessionId) setPresence(msg.sessionId, false, false);
   });
-  // За время обрыва переходы 0↔N прошли мимо — состав пересобираем снимком
+  // За время обрыва смены состояния прошли мимо — состав пересобираем снимком
   _offReconnected = onReconnected(() => void fetchSnapshot());
 }
 
@@ -74,8 +95,9 @@ function subscribe(fn: () => void): () => void {
 }
 
 const snapshot = () => _ids;
+const commandsSnapshot = () => _commandIds;
 
-/** Чаты с живыми фоновыми агентами. Пустое множество — фона нет нигде. */
+/** Чаты с живыми фоновыми агентами. Пустое множество — агентов нет нигде. */
 export function useAgentsPresence(): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
@@ -85,6 +107,16 @@ export function useAgentsRunning(sessionId: string): boolean {
   return useAgentsPresence().has(sessionId);
 }
 
+/** Чаты с живой фоновой КОМАНДОЙ (Bash в фоне) — тихая пометка, без свечения. */
+export function useBgCommandsPresence(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, commandsSnapshot, commandsSnapshot);
+}
+
+/** Работает ли в этом чате фоновая команда прямо сейчас. */
+export function useBgCommandRunning(sessionId: string): boolean {
+  return useBgCommandsPresence().has(sessionId);
+}
+
 /**
  * Подписка для потребителей ВНЕ React (сторы projectActivity, wallStore): те держат
  * собственные агрегаты и обязаны пересчитываться, когда фон появился или закончился.
@@ -92,12 +124,16 @@ export function useAgentsRunning(sessionId: string): boolean {
  */
 export const subscribeAgentsPresence = subscribe;
 
-/** Текущее множество чатов с живым фоном — для тех же не-React потребителей. */
+/** Текущее множество чатов с живыми агентами — для тех же не-React потребителей. */
 export const agentsPresenceSnapshot = snapshot;
+
+/** Текущее множество чатов с живой фоновой командой — для не-React потребителей. */
+export const bgCommandsPresenceSnapshot = commandsSnapshot;
 
 // Только для тестов: сбросить состояние между кейсами
 export function __resetAgentsPresence() {
   _ids = new Set();
+  _commandIds = new Set();
   _listeners.clear();
   stop();
 }

@@ -8,7 +8,7 @@ import {
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
-  markActiveSide,
+  markActiveSide, restoreOppositeIfEmpty,
   isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
   railSequence, COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
@@ -913,6 +913,61 @@ describe('markActiveSide', () => {
   });
 });
 
+// Обратная сторона эксклюзива: активная сторона опустела — выбитая соседка
+// возвращается из stash сама, без похода к её иконке на рельсе.
+describe('restoreOppositeIfEmpty', () => {
+  it('без exclusive ничего не возвращает', () => {
+    const base = zones([], []);
+    const z = { ...base, right: { ...base.right, stash: [['files']] } };
+    expect(restoreOppositeIfEmpty(z, 'left')).toBe(z);
+  });
+
+  it('активная сторона опустела — соседка возвращается из stash', () => {
+    const base = zones([], []);
+    const z = { ...base, exclusive: true, activeSide: 'left' as const, right: { ...base.right, stash: [['files', 'tasks']] } };
+    const r = restoreOppositeIfEmpty(z, 'left');
+    expect(r.right.layout).toEqual([['files', 'tasks']]);  // набор вернулся целиком
+    expect(r.right.stash).toEqual([]);
+    expect(r.activeSide).toBe('right');                    // активность переехала к ней
+  });
+
+  it('на активной стороне ещё есть панели — возвращать рано', () => {
+    const base = zones([['chats']], []);
+    const z = { ...base, exclusive: true, right: { ...base.right, stash: [['files']] } };
+    expect(restoreOppositeIfEmpty(z, 'left')).toBe(z);
+  });
+
+  it('соседка и так на экране — выбивания не было', () => {
+    const base = zones([], [['files']]);
+    const z = { ...base, exclusive: true, right: { ...base.right, stash: [['tasks']] } };
+    expect(restoreOppositeIfEmpty(z, 'left')).toBe(z);
+  });
+
+  it('stash пуст — возвращать нечего', () => {
+    const z = { ...zones([], []), exclusive: true };
+    expect(restoreOppositeIfEmpty(z, 'left')).toBe(z);
+  });
+
+  it('идемпотентна: повторный вызов раскладку не дёргает', () => {
+    const base = zones([], []);
+    const z = { ...base, exclusive: true, right: { ...base.right, stash: [['files']] } };
+    const once = restoreOppositeIfEmpty(z, 'left');
+    // Вторым вызовом сторона 'left' всё ещё пуста, но соседка уже на экране
+    expect(restoreOppositeIfEmpty(once, 'left')).toBe(once);
+  });
+
+  it('парна markActiveSide: выбил — закрыл — вернулась', () => {
+    const z = { ...zones([['chats']], [['files']]), exclusive: true };
+    const kicked = markActiveSide(z, 'left');            // активность слева — правую выбило
+    expect(kicked.right.layout).toEqual([]);
+    expect(kicked.right.stash).toEqual([['files']]);
+    const closed = closePanel(kicked, 'chats');          // закрыли всё слева
+    const back = restoreOppositeIfEmpty(closed, 'left');
+    expect(back.right.layout).toEqual([['files']]);      // правая вернулась сама
+    expect(back.activeSide).toBe('right');
+  });
+});
+
 describe('sanitizeZones — runtime-поля эксклюзива', () => {
   it('exclusive/activeSide из сырого состояния обнуляются (не утекают из localStorage)', () => {
     const z = sanitizeZones({ exclusive: true, activeSide: 'right', left: { layout: [['chats']] } });
@@ -933,5 +988,11 @@ describe('sanitizeZones — runtime-поля эксклюзива', () => {
 
   it('emptyZones стартует с нулевым closeCompactSignal', () => {
     expect(emptyZones().closeCompactSignal).toBe(0);
+  });
+
+  it('restoreCompactSignal тоже runtime: из сырого состояния обнуляется', () => {
+    const z = sanitizeZones({ restoreCompactSignal: 3, left: { layout: [['chats']] } } as never);
+    expect(z.restoreCompactSignal).toBe(0);
+    expect(emptyZones().restoreCompactSignal).toBe(0);
   });
 });

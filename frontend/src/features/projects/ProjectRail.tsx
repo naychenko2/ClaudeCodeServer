@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDownToLine, Pin, Plus, Search } from 'lucide-react';
+import { ArrowDownToLine, Pin, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { RailCapsule, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
@@ -8,7 +8,7 @@ import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { ProjectIcon } from './ProjectIcon';
 import { ProjectPalette } from './ProjectPalette';
-import { useAllProjects, openProjectViaEvent, openNewProjectFlow } from './useAllProjects';
+import { useAllProjects, openProjectViaEvent } from './useAllProjects';
 import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore, removeFromDock } from '../../lib/pinnedProjects';
 import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } from '../../lib/projectActivity';
 
@@ -17,7 +17,7 @@ import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } 
 // с сайдбар вмещал мало и при этом занимал место в рельсе. В вертикали иконок помещается
 // столько, сколько даёт высота окна, а сама рельса ширины у контента не отнимает.
 //
-// Сверху вниз: «+» новый проект | закреплённые | недавние | поиск.
+// Сверху вниз: закреплённые | недавние | поиск (палитра умеет и создание проекта).
 // Порядок проектов СТАБИЛЬНЫЙ (закреплённые > незакреплённые, append-only): выбор другого
 // проекта иконки не переставляет, активный лишь подсвечивается, как активная иконка
 // в рельсе панелей. Настройки проекта живут в подписи активной иконки (RailFlyout):
@@ -31,10 +31,10 @@ import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } 
 const ICON_BOX = 32;          // бокс кнопки проекта — как у кнопок рельсы (IconButton md)
 const CAP_GAP = 6;            // зазор между элементами капсулы (как в PanelRail)
 const STEP = ICON_BOX + CAP_GAP;
-// Высота несменяемой части капсулы: паддинги, «+», два сепаратора и лупа с их
-// зазорами, плюс шляпка. По ней из свободной высоты считается число
+// Высота несменяемой части капсулы: паддинги (8), сепаратор (5), лупа (32) и три
+// зазора капсулы (18), плюс шляпка. По ней из свободной высоты считается число
 // слотов под иконки.
-const FIXED_H = 100 + RAIL_HAT_H;
+const FIXED_H = 63 + RAIL_HAT_H;
 // Потолок значков. Не про место (по высоте влезло бы вдвое больше), а про то, что
 // док ищут глазами: два десятка одинаковых квадратов читаются медленнее, чем поиск
 // по имени в палитре, и съедают экран. Что не влезло — «+N» на лупе.
@@ -382,36 +382,6 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
       >
         <RailHat side={side} label="Проекты" title="Переключение проектов" />
 
-        {/* Поиск по всем проектам: палитра умеет и переход, и создание, и «Все проекты».
-            Кружок — сколько проектов не поместилось в док. */}
-        <RailIconButton
-          side={side}
-          label={hiddenCount > 0
-            ? `Перейти к проекту (ещё ${hiddenCount}${hiddenWaiting ? ' · агент ждет ответа' : ''})`
-            : 'Перейти к проекту'}
-          onClick={() => setPaletteOpen(true)}
-        >
-          <div style={{ position: 'relative', display: 'flex' }}>
-            <Search size={17} strokeWidth={ICON_STROKE} />
-            {/* Счётчик спрятанных проектов — нейтральный: это справка о размере списка,
-                а не событие. Цвет он берёт только когда среди скрытых кто-то ЖДЁТ
-                ответа — вот на это оторваться от дела стоит. Тон — тот же warning,
-                что у точки waiting и у статуса «ждёт ввода» на карточке чата. */}
-            {hiddenCount > 0 && (
-              <span style={{
-                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                borderRadius: 7,
-                background: hiddenWaiting ? C.warning : C.bgSelected,
-                color: hiddenWaiting ? C.onAccent : C.textSecondary,
-                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-              }}>
-                +{hiddenCount}
-              </span>
-            )}
-          </div>
-        </RailIconButton>
-        <RailSep />
-
         {/* Столбец иконок: закреплённые, разделитель, недавние */}
         <div ref={colRef} style={{
           position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -473,10 +443,33 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         </div>
 
         <RailSep />
-        {/* Новый проект. Мастер проекта требует места, которого в рельсе нет, поэтому
-            уводим в раздел «Проекты» с уже открытым диалогом. */}
-        <RailIconButton side={side} label="Новый проект" onClick={openNewProjectFlow}>
-          <Plus size={17} strokeWidth={ICON_STROKE} />
+        {/* Поиск по всем проектам: палитра умеет и переход, и создание, и «Все проекты» —
+            отдельная кнопка «+» ей не нужна. Кружок — сколько проектов не поместилось в док. */}
+        <RailIconButton
+          side={side}
+          label={hiddenCount > 0
+            ? `Перейти к проекту (ещё ${hiddenCount}${hiddenWaiting ? ' · агент ждет ответа' : ''})`
+            : 'Перейти к проекту'}
+          onClick={() => setPaletteOpen(true)}
+        >
+          <div style={{ position: 'relative', display: 'flex' }}>
+            <Search size={17} strokeWidth={ICON_STROKE} />
+            {/* Счётчик спрятанных проектов — нейтральный: это справка о размере списка,
+                а не событие. Цвет он берёт только когда среди скрытых кто-то ЖДЁТ
+                ответа — вот на это оторваться от дела стоит. Тон — тот же warning,
+                что у точки waiting и у статуса «ждёт ввода» на карточке чата. */}
+            {hiddenCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+                borderRadius: 7,
+                background: hiddenWaiting ? C.warning : C.bgSelected,
+                color: hiddenWaiting ? C.onAccent : C.textSecondary,
+                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+              }}>
+                +{hiddenCount}
+              </span>
+            )}
+          </div>
         </RailIconButton>
       </RailCapsule>
 

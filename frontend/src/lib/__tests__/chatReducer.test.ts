@@ -60,6 +60,33 @@ describe('applyServerMessage: дельты текста', () => {
     expect(next.items[2]).toEqual({ kind: 'text', text: 'после', ts: expect.any(Number) });
   });
 
+  // Правка файла НЕ этим чатом (человек, форматтер, соседний чат, фоновый агент) прилетает
+  // асинхронно и раньше рвала ответ надвое: обрубок, строка, продолжение отдельным пузырём
+  it('строка внешней правки посреди ответа не режет пост — текст растёт над ней', () => {
+    const next = run(
+      [
+        { type: 'text_delta', text: 'начало ' },
+        { type: 'file_changed', path: 'src/other.cs', added: 4, removed: 1, external: true },
+        { type: 'text_delta', text: 'и конец' },
+      ],
+    );
+    expect(next.items).toEqual([
+      { kind: 'text', text: 'начало и конец', ts: expect.any(Number) },
+      { kind: 'file_changed', path: 'src/other.cs', added: 4, removed: 1, external: true },
+    ]);
+  });
+
+  it('правка этого же чата пост закрывает — разрез остаётся законным', () => {
+    const next = run(
+      [
+        { type: 'text_delta', text: 'начало ' },
+        { type: 'file_changed', path: 'src/file.cs', added: 4, removed: 1 },
+        { type: 'text_delta', text: 'и конец' },
+      ],
+    );
+    expect(next.items.map(i => i.kind)).toEqual(['text', 'file_changed', 'text']);
+  });
+
   it('thinking_delta накапливается и сохраняет expanded', () => {
     const initial = state({ items: [{ kind: 'thinking', text: 'a', expanded: true }] });
     const next = run([{ type: 'thinking_delta', text: 'b' }], initial);

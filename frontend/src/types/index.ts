@@ -229,6 +229,7 @@ export interface DocsScope {
   rootFiles: string[];       // имена файлов в корне проекта, без путей
   types: string[];           // ключи групп типов: "markdown", "pdf", "visio"…
   home?: string | null;      // документ «Начала»; null — авто (README корня)
+  excludeFolders?: string[] | null;  // подпапки, вычитаемые из выбранных папок; null — исключений нет
 }
 
 // Документ области как вариант выбора начального
@@ -891,9 +892,10 @@ export type ServerMessage = { sessionId: string } & (
   // достоверный сигнал «ответ готов» (по task-notification CLI). aborted=true — агенты
   // умерли вместе с процессом (Стоп/несовместимый ход), не доработав
   | { type: 'bg_agent_done'; toolUseIds: string[]; aborted?: boolean }
-  // У чата появились/закончились живые фоновые агенты. Событие для СПИСКА чатов (карточка
-  // светится, пока агенты работают), а не для ленты: приходит только на переходе 0↔N
-  | { type: 'bg_agents_presence'; active: boolean }
+  // У чата появилась/закончилась живая фоновая работа. Событие для СПИСКА чатов, а не для
+  // ленты; приходит только на СМЕНЕ состояния. active — агенты (карточка светится, робот),
+  // command — фоновая команда Bash (тихий значок: она живёт часами и завершения не шлёт)
+  | { type: 'bg_agents_presence'; active: boolean; command: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
@@ -1090,6 +1092,25 @@ export interface ProjectService {
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)
+// Выданная ссылка внешнего доступа к дев-серверу (поддомен, а не путь /preview/**).
+export interface ExternalPreviewLink {
+  jti: string;
+  projectId: string;
+  serviceId: string;
+  issuedAt: string;
+  expiresAt: string;
+  // Имя проекта приходит с сервера: список сквозной, и чужой проект надо назвать
+  projectName?: string | null;
+}
+
+export interface ExternalLinkIssued {
+  url: string;
+  jti: string;
+  expiresAt: string;
+  // Вытесненные потолком ссылки — их закрыли, и человек обязан об этом узнать
+  evicted: { jti: string; projectId: string; serviceId: string }[];
+}
+
 export interface LaunchConfigEntry {
   name?: string;
   runtimeExecutable?: string;
@@ -3100,6 +3121,69 @@ export interface IncidentDossier {
 export interface IncidentListResponse {
   status: IncidentStatus;
   items: IncidentSummary[];
+}
+
+// Быстрая фраза композера: готовое сообщение и необязательная группа (второй
+// уровень попапа). Пустая/отсутствующая group — фраза лежит в корне списка.
+// Логика набора (порядок, раскладка по группам) — в lib/quickPhrases.ts
+export interface QuickPhrase {
+  text: string;
+  group?: string | null;
+}
+
+// === Раздел «Видео» ===
+
+// Что источник умеет показывать: live — прямые эфиры (канал и есть содержимое),
+// feed — лента подписок (канал = подписка, смотрят ролики из неё).
+export type VideoProviderKind = 'live' | 'feed';
+
+// Отказы источника разведены классами: каждому в разделе отвечает своё пустое
+// состояние. «Подключите аккаунт» вместо «кончилась квота» — это человек, который
+// жмёт не ту кнопку.
+export type VideoError = 'not-configured' | 'needs-auth' | 'quota-exceeded' | 'unreachable';
+
+export interface VideoProviderInfo {
+  key: string;
+  title: string;
+  kind: VideoProviderKind;
+  connected: boolean;
+  needsAuth: boolean;
+}
+
+export interface VideoChannel {
+  id: string;
+  provider: string;
+  title: string;
+  // Можно ли играть внутри продукта. У эфиров это не все каналы каталога: часть
+  // вещается чужим плеером по домену-реферреру, их уводим наружу по externalUrl.
+  embeddable: boolean;
+  embedUrl: string | null;
+  externalUrl: string | null;
+  coverUrl: string | null;
+  // Что идёт сейчас (EPG). Приходит и у неиграбельных каналов.
+  nowPlaying: string | null;
+}
+
+export interface VideoItem {
+  id: string;
+  provider: string;
+  title: string;
+  channelId: string;
+  channelTitle: string;
+  thumbnailUrl: string | null;
+  publishedAt: string | null;
+  embedUrl: string;
+  externalUrl: string;
+}
+
+export interface VideoChannelsResponse {
+  error: VideoError | null;
+  channels: VideoChannel[];
+}
+
+export interface VideoFeedResponse {
+  error: VideoError | null;
+  items: VideoItem[];
 }
 
 // ---------- Десктопный агент (ADR-008) ----------

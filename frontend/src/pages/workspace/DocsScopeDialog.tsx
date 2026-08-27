@@ -10,7 +10,7 @@
 // папки, которой в списке нет: пустой пока или лежащей глубже.
 
 import { useEffect, useState } from 'react';
-import { Check, FolderPlus } from 'lucide-react';
+import { Ban, Check, FolderPlus } from 'lucide-react';
 import type { DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, R, SP } from '../../lib/design';
@@ -86,11 +86,62 @@ export function SectionTitle({ children, note }: { children: string; note?: stri
   );
 }
 
+// Вложенная строка папок — управляемая: клик исключает подпапку из области (рабочие
+// артефакты спайков рядом с документацией), повторный возвращает. Отдельна от ScopeRow:
+// тот — пассивная строка с галкой и экспортирован в редактор типов, а у этой три
+// состояния (внутри / исключена / внутри исключённой), которые ScopeRow не выражает.
+function SubfolderRow({ path, parent, insideExcluded, excluded, onClick }: {
+  path: string;
+  parent: string;            // выбранная папка, внутри которой лежит строка
+  insideExcluded: boolean;   // строка сама внутри исключённой — управлять ею незачем
+  excluded: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={insideExcluded ? undefined : onClick}
+      title={insideExcluded
+        ? `Вся «${parent}» уже исключена`
+        : excluded ? `Вернуть «${path}» в область` : `Исключить «${path}» из области`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%',
+        padding: `${SP.xs}px ${SP.sm}px`, border: 'none', background: 'transparent',
+        borderRadius: R.md, cursor: insideExcluded ? 'default' : 'pointer', textAlign: 'left',
+        fontFamily: FONT.sans, fontSize: FS.sm,
+        // Строка внутри исключённой глушится целиком: снять её нельзя, а активный вид
+        // обещал бы управление, которого нет. Исключённая сама по себе остаётся активной
+        opacity: insideExcluded ? 0.55 : 1,
+      }}
+    >
+      <span style={{
+        flex: 'none', width: 17, height: 17, borderRadius: 5,
+        border: `1.5px solid ${excluded ? C.danger : C.border}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {excluded && <Ban size={10} strokeWidth={ICON_STROKE} color={C.danger} />}
+      </span>
+      <span style={{
+        flex: 1, minWidth: 0, fontFamily: FONT.mono, fontSize: FS.xs,
+        color: excluded ? C.textMuted : C.textPrimary,
+        textDecoration: excluded ? 'line-through' : 'none',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {path}
+      </span>
+      <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted }}>
+        {insideExcluded ? 'внутри исключённой' : excluded ? 'исключена' : `внутри ${parent}`}
+      </span>
+    </button>
+  );
+}
+
 export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
   const [info, setInfo] = useState<DocsScopeInfo | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [rootFiles, setRootFiles] = useState<string[]>([]);
   const [types, setTypes] = useState<string[]>([]);
+  // Исключённые подпапки выбранных папок: рабочие артефакты рядом с документацией
+  const [excluded, setExcluded] = useState<string[]>([]);
   // Папки, добавленные вручную в этом заходе: их нет среди кандидатов, но показать надо
   const [extra, setExtra] = useState<string[]>([]);
   const [manual, setManual] = useState('');
@@ -106,6 +157,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
         setFolders(s.selected.folders);
         setRootFiles(s.selected.rootFiles);
         setTypes(s.selected.types);
+        setExcluded(s.selected.excludeFolders ?? []);
       })
       .catch(() => { if (alive) setError('Не удалось загрузить настройку'); });
     return () => { alive = false; };
@@ -126,6 +178,17 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
   const toggleIn = (set: (fn: (prev: string[]) => string[]) => void, value: string) =>
     set(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
 
+  // Исключение/возврат подпапки. Снятие выбранной папки выше уносит и её исключения
+  // (сервер нормализует ось против итоговых папок), здесь остаётся только живое
+  const toggleExclude = (path: string) =>
+    setExcluded(prev => prev.includes(path)
+      ? prev.filter(p => p !== path)
+      : [...prev, path]);
+
+  // Первый исключённый предок пути: строка внутри исключённой не управляема сама
+  const excludedParentOf = (path: string) =>
+    excluded.find(e => path.toLowerCase().startsWith(`${e.toLowerCase()}/`));
+
   // Ручная папка сразу отмечается: её вводят, чтобы включить, а не чтобы посмотреть
   const addManual = () => {
     const path = manual.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -141,7 +204,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
     setSaving(true);
     // home не шлём: выбор начального документа временно снят из UI, а null в запросе
     // означает «не трогать» — сохранённое значение переживает правку области
-    api.docs.setScope(projectId, { folders, rootFiles, types })
+    api.docs.setScope(projectId, { folders, rootFiles, types, excludeFolders: excluded })
       .then(saved => { onSaved(saved); onClose(); })
       .catch(() => { setSaving(false); setError('Не удалось сохранить'); });
   };
@@ -150,7 +213,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
   // в файл: иначе кнопка записала бы то, что было до правок, — а нажимают её как раз после
   const saveToRepo = () => {
     setSaving(true);
-    api.docs.setScope(projectId, { folders, rootFiles, types })
+    api.docs.setScope(projectId, { folders, rootFiles, types, excludeFolders: excluded })
       .then(() => api.docs.saveScopeFile(projectId))
       .then(saved => { onSaved(saved); onClose(); })
       .catch(() => { setSaving(false); setError(`Не удалось записать ${SCOPE_FILE} в репозиторий`); });
@@ -161,6 +224,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
     setFolders(info.defaults.folders);
     setRootFiles(info.defaults.rootFiles);
     setTypes(info.defaults.types);
+    setExcluded(info.defaults.excludeFolders ?? []);
   };
 
   const folderRows = [
@@ -276,9 +340,10 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
             </div>
           </div>
 
-          {/* Папки — берутся рекурсивно */}
+          {/* Папки — берутся рекурсивно; вложенные строки управляемы: клик исключает
+              подпапку (рабочие артефакты рядом с документацией), повторный возвращает */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-            <SectionTitle note="со всеми вложенными">Папки</SectionTitle>
+            <SectionTitle note="вложенные можно исключить">Папки</SectionTitle>
             <div style={{ maxHeight: 190, overflowY: 'auto', margin: `0 -${SP.xs}px` }}>
               {folderRows.length === 0 && (
                 <div style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.xs}px ${SP.sm}px` }}>
@@ -287,15 +352,25 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
               )}
               {folderRows.map(row => {
                 const parent = parentOf(row.path, folders);
+                if (parent == null)
+                  return (
+                    <ScopeRow
+                      key={row.path}
+                      label={row.path}
+                      hint={row.exists ? `${row.count}` : 'нет папки'}
+                      on={folders.includes(row.path)}
+                      onClick={() => toggleFolder(row.path)}
+                    />
+                  );
+                const exclParent = excludedParentOf(row.path);
                 return (
-                  <ScopeRow
+                  <SubfolderRow
                     key={row.path}
-                    label={row.path}
-                    hint={parent ? `внутри ${parent}` : row.exists ? `${row.count}` : 'нет папки'}
-                    on={folders.includes(row.path) || parent != null}
-                    muted={parent != null}
-                    title={parent ? `Уже входит в «${parent}» — папка берётся со всем содержимым` : undefined}
-                    onClick={() => { if (!parent) toggleFolder(row.path); }}
+                    path={row.path}
+                    parent={exclParent ?? parent}
+                    insideExcluded={exclParent != null}
+                    excluded={excluded.includes(row.path)}
+                    onClick={() => toggleExclude(row.path)}
                   />
                 );
               })}
@@ -322,7 +397,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
             <Button variant="ghost" size="sm" onClick={toDefaults}>
               По умолчанию
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => { setFolders([]); setRootFiles([]); }}>
+            <Button variant="ghost" size="sm" onClick={() => { setFolders([]); setRootFiles([]); setExcluded([]); }}>
               Снять всё
             </Button>
           </div>

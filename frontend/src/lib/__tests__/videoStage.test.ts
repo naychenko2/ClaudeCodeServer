@@ -1,0 +1,190 @@
+// Тесты стора «где смотрят видео»: главный инвариант — центральный остров занимает
+// РОВНО ОДИН обитатель, кадр или каталог. Живого кадра в продукте тоже один: панель
+// снимает свой плеер по этому же стору, и разъехавшееся состояние дало бы два звука.
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  getVideoCenter, getVideoPicker, getVideoStage, setVideoPicker, setVideoStage, closeVideoCenter,
+  setVideoCenterBlocked, getVideoCenterBlocked, setPanelChannel, getPanelChannel,
+  clampRect, FLOAT_MIN_W, FLOAT_HEADER_H,
+} from '../videoStage';
+import type { VideoChannel } from '../../types';
+
+const ch = (id: string): VideoChannel => ({
+  id, provider: 'smotrim', title: `Канал ${id}`, embeddable: true,
+  embedUrl: `https://example.test/${id}`,
+});
+
+// Стор — модульный синглтон: между тестами возвращаем его в исходное состояние
+beforeEach(() => {
+  setVideoCenterBlocked(false);
+  setVideoPicker(false);
+  setVideoStage(null);
+  setPanelChannel(null);
+});
+
+// Центр, занятый файлом или задачей. Дыра, ради которой это тестируется: раньше
+// запрет жил эффектом страницы по признаку «центр свободен», и центр, занятый
+// ЗАРАНЕЕ, признака не менял — кадр, отправленный туда, пропадал совсем: панель
+// снимала свой плеер, а рисовать его было уже некому.
+describe('занятый центр', () => {
+  it('кадр в занятый центр не уходит и остаётся в панели', () => {
+    setVideoCenterBlocked(true);
+    setVideoStage(ch('a'), 'center');
+
+    expect(getVideoStage()).toBeNull();
+    expect(getVideoCenter()).toBeNull();
+  });
+
+  it('каталог в занятый центр не открывается', () => {
+    setVideoCenterBlocked(true);
+    setVideoPicker(true);
+    expect(getVideoPicker()).toBe(false);
+  });
+
+  it('занятие центра выселяет и кадр, и каталог', () => {
+    setVideoStage(ch('a'), 'center');
+    setVideoCenterBlocked(true);
+    expect(getVideoStage()).toBeNull();
+
+    setVideoCenterBlocked(false);
+    setVideoPicker(true);
+    setVideoCenterBlocked(true);
+    expect(getVideoPicker()).toBe(false);
+  });
+
+  it('плавающее окно занятому центру не мешает и остаётся живым', () => {
+    setVideoStage(ch('a'), 'float');
+    setVideoCenterBlocked(true);
+
+    expect(getVideoStage()?.mode).toBe('float');
+    expect(getVideoCenterBlocked()).toBe(true);
+  });
+});
+
+describe('обитатель центра', () => {
+  it('пустой стор — центр свободен', () => {
+    expect(getVideoCenter()).toBeNull();
+  });
+
+  it('кадр в центре виден как player, в окне — не виден вовсе', () => {
+    setVideoStage(ch('a'), 'center');
+    expect(getVideoCenter()).toBe('player');
+
+    setVideoStage(ch('a'), 'float');
+    expect(getVideoCenter()).toBeNull();
+    expect(getVideoStage()?.mode).toBe('float');
+  });
+
+  it('каталог вытесняет кадр из центра, возвращая его в панель', () => {
+    setVideoStage(ch('a'), 'center');
+    setVideoPicker(true);
+
+    expect(getVideoCenter()).toBe('picker');
+    // Именно в панель, а не в окно: кадр продолжит идти сбоку, пока выбирают следующий
+    expect(getVideoStage()).toBeNull();
+  });
+
+  it('каталог НЕ трогает плавающее окно — оно не в центре', () => {
+    setVideoStage(ch('a'), 'float');
+    setVideoPicker(true);
+
+    expect(getVideoCenter()).toBe('picker');
+    expect(getVideoStage()?.mode).toBe('float');
+  });
+
+  it('разворот кадра в центре закрывает каталог', () => {
+    setVideoPicker(true);
+    setVideoStage(ch('b'), 'center');
+
+    expect(getVideoPicker()).toBe(false);
+    expect(getVideoCenter()).toBe('player');
+  });
+
+  it('уход кадра в окно каталог не открывает обратно', () => {
+    setVideoPicker(true);
+    setVideoStage(ch('b'), 'center');
+    setVideoStage(ch('b'), 'float');
+
+    expect(getVideoCenter()).toBeNull();
+  });
+
+  it('закрытие центра снимает обоих обитателей', () => {
+    setVideoStage(ch('a'), 'center');
+    closeVideoCenter();
+    expect(getVideoCenter()).toBeNull();
+    expect(getVideoStage()).toBeNull();
+
+    setVideoPicker(true);
+    closeVideoCenter();
+    expect(getVideoPicker()).toBe(false);
+  });
+
+  it('закрытие центра оставляет плавающее окно в покое', () => {
+    setVideoStage(ch('a'), 'float');
+    closeVideoCenter();
+    expect(getVideoStage()?.mode).toBe('float');
+  });
+});
+
+// Панель — место фонового просмотра, и канал для неё выбирают в каталоге: тот стоит
+// в центре и до состояния панели иначе не дотянулся бы.
+describe('канал боковой панели', () => {
+  it('канал уходит в панель, не занимая центр', () => {
+    setPanelChannel(ch('a'));
+    expect(getPanelChannel()?.id).toBe('a');
+    expect(getVideoCenter()).toBeNull();
+  });
+
+  it('выбор канала для панели возвращает туда же развёрнутый кадр', () => {
+    setVideoStage(ch('a'), 'center');
+    setPanelChannel(ch('b'));
+
+    expect(getVideoStage()).toBeNull();
+    expect(getPanelChannel()?.id).toBe('b');
+  });
+
+  it('«вернуть кадр в панель» реально кладёт его в панель, а не гасит', () => {
+    setVideoStage(ch('a'), 'center');
+    setVideoStage(null);
+    expect(getPanelChannel()?.id).toBe('a');
+
+    setVideoStage(ch('c'), 'float');
+    setVideoStage(null);
+    expect(getPanelChannel()?.id).toBe('c');
+  });
+
+  it('крестик центра и приход каталога тоже возвращают кадр в панель', () => {
+    setVideoStage(ch('a'), 'center');
+    closeVideoCenter();
+    expect(getPanelChannel()?.id).toBe('a');
+
+    setVideoStage(ch('b'), 'center');
+    setVideoPicker(true);
+    expect(getPanelChannel()?.id).toBe('b');
+  });
+
+  it('занятие центра файлом не гасит эфир, а уводит его в панель', () => {
+    setVideoStage(ch('a'), 'center');
+    setVideoCenterBlocked(true);
+    expect(getPanelChannel()?.id).toBe('a');
+  });
+});
+
+describe('геометрия плавающего окна', () => {
+  it('высота считается из ширины по 16:9 плюс шапка', () => {
+    const r = clampRect({ x: 10, y: 10, w: 320, h: 999 });
+    expect(r.h).toBe(Math.round((r.w * 9) / 16) + FLOAT_HEADER_H);
+  });
+
+  it('уже минимума окно не становится', () => {
+    expect(clampRect({ x: 0, y: 0, w: 10, h: 10 }).w).toBe(FLOAT_MIN_W);
+  });
+
+  it('окно за краем экрана возвращается кромкой внутрь', () => {
+    const r = clampRect({ x: 99999, y: 99999, w: 400, h: 300 });
+    // Без окна браузера стор меряет по запасному экрану 1280×800. Важен сам факт
+    // возврата: кромка обязана остаться в пределах, иначе окно нечем поймать мышью
+    expect(r.x).toBeLessThan(1280);
+    expect(r.y).toBeLessThan(800);
+  });
+});

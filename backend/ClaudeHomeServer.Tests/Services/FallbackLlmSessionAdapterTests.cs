@@ -35,6 +35,7 @@ public class FallbackLlmSessionAdapterTests
         public bool OrchestrationActive => false;
         public bool HasPendingBg => false;
     public bool HasTrackedBg => false;
+    public bool HasTrackedCommandBg => false;
         public bool IsContinuationInFlight => false;
         // Номер поданных прогонам ходов (калька ClaudeSession.SubmittedTurnSeq): растёт на
         // каждой подаче. Тесты, которым метка не нужна, эмитят ExitedMessage() с TurnSeq=0 —

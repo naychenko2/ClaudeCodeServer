@@ -77,7 +77,10 @@ export interface HashTarget {
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
-  const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  // Query внутри хеша срезаем ДО разбора: внешний сервис возвращает человека на
+  // #/chats?connect=ok, и без этого первым сегментом становилось бы «chats?connect=ok» —
+  // ни один case не совпадал, экран молча уезжал на дашборд, а сид истории затирал адрес.
+  const parts = hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   if (parts.length === 0) return null;
   switch (parts[0]) {
     case 'home': return { screen: 'home' };

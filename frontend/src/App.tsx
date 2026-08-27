@@ -9,6 +9,8 @@ import type { HubTabValue } from './components/HubTabs'
 import { moduleIdOf } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
 import { loadModules } from './lib/modules'
+import { VideoFloat } from './features/video/VideoFloat'
+import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
 import { ProductHistory } from './components/ProductHistory'
@@ -126,6 +128,9 @@ export default function App() {
   })
   // Если токен восстановлен из localStorage — ждём ответа сервера перед показом контента,
   // чтобы не было flash рабочего экрана с последующим переключением на пустой фон.
+  // Что показывают вне панели: плавающее окно рисуем здесь, центр — сами страницы
+  const floatingVideo = useVideoStage()
+
   const [authChecking, setAuthChecking] = useState<boolean>(() => {
     return !!(localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
   })
@@ -1177,6 +1182,10 @@ export default function App() {
     <>
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
+      {/* Плавающее окно с видео живёт НАД страницами: только так кадр переживает
+          переход между проектами и разделами — панель и центр этого не умеют,
+          они часть страницы и размонтируются вместе с ней. */}
+      {auth && floatingVideo?.mode === 'float' && <VideoFloat stage={floatingVideo} />}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth

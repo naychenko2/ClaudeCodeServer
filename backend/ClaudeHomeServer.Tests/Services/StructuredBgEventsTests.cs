@@ -21,6 +21,16 @@ public class StructuredBgEventsTests : IDisposable
 {
     private static JsonElement El(string json) => JsonDocument.Parse(json).RootElement;
 
+    // Образцы task_started двух видов. Агентский — живой образец CLI 2.1.220 (несёт
+    // subagent_type). Фоновая команда — то же событие БЕЗ subagent_type: у Bash с
+    // run_in_background его быть не может, и ровно по этому полю различается вид задачи
+    // (полная форма bash-события с живого CLI не снималась — тестам она и не нужна).
+    private static JsonElement AgentStarted(string taskId, string toolUseId) => El(
+        $$"""{"type":"system","subtype":"task_started","task_id":"{{taskId}}","tool_use_id":"{{toolUseId}}","description":"Test task","subagent_type":"general-purpose","task_type":"local_agent"}""");
+
+    private static JsonElement BashStarted(string taskId, string toolUseId) => El(
+        $$"""{"type":"system","subtype":"task_started","task_id":"{{taskId}}","tool_use_id":"{{toolUseId}}","description":"Запустить дев-сервер"}""");
+
     // === Часть 1: ParseTaskStarted / ParseTaskNotification / IsBackgroundTasksEmptySnapshot ===
 
     [Fact]
@@ -169,9 +179,23 @@ public class StructuredBgEventsTests : IDisposable
     private static HashSet<string> BgLaunchCandidatesOf(object run) =>
         (HashSet<string>)CliRunType.GetField("BgLaunchCandidates")!.GetValue(run)!;
 
+    // Вид задачи: сюда HandleAssistantToolsAsync кладёт toolUseId запусков Agent/Task с
+    // run_in_background и Workflow (в тестах обработчиков этот путь не проигрывается —
+    // заполняем набор руками, как и BgLaunchCandidates)
+    private static HashSet<string> AgenticBgToolUsesOf(object run) =>
+        (HashSet<string>)CliRunType.GetField("AgenticBgToolUses")!.GetValue(run)!;
+
     // Признак «здесь работают агенты» — ровно то, по чему список чатов рисует значок
     private static bool HasTrackedBgOf(object run) =>
         (bool)CliRunType.GetProperty("HasTrackedBg")!.GetValue(run)!;
+
+    // Признак «жива фоновая команда» — по нему список чатов рисует тихий значок
+    private static bool HasTrackedCommandBgOf(object run) =>
+        (bool)CliRunType.GetProperty("HasTrackedCommandBg")!.GetValue(run)!;
+
+    // Признак «фоновая работа ещё идёт» — по нему прогон доживает, а stdin не закрывается
+    private static bool HasPendingBgOf(object run) =>
+        (bool)CliRunType.GetProperty("HasPendingBg")!.GetValue(run)!;
 
     // === Снэпшот живых задач гасит значок агентов ===
     //
@@ -186,7 +210,7 @@ public class StructuredBgEventsTests : IDisposable
     {
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"t1","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("t1", "toolu_1"));
         HasTrackedBgOf(run).Should().BeTrue("задача стартовала");
 
         InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
@@ -204,7 +228,7 @@ public class StructuredBgEventsTests : IDisposable
         var run = NewRun();
         InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
 
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"t2","tool_use_id":"toolu_2"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("t2", "toolu_2"));
 
         HasTrackedBgOf(run).Should().BeTrue("старт задачи отменяет «работать некому»");
     }
@@ -214,7 +238,7 @@ public class StructuredBgEventsTests : IDisposable
     {
         var (session, _) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"t3","tool_use_id":"toolu_3"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("t3", "toolu_3"));
         InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
         HasTrackedBgOf(run).Should().BeFalse();
 
@@ -274,7 +298,7 @@ public class StructuredBgEventsTests : IDisposable
         var (session, _) = NewClaudeSession();
         var run = NewRun();
 
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("ad465d65e2756280a", "toolu_1"));
 
         PendingBgOf(run).Should().ContainKey("ad465d65e2756280a").WhoseValue.Should().Be("toolu_1");
     }
@@ -298,7 +322,7 @@ public class StructuredBgEventsTests : IDisposable
         UnknownBgToolUsesOf(run).Add("toolu_1");
         SetPendingBgUnknown(run, true);
 
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("ad465d65e2756280a", "toolu_1"));
 
         UnknownBgToolUsesOf(run).Should().BeEmpty();
         PendingBgUnknownOf(run).Should().BeFalse();
@@ -324,7 +348,7 @@ public class StructuredBgEventsTests : IDisposable
     {
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("ad465d65e2756280a", "toolu_1"));
 
         InvokeHandleStructuredTaskNotification(session, run,
             El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1","status":"completed"}"""));
@@ -394,7 +418,7 @@ public class StructuredBgEventsTests : IDisposable
         // (PendingBg) закрывает исключительно task_notification/финализация прогона
         var (session, _) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("ad465d65e2756280a", "toolu_1"));
 
         InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
 
@@ -430,7 +454,7 @@ public class StructuredBgEventsTests : IDisposable
     {
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("ad465d65e2756280a", "toolu_1"));
         var notification = El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1","status":"completed"}""");
 
         InvokeHandleStructuredTaskNotification(session, run, notification); // первое завершение
@@ -451,7 +475,7 @@ public class StructuredBgEventsTests : IDisposable
         // не найдёт задачу (что и проверяем), либо, при дублирующей логике, пошлёт вторую карточку
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("ad465d65e2756280a", "toolu_1"));
 
         InvokeHandleStructuredTaskNotification(session, run,
             El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1","status":"completed"}""")); // структурный путь
@@ -475,7 +499,7 @@ public class StructuredBgEventsTests : IDisposable
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
 
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-1","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-1", "toolu_1"));
         await WaitForAsync(() => PresenceOf(sent).Count > 0);
 
         PresenceOf(sent).Should().ContainSingle().Which.Active.Should().BeTrue();
@@ -490,9 +514,9 @@ public class StructuredBgEventsTests : IDisposable
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
 
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-1","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-1", "toolu_1"));
         await WaitForAsync(() => PresenceOf(sent).Count > 0);
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-2","tool_use_id":"toolu_2"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-2", "toolu_2"));
         await Task.Delay(100); // дать шанс возможной второй fire-and-forget рассылке
 
         PresenceOf(sent).Should().ContainSingle("присутствие публикуется на переходе 0↔N, а не на каждой задаче");
@@ -523,8 +547,8 @@ public class StructuredBgEventsTests : IDisposable
         // Пока жива хоть одна задача — присутствие держится; снимается ровно на последней
         var (session, sent) = NewClaudeSession();
         var run = NewRun();
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-1","tool_use_id":"toolu_1"}"""));
-        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-2","tool_use_id":"toolu_2"}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-1", "toolu_1"));
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-2", "toolu_2"));
         await WaitForAsync(() => PresenceOf(sent).Count > 0);
 
         InvokeHandleStructuredTaskNotification(session, run,
@@ -538,5 +562,123 @@ public class StructuredBgEventsTests : IDisposable
 
         PresenceOf(sent).Should().HaveCount(2);
         PresenceOf(sent)[1].Active.Should().BeFalse();
+    }
+
+    // --- 6. вид фоновой задачи: агент или просто команда в фоне ---
+    //
+    // Инцидент (бой, 26.08): чат светился «агенты работают» с иконкой робота при пустой панели
+    // агентов. В нём фоном (Bash с run_in_background) были подняты дев-серверы worktree —
+    // бесконечные по природе. CLI считает их фоновыми задачами и присылает на них такой же
+    // task_started, поэтому значок не гас в принципе: уведомления о завершении у них не будет.
+
+    [Fact]
+    public async Task ФоноваяКомандаBash_ПомечаетсяКомандой_АНеАгентом()
+    {
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, BashStarted("task-bash", "toolu_bash"));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+
+        HasTrackedBgOf(run).Should().BeFalse("дев-сервер в фоне — не агент");
+        HasTrackedCommandBgOf(run).Should().BeTrue();
+        var presence = PresenceOf(sent).Should().ContainSingle().Subject;
+        presence.Active.Should().BeFalse("свечение и робот команде не положены");
+        presence.Command.Should().BeTrue("но тихий значок нужен — чат держит живой процесс");
+    }
+
+    [Fact]
+    public void ФоноваяКомандаBash_ВсёРавноДержитПрогонЖивым()
+    {
+        // Обратная сторона: значка нет, но фоновая работа реальна — прогон и stdin обязаны
+        // дожить, иначе команда оборвётся вместе с процессом CLI
+        var (session, _) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, BashStarted("task-bash", "toolu_bash"));
+
+        HasPendingBgOf(run).Should().BeTrue();
+        PendingBgOf(run).Should().ContainKey("task-bash");
+    }
+
+    [Fact]
+    public async Task АгентРядомСФоновойКомандой_ЗначокГаснетПоАгенту_АНеПоКоманде()
+    {
+        // Ровно боевой случай: дев-сервер живёт часами, агент отработал за минуту. Значок
+        // обязан погаснуть вместе с агентом, а не ждать смерти процесса
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, BashStarted("task-bash", "toolu_bash"));
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-agent", "toolu_agent"));
+        await WaitForAsync(() => PresenceOf(sent).Count > 1); // команда, затем команда + агент
+        PresenceOf(sent)[^1].Active.Should().BeTrue();
+
+        InvokeHandleStructuredTaskNotification(session, run,
+            El("""{"task_id":"task-agent","tool_use_id":"toolu_agent","status":"completed"}"""));
+        await WaitForAsync(() => PresenceOf(sent).Count > 2);
+
+        PresenceOf(sent)[^1].Active.Should().BeFalse("агент закончил — свечение гаснет");
+        PresenceOf(sent)[^1].Command.Should().BeTrue("дев-сервер жив — тихий значок остаётся");
+        HasPendingBgOf(run).Should().BeTrue("фоновая команда всё ещё работает — прогон держим");
+    }
+
+    [Fact]
+    public async Task ЗавершениеКоманды_СнимаетТихийЗначок()
+    {
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, BashStarted("task-bash", "toolu_bash"));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+
+        InvokeHandleStructuredTaskNotification(session, run,
+            El("""{"task_id":"task-bash","tool_use_id":"toolu_bash","status":"completed"}"""));
+        await WaitForAsync(() => PresenceOf(sent).Count > 1);
+
+        PresenceOf(sent)[1].Command.Should().BeFalse();
+        HasTrackedCommandBgOf(run).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task СменаОдногоВида_ПубликуетсяОднимСобытием()
+    {
+        // Гейт общий на оба вида: у чата с агентом и дев-сервером завершение агента меняет
+        // только первый бит, и раздельные гейты слали бы два события об одном состоянии
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, AgentStarted("task-agent", "toolu_agent"));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+
+        InvokeHandleTaskStarted(session, run, BashStarted("task-bash", "toolu_bash"));
+        await WaitForAsync(() => PresenceOf(sent).Count > 1);
+        await Task.Delay(100); // дать шанс лишней рассылке, если гейт разъехался
+
+        PresenceOf(sent).Should().HaveCount(2);
+        PresenceOf(sent)[1].Active.Should().BeTrue();
+        PresenceOf(sent)[1].Command.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ЗапускУчтёнПриВызове_ЗадачаАгентская_ДажеБезSubagentType()
+    {
+        // Workflow и Agent с run_in_background учитываются на самом tool_use
+        // (HandleAssistantToolsAsync) — subagent_type в их task_started может и не прийти,
+        // вид задачи мы к этому моменту уже знаем
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        AgenticBgToolUsesOf(run).Add("toolu_wf");
+
+        InvokeHandleTaskStarted(session, run, BashStarted("wf_1", "toolu_wf"));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+
+        HasTrackedBgOf(run).Should().BeTrue();
+        PresenceOf(sent).Should().ContainSingle().Which.Active.Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsAgenticTaskStarted_РазличаетАгентаИФоновуюКоманду()
+    {
+        ClaudeSession.IsAgenticTaskStarted(AgentStarted("t", "toolu_1")).Should().BeTrue();
+        ClaudeSession.IsAgenticTaskStarted(BashStarted("t", "toolu_1")).Should().BeFalse();
+        ClaudeSession.IsAgenticTaskStarted(El("""{"task_id":"t","subagent_type":""}""")).Should().BeFalse();
     }
 }

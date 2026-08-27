@@ -45,9 +45,14 @@ export function NotifyButton({ session, isMobile, onSessionUpdated }: {
   return (
     <ToolbarIconButton
       onClick={toggle}
-      active={on}
+      // Акцентная плашка снята: в ряду шапки такие кнопки стоят подряд, и
+      // оранжевый переставал означать главное действие. Состояние показывает
+      // сама иконка — Bell против BellOff (образец тона — ExpiryButton)
       disabled={saving}
       isMobile={isMobile}
+      // Ghost-ряд шапки гасит кнопку в покое; включённые уведомления — состояние,
+      // которое должно читаться всегда (cc-ghost-live снимает заглушку)
+      className={on ? 'cc-ghost-live' : undefined}
       title={on
         ? 'Уведомления по этому чату включены — сигнал, когда нужно решение или ход завершён'
         : 'Уведомления по этому чату выключены'}

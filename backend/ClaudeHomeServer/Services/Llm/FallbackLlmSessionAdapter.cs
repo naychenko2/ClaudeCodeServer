@@ -221,6 +221,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     public bool HasPendingBg => _inner.HasPendingBg;
     // Учтённые фоновые задачи живут в обёрнутом прогоне — делегируем (как HasPendingBg)
     public bool HasTrackedBg => _inner.HasTrackedBg;
+    public bool HasTrackedCommandBg => _inner.HasTrackedCommandBg;
     // Продолжение живёт в обёрнутом ClaudeSession-прогоне — делегируем (как HasPendingBg).
     public bool IsContinuationInFlight => _inner.IsContinuationInFlight;
     public long SubmittedTurnSeq => _inner.SubmittedTurnSeq;

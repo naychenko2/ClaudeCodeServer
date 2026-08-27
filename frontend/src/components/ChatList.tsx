@@ -1,9 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Archive, FilterX, MessageCircle, Plus } from 'lucide-react';
+import { FilterX, MessageCircle, Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
-import { showToast } from '../lib/toast';
 import { useOnline } from '../hooks/useOnline';
 import { C, ISLAND, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
@@ -13,7 +11,7 @@ import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -32,9 +30,6 @@ interface Props {
   onEdited: (updated: Session) => void;
   // Чат удалён — убрать из списка
   onDeleted: (id: string) => void;
-  // Чат убран в архив / возвращён из архива — обновить в списке. archived=true — в архив,
-  // archived=false — из архива. Реализация ловит 409 «в чате идёт ход» и показывает тостом.
-  onArchive: (chat: Session, archived: boolean) => void;
   isMobile?: boolean;
   // Чат с активным workflow — плашка «WF» на его карточке
   workflowRunningFor?: string;
@@ -47,7 +42,7 @@ interface Props {
 // Режимы группировки глобального списка: реестра тегов у него нет — только Дни/Без
 const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
-export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, onArchive, isMobile = false, workflowRunningFor, bare = false }: Props) {
+export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
@@ -56,6 +51,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Раскрытая свайпом карточка (мобильная раскладка): максимум одна; открытие
+  // другой закрывает предыдущую. null — все закрыты
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
 
   // === Фильтры и оси списка чатов ===
   // Фильтры + оси вида (groupBy/sortOrder/hierarchy) — единый state, персистится
@@ -96,13 +94,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, agentsRunningIds],
   );
-  // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
-  // По этому подмножеству считаются и «скрыто фильтрами», и пустые состояния:
-  // иначе в режиме архива бейдж мерил бы весь список, а в обычном записывал в
-  // «скрытые фильтрами» убранные в архив чаты, которых сброс фильтров не вернёт.
-  const scoped = chats.filter(c => isArchivedChat(c) === filters.archivedOnly);
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = scoped.length - filteredChats.length;
+  const hiddenCount = chats.length - filteredChats.length;
 
   const togglePin = async (chat: Session) => {
     try {
@@ -116,36 +109,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const renameChat = async (chat: Session, name: string) => {
     const updated = await api.chats.update(chat.id, { name });
     onEdited(updated);
-  };
-
-  // === Действия архивной карточки (режим «Архивные» этого же списка) ===
-  // Сам архив/возврат идёт каналом onArchive владельца (ChatsPage.handleArchive) —
-  // второго пути к эндпоинту не заводим. Здесь — только сводка и заметка.
-
-  // Сводка (место chat-digest): первая сборка зовёт модель, дальше отдаётся из
-  // кэша. Ответ — обновлённый чат, отдаём владельцу тем же onEdited, что и
-  // переименование. 409 «сводка уже собирается» и 502 «модель упала» приходят
-  // человеческим текстом — своего сообщения поверх не сочиняем.
-  const buildDigest = async (chat: Session) => {
-    try {
-      onEdited(await archiveApi.buildDigest(chat.id));
-    } catch (e) {
-      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
-    }
-  };
-
-  // «Сохранить в заметки» — существующий POST /api/sessions/{id}/summary. В ответе
-  // заметка, а SummaryNoteId сервер проставляет чату: перечитываем его, иначе
-  // карточка покажет первые строки заметки только после ближайшего обновления списка.
-  const saveAsNote = async (chat: Session) => {
-    try {
-      await saveArchiveSessionAsNote(chat.id);
-      showToast('Сохранение в заметки', 'Заметка создана', 'info');
-      const fresh = await api.chats.get(chat.id).catch(() => null);
-      if (fresh) onEdited(fresh);
-    } catch (e) {
-      showToast('Сохранение в заметки', e instanceof Error ? e.message : 'Не удалось сохранить в заметки', 'info');
-    }
   };
 
   const handleDelete = async () => {
@@ -194,18 +157,14 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       online={online}
       hovered={hoveredId === chat.id}
       workflowRunning={workflowRunningFor === chat.id}
-      onSelect={() => onSelect(chat)}
+      onSelect={() => { setOpenSwipeId(null); onSelect(chat); }}
       onHover={h => setHoveredId(h ? chat.id : null)}
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
-      // Архив и его действия — только онлайн: офлайн-кэш вернул бы «успех» на
-      // запрос, который до сервера не доехал. Сводку и заметку карточка рисует
-      // подвалом только у архивного чата (см. ChatCard) — обычной ничего не меняет
-      onArchive={online ? archived => onArchive(chat, archived) : undefined}
-      onBuildDigest={online ? () => buildDigest(chat) : undefined}
-      onSaveAsNote={online ? () => saveAsNote(chat) : undefined}
+      swipeOpen={openSwipeId === chat.id}
+      onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}
     />
   );
 
@@ -231,44 +190,29 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // есть, но фильтры всё скрыли — подсказка со сбросом.
   const listContent = (
     <>
-      {scoped.length === 0 && (
-        filters.archivedOnly ? (
-          // Режим архива, а убранных чатов нет вовсе — рассказываем, откуда они
-          // берутся и что архив ничего не теряет. Кнопки создания тут нет: новый
-          // чат в архиве не появится
-          <EmptyState
-            compact={!isMobile}
-            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title={ARCHIVE_EMPTY_TITLE}
-            subtitle={ARCHIVE_EMPTY_SUBTITLE}
-          />
-        ) : (
-          <EmptyState
-            compact={!isMobile}
-            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title="Здесь будут ваши чаты"
-            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
-            action={
-              <Button
-                variant="primary" size="md" loading={creating}
-                onClick={onNew}
-                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-              >
-                Создать первый чат
-              </Button>
-            }
-          />
-        )
+      {chats.length === 0 && (
+        <EmptyState
+          compact={!isMobile}
+          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+          title="Здесь будут ваши чаты"
+          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+          action={
+            <Button
+              variant="primary" size="md" loading={creating}
+              onClick={onNew}
+              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+            >
+              Создать первый чат
+            </Button>
+          }
+        />
       )}
-      {/* Чаты этой оси есть, но их скрыли фильтры. Типовой случай режима архива:
-          архивный чат выполненной задачи (taskDone) не проходит дефолтный набор
-          статусов — чип «Завершён» выключен, и архив кажется пустым */}
-      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && scoped.length > 0 && (
+      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
         <EmptyState
           compact
           icon={<FilterX size={20} strokeWidth={2} />}
           title="Ничего не нашлось"
-          subtitle={buildHiddenReason(scoped.length, filters.search)}
+          subtitle={buildHiddenReason(chats.length, filters.search)}
           action={
             <ChatFilterResetActions
               search={filters.search}
@@ -288,7 +232,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           ) : (
             dayGroups.map(g => (
               <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-                <ListDateDivider title={g.title} />
+                <ListDateDivider title={g.title} plain />
                 {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
                   <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                 )))}
@@ -305,7 +249,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
         // её margin наружу не выходит. Панель растёт по контенту, и переключение
         // иерархии дёргало её на эту разницу
         <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
-          <ListDateDivider title={g.title} />
+          <ListDateDivider title={g.title} plain />
           {g.items.map(c => renderCard(c))}
         </div>
       ))}
@@ -350,7 +294,15 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     // верхний padding у него есть, и вместе с общим набегало 18px пустоты под
     // шапкой. Без группировки список начинается сразу карточкой — ей нужен
     // обычный отступ, иначе она липнет к заголовку.
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+    <div
+      // Скролл списка закрывает раскрытую свайпом карточку: жест и прокрутка —
+      // разные намерения, держать раскрытие во время прокрутки мешает обзору
+      onScroll={() => { if (openSwipeId !== null) setOpenSwipeId(null); }}
+      // Фон задан явно, хотя тело панели и так белое: строки чатов рамок не имеют
+      // и в покое прозрачны, а липкая подпись группы закрашена тем же bgWhite —
+      // оба приёма ломаются, если список поставить на чужой фон (мобильная
+      // раскладка воркспейса своего фона колонке не задаёт)
+      style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: C.bgWhite, padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
       {listContent}
     </div>
   );
@@ -396,7 +348,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           />
         }
         title="Чаты"
-        badge={scoped.length > 0 ? String(scoped.length) : null}
+        badge={chats.length > 0 ? String(chats.length) : null}
         // fill=false: панель занимает по контенту, не растягивается на всю
         // высоту сайдбара — если чатов мало, низ остаётся свободным.
         fill={false}

@@ -25,7 +25,8 @@ public sealed partial class DocsIndexService(FileService? files = null)
 {
     // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
     // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.
-    public static readonly DocsScope DefaultScope = new(["docs"], ["README.md"], ["markdown"]);
+    public static readonly DocsScope DefaultScope = new(["docs"], ["README.md"], ["markdown"],
+        ExcludeFolders: []);
 
     // Что можно включить в документацию — ровно то, что продукт умеет открыть
     // (FileService.ViewableDocuments / IsImageFile / IsAudioFile / IsVideoFile и drawio
@@ -114,6 +115,7 @@ public sealed partial class DocsIndexService(FileService? files = null)
     // осознанное «ничего отсюда» (это разные вещи, и нормализаторы их различают).
     private sealed record ScopeFileShape(
         List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home,
+        List<string>? ExcludeFolders,
         // Схема типов документов — СЫРЫМ элементом, а не List<DocTypeDef>: типизированное поле
         // означало бы, что «"docTypes": 5» роняет разбор ВСЕГО файла и область молча
         // откатывается к настройке проекта. Секция схемы не вправе утащить за собой область.
@@ -255,7 +257,31 @@ public sealed partial class DocsIndexService(FileService? files = null)
             NormalizeFolders(scope.Folders),
             NormalizeRootFiles(scope.RootFiles),
             NormalizeTypes(scope.Types),
-            NormalizeHome(scope.Home));
+            NormalizeHome(scope.Home),
+            NormalizeExcludeFolders(scope.ExcludeFolders, NormalizeFolders(scope.Folders)));
+
+    // Исключения — подпапки выбранных папок. Отбрасывается молча то, что ничего не
+    // исключает: запись вне всех выбранных папок (не вычитает ни одного файла) и запись,
+    // совпавшая с элементом Folders (явное включение сильнее — иначе оси спорили бы
+    // о папке, включённой обеими). Снятие выбранной папки выкидывает и её исключения —
+    // это тот же фильтр «вне выбранных», а не отдельная чистка.
+    public static IReadOnlyList<string> NormalizeExcludeFolders(IReadOnlyList<string>? exclude, IReadOnlyList<string> folders)
+    {
+        if (exclude is null || exclude.Count == 0) return [];
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in exclude)
+        {
+            var folder = NormalizeFolder(raw);
+            if (folder is null || !seen.Add(folder)) continue;
+            // Должна вычитать что-то: лежать внутри выбранной папки, но не совпадать с ней
+            if (folders.Contains(folder, StringComparer.OrdinalIgnoreCase)) continue;
+            if (!folders.Any(f => folder.StartsWith($"{f}/", StringComparison.OrdinalIgnoreCase))) continue;
+            result.Add(folder);
+            if (result.Count >= MaxFolders) break;
+        }
+        return result;
+    }
 
     // Домашний документ — путь от корня проекта (в отличие от файлов корня, он может
     // лежать в папке). Значение вне корня отбрасывается: гейт области дальше всё равно
@@ -312,7 +338,8 @@ public sealed partial class DocsIndexService(FileService? files = null)
         project.DocsFolders ?? DefaultScope.Folders,
         project.DocsRootFiles ?? DefaultScope.RootFiles,
         project.DocsTypes ?? DefaultScope.Types,
-        project.DocsHome));
+        project.DocsHome,
+        project.DocsExcludeFolders ?? []));
 
     // Единственная точка резолва области: файл репозитория сильнее настройки проекта.
     // Иначе двое владельцев одной папки видели бы разную документацию — ровно то, от чего
@@ -358,7 +385,8 @@ public sealed partial class DocsIndexService(FileService? files = null)
             NormalizeFolders(parsed.Folders),
             NormalizeRootFiles(parsed.RootFiles),
             NormalizeTypes(parsed.Types),
-            NormalizeHome(parsed.Home)), null, docTypes, docTypesError);
+            NormalizeHome(parsed.Home),
+            NormalizeExcludeFolders(parsed.ExcludeFolders, NormalizeFolders(parsed.Folders))), null, docTypes, docTypesError);
     }
 
     public enum ScopeFileWriteStatus { Ok, Broken, Failed }
@@ -409,6 +437,15 @@ public sealed partial class DocsIndexService(FileService? files = null)
             // Home удаляем явно: WhenWritingNull работал только при сериализации целого объекта,
             // а «home: null» в файле читается как выбранный пустой путь — ровно наоборот
             if (normalized.Home is { } home) root["home"] = home; else root.Remove("home");
+            // Исключения пишем только непустыми: у оси нет непустого дефолта, и пустой
+            // ключ отличал бы «осознанно без исключений» от «не задано» там, где разницы
+            // никакой — а строка в версионируемом файле была бы шумом в диффе
+            // is-паттерн, а не .Count: ось nullable в типе модели, ненулевой её делает
+            // только NormalizeScope, и компилятору эту гарантию надо показать на месте
+            if (normalized.ExcludeFolders is { Count: > 0 })
+                root["excludeFolders"] = ToJsonArray(normalized.ExcludeFolders);
+            else
+                root.Remove("excludeFolders");
         }
         if (docTypes is not null) root["docTypes"] = DocTypeSchema.ToJson(docTypes);
 
@@ -494,8 +531,11 @@ public sealed partial class DocsIndexService(FileService? files = null)
         var root = Path.GetFullPath(rootPath);
         var scope = NormalizeScope(rawScope);
         // Ключ кеша — корень ВМЕСТЕ с областью: у соседей по папке (один RootPath, разные
-        // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
-        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}";
+        // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга.
+        // Исключения — тоже часть области: смена исключения без правки файлов обязана
+        // пересобрать корпус, а отпечаток (ниже) считается уже по собранному списку и
+        // правок внутри исключённого не видит — и не должен
+        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}\n{string.Join('|', scope.ExcludeFolders ?? [])}";
         var files = CollectFiles(root, scope);
         // Файлы порядка обязаны попасть в отпечаток: правка .order не меняет ни один документ,
         // и без них кеш не инвалидируется — панель показывала бы прежний порядок до перезапуска
@@ -531,7 +571,7 @@ public sealed partial class DocsIndexService(FileService? files = null)
                 if (files.Count >= MaxDocs) break;
                 var dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
                 if (!Directory.Exists(dir)) continue;
-                foreach (var file in EnumerateDocs(dir, ExtensionsOf(scope.Types)))
+                foreach (var file in EnumerateDocs(dir, folder, ExtensionsOf(scope.Types), scope.ExcludeFolders ?? []))
                 {
                     if (files.Count >= MaxDocs) break;
                     if (seen.Add(file)) files.Add(file);
@@ -603,14 +643,17 @@ public sealed partial class DocsIndexService(FileService? files = null)
 
     // Обход вручную, а не EnumerateFiles(AllDirectories): нужен пропуск служебных
     // подпапок. Выбранной может оказаться папка с node_modules внутри, и рекурсия туда
-    // затянула бы тысячи чужих README.
-    private static IEnumerable<string> EnumerateDocs(string dir, IReadOnlyList<string> extensions)
+    // затянула бы тысячи чужих README. rel — путь текущей папки ОТ КОРНЯ ПРОЕКТА
+    // (стартует с пути выбранной папки): исключения области записаны от него же, и
+    // относительный отсчёт от выбранной папки никогда бы с ними не совпал.
+    private static IEnumerable<string> EnumerateDocs(string dir, string folder, IReadOnlyList<string> extensions,
+        IReadOnlyList<string> excludeFolders)
     {
-        var queue = new Queue<string>();
-        queue.Enqueue(dir);
+        var queue = new Queue<(string Dir, string Rel)>();
+        queue.Enqueue((dir, folder));
         while (queue.Count > 0)
         {
-            var current = queue.Dequeue();
+            var (current, rel) = queue.Dequeue();
             string[] files, subdirs;
             try
             {
@@ -628,9 +671,22 @@ public sealed partial class DocsIndexService(FileService? files = null)
             {
                 var name = Path.GetFileName(sub);
                 if (name.StartsWith('.') || SkipDirs.Contains(name)) continue;
-                queue.Enqueue(sub);
+                var subRel = rel.Length == 0 ? name : $"{rel}/{name}";
+                if (IsExcluded(subRel, excludeFolders)) continue;
+                queue.Enqueue((sub, subRel));
             }
         }
+    }
+
+    // Папка попадает под исключение: совпала с ним или лежит внутри. Сравнение
+    // префиксное и без учёта регистра — как весь остальной обход области
+    private static bool IsExcluded(string relFolder, IReadOnlyList<string> excludeFolders)
+    {
+        foreach (var ex in excludeFolders)
+            if (string.Equals(relFolder, ex, StringComparison.OrdinalIgnoreCase) ||
+                relFolder.StartsWith($"{ex}/", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     // Настройка области проекта вместе с источником: файл репозитория или настройка продукта.

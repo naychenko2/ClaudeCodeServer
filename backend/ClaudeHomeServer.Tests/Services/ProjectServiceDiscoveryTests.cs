@@ -36,6 +36,53 @@ public class ProjectServiceDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task Ids_AreUnique_WhenSlugsCollide()
+    {
+        // Регрессия боя 26.08: слаг оставляет только латиницу и цифры, поэтому у двух
+        // конфигураций с чисто кириллическими именами Id совпадал. Панель «Сервисы»
+        // отвечала 500 (ToDictionary по Id → ArgumentException), и запустить нельзя было
+        // ни один сервис проекта — падал весь список.
+        Write(".claude/launch.json", """
+        {
+          "configurations": [
+            { "name": "Панель хостов",  "runtimeExecutable": "npm", "runtimeArgs": ["run", "hosts"] },
+            { "name": "Панель сессий",  "runtimeExecutable": "npm", "runtimeArgs": ["run", "sessions"] }
+          ]
+        }
+        """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+
+        svcs.Should().HaveCount(2, "разные запуски не схлопываются — теряется кнопка");
+        svcs.Select(s => s.Id).Should().OnlyHaveUniqueItems(
+            "Id — ключ сервиса во всём API: по нему идут запуск, остановка и реестр запущенных");
+        svcs.Select(s => s.Name).Should().BeEquivalentTo(["Панель хостов", "Панель сессий"],
+            "имена остаются человеческими — суффикс уходит только в Id");
+    }
+
+    [Fact]
+    public async Task Ids_StayStable_AcrossCalls()
+    {
+        // Суффикс считается от сигнатуры запуска, а не от порядкового номера: иначе
+        // добавление третьей конфигурации переставило бы Id уже запущенным сервисам,
+        // и реестр процессов (он ключуется Id) осиротел бы.
+        Write(".claude/launch.json", """
+        {
+          "configurations": [
+            { "name": "Панель хостов",  "runtimeExecutable": "npm", "runtimeArgs": ["run", "hosts"] },
+            { "name": "Панель сессий",  "runtimeExecutable": "npm", "runtimeArgs": ["run", "sessions"] }
+          ]
+        }
+        """);
+        var first = (await _svc.DiscoverAsync(Project())).Select(s => s.Id).ToList();
+
+        _svc.Invalidate(Project().Id);
+        var second = (await _svc.DiscoverAsync(Project())).Select(s => s.Id).ToList();
+
+        second.Should().Equal(first);
+    }
+
+    [Fact]
     public async Task PackageJson_ServerScriptsOnly()
     {
         Write("package.json", """{ "scripts": { "dev": "vite", "build": "vite build", "predev": "x", "serve": "vite preview" } }""");

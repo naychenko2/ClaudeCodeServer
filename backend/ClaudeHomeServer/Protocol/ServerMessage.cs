@@ -107,7 +107,11 @@ public record BgAgentDoneMessage(IReadOnlyList<string> ToolUseIds, bool Aborted 
 // Отдельное событие, а не флаг в status_changed: тот дёргает reloadHistory открытого чата
 // (useSession) и пачку рефетчей, а старт фонового агента статуса сессии не меняет вовсе —
 // чат при доживании фона уже Active, и именно поэтому карточка выглядела остывшей
-public record BgAgentsPresenceMessage(bool Active)
+// Active — работают агенты (Agent/Task в фоне, Workflow); Command — работает фоновая команда
+// (Bash с run_in_background: дев-сервер, watch). Виды разделены намеренно: команда живёт часами
+// и завершения не присылает, поэтому «агенты работают» на ней врало, а полное молчание скрывало
+// причину, по которой чат держит живой процесс CLI.
+public record BgAgentsPresenceMessage(bool Active, bool Command)
     : ServerMessage("bg_agents_presence");
 
 public record PermissionRequestMessage(string RequestId, string ToolName, object ToolInput)

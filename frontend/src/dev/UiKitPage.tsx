@@ -20,7 +20,7 @@ import {
   Send,
   Star, Database,
   ClipboardList, FolderTree, GitCompare, ListTodo,
-  Bot, Users, SquareTerminal, MonitorPlay, User,
+  Bot, Users, SquareTerminal, AppWindow, User,
   ChevronRight, Folder,
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
@@ -1816,7 +1816,7 @@ const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: bool
   { key: 'tasks',    title: 'Задачи',    Icon: ListTodo },
   { key: 'team',     title: 'Команда',   Icon: Users },
   { key: 'terminal', title: 'Терминал',  Icon: SquareTerminal, accent: true },
-  { key: 'preview',  title: 'Сервисы',   Icon: MonitorPlay, accent: true },
+  { key: 'preview',  title: 'Сервисы',   Icon: AppWindow, accent: true },
 ];
 
 // Четыре фоновых тона дизайн-системы (Rider Islands): холст → остров →

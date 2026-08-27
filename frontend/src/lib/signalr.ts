@@ -188,8 +188,10 @@ export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   return () => conn.off('message', handler);
 }
 
-// Watcher: сервер сообщает об изменении файлов проекта (создание/правка/удаление)
-export function onFilesChanged(handler: (data: { projectId: string; paths: string[] }) => void): () => void {
+// Watcher: сервер сообщает об изменении файлов проекта (создание/правка/удаление).
+// full=true — сигнал полной пересинхронизации (массовые изменения либо сбой watcher'а):
+// paths при нём пуст, подписчик перезагружает всё, а не ждёт конкретных путей.
+export function onFilesChanged(handler: (data: { projectId: string; paths: string[]; full?: boolean }) => void): () => void {
   const conn = getConnection();
   conn.on('filesChanged', handler);
   return () => conn.off('filesChanged', handler);

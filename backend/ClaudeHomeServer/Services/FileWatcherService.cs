@@ -6,7 +6,9 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Services;
 
 // Следит за файлами проекта, пока к нему подключён хотя бы один клиент (ref-count по connectionId),
-// и шлёт в группу "project_{id}" событие "filesChanged" { projectId, paths } с дебаунсом.
+// и шлёт в группу "project_{id}" событие "filesChanged" { projectId, paths, full } с дебаунсом.
+// full=true — сигнал полной пересинхронизации (переполнение лимита путей либо пересоздание
+// watcher'а после сбоя): paths при нём пуст, клиент перезагружает всё раскрытое.
 // События тяжёлых/нерелевантных папок (.git, node_modules, bin, obj, …) отфильтрованы.
 //
 // Второй вид watcher'ов — по произвольному пути (WatchPath/UnwatchPath, ключ "worktree:{sessionId}"):
@@ -19,8 +21,10 @@ public class FileWatcherService : IDisposable
     private const int MaxPaths = 200;
     // Защита от зависания обхода на огромных деревьях в polling-режиме.
     private const int SnapshotMaxEntries = 20000;
-    // Буфер событий path-watcher'ов: дефолтные 8 КБ переполняются на git checkout / npm install
-    // в отдельном дереве (Error → RecreateWatcher, часть событий теряется).
+    // Буфер событий watcher'ов: дефолтные 8 КБ переполняются на git checkout / npm install
+    // (Error → RecreateWatcher, часть событий теряется). Ставится ВСЕМ watcher'ам, не только
+    // отдельным деревьям: массовые правки бывают и в RootPath проекта, а пересоздание
+    // проектного watcher'а с дефолтным буфером давало цикл «переполнился → такой же → снова».
     private const int PathBufferBytes = 64 * 1024;
     // Автоснятие path-watcher'а по бездействию: к графу worktree давно не обращались —
     // гасим handle, при следующем запросе он поднимется лениво снова.
@@ -145,7 +149,7 @@ public class FileWatcherService : IDisposable
             var entry = new Entry { Root = full, LastTouchUtc = DateTime.UtcNow };
             _entries[key] = entry;
             if (_usePolling) StartPolling(key, entry);
-            else entry.Watcher = CreateWatcher(key, entry, largeBuffer: true);
+            else entry.Watcher = CreateWatcher(key, entry);
             _idleSweep ??= new Timer(_ => SweepIdlePaths(), null, IdleSweepMs, IdleSweepMs);
         }
     }
@@ -172,15 +176,15 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    private FileSystemWatcher CreateWatcher(string key, Entry entry, bool largeBuffer = false)
+    private FileSystemWatcher CreateWatcher(string key, Entry entry)
     {
         var w = new FileSystemWatcher(entry.Root)
         {
             IncludeSubdirectories = true,
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
                          | NotifyFilters.LastWrite | NotifyFilters.Size,
+            InternalBufferSize = PathBufferBytes,
         };
-        if (largeBuffer) w.InternalBufferSize = PathBufferBytes;
         void OnChange(object _, FileSystemEventArgs e) => OnFsEvent(key, entry, e.FullPath);
         w.Created += OnChange;
         w.Changed += OnChange;
@@ -293,25 +297,34 @@ public class FileWatcherService : IDisposable
 
     private void Flush(string key, Entry entry)
     {
-        string[] paths;
+        string[] allPaths;
+        bool full;
         lock (_lock)
         {
             if (entry.PendingPaths.Count == 0) return;
-            paths = entry.PendingPaths.Take(MaxPaths).ToArray();
+            full = entry.PendingPaths.Count > MaxPaths;
+            allPaths = entry.PendingPaths.ToArray();
             entry.PendingPaths.Clear();
         }
         // Отдельное дерево чата (path-watcher) в UI не показывается и в знания не синкается —
         // у него нет ни SignalR-группы, ни датасета: он живёт только ради графа кода.
         if (entry.ProjectId is string projectId)
         {
+            // Переполнение MaxPaths: раньше всё сверх лимита молча выбрасывалось и часть
+            // изменений не доезжала до клиента никогда. Теперь — признак полной
+            // пересинхронизации; сами пути не слаим, клиент при full перезагружает всё раскрытое.
+            var clientPaths = full ? Array.Empty<string>() : allPaths;
             _ = _hub.Clients.Group("project_" + projectId)
-                .SendAsync("filesChanged", new { projectId, paths });
-            // Правки Claude/внешние идут мимо файлового API — синк знаний узнаёт о них отсюда
-            _knowledgeSync.QueueSync(entry.Root, paths);
+                .SendAsync("filesChanged", new { projectId, paths = clientPaths, full });
+            // Правки Claude/внешние идут мимо файлового API — синк знаний узнаёт о них отсюда.
+            // Передаём полный накопленный список (а не клиентскую вырезку): SyncAsync и так
+            // делает полный проход по отслеживаемым файлам, а hints нужны лишь для детекта
+            // переноса — резать их значило бы деградировать перенос до delete+create.
+            _knowledgeSync.QueueSync(entry.Root, allPaths);
         }
         // Реактивный триггер CodeGraph: .cs-правки планируют инкрементальное перестроение графа
         // (дебаунс 15с живёт в CodeGraphService — серия правок схлопывается в один rebuild).
-        NotifyCodeGraph(entry.Root, paths);
+        NotifyCodeGraph(entry.Root, allPaths);
     }
 
     // Фильтрует .cs из накопленных путей и передаёт в CodeGraphService для инкрементального
@@ -334,8 +347,25 @@ public class FileWatcherService : IDisposable
         lock (_lock)
         {
             try { entry.Watcher?.Dispose(); } catch { }
-            entry.Watcher = CreateWatcher(key, entry, largeBuffer: entry.ProjectId is null);
+            entry.Watcher = CreateWatcher(key, entry);
         }
+        // За время сбоя watcher'а события ФС потеряны — списку файлов в UI нечем
+        // компенсироваться. Клиенту уходит сигнал полной пересинхронизации (пути неизвестны),
+        // синку знаний — полный проход без hints: перенос вне файлового API задетектится
+        // как delete+create вместо миграции, это приемлемая цена редкого сбоя.
+        if (entry.ProjectId is string projectId)
+        {
+            _ = _hub.Clients.Group("project_" + projectId)
+                .SendAsync("filesChanged", new { projectId, paths = Array.Empty<string>(), full = true });
+            _knowledgeSync.QueueSync(entry.Root);
+        }
+    }
+
+    // internal для тестов (InternalsVisibleTo): пересоздание watcher'а по ключу —
+    // воспроизводит путь Error → RecreateWatcher без реального сбоя ФС.
+    internal void RecreateWatcher(string key)
+    {
+        if (_entries.TryGetValue(key, out var entry)) RecreateWatcher(key, entry);
     }
 
     private void DisposeEntry(string key, Entry entry)

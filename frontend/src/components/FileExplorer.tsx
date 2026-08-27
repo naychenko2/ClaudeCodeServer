@@ -876,8 +876,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   useEffect(() => { loadSyncMarks(project.id); loadDownloadedSet(project.id); }, [project.id]);
 
   useEffect(() => {
-    return onFilesChanged(({ projectId, paths }) => {
+    return onFilesChanged(({ projectId, paths, full }) => {
       if (projectId !== project.id) return;
+      if (full) {
+        // Полная пересинхронизация (массовые изменения либо сбой watcher'а): paths пуст,
+        // перезагружаем все уже загруженные папки — иначе список устаревает до F5
+        for (const d of dirCacheRef.current.keys()) loadDir(d);
+        return;
+      }
       const dirs = new Set<string>();
       for (const raw of paths) {
         const p = raw.replace(/\\/g, '/');

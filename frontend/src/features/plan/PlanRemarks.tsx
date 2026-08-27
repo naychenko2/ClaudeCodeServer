@@ -61,10 +61,10 @@ interface Props {
   status: 'pending' | 'resolved';
   // Колбэк отправки готового текста обратной связи
   onSubmit: (feedback: string) => void;
-  // Необязательное уведомление наружу — для подсветки карточки «замечания
-  // ещё не отправлены» или аналога (задача этого пока не требует, оставлено
-  // на будущее; сейчас компонент полностью автономен)
-  onDirtyChange?: (dirty: boolean) => void;
+  // Текущее количество неотправленных замечаний: наружу уходит сам счётчик,
+  // а не флаг — родителю нужно показать цифру в подписи (например,
+  // «замечания (N) не отправятся» под второстепенной кнопкой одобрения).
+  onCountChange?: (count: number) => void;
 }
 
 const REMARK_STYLE_ID = 'cc-plan-remark-styles';
@@ -158,7 +158,7 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max);
 }
 
-export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyChange }: Props) {
+export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountChange }: Props) {
   const [remarks, setRemarks] = useState<PlanRemark[]>([]);
   const [form, setForm] = useState<FormAnchor | null>(null);
   const [draft, setDraft] = useState('');
@@ -182,8 +182,9 @@ export function PlanRemarks({ contentRef, planText, status, onSubmit, onDirtyCha
     return () => mq.removeEventListener?.('change', apply);
   }, []);
 
-  // Уведомляем родителя о появлении/сбросе неотправленных замечаний
-  useEffect(() => { onDirtyChange?.(remarks.length > 0); }, [remarks.length, onDirtyChange]);
+  // Уведомляем родителя о текущем количестве неотправленных замечаний —
+  // он переключает акцент кнопок одобрения/доработки на основе счётчика
+  useEffect(() => { onCountChange?.(remarks.length); }, [remarks.length, onCountChange]);
 
   // ── Детект выделения внутри контейнера ──
   // Без active selection попап с кнопкой «Оставить замечание» не появляется.

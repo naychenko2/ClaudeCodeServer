@@ -93,6 +93,11 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
+  // Количество неотправленных замечаний в PlanRemarks. При > 0 акцент
+  // кнопок карточки меняется: согласование становится второстепенным с
+  // честной подписью про потерю замечаний (задача про молча теряемые
+  // замечания — протокол одобрения комментарий не передаёт)
+  const [remarksCount, setRemarksCount] = useState(0);
   const asstName = useAssistantName();
   const project = useContext(ChatProjectContext);
   // Фича «Визуальный разворот плана»: контекстные замечания к разделам.
@@ -218,20 +223,43 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       {!online ? (
         <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
       ) : visualPlanEnabled ? (
-        // Под флагом visualPlan — единственная primary-кнопка одобрения; отправка
-        // на доработку идёт через слой замечаний (PlanRemarks) ниже, отправляющий
-        // тот же onRespond(requestId, false, feedback). Старый путь с textarea
-        // оставлен для отката, когда флаг выключен.
-        <button onClick={() => onRespond(item.requestId, true)}
-          style={{
-            width: '100%', minHeight: 42, background: C.plan, color: C.onAccent, borderRadius: R.lg,
-            padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
-            boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          }}>
-          <Check size={16} color={C.onAccent} strokeWidth={2.6} style={{ flexShrink: 0 }} />
-          Одобрить и выполнить
-        </button>
+        // Под флагом visualPlan — кнопка одобрения + слой замечаний (PlanRemarks)
+        // с кнопкой «Отправить на доработку (N)». Когда замечаний нет, одобрение —
+        // единственный primary; когда есть — PlanRemarks рисует свою primary-кнопку
+        // отправки на доработку, а одобрение становится второстепенным с честной
+        // подписью про потерю (задача про молча теряемые замечания: протокол
+        // ClaudeSession.RespondPlan при approve=true шлёт `{behavior: "allow"}` без
+        // updatedInput, комментарий на уровне протокола отбрасывается).
+        remarksCount > 0 ? (
+          <div>
+            <button onClick={() => onRespond(item.requestId, true)}
+              style={{
+                width: '100%', minHeight: 42, background: C.bgWhite, color: C.planText,
+                border: `1px solid ${C.planBorder}`, borderRadius: R.lg, padding: 9,
+                cursor: 'pointer', fontSize: 13.5, fontWeight: 600,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+              }}>
+              <Check size={16} color={C.planText} strokeWidth={2.4} style={{ flexShrink: 0 }} />
+              Одобрить и выполнить
+            </button>
+            <div style={{
+              marginTop: 6, fontSize: 12, color: C.textMuted, textAlign: 'center', lineHeight: 1.35,
+            }}>
+              замечания ({remarksCount}) не отправятся
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => onRespond(item.requestId, true)}
+            style={{
+              width: '100%', minHeight: 42, background: C.plan, color: C.onAccent, borderRadius: R.lg,
+              padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
+              boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+            }}>
+            <Check size={16} color={C.onAccent} strokeWidth={2.6} style={{ flexShrink: 0 }} />
+            Одобрить и выполнить
+          </button>
+        )
       ) : rejecting ? (
         <div>
           <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 7 }}>
@@ -283,6 +311,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           planText={plan}
           status="pending"
           onSubmit={feedback => onRespond(item.requestId, false, feedback || undefined)}
+          onCountChange={setRemarksCount}
         />
       )}
     </div>

@@ -36,10 +36,6 @@ export interface ChatFilters {
   sortOrder: ChatSortOrder;
   // Дерево по parentSessionId: группировка применяется к корням, дети — под корнём
   hierarchy: boolean;
-  // Архивный вид: false (дефолт) — список без архивных чатов, true — ТОЛЬКО архивные.
-  // Не фильтр, а ось вида: переключается кнопкой в шапке панели, «Сбросить всё» её не
-  // трогает (иначе сброс фильтров молча выкидывал бы человека из архива обратно в список)
-  archived: boolean;
 }
 
 const KEY_PREFIX = 'cc_chat_filters:';
@@ -63,7 +59,6 @@ function defaults(): ChatFilters {
     groupBy: 'days',
     sortOrder: 'newest',
     hierarchy: false,
-    archived: false,
   };
 }
 
@@ -124,7 +119,6 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     groupBy,
     sortOrder: p.sortOrder === 'oldest' || p.sortOrder === 'newest' ? p.sortOrder : 'newest',
     hierarchy: typeof p.hierarchy === 'boolean' ? p.hierarchy : legacyAxes.hierarchy ?? false,
-    archived: p.archived === true,
   };
 }
 
@@ -213,14 +207,8 @@ export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
   const q = filters.search.trim().toLowerCase();
   const onlySet = filters.only;
   return (s) => {
-    // Архив — жёсткая развилка, а не один из чипов: обычный вид не показывает архивные
-    // никогда, архивный — только их
-    if (!!s.archivedAt !== filters.archived) return false;
     if (!filters.origins.includes(s.origin)) return false;
-    // В архиве фильтр статусов не применяется. Дефолт прячет срез «Готово» (чаты
-    // выполненных задач), а в архив как раз их и убирают — иначе человек открывал бы
-    // архив и видел «пусто» при трёх лежащих там чатах
-    if (!filters.archived && !filters.statuses.includes(chatStatusOf(s))) return false;
+    if (!filters.statuses.includes(chatStatusOf(s))) return false;
     if (filters.personaId && s.personaId !== filters.personaId) return false;
     if (onlySet.length) {
       // «Показать только» — OR по выбранным тегам: чат виден, если подпадает хотя бы
@@ -259,7 +247,7 @@ export function defaultChatFilters(): ChatFilters {
 // Сброс только фильтрующих полей, оси вида сохраняются — «Сбросить всё» в поповере
 // фильтров не должен неожиданно перестраивать список (группировка/порядок/иерархия).
 export function defaultChatFiltersKeepingView(f: ChatFilters): ChatFilters {
-  return { ...defaults(), groupBy: f.groupBy, sortOrder: f.sortOrder, hierarchy: f.hierarchy, archived: f.archived };
+  return { ...defaults(), groupBy: f.groupBy, sortOrder: f.sortOrder, hierarchy: f.hierarchy };
 }
 
 // === Empty state списка чатов (макет варианта А, сцена 3) ===

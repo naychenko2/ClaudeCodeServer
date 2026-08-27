@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   loadChatFilters, persistChatFilters, isDefaultFilters, defaultChatFilters,
-  defaultChatFiltersKeepingView, matchChatFilter, type ChatFilters,
+  defaultChatFiltersKeepingView, type ChatFilters,
 } from '../chatFilters';
-import type { Session } from '../../types';
 
 // Окружение node — localStorage нет; мокаем минимальную реализацию на Map
 const store = new Map<string, string>();
@@ -136,41 +135,5 @@ describe('defaultChatFiltersKeepingView', () => {
     expect(r.groupBy).toBe('tags');
     expect(r.sortOrder).toBe('oldest');
     expect(r.hierarchy).toBe(true);
-  });
-});
-
-// === Архивный вид ===
-// Архив — не чип фильтра, а развилка вида: обычный список не показывает архивные
-// никогда, архивный — только их.
-const chat = (over: Partial<Session>): Session => ({
-  id: 'c1', mode: 'auto', status: 'finished', messageCount: 1,
-  createdAt: '2026-08-01T10:00:00Z', updatedAt: '2026-08-01T10:00:00Z',
-  origin: 'manual', ...over,
-} as Session);
-
-describe('matchChatFilter: архив', () => {
-  it('обычный вид скрывает архивные чаты', () => {
-    const ok = matchChatFilter(defaultChatFilters());
-    expect(ok(chat({}))).toBe(true);
-    expect(ok(chat({ archivedAt: '2026-08-02T10:00:00Z' }))).toBe(false);
-  });
-
-  it('архивный вид показывает только архивные', () => {
-    const ok = matchChatFilter({ ...defaultChatFilters(), archived: true });
-    expect(ok(chat({}))).toBe(false);
-    expect(ok(chat({ archivedAt: '2026-08-02T10:00:00Z' }))).toBe(true);
-  });
-
-  it('в архиве не применяется фильтр статусов: чат выполненной задачи виден', () => {
-    // Дефолт прячет срез «Готово» — иначе архив выглядел бы пустым при лежащих там
-    // чатах выполненных задач
-    const ok = matchChatFilter({ ...defaultChatFilters(), archived: true });
-    expect(ok(chat({ archivedAt: '2026-08-02T10:00:00Z', taskDone: true }))).toBe(true);
-  });
-
-  it('сброс фильтров не выкидывает из архива', () => {
-    const r = defaultChatFiltersKeepingView({ ...defaultChatFilters(), archived: true, search: 'x' });
-    expect(r.archived).toBe(true);
-    expect(r.search).toBe('');
   });
 });

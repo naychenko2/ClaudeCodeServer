@@ -8,13 +8,11 @@
 // диалогом), и склеивать эти реализации в один рантайм смысла нет.
 
 export type ChatActionKey =
-  | 'rename' | 'pin' | 'tags' | 'wall' | 'notify' | 'dossier' | 'expiry' | 'archive' | 'delete';
+  | 'rename' | 'pin' | 'tags' | 'wall' | 'notify' | 'dossier' | 'expiry' | 'delete';
 
-// Порядок — канонический: в каком бы месте действие ни рисовалось, соседи те же.
-// «В архив» стоит перед «Удалить» намеренно: это мягкая альтернатива удалению, и
-// дотянувшийся до края меню человек должен увидеть её ПЕРЕД необратимым действием
+// Порядок — канонический: в каком бы месте действие ни рисовалось, соседи те же
 export const CHAT_ACTION_ORDER: ChatActionKey[] = [
-  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'expiry', 'archive', 'delete',
+  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'expiry', 'delete',
 ];
 
 export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
@@ -25,7 +23,6 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
   notify: 'Уведомления',
   dossier: 'Досье решений',
   expiry: 'Срок хранения',
-  archive: 'В архив',
   delete: 'Удалить',
 };
 
@@ -39,20 +36,20 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
 
 // Плитка в списке: Закрепить · Теги · Удалить
 export const CARD_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'wall', 'notify', 'dossier', 'expiry', 'archive',
+  'rename', 'wall', 'notify', 'dossier', 'expiry',
 ];
 
 // Шапка открытого чата: Теги · Срок хранения (у срока ещё и роль индикатора —
 // у временного чата он показывает остаток)
 export const HEADER_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'pin', 'wall', 'notify', 'dossier', 'archive', 'delete',
+  'rename', 'pin', 'wall', 'notify', 'dossier', 'delete',
 ];
 
 // Мобильная шапка: ряд там не переносится, и каждая кнопка отъедает у названия
 // чата. Наружу оставляем только срок хранения — он же индикатор временного чата;
 // остальное достаётся из «⋯», которое на мобиле раскрывается боттом-шитом
 export const HEADER_COMPACT_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'archive', 'delete',
+  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'delete',
 ];
 
 // Колонка «Стены»: там своя настройка видимости, ОБЩАЯ для всех чатов на стене —
@@ -60,7 +57,7 @@ export const HEADER_COMPACT_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 // значило бы настраивать одно и то же по многу раз. Наружу по умолчанию только
 // срок хранения (он же индикатор временного чата), остальное — из «⋯»
 export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'archive', 'delete',
+  'rename', 'pin', 'tags', 'wall', 'notify', 'dossier', 'delete',
 ];
 
 // === Пилюли шапки чата (индикаторы, не действия) ===

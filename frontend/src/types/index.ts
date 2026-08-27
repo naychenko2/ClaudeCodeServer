@@ -603,10 +603,6 @@ export interface Session {
   lastReadAt?: string | null;
   // Чат заглушён: браузерные уведомления по нему не показываются
   notificationsMuted?: boolean;
-  // Чат убран в архив: момент архивации (ISO) либо null/отсутствие у обычного чата.
-  // Архивный чат не виден в основном списке, не считается в непрочитанном и молчит в
-  // уведомлениях, но открывается как обычно; сообщение человека возвращает его из архива
-  archivedAt?: string | null;
   // Голосовой режим чата: ответы озвучиваются (POST /api/tts)
   voiceMode?: boolean;
   // Стиль озвучки: 'talk' — ответ короткий целиком (разговор), 'digest' — ответ обычный,
@@ -1673,10 +1669,6 @@ export interface Me {
   role: string;
   featureFlags?: Record<string, boolean>;
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
-  // Через сколько дней после архивации архивный чат удаляется насовсем.
-  // null/отсутствие — не удалять никогда (дефолт). Настройка личная, правится кнопкой
-  // «Хранить» в строке действий архивного списка чатов
-  archiveRetentionDays?: number | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;
   onboardingSessionId?: string | null;

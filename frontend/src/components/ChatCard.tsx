@@ -233,9 +233,12 @@ export function ChatCard({
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeActive = useRef(false);   // ось зафиксирована как горизонталь
   const swipeStartX = useRef(0);
-  // Свайп стартует только из закрытого состояния: из раскрытого тап по карточке
-  // закрывает её (см. onClick), встречный свайп вправо не делаем (упрощение плана)
-  const swipeBase = useRef(0);         // трансформ-база на старте жеста (всегда 0)
+  // Жест работает в обе стороны: из закрытого состояния тянем влево (раскрыть),
+  // из раскрытого — вправо (закрыть). Тап по карточке тоже закрывает (см. onClick),
+  // но обратный свайп — то, что палец делает сам собой, и без него раскрытие
+  // выглядит залипшим.
+  // База — трансформ на старте жеста: 0 у закрытой, -swipeOpenW у раскрытой
+  const swipeBase = useRef(0);
   const swipeMoved = useRef(false);    // был ли горизонтальный сдвиг — глушит клик
 
   const beginLongPress = (e: React.TouchEvent) => {
@@ -246,7 +249,7 @@ export function ChatCard({
     swipeActive.current = false;
     swipeMoved.current = false;
     swipeStartX.current = t.clientX;
-    if (swipeCanWork && !swipeOpen) swipeBase.current = 0;
+    if (swipeCanWork) swipeBase.current = swipeOpen ? -swipeOpenW : 0;
     lpTimer.current = window.setTimeout(() => {
       lpFired.current = true;
       // Якорь — правый край карточки, там же где «⋮»: меню встанет как от кнопки
@@ -267,26 +270,34 @@ export function ChatCard({
     if (!swipeActive.current) {
       if (Math.abs(dx) > SWIPE_AXIS || Math.abs(dy) > SWIPE_AXIS) {
         killLongPress();
-        if (swipeCanWork && Math.abs(dx) > dy && dx < 0) {
-          // Горизонтальный свайп влево: перехват жеста у скролла
+        // Вправо жест берём только у раскрытой карточки: у закрытой тянуть некуда,
+        // и перехват отобрал бы у страницы её собственные горизонтальные жесты.
+        // Сравниваем модули: с сырым dy диагональ вверх-влево (dy < 0) проходила
+        // проверку всегда и жест перехватывался у вертикальной прокрутки
+        if (swipeCanWork && Math.abs(dx) > Math.abs(dy) && (dx < 0 || swipeOpen)) {
+          // Горизонтальный свайп: перехват жеста у скролла
           swipeActive.current = true;
           swipeMoved.current = true;
         }
       }
       return;
     }
-    // Горизонталь зафиксирована: карточка следует за пальцем (только влево,
-    // вправо от базы не тянет — раскрытие закрывается тапом, а не обратным жестом)
+    // Горизонталь зафиксирована: карточка следует за пальцем в пределах вылета —
+    // от -swipeOpenW (раскрыто) до 0 (закрыто), считая от базы
     const next = Math.max(-swipeOpenW, Math.min(0, swipeBase.current + dx));
     setSwipeDx(next);
   };
   const onSwipeEnd = () => {
     killLongPress();
     if (swipeActive.current) {
-      // Дальше половины вылета — считаем открытым, иначе пружинка назад
+      // Дальше половины вылета — считаем открытым, ближе — закрытым. Порог один на
+      // оба направления, поэтому обратный свайп закрывает ровно там же, где прямой
+      // открывает: протянул больше половины назад — закрылось, меньше — вернулось
       const opened = swipeDx <= -swipeOpenW / 2;
       setSwipeDx(0);
-      if (opened) onSwipeToggle?.(true);
+      // Итог сообщаем всегда, а не только при открытии: иначе закрывающий жест
+      // отпускал бы карточку обратно в раскрытое состояние (swipeOpen не менялся)
+      onSwipeToggle?.(opened);
       swipeActive.current = false;
     }
   };
@@ -701,7 +712,12 @@ export function ChatCard({
         className={'cc-card-shadow' + (editing ? '' : ' cc-card-press') + glowClass + unreadClass}
         style={{
           position: 'relative', zIndex: 1,
-          transform: swipeOpen ? `translateX(${-swipeOpenW}px)` : swipeDx ? `translateX(${swipeDx}px)` : undefined,
+          // Пока палец ведёт (swipeActive) — за ним, иначе по состоянию раскрытия.
+          // Порядок именно такой: с приоритетом у swipeOpen раскрытая карточка стояла
+          // бы прибитой к -swipeOpenW и обратный жест не двигал бы её вовсе
+          transform: swipeActive.current ? `translateX(${swipeDx}px)`
+            : swipeOpen ? `translateX(${-swipeOpenW}px)`
+              : swipeDx ? `translateX(${swipeDx}px)` : undefined,
           // Пружинка на отпускании/раскрытии; во время слежения за пальцем — без неё
           transition: swipeActive.current ? 'none' : 'transform 0.18s ease',
           // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left

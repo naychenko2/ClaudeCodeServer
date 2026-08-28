@@ -18,8 +18,14 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
     Llm.ICheapTextRunner cheap)
 {
     // Длинному JSON-ответу сводки дня (до 12 пунктов) профильного лимита вывода мало —
-    // задаём свой большой maxTokens (на claude-путь не влияет: там лимит не ограничиваем)
-    private const int ChangelogMaxTokens = 8192;
+    // задаём свой большой maxTokens (на claude-путь не влияет: там лимит не ограничиваем).
+    // 32768 вместо прежних 8192 (прод 28.08.2026): у РАССУЖДАЮЩЕЙ модели прямого адаптера
+    // (direct:MiniMax-M3) ход мысли идёт в тот же бюджет вывода, что и ответ, — 8192 уходили
+    // в reasoning целиком. Исходы были два, оба выглядели как «настройка не работает»:
+    // finish_reason=length с оборванным JSON → день помечался Degraded и показывал сырые
+    // subject'ы коммитов (24–26.08), либо пустой content → шаг отбрасывался и сводка молча
+    // собиралась платным claude-путём (28.08, MiniMax-M2.7-highspeed за $0.02 и 130 с).
+    private const int ChangelogMaxTokens = 32768;
 
     private readonly string _cacheDir = Path.Combine(
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))

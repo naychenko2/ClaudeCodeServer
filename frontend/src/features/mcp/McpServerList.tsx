@@ -78,7 +78,11 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
           <EmptyState
             icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
             title="Своих серверов пока нет"
-            subtitle="Пока подключены только встроенные серверы продукта. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
+            // Что такое внешний MCP-сервер: программа, которую AI Home запускает
+            // рядом с собой, чтобы дать чатам новые возможности — файлы, БД, поиск
+            // по API. Это первое, что видит новый человек в разделе, и без строчки
+            // «а зачем» кнопки «Найти» и «Добавить» выглядели бы как ритуал
+            subtitle="Внешний MCP-сервер — это программа, которую AI Home запускает рядом с собой, чтобы дать чатам новые возможности: чтение файлов, доступ к базе, поиск по API. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
             action={
               <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
                 {onCatalog && <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>}

@@ -75,7 +75,10 @@ export function VideoStageFrame() {
         position: 'fixed', left: box.clip.x, top: box.clip.y, width: box.clip.w, height: box.clip.h,
         zIndex: Z.videoFrame, overflow: 'hidden',
         visibility: hidden ? 'hidden' : 'visible',
-        pointerEvents: hidden ? 'none' : undefined,
+        // Слой клипа шире кадра — он накрывает ВСЁ тело панели, вместе с кнопками
+        // под кадром. Указатель сквозь него обязан проходить, иначе «развернуть в
+        // центре», «в окно» и ссылка на сайт канала перестают нажиматься.
+        pointerEvents: 'none',
       }}
     >
       <div style={{
@@ -83,6 +86,8 @@ export function VideoStageFrame() {
         left: box.frame.x - box.clip.x, top: box.frame.y - box.clip.y,
         width: box.frame.w, height: box.frame.h,
         borderRadius: R.md, overflow: 'hidden',
+        // …а сам кадр указатель ловит: в плеере кликают полноэкранный режим и звук
+        pointerEvents: hidden ? 'none' : 'auto',
       }}>
         <iframe
           ref={frameRef}

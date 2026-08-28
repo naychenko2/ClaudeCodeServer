@@ -327,6 +327,58 @@ export const TEAM_IMPLEMENT_STOP_TEXT =
 export const TEAM_IMPLEMENT_STOPPED_HINT =
   'Практика остановлена: новые волны не стартуют. Продолжить — по карточке остановки в ленте';
 
+// Подпись бейджа в композере при остановленной практике. Главное, что человек
+// должен увидеть — практика стоит и ждёт его решения: ни номер волны, ни
+// активность штаба рядом с этим не нужны (исполнители дорабатывают начатое,
+// но новых волн не будет — это главное, а не хвост процесса).
+//
+// Полная форма уходит в тултип и в широкий бейдж; короткая — в узкую полосу
+// композера и мобилу. Тексты живут здесь же, рядом с TEAM_IMPLEMENT_STOPPED_HINT,
+// — других точек истины для них нет
+export const TEAM_IMPLEMENT_STOPPED_BADGE_FULL = 'Командная реализация · остановлено';
+export const TEAM_IMPLEMENT_STOPPED_BADGE_SHORT = `${TEAM_IMPLEMENT_SHORT_NAME} · остановлено`;
+
+// Резолв бейджа композера одной формулой: подпись (полная/короткая) и тон —
+// чтобы и компонент, и тесты смотрели в одно место. Приоритет источников правды:
+//   1) stopped > всё остальное — практика остановлена, тон спокойный, и живой
+//      пульс (если ещё приходит с бэка от дорабатывающих исполнителей) НЕ должен
+//      перебивать главное сообщение;
+//   2) живой livePulse на стадии волны/проверки — показывает «N/M · активность»;
+//   3) без пульса — подпись и тон по стадии режима.
+//
+// Тон при stopped всегда `wait`: «практика стоит и ждёт человека». Это и есть
+// спокойный янтарный (warningBg/warningText), а не акцентный work и не muted idle
+export interface TeamImplementBadgeResolution {
+  full: string;
+  short: string;
+  tone: 'work' | 'wait' | 'idle' | 'warning' | 'danger';
+}
+
+export function teamImplementBadgeAt(
+  state: SessionTeamImplement,
+  livePulse: TeamWavePulse | null,
+): TeamImplementBadgeResolution {
+  if (state.stopped) {
+    return {
+      full: TEAM_IMPLEMENT_STOPPED_BADGE_FULL,
+      short: TEAM_IMPLEMENT_STOPPED_BADGE_SHORT,
+      tone: 'wait',
+    };
+  }
+  if (livePulse) {
+    return {
+      full: teamPulseBadgeText(state, livePulse),
+      short: teamPulseBadgeShort(livePulse),
+      tone: teamPulseTone(livePulse.liveness),
+    };
+  }
+  return {
+    full: teamImplementBadgeText(state.stage, state.waveNumber, state.plannedWaves),
+    short: `${TEAM_IMPLEMENT_SHORT_NAME} · ${teamImplementStageShort(state.stage, state.waveNumber, state.plannedWaves)}`,
+    tone: teamImplementTone(state.stage),
+  };
+}
+
 // Расход бюджета итерации для поповера бейджа: задачи и волны — то, по чему человек
 // понимает, близко ли исчерпание. Остальные потолки (запуски, перевыдачи, пробуждения)
 // в строку не выносим — она должна читаться с одного взгляда

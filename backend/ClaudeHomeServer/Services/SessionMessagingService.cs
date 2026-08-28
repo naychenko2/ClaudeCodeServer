@@ -47,10 +47,12 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
     /// заголовка X-Agent-Depth для прямых REST-вызовов без сессии-вызывателя.
     /// callerSessionId != null — признак MCP-вызова: только тогда расходуется квота
     /// пробуждения штаба («Командная реализация»), ход человека/фронта её не тратит.
+    /// preempt=false — не прерывать рабочий ход получателя (сообщение в очередь, доставка
+    /// по result); Waiting прерывается всегда, дефолт true — прежнее поведение.
     /// </summary>
     public async Task<SendOutcome> SendAsync(string ownerId, string sessionId, string? text,
         string? callerSessionId, string? senderSessionId, int agentDepthFallback,
-        string? wait, int? timeoutSec)
+        string? wait, int? timeoutSec, bool preempt = true)
     {
         var session = sessions.GetOwned(sessionId, ownerId);
         if (session is null) return new SendOutcome.NotFound();
@@ -102,7 +104,7 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         try
         {
             result = await sessions.SendMessageAndWaitAsync(sessionId, trimmed, timeout,
-                agentDepth, senderPersonaId, senderOrigin, senderChatName);
+                agentDepth, senderPersonaId, senderOrigin, senderChatName, preempt);
         }
         catch (InvalidOperationException) { return new SendOutcome.NotFound(); }
 

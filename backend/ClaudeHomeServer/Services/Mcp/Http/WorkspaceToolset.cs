@@ -1293,7 +1293,8 @@ public sealed partial class WorkspaceToolset(
                     callerSessionId: session.Id, senderSessionId: session.Id,
                     agentDepthFallback: 0,
                     wait: OptionalArg(arguments, "wait"),
-                    timeoutSec: IntArg(arguments, "timeoutSec"));
+                    timeoutSec: IntArg(arguments, "timeoutSec"),
+                    preempt: BoolArg(arguments, "preempt", fallback: true));
                 var sent = outcome switch
                 {
                     SessionMessagingService.SendOutcome.NotFound => Deny($"Сессия {sid} не найдена."),
@@ -1614,6 +1615,11 @@ public sealed partial class WorkspaceToolset(
 
     private static bool BoolArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
+
+    // Дефолт не всегда false: у части параметров контракт «прежнее поведение» (напр.
+    // preempt у chats_send) — отсутствующий или не-bool ключ трактуем как fallback
+    private static bool BoolArg(JsonObject arguments, string name, bool fallback) =>
+        arguments[name] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : fallback;
 
     private static List<string> StringsArg(JsonObject arguments, string name) =>
         arguments[name] is JsonArray arr

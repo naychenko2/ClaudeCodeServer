@@ -2407,6 +2407,68 @@ public class SessionManagerTests : IDisposable
         _sut.GetPending(session.Id).Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task SendMessageAndWait_PreemptFalse_ОбычныйЗанятыйЧат_НеПрерываетИДоставляетПоResult()
+    {
+        // preempt=false: агент не рубит чужой рабочий ход (Kill убил бы фоновых сабагентов
+        // внутри него) — сообщение ждёт штатного result и уходит в ЖИВОЙ процесс
+        var session = await MkBusySessionAsync("agent-nopreempt", SessionStatus.Working);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "доклад без прерывания",
+            TimeSpan.Zero, preempt: false);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+        _sut.GetPending(session.Id).Should().ContainSingle();
+
+        // Штатный конец хода разбирает очередь: сообщение доставлено, очередь пуста
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        _sut.GetPending(session.Id).Should().BeEmpty();
+        adapter.Verify(a => a.SendMessageAsync("доклад без прерывания", It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_PreemptFalse_ОжидающийЧат_ПрерываетХод()
+    {
+        // Waiting прерывается и при preempt=false: ход на карточке разрешения сам не
+        // закончится — «не прерывать» означало бы вечное ожидание (как у пользователя)
+        var session = await MkBusySessionAsync("agent-nopreempt-waiting", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "ответ вместо человека",
+            TimeSpan.Zero, preempt: false);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        _sut.GetPending(session.Id).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_PreemptTrueЯвно_ОбычныйЗанятыйЧат_ПрерываетХод()
+    {
+        // Явный preempt=true ведёт себя как дефолт (обратная совместимость контракта)
+        var session = await MkBusySessionAsync("agent-preempt-true", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "срочный доклад",
+            TimeSpan.Zero, preempt: true);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        _sut.GetPending(session.Id).Should().ContainSingle();
+    }
+
     // --- Цикл «до готово»: явная остановка в ленту (B3/B5/B6 — ContinueWorkLoopAsync
     // ни разу не был покрыт тестами: ни лимит итераций, ни LoopTurnFailed, ни verifying) ---
 

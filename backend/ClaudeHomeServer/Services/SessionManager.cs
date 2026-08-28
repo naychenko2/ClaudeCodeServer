@@ -3905,14 +3905,17 @@ public class SessionManager : IDisposable
 
     // Отправка сообщения с ожиданием завершения хода — REST-канал агентов (chats_send).
     // Занятая или ждущая человека сессия НЕ отвергает сообщение: оно встаёт в очередь
-    // (Queued), обычный ход при этом прерывается — доставка сразу по его концу. Цикл
+    // (Queued). По умолчанию (preempt=true) обычный ход при этом прерывается — доставка
+    // сразу по его концу; preempt=false рабочего хода НЕ прерывает (сообщение ждёт
+    // штатного result — Kill процесса убил бы фоновых сабагентов внутри хода), но ход
+    // на карточке разрешения (Waiting) прерывается всегда. Цикл
     // «до готово» и штаб «Командной реализации» агентское НЕ рушит: в цикле сообщение ждёт
     // конца ВСЕГО цикла (гейт разбора очереди по WorkLoop), в штабе — штатного конца хода
     // координатора. Таймаут НЕ отменяет ход: вызывающий получает Running и позже читает
     // результат через историю (chats_history).
     public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
         TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null,
-        string? senderOrigin = null, string? senderChatName = null)
+        string? senderOrigin = null, string? senderChatName = null, bool preempt = true)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -3928,16 +3931,24 @@ public class SessionManager : IDisposable
         {
             var queued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
                 senderChatName: senderChatName);
-            // Агентское сообщение прерывает текущий ход (доставится сразу по его концу),
-            // но НЕ рушит цикл «до готово» и штаб «Командной реализации» — там доклад ждёт
-            // штатного конца хода, как раньше. Дубликат и переполнение ничего не прерывают;
+            // Агентское сообщение по умолчанию (preempt=true) прерывает текущий ход
+            // (доставится сразу по его концу), но НЕ рушит цикл «до готово» и штаб
+            // «Командной реализации» — там доклад ждёт штатного конца хода, как раньше.
+            // preempt=false рабочего хода (Working) не прерывает: сообщение ждёт штатного
+            // result, и живой процесс получает его same-process — Kill ради доставки убивал
+            // бы фоновых сабагентов, работающих внутри чужого хода (диагностика обрывов
+            // агентов 28.08, чат ea9a0f18). Waiting прерывается и при preempt=false: ход на
+            // карточке разрешения сам не закончится, «не прерывать» там — висеть вечно
+            // (та же логика, что у пользовательского пути в SendMessageAsync).
+            // Дубликат и переполнение ничего не прерывают;
             // замороженную «Стоп» очередь агент не возобновляет — прерывать ход тоже не ему.
             // Dispatched — ход успел кончиться между снимком занятости и постановкой, и
             // доставку уже форсировал сам enqueue: прерывать теперь означало бы убить
             // собственный только что запущенный ход.
             if (queued is SendAndWaitResult.Queued { Duplicate: false, Dispatched: false }
                 && entry.Info.WorkLoop is null && entry.Info.TeamImplement is null
-                && !entry.QueueFrozen)
+                && !entry.QueueFrozen
+                && (preempt || status is SessionStatus.Waiting))
             {
                 entry.DrainOnExitedRun = entry.RunId;
                 _log.LogInformation("Interrupt адаптера {Session}: callsite=agent-message (preempt хода агента, chats_send)", sessionId);

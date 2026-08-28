@@ -15,6 +15,16 @@ const nextId = () => `tu_${++_id}`;
 
 const text = (t: string): ChatItem => ({ kind: 'text', text: t });
 
+// Доклад о завершении делегированной задачи: приходит от сессии-исполнителя в ленту
+// чата-постановщика структурным полем, не вытащенным из текста. Модели — обе формы из
+// chatReducer.ts: это либо гостевая реплика (kind: 'text'), либо обычное сообщение
+// пользователя от другой сессии (kind: 'user_message').
+const delegationText = (t: string, delegationTaskId: string): ChatItem =>
+  ({ kind: 'text', text: t, delegationTaskId });
+
+const delegationUserMessage = (t: string, delegationTaskId: string): ChatItem =>
+  ({ kind: 'user_message', text: t, delegationTaskId });
+
 const fileChanged = (path: string, added = 1, removed = 0): ChatItem =>
   ({ kind: 'file_changed', path, added, removed });
 
@@ -195,6 +205,165 @@ describe('computeTodos', () => {
       tool('TaskCreate', { subject: 'новое' }, { result: 'Task #1 created' }),
     ];
     expect(computeTodos(items).map(t => t.content)).toEqual(['новое']);
+  });
+
+  // --- MCP-задачи: ключ из result, полный путь create → update → run_executor → complete ---
+
+  it('mcp__tasks__tasks_create: ключ пункта — настоящий guid из result (а не синтетический)', () => {
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create',
+        { title: 'Сделать A' },
+        { result: '{"id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","title":"Сделать A"}' }),
+      // Апдейт по guid — теперь сматчится
+      tool('mcp__tasks__tasks_update',
+        { id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', status: 'in_progress' }),
+    ];
+    expect(computeTodos(items)).toEqual([
+      { content: 'Сделать A', status: 'in_progress' },
+    ]);
+  });
+
+  it('mcp__tasks__tasks_create: без guid в result (стрим или старый транскрипт) — фолбэк на mcp-N', () => {
+    // result пустой — стрим; guid не достали, ключ синтетический, но update идёт по title
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Поток' }),
+      tool('mcp__tasks__tasks_update', { title: 'Поток', status: 'completed' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Поток', status: 'completed' }]);
+  });
+
+  it('mcp__tasks__tasks_update: матч по input.id + маппинг done/inProgress/todo', () => {
+    // Все три create подряд — потом все три update: пачка одна, проверяем только маппинг
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'A' },
+        { result: '{"id":"11111111-1111-1111-1111-111111111111"}' }),
+      tool('mcp__tasks__tasks_create', { title: 'B' },
+        { result: '{"id":"22222222-2222-2222-2222-222222222222"}' }),
+      tool('mcp__tasks__tasks_create', { title: 'C' },
+        { result: '{"id":"33333333-3333-3333-3333-333333333333"}' }),
+      // completed (cиноним done)
+      tool('mcp__tasks__tasks_update',
+        { id: '11111111-1111-1111-1111-111111111111', status: 'completed' }),
+      // inProgress (cиноним in_progress)
+      tool('mcp__tasks__tasks_update',
+        { id: '22222222-2222-2222-2222-222222222222', status: 'inProgress' }),
+      // todo → pending
+      tool('mcp__tasks__tasks_update',
+        { id: '33333333-3333-3333-3333-333333333333', status: 'todo' }),
+    ];
+    expect(computeTodos(items)).toEqual([
+      { content: 'A', status: 'completed' },
+      { content: 'B', status: 'in_progress' },
+      { content: 'C', status: 'pending' },
+    ]);
+  });
+
+  it('mcp__tasks__tasks_update без title (только id+status) сматчится', () => {
+    // Главный кейс из задачи: модель шлёт id+status, без title — раньше ломалось
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Сборка' },
+        { result: '{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}' }),
+      tool('mcp__tasks__tasks_update',
+        { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', status: 'done' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Сборка', status: 'completed' }]);
+  });
+
+  it('mcp__tasks__tasks_update: title как фолбэк для старых лент (id не приходил)', () => {
+    // Старый сценарий, оставлен бэк-совместимым: result без guid + update по title
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'старая задача' }),
+      tool('mcp__tasks__tasks_update', { title: 'старая задача', status: 'in_progress' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'старая задача', status: 'in_progress' }]);
+  });
+
+  it('mcp__tasks__tasks_complete по id → completed', () => {
+    // Главный кейз: основной способ закрытия задачи на проде — 254 вызова из 217 сессий
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Закрыть' },
+        { result: '{"id":"deadbeef-dead-beef-dead-beefdeadbeef"}' }),
+      tool('mcp__tasks__tasks_complete', { id: 'deadbeef-dead-beef-dead-beefdeadbeef' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Закрыть', status: 'completed' }]);
+  });
+
+  it('mcp__tasks__tasks_run_executor по taskId → in_progress', () => {
+    // 867 вызовов на проде; раньше «взял в работу» проходило мимо
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Делать' },
+        { result: '{"id":"feedface-feed-face-feed-facefeedface"}' }),
+      tool('mcp__tasks__tasks_run_executor', { taskId: 'feedface-feed-face-feed-facefeedface' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Делать', status: 'in_progress' }]);
+  });
+
+  it('run_executor не сбивает уже закрытую задачу', () => {
+    // complete мог прийти раньше run_executor по таймингу — completed побеждает
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'X' },
+        { result: '{"id":"12345678-1234-1234-1234-123456789012"}' }),
+      tool('mcp__tasks__tasks_complete', { id: '12345678-1234-1234-1234-123456789012' }),
+      tool('mcp__tasks__tasks_run_executor', { taskId: '12345678-1234-1234-1234-123456789012' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'X', status: 'completed' }]);
+  });
+
+  it('доклад с delegationTaskId (user_message) закрывает соответствующий пункт', () => {
+    // В чате-постановщике: исполнитель закрыл задачу, пришёл доклад структурным полем
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Сборка' },
+        { result: '{"id":"abcd1234-5678-90ab-cdef-1234567890ab"}' }),
+      delegationUserMessage('Готово', 'abcd1234-5678-90ab-cdef-1234567890ab'),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Сборка', status: 'completed' }]);
+  });
+
+  it('доклад с delegationTaskId (text — гостевая реплика) тоже закрывает пункт', () => {
+    // Модель Z — гостевая реплика исполнителя-персоны; формат delegationTaskId тот же
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Тест' },
+        { result: '{"id":"98765432-1098-7654-3210-abcdefabcdef"}' }),
+      delegationText('Сделано', '98765432-1098-7654-3210-abcdefabcdef'),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Тест', status: 'completed' }]);
+  });
+
+  it('доклад с незнакомым delegationTaskId не ломает парсинг', () => {
+    // Не наша задача — тихо игнорируем, остальное считается как есть
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Наша' },
+        { result: '{"id":"aaaa1111-bbbb-2222-cccc-3333dddd4444"}' }),
+      delegationUserMessage('Чужой доклад', '00000000-0000-0000-0000-000000000000'),
+      tool('mcp__tasks__tasks_complete', { id: 'aaaa1111-bbbb-2222-cccc-3333dddd4444' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Наша', status: 'completed' }]);
+  });
+
+  it('пачки mcp: новый tasks_create после полностью выполненного списка начинает новую пачку', () => {
+    // Без этой границы залпом создаётся одна гигантская пачка вместо текущей волны
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'A' }, { result: '{"id":"aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"}' }),
+      tool('mcp__tasks__tasks_create', { title: 'B' }, { result: '{"id":"bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb"}' }),
+      tool('mcp__tasks__tasks_complete', { id: 'aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa' }),
+      tool('mcp__tasks__tasks_complete', { id: 'bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb' }),
+      tool('mcp__tasks__tasks_create', { title: 'C' }, { result: '{"id":"cccccccc-3333-3333-3333-cccccccccccc"}' }),
+    ];
+    const batches = computeTodoBatches(items);
+    expect(batches.map(b => b.todos.map(t => t.content))).toEqual([['A', 'B'], ['C']]);
+    // Текущая пачка — только незакрытая C
+    expect(computeTodos(items).map(t => t.content)).toEqual(['C']);
+  });
+
+  it('пачки mcp: незакрытый пункт держит всё в одной пачке', () => {
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'A' }, { result: '{"id":"aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"}' }),
+      tool('mcp__tasks__tasks_create', { title: 'B' }, { result: '{"id":"bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb"}' }),
+      tool('mcp__tasks__tasks_complete', { id: 'aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa' }),
+      tool('mcp__tasks__tasks_create', { title: 'C' }, { result: '{"id":"cccccccc-3333-3333-3333-cccccccccccc"}' }),
+    ];
+    expect(computeTodoBatches(items)).toHaveLength(1);
+    expect(computeTodos(items).map(t => t.content)).toEqual(['A', 'B', 'C']);
   });
 });
 

@@ -76,6 +76,9 @@
   --c-warning:      #C9923E;
   --c-warning-bg:   #FBEFE0;
   --c-warning-text: #8A6A28;
+  /* Текст/цифры поверх сплошного warning-фона: тёмный в ОБЕИХ темах — жёлтый
+     сам по себе светлый, светлый текст на нём не читается */
+  --c-on-warning:   #201C18;
   --c-danger:        #B4452F;
   --c-danger-bg:     #FBF1EC;
   --c-danger-text:   #B4452F;
@@ -249,6 +252,7 @@
   --c-warning:      #E0AC5A;
   --c-warning-bg:   #322717;
   --c-warning-text: #E7B96E;
+  --c-on-warning:   #201C18;
   --c-danger:        #E8785E;
   --c-danger-bg:     #331F1B;
   --c-danger-text:   #EE8A72;

@@ -83,6 +83,7 @@ export const C = {
   warning:     'var(--c-warning)',
   warningBg:   'var(--c-warning-bg)',
   warningText: 'var(--c-warning-text)',
+  onWarning:   'var(--c-on-warning)',   // текст/цифры поверх сплошного warning-фона
   danger:       'var(--c-danger)',
   dangerBg:     'var(--c-danger-bg)',
   dangerText:   'var(--c-danger-text)',

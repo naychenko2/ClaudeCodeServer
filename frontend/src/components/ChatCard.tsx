@@ -138,10 +138,13 @@ interface Props {
   agentsRunning?: boolean;
   // То же для фоновой команды (Bash в фоне) — тихий значок терминала
   bgCommandRunning?: boolean;
-  // За чатом числятся правки, не зафиксированные в git (dirtySessionIds из lib/git.ts) —
-  // тихий значок в строке названия. Не задан — признак неизвестен или не применим:
-  // чаты вне проектов, витрина UI-кита, недоступный git-статус
-  hasUncommitted?: boolean;
+  // Незафиксированные в git правки (dirtySessionIds из lib/git.ts) — тихий значок в
+  // строке названия. 'own' — правил сам чат; 'descendants' — сам не правил, но правки
+  // есть у вложенных чатов (признак наследуется вверх по ветке, чтобы свёрнутая или
+  // длинная ветка не прятала работу). Оба сразу — 'own', свои правки важнее.
+  // Не задан — значка нет: признак неизвестен или не применим (чаты вне проектов,
+  // витрина UI-кита, недоступный git-статус)
+  uncommitted?: 'own' | 'descendants';
   onSelect: () => void;
   onHover: (hovered: boolean) => void;
   onDelete: () => void;
@@ -184,7 +187,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, hasUncommitted,
+  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
   onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
@@ -881,9 +884,18 @@ export function ChatCard({
               (коммит при погашенном сервере, чужая правка «его» файла) — обещать
               «в репозитории есть незакоммиченное» значок не вправе. На мобиле тултип по
               тапу не всплывает — значок остаётся без пояснения осознанно, прятать его
-              там хуже, чем показать молча */}
-          {hasUncommitted && (
-            <span title="Правки этого чата не зафиксированы в git" aria-label="Правки этого чата не зафиксированы в git"
+              там хуже, чем показать молча.
+              Унаследованный от потомков значок тем же глифом и цветом: два оттенка серого
+              на иконке 13px не различить, поэтому разводим их ТЕКСТОМ подсказки, а не
+              видом — иначе родитель молча врал бы, что правил файлы сам */}
+          {uncommitted && (
+            <span
+              title={uncommitted === 'own'
+                ? 'Правки этого чата не зафиксированы в git'
+                : 'Не зафиксированы правки во вложенных чатах'}
+              aria-label={uncommitted === 'own'
+                ? 'Правки этого чата не зафиксированы в git'
+                : 'Не зафиксированы правки во вложенных чатах'}
               style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
               <GitCommitVertical size={13} strokeWidth={2.2} />
             </span>

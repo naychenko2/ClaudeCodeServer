@@ -12,7 +12,7 @@ import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord } from '../lib/chatFilters';
-import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
+import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse, withAncestors } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -89,6 +89,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // мог не понадобиться никому. Вызов идемпотентен — повторный ничего не грузит
   useEffect(() => { ensureGit(project.id); }, [project.id]);
   const { dirtySessionIds } = useGitState(project.id);
+  // Признак наследуется вверх по ветке: родитель отвечает за работу потомков, иначе
+  // свёрнутая (или просто длинная) ветка прятала бы незафиксированные правки. Считаем
+  // по ПОЛНОМУ списку чатов, а не по отфильтрованному: предок, скрытый фильтром, всё
+  // равно остаётся звеном цепочки к видимому прародителю. Работает во всех режимах
+  // списка — иерархия лежит в данных и без включённого режима «Иерархия»
+  const dirtyBranchIds = useMemo(
+    () => (dirtySessionIds ? withAncestors(sessions, dirtySessionIds) : undefined),
+    [dirtySessionIds, sessions],
+  );
 
   // === Реестр общих тегов проекта ===
   // Optimistic state поверх project.tagRegistry: reorder/создание видны сразу, ответ
@@ -424,7 +433,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         online={online}
         hovered={hoveredId === s.id}
         workflowRunning={workflowRunningFor === s.id}
-        hasUncommitted={dirtySessionIds?.has(s.id) ?? false}
+        uncommitted={dirtySessionIds?.has(s.id) ? 'own' : (dirtyBranchIds?.has(s.id) ? 'descendants' : undefined)}
         onSelect={() => onSelect(s)}
         onHover={h => setHoveredId(h ? s.id : null)}
         onDelete={() => setDeleteTarget(s)}

@@ -343,6 +343,10 @@ export function ChatCard({
     notify: canMute,
     dossier: canEditChat && !!s.projectId,
     expiry: canEditChat,
+    // Архивный пункт рисуется на меню (см. ниже) и/или в быстром кластере — но
+    // только когда родительский список дал колбэк onArchive (= отвечает за сеть
+    // и обработку 409). Без колбэка пункта в этой карточке быть не должно
+    archive: !!onArchive,
     delete: true,
   };
   const cardActions = CHAT_ACTION_ORDER.filter(k => cardActionAvailable[k]);
@@ -370,7 +374,12 @@ export function ChatCard({
   // одной из трёх: вытеснять ради неё «Удалить» (соседа по смыслу) нельзя, а архивный
   // список — редкий режим, четвёртая кнопка там ряд не ломает. Дубля нет: если archive
   // уже в shownActions по глазику, фильтр отдаст её один раз
-  const quickButtons = shownActions;
+  let quickButtons = shownActions;
+  // Направление архива — через isArchivedChat (НЕ archivedAt): наш производный
+  // bool с бэка, никаких сравнений updatedAt/archivedAt на фронте
+  if (isArchivedChat(s) && cardActionAvailable.archive && !quickButtons.includes('archive')) {
+    quickButtons = [...quickButtons, 'archive'];
+  }
   useEffect(() => { if (overLimitKeys) cardVis.hide(overLimitKeys.split(',')); }, [overLimitKeys]);
   const swipeOpenW = quickButtons.length * SWIPE_BTN_W;
   // Глазик-спутник строки меню: показывает, стоит ли действие быстрой кнопкой
@@ -438,6 +447,16 @@ export function ChatCard({
       case 'delete': return {
         icon: <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Удалить', danger: true,
         onClick: e => { e.stopPropagation(); onDelete(); },
+      };
+      // Архив в быстрых кнопках: иконка и подпись по isArchivedChat(s), без чтения
+      // archivedAt; сеть зовётся через onArchive проп (на уровне списка — там же
+      // ловится 409 «в чате идёт ход»)
+      case 'archive': return {
+        icon: isArchivedChat(s)
+          ? <ArchiveRestore size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          : <Archive size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        title: isArchivedChat(s) ? 'Вернуть из архива' : 'В архив',
+        onClick: e => { e.stopPropagation(); onArchive?.(!isArchivedChat(s)); },
       };
     }
   };

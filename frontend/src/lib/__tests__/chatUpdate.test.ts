@@ -67,4 +67,26 @@ describe('chatNeighborForArchive — сосед архивируемого ча�
     const list = [s('a', '2026-08-01'), s('b')];
     expect(chatNeighborForArchive(list, 'zzz')).toMatchObject({ id: 'b' });
   });
+
+  // Предикат видимости: сосед обязан быть не только неархивным, но и видимым
+  // под фильтрами списка — скрытого фильтром чата на экране нет
+  describe('с предикатом видимости', () => {
+    const vis = (ids: string[]) => (x: Session) => ids.includes(x.id);
+
+    it('скрытый фильтром сосед пропускается — берёт следующего видимого', () => {
+      const list = [s('a'), s('b'), s('c')];
+      // b скрыт фильтром — соседом становится c, хотя b стоит ближе
+      expect(chatNeighborForArchive(list, 'a', vis(['a', 'c']))).toMatchObject({ id: 'c' });
+    });
+
+    it('все неархивные скрыты фильтром — null', () => {
+      const list = [s('a'), s('b'), s('c')];
+      expect(chatNeighborForArchive(list, 'a', vis(['a']))).toBeNull();
+    });
+
+    it('чат вне списка — первый видимый, скрытые пропущены', () => {
+      const list = [s('a'), s('b'), s('c')];
+      expect(chatNeighborForArchive(list, 'zzz', vis(['a', 'c']))).toMatchObject({ id: 'a' });
+    });
+  });
 });

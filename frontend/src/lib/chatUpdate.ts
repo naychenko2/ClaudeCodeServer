@@ -58,22 +58,31 @@ export function updateChatFields(session: Session, patch: ChatFieldsPatch): Prom
 // ушёл в архив. «Предыдущий» — по порядку списка (свежесть/закрепление уже учтены
 // в его сортировке), не по истории переходов: после архивации из списка пропадает
 // и сама строка, и «исторический сосед» стал бы ссылкой на чат, которого на экране нет.
-// null — неархивных соседей нет (архивировали последний) — центр уходит в пустое состояние.
-export function chatNeighborForArchive(list: Session[], archivedId: string): Session | null {
-  const live = list.filter(s => s.id !== archivedId && !s.archivedAt);
+// isVisible — предикат текущих фильтров списка (matchChatFilter): сосед обязан быть
+// не только неархивным, но и ВИДИМЫМ — чаты, скрытые фильтрами (напр., выполненные
+// задачи под скрытым чипом «Готово»), в списке нет, и центр открыл бы ещё одного
+// призрака. Предикат опционален: без него выборка только по архиву (места без фильтров).
+// null — подходящих соседей нет (архивировали последний видимый) — центр уходит в пустое состояние.
+export function chatNeighborForArchive(
+  list: Session[],
+  archivedId: string,
+  isVisible?: (s: Session) => boolean,
+): Session | null {
+  const ok = (s: Session) => !s.archivedAt && (!isVisible || isVisible(s));
+  const live = list.filter(s => s.id !== archivedId && ok(s));
   if (live.length === 0) return null;
   const idx = list.findIndex(s => s.id === archivedId);
   // Чата нет в списке (архивация со стены/из другого окна) — просто первый живой
   if (idx < 0) return live[0];
-  // Ближайший НЕархивный сосед: сперва вверх по списку, потом вниз. Вверх — первым:
+  // Ближайший видимый сосед: сперва вверх по списку, потом вниз. Вверх — первым:
   // список свежими сверху, и чат СВЕРХУ — тот, из которого пришли в архивируемый
   for (let i = idx - 1; i >= 0; i--) {
     const s = list[i];
-    if (!s.archivedAt) return s;
+    if (ok(s)) return s;
   }
   for (let i = idx + 1; i < list.length; i++) {
     const s = list[i];
-    if (!s.archivedAt) return s;
+    if (ok(s)) return s;
   }
   return null;
 }

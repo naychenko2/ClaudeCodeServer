@@ -19,6 +19,7 @@ import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/sign
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
+import { matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { C, FONT } from '../lib/design';
@@ -992,7 +993,11 @@ const windowWidth = useWindowWidth();
     if (updated.archivedAt && activeSession?.id === updated.id) {
       void (async () => {
         const list = await api.sessions.list(project.id).catch(() => null);
-        const neighbor = list ? chatNeighborForArchive(list, updated.id) : null;
+        // Сосед — только видимый под фильтрами списка проекта: скрытый фильтром
+        // чат (напр., выполненная задача под чипом «Готово») в списке нет, и центр
+        // открыл бы ещё одного призрака. Фильтры живут в SessionList (scope
+        // project.id) — читаем ту же персистентную копию
+        const neighbor = list ? chatNeighborForArchive(list, updated.id, matchChatFilter(loadChatFilters(project.id))) : null;
         if (neighbor) {
           handleSelectSession(neighbor, undefined, true);
           navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, chatId: neighbor.id });

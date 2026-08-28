@@ -27,6 +27,7 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
+import { matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -198,7 +199,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     prevActiveRef.current = cur;
     if (!cur.id || !cur.archived) return;
     if (prev.id !== cur.id || prev.archived) return; // выбор архивного — не переход
-    const neighbor = chatNeighborForArchive(chats, cur.id);
+    // Сосед — только видимый под фильтрами списка: скрытый фильтром чат в списке
+    // нет, центр открыл бы ещё одного призрака поверх только что архивированного.
+    // Фильтры живут в ChatList (scope 'global') — читаем ту же персистентную копию
+    const neighbor = chatNeighborForArchive(chats, cur.id, matchChatFilter(loadChatFilters('global')));
     if (neighbor) {
       setActiveId(neighbor.id);
       localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
@@ -268,9 +272,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
     // Активный чат ушёл в архив — центр покидает его и встаёт на соседа по списку
     // (архивный вид списка чат скрывает, а открытым он висел бы призраком).
-    // Сосед — «предыдущий» в порядке списка; нет соседа — возврат к списку
+    // Сосед — «предыдущий» в порядке списка и только видимый под фильтрами
+    // (скрытого фильтром чата в списке нет — тот же призрак); нет соседа — возврат к списку
     if (updated.archivedAt && activeId === updated.id) {
-      const neighbor = chatNeighborForArchive(chats, updated.id);
+      const neighbor = chatNeighborForArchive(chats, updated.id, matchChatFilter(loadChatFilters('global')));
       if (neighbor) {
         setActiveId(neighbor.id);
         localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);

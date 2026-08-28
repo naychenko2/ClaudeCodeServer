@@ -12,7 +12,7 @@ import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse, withAncestors } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { ensureGit, useGitState } from '../lib/git';
@@ -197,10 +197,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
         // центр показывает пустое состояние с кнопкой «Новый чат» (создание только по клику).
         // Читаем через ref-зеркала: эффект живёт на весь project.id, пропсы за это время свежие.
-        // Архивные пропускаем: архивация не двигает UpdatedAt (иначе возврат из архива
-        // выкидывал бы чат в верх списка), поэтому заархивированный последним чат так и
-        // стоит первым в списке — без фильтра автовыбор открывал бы его призраком.
-        const live = list.filter(s => !s.archivedAt);
+        // Автовыбор — только чаты, видимые под фильтрами списка: архивные (архивация
+        // не двигает UpdatedAt, и заархивированный последним стоит первым) и скрытые
+        // фильтрами (напр., выполненные задачи) в списке нет — открытым в центре
+        // такой чат висел бы призраком.
+        const isVisible = matchChatFilter(loadChatFilters(project.id));
+        const live = list.filter(s => !s.archivedAt && isVisible(s));
         if (!activeRef.current && live.length > 0) {
           onSelectRef.current(live[0], undefined, true);
         }

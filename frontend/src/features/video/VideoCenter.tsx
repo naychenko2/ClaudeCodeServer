@@ -129,7 +129,7 @@ export function VideoCenter() {
             </IconButton>
             <IconButton
               size="sm"
-              title="В плавающее окно — его двигают и тянут за угол, и оно переживает переходы"
+              title="В плавающее окно — его двигают и тянут за угол, и оно остаётся поверх любого раздела"
               onClick={() => setVideoStage(channel, 'float')}
             >
               <PictureInPicture2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

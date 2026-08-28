@@ -139,7 +139,14 @@ export interface McpData {
   probes: Record<string, McpProbeResult>;
   reload: () => void;
   setEnabled: (server: McpServer, enabled: boolean) => void;
-  probe: (server: McpServer) => Promise<void>;
+  // Проба каталожной stdio-записи у local-владельца требует подтверждения: бэк
+  // отдаёт 400 с {requiresConfirmation, command}. Вызывающий рисует диалог с этой
+  // строкой запуска и по согласию зовёт confirmProbe. 'done' — проба закончилась:
+  // либо успех, либо ошибка, которая уже легла в error
+  probe: (server: McpServer) => Promise<
+    { kind: 'done' } | { kind: 'needsConfirmation'; command: string }
+  >;
+  confirmProbe: (server: McpServer) => Promise<void>;
   remove: (server: McpServer) => Promise<void>;
   save: (id: string | null, data: McpServerUpsert) => Promise<McpServer>;
   importJson: (fragment: unknown) => Promise<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>;
@@ -268,12 +275,18 @@ export function useMcpData(): McpData {
       });
   };
 
-  const probe = async (server: McpServer) => {
-    if (checking[server.id]) return;
+  // Проба «по кнопке». Каталожная stdio-запись у local-владельца запустится на машине
+  // человека, поэтому бэк отказывает без подтверждения (400 + requiresConfirmation +
+  // полная строка запуска). Возвращаем это вызывающему вместо общей плашки «Проверка
+  // не удалась»: та читалась как «сервер не отвечает», хотя разрешения просто не спросили
+  const runProbe = async (server: McpServer, confirmed: boolean): Promise<
+    { kind: 'done' } | { kind: 'needsConfirmation'; command: string }
+  > => {
+    if (checking[server.id]) return { kind: 'done' };
     setChecking(c => ({ ...c, [server.id]: true }));
     setError(null);
     try {
-      const result = await api.mcp.probe(server.id);
+      const result = await api.mcp.probe(server.id, confirmed ? { confirmed: true } : undefined);
       setProbes(p => ({ ...p, [server.id]: result }));
       // Наблюдение уже записано на бэке: тот же результат кладём в карточку,
       // чтобы статус и время проверки обновились без перезапроса списка
@@ -287,12 +300,24 @@ export function useMcpData(): McpData {
           error: result.error ?? null,
         },
       });
+      return { kind: 'done' };
     } catch (e) {
+      const body = (e as { body?: { requiresConfirmation?: boolean; command?: string } } | null)?.body;
+      if (!confirmed && body?.requiresConfirmation) {
+        // Ошибку НЕ показываем: отказа не было, был вопрос — его задаёт диалог
+        return { kind: 'needsConfirmation', command: body.command ?? '' };
+      }
       setError(msg(e, 'Проверка не удалась'));
+      return { kind: 'done' };
     } finally {
       setChecking(c => ({ ...c, [server.id]: false }));
     }
   };
+
+  const probe = (server: McpServer) => runProbe(server, false);
+
+  // Повторная проба с confirmed=true — после согласия в диалоге
+  const confirmProbe = async (server: McpServer) => { await runProbe(server, true); };
 
   // state сервера (не React-стейт, ключ oauth/start) → id записи, ждущей ответа окна входа
   const [oauthSessions, setOauthSessions] = useState<Record<string, { key: string; state: string }>>({});
@@ -506,7 +531,7 @@ export function useMcpData(): McpData {
   return {
     servers, builtin, projects, personas, error, setError,
     checking, probes, reload: loadServers,
-    setEnabled, probe, remove, save, importJson,
+    setEnabled, probe, confirmProbe, remove, save, importJson,
     setProjectOn, confirmSetProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
     oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
     revisions, revisionsCheckFailed,

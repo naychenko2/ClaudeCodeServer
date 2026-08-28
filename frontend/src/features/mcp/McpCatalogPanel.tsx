@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ArrowLeft, Ban, Box, Cloud, Monitor, RefreshCw, Search, X } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -42,40 +42,111 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
   const env = useMe().executionEnvironment;
 
   const [q, setQ] = useState('');
-  // Серверы из каталога: грузим с бэка (волна 1, задача 9fa075ec). Три состояния
-  // жёстко разделены: loading (скелетоны), error (плашка с «Повторить»), loaded.
-  // Реестр в preview может лежать — это НЕ блокирует раздел: ручной путь «Добавить
-  // вручную» всегда рядом
+  // Серверы из каталога: ищет БЭКЕНД по параметру q (волна 1, задача 9fa075ec).
+  // Локальной фильтрации здесь нет и быть не может: реестр отдаёт результат
+  // страницами, и подходящей записи на первой странице может не быть вовсе —
+  // фильтр по загруженному массиву врал «ничего не нашлось» при живых данных
+  // (QA: «filesystem» — 14 записей в реестре, ни одной на первой странице).
+  // Три состояния жёстко разделены: loading (скелетоны, servers === null),
+  // error (плашка с «Повторить»), loaded. Реестр в preview может лежать — это НЕ
+  // блокирует раздел: ручной путь «Добавить вручную» всегда рядом
   const [servers, setServers] = useState<McpCatalogServer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Следующая страница реестра: пока курсор есть — под списком живёт «Показать ещё».
+  // Молча обрывать выдачу на первой странице нельзя: человек не отличит «это весь
+  // каталог» от «дальше есть, но мы не показали»
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Итог догрузки для человека: отказ («не удалось») или пояснение, почему список
+  // не вырос. Отдельно от error поиска — уже показанный список сносить плашкой
+  // «Каталог недоступен» нельзя
+  const [moreNote, setMoreNote] = useState<{ text: string; isError: boolean } | null>(null);
+  // Порядковый номер поиска: человек печатает быстрее, чем отвечает реестр, и без
+  // счётчика ответ по «not» перезаписал бы выдачу по «notion». Тот же приём, что
+  // в useMcpData (saveSeq) и «Поставщиках моделей»
+  const searchSeq = useRef(0);
 
-  const load = () => {
+  const runSearch = useCallback((term: string) => {
+    const seq = ++searchSeq.current;
     setServers(null);
+    setNextCursor(null);
     setError(null);
-    api.mcp.catalogSearch('')
+    setMoreNote(null);
+    api.mcp.catalogSearch(term)
       .then(res => {
+        if (searchSeq.current !== seq) return;
         setServers(res.items ?? []);
+        setNextCursor(res.nextCursor ?? null);
         if (res.error) setError(res.error);
       })
-      .catch(e => setError(e instanceof Error && e.message ? e.message : 'Не удалось загрузить каталог'));
+      .catch(e => {
+        if (searchSeq.current !== seq) return;
+        setError(e instanceof Error && e.message ? e.message : 'Не удалось загрузить каталог');
+      });
+  }, []);
+
+  // Первый заход грузит витрину сразу, каждый следующий ввод ждёт 350 мс: у реестра
+  // на бэке стоит потолок запросов, и печать по букве молотила бы внешний сервис
+  const firstRun = useRef(true);
+  useEffect(() => {
+    const term = q.trim();
+    if (firstRun.current) {
+      firstRun.current = false;
+      runSearch(term);
+      return;
+    }
+    const t = setTimeout(() => runSearch(term), 350);
+    return () => clearTimeout(t);
+  }, [q, runSearch]);
+
+  // Догрузка страницы принадлежит ТЕКУЩЕМУ поиску: счётчик не двигаем, а сверяем —
+  // если запрос успел смениться, доехавшая страница чужой выдачи выбрасывается.
+  //
+  // Листаем до первой НОВОЙ записи, а не ровно одну страницу: реестр пагинирует по
+  // ВЕРСИЯМ (двадцать релизов одного сервера — двадцать записей и двадцать курсоров),
+  // а бэкенд дедупит их по имени. Поэтому честная следующая страница нередко приносит
+  // ноль новых имён, и «Показать ещё» без цикла выглядел бы как мёртвая кнопка.
+  // Потолок в пять страниц — чтобы один клик не пролистал полреестра
+  const MORE_PAGES = 5;
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    const seq = searchSeq.current;
+    setLoadingMore(true);
+    setMoreNote(null);
+    // Известные имена собираем ДО цикла и ведём сами: считать добавленное внутри
+    // updater'а нельзя — React зовёт его дважды в StrictMode
+    const seen = new Set((servers ?? []).map(s => s.name));
+    let cursor: string | null = nextCursor;
+    let added = 0;
+    try {
+      for (let page = 0; page < MORE_PAGES && cursor && added === 0; page++) {
+        const res = await api.mcp.catalogSearch(q.trim(), cursor);
+        if (searchSeq.current !== seq) return;
+        cursor = res.nextCursor ?? null;
+        const fresh = (res.items ?? []).filter(s => !seen.has(s.name));
+        for (const s of fresh) seen.add(s.name);
+        if (fresh.length > 0) {
+          added += fresh.length;
+          setServers(prev => [...(prev ?? []), ...fresh]);
+        }
+      }
+      setNextCursor(cursor);
+      // Ничего не добавилось — говорим об этом вслух: молчащая кнопка читается как поломка
+      if (added === 0) {
+        setMoreNote(cursor
+          ? { text: 'Дальше в реестре идут другие версии тех же серверов — уточните запрос', isError: false }
+          : { text: 'Это всё, что нашлось в реестре', isError: false });
+      }
+    } catch (e) {
+      if (searchSeq.current !== seq) return;
+      setMoreNote({
+        text: e instanceof Error && e.message ? e.message : 'Не удалось загрузить ещё',
+        isError: true,
+      });
+    } finally {
+      if (searchSeq.current === seq) setLoadingMore(false);
+    }
   };
-
-  useEffect(() => { load(); }, []);
-
-  const filtered = useMemo(() => {
-    if (!servers) return [];
-    const term = q.trim().toLowerCase();
-    if (!term) return servers;
-    // Поиск идёт по title (человеческое имя), name (реестровое имя) и description.
-    // У всех бэк отдаёт nullable — проверяем, чтобы фильтр не ронял интерфейс при
-    // пустых полях (D1 QA: TypeError на undefined.toLowerCase)
-    return servers.filter(s => {
-      const title = (s.title ?? '').toLowerCase();
-      const name = (s.name ?? '').toLowerCase();
-      const desc = (s.description ?? '').toLowerCase();
-      return title.includes(term) || name.includes(term) || desc.includes(term);
-    });
-  }, [q, servers]);
 
   const isStdioLocal = env === 'local';
 
@@ -100,9 +171,11 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
 
       <SearchField value={q} onChange={setQ} loading={servers === null} />
 
-      {servers === null && !error ? (
-        <CatalogSkeletons />
-      ) : error ? (
+      {/* Порядок ветвей: сперва отказ (плашка с «Повторить»), потом ожидание
+          (скелетоны), потом пустая выдача. «Ничего не нашлось» показывается ТОЛЬКО
+          по фактическому пустому ответу сервера — на ошибке и на ожидании там
+          соответственно плашка и кости */}
+      {error ? (
         <EmptyState
           compact
           icon={<RefreshCw size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
@@ -110,12 +183,14 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
           subtitle={error}
           action={
             <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
-              <Button variant="primary" size="sm" onClick={load}>Повторить</Button>
+              <Button variant="primary" size="sm" onClick={() => runSearch(q.trim())}>Повторить</Button>
               <Button variant="ghost" size="sm" onClick={onManual}>Добавить вручную</Button>
             </div>
           }
         />
-      ) : filtered.length === 0 ? (
+      ) : servers === null ? (
+        <CatalogSkeletons />
+      ) : servers.length === 0 ? (
         <EmptyState
           compact
           icon={<Search size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
@@ -129,7 +204,7 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-          {filtered.map(s => (
+          {servers.map(s => (
             <CatalogCard
               key={s.name}
               server={s}
@@ -139,6 +214,23 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
               onPick={onPick}
             />
           ))}
+          {/* Подпись живёт и без кнопки: когда курсор иссяк, «Показать ещё» уходит,
+              а «это всё, что нашлось» человеку по-прежнему нужно прочитать */}
+          {(nextCursor || moreNote) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, alignItems: 'center' }}>
+              {nextCursor && (
+                <Button variant="ghost" size="sm" loading={loadingMore} onClick={() => void loadMore()}>
+                  Показать ещё
+                </Button>
+              )}
+              {moreNote && (
+                <div style={{
+                  fontSize: FS.xs, textAlign: 'center',
+                  color: moreNote.isError ? C.warningText : C.textMuted,
+                }}>{moreNote.text}</div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

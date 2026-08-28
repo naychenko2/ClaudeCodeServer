@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Plug, X } from 'lucide-react';
-import { Button, Dot, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
+import { ChevronDown, ChevronRight, AlertTriangle, Pencil, Plug, X } from 'lucide-react';
+import { Button, ConfirmDialog, Dot, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
@@ -268,6 +268,15 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
   const revision = server.catalogRef?.name
     ? data.revisions[server.catalogRef.name]
     : undefined;
+  // Подтверждение запуска пробы: у каталожной stdio-записи local-владельца бэк
+  // отказывает без confirmed=true и присылает полную строку запуска. Без диалога
+  // человек видел «Проверка не удалась» и читал это как «сервер сломан»
+  const [pendingProbe, setPendingProbe] = useState<string | null>(null);
+
+  const startProbe = async () => {
+    const result = await data.probe(server);
+    if (result.kind === 'needsConfirmation') setPendingProbe(result.command);
+  };
 
   return (
     <div style={{
@@ -363,7 +372,7 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
               onClick={() => void data.startOAuth(server)}
             >Войти</Button>
           )}
-          <Button variant="ghost" size="md" disabled={checking} onClick={() => void data.probe(server)}>
+          <Button variant="ghost" size="md" disabled={checking} onClick={() => void startProbe()}>
             Проверить
           </Button>
           <IconButton size="lg" title="Изменить" onClick={onEdit} disabled={checking}>
@@ -381,6 +390,38 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
 
       {canLogin && oauthBusy && (
         <ManualOAuthCode server={server} data={data} />
+      )}
+
+      {pendingProbe !== null && (
+        <ConfirmDialog
+          title="Запустить этот сервер на вашем компьютере?"
+          subtitle={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warningText} style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  Чтобы спросить у сервера список инструментов, AI Home выполнит эту
+                  команду целиком на вашем компьютере. Код сервера писали не мы.
+                </span>
+              </div>
+              <div style={{
+                fontFamily: FONT.mono, fontSize: FS.xs, lineHeight: 1.45,
+                background: C.bgInset, border: `1px solid ${C.border}`, borderRadius: R.md,
+                padding: '8px 10px', color: C.textPrimary,
+                wordBreak: 'break-all', whiteSpace: 'pre-wrap',
+              }}>
+                {pendingProbe}
+              </div>
+            </div>
+          }
+          confirmLabel="Запустить"
+          confirmVariant="danger"
+          onConfirm={async () => {
+            setPendingProbe(null);
+            await data.confirmProbe(server);
+          }}
+          onCancel={() => setPendingProbe(null)}
+        />
       )}
     </div>
   );

@@ -120,11 +120,29 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
       const m = await api.plans.buildMap(curPlan.plan);
       setMap(m);
       setSchemeStatus(m === null ? 'failed' : 'ready');
+      // 204 от сервера: карту собрать не вышло. Возвращаем вид на текст —
+      // плашка с тем же сообщением покажется над телом (см. ниже).
+      if (m === null) setSchemeView('text');
     } catch (e) {
       const err = e as Error & { status?: number };
       setSchemeError(err.message || 'Не удалось собрать схему');
       setSchemeStatus('failed');
+      // Исключение из POST /api/plans/build-map: тоже уходим на текст.
+      setSchemeView('text');
     }
+  }
+  function handleSchemeViewChange(v: 'text' | 'scheme') {
+    setSchemeView(v);
+    // После отказа человек мог сам вернуться в «Схемой». Сбрасываем
+    // статус в idle, чтобы тело показало «Нажмите собрать», а не плашку.
+    if (v === 'scheme' && schemeStatus === 'failed') {
+      setSchemeStatus('idle');
+      setSchemeError(null);
+    }
+  }
+  function retryScheme() {
+    setSchemeView('scheme');
+    void buildScheme();
   }
 
   const goToHeading = (h: Heading) => {
@@ -223,7 +241,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
           }}>
             <InlineSegmented
               value={schemeView}
-              onChange={setSchemeView}
+              onChange={handleSchemeViewChange}
               options={[
                 { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
                   tone: { bg: C.plan, fg: C.onAccent } },
@@ -266,28 +284,6 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
               </div>
               <PlanScheme map={map} planText={curPlan.plan} contentRef={planContentRef} />
             </div>
-          ) : schemeStatus === 'failed' ? (
-            <div style={{
-              margin: '14px 16px', padding: '10px 12px',
-              background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
-              display: 'flex', alignItems: 'flex-start', gap: SP.sm,
-              fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
-            }}>
-              <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
-              <div>
-                <div style={{ fontWeight: 600 }}>
-                  {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
-                </div>
-                <Button
-                  variant="ghostFilled"
-                  size="xs"
-                  onClick={buildScheme}
-                  style={{ marginTop: SP.xs }}
-                >
-                  Попробовать снова
-                </Button>
-              </div>
-            </div>
           ) : schemeStatus === 'building' ? (
             <div style={{
               margin: '14px 16px', padding: '14px',
@@ -310,9 +306,38 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             </div>
           )
         ) : (
-          <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
-            <MarkdownViewer content={curPlan.plan} />
-          </div>
+          <>
+            {/* При отказе сборки — плашка над текстом, а не вместо него.
+                Вид уже на «Текстом» (см. buildScheme/handleSchemeViewChange),
+                человек видит и сообщение, и сам план. */}
+            {visualPlanEnabled && schemeStatus === 'failed' && (
+              <div style={{
+                margin: '14px 16px 8px',
+                padding: '10px 12px',
+                background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
+                display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+                fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
+              }}>
+                <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
+                  </div>
+                  <Button
+                    variant="ghostFilled"
+                    size="xs"
+                    onClick={retryScheme}
+                    style={{ marginTop: SP.xs }}
+                  >
+                    Попробовать снова
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+              <MarkdownViewer content={curPlan.plan} />
+            </div>
+          </>
         )}
 
         {/* Слой замечаний рендерится ВСЕГДА под флагом: иначе переключение

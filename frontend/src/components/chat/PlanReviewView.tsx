@@ -145,11 +145,30 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       // m === null → 204, сервер не смог собрать карту: НЕ падаем в ошибку, остаёмся на
       // тексте с работающими замечаниями. План «Визуальный разворот» §4 и §6.
       setSchemeStatus(m === null ? 'failed' : 'ready');
+      // 204 — карту собрать не вышло: возвращаем вид на текст, плашка с тем же
+      // сообщением покажется над телом (см. ниже). Раньше карточка оставалась
+      // в режиме «Схемой» и показывала пустоту.
+      if (m === null) setSchemeView('text');
     } catch (e) {
       const err = e as Error & { status?: number };
       setSchemeError(err.message || 'Не удалось собрать схему');
       setSchemeStatus('failed');
+      // Исключение из POST /api/plans/build-map: тоже уходим на текст.
+      setSchemeView('text');
     }
+  }
+  function handleSchemeViewChange(v: 'text' | 'scheme') {
+    setSchemeView(v);
+    // После отказа человек мог сам вернуться в «Схемой». Сбрасываем
+    // статус в idle, чтобы тело показало «Нажмите собрать», а не плашку.
+    if (v === 'scheme' && schemeStatus === 'failed') {
+      setSchemeStatus('idle');
+      setSchemeError(null);
+    }
+  }
+  function retryScheme() {
+    setSchemeView('scheme');
+    void buildScheme();
   }
   // fade-оверлей снизу появляется только если контент плана не помещается в maxHeight.
   // В deps — schemeView: при переключении «Текстом ↔ Схемой» контейнер ref тот же,
@@ -263,7 +282,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           }}>
             <InlineSegmented
               value={schemeView}
-              onChange={setSchemeView}
+              onChange={handleSchemeViewChange}
               options={[
                 { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
                   tone: { bg: C.plan, fg: C.onAccent } },
@@ -321,24 +340,6 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
                 }} />
               )}
             </div>
-          ) : schemeStatus === 'failed' ? (
-            // Отказ сборки: НЕ падаем в красную ошибку — план остался на тексте с
-            // работающими замечаниями. Текст ровно как в плане «Визуальный разворот» §4.
-            <div style={{
-              background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
-              padding: '10px 12px', display: 'flex', alignItems: 'flex-start', gap: SP.sm,
-              fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
-            }}>
-              <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
-              <div>
-                <div style={{ fontWeight: 600 }}>
-                  {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
-                </div>
-                <Button variant="ghostFilled" size="xs" onClick={buildScheme} style={{ marginTop: SP.xs }}>
-                  Попробовать снова
-                </Button>
-              </div>
-            </div>
           ) : schemeStatus === 'building' ? (
             <div style={{
               background: C.bgInset, border: `1px dashed ${C.border}`, borderRadius: R.lg,
@@ -360,6 +361,27 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           )
         ) : (
           <>
+            {/* При отказе сборки — плашка над текстом, а не вместо него.
+                Вид уже на «Текстом» (см. buildScheme/handleSchemeViewChange),
+                человек видит и сообщение, и сам план — расхождения нет. */}
+            {visualPlanEnabled && schemeStatus === 'failed' && (
+              <div style={{
+                marginBottom: SP.xs,
+                background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
+                padding: '10px 12px', display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+                fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
+              }}>
+                <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
+                  </div>
+                  <Button variant="ghostFilled" size="xs" onClick={retryScheme} style={{ marginTop: SP.xs }}>
+                    Попробовать снова
+                  </Button>
+                </div>
+              </div>
+            )}
             <div ref={planBodyRef} style={{
               background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
               padding: '10px 12px', maxHeight: 360, overflow: 'auto',

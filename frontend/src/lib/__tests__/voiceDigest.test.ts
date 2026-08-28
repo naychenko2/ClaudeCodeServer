@@ -74,6 +74,36 @@ describe('stripVoiceMarker', () => {
   it('одиночный «<» в конце ответа не теряется', () => {
     expect(stripVoiceMarker('Сравни a <')).toBe('Сравни a <');
   });
+
+  // Живая регрессия: ответ про схемы упомянул ```mermaid прямо в строке таблицы, парсер
+  // счёл эти бэктики открытием блока кода, счёт фенсов уехал — и остаток ответа
+  // (вместе с маркером) остался «внутри кода». Маркер уехал в ленту сырым
+  it('тройные бэктики посреди строки блока кода не открывают', () => {
+    const text = [
+      '| файл | было | стало |',
+      '| --- | --- | --- |',
+      '| style.md | нельзя определить | интерфейс сам просит ```mermaid в промпте |',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A --> B',
+      '```',
+      '',
+      '<voice>Суть ответа.</voice>',
+    ].join('\n');
+    const out = stripVoiceMarker(text);
+    expect(out).toContain('flowchart TD');
+    expect(out).toContain('в промпте');
+    expect(out).not.toContain('<voice>');
+    // Второй парсер обязан видеть тот же текст: разъедься они — плашка есть, маркер сырой
+    expect(extractVoiceDigest(text)).toBe('Суть ответа.');
+  });
+
+  it('фенс с отступом до трёх пробелов (пункт списка) блоком остаётся', () => {
+    const text = '- пример:\n\n   ```\n   <voice>Не выжимка.</voice>\n   ```\n\nХвост.';
+    expect(stripVoiceMarker(text)).toBe(text);
+    expect(extractVoiceDigest(text)).toBeNull();
+  });
 });
 
 describe('sanitizeForSpeech и маркер', () => {

@@ -94,8 +94,12 @@ export function verbalizeIdentifiers(text: string): string {
 // иначе не трогает вовсе, и синтезатор зачитал бы «voice» вслух.
 export const VOICE_MARKER_RE = /<voice[\s\S]*$/i;
 const VOICE_TAG = '<voice';
-// Фенсы кода — с их началом, чтобы можно было отличить открытый блок от закрытого
-const FENCE_RE = /(```|~~~)/g;
+// Фенсы кода — с их началом, чтобы можно было отличить открытый блок от закрытого.
+// Фенсом считается ТОЛЬКО тройка в НАЧАЛЕ строки (CommonMark допускает отступ до трёх
+// пробелов): тройные бэктики посреди строки — обычный текст (ответ, упомянувший
+// ```mermaid в предложении), а принятые за начало блока они уводили парсер «в код» до
+// самого конца ответа — маркер переставал стричься вовсе и уезжал в ленту сырым.
+const FENCE_RE = /^[ \t]{0,3}(```|~~~)/gm;
 
 export function stripVoiceMarker(text: string): string {
   if (!text) return '';
@@ -118,7 +122,7 @@ export function stripVoiceMarker(text: string): string {
     } else if (m[1] === fence) {
       inCode = false;
     }
-    i = m.index + m[1].length;
+    i = m.index + m[0].length;
   }
   // Хвост после последнего фенса. Незакрытый блок кода (ход ещё стримится) маркера
   // содержать не может — там код

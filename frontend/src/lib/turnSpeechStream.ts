@@ -93,7 +93,13 @@ export function turnText(items: ChatItem[]): string {
 // Незакрытый блок (ход ещё стримится) выжимкой не считается — озвучка стартует на result.
 export function extractVoiceDigest(text: string): string | null {
   if (!text) return null;
-  const withoutCode = text.replace(/```[\s\S]*?```/g, ' ').replace(/~~~[\s\S]*?~~~/g, ' ');
+  // Фенсом считается ТОЛЬКО тройка в начале строки — тем же правилом, что у
+  // stripVoiceMarker: тройные бэктики посреди фразы (ответ, упомянувший ```mermaid в
+  // предложении) это обычный текст, а принятые за блок кода они разводят два парсера по
+  // разным ответам — плашка «Коротко» есть, а маркер в ленте остался сырым.
+  const withoutCode = text
+    .replace(/^[ \t]{0,3}```[\s\S]*?^[ \t]{0,3}```/gm, ' ')
+    .replace(/^[ \t]{0,3}~~~[\s\S]*?^[ \t]{0,3}~~~/gm, ' ');
   const matches = [...withoutCode.matchAll(/<voice>([\s\S]*?)<\/voice>/gi)];
   const body = matches.at(-1)?.[1]?.trim();
   return body ? body : null;

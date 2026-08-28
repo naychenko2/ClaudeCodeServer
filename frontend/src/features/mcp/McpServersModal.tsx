@@ -9,7 +9,7 @@ import { McpServerForm } from './McpServerForm';
 import { McpAccessTab } from './McpAccessTab';
 import { McpDiagnosticsTab } from './McpDiagnosticsTab';
 import { McpCatalogPanel } from './McpCatalogPanel';
-import type { McpCatalogField, McpCatalogServer, McpServer, McpServerCatalogDraft } from '../../types';
+import type { McpCatalogServer, McpServer, McpServerCatalogDraft } from '../../types';
 
 // Раздел «MCP-серверы» — модалка из меню аватара, рядом с «Поставщиками моделей»:
 // настроечная поверхность низкой частоты без навигируемого содержимого. Раскладка
@@ -35,21 +35,21 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
   const openAdd = () => { setEditing(null); setCatalogDraft(null); setTab('add'); };
   const openEdit = (server: McpServer) => { setEditing(server); setCatalogDraft(null); setTab('add'); };
   // Карточка каталога → форма с предзаполнением. source берётся целиком, чтобы
-  // форма при желании показала превью строки запуска; поля черновика раскладываются
-  // по env/headers прямо в useState-инициализаторе формы
+  // форма при желании показала превью строки запуска; поля черновика лежат в
+  // prefill.fields (DTO McpCatalogPrefillDto) — на верхнем уровне их нет, иначе
+  // любое нажатие «Настроить подключение» падало бы с TypeError на undefined.map
   const openCatalogDraft = (source: McpCatalogServer) => {
     setCatalogDraft({
       source,
       catalogRef: {
         name: source.name,
-        version: source.version,
-        publishedAt: source.publishedAt,
+        version: source.version ?? '',
+        publishedAt: source.publishedAt ?? null,
       },
-      // В черновике: env — для stdio, headers — для http. arg-поля идут в args строкой
-      fieldsDraft: source.fields.map((f: McpCatalogField) => ({
-        ...f,
-        where: source.transport === 'remote' ? 'headers' : 'env',
-      })),
+      // Поля черновика: фильтр target='args' пойдёт в argv, target='header' — в
+      // headers, target='env'/'url' — в env. У отказанных записей prefill=null,
+      // тогда форма просто не получит полей (Connectable=false и так блокирует клик)
+      fieldsDraft: source.prefill?.fields ?? [],
     });
     setEditing(null);
     setTab('add');

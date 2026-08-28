@@ -143,8 +143,13 @@ export interface McpData {
   remove: (server: McpServer) => Promise<void>;
   save: (id: string | null, data: McpServerUpsert) => Promise<McpServer>;
   importJson: (fragment: unknown) => Promise<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>;
-  // Allow-модель: выдача доступа, а не исключение из него
-  setProjectOn: (project: Project, serverKey: string, on: boolean) => void;
+  // Allow-модель: выдача доступа, а не исключение из него. Включение каталожной
+  // stdio-записи у local-владельца возвращает needsConfirmation — вызывающий
+  // показывает диалог с командой и зовёт confirmSetProjectOn по согласию
+  setProjectOn: (project: Project, serverKey: string, on: boolean) => Promise<
+    { kind: 'ok' } | { kind: 'needsConfirmation'; servers: { key: string; command: string }[] }
+  >;
+  confirmSetProjectOn: (project: Project, serverKey: string) => Promise<void>;
   projectsOnCount: (serverKey: string) => number;
   personasOnCount: (serverKey: string) => number;
   grantPersona: (persona: Persona, serverKey: string) => Promise<void>;
@@ -219,7 +224,13 @@ export function useMcpData(): McpData {
       if (revisionsSeq.current !== seq) return; // устаревший ответ
       revisionsCheckedAt.current = Date.now();
       const next: Record<string, McpCatalogRevision> = {};
-      for (const r of res.revisions ?? []) next[r.name] = r;
+      // Бэк возвращает items только по тем именам, по которым что-то нашлось.
+      // «Пропавшие» (реестр ответил, но конкретно эту запись не нашёл) считаем
+      // как отсутствие ревизии: никакой плашки на карточке не рисуем, чтобы
+      // «проверить не удалось» и «запись пропала из реестра» не путались. missing
+      // как поле DTO больше нет — фронт выводит «нет ответа по этой записи» из
+      // пустого ключа в next
+      for (const r of res.items ?? []) next[r.name] = r;
       setRevisions(next);
       setRevisionsCheckFailed(!!res.checkFailed);
     }).catch(() => {
@@ -407,8 +418,14 @@ export function useMcpData(): McpData {
     return result;
   };
 
-  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и остальные настройки
-  const setProjectOn = (project: Project, serverKey: string, on: boolean) => {
+  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и остальные настройки.
+  // Включение каталожной stdio-записи у local-владельца требует подтверждения: бэк
+  // отдаёт 400 с {requiresConfirmation, servers[{key, command}]}. Резолв промиса —
+  // способ синхронизировать UI вызывающего (McpAccessTab) с решением бэка, не
+  // заводя второй стор pending-подтверждений
+  const setProjectOn = (project: Project, serverKey: string, on: boolean): Promise<
+    { kind: 'ok' } | { kind: 'needsConfirmation'; servers: { key: string; command: string }[] }
+  > => {
     const current = project.mcpServersOn ?? [];
     const next = on
       ? [...current.filter(k => k !== serverKey), serverKey]
@@ -417,14 +434,38 @@ export function useMcpData(): McpData {
     saveSeq.current[project.id] = seq;
     setProjects(list => list.map(p => (p.id === project.id ? { ...p, mcpServersOn: next } : p)));
     setError(null);
-    api.projects.update(project.id, { mcpServersOn: next })
+    return api.projects.update(project.id, { mcpServersOn: next })
+      .then(saved => {
+        if (saveSeq.current[project.id] !== seq) return { kind: 'ok' as const };
+        setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
+        return { kind: 'ok' as const };
+      })
+      .catch((e: unknown) => {
+        if (saveSeq.current[project.id] !== seq) throw e;
+        setProjects(list => list.map(p => (p.id === project.id ? project : p)));
+        const body = (e as { body?: { requiresConfirmation?: boolean; servers?: { key: string; command: string }[] } } | null)?.body;
+        if (body?.requiresConfirmation && body.servers) {
+          // Откатываем оптимистичный апдейт: сервер ещё не включён, решение — за человеком
+          return { kind: 'needsConfirmation' as const, servers: body.servers };
+        }
+        setError(msg(e, 'Не удалось сохранить'));
+        throw e;
+      });
+  };
+
+  // Повторный запрос с mcpCatalogConfirmed=true — после согласия в диалоге
+  const confirmSetProjectOn = (project: Project, serverKey: string): Promise<void> => {
+    const current = project.mcpServersOn ?? [];
+    const next = [...current.filter(k => k !== serverKey), serverKey];
+    const seq = (saveSeq.current[project.id] ?? 0) + 1;
+    saveSeq.current[project.id] = seq;
+    return api.projects.update(project.id, { mcpServersOn: next, mcpCatalogConfirmed: true })
       .then(saved => {
         if (saveSeq.current[project.id] !== seq) return;
         setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
       })
-      .catch(e => {
-        if (saveSeq.current[project.id] !== seq) return;
-        setProjects(list => list.map(p => (p.id === project.id ? project : p)));
+      .catch((e: unknown) => {
+        if (saveSeq.current[project.id] !== seq) throw e;
         setError(msg(e, 'Не удалось сохранить'));
       });
   };
@@ -466,7 +507,7 @@ export function useMcpData(): McpData {
     servers, builtin, projects, personas, error, setError,
     checking, probes, reload: loadServers,
     setEnabled, probe, remove, save, importJson,
-    setProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
+    setProjectOn, confirmSetProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
     oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
     revisions, revisionsCheckFailed,
   };

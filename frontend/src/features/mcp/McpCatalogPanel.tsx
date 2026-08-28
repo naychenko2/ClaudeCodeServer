@@ -34,12 +34,12 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
   onManual: () => void;
   onClose: () => void;
 }) {
-  // useMe держит «обо мне» (role/defaultPersonaId); ExecutionEnvironment приходит с
-  // /api/auth/me — пробрасывается полем в типе Me, но useMe пока не отдаёт его. Карточка
-  // без него просто не показывает бейдж среды (см. readExecEnv). Когда useMe расширится,
-  // тут же появится реальное значение без правок компонента
-  useMe();
-  const env = readExecEnv();
+  // useMe держит «обо мне» (role/defaultPersonaId/executionEnvironment). Среда из
+  // /api/auth/me пробрасывается в стор в defaultPersona.ts: карточка без неё просто
+  // не показала бы бейдж среды и предупреждающую полосу (отказ от честной пометки
+  // был бы нарушением договорённости с владельцем — без неё человек не видит, что
+  // stdio-сервер запустится на его машине)
+  const env = useMe().executionEnvironment;
 
   const [q, setQ] = useState('');
   // Серверы из каталога: грузим с бэка (волна 1, задача 9fa075ec). Три состояния
@@ -66,12 +66,14 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
     if (!servers) return [];
     const term = q.trim().toLowerCase();
     if (!term) return servers;
+    // Поиск идёт по title (человеческое имя), name (реестровое имя) и description.
+    // У всех бэк отдаёт nullable — проверяем, чтобы фильтр не ронял интерфейс при
+    // пустых полях (D1 QA: TypeError на undefined.toLowerCase)
     return servers.filter(s => {
-      return (
-        s.displayName.toLowerCase().includes(term) ||
-        s.name.toLowerCase().includes(term) ||
-        s.description.toLowerCase().includes(term)
-      );
+      const title = (s.title ?? '').toLowerCase();
+      const name = (s.name ?? '').toLowerCase();
+      const desc = (s.description ?? '').toLowerCase();
+      return title.includes(term) || name.includes(term) || desc.includes(term);
     });
   }, [q, servers]);
 
@@ -133,7 +135,7 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
               server={s}
               env={env}
               installed={!!installedNames?.has(s.name)}
-              isLocalStdioWarning={isStdioLocal && s.transport === 'npm'}
+              isLocalStdioWarning={isStdioLocal && s.prefill?.transport === 'stdio'}
               onPick={onPick}
             />
           ))}
@@ -191,8 +193,15 @@ function CatalogCard({ server, env, installed, isLocalStdioWarning, onPick }: {
   isLocalStdioWarning: boolean;
   onPick: (server: McpCatalogServer) => void;
 }) {
-  const blocked = !!server.unsupportedReason;
-  const tag = server.unsupportedTag ?? null;
+  // Connectable=false у DTO — карточка без кнопки. Причина отказа — в notice.
+  // Дополнительно рисуем бейдж «Устарел» если сервер в реестре deprecated: первая
+  // буква причины не видна на превью, а тон «deprecated» нужно показать явно
+  const blocked = !server.connectable;
+  const reason = server.notice ?? null;
+  const isDeprecated = server.status === 'deprecated';
+  // Заголовок карточки: title из реестра (человеческое имя) или name как фолбэк.
+  // По макету docs/mockups/mcp-catalog-v1.html имя сервера — первое, что человек читает
+  const title = server.title ?? server.name;
 
   const Tag = blocked ? 'div' : 'button';
 
@@ -211,50 +220,72 @@ function CatalogCard({ server, env, installed, isLocalStdioWarning, onPick }: {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
         {/* Длинные имена (в реестре встречаются записи вида io.github.<id>) обрезаются
             многоточием: без minWidth:0 имя выдавило бы бейджи в новую строку и карточка
-            «прыгала» по высоте. Полное имя в title — посмотреть можно, наведя курсор */}
-        <span title={server.displayName} style={{
+            «прыгала» по высоте. Полное имя в title атрибуте — посмотреть можно, наведя курсор */}
+        <span title={title} style={{
           fontSize: FS.md, fontWeight: 600,
           color: blocked ? C.textMuted : C.textHeading,
           minWidth: 0, flex: '1 1 auto',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{server.displayName}</span>
+        }}>{title}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
           {installed && (
             <span style={badgeStyle('ok')}>Уже добавлен</span>
           )}
-          {tag && (
-            <span style={badgeStyle('warn')}>{tag}</span>
+          {isDeprecated && (
+            <span style={badgeStyle('warn')}>Устарел</span>
           )}
           {envBadgeFor(server, env)}
         </div>
       </div>
 
-      {blocked && server.unsupportedReason && (
+      {blocked && reason && (
         <div style={{
           display: 'flex', gap: SP.sm, alignItems: 'flex-start',
           fontSize: FS.sm, lineHeight: 1.5, color: C.warningText,
         }}>
           <Ban size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.warningText} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>{server.unsupportedReason}</span>
+          <span>{reason}</span>
         </div>
       )}
 
-      <div style={{
-        fontSize: FS.sm, color: blocked ? C.textMuted : C.textSecondary, lineHeight: 1.5,
-      }}>{server.description}</div>
+      {server.description && (
+        <div style={{
+          fontSize: FS.sm, color: blocked ? C.textMuted : C.textSecondary, lineHeight: 1.5,
+        }}>{server.description}</div>
+      )}
+
+      {server.prefill?.transport === 'stdio' && (server.prefill.command || server.prefill.args.length > 0) && (() => {
+        // Полная строка запуска из черновика каталога: то же, что уйдёт в запись
+        // после подстановки плейсхолдеров {name} в форме. На карточке каталога
+        // плейсхолдеры видны как есть — сигнал «форма спросит значения» до
+        // нажатия «Настроить подключение»
+        const parts = [server.prefill.command ?? '', ...server.prefill.args].filter(Boolean);
+        const line = parts.join(' ');
+        return (
+          <div title={line} style={{
+            fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono, lineHeight: 1.45,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{line}</div>
+        );
+      })()}
 
       <div style={{
         fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5,
       }}>
-        <a
-          href={server.repositoryUrl ?? `https://${server.repository}`}
-          target="_blank" rel="noopener noreferrer"
-          style={{ color: C.accent, textDecoration: 'none' }}
-        >
-          {server.repository}
-        </a>
-        {' · '}версия {server.version}
-        {' · '}в реестре с {formatMonth(server.publishedAt)}
+        {server.repositoryUrl && (
+          <>
+            <a
+              href={server.repositoryUrl}
+              target="_blank" rel="noopener noreferrer"
+              style={{ color: C.accent, textDecoration: 'none' }}
+            >
+              {repoDisplay(server.repositoryUrl)}
+            </a>
+            {' · '}
+          </>
+        )}
+        версия {server.version ?? '—'}
+        {server.publishedAt && ` · в реестре с ${formatMonth(server.publishedAt)}`}
       </div>
 
       {isLocalStdioWarning && !blocked && (
@@ -276,12 +307,21 @@ function CatalogCard({ server, env, installed, isLocalStdioWarning, onPick }: {
   );
 }
 
-// Бейдж среды по факту User.ExecutionEnvironment. Для remote-сервера — нейтральный
-// «На сервере автора», для npm-сервера: у container — «В песочнице» (нейтральный тон),
+// Из полного URL репозитория вырезаем хост + путь без схемы (для UI). Реестр
+// присылает адреса вида https://github.com/... — нам нужен короткий «github.com/...»
+// в моноширинной подписи, чтобы строка не разъезжалась по ширине карточки
+function repoDisplay(url: string): string {
+  return url.replace(/^https?:\/\//, '').replace(/\.git$/, '');
+}
+
+// Бейдж среды по факту User.ExecutionEnvironment. Для http-сервера — нейтральный
+// «На сервере автора», для stdio-сервера: у container — «В песочнице» (нейтральный тон),
 // у local — «На вашем компьютере» (warning). Неизвестная среда (env === null, например
-// до того как /me ответил) — ничего не рисуем, карточка остаётся без этого бейджа
+// до того как /me ответил) — ничего не рисуем, карточка остаётся без этого бейджа.
+// Transport живёт в prefill: у Connectable=false (prefill=null) бейдж не рисуем
 function envBadgeFor(server: McpCatalogServer, env: 'local' | 'container' | null) {
-  if (server.transport === 'remote') {
+  const transport = server.prefill?.transport;
+  if (transport === 'http') {
     return (
       <span style={badgeStyle('neutral')}>
         <Cloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> На сервере автора
@@ -395,10 +435,5 @@ function formatMonth(iso: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-// === Чтение ExecutionEnvironment из текущего пользователя. ===
-// Сейчас стора для него нет (useMe отдаёт только role и defaultPersonaId), поэтому
-// безопасно возвращаем null — карточка просто не покажет бейдж среды. Когда стор
-// расширится, тут же появится реальное значение и бейдж оживёт без правок компонента
-function readExecEnv(): 'local' | 'container' | null {
-  return null;
-}
+// Старая заглушка readExecEnv удалена — executionEnvironment едет через useMe().
+// Заглушка жила ровно один релиз и выпилена вместе с добавлением поля в стор

@@ -323,7 +323,7 @@ export const api = {
     // ОТДЕЛЬНО от основного списка, после отрисовки раздела — реестр в статусе preview
     // может лежать, а раздел обязан открываться. names: уникальные CatalogRef.name
     catalogRevisions: (names: string[]) =>
-      request<McpCatalogRevisionResult>('/mcp/catalog/revisions', {
+      request<McpCatalogRevisionResult>('/mcp/catalog/revision', {
         method: 'POST', body: JSON.stringify({ names }),
       }),
     // Диагностика вызовов инструментов — только админ (данные всех владельцев)
@@ -545,7 +545,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean; mcpCatalogConfirmed?: boolean }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
     // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,

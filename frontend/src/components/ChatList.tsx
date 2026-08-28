@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { FilterX, MessageCircle, Plus } from 'lucide-react';
+import { FilterX, MessageCircle, Plus, Archive } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
+import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { useOnline } from '../hooks/useOnline';
-import { C, ISLAND, MODAL_W } from '../lib/design';
+import { C, ISLAND, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -11,7 +12,7 @@ import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, type ChatGroupBy } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -19,6 +20,7 @@ import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
+import { showToast } from '../lib/toast';
 
 interface Props {
   chats: Session[];
@@ -30,6 +32,7 @@ interface Props {
   onEdited: (updated: Session) => void;
   // Чат удалён — убрать из списка
   onDeleted: (id: string) => void;
+  onArchive: (chat: Session, archived: boolean) => void;
   isMobile?: boolean;
   // Чат с активным workflow — плашка «WF» на его карточке
   workflowRunningFor?: string;
@@ -42,7 +45,7 @@ interface Props {
 // Режимы группировки глобального списка: реестра тегов у него нет — только Дни/Без
 const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
-export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor, bare = false }: Props) {
+export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, onArchive, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
@@ -94,8 +97,14 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, agentsRunningIds],
   );
+  // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
+  // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
+  // подмножеству: в режиме архива бейдж иначе врал бы на весь список,
+  // а в обычном — записывал в «скрытые фильтрами» убранные в архив чаты, которые
+  // сбросом фильтров не возвращаются.
+  const scoped = chats.filter(c => isArchivedChat(c) === filters.archivedOnly);
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
-  const hiddenCount = chats.length - filteredChats.length;
+  const hiddenCount = scoped.length - filteredChats.length;
 
   const togglePin = async (chat: Session) => {
     try {
@@ -121,6 +130,28 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     }
     onDeleted(deleteTarget.id);
     setDeleteTarget(null);
+  };
+
+  // Сводка карточки архива (место chat-digest): первая сборка зовёт модель,
+  // последующие отдаются из кэша.
+  const handleBuildDigest = async (chat: Session) => {
+    try {
+      onEdited(await archiveApi.buildDigest(chat.id));
+    } catch (e) {
+      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
+    }
+  };
+
+  // «Сохранить в заметки» — заметка создаётся и кладётся в vault.
+  const handleSaveAsNote = async (chat: Session) => {
+    try {
+      await saveArchiveSessionAsNote(chat.id);
+      showToast('Сохранение в заметки', 'Заметка создана', 'info');
+      const fresh = await api.chats.get(chat.id).catch(() => null);
+      if (fresh) onEdited(fresh);
+    } catch (e) {
+      showToast('Сохранение в заметки', e instanceof Error ? e.message : 'Не удалось сохранить в заметки', 'info');
+    }
   };
 
   // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
@@ -163,6 +194,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
+      onArchive={online ? (archived) => onArchive(chat, archived) : undefined}
+      onBuildDigest={online ? () => handleBuildDigest(chat) : undefined}
+      onSaveAsNote={online ? () => handleSaveAsNote(chat) : undefined}
       swipeOpen={openSwipeId === chat.id}
       onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}
     />
@@ -190,29 +224,66 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // есть, но фильтры всё скрыли — подсказка со сбросом.
   const listContent = (
     <>
-      {chats.length === 0 && (
-        <EmptyState
-          compact={!isMobile}
-          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-          title="Здесь будут ваши чаты"
-          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
-          action={
-            <Button
-              variant="primary" size="md" loading={creating}
-              onClick={onNew}
-              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-            >
-              Создать первый чат
-            </Button>
-          }
-        />
+      {/* Все чаты области лежат в архиве: chats.length > 0, так что empty «здесь будут
+          чаты» не срабатывает, а viewTotal === 0 гасит и «Ничего не нашлось» — без этого
+          состояния панель оставалась бы белой дырой. В отличие от «пусто», здесь
+          человек должен вспомнить про архив, а не про создание */}
+      {!filters.archivedOnly && chats.length > 0 && scoped.length === 0 && (
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+          <EmptyState
+            compact={!isMobile}
+            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="Все чаты в архиве"
+            subtitle="Список пуст: живых чатов нет, архив не считается."
+            action={
+              <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <Button variant="ghost" size="md" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archivedOnly: true })}>
+                  Открыть архив
+                </Button>
+                <Button
+                  variant="primary" size="md" loading={creating}
+                  onClick={onNew}
+                  leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+                >
+                  Создать первый чат
+                </Button>
+              </div>
+            }
+          />
+        </div>
       )}
-      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
+      {scoped.length === 0 && chats.length === 0 && (
+        filters.archivedOnly ? (
+          <EmptyState
+            compact={!isMobile}
+            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title={ARCHIVE_EMPTY_TITLE}
+            subtitle={ARCHIVE_EMPTY_SUBTITLE}
+          />
+        ) : (
+          <EmptyState
+            compact={!isMobile}
+            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="Здесь будут ваши чаты"
+            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+            action={
+              <Button
+                variant="primary" size="md" loading={creating}
+                onClick={onNew}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+              >
+                Создать первый чат
+              </Button>
+            }
+          />
+        )
+      )}
+      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && scoped.length > 0 && (
         <EmptyState
           compact
           icon={<FilterX size={20} strokeWidth={2} />}
           title="Ничего не нашлось"
-          subtitle={buildHiddenReason(chats.length, filters.search)}
+          subtitle={buildHiddenReason(scoped.length, filters.search)}
           action={
             <ChatFilterResetActions
               search={filters.search}

@@ -9,7 +9,7 @@ import { X } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../lib/design';
 import { ICON_STROKE } from './ui/icons';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
-import type { LocalToast } from '../lib/toast';
+import type { LocalToast, ToastAction } from '../lib/toast';
 import { KIND_LABELS } from '../features/notifications/kindMeta';
 import { NotificationAvatar, hasPersona, notifPersonaLabel } from '../features/notifications/NotificationAvatar';
 
@@ -24,6 +24,10 @@ interface ToastItem {
   personaRole?: string;
   personaColor?: string;
   projectName?: string;
+  // Необязательное действие («Отменить», «Открыть»…) — кнопка справа под body.
+  // Не задан — тост как раньше, только текст. Колбэк зовётся из NotificationToasts
+  // при клике; id не нужен — действие само знает, что делать
+  action?: ToastAction;
 }
 
 const AUTO_DISMISS_MS = 8000;
@@ -71,7 +75,7 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
     // Локальные тосты (клиентские события без сервера)
     const onLocal = (e: Event) => {
       const d = (e as CustomEvent<LocalToast>).detail;
-      pushToast({ title: d.title, body: d.body, kind: d.kind ?? 'info' });
+      pushToast({ title: d.title, body: d.body, kind: d.kind ?? 'info', action: d.action });
     };
     window.addEventListener('cc-local-toast', onLocal);
     return () => { off(); offReconnect(); window.removeEventListener('cc-local-toast', onLocal); };
@@ -87,6 +91,15 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
     }}>
       {toasts.map(t => {
         const eyebrow = eyebrowText(t);
+        // Кнопка-действие: «Отменить» в тосте архивации. Клик НЕ открывает тост
+        // (это не диплинк), а зовёт свой колбэк; сам тост после этого снимается.
+        // Стиль — тот же accent-цвет, что у главной кнопки композера: читается
+        // как «отменить сделанное», а не как «закрыть уведомление»
+        const runAction = () => {
+          if (!t.action) return;
+          t.action.onClick();
+          setToasts(prev => prev.filter(x => x.id !== t.id));
+        };
         return (
           <div
             key={t.id}
@@ -129,6 +142,25 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
               }}>
                 {t.body}
               </div>
+              {t.action && (
+                // Кнопка-действие — справа под body, на своей строке. Курсор
+                // pointer оставляем только на кнопке, родительский клик-переход
+                // по диплинку гасим stopPropagation. Стиль — accent-цветом, без
+                // заливки: тост остаётся лёгким, акцент — только у действия
+                <div style={{ marginTop: SP.sm, display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={e => { e.stopPropagation(); runAction(); }}
+                    style={{
+                      border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                      color: C.accent, fontFamily: FONT.sans, fontWeight: 600,
+                      fontSize: FS.sm, lineHeight: 1.2,
+                    }}
+                  >
+                    {t.action.label}
+                  </button>
+                </div>
+              )}
             </div>
             <button
               onClick={e => { e.stopPropagation(); setToasts(prev => prev.filter(x => x.id !== t.id)); }}

@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Архив чатов — три состояния: пустой список, плашка, тост · макет v1</title>
+<style>
+/* ===== Токены (значения из frontend/src/lib/theme.css; семантика — C.* из design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-smoke:#B4A899;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-smoke:#7E7566;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; letter-spacing:-.01em; }
+svg.ic { width:15px; height:15px; flex-shrink:0; }
+svg.ic-sm { width:13px; height:13px; flex-shrink:0; }
+svg.ic-lg { width:22px; height:22px; flex-shrink:0; }
+svg.ic-xl { width:26px; height:26px; flex-shrink:0; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1180px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:48px 0 4px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+h2.sec:first-of-type { margin-top:8px; }
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:74ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 8px; }
+.cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+.cols > .col { flex:1; min-width:300px; }
+.stage { margin-bottom:20px; }
+table.spec { border-collapse:collapse; width:100%; font-size:12px; }
+table.spec th, table.spec td { border:1px solid var(--c-border-light); padding:6px 10px; text-align:left; vertical-align:top; }
+table.spec th { background:var(--c-bg-inset); color:var(--c-text-heading); font-weight:600; }
+table.spec code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:11px; font-family:"JetBrains Mono",monospace; }
+
+/* ===== Панель-остров (ISLAND: bgPanel, R.xxl=14, borderLight, shadow-island) ===== */
+.island {
+  background:var(--c-bg-panel); border:1px solid var(--c-border-light);
+  border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden;
+}
+.island-head {
+  height:40px; display:flex; align-items:center; gap:8px; padding:0 12px;
+  background:var(--c-bg-inset); border-bottom:1px solid var(--c-border-light);
+  font-size:13px; font-weight:600; color:var(--c-text-heading);
+}
+.island-body { padding:8px; }
+
+/* ===== Кнопки (components/ui/Button) ===== */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
+  border-radius:12px; padding:7px 14px; font-size:13px; border:1px solid transparent;
+}
+.btn.sm { padding:5px 11px; font-size:12px; border-radius:8px; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.primary.glow { box-shadow:var(--shadow-button); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { background:transparent; color:var(--c-text-secondary); border-color:transparent; }
+.btn.ghost:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+
+/* ===== Пустое состояние (ui/EmptyState, дефолтный вариант: кружок 56/R16/accent) ===== */
+.empty {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:40px; gap:8px; min-height:320px;
+}
+.empty .ico {
+  width:56px; height:56px; margin-bottom:8px; border-radius:16px;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--c-bg-panel); color:var(--c-accent);
+}
+.empty h3 {
+  margin:0; font-size:21px; font-weight:500; color:var(--c-text-primary);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+.empty .sub { font-size:13.5px; color:var(--c-text-secondary); line-height:1.5; max-width:280px; }
+.empty .actions { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+
+/* ===== Плашка архивного чата над лентой ===== */
+.banner {
+  display:flex; align-items:center; gap:10px; padding:10px 14px;
+  background:var(--c-bg-inset); border:1px solid var(--c-border); border-radius:12px;
+  color:var(--c-text-secondary); font-size:13px;
+}
+.banner .txt { flex:1; min-width:0; color:var(--c-text-heading); font-weight:600; }
+.banner svg { color:var(--c-text-muted); }
+
+/* ===== Тост с действием (каркас NotificationToasts: bgCard/border/R.xl=12/shadow-dropdown) ===== */
+.toaststack { display:flex; flex-direction:column; gap:10px; max-width:360px; }
+.toast {
+  display:flex; gap:12px; align-items:center;
+  padding:13px 15px;
+  background:var(--c-bg-card); border:1px solid var(--c-border);
+  border-radius:12px; box-shadow:var(--shadow-dropdown);
+}
+.toast .tic {
+  width:36px; height:36px; border-radius:10px; flex-shrink:0;
+  background:var(--c-bg-selected); color:var(--c-text-muted);
+  display:flex; align-items:center; justify-content:center;
+}
+.toast .tt { flex:1; min-width:0; font-size:13px; font-weight:700; color:var(--c-text-heading); }
+.toast .undo {
+  border:none; background:none; cursor:pointer; padding:4px 6px; border-radius:8px;
+  font:inherit; font-size:12px; font-weight:600; color:var(--c-accent); white-space:nowrap;
+}
+.toast .x {
+  border:none; background:none; cursor:pointer; padding:2px; flex-shrink:0;
+  color:var(--c-text-muted); display:flex; align-items:center;
+}
+
+/* ===== Мобильный фрейм 390px ===== */
+.phones { display:flex; gap:20px; flex-wrap:wrap; }
+.phone {
+  width:390px; border:1px solid var(--c-border); border-radius:28px; overflow:hidden;
+  background:var(--c-bg-main); box-shadow:var(--shadow-card); flex-shrink:0;
+}
+.pbar {
+  height:52px; display:flex; align-items:center; gap:10px; padding:0 16px;
+  border-bottom:1px solid var(--c-border); font-size:14px; font-weight:600; color:var(--c-text-heading);
+}
+.plabel { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); padding:10px 16px 0; }
+.pbody { padding:12px; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Архив чатов — пустое состояние «Все чаты в архиве», плашка, тост · макет v1</h1>
+  <div class="toggle">
+    <button id="tl" class="on" onclick="setTheme('light')">Светлая</button>
+    <button id="td" onclick="setTheme('dark')">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="note">
+  Три состояния доносятся из origin поверх нашей модели архива v4. Тексты утверждены задачей и
+  переносятся <b>дословно</b>. Все цвета — существующие токены <code>C.*</code> (значения — из
+  <code>theme.css</code> обеих тем), новых цветов и размеров не заведено: пустое состояние — готовый
+  <code>ui/EmptyState</code>, тост — каркас <code>NotificationToasts</code>, плашка — паттерн
+  «состояние над лентой» из макета <code>archive-chats-v1</code>.
+</p>
+
+<!-- ============================================================ 1 -->
+<h2 class="sec">1. Пустое состояние списка: «Все чаты в архиве»</h2>
+<p class="note">
+  Сценарий: человек заархивировал всё подчистую и открыл список чатов. Живых чатов нет, но ничего
+  не потеряно — и состояние говорит об этом, а не «у вас пока нет чатов». Это дефолтный
+  <code>EmptyState</code> (не compact): кружок 56, serif-заголовок 21, подзаголовок 13.5, кнопки под
+  текстом с <code>margin-top:12</code>. Иконка — lucide <code>archive</code> (та же, что у раздела
+  «Архив» и плашки: один визуальный ключ у всей механики).
+</p>
+
+<div class="cols">
+  <div class="col">
+    <p class="cap">Глобальный список (все чаты) — две кнопки</p>
+    <div class="stage island">
+      <div class="island-head">Чаты</div>
+      <div class="empty">
+        <div class="ico">
+          <svg class="ic-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        </div>
+        <h3>Все чаты в архиве</h3>
+        <div class="sub">Список пуст: живых чатов нет, архив не считается.</div>
+        <div class="actions">
+          <button class="btn ghost">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            Открыть архив
+          </button>
+          <button class="btn primary glow">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            Создать первый чат
+          </button>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      «Открыть архив» — ghost: действие вторичное, ведёт в раздел «Архив» внизу списка (разворачивает
+      свёрнутую секцию и скроллит к ней). «Создать первый чат» — primary с <code>SHADOW.button</code>:
+      единственное акцентное пятно на пустом экране, это и есть выход из тупика.
+    </p>
+  </div>
+  <div class="col">
+    <p class="cap">Список внутри проекта — только «Открыть архив»</p>
+    <div class="stage island">
+      <div class="island-head">Чаты · AI Home</div>
+      <div class="empty">
+        <div class="ico">
+          <svg class="ic-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        </div>
+        <h3>Все чаты в архиве</h3>
+        <div class="sub">Список пуст: живых чатов нет, архив не считается.</div>
+        <div class="actions">
+          <button class="btn ghost">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+            Открыть архив
+          </button>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      «Создать первый чат» показывается <b>только в глобальном списке</b>: внутри проекта кнопка
+      создания живёт в шапке списка, дублировать её в пустом состоянии не нужно — иначе на экране
+      два одинаковых primary, и приоритет размывается.
+    </p>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Компонент</td><td><code>ui/EmptyState</code>, дефолтный вариант (не <code>compact</code>)</td></tr>
+  <tr><td>Иконка</td><td>lucide <code>archive</code>, 26px в кружке 56×56, R=16, фон <code>C.bgPanel</code>, цвет <code>C.accent</code>, <code>margin-bottom:8</code></td></tr>
+  <tr><td>Заголовок</td><td>«Все чаты в архиве» — <code>FONT.serif</code>, 21px, weight 500, <code>C.textPrimary</code></td></tr>
+  <tr><td>Подзаголовок</td><td>«Список пуст: живых чатов нет, архив не считается.» — 13.5px, <code>C.textSecondary</code>, max-width 280, gap 8 от заголовка</td></tr>
+  <tr><td>Кнопки</td><td>ряд flex, gap 8, <code>margin-top:12</code> от подзаголовка; «Открыть архив» — ghost; «Создать первый чат» — primary (только глобальный список)</td></tr>
+  <tr><td>Обводка блока</td><td><code>padding:40</code> (EmptyState default), центрирование по вертикали панели</td></tr>
+</table>
+
+<!-- ============================================================ 2 -->
+<h2 class="sec">2. Плашка у открытого архивного чата</h2>
+<p class="note">
+  Архивный чат открывается из раздела «Архив» и по прямой ссылке. Над лентой — плашка состояния:
+  тон нейтральный (<code>C.bgInset</code>), потому что архив — не ошибка и не предупреждение.
+  Текст задачи — «Этот чат в архиве», одной строкой, без пояснения: кнопка рядом сама объясняет,
+  что делать. Иконка — тот же <code>archive</code>, приглушённая (<code>C.textMuted</code>): плашка
+  не должна перетягивать внимание с ленты.
+</p>
+
+<div class="stage" style="max-width:760px">
+  <p class="cap">Отдельно</p>
+  <div class="banner">
+    <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+    <span class="txt">Этот чат в архиве</span>
+    <button class="btn sm secondary">
+      <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+      Вернуть из архива
+    </button>
+  </div>
+</div>
+
+<div class="stage" style="max-width:760px">
+  <p class="cap">Как стоит над лентой</p>
+  <div class="island">
+    <div class="island-head">Черновик письма в yar.net</div>
+    <div class="island-body" style="padding:12px">
+      <div class="banner" style="margin-bottom:12px">
+        <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        <span class="txt">Этот чат в архиве</span>
+        <button class="btn sm secondary">Вернуть из архива</button>
+      </div>
+      <div style="font-size:13px; color:var(--c-text-secondary); padding:0 4px 10px">
+        <p style="margin:0 0 10px"><b style="color:var(--c-text-heading)">Вы:</b> Составь письмо провайдеру про скоростной интернет.</p>
+        <p style="margin:0">Готово, черновик ниже. Но, честно говоря, звонок будет быстрее — у них почта отвечает сутками.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Контейнер</td><td>flex, gap 10, <code>padding:10px 14px</code>, фон <code>C.bgInset</code>, рамка 1px <code>C.border</code>, R=12, отступ от ленты 12 снизу</td></tr>
+  <tr><td>Иконка</td><td>lucide <code>archive</code>, 22px, <code>C.textMuted</code></td></tr>
+  <tr><td>Текст</td><td>«Этот чат в архиве» — 13px, weight 600, <code>C.textHeading</code>, <code>flex:1</code> (прижимает кнопку вправо)</td></tr>
+  <tr><td>Кнопка</td><td>«Вернуть из архива» — <code>Button</code> variant secondary, size sm; иконка <code>archive-restore</code> 13px</td></tr>
+  <tr><td>Мобиле</td><td>wrap: текст занимает строку целиком, кнопка — новой строкой в полную ширину (см. секцию 4)</td></tr>
+</table>
+
+<!-- ============================================================ 3 -->
+<h2 class="sec">3. Тост «Чат убран в архив» с действием «Отменить»</h2>
+<p class="note">
+  Человек нажал «Убрать в архив» в меню карточки — чат исчез из списка, и единственное окно вернуть
+  его не глядя — тост. Каркас повторяет <code>NotificationToasts</code>: та же карточка
+  <code>C.bgCard</code> + 1px <code>C.border</code> + R=12 + <code>SHADOW.dropdown</code>, тот же
+  стек в правом верхнем углу (<code>top:14; right:14</code>, <code>z-index: Z.modal+10</code>,
+  автоскрытие 8 с, не больше 4 штук). Отличие одно: вместо диплинка — действие «Отменить»
+  акцентным текстом: это главное действие тоста, поэтому accent здесь уместен по дисциплине.
+</p>
+
+<div class="stage">
+  <p class="cap">Стек тостов (правый верхний угол вьюпорта)</p>
+  <div class="toaststack">
+    <div class="toast">
+      <div class="tic">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+      </div>
+      <div class="tt">Чат убран в архив</div>
+      <button class="undo">Отменить</button>
+      <button class="x" title="Закрыть">
+        <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Контейнер</td><td>flex, gap 12, выравнивание по центру, <code>padding:13px 15px</code>, <code>C.bgCard</code>, рамка 1px <code>C.border</code>, R=12, <code>SHADOW.dropdown</code>, max-width 360</td></tr>
+  <tr><td>Иконка</td><td>плитка 36×36, R=10, фон <code>C.bgSelected</code>, внутри lucide <code>archive</code> 15px цветом <code>C.textMuted</code></td></tr>
+  <tr><td>Текст</td><td>«Чат убран в архив» — 13px, weight 700, <code>C.textHeading</code>, <code>flex:1</code></td></tr>
+  <tr><td>Действие</td><td>«Отменить» — текстовая кнопка 12px, weight 600, <code>C.accent</code>; hover — фон <code>C.accentLight</code></td></tr>
+  <tr><td>Закрытие</td><td>иконка <code>x</code> 13px, <code>C.textMuted</code> (та же, что в NotificationToasts)</td></tr>
+  <tr><td>Позиция и таймер</td><td>правый верхний угол, <code>top/right:14</code>, <code>z-index: Z.modal+10</code>; автоскрытие 8 с — как у всех тостов стека</td></tr>
+  <tr><td>«Отменить»</td><td>возвращает чат из архива (тот же PUT /archived) и гасит тост немедленно; подтверждающего тоста нет — чат просто появляется в списке</td></tr>
+</table>
+
+<!-- ============================================================ 4 -->
+<h2 class="sec">4. Мобильная раскладка (390 CSS px)</h2>
+<p class="note">
+  Нижний ориентир — 360 CSS: все три состояния сверстаны так, чтобы ничего не ломалось и там.
+  Правила: кнопки пустого состояния встают в столбец в полную ширину (в строке 360 две кнопки не
+  набирают комфортной цели нажатия); плашка переносит кнопку на новую строку; тост занимает всю
+  ширину минус поля (<code>max-width: min(360px, 100vw − 28px)</code> — уже заложено в стеке).
+</p>
+
+<div class="phones">
+  <div class="phone">
+    <div class="pbar">Чаты</div>
+    <div class="plabel">Пустой список, глобальный</div>
+    <div class="empty" style="min-height:300px; padding:24px">
+      <div class="ico">
+        <svg class="ic-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+      </div>
+      <h3>Все чаты в архиве</h3>
+      <div class="sub">Список пуст: живых чатов нет, архив не считается.</div>
+      <div class="actions" style="flex-direction:column; width:100%; max-width:280px">
+        <button class="btn ghost" style="width:100%; padding:10px 14px">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+          Открыть архив
+        </button>
+        <button class="btn primary glow" style="width:100%; padding:10px 14px">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          Создать первый чат
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="pbar">Черновик письма в yar.net</div>
+    <div class="plabel">Плашка архивного чата</div>
+    <div class="pbody">
+      <div class="banner" style="flex-wrap:wrap">
+        <svg class="ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        <span class="txt">Этот чат в архиве</span>
+        <button class="btn sm secondary" style="width:100%; padding:9px 14px; justify-content:center">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>
+          Вернуть из архива
+        </button>
+      </div>
+    </div>
+    <div class="plabel">Тост</div>
+    <div class="pbody" style="padding-top:0">
+      <div class="toast" style="max-width:none">
+        <div class="tic">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+        </div>
+        <div class="tt">Чат убран в архив</div>
+        <button class="undo">Отменить</button>
+        <button class="x" title="Закрыть">
+          <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ 5 -->
+<h2 class="sec">5. Сводка по токенам</h2>
+<p class="note">
+  Все значения ниже уже существуют в <code>design.ts</code> / <code>theme.css</code> — новых цветов,
+  размеров и теней не заведено. Тёмная тема переключается теми же CSS-переменными, ручных
+  переопределений ни одно из трёх состояний не требует: проверь переключателем в шапке.
+</p>
+<table class="spec">
+  <tr><th>Состояние</th><th>Токены</th></tr>
+  <tr><td>Пустое состояние</td><td><code>C.bgPanel</code> / <code>C.accent</code> (иконка), <code>C.textPrimary</code> / <code>C.textSecondary</code> (текст), ghost-кнопка <code>C.textSecondary</code> → hover <code>C.bgSelected</code>, primary <code>C.accent</code> + <code>C.onAccent</code> + <code>SHADOW.button</code></td></tr>
+  <tr><td>Плашка</td><td><code>C.bgInset</code> (фон), <code>C.border</code> (рамка), <code>C.textMuted</code> (иконка), <code>C.textHeading</code> (текст), кнопка secondary <code>C.bgWhite</code> / <code>C.border</code></td></tr>
+  <tr><td>Тост</td><td><code>C.bgCard</code>, <code>C.border</code>, <code>SHADOW.dropdown</code>, плитка <code>C.bgSelected</code> + <code>C.textMuted</code>, действие <code>C.accent</code>, закрытие <code>C.textMuted</code></td></tr>
+  <tr><td>Размеры</td><td>Радиусы 8/10/12/16 из <code>R</code>; отступы 8/10/12/13/14/15/24/40 из сетки <code>SP</code> (13/15 — уже принятый шаг тостов стека); шрифты 12/13/13.5/21 — существующие точки шкалы и <code>EmptyState</code></td></tr>
+</table>
+
+</div>
+
+<script>
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.getElementById('tl').classList.toggle('on', t === 'light');
+  document.getElementById('td').classList.toggle('on', t === 'dark');
+}
+</script>
+</body>
+</html>

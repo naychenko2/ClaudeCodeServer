@@ -18,6 +18,8 @@ import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
+import { archiveApi } from '../api/chats';
+import { isArchivedChat } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { C, FONT } from '../lib/design';
@@ -954,8 +956,49 @@ const windowWidth = useWindowWidth();
     }
   };
 
+  // ЕДИНСТВЕННАЯ точка реакции на обновление сессии: обновляем activeSession и —
+  // если только что ушёл в архив АКТИВНЫЙ чат — уводим центр на соседа и
+  // показываем тост с «Отменить». Сюда стекаются оба пути архивации:
+  //   • ChatHeaderBar.handleArchive → ChatPanel.onSessionUpdated → handleSessionUpdated
+  //   • ChatCard.handleArchive (в SessionList) → SessionList.handleSessionUpdated
+  //     → прокидывает сюда через onSessionUpdated, если id совпал с активной
+  // Гейт по `!isArchivedChat(prev)`: повторный апдейт уже-архивного чата
+  // (realtime `chat_archived` от другой вкладки) реакцию не запускает —
+  // уводить центр и тостить второй раз бессмысленно. Соседа ищем через
+  // api.sessions.list: своего списка у воркспейса нет (чаты держит SessionList),
+  // локальный запрос дешёвый и не требует поднимать новое состояние наверх.
   const handleSessionUpdated = (updated: Session) => {
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
+    if (updated.id !== activeSession?.id) return;
+    if (!isArchivedChat(updated)) return;
+    const prev = activeSession;
+    if (prev && !isArchivedChat(prev)) {
+      // Реакция асинхронная: сосед берётся из полного списка сессий проекта,
+      // без него найти первого неархивного чата воркспейс не может (свой стейт
+      // чатов не ведёт). 409 от бэка — в тост как есть; сам факт сетевой
+      // ошибки пользователю важнее, чем наша обёртка.
+      void api.sessions.list(project.id).then(list => {
+        const neighbor = list.find(s => s.id !== updated.id && !isArchivedChat(s));
+        if (neighbor) handleSelectSession(neighbor);
+        else handleClearSession();
+        showToast(
+          'Чат убран в архив',
+          `«${updated.name ?? 'Без названия'}» больше не в общем списке.`,
+          'info',
+          {
+            label: 'Отменить',
+            onClick: async () => {
+              try {
+                const fresh = await archiveApi.setArchived(updated.id, false);
+                handleSessionUpdated(fresh);
+              } catch (e) {
+                showToast('Архив', e instanceof Error ? e.message : 'Не удалось вернуть чат из архива');
+              }
+            },
+          },
+        );
+      }).catch(() => { /* офлайн — без соседа, без тоста; карточка в SessionList подтянется */ });
+    }
   };
 
   // Дефолт-персона проекта (руководитель): рабочее пространство она не гейтует

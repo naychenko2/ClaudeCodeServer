@@ -1,5 +1,6 @@
 import type { Session } from '../types';
 import { api } from './api';
+import { updateChat as wallUpdateChat } from '../features/wall/wallStore';
 
 // Единая точка обновления полей чата.
 //
@@ -42,9 +43,15 @@ export function updateChatFields(session: Session, patch: ChatFieldsPatch): Prom
     ...(patch.voiceStyle !== undefined && { voiceStyle: patch.voiceStyle }),
     ...(patch.archived !== undefined && { archived: patch.archived }),
   };
-  return session.projectId
+  const done = session.projectId
     ? api.sessions.update(session.projectId, session.id, data)
     : api.chats.update(session.id, data);
+  // Архив снимает чат со «Стены»: архивный чат скрыт из списков и молчит, колонка стала бы
+  // призраком. Сервер это уже гарантирует (MyWallController не резолвит архивные), но
+  // состав живёт в модульном сторе — без этого монета висела бы до перезагрузки экрана.
+  // Точка одна на все места архивации (список чатов, шапка чата, шапка колонки стены);
+  // стор сам игнорит чат вне набора, поэтому вызов дёшев и идемпотентен.
+  return patch.archived === undefined ? done : done.then(s => { wallUpdateChat(s); return s; });
 }
 
 // Сосед архивируемого чата в списке: на кого переключить центр, когда активный чат

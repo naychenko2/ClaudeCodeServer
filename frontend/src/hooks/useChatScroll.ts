@@ -18,6 +18,11 @@ try {
   }
 } catch { /* localStorage недоступен */ }
 
+// Последняя измеренная высота композера — стартовое значение для следующего чата.
+// Иначе лента каждый раз открывается с запасом в 96px, а через кадр композер домеряет
+// свои ~180 и область прокрутки ужимается: открытие чата даёт рывок снизу.
+let _lastComposerH = 96;
+
 // Скролл-механика ленты чата: прилипание к низу, восстановление позиции чтения
 // после перезагрузки страницы, автоскролл в конец при открытии чата, измерение
 // высоты плавающего composer и кнопка «вниз».
@@ -29,7 +34,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   const contentRef = useRef<HTMLDivElement>(null);
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
   const composerWrapRef = useRef<HTMLDivElement>(null);
-  const [composerH, setComposerH] = useState(96);
+  const [composerH, setComposerH] = useState(_lastComposerH);
   // Прилипание к низу: автоскролл при новых сообщениях, пока лента «приклеена» к концу.
   // ГЛАВНЫЙ ИНВАРИАНТ: отклеивает ленту ТОЛЬКО жест пользователя (колесо, тач, клавиши,
   // перетаскивание полосы). Программные сдвиги геометрии — composer домерил свою высоту
@@ -109,7 +114,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   useEffect(() => {
     const el = composerWrapRef.current;
     if (!el) return;
-    const update = () => setComposerH(el.offsetHeight);
+    const update = () => { _lastComposerH = el.offsetHeight; setComposerH(el.offsetHeight); };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);

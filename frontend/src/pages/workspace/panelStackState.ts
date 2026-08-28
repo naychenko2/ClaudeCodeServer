@@ -973,6 +973,8 @@ export interface PanelZonesApi {
 
 export type PanelZonesStore = { use: () => PanelZonesApi };
 
+const panelZoneChannels = new Map<PanelZonesStore, { listeners: Set<() => void>; snapshot: PanelZones }>();
+
 // Фабрика независимого инстанса: своё состояние в замыкании + свой ключ
 // localStorage cc_{ns}_zones. Инстансы создаются на уровне модуля (ниже),
 // поэтому чтение localStorage происходит при импорте — как было до зон.
@@ -1039,7 +1041,13 @@ function createPanelZones(ns: string, opts?: {
   })());
 
   const listeners = new Set<() => void>();
-  function emit() { listeners.forEach(l => l()); }
+  function emit() {
+    listeners.forEach(l => l());
+    // Внешние подписчики (эфир видео): снапшот обязан обновиться ДО их вызова,
+    // иначе читающий получил бы прежнее состояние — «панель ещё открыта»
+    const chan = panelZoneChannels.get(api);
+    if (chan) { chan.snapshot = _zones; chan.listeners.forEach(l => l()); }
+  }
   function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 
   // Открыватели смонтированных зон (см. registerOpener): по одному на сторону.
@@ -1065,7 +1073,6 @@ function createPanelZones(ns: string, opts?: {
     zoneKeysListeners.add(l);
     return () => { zoneKeysListeners.delete(l); };
   }
-
 
   function persist() {
     // exclusive/activeSide/сигналы — runtime: в localStorage не пишем,
@@ -1324,7 +1331,11 @@ function createPanelZones(ns: string, opts?: {
     return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
   }
 
-  return { use: usePanelZones };
+  const api = { use: usePanelZones };
+  // Канал внешней подписки (subscribePanelZones): снапшот сразу, не дожидаясь
+  // первого emit — читающий может спросить раньше любого рендера
+  panelZoneChannels.set(api, { listeners: new Set(), snapshot: _zones });
+  return api;
 }
 
 // Инстанс воркспейса — ключ cc_ws_zones, миграция со старых cc_ws_panels_* /

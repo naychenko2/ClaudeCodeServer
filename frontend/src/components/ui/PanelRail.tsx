@@ -4,6 +4,7 @@ import { C, FONT, FS, ISLAND, R, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { Menu, MenuItem } from './Menu';
 import { CountBadge, type BadgeTone } from './CountBadge';
+import { Dot } from './Dot';
 import { PanelDropLine } from './PanelDropGuide';
 import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 import { RailHat, RAIL_HAT_H } from './RailHat';
@@ -47,6 +48,9 @@ export interface RailItem {
   // В ящике «…» не рисуется и в сумму ящика не входит.
   badgeSecondary?: number | null;
   badgeSecondaryTone?: BadgeTone;
+  // Точка-индикатор вместо числа: «за этой кнопкой что-то идёт прямо сейчас».
+  // Рисуется на месте основного кружка и по тем же правилам гаснет у крестика.
+  dot?: BadgeTone;
   // Подзаголовок тултипа-плашки: расшифровка чисел. Строка — одна линия с оранжевой
   // точкой (как primary); массив линий — каждая со своим тоном под кружок на иконке
   // (accent/primary, muted/secondary). Не задан — плашка из одной строки (как раньше).
@@ -462,6 +466,15 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
                 читается как часть действия, а не как содержимое панели */}
             {item.badge && !closing && !pinning
               ? <RailBadge value={item.badge} tone={item.badgeTone ?? 'accent'} />
+              : null}
+            {/* Точка «идёт сейчас» — только когда числа нет: два индикатора в одном
+                углу слиплись бы в пятно */}
+            {!item.badge && item.dot && !closing && !pinning
+              ? (
+                <span style={{ position: 'absolute', top: -3, right: -4, display: 'flex' }}>
+                  <Dot color={item.dot === 'muted' ? C.textMuted : item.dot === 'warning' ? C.warning : C.accent} size={8} />
+                </span>
+              )
               : null}
             {/* Второй индикатор — в нижнем углу, под основным. Тот же регламент:
                 при закрытии/закреплении гаснет вместе с основным, чтобы у крестика/булавки

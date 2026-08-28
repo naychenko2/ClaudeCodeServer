@@ -1,5 +1,6 @@
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { frameVisible, useAudioBusy } from './useVideoFrame';
+import { useVideoPlayerState } from '../../lib/videoStage';
 import { useVideoSlot } from './useVideoSlot';
 import type { VideoChannel } from '../../types';
 
@@ -21,7 +22,8 @@ import type { VideoChannel } from '../../types';
  */
 export function VideoStage({ channel }: { channel: VideoChannel }) {
   const audioBusy = useAudioBusy();
-  const visible = frameVisible(channel, audioBusy);
+  const player = useVideoPlayerState();
+  const visible = frameVisible(channel, audioBusy, player.paused);
   const { frameRef } = useVideoSlot('center', true);
 
   return (
@@ -44,7 +46,7 @@ export function VideoStage({ channel }: { channel: VideoChannel }) {
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: C.onDark, fontFamily: FONT.sans, fontSize: FS.sm, textAlign: 'center', padding: SP.lg,
           }}>
-            {audioBusy ? 'Эфир приостановлен — идёт разговор' : 'Эфир приостановлен'}
+            {player.paused ? 'Пауза' : audioBusy ? 'Эфир приостановлен — идёт разговор' : 'Эфир приостановлен'}
           </div>
         )}
       </div>

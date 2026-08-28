@@ -71,6 +71,9 @@ export interface RailBadgeInfo {
   // неопубликованные коммиты — оранжевые (требуют пуша)
   primaryTone?: BadgeTone;
   secondaryTone?: BadgeTone;
+  // Точка без числа: не «сколько чего-то», а «что-то ИДЁТ прямо сейчас» (эфир в
+  // «Видео»). Числовой кружок здесь врал бы — считать нечего, а «1» читается как счётчик.
+  dot?: BadgeTone;
   hint?: RailHint;
 }
 

@@ -7,6 +7,7 @@ import {
   setVideoCenterBlocked, getVideoCenterBlocked, setPanelChannel, getPanelChannel,
   clampRect, FLOAT_MIN_W, FLOAT_HEADER_H,
   setVideoSlot, getVideoSlots, videoFramePlace,
+  getVideoPlayerState, setVideoPlayerState,
 } from '../videoStage';
 import type { VideoChannel } from '../../types';
 
@@ -23,6 +24,48 @@ beforeEach(() => {
   setPanelChannel(null);
   setVideoSlot('panel', null);
   setVideoSlot('center', null);
+  setVideoPlayerState(false, false);
+});
+
+// Плеер один на продукт (живой кадр всегда один), и его кнопки живут в сторе:
+// пауза у эфира — снятие кадра, у ролика — команда; смена канала чистит состояние,
+// иначе новый канал приезжал бы с чужой паузой.
+describe('состояние плеера', () => {
+  it('пауза и тишина читаются и пишутся', () => {
+    setVideoPlayerState(true, true);
+    expect(getVideoPlayerState()).toEqual({ paused: true, muted: true });
+
+    setVideoPlayerState(false, true);
+    expect(getVideoPlayerState()).toEqual({ paused: false, muted: true });
+  });
+
+  it('смена канала панели сбрасывает паузу и тишину', () => {
+    setPanelChannel(ch('a'));
+    setVideoPlayerState(true, true);
+    setPanelChannel(ch('b'));
+    expect(getVideoPlayerState()).toEqual({ paused: false, muted: false });
+  });
+
+  it('тот же канал в другом режиме состояние не трогает', () => {
+    setPanelChannel(ch('a'));
+    setVideoPlayerState(true, false);
+    setVideoStage(ch('a'), 'center');
+    expect(getVideoPlayerState()).toEqual({ paused: true, muted: false });
+  });
+
+  it('смена канала развёрнутого кадра тоже сбрасывает', () => {
+    setVideoStage(ch('a'), 'center');
+    setVideoPlayerState(true, true);
+    setVideoStage(ch('b'), 'center');
+    expect(getVideoPlayerState()).toEqual({ paused: false, muted: false });
+  });
+
+  it('возврат кадра в панель сохраняет состояние — канал тот же', () => {
+    setVideoStage(ch('a'), 'float');
+    setVideoPlayerState(true, false);
+    setVideoStage(null);
+    expect(getVideoPlayerState()).toEqual({ paused: true, muted: false });
+  });
 });
 
 // Центр, занятый файлом или задачей. Дыра, ради которой это тестируется: раньше

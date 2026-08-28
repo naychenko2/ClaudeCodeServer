@@ -854,6 +854,7 @@ export function PanelZone({
     badgeTone: bd?.primaryTone,
     badgeSecondary: bd?.secondary ?? null,
     badgeSecondaryTone: bd?.secondaryTone,
+    dot: bd?.dot,
     hint: bd?.hint,
     // Иконку можно не только нажать, но и утащить в раскладку: клик открывает
     // панель туда, куда решит зона, а перетаскивание — ровно на выбранное место.

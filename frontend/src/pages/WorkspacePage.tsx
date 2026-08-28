@@ -8,6 +8,7 @@ import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
+import { useVideoPlaying } from '../lib/videoStage';
 import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { SESSION_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
@@ -543,6 +544,8 @@ const windowWidth = useWindowWidth();
     // держат стек свежим дальше — здесь лишь первая подтяжка
     void loadUnpushedLog(project.id);
   }, [project.id]);
+  // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
+  const videoPlaying = useVideoPlaying();
   const railBadges = useMemo<Partial<Record<PanelKey, RailBadgeInfo>>>(() => {
     // «Изменения»: основной кружок — незафиксированные файлы (дедуп по пути), второй
     // (серый) — незапушенные коммиты. hint расшифровывает оба в тултипе кнопки
@@ -593,8 +596,11 @@ const windowWidth = useWindowWidth();
         secondaryTone: 'warning',
         hint: previewHint.length > 0 ? previewHint : undefined,
       },
+      // Точка на кнопке «Видео», пока идёт эфир: панель можно закрыть, а звук остаётся —
+      // без метки он шёл бы из ниоткуда и гасить его было бы нечем
+      video: videoPlaying ? { dot: 'accent', hint: 'эфир идёт' } : undefined,
     };
-  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices, extLinks]);
+  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices, extLinks, videoPlaying]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);

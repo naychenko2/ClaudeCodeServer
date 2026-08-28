@@ -70,8 +70,27 @@ export const archiveRuleApi = {
       body: JSON.stringify({ days }),
     }),
 
-  // Кнопка «Применить сейчас»: один проход правила по всем сферам владельца
-  // (включая накопившиеся старые чаты). Устанавливает User.ArchiveRuleFirstRunAt —
+  // Сохранить порог ПРОЕКТА (Project.ArchiveAfterDays). days=null — наследовать
+  // личный порог владельца. Настройка проекта живёт отдельно от личной: в диалоге
+  // проекта человек настраивает именно этот порог, а не свой. Ответом приходит
+  // проект целиком — читаем из него только сам порог.
+  setProjectDays: (projectId: string, days: number | null) =>
+    request<{ archiveAfterDays: number | null }>(
+      `/projects/${encodeURIComponent(projectId)}/archive-days`,
+      { method: 'PUT', body: JSON.stringify({ days }) },
+    ),
+
+  // Один проход правила по ОДНОМУ проекту — запускается сохранением порога в его
+  // настройках (отдельной кнопки «Применить сейчас» нет). 404 — чужой или
+  // несуществующий проект, 400 с человеческим текстом — флаг выключен.
+  runNowForProject: (projectId: string) =>
+    request<{ archived: number; batchId: string | null }>(
+      `/projects/${encodeURIComponent(projectId)}/archive-run`,
+      { method: 'POST' },
+    ),
+
+  // Один проход правила по всем сферам владельца (включая накопившиеся старые
+  // чаты) — путь чатов ВНЕ проектов. Устанавливает User.ArchiveRuleFirstRunAt —
   // гейт фонового тика.
   runNow: () =>
     request<{ archived: number; batchId: string | null }>(`/chats/archive-run`, { method: 'POST' }),

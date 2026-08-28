@@ -241,7 +241,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // Грань десктопа за флагом: без него секции нет — включать нечего, сервер откажет
   const desktopEnabled = useFeature(FLAGS.desktopAgent);
   // Автоправило архива (флаг chat-auto-archive): закрывает ТОЛЬКО настройку правила
-  // и кнопку «Применить сейчас». Ручной архив, раздел «Архив» и сводка карточки
+  // и запускаемый ею проход. Ручной архив, режим «Архивные» и сводка карточки
   // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
   const autoArchiveEnabled = useFeature(FLAGS.chatAutoArchive);
   const me = useMe();
@@ -277,13 +277,13 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       .catch(() => {});
   }, [view, promptParts, project.id]);
 
-  // Настройка автоправила архива: личный порог и признак первого прохода
-  // (User.ArchiveAfterDays и User.ArchiveRuleFirstRunAt — оба per-user, не проект).
-  // Грузим один раз при открытии диалога под флагом: при выключенном флаге блок
-  // не рисуется и запрос слать незачем. Превью счётчика внутри ArchiveSettings
-  // ходит в свой эндпоинт с дебаунсом и сам обновляется при изменении порога.
+  // Настройка автоправила архива. Настраивается порог ПРОЕКТА
+  // (Project.ArchiveAfterDays); личный User.ArchiveAfterDays нужен только как
+  // унаследованный дефолт, пока у проекта своего порога нет — за ним и ходим
+  // один раз при открытии диалога под флагом (без флага блок не рисуется,
+  // и запрос слать незачем). Превью счётчика внутри ArchiveSettings ходит в свой
+  // эндпоинт с дебаунсом и сам обновляется при изменении порога.
   const [archiveDays, setArchiveDays] = useState<number | null>(null);
-  const [archiveHasFirstRun, setArchiveHasFirstRun] = useState<boolean>(false);
   const [archiveLoaded, setArchiveLoaded] = useState(false);
   useEffect(() => {
     if (!autoArchiveEnabled || archiveLoaded) return;
@@ -292,7 +292,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       .then(r => {
         if (cancelled) return;
         setArchiveDays(r.archiveAfterDays);
-        setArchiveHasFirstRun(r.hasFirstRun);
         setArchiveLoaded(true);
       })
       .catch(() => { if (!cancelled) setArchiveLoaded(true); });
@@ -576,16 +575,16 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         />
       )}
       <ProjectSyncToggle projectId={project.id} online={online} />
-      {/* Настройка автоправила архива (флаг chat-auto-archive). Скоуп превью —
-          чаты этого проекта: проектный ArchiveSettings всё равно опирается на личный
-          порог User.ArchiveAfterDays (он же дефолт для проектов без своего).
-          Рисуем только после загрузки настройки: иначе первоначальный null
-          мелькает состоянием «правило выключено» до прихода ответа. */}
+      {/* Настройка автоправила архива (флаг chat-auto-archive). Порог и проход —
+          по ЭТОМУ проекту; личный порог показываем лишь как унаследованный дефолт,
+          пока у проекта нет своего. Рисуем только после загрузки настройки: иначе
+          первоначальный null мелькает состоянием «правило выключено» до прихода
+          ответа. Проход завершился — закрываем диалог. */}
       {autoArchiveEnabled && archiveLoaded && (
         <ArchiveSettings
-          initialDays={archiveDays}
-          hasFirstRun={archiveHasFirstRun}
+          initialDays={project.archiveAfterDays ?? archiveDays}
           projectId={project.id}
+          onArchiveDone={onClose}
         />
       )}
     </Modal>

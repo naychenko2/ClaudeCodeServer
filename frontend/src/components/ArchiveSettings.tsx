@@ -1,8 +1,9 @@
 // Настройка автоправила архивации чатов (план «Архив чатов» v4, шаг 6, флаг
 // chat-auto-archive). ВЕСЬ блок рисуется только при включённом флаге — ручной
-// архив, раздел «Архив» и сводка карточки работают и без тумблера. Здесь же
-// кнопка «Применить сейчас», которая запускает первый проход по накопившимся
-// старым чатам — фоновый тик правила их сам не трогает, решение человека.
+// архив, режим «Архивные» и сводка карточки работают и без тумблера.
+// Сохранение порога И ЕСТЬ запуск: отдельной кнопки «Применить сейчас» нет —
+// «Сохранить» пишет порог и тут же прогоняет правило по накопившимся чатам,
+// иначе залежи так и лежат в списке (фоновый тик их не трогает).
 
 import { useEffect, useState } from 'react';
 import { Archive } from 'lucide-react';
@@ -12,16 +13,17 @@ import { C, FONT, R } from '../lib/design';
 import { Button } from './ui';
 
 interface Props {
-  // Текущее значение порога (дней без активности) из User.ArchiveAfterDays.
-  // null — правило выключено. Источник истины — сервер, фронт лишь
-  // оптимистично отражает ввод.
+  // Текущее значение порога (дней без активности): у проекта — его собственный
+  // Project.ArchiveAfterDays (или унаследованный личный, пока своего нет), вне
+  // проекта — User.ArchiveAfterDays. null — правило выключено. Источник истины —
+  // сервер, фронт лишь оптимистично отражает ввод.
   initialDays: number | null;
-  // Был ли уже первый проход: если нет, кнопка «Применить сейчас» сразу после
-  // сохранения порога — иначе только как повторный запуск.
-  hasFirstRun: boolean;
-  // Чьи чаты считаются превью: null = чаты вне проекта (личная сфера),
-  // id проекта — чаты этого проекта (принадлежность проверяет бэкенд).
+  // Чей порог настраиваем и чьи чаты считаются превью: null = чаты вне проекта
+  // (личная сфера), id проекта — чаты этого проекта (владение проверяет бэкенд).
   projectId?: string | null;
+  // Проход правила завершился — хозяин блока (диалог проекта) закрывает себя.
+  // Сам блок про диалог ничего не знает.
+  onArchiveDone?: () => void;
 }
 
 // Дефолт для порога при первом включении: 30 дней. Подсказка под полем даёт
@@ -30,7 +32,7 @@ interface Props {
 const DEFAULT_DAYS = 30;
 const DAY_OPTIONS: number[] = [7, 14, 30, 60, 90];
 
-export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: Props) {
+export function ArchiveSettings({ initialDays, projectId = null, onArchiveDone }: Props) {
   // Локальный черновик порога: хранится в UI, в стор пишем по «Сохранить» (или
   // сейчас, если перешли с невалидного значения). При первом включении правила
   // стартуем с дефолтом — пока человек не настроил, пусть видит рабочее значение.
@@ -42,10 +44,15 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
   // Превью не посчиталось (сеть/сервер) — показываем честную ошибку, а не «0 чатов»
   const [previewError, setPreviewError] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [running, setRunning] = useState(false);
+  // Идёт «Сохранить»: запись порога плюс сразу проход правила. Отдельно от
+  // saving (тумблер) — у кнопки свой индикатор и свой текст состояния.
+  const [applying, setApplying] = useState(false);
   // Включено ли правило сейчас: false — поле и кнопки погашены. Отдельно от
   // days: пользователь мог сбросить days=null, и мы это отразим здесь.
   const [enabled, setEnabled] = useState<boolean>(initialDays !== null);
+
+  // Блок занят: идёт запись порога тумблером или «Сохранить» с проходом правила
+  const busy = saving || applying;
 
   useEffect(() => {
     setDays(initialDays ?? DEFAULT_DAYS);
@@ -73,13 +80,20 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
     return () => { cancelled = true; clearTimeout(t); };
   }, [days, enabled, projectId]);
 
-  // Сохранить порог правила. enabled=true — шлём days как есть; enabled=false —
-  // сброс (days=null в User.ArchiveAfterDays). Ответом приходит текущее
-  // серверное значение, которое кладём в local-черновик, чтобы UI не отстал.
-  const save = async (nextEnabled: boolean) => {
+  // Записать порог. В проекте пишем в Project.ArchiveAfterDays, вне проекта — в
+  // личный User.ArchiveAfterDays: в диалоге проекта личный порог трогать нельзя,
+  // иначе настройка одного проекта меняет правило всех остальных.
+  const writeDays = (next: number | null) =>
+    projectId
+      ? archiveRuleApi.setProjectDays(projectId, next)
+      : archiveRuleApi.setDays(next);
+
+  // Тумблер правила: только запись порога (или сброс), без прохода — человек
+  // включил блок, чтобы настроить, а не чтобы прямо сейчас всё убрать в архив.
+  const toggle = async (nextEnabled: boolean) => {
     setSaving(true);
     try {
-      const r = await archiveRuleApi.setDays(nextEnabled ? days : null);
+      const r = await writeDays(nextEnabled ? days : null);
       setEnabled(r.archiveAfterDays !== null);
       if (r.archiveAfterDays !== null) setDays(r.archiveAfterDays);
       showToast('Автоправило архива', nextEnabled ? 'Порог сохранён' : 'Правило выключено', 'info');
@@ -90,23 +104,30 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
     }
   };
 
-  // Кнопка первого прохода: «Применить сейчас». Запускает один проход правила,
-  // снимает гейт фонового тика (User.ArchiveRuleFirstRunAt). Повторный клик —
-  // ещё один проход, никакого «уже сделано»: правило фоновое, ручной прогон
-  // пригодится после крупного завоза старых чатов.
-  const runNow = async () => {
-    setRunning(true);
+  // «Сохранить» = согласие: пишем порог и тут же прогоняем правило по этой сфере.
+  // Успех (в том числе «убрано 0») закрывает диалог, ошибка — оставляет открытым
+  // и разблокирует кнопку, чтобы человек мог повторить.
+  const saveAndRun = async () => {
+    setApplying(true);
     try {
-      const r = await archiveRuleApi.runNow();
-      // Число «0» тоже успех — правило пробежало, под отбор ничего не попало.
-      const noun = r.archived === 0
-        ? 'Под правило ничего не попало'
-        : `В архив ушло чатов: ${r.archived}`;
-      showToast('Автоправило архива', noun, 'info');
+      const saved = await writeDays(days);
+      setEnabled(saved.archiveAfterDays !== null);
+      if (saved.archiveAfterDays !== null) setDays(saved.archiveAfterDays);
+      const r = projectId
+        ? await archiveRuleApi.runNowForProject(projectId)
+        : await archiveRuleApi.runNow();
+      showToast(
+        'Автоправило архива',
+        r.archived > 0
+          ? `Убрано в архив ${r.archived} ${pluralChats(r.archived)}`
+          : 'Под правило пока ничего не подпадает',
+        'info',
+      );
+      onArchiveDone?.();
     } catch (e) {
-      showToast('Автоправило архива', e instanceof Error ? e.message : 'Не удалось применить', 'info');
+      showToast('Автоправило архива', e instanceof Error ? e.message : 'Не удалось убрать чаты в архив', 'info');
     } finally {
-      setRunning(false);
+      setApplying(false);
     }
   };
 
@@ -131,11 +152,11 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
         <input
           type="checkbox"
           checked={enabled}
-          disabled={saving}
-          onChange={e => { void save(e.target.checked); }}
+          disabled={busy}
+          onChange={e => { void toggle(e.target.checked); }}
           // Стандартный чекбокс: кастомный контрол рисовать не нужно, реестр
           // ui-кита чекбоксов не даёт; нативный в этом контексте читается ясно
-          style={{ width: 16, height: 16, accentColor: C.accent, flexShrink: 0, cursor: saving ? 'wait' : 'pointer' }}
+          style={{ width: 16, height: 16, accentColor: C.accent, flexShrink: 0, cursor: busy ? 'wait' : 'pointer' }}
         />
       </div>
 
@@ -155,29 +176,42 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <select
             value={days}
-            disabled={saving}
+            disabled={busy}
             onChange={e => setDays(Number(e.target.value))}
             style={{
               fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary,
               padding: '6px 28px 6px 10px', borderRadius: R.md,
               border: `1px solid ${C.border}`, background: C.bgWhite,
-              cursor: saving ? 'wait' : 'pointer', minWidth: 100,
+              cursor: busy ? 'wait' : 'pointer', minWidth: 100,
             }}
           >
             {DAY_OPTIONS.map(d => (
               <option key={d} value={d}>{d} {pluralDays(d)}</option>
             ))}
           </select>
-          <Button variant="secondary" size="sm" loading={saving} onClick={() => void save(true)}>
+          {/* «Сохранить» — главное действие блока: пишет порог и сразу убирает
+              подпавшие чаты в архив. Пока идёт проход — блокировка с индикатором
+              и текст состояния рядом, чтобы пауза не читалась как «ничего не
+              произошло»: диалог закроется сам по завершении. */}
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy}
+            disabled={busy}
+            onClick={() => void saveAndRun()}
+          >
             Сохранить
           </Button>
+          {applying && (
+            <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>
+              Убираю чаты в архив…
+            </span>
+          )}
         </div>
       )}
 
-      {/* Счётчик превью + кнопка первого прохода. Кнопка появляется сразу
-          после сохранения порога (или если правило уже было включено), и
-          остаётся доступной как повторный запуск. Текст кнопки и подписи —
-          дословно из docs/product/archive-chats.md. */}
+      {/* Счётчик превью: сколько чатов этой сферы подпадёт под текущий порог.
+          Отдельной кнопки прохода рядом нет — проход запускает «Сохранить». */}
       {enabled && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{
@@ -190,19 +224,6 @@ export function ArchiveSettings({ initialDays, hasFirstRun, projectId = null }: 
                 ? 'Не удалось посчитать, сколько чатов подпадёт'
                 : `Под правило подпадёт ${previewCount ?? 0} ${pluralChats(previewCount ?? 0)}`}
           </span>
-          <Button
-            variant="primary"
-            size="sm"
-            loading={running}
-            onClick={() => void runNow()}
-            // Первый прогон — hasFirstRun=false, текст подсказывает «начать»;
-            // после первого прохода остаётся как повторный запуск
-            title={hasFirstRun
-              ? 'Прогнать правило ещё раз прямо сейчас'
-              : 'Запустить первый проход правила'}
-          >
-            Применить сейчас
-          </Button>
         </div>
       )}
     </div>

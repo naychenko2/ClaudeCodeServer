@@ -107,6 +107,35 @@ export const isChatRunning = (c: Session, bgWorkIds?: ReadonlySet<string>) =>
 export const formatGroupCount = (n: number) => (n > 99 ? '99+' : String(n));
 
 /**
+ * Исходное множество ПЛЮС все предки его участников — наследование признака вверх по
+ * ветке (значок «правки не зафиксированы»: родитель отвечает за работу потомков).
+ * Обход по той же связи parentSessionId, по которой строится дерево, иначе значок
+ * разошёлся бы с нарисованной иерархией.
+ *
+ * Считать нужно по ПОЛНОМУ списку чатов проекта, а не по отфильтрованному: предок,
+ * скрытый фильтром, всё равно остаётся звеном цепочки к видимому прародителю.
+ * seen обрывает циклы в данных (их же сторожит buildChatTree) и заодно не даёт
+ * переобходить общие участки веток.
+ */
+export function withAncestors(chats: Session[], ids: ReadonlySet<string>): Set<string> {
+  if (ids.size === 0) return new Set();
+  const parentOf = new Map<string, string>();
+  for (const c of chats) {
+    const pid = c.parentSessionId;
+    if (pid && pid !== c.id) parentOf.set(c.id, pid);
+  }
+  const out = new Set<string>();
+  for (const id of ids) {
+    let cur: string | undefined = id;
+    while (cur && !out.has(cur)) {
+      out.add(cur);
+      cur = parentOf.get(cur);
+    }
+  }
+  return out;
+}
+
+/**
  * Все потомки чата (без него самого) — запретные цели при перетаскивании: вложить
  * чат в собственного потомка значило бы замкнуть кольцо. Бэкенд это тоже отклоняет
  * (SessionManager.SetParent), здесь — чтобы drop-зона просто не подсвечивалась.

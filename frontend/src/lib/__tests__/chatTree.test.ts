@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatTreeRows, collectDescendants, formatGroupCount, splitChatTreeByRoots } from '../chatTree';
+import { buildChatTreeRows, collectDescendants, formatGroupCount, splitChatTreeByRoots, withAncestors } from '../chatTree';
 import type { Session } from '../../types';
 
 // Фабрика минимальной сессии: важны только id/parentSessionId/updatedAt/origin/isPinned
@@ -318,5 +318,45 @@ describe('collectDescendants', () => {
     const chats = [mk('a', { parentSessionId: 'a' }), mk('b', { parentSessionId: 'a' })];
 
     expect(collectDescendants(chats, 'a')).toEqual(new Set(['b']));
+  });
+});
+
+// Наследование признака вверх по ветке: значок «правки не зафиксированы» у родителя,
+// если он есть у любого потомка на любой глубине. Обход по тому же parentSessionId,
+// по которому строится дерево, — иначе значок разошёлся бы с нарисованной иерархией.
+describe('withAncestors — наследование признака вверх по ветке', () => {
+  it('поднимает признак от внука до корня через всех промежуточных', () => {
+    const chats = [mk('root'), mk('mid', { parentSessionId: 'root' }), mk('leaf', { parentSessionId: 'mid' })];
+
+    expect(withAncestors(chats, new Set(['leaf']))).toEqual(new Set(['leaf', 'mid', 'root']));
+  });
+
+  it('соседнюю ветку не задевает', () => {
+    const chats = [
+      mk('root'),
+      mk('a', { parentSessionId: 'root' }),
+      mk('b', { parentSessionId: 'root' }),
+      mk('b-kid', { parentSessionId: 'b' }),
+    ];
+
+    expect(withAncestors(chats, new Set(['a']))).toEqual(new Set(['a', 'root']));
+  });
+
+  it('пустое множество остаётся пустым — значков нет ни у кого', () => {
+    expect(withAncestors([mk('root'), mk('kid', { parentSessionId: 'root' })], new Set())).toEqual(new Set());
+  });
+
+  it('чат вне списка (родитель отфильтрован из выборки) не роняет обход', () => {
+    expect(withAncestors([mk('root')], new Set(['ghost']))).toEqual(new Set(['ghost']));
+  });
+
+  it('цикл в данных не зацикливает обход', () => {
+    const chats = [mk('a', { parentSessionId: 'b' }), mk('b', { parentSessionId: 'a' })];
+
+    expect(withAncestors(chats, new Set(['a']))).toEqual(new Set(['a', 'b']));
+  });
+
+  it('чат, ссылающийся сам на себя, не считается своим предком дважды', () => {
+    expect(withAncestors([mk('self', { parentSessionId: 'self' })], new Set(['self']))).toEqual(new Set(['self']));
   });
 });

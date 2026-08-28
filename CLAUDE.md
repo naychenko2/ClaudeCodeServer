@@ -324,13 +324,18 @@ node-процесса нет вовсе (замер: 30 продуктовых n
 **Каталог MCP-серверов** (флаг `mcp-catalog`) — поиск по официальному реестру
 `registry.modelcontextprotocol.io` + предзаполнение формы из декларации `server.json`.
 Каталог — источник предложения, а не доверия: маппер режет всё неподдержанное (remotes только
-https, npm с точным semver и `runtimeHint: npx|пусто`, allow-list `runtimeArguments` = `-y`,
-отказ секрета в argv/URL, чёрный список env), каталожная запись заводится выключенной и несёт
-`McpCatalogRef` (без нового enum-значения Source — откат кода не должен уносить стор в
-`.corrupt`). Гейты: SSRF-фильтр пробы, пока `Url` совпадает с импортированным, и два
-подтверждения с полной строкой запуска у stdio-записи local-владельца — проба
-(`{ confirmed: true }`, тело опциональное) и включение в проекте (`mcpCatalogConfirmed`).
-Пустой `Mcp:Catalog:BaseUrl` — каталог выключен. Подробности — раздел «Каталог MCP-серверов»
+https, npm с точным semver и `runtimeHint: npx|пусто`, pypi → `uvx` с именем по правилам PyPI
+(PEP 503) и ПУСТЫМ allow-list рантайм-флагов — `--from`/`--with`/`--index*` подменяют источник
+пакета, как `--registry` у npx; отказ секрета в argv/URL, чёрный список env), каталожная
+запись заводится выключенной и несёт `McpCatalogRef` (без нового enum-значения Source — откат
+кода не должен уносить стор в `.corrupt`). Гейты: SSRF-фильтр пробы, пока `Url` совпадает с
+импортированным, и два подтверждения с полной строкой запуска у stdio-записи local-владельца —
+проба (`{ confirmed: true }`, тело опциональное) и включение в проекте (`mcpCatalogConfirmed`).
+Ревизия импортированных записей — отдельный `POST /api/mcp/catalog/revision`: плашка
+«отозван» ТОЛЬКО по явному `status: deprecated/deleted` в разобранном ответе (404/таймаут/5xx
+→ «проверить не удалось», сторож в тестах — лежащий preview-сервис не выключает рабочие
+серверы), кэш суток на имя, только имена владельца с `CatalogRef`. Пустой `Mcp:Catalog:BaseUrl`
+— каталог выключен. Подробности — раздел «Каталог MCP-серверов»
 в [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md), план —
 [docs/research/mcp-catalog-plan.md](docs/research/mcp-catalog-plan.md).
 

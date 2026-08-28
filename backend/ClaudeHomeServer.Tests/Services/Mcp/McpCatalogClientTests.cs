@@ -1,7 +1,6 @@
 using System.Net;
 using ClaudeHomeServer.Services.Mcp.Catalog;
 using FluentAssertions;
-using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Tests.Services.Mcp;
 
@@ -59,14 +58,14 @@ public class McpCatalogClientTests
         if (respond is not null) handler.Respond = respond;
         else handler.Respond = _ => new HttpResponseMessage(status) { Content = new StringContent(body) };
         var time = new MutableTimeProvider();
-        var options = Options.Create(new McpCatalogOptions
+        var options = new McpCatalogOptions
         {
             BaseUrl = "https://registry.example",
             PageSize = 20,
             CacheMinutes = 30,
             CacheMaxEntries = 8,
             MaxQueryLength = 100,
-        });
+        };
         return (new McpCatalogClient(new StubFactory(handler), options, time), handler, time);
     }
 
@@ -88,7 +87,7 @@ public class McpCatalogClientTests
     public void Пустой_адрес_каталог_выключен()
     {
         var client = new McpCatalogClient(new StubFactory(new StubHandler()),
-            Options.Create(new McpCatalogOptions()));
+            new McpCatalogOptions());
         client.IsEnabled.Should().BeFalse();
     }
 
@@ -129,7 +128,7 @@ public class McpCatalogClientTests
             Respond = _ => throw new TaskCanceledException("запрос не уложился в таймаут"),
         };
         var client = new McpCatalogClient(new StubFactory(slow),
-            Options.Create(new McpCatalogOptions { BaseUrl = "https://registry.example" }));
+            new McpCatalogOptions { BaseUrl = "https://registry.example" });
         var act = () => client.SearchAsync("q", null);
         await act.Should().ThrowAsync<McpCatalogUnavailableException>()
             .WithMessage("*не отвечает*");

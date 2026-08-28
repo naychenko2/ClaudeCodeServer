@@ -62,6 +62,12 @@ public static class BackupPaths
             && fileName.Equals(Mcp.McpStatusStore.FileName, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // Кеш карт планов (место plan-map): восстанавливается одним вызовом по кнопке
+        // «Собрать схему» — в облачный архив не едет
+        if (segments.Length == 1
+            && fileName.Equals(Llm.PlanMapService.CacheFileName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
         // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
         // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
         if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;

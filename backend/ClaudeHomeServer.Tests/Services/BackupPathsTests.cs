@@ -87,6 +87,13 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void КешКартПланов_Исключен()
+    {
+        // Карта восстановима одним вызовом по кнопке «Собрать схему» — кеш, не данные
+        BackupPaths.ShouldInclude("plan-maps.json").Should().BeFalse();
+    }
+
+    [Fact]
     public void РеестрPid_Исключен()
     {
         // Восстановленный список PID заставил бы следующий старт убить по протухшим

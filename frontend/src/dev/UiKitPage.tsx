@@ -7,7 +7,7 @@
 // ВСЕ визуальные значения — из токенов design.ts (C, FS, SP, ISLAND) и
 // компонентов ui/. Ни одного hex-литерала: lint:design проходит зелёным.
 
-import { useState, useEffect, type CSSProperties, Fragment } from 'react';
+import { useState, useEffect, useRef, type CSSProperties, Fragment } from 'react';
 import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
@@ -24,6 +24,7 @@ import {
   ChevronRight, Folder,
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
+  Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
 import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
@@ -31,7 +32,9 @@ import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from '../components/StatusIndicator';
 import { ProviderLimitCard } from '../components/chat/ChatItemView';
-import type { Session, ChatItem, Persona } from '../types';
+import type { Session, ChatItem, Persona, PlanMap } from '../types';
+import { MarkdownContent } from '../components/chat/MarkdownContent';
+import { PlanScheme } from '../components/plan/PlanScheme';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
@@ -45,10 +48,13 @@ import {
   TextField, TextArea, IconField, Field, FieldLabel,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout,
 } from '../components/ui';
+import { InlineSegmented } from '../components/ui/InlineSegmented';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import { EmptyState } from '../components/EmptyState';
+import { PlanRemarks } from '../features/plan/PlanRemarks';
+import { showToast } from '../lib/toast';
 import type {
   ButtonVariant, ButtonSize,
   IconButtonSize, IconButtonTone, IconButtonVariant,
@@ -112,6 +118,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-islands',    label: 'Острова и холст'   },
   { id: 'sec-colors',     label: 'Цвета'             },
   { id: 'sec-panels',     label: 'Панели'             },
+  { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
 ];
 
@@ -247,6 +254,14 @@ export function UiKitPage() {
             {/* Секция «Панели» — правая рельса + левые сайдбары + чаты + тона */}
             <div id="sec-panels" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <PanelsSection />
+            </div>
+
+            {/* Секция «Визуальный разворот плана» — карточка плана + живая схема на
+                фиктивной карте. Демо без живого ExitPlanMode и без вызова модели:
+                карта уже собрана (статичный JSON ниже), остаётся переключать
+                уровни и проверять разворот. */}
+            <div id="sec-visual-plan" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <VisualPlanSection />
             </div>
 
             {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
@@ -3239,5 +3254,565 @@ function ToolbarAndEmptySection() {
         </SubBlock>
       </div>
     </Island>
+  );
+}
+
+// === Секция «Визуальный разворот плана» ============================
+// Демо карточки плана и фиктивной PlanMap для приёмки без живой модели и без
+// plan-режима. Раньше QA не могла проверить разворот схемой: карточка плана
+// рождается только от ExitPlanMode, и без живого режима планирования на
+// стенде проверить нечего. Здесь весь сценарий живёт без сети: карта —
+// статичный JSON, разворот строится по клику в PlanScheme, на «Блок»
+// показывается настоящий markdown раздела через sliceSection.
+//
+// План содержит два одноимённых раздела «Дизайн» и два «Тесты» — главный
+// кейс починки: для второй итерации дизайна / стабилизации уровень «Блок»
+// должен показать СВОЁ тело, а не тело первого одноимённого. Один из
+// заголовков несёт inline-жирный (`**Ключевой** поворот`) — это проверка
+// stripInlineMarkdown в sliceSection.
+//
+// Демо намеренно насыщено контейнерами, на которых алгоритм поиска
+// заголовка для замечания ломался дважды: маркированный и нумерованный
+// списки, кодовый блок, таблица, цитата со вложенным списком, вложенный
+// список, разделы из нескольких абзацев подряд. Конструкции лежат внутри
+// существующих разделов, заголовки и порядок не меняются.
+const VISUAL_PLAN_DEMO_TEXT = [
+  '# План: перевод воркспейса на новые раскладки',
+  '',
+  '## Введение',
+  '',
+  'Сейчас воркспейс живёт на старой раскладке. Переезд большой, но без него',
+  'дальше расти нельзя: место кончилось и по вертикали, и по семантике.',
+  '',
+  'Сначала опишем, что меняем, потом — как проверим результат. Каждый',
+  'раздел плана самодостаточен, но связан с остальными: дизайн диктует',
+  'тесты, тесты закрепляют дизайн.',
+  '',
+  'Контракт с заказчиком: ритм не меняем, добавляем слоты под новые острова.',
+  '',
+  '## Дизайн',
+  '',
+  'Главное — сохранить текущий ритм: левая рельса, центральный остров,',
+  'правая рельса. На десктопе всё так же, на мобиле — те же две колонки.',
+  '',
+  'Правила, которые держим в первой итерации:',
+  '',
+  '- левая рельса остаётся рельсой, а не сворачивается в шапку;',
+  '- центральный остров — единственное место для контента шире 480px;',
+  '  - вложенное правило: внутри острова — только один активный слот;',
+  '  - и только один цвет акцента на весь экран;',
+  '- правая рельса переезжает на мобиле в нижний шелл;',
+  '- акцент остаётся только у одного действия на экране.',
+  '',
+  '### **Ключевой** поворот',
+  '',
+  'Внутри острова появятся дополнительные слоты под новые острова.',
+  '',
+  'Пример слота, который встанет в остров:',
+  '',
+  '```tsx',
+  '<div className="island" data-slot="chat">',
+  '  <SlotHost kind="chat" />',
+  '  <SlotHost kind="artifacts" />',
+  '</div>',
+  '```',
+  '',
+  '## Тесты',
+  '',
+  'Сначала визуальные проверки на текущей раскладке, потом — e2e.',
+  '',
+  'Что гоняем в первую очередь:',
+  '',
+  '1. Скриншот-тест главного экрана на ширине 360 и 1280.',
+  '2. Переключение рельсы на мобиле через свайп.',
+  '3. Появление слота в острове при длинном контенте.',
+  '4. Регресс по замечаниям к плану.',
+  '',
+  '## Дизайн',
+  '',
+  'Вторая итерация дизайна — мобильная. Здесь выкатим новую раскладку',
+  'и проверим её на всех целевых устройствах.',
+  '',
+  '| Устройство        | Ширина | Режим         |',
+  '|-------------------|--------|---------------|',
+  '| Маленький телефон | 360    | компактный    |',
+  '| Fold в развороте  | 720    | планшетный    |',
+  '| Десктоп           | 1280   | полная        |',
+  '',
+  '## Тесты',
+  '',
+  'После второй итерации — регрессии и стабилизация.',
+  '',
+  '> Решения по регрессиям принимает владелец фичи. Спорные места',
+  '> фиксируем списком, чтобы не размазывать ответственность:',
+  '>',
+  '> - цвет акцента не уезжает за пределы одного действия;',
+  '> - рельса не съедает более 30% ширины на мобиле;',
+  '> - замечания к плану собираются через `PlanRemarks`.',
+  '',
+  '## Заключение',
+  '',
+  'К концу релиза обе раскладки синхронизированы.',
+  '',
+  'Переход идёт в три волны: сначала витрина, затем чат, в конце —',
+  'файловое дерево. Каждая волна закрывается регрессией и стабилизацией.',
+  '',
+  'После третьей волны старая раскладка уходит в архив, новая остаётся',
+  'единственным источником истины. Откат возможен до закрытия релиза.',
+].join('\n');
+
+// Фиктивная PlanMap: 6 блоков, два из которых ссылаются на вторые вхождения
+// «Дизайн» и «Тесты» (anchorIndex=1). Граница одна — у «Заключение», оно
+// уйдёт в блок «Чего этот план не делает» на «Сути».
+const VISUAL_PLAN_DEMO_MAP: PlanMap = {
+  genre: 'framework',
+  oneLine: 'Перевести воркспейс на новые раскладки с сохранением ритма.',
+  numbers: [
+    { value: '6', label: 'разделов' },
+    { value: '2', label: 'итерации дизайна' },
+  ],
+  blocks: [
+    { id: 'b1', title: 'Введение',                 type: 'step',      flags: [],                          anchor: 'Введение',    anchorIndex: 0, dependsOn: [] },
+    { id: 'b2', title: 'Дизайн — десктоп',         type: 'step',      flags: ['needs-decision'],          anchor: 'Дизайн',      anchorIndex: 0, dependsOn: ['b1'] },
+    { id: 'b3', title: 'Дизайн — мобила',          type: 'step',      flags: ['expands-scope'],           anchor: 'Дизайн',      anchorIndex: 1, dependsOn: ['b2'] },
+    { id: 'b4', title: 'Тесты — регрессии',        type: 'criterion', flags: ['blocking'],                 anchor: 'Тесты',       anchorIndex: 0, dependsOn: ['b2'] },
+    { id: 'b5', title: 'Тесты — стабилизация',     type: 'criterion', flags: ['review-fix'],              anchor: 'Тесты',       anchorIndex: 1, dependsOn: ['b3'] },
+    { id: 'b6', title: 'Согласование с владельцем', type: 'boundary', flags: [],                          anchor: 'Заключение',  anchorIndex: 0, dependsOn: [] },
+  ],
+};
+
+function VisualPlanSection() {
+  // Реф на контейнер, в котором живут и PlanScheme, и скрытый исходный
+  // markdown. useHeadings в PlanScheme ищет h1–h6 по этому рефу —
+  // без скрытого слоя он вернул бы [], и весь разворот выродился бы в
+  // жанр/фразу/числа (та самая починка Critical 1).
+  const planRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={
+          <Network
+            size={ICON_SIZE.md}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.accent, flexShrink: 0 }}
+          />
+        }
+        title="Визуальный разворот плана"
+        badge="visual-plan"
+      />
+      <div style={{
+        padding: ISLAND.pad,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: ISLAND.gap,
+      }}>
+        <p style={{
+          margin: 0, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5,
+          fontFamily: FONT.sans,
+        }}>
+          Демо карточки плана (ожидает) и живой схемы на фиктивной карте.
+          Карта уже собрана — без модели и без plan-режима; все три уровня
+          («Суть», «Карта», «Блок») переключаются кликом. План содержит
+          два «Дизайн» и два «Тесты» — для второго вхождения уровень
+          «Блок» должен показать СВОЁ тело, а не первое.
+        </p>
+
+        {/* === SubBlock 1: карточка плана (ожидает) === */}
+        {/* Живая копия PlanReviewView без контекста проекта и без бэкенда:
+            переключатель «Текстом/Схемой», кнопка сборки с тремя состояниями,
+            слой замечаний с маркерами у заголовков, кнопки решения с
+            локальной обработкой и сменой акцента при появлении замечаний.
+            Сборка — имитация через setTimeout: успех кладёт VISUAL_PLAN_DEMO_MAP,
+            «имитация отказа» переключает следующий билд в failed. */}
+        <SubBlock label="Карточка плана — статус «ожидает», живой PlanRemarks и сборка">
+          <VisualPlanCardDemo />
+        </SubBlock>
+
+        {/* === SubBlock 2: разворот схемой на фиктивной карте === */}
+        <SubBlock label="Разворот схемой — три уровня и блок внимания (живой PlanScheme)">
+          <div ref={planRef} style={{
+            position: 'relative',
+            background: C.bgWhite, border: `1px solid ${C.border}`,
+            borderRadius: R.lg, padding: '12px 14px',
+            maxHeight: 520, overflow: 'auto',
+            fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+          }}>
+            {/* Скрытый исходный план нужен PlanScheme: useHeadings берёт
+                заголовки из реального DOM. Узлы в DOM, но вне потока —
+                aria-hidden снимает со скринридеров (контент уже виден
+                через схему). */}
+            <div aria-hidden="true" style={{
+              position: 'absolute', top: 0, left: 0,
+              width: 1, height: 1, opacity: 0,
+              overflow: 'hidden', pointerEvents: 'none',
+            }}>
+              <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+            </div>
+            <PlanScheme
+              map={VISUAL_PLAN_DEMO_MAP}
+              planText={VISUAL_PLAN_DEMO_TEXT}
+              contentRef={planRef}
+            />
+          </div>
+          <p style={{
+            margin: `${SP.sm}px 0 0`,
+            fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5,
+          }}>
+            Что проверить руками: «Суть» показывает 4 пункта внимания
+            («нужно решение», «расширяет рамку», «блокирует», «проверить
+            починку») — каждый ведёт в свой блок. На «Карте» строки
+            «Дизайн — мобила» и «Тесты — стабилизация» — вторые одноимённые
+            разделы, при открытии «Блок» показывают СВОЁ тело. Граница
+            «Согласование с владельцем» — отдельный блок внимания
+            «Чего этот план не делает».
+          </p>
+        </SubBlock>
+      </div>
+    </Island>
+  );
+}
+
+// === Демо карточки плана для витрины =====================================
+// Копия PlanReviewView без контекста проекта и без бэкенда. Задача — сделать
+// приёмку фичи через витрину без живого ExitPlanMode: переключатель «Текстом/
+// Схемой», кнопка сборки с тремя состояниями (идёт → готово → не удалось),
+// живой слой замечаний с маркерами у заголовков и счётчиком, кнопки решения
+// с локальной обработкой и сменой акцента при появлении замечаний.
+//
+// Сборка имитируется через setTimeout: успех кладёт VISUAL_PLAN_DEMO_MAP,
+// «имитация отказа» переключает следующий билд в failed — так видны все
+// три состояния.
+function VisualPlanCardDemo() {
+  const planBodyRef = useRef<HTMLDivElement>(null);
+
+  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>('text');
+  const [map, setMap] = useState<PlanMap | null>(null);
+  const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
+  const [schemeError, setSchemeError] = useState<string | null>(null);
+  const [simulateFail, setSimulateFail] = useState(false);
+
+  const [remarksCount, setRemarksCount] = useState(0);
+  const [rejecting, setRejecting] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  async function buildScheme() {
+    if (schemeStatus === 'building') return;
+    setSchemeStatus('building');
+    setSchemeError(null);
+    await new Promise<void>(resolve => window.setTimeout(resolve, 600));
+    if (simulateFail) {
+      setMap(null);
+      setSchemeError('Схему собрать не удалось — план открыт текстом, замечания работают.');
+      setSchemeStatus('failed');
+      // Сборка провалилась — план возвращается на текст. Плашка с тем же
+      // текстом покажется над телом, чтобы сообщение не разошлось с тем,
+      // что человек видит (раньше карточка оставалась в режиме «Схемой»
+      // и показывала пустоту).
+      setSchemeView('text');
+      return;
+    }
+    setMap(VISUAL_PLAN_DEMO_MAP);
+    setSchemeStatus('ready');
+  }
+
+  function handleSchemeViewChange(v: 'text' | 'scheme') {
+    setSchemeView(v);
+    // После отказа человек мог вручную вернуться в «Схемой». Сбрасываем
+    // статус в idle, чтобы тело показало «Нажмите собрать», а не плашку —
+    // иначе плашка и подсказка конкурировали бы за одно и то же место.
+    if (v === 'scheme' && schemeStatus === 'failed') {
+      setSchemeStatus('idle');
+      setSchemeError(null);
+    }
+  }
+
+  function retryScheme() {
+    // Кнопка «Попробовать снова» из плашки: явно возвращает в режим схемы
+    // и сразу запускает сборку — buildScheme сам переведёт статус в
+    // building и развернёт лоадер.
+    setSchemeView('scheme');
+    void buildScheme();
+  }
+
+  function approve() {
+    // Локальный «обработчик» витрины: тост и сброс. Боевой approve живёт
+    // только в PlanReviewView (через onRespond), тут его нет.
+    showToast(
+      remarksCount > 0
+        ? `Одобрено: ${remarksCount} ${remarksCount === 1 ? 'замечание' : remarksCount < 5 ? 'замечания' : 'замечаний'} потеряны`
+        : 'План одобрен',
+      'В бою ушло бы через /api/plans/respond.',
+    );
+    setRejecting(false);
+    setFeedback('');
+  }
+
+  function reject() {
+    // В PlanReviewView здесь был бы textarea; в витрине достаточно тоста,
+    // чтобы приёмщик увидел ветку «есть форма».
+    showToast(
+      feedback.trim() ? `Отправлено: «${feedback.trim().slice(0, 80)}…»` : 'Отклонено без комментария',
+      'В бою ушло бы через /api/plans/respond.',
+    );
+    setRejecting(false);
+    setFeedback('');
+  }
+
+  return (
+    <div style={{
+      border: `1px solid ${C.planBorder}`,
+      borderLeft: `4px solid ${C.plan}`,
+      borderRadius: R.xl, padding: '14px 16px',
+      background: C.bgCard, boxShadow: SHADOW.card,
+      display: 'flex', flexDirection: 'column', gap: SP.md,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <span style={{
+          width: 28, height: 28, borderRadius: R.md, background: C.plan,
+          flexShrink: 0, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          <ClipboardList size={15} color={C.onAccent} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontFamily: FONT.serif, fontSize: 15, fontWeight: 700,
+            color: C.textHeading, lineHeight: 1.2,
+          }}>
+            План готов
+          </div>
+          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+            Ассистент предлагает план. Файлы пока не изменялись.
+          </div>
+        </div>
+        <span style={{
+          flexShrink: 0, background: C.planLight, color: C.planText,
+          borderRadius: R.sm, padding: '2px 8px',
+          fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+        }}>
+          v1 · на согласовании
+        </span>
+      </div>
+
+      {/* Переключатель + кнопка сборки + служебный тоггл «имитировать отказ» */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap',
+      }}>
+        <InlineSegmented
+          value={schemeView}
+          onChange={handleSchemeViewChange}
+          options={[
+            { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+              tone: { bg: C.plan, fg: C.onAccent } },
+            { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+              tone: { bg: C.plan, fg: C.onAccent } },
+          ]}
+        />
+        {schemeView === 'scheme' && schemeStatus !== 'ready' && (
+          <Button
+            variant="ghostFilled"
+            size="sm"
+            loading={schemeStatus === 'building'}
+            onClick={buildScheme}
+            leftIcon={schemeStatus === 'building'
+              ? <Loader2 size={12} />
+              : <Network size={12} />}
+          >
+            {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
+          </Button>
+        )}
+        {/* Служебный тоггл — переключает, какой исход вернёт buildScheme:
+            следующий клик «Собрать схему» либо соберёт, либо провалится.
+            Только для приёмки через витрину. */}
+        <label style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          marginLeft: 'auto', cursor: 'pointer',
+          fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans,
+        }}>
+          <input
+            type="checkbox"
+            checked={simulateFail}
+            onChange={e => setSimulateFail(e.target.checked)}
+            style={{ margin: 0 }}
+          />
+          имитация отказа
+        </label>
+      </div>
+
+      {/* Тело карточки: один из вариантов по schemeStatus */}
+      <div style={{ position: 'relative' }}>
+        {schemeView === 'scheme' && schemeStatus === 'ready' && map ? (
+          <div style={{ position: 'relative' }}>
+            <div ref={planBodyRef} style={{
+              background: C.bgWhite, border: `1px solid ${C.border}`,
+              borderRadius: R.lg, padding: '12px 14px',
+              maxHeight: 360, overflow: 'auto',
+              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+            }}>
+              {/* Скрытый исходный markdown — useHeadings берёт заголовки из
+                  реального DOM. Без слоя разворот выродился бы в жанр/фразу/числа. */}
+              <div aria-hidden="true" style={{
+                position: 'absolute', top: 0, left: 0,
+                width: 1, height: 1, opacity: 0,
+                overflow: 'hidden', pointerEvents: 'none',
+              }}>
+                <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+              </div>
+              <PlanScheme
+                map={map}
+                planText={VISUAL_PLAN_DEMO_TEXT}
+                contentRef={planBodyRef}
+              />
+            </div>
+          </div>
+        ) : schemeView === 'scheme' && schemeStatus === 'building' ? (
+          <div style={{
+            background: C.bgInset, border: `1px dashed ${C.border}`,
+            borderRadius: R.lg, padding: '14px', textAlign: 'center',
+            fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}>
+            <Loader2 size={14} style={{ animation: 'cc-spin 1s linear infinite' }} />
+            Собираю схему…
+          </div>
+        ) : schemeView === 'scheme' ? (
+          <div style={{
+            background: C.bgInset, border: `1px dashed ${C.border}`,
+            borderRadius: R.lg, padding: '14px', textAlign: 'center',
+            fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+          }}>
+            Нажмите «Собрать схему», чтобы построить разворот.
+          </div>
+        ) : (
+          <>
+            {/* При отказе сборки — плашка над текстом, а не вместо него.
+                Карточка уже на «Текстом» (см. buildScheme), человек видит
+                и сообщение, и сам план — никакого расхождения. */}
+            {schemeStatus === 'failed' && (
+              <div style={{
+                marginBottom: SP.xs,
+                background: C.warningBg, border: `1px solid ${C.border}`,
+                borderRadius: R.lg, padding: '10px 12px',
+                display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+                fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
+              }}>
+                <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
+                  </div>
+                  <Button variant="ghostFilled" size="xs" onClick={retryScheme} style={{ marginTop: SP.xs }}>
+                    Попробовать снова
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div ref={planBodyRef} style={{
+              background: C.bgWhite, border: `1px solid ${C.border}`,
+              borderRadius: R.lg, padding: '10px 12px',
+              maxHeight: 220, overflow: 'auto',
+              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+            }}>
+              <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Слой замечаний — живой. containerToken=schemeView: при переключении
+          «Текстом ↔ Схемой» ref тот же, но контент другой — без явного токена
+          useHeadings не пересоберёт заголовки, и замечания поедут мимо разделов. */}
+      <PlanRemarks
+        contentRef={planBodyRef}
+        planText={VISUAL_PLAN_DEMO_TEXT}
+        containerToken={schemeView}
+        status="pending"
+        onSubmit={text => showToast('Замечания собраны', `Демо: ${text.slice(0, 60)}…`)}
+        onCountChange={setRemarksCount}
+      />
+
+      {/* Кнопки решения — локальные. При наличии замечаний одобрение
+          уходит в ghostFilled с честной подписью про потерю (та же логика,
+          что в боевой карточке: протокол ClaudeSession.RespondPlan при
+          approve=true не передаёт комментарий). */}
+      {rejecting ? (
+        <div>
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs }}>
+            Ассистент учтёт это и предложит новый план
+          </div>
+          <textarea
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            autoFocus
+            placeholder="Что поправить в плане? (необязательно)"
+            rows={3}
+            style={{
+              width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
+              border: `1px solid ${C.border}`, background: C.bgWhite,
+              padding: '8px 10px', fontSize: FS.sm, color: C.textHeading,
+              fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: SP.xs,
+            }}
+          />
+          <div style={{ display: 'flex', gap: SP.xs }}>
+            <Button fullWidth variant="primary" size="md" onClick={reject}>
+              Переработать план
+            </Button>
+            <Button variant="ghostFilled" size="md" onClick={() => { setRejecting(false); setFeedback(''); }}>
+              Назад
+            </Button>
+          </div>
+        </div>
+      ) : remarksCount > 0 ? (
+        <div>
+          <Button
+            fullWidth
+            variant="ghostFilled"
+            size="md"
+            onClick={approve}
+            style={{ color: C.planText, borderColor: C.planBorder }}
+            leftIcon={<Check size={16} color={C.planText} strokeWidth={2.4} />}
+          >
+            Одобрить и выполнить
+          </Button>
+          <div style={{
+            marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted,
+            textAlign: 'center', lineHeight: 1.35,
+          }}>
+            замечания ({remarksCount}) не отправятся
+          </div>
+          <Button
+            variant="ghostAccent"
+            size="md"
+            fullWidth
+            onClick={() => setRejecting(true)}
+            style={{ color: C.planText, borderColor: C.planBorder, marginTop: SP.xs }}
+          >
+            Отклонить
+          </Button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: SP.xs }}>
+          <Button
+            fullWidth
+            variant="primary"
+            size="md"
+            glow
+            onClick={approve}
+            leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
+          >
+            Одобрить и выполнить
+          </Button>
+          <Button
+            variant="ghostAccent"
+            size="md"
+            onClick={() => setRejecting(true)}
+            style={{ color: C.planText, borderColor: C.planBorder }}
+          >
+            Отклонить
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

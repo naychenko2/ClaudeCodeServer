@@ -11,7 +11,19 @@ import { LIST_FLASH_CLASS, LIST_FLASH_MS } from '../components/ListDateDivider';
 // Логика перенесена из components/artifacts/PlanSection и используется обеими панелями —
 // «План» и «Документы», чтобы оглавление вело себя одинаково.
 
-export interface Heading { level: number; text: string; el: HTMLElement }
+export interface Heading {
+  level: number;
+  text: string;
+  el: HTMLElement;
+  // 0-based порядковый номер заголовка СРЕДИ ОДНОИМЁННЫХ: первый «Тесты»
+  // — 0, второй — 1. Прыжок по такому индексу попадает ровно в то вхождение,
+  // на которое оставлено замечание; подпись «(N-й)» в обратной связи
+  // опирается на этот же счётчик. Считаем ОТДЕЛЬНО от DOM-индекса, потому
+  // что (а) между «Тесты» могут стоять другие разделы — DOM-номер не равен
+  // порядковому, и (б) в оглавление попадают только заголовки с непустым
+  // текстом — в DOM-счётчике были бы дыры, которые путают подпись.
+  occurrence: number;
+}
 
 // Оглавление документа, отданное НАРУЖУ тем, кто этот документ показывает (сейчас —
 // FileViewer центральной области, читает панель «Оглавление»).
@@ -47,23 +59,47 @@ export function headingText(el: HTMLElement): string {
   return (clone.textContent ?? '').trim();
 }
 
+// Сборка оглавления из узлов заголовков. Вынесена из хука чистой функцией, чтобы
+// счётчик вхождений можно было проверить тестом без браузерного окружения.
+export function collectHeadings(nodes: HTMLElement[]): Heading[] {
+  const list: Heading[] = [];
+  // Счётчик вхождений по слагу: одинаковый текст у заголовков даёт
+  // одинаковый слаг, заголовки с пустым текстом сюда не доходят
+  const occurrences = new Map<string, number>();
+  for (const el of nodes) {
+    const text = headingText(el);
+    if (!text) continue;
+    const slug = slugify(text);
+    const occurrence = occurrences.get(slug) ?? 0;
+    occurrences.set(slug, occurrence + 1);
+    list.push({ level: Number(el.tagName[1]), text, el, occurrence });
+  }
+  return list;
+}
+
 // оглавление пересобирается (обычно текст документа)
-export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unknown): Heading[] {
+//
+// `containerToken` — доп. зависимость для случая, когда `contentRef` указывает на
+// ОДИН И ТОТ ЖЕ DOM-узел, но его содержимое меняется (переключение «Текстом ↔ Схемой»
+// в карточке/панели плана: ref стабилен, дети другие). Без токена эффект не
+// перезапустится, и собранный список заголовков зависнет на протухших узлах —
+// `anchorForHeadingEl` их не найдёт, и новое замечание молча уйдёт в
+// «Общее по плану» вместо своего раздела. Передавайте туда значение, которое
+// меняется при смене контейнера (например, текущий режим отображения).
+export function useHeadings(
+  contentRef: RefObject<HTMLElement | null>,
+  dep: unknown,
+  containerToken?: unknown,
+): Heading[] {
   const [headings, setHeadings] = useState<Heading[]>([]);
 
   useEffect(() => {
     const root = contentRef.current;
     if (!root) { setHeadings([]); return; }
-    const list: Heading[] = [];
-    root.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(n => {
-      const el = n as HTMLElement;
-      const text = headingText(el);
-      if (text) list.push({ level: Number(el.tagName[1]), text, el });
-    });
-    setHeadings(list);
+    setHeadings(collectHeadings([...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]));
     // contentRef стабилен между рендерами, пересбор нужен только при смене содержимого
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dep]);
+  }, [dep, containerToken]);
 
   return headings;
 }
@@ -97,21 +133,23 @@ export function scrollToHeading(root: HTMLElement | null, h: Heading): boolean {
   if (!el) return false;
   const scroller = scrollerOf(el);
   if (!scroller) {   // некому прокручивать (документ короче зоны) — только отметим цель
-    flashHeading(root, el);
+    flashHeading(root, el, h.occurrence);
     return true;
   }
 
   const gapOf = (node: HTMLElement) =>
     node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - HEADING_TOP_GAP;
   scroller.scrollBy({ top: gapOf(el), behavior: 'smooth' });
-  holdHeading(root, scroller, h.text, gapOf);
+  holdHeading(root, scroller, h.text, h.occurrence, gapOf);
   return true;
 }
 
-// Удержание цели у кромки, пока документ дорисовывается. Прекращается досрочно, если
+// Удержание цели у кромки, пока документ дорисовывается. Прерывается досрочно, если
 // читатель тронул прокрутку сам: спорить с ним — худшее, что тут можно сделать.
+// occurrence нужен, чтобы удержать именно то вхождение, на которое прыгнули:
+// для одноимённых заголовков первое совпадение по тексту было бы чужим разделом.
 function holdHeading(
-  root: HTMLElement | null, scroller: HTMLElement, text: string,
+  root: HTMLElement | null, scroller: HTMLElement, text: string, occurrence: number,
   gapOf: (node: HTMLElement) => number,
 ): void {
   let timer = 0;
@@ -133,7 +171,7 @@ function holdHeading(
   let steady = 0;
   const tick = () => {
     if (cancelled) return;
-    const live = findHeadingEl(root, text);
+    const live = findHeadingEl(root, text, occurrence);
     // Узла сейчас нет — идёт перерисовка; ждём следующего тика, а не сдаёмся
     if (live) {
       const gap = gapOf(live);
@@ -141,7 +179,7 @@ function holdHeading(
       else { steady = 0; scroller.scrollBy({ top: gap }); }   // доводка без анимации
       if (steady >= 2 || performance.now() >= deadline) {
         cancel();
-        flashHeading(root, live);
+        flashHeading(root, live, occurrence);
         return;
       }
     } else if (performance.now() >= deadline) { cancel(); return; }
@@ -172,9 +210,11 @@ function scrollerOf(el: HTMLElement): HTMLElement | null {
 // в списке документации, — жест поиска цели во всём продукте один и тот же. Зовётся, когда
 // документ уже доехал и устоялся (см. holdHeading): во время прокрутки анимацию глазом не
 // поймать, а взгляд приходит ровно к её концу.
-export function flashHeading(root: HTMLElement | null, el: HTMLElement): void {
+// occurrence нужен для подбора живого узла, если переданный el отвалился при
+// перерисовке: иначе ищем первое совпадение по тексту и подсвечиваем чужой раздел
+export function flashHeading(root: HTMLElement | null, el: HTMLElement, occurrence: number = 0): void {
   // Узел мог смениться на перерисовке — ищем живой по тексту цели
-  const live = el.isConnected ? el : findHeadingEl(root, (el.textContent ?? '').trim());
+  const live = el.isConnected ? el : findHeadingEl(root, (el.textContent ?? '').trim(), occurrence);
   if (!live) return;
   live.classList.add(LIST_FLASH_CLASS);
   window.setTimeout(() => live.classList.remove(LIST_FLASH_CLASS), LIST_FLASH_MS);
@@ -189,20 +229,23 @@ export function flashHeading(root: HTMLElement | null, el: HTMLElement): void {
 // использовали сразу после рендера (якорь ссылки), это не замечалось; панель
 // «Оглавление» живёт рядом с документом часами, и там протухает всё.
 //
-// Поэтому храним заголовок как ТЕКСТ, а узел ищем в момент перехода: тексты при
-// перерисовке те же, слаг совпадает. Прежний узел берём, только пока он в документе.
+// Поэтому храним заголовок как ТЕКСТ+ПОЗИЦИЮ, а узел ищем в момент перехода:
+// тексты при перерисовке те же, слаг совпадает; для одноимённых заголовков
+// occurrence задаёт, какое из вхождений брать (см. Heading.occurrence).
+// Прежний узел берём, только пока он в документе.
 export function resolveHeadingEl(root: HTMLElement | null, h: Heading): HTMLElement | null {
-  return h.el.isConnected ? h.el : findHeadingEl(root, h.text);
+  return h.el.isConnected ? h.el : findHeadingEl(root, h.text, h.occurrence);
 }
 
-// Заголовок с таким текстом среди ЖИВЫХ узлов root. Сверка по слагу — тому же, которым
-// ходят якоря ссылок: разметка внутри заголовка на неё не влияет.
-function findHeadingEl(root: HTMLElement | null, text: string): HTMLElement | null {
+// Заголовок с таким текстом среди ЖИВЫХ узлов root. occurrence — какое по
+// счёту вхождение нужно (по умолчанию первое). Сверка по слагу — тому же,
+// которым ходят якоря ссылок: разметка внутри заголовка на неё не влияет.
+function findHeadingEl(root: HTMLElement | null, text: string, occurrence: number = 0): HTMLElement | null {
   if (!root) return null;
   const slug = slugify(text);
-  const live = [...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]
-    .find(n => slugify((n.textContent ?? '').trim()) === slug);
-  return live ?? null;
+  const matches = [...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]
+    .filter(n => slugify((n.textContent ?? '').trim()) === slug);
+  return matches[occurrence] ?? null;
 }
 
 // Линия отсчёта: раздел считается текущим, когда его заголовок поднялся выше этой

@@ -444,6 +444,9 @@ builder.Services.AddSingleton<SessionSummaryService>();
 // Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов»): one-shot сборка
 // по кнопке с кэшем в Session.ArchiveSummary; «Итог сессии» выше — другой маршрут
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ChatDigestService>();
+// Карта плана (место plan-map, «Визуальный разворот плана» часть B): one-shot слепок плана
+// по кнопке «Собрать схему», кэш data/plan-maps.json
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.PlanMapService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator

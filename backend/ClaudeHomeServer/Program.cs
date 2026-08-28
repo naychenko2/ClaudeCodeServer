@@ -408,6 +408,9 @@ AddHosted<NoteExpiryService>();
 AddHosted<ChangelogWarmupService>();
 // Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
 builder.Services.AddSingleton<TerminalService>();
+// Последний известный порт сервиса: без него живой дев-сервер после перезапуска продукта
+// выглядел бы остановленным, и запуск падал бы на занятом порту
+builder.Services.AddSingleton<DevServerPortMemory>();
 builder.Services.AddSingleton<DevServerService>();
 builder.Services.AddSingleton<LaunchConfigService>();
 builder.Services.AddSingleton<ProjectServiceDiscovery>();

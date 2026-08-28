@@ -137,7 +137,10 @@ public sealed class ProjectServiceDiscovery
         if (svc.Members is not { Length: > 0 }) return svc.SuggestedPort is > 0 ? svc.SuggestedPort : null;
 
         var byId = known.ToDictionary(s => s.Id);
+        // Последний участник, а не первый: в составном запуске сначала идут зависимости,
+        // а приложение, ради которого всё затевалось, ждёт их и стоит в конце
         return svc.Members
+            .Reverse()
             .Select(id => byId.TryGetValue(id, out var m) ? m.SuggestedPort : null)
             .FirstOrDefault(p => p is > 0);
     }

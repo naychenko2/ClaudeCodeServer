@@ -15,6 +15,7 @@ public class PreviewController : ControllerBase
     private readonly ProjectServiceDiscovery _discovery;
     private readonly LaunchConfigService _launch;
     private readonly ExternalPreviewRouter _external;
+    private readonly DevServerPortMemory _portMemory;
     private readonly ExternalPreviewStore _links;
     private readonly JwtService _jwt;
     private readonly ILogger<PreviewController> _log;
@@ -22,13 +23,14 @@ public class PreviewController : ControllerBase
     public PreviewController(ProjectManager projects, DevServerService devServer,
         ProjectServiceDiscovery discovery, LaunchConfigService launch,
         ExternalPreviewRouter external, ExternalPreviewStore links, JwtService jwt,
-        ILogger<PreviewController> log)
+        DevServerPortMemory portMemory, ILogger<PreviewController> log)
     {
         _projects = projects;
         _devServer = devServer;
         _discovery = discovery;
         _launch = launch;
         _external = external;
+        _portMemory = portMemory;
         _links = links;
         _jwt = jwt;
         _log = log;
@@ -57,7 +59,7 @@ public class PreviewController : ControllerBase
         // Сервисы с известным портом, которых мы не запускали, пробуем на слух: порт
         // отвечает — значит сервис поднят снаружи (Rider, терминал, второй инстанс).
         // Скана слушающих портов машины при этом не делаем: щупаем только свои порты.
-        var external = await ProbeExternalAsync(discovered, running);
+        var external = await ProbeExternalAsync(projectId, discovered, running);
 
         var services = new List<ServiceDto>();
         var covered = new HashSet<string>();
@@ -71,11 +73,11 @@ public class PreviewController : ControllerBase
                 continue;
             }
             running.TryGetValue(s.Id, out var run);
-            var isExternal = run is null && external.Contains(s.Id);
+            var isExternal = run is null && external.ContainsKey(s.Id);
             services.Add(new ServiceDto(s.Id, s.Name, s.Source, s.Command, s.Args, s.Cwd,
                 s.SuggestedPort, s.AutoPort, s.Saved,
                 run?.Status ?? (isExternal ? "external" : "idle"),
-                run?.Port ?? (isExternal ? s.SuggestedPort : null),
+                run?.Port ?? (isExternal ? external[s.Id] : null),
                 run?.Error, s.Members));
         }
         // Запущенные сервисы, которых нет в инференсе (напр. кастомная разовая команда).
@@ -95,13 +97,13 @@ public class PreviewController : ControllerBase
     /// Порт берём у первого участника, которому есть что показать в превью.
     /// </summary>
     private static ServiceDto GroupDto(ProjectServiceInfo group, Dictionary<string, ProjectServiceInfo> byId,
-        Dictionary<string, RunningServiceInfo> running, HashSet<string> external)
+        Dictionary<string, RunningServiceInfo> running, Dictionary<string, int> external)
     {
         var members = group.Members!.Where(byId.ContainsKey).ToArray();
         var states = members.Select(id =>
         {
             running.TryGetValue(id, out var run);
-            return run?.Status ?? (external.Contains(id) ? "external" : "idle");
+            return run?.Status ?? (external.ContainsKey(id) ? "external" : "idle");
         }).ToList();
 
         var status = states.Count == 0 ? "idle"
@@ -117,8 +119,10 @@ public class PreviewController : ControllerBase
             : states.Any(s => s is "started" or "external") ? "partial"
             : "idle";
 
+        // Тем же правилом, что и резолв для превью: последний участник — это агрегатор
         var port = members
-            .Select(id => running.TryGetValue(id, out var r) ? r.Port : (external.Contains(id) ? byId[id].SuggestedPort : null))
+            .Reverse()
+            .Select(id => running.TryGetValue(id, out var r) ? r.Port : (external.TryGetValue(id, out var ep) ? ep : (int?)null))
             .FirstOrDefault(p => p is > 0);
         var error = members
             .Select(id => running.TryGetValue(id, out var r) ? r.Error : null)
@@ -132,17 +136,23 @@ public class PreviewController : ControllerBase
     /// Id сервисов, чей порт слушается кем-то со стороны. Пробуем параллельно и только
     /// те порты, которые вычислил discovery: чужие порты машины нас не касаются.
     /// </summary>
-    private static async Task<HashSet<string>> ProbeExternalAsync(
-        List<ProjectServiceInfo> discovered, Dictionary<string, RunningServiceInfo> running)
+    private async Task<Dictionary<string, int>> ProbeExternalAsync(
+        string projectId, List<ProjectServiceInfo> discovered, Dictionary<string, RunningServiceInfo> running)
     {
+        // Порт берём из конфигурации, а если её там нет — из памяти прошлых запусков.
+        // Второй источник нужен ровно после перезапуска продукта: реестр процессов пуст,
+        // сами дев-серверы живы, и без него панель предложила бы запустить сервис поверх
+        // собственного вчерашнего процесса (см. DevServerPortMemory).
         var candidates = discovered
-            .Where(s => s.SuggestedPort is > 0 && !running.ContainsKey(s.Id))
+            .Where(s => !running.ContainsKey(s.Id))
+            .Select(s => (s.Id, Port: s.SuggestedPort is > 0 ? s.SuggestedPort : _portMemory.Get(projectId, s.Id)))
+            .Where(c => c.Port is > 0)
             .ToList();
         if (candidates.Count == 0) return [];
 
-        var results = await Task.WhenAll(candidates.Select(async s =>
-            (s.Id, Listening: await LoopbackResolver.IsListeningAsync(s.SuggestedPort!.Value))));
-        return results.Where(r => r.Listening).Select(r => r.Id).ToHashSet();
+        var results = await Task.WhenAll(candidates.Select(async c =>
+            (c.Id, c.Port, Listening: await LoopbackResolver.IsListeningAsync(c.Port!.Value))));
+        return results.Where(r => r.Listening).ToDictionary(r => r.Id, r => r.Port!.Value);
     }
 
     /// <summary>

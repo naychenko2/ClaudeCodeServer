@@ -78,7 +78,19 @@ export function collectHeadings(nodes: HTMLElement[]): Heading[] {
 }
 
 // оглавление пересобирается (обычно текст документа)
-export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unknown): Heading[] {
+//
+// `containerToken` — доп. зависимость для случая, когда `contentRef` указывает на
+// ОДИН И ТОТ ЖЕ DOM-узел, но его содержимое меняется (переключение «Текстом ↔ Схемой»
+// в карточке/панели плана: ref стабилен, дети другие). Без токена эффект не
+// перезапустится, и собранный список заголовков зависнет на протухших узлах —
+// `anchorForHeadingEl` их не найдёт, и новое замечание молча уйдёт в
+// «Общее по плану» вместо своего раздела. Передавайте туда значение, которое
+// меняется при смене контейнера (например, текущий режим отображения).
+export function useHeadings(
+  contentRef: RefObject<HTMLElement | null>,
+  dep: unknown,
+  containerToken?: unknown,
+): Heading[] {
   const [headings, setHeadings] = useState<Heading[]>([]);
 
   useEffect(() => {
@@ -87,7 +99,7 @@ export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unkn
     setHeadings(collectHeadings([...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]));
     // contentRef стабилен между рендерами, пересбор нужен только при смене содержимого
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dep]);
+  }, [dep, containerToken]);
 
   return headings;
 }
@@ -132,7 +144,7 @@ export function scrollToHeading(root: HTMLElement | null, h: Heading): boolean {
   return true;
 }
 
-// Удержание цели у кромки, пока документ дорисовывается. Прекрещается досрочно, если
+// Удержание цели у кромки, пока документ дорисовывается. Прерывается досрочно, если
 // читатель тронул прокрутку сам: спорить с ним — худшее, что тут можно сделать.
 // occurrence нужен, чтобы удержать именно то вхождение, на которое прыгнули:
 // для одноимённых заголовков первое совпадение по тексту было бы чужим разделом.

@@ -101,7 +101,7 @@ describe('sliceSection', () => {
       '',
     ].join('\n');
     const headings = [makeHeading('Введение', 0)];
-    const sec = sliceSection(plan, headings[0], headings);
+    const sec = sliceSection(plan, headings[0]);
     expect(sec).toContain('## Введение');
     expect(sec).toContain('текст введения');
     expect(sec).not.toContain('## Детали');
@@ -121,7 +121,7 @@ describe('sliceSection', () => {
       'детали шага 2',
     ].join('\n');
     const headings = [makeHeading('Шаг 1', 0)];
-    const sec = sliceSection(plan, headings[0], headings);
+    const sec = sliceSection(plan, headings[0]);
     expect(sec).toContain('## Шаг 1');
     expect(sec).toContain('детали шага');
     expect(sec).not.toContain('Шаг 2');
@@ -142,7 +142,7 @@ describe('sliceSection', () => {
       'другой раздел',
     ].join('\n');
     const headings = [makeHeading('Главный', 0, 2)];
-    const sec = sliceSection(plan, headings[0], headings);
+    const sec = sliceSection(plan, headings[0]);
     expect(sec).toContain('### Подпункт');
     expect(sec).not.toContain('## Следующий');
   });
@@ -159,7 +159,7 @@ describe('sliceSection', () => {
       'прочее',
     ].join('\n');
     const headings = [makeHeading('Шаг — код', 0, 2)];
-    const sec = sliceSection(plan, headings[0], headings);
+    const sec = sliceSection(plan, headings[0]);
     expect(sec).toContain('## Шаг — `код`');
     expect(sec).toContain('текст');
     expect(sec).not.toContain('## Дальше');
@@ -172,14 +172,14 @@ describe('sliceSection', () => {
       'содержимое',
     ].join('\n');
     const headings = [makeHeading('Важный раздел', 0, 2)];
-    const sec = sliceSection(plan, headings[0], headings);
+    const sec = sliceSection(plan, headings[0]);
     expect(sec).toContain('**Важный** раздел');
   });
 
   it('возвращает пустую строку, если заголовок не найден', () => {
     const plan = '# Другой план\n\n## Другой раздел';
     const headings = [makeHeading('Несуществующий', 0, 2)];
-    expect(sliceSection(plan, headings[0], headings)).toBe('');
+    expect(sliceSection(plan, headings[0])).toBe('');
   });
 
   it('берёт раздел до конца плана, если дальше ничего нет', () => {
@@ -189,7 +189,7 @@ describe('sliceSection', () => {
       'хвост',
     ].join('\n');
     const headings = [makeHeading('Последний', 0, 2)];
-    const sec = sliceSection(plan, headings[0], headings);
+    const sec = sliceSection(plan, headings[0]);
     expect(sec).toContain('## Последний');
     expect(sec).toContain('хвост');
   });
@@ -222,7 +222,7 @@ describe('sliceSection', () => {
       makeHeading('Дизайн', 1, 2),
       makeHeading('Заключение', 0, 2),
     ];
-    const second = sliceSection(plan, headings[2], headings);
+    const second = sliceSection(plan, headings[2]);
     expect(second).toContain('тело второго дизайна');
     expect(second).not.toContain('тело первого дизайна');
     expect(second).not.toContain('первые тесты');
@@ -235,7 +235,6 @@ describe('sliceSection', () => {
       '',
       'единственное тело',
     ].join('\n');
-    const headings = [makeHeading('Дизайн', 0, 2)];
-    expect(sliceSection(plan, makeHeading('Дизайн', 5, 2), headings)).toBe('');
+    expect(sliceSection(plan, makeHeading('Дизайн', 5, 2))).toBe('');
   });
 });

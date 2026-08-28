@@ -59,6 +59,11 @@ interface Props {
   contentRef: RefObject<HTMLElement | null>;
   // Исходный markdown плана — пересчёт headings + сборка обратной связи
   planText: string;
+  // Токен контейнера: значение, которое дёргается при смене содержимого внутри
+  // того же contentRef (например, переключение «Текстом ↔ Схемой» в PlanReviewView:
+  // ref указывает на ТОТ ЖЕ DOM-узел, но его дети разные). Без токена useHeadings
+  // не пересоберёт заголовки — и новое замечание молча уйдёт в «Общее по плану».
+  containerToken?: unknown;
   // Замечания доступны только у плана в статусе pending
   status: 'pending' | 'resolved';
   // Колбэк отправки готового текста обратной связи
@@ -165,15 +170,18 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max);
 }
 
-export function PlanRemarks({ contentRef, planText, status, onSubmit, onCountChange }: Props) {
+export function PlanRemarks({ contentRef, planText, containerToken, status, onSubmit, onCountChange }: Props) {
   const [remarks, setRemarks] = useState<PlanRemark[]>([]);
   const [form, setForm] = useState<FormAnchor | null>(null);
   const [draft, setDraft] = useState('');
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
   const [isMobile, setIsMobile] = useState(false);
 
-  // Список заголовков — берём с реального DOM через общий хук
-  const headings = useHeadings(contentRef, planText);
+  // Список заголовков — берём с реального DOM через общий хук. containerToken
+  // нужен родителю, у которого contentRef стабилен, но его содержимое меняется
+  // (например, переключение «Текстом ↔ Схемой» в PlanReviewView): без токена
+  // хук не пересоберёт заголовки, и замечания поедут в «Общее по плану».
+  const headings = useHeadings(contentRef, planText, containerToken);
 
   // Глобальный CSS для кнопок у заголовков и тач-варианта — инжектируем
   // единожды за время жизни компонента

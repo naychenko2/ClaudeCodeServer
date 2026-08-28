@@ -87,21 +87,25 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
   const effIdx = planIdx == null ? plans.length - 1 : Math.min(Math.max(planIdx, 0), plans.length - 1);
   const curPlan = plans[effIdx];
 
+  // Состояние схемы объявляется ДО useHeadings: его значение передаётся
+  // в deps эффекта как containerToken (см. useHeadings) — иначе при
+  // переключении «Текстом ↔ Схемой» заголовки не пересобираются.
+  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>('text');
+  const [map, setMap] = useState<PlanMap | null>(null);
+  const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
+  const [schemeError, setSchemeError] = useState<string | null>(null);
+
   // Оглавление текущего плана + поповер
   const [tocOpen, setTocOpen] = useState(false);
   const planContentRef = useRef<HTMLDivElement>(null);
-  const headings = useHeadings(planContentRef, curPlan?.plan);
+  // containerToken=schemeView: при переключении «Текстом ↔ Схемой» ref тот же,
+  // но контент другой, и без явного токена useHeadings не пересоберёт заголовки.
+  const headings = useHeadings(planContentRef, curPlan?.plan, schemeView);
   // Фича «Визуальный разворот плана»: в панели `requestId` не хранится
   // (PlanArtifact — проекция истории), отправлять через respondPlan нельзя.
   // Слой замечаний работает на сбор: копирует текст обратной связи в буфер
   // обмена, дальше пользователь открывает план в чате и вставляет его туда.
   const visualPlanEnabled = useFeature(FLAGS.visualPlan);
-  // Состояние схемы — отдельная сущность от текста. Идентично PlanReviewView:
-  // сборка только по кнопке (вики-план часть B §4), сброс при смене плана.
-  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>('text');
-  const [map, setMap] = useState<PlanMap | null>(null);
-  const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
-  const [schemeError, setSchemeError] = useState<string | null>(null);
   useEffect(() => {
     setMap(null);
     setSchemeStatus('idle');
@@ -315,13 +319,16 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             «Схемой» размонтировало бы его и унесло несобранные черновики
             (отзыв ревью: «план из 15 разделов — замечания не должны пропадать
             от смены вкладки»). При schemeView='scheme' contentRef указывает на
-            контейнер схемы; внутри лежит скрытый исходный markdown, чтобы
-            useHeadings находил h1–h6, — кнопки замечаний у заголовков
-            показываются и в режиме схемы. */}
+            контейнер схемы; кнопки замечаний в режиме схемы НЕ показываются —
+            замечания из схемы не создаются (вики-план «Визуальный разворот»),
+            а кнопки у заголовков лежат в скрытом markdown-слое и пользователю
+            не видны: при возврате на текст слой пересобирается с актуальными
+            узлами, и кнопки появляются снова. */}
         {visualPlanEnabled && (
           <PlanRemarks
             contentRef={planContentRef}
             planText={curPlan.plan}
+            containerToken={schemeView}
             status={curPlan.status === 'pending' ? 'pending' : 'resolved'}
             onSubmit={feedback => {
               // requestId в PlanArtifact нет — отправлять в панели некуда.

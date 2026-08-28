@@ -151,13 +151,15 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       setSchemeStatus('failed');
     }
   }
-  // fade-оверлей снизу появляется только если контент плана не помещается в maxHeight
+  // fade-оверлей снизу появляется только если контент плана не помещается в maxHeight.
+  // В deps — schemeView: при переключении «Текстом ↔ Схемой» контейнер ref тот же,
+  // но контент и его высота другие.
   const [overflowing, setOverflowing] = useState(false);
   useEffect(() => {
     const el = planBodyRef.current;
     if (!el) return;
     setOverflowing(el.scrollHeight - el.clientHeight > 8);
-  }, [plan, rejecting]);
+  }, [plan, rejecting, schemeView]);
 
   // === Решённое состояние: одобрено → компактная шапка выполнения ===
   if (item.resolved && item.approved) {
@@ -489,6 +491,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         <PlanRemarks
           contentRef={planBodyRef}
           planText={plan}
+          containerToken={schemeView}
           status="pending"
           onSubmit={feedback => onRespond(item.requestId, false, feedback || undefined)}
           onCountChange={setRemarksCount}

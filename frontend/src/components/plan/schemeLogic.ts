@@ -35,7 +35,7 @@ export function headingHasDuplicates(text: string, headings: Heading[]): boolean
 // Нормализует ОБЕ стороны сравнения: текст в DOM может быть без inline-разметки
 // (textContent даёт «Шаг — код»), а в исходнике остаётся «Шаг — `код`». Без
 // нормализации заголовки с inline-кодом/жирным/ссылками не находились бы.
-export function sliceSection(planText: string, heading: Heading, _all?: Heading[]): string {
+export function sliceSection(planText: string, heading: Heading): string {
   const lines = planText.split('\n');
   const prefix = '#'.repeat(heading.level) + ' ';
   const target = stripInlineMarkdown(heading.text);

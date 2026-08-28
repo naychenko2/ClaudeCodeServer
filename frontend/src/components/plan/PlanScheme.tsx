@@ -73,6 +73,17 @@ const FLAG_LABEL: Record<PlanMapBlock['flags'][number], string> = {
   'review-fix':     'проверить починку',
 };
 
+// Склонение «флаг/флага/флагов» для счётчика на карте. Потолок 5 — на сервере
+// (см. эпиграф в PlanScheme), поэтому варианты только 0/1/2-4/5+. Для 5+
+// используется та же форма, что и для 5: «флагов», «флага» уже не подходит.
+function flagWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'флаг';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'флага';
+  return 'флагов';
+}
+
 type View = 'essence' | 'map' | 'block';
 
 export function PlanScheme({ map, planText, contentRef }: Props) {
@@ -117,7 +128,7 @@ export function PlanScheme({ map, planText, contentRef }: Props) {
   const selectedBlock = selectedBlockId ? map.blocks.find(b => b.id === selectedBlockId) ?? null : null;
   const selectedHeading = selectedBlockId ? resolved.get(selectedBlockId) ?? null : null;
   const selectedSection = selectedHeading
-    ? sliceSection(planText, selectedHeading, headings)
+    ? sliceSection(planText, selectedHeading)
     : null;
 
   function openBlock(id: string) {
@@ -391,7 +402,7 @@ function MapView({ blocks, resolved, onOpenBlock }: {
                       padding: '1px 7px', borderRadius: R.max,
                       background: C.warningBg, color: C.warningText,
                       fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
-                    }}>{b.flags.length} {b.flags.length === 1 ? 'флаг' : 'флагов'}</span>
+                    }}>{b.flags.length} {flagWord(b.flags.length)}</span>
                   )}
                 </div>
                 <div style={{

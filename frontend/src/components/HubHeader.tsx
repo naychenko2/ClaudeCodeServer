@@ -496,9 +496,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile || isTablet}
-          // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:
-          // в таббар они не входят, а отдельного меню разделов больше нет
+          // «Знания», «Специальности», «Аналитика токенов» и «Что нового» живут здесь
+          // на обеих платформах: в таббар они не входят, а отдельного меню разделов нет
           onOpenKnowledge={() => onTab('knowledge')}
+          onOpenSpecialties={() => onTab('specialties')}
           onOpenSpend={() => onTab('spend')}
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
           // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —

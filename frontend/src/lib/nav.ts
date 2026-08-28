@@ -5,7 +5,7 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'home' | 'projects' | 'project' | 'chats' | 'wall' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
+  screen: 'home' | 'projects' | 'project' | 'chats' | 'wall' | 'calendar' | 'notes' | 'personas' | 'specialties' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
   moduleId?: string;              // когда screen === 'module' (внешний модуль платформы)
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
@@ -15,10 +15,13 @@ export interface NavSnapshot {
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
   persona?: string | null;       // открытая персона (id) или null (screen === 'personas')
-  // Подвид раздела «Персоны»: 'automation' — открыть вкладку автоматизаций в студии;
-  // 'specialties' — режим «Специальности» (центральная зона раздела, без выбранной персоны)
-  personaView?: 'automation' | 'specialties';
+  // Подвид раздела «Персоны»: 'automation' — открыть вкладку автоматизаций в студии
+  personaView?: 'automation';
   knowledge?: string | null;     // открытая база знаний (id датасета Dify) или null
+  // Раздел «Специальности» (screen === 'specialties'): открытая роль и режим правки.
+  // Под-адрес живёт прямо в снимке — раздел свой, а не режим «Персон».
+  specialty?: string | null;     // ключ роли или null (витрина списка)
+  specialtyEdit?: boolean;       // экран настройки роли (только админу)
 }
 
 // Hash-представление снапшота для адресной строки
@@ -30,11 +33,15 @@ function toHash(s: NavSnapshot): string {
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': {
-      if (s.personaView === 'specialties') return '#/personas/specialties';
       // Вкладка «Проактивность» симметрична разбору в parseHash (parts[2] === 'automation'):
       // требует заданной персоны, без неё automation уходит в центральный экран.
       if (s.personaView === 'automation' && s.persona) return `#/personas/${encodeURIComponent(s.persona)}/automation`;
       return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
+    }
+    case 'specialties': {
+      if (!s.specialty) return '#/specialties';
+      const base = `#/specialties/${encodeURIComponent(s.specialty)}`;
+      return s.specialtyEdit ? `${base}/edit` : base;
     }
     case 'knowledge': return s.knowledge ? `#/knowledge/${encodeURIComponent(s.knowledge)}` : '#/knowledge';
     case 'spend': return '#/spend';
@@ -57,7 +64,7 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'home' | 'projects' | 'chats' | 'wall' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
+  screen: 'home' | 'projects' | 'chats' | 'wall' | 'calendar' | 'project' | 'notes' | 'personas' | 'specialties' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
   projectId?: string;
   moduleId?: string;             // #/module/{id}
   taskId?: string;
@@ -65,8 +72,10 @@ export interface HashTarget {
   board?: boolean;
   noteId?: string;
   personaId?: string;
-  personaView?: 'automation' | 'specialties'; // 'automation' — вкладка студии персоны (бэйдж автоматизации в чате); 'specialties' — режим «Специальности» раздела «Персоны»
+  personaView?: 'automation'; // вкладка студии персоны (бэйдж автоматизации в чате)
   knowledgeId?: string;
+  specialtyKey?: string;     // #/specialties/{roleKey}
+  specialtyEdit?: boolean;   // #/specialties/{roleKey}/edit
   chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
   // #/telemetry/incident/{fingerprint} — карточка инцидента (уведомление об алерте);
   // #/telemetry/incidents — вкладка со списком (сводное уведомление о лавине)
@@ -110,11 +119,15 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'personas':
     case 'agents': {
       const target: HashTarget = { screen: 'personas' };
-      // #/personas/specialties — режим «Специальности» центральной зоны (без personaId,
-      // сегмент резервируется ДО присвоения personaId — иначе "specialties" уехал бы в неё).
-      if (parts[1] === 'specialties') target.personaView = 'specialties';
-      else if (parts[1]) target.personaId = decodeURIComponent(parts[1]);
+      if (parts[1]) target.personaId = decodeURIComponent(parts[1]);
       if (parts[2] === 'automation') target.personaView = 'automation';
+      return target;
+    }
+    // Свой раздел, а не под-адрес «Персон»: #/specialties[/{roleKey}[/edit]]
+    case 'specialties': {
+      const target: HashTarget = { screen: 'specialties' };
+      if (parts[1]) target.specialtyKey = decodeURIComponent(parts[1]);
+      if (parts[2] === 'edit') target.specialtyEdit = true;
       return target;
     }
     case 'knowledge': {

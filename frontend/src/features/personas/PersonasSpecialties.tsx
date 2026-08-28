@@ -31,6 +31,7 @@ import { SpecialtyListView } from './SpecialtyListView';
 import { SpecialtyRoleView } from './SpecialtyRoleView';
 import { SpecialtyEditView } from './SpecialtyEditView';
 import { SPECIALTIES_TITLE, SPECIALTIES_SUBTITLE } from './personaSpecialtyShared';
+import { useSpecialtiesCoverage } from './useSpecialtiesCoverage';
 
 export interface PersonasSpecialtiesProps {
   roleKey?: string | null;
@@ -73,6 +74,11 @@ export function PersonasSpecialties(props: PersonasSpecialtiesProps): React.Reac
 
   // Глобальный слой — единственная запись, на которую смотрит весь раздел.
   const layerSettings = settingsAll?.global ?? null;
+
+  // Охват «N из M» — сколько ролей каталога уже настроено. Раньше висел бейджем на
+  // переключателе «Персоны | Специальности»; переключателя больше нет, показываем
+  // рядом с заголовком раздела — там, где им и пользуются.
+  const coverage = useSpecialtiesCoverage(isAdmin);
 
   const data = useProviderData(isAdmin, null);
   const { settingsError } = useSaveState();
@@ -133,10 +139,24 @@ export function PersonasSpecialties(props: PersonasSpecialtiesProps): React.Reac
             marginBottom: 28,
           }}>
             <div style={{
-              fontFamily: FONT.serif, fontSize: 28, fontWeight: 500,
-              color: C.textHeading, lineHeight: 1.28, letterSpacing: '-0.01em',
+              display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap',
               marginBottom: 12,
-            }}>{SPECIALTIES_TITLE}</div>
+            }}>
+              <div style={{
+                fontFamily: FONT.serif, fontSize: 28, fontWeight: 500,
+                color: C.textHeading, lineHeight: 1.28, letterSpacing: '-0.01em',
+              }}>{SPECIALTIES_TITLE}</div>
+              {coverage && (
+                <span
+                  title={`Охват специальностей: ${coverage}`}
+                  style={{
+                    fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700,
+                    color: C.textSecondary, background: C.bgSelected,
+                    padding: '2px 8px', borderRadius: 12,
+                  }}
+                >{coverage}</span>
+              )}
+            </div>
             <div style={{
               fontSize: FS.md, color: C.textMuted, lineHeight: 1.65,
               maxWidth: 560,

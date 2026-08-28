@@ -46,6 +46,7 @@ import { NotesPage } from './features/notes/NotesPage'
 import { PersonasPage } from './features/personas/PersonasPage'
 import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
+import { SpecialtiesPage } from './features/personas/SpecialtiesPage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
 import { WallPage } from './pages/WallPage'
@@ -156,6 +157,7 @@ export default function App() {
     if (initialHash?.screen === 'wall') return 'wall'
     if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'personas') return 'personas'
+    if (initialHash?.screen === 'specialties') return 'specialties'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
     if (initialHash?.screen === 'spend') return 'spend'
     if (initialHash?.screen === 'telemetry') return 'telemetry'
@@ -478,25 +480,20 @@ export default function App() {
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
     if (isDevTeamPlanSimHash()) return;
-    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'specialties' ? 'specialties' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'personas' && initialHash?.screen === 'personas') seed.persona = initialHash.personaId ?? null
     // Диплинк #/knowledge/{id}: сохраняем базу знаний в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'knowledge' && initialHash?.screen === 'knowledge') seed.knowledge = initialHash.knowledgeId ?? null
-    // Диплинк #/personas/specialties[/{roleKey}]: сохраняем personaView, иначе сид затрёт
-    // под-адрес specialties и F5/прямой URL сбросит адрес на #/personas
+    // Диплинк #/personas/{id}/automation: вкладка студии персоны едет в снимок
     if (seed.screen === 'personas' && initialHash?.screen === 'personas' && initialHash.personaView) seed.personaView = initialHash.personaView
-    // Диплинк #/personas/specialties/{roleKey}[/edit] — toHash в nav.ts не умеет в под-адреса
-    // (контракт общего NavSnapshot), и обычный navReplace ниже обрезал бы URL до #/personas/specialties.
-    // Прямая запись через history.replaceState с текущим hash сохраняет и URL, и state;
-    // ровно так же поступает pushSpecialtiesUrl в PersonasPage при навигации по под-адресам.
-    const specialtiesSubHash = window.location.hash.match(/^#\/personas\/specialties\/[^/?]+(\/edit)?$/)
-    if (specialtiesSubHash && !initialHash?.history) {
-      window.history.replaceState(seed, '', specialtiesSubHash[0])
-      window.dispatchEvent(new Event('cc-nav-change'))
-      return
+    // Диплинк #/specialties/{roleKey}[/edit]: под-адрес раздела живёт прямо в снимке,
+    // иначе сид обрезал бы URL до #/specialties
+    if (seed.screen === 'specialties' && initialHash?.screen === 'specialties') {
+      seed.specialty = initialHash.specialtyKey ?? null
+      seed.specialtyEdit = !!initialHash.specialtyEdit
     }
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
@@ -557,6 +554,9 @@ export default function App() {
       } else if (s?.screen === 'personas') {
         // Раздел «Персоны» — проект «спит»
         if (hubTab !== 'personas') { localStorage.setItem(HUB_TAB_KEY, 'personas'); setHubTab('personas') }
+      } else if (s?.screen === 'specialties') {
+        // Раздел «Специальности» — проект «спит»
+        if (hubTab !== 'specialties') { localStorage.setItem(HUB_TAB_KEY, 'specialties'); setHubTab('specialties') }
       } else if (s?.screen === 'knowledge') {
         // Раздел «Знания» — проект «спит»
         if (hubTab !== 'knowledge') { localStorage.setItem(HUB_TAB_KEY, 'knowledge'); setHubTab('knowledge') }
@@ -724,6 +724,7 @@ export default function App() {
         case 'calendar': next = 'calendar'; break
         case 'notes': next = 'notes'; break
         case 'personas': next = 'personas'; break
+        case 'specialties': next = 'specialties'; break
         case 'knowledge': next = 'knowledge'; break
         case 'spend': next = 'spend'; break
         case 'telemetry': next = 'telemetry'; break
@@ -882,7 +883,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
+      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'specialties' ? 'specialties' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -1202,6 +1203,8 @@ export default function App() {
               ? <NotesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'personas'
               ? <PersonasPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            : effectiveHubTab === 'specialties'
+              ? <SpecialtiesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'knowledge'
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'spend'

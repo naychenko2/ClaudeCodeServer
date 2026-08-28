@@ -3,7 +3,7 @@ import { C, FS, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { Bell, History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Rocket, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, BriefcaseBusiness, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Rocket, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -60,6 +60,9 @@ interface Props {
   // «Знания» (настройка баз знаний Dify) — раздел убран из хаб-таббара, вызов в меню аватара.
   // undefined — пункт не показывать
   onOpenKnowledge?: () => void;
+  // «Специальности» (справочник ролей персон) — раздел-таб без вкладки, вызов из
+  // меню аватара. undefined — пункт не показывать
+  onOpenSpecialties?: () => void;
   // «Модели и расход» — единый раздел вместо прежних «Использование» и «Поставщики моделей»
   // (редизайн models-spend, этап 1). undefined — пункт не показывать
   onShowModelsSpend?: () => void;
@@ -84,7 +87,7 @@ interface Props {
   onShowDeploy?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -280,6 +283,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Book size={ICON_SIZE.xs} strokeWidth={2} />
               Знания
+            </button>
+          )}
+          {onOpenSpecialties && (
+            <button
+              onClick={() => { setOpen(false); onOpenSpecialties(); }}
+              style={dropdownItem}
+            >
+              <BriefcaseBusiness size={ICON_SIZE.xs} strokeWidth={2} />
+              Специальности
             </button>
           )}
           {onShowModelsSpend && (

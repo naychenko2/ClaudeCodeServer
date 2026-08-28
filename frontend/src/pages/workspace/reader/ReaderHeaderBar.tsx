@@ -14,10 +14,11 @@
 // сменить режим в обе стороны. В состояниях загрузки/ошибки чипа нет — режим ещё не
 // определён (макет §2.3).
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, ArrowLeftRight, Columns2, ExternalLink, Maximize2, X } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, Columns2, ExternalLink, Maximize2, SquareStack, X } from 'lucide-react';
 import { C, FONT, FS, R, SP, TB } from '../../../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch } from '../../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { useContextButton } from '../../../features/chatContext/useContextButton';
 import type { ReaderPanelActions, ReaderPanelState } from './useReaderPanel';
 
 // Ступени по ширине панели — те же пороги, что у FileViewer (840/600/400): один и тот
@@ -103,6 +104,16 @@ export function ReaderHeaderBar({ state, actions, onClose, isTablet }: Props) {
   // Пока грузим/ошибка — разворачивать нечего (как в исходной версии шапки)
   const showModeSwitch = !isTablet && !state.loading && !state.error;
 
+  // «В контекст чата» (фича chat-context): подпись материала — заголовок статьи,
+  // домен как запасной (по нему статью узнают в полосе, если заголовка ещё нет)
+  const chatContext = useContextButton('url', state.url, state.page?.title || host);
+  const addToChatContext = () => {
+    chatContext.toggle();
+    // Из полного экрана материал сворачивается к чату: полоса вкладок живёт
+    // только в сплите, а контекст — про работу рядом с разговором
+    if (!chatContext.inContext && state.expanded && !isTablet) actions.toggleExpand();
+  };
+
   return (
     <Toolbar>
       <div ref={rootRef} style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flex: 1, minWidth: 0 }}>
@@ -137,6 +148,15 @@ export function ReaderHeaderBar({ state, actions, onClose, isTablet }: Props) {
               </div>
             )}
           </div>
+
+          {chatContext.available && (
+            <ToolbarIconButton
+              onClick={addToChatContext} title={chatContext.title}
+              color={chatContext.inContext ? C.accent : undefined}
+            >
+              <SquareStack size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </ToolbarIconButton>
+          )}
 
           <ToolbarIconButton onClick={actions.openInBrowser} title="Открыть оригинал в браузере">
             <ExternalLink size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

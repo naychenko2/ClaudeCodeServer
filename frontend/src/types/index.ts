@@ -2965,6 +2965,21 @@ export interface McpServer {
   createdAt: string;
   updatedAt: string;
   status?: McpServerStatus | null;
+  // Указатель на источник из каталога (волна 1, McpCatalogRef): «реестровое» имя/версия
+  // и дата появления в реестре. Сервер приехал из каталога, если поле задано; без
+  // CatalogRef запись заведена руками. Сама строка запуска лежит в command/args/url —
+  // CatalogRef её НЕ дублирует, только помечает происхождение
+  catalogRef?: McpCatalogRef | null;
+}
+
+// Указатель на каталожную запись в McpServerDto и McpServerUpsert. Поля стабильны
+// и не разрастаются: реестровое имя, точная semver-версия и дата публикации. Этого
+// хватает для дедупа и показа «в реестре с …», полный слепок server.json намеренно
+// не хранится — иначе дрейф каталога и записи расходились бы молча
+export interface McpCatalogRef {
+  name: string;
+  version: string;
+  publishedAt?: string | null;
 }
 
 // Наблюдаемый сервер вне личного реестра: записи в реестре нет, есть только наблюдение
@@ -3003,6 +3018,9 @@ export interface McpServerUpsert {
   alwaysLoad?: boolean;
   allowReadOnlyPersonas?: boolean;
   allowOutsideProjects?: boolean;
+  // Указатель на каталожную запись. В Create идёт от черновика импорта (поле задано),
+  // в PUT — отсутствует или совпадает с прежним; бэкенд по нему включает SSRF-гейт пробы
+  catalogRef?: McpCatalogRef | null;
 }
 
 export interface McpProbeResult {
@@ -3011,6 +3029,80 @@ export interface McpProbeResult {
   serverName?: string | null;
   toolCount?: number | null;
   toolNames?: string[] | null;
+  error?: string | null;
+}
+
+// === Каталог MCP-серверов (волна 1) ===
+
+// Сервер из реестра: всё, что нужно карточке каталога и предзаполнению формы. Поля формы
+// (fields[]) — описание «как заполнять»: ключ переменной, человеческая подпись, признаки
+// обязательности/секретности, плейсхолдер. Сами значения секретов из реестра НЕ приходят
+// никогда — их вводит человек на форме, а хранит бэкенд в защищённом сторе. См. также
+// McpCatalogRef: минимальный слепок происхождения, который кладётся в McpServerDto
+export interface McpCatalogField {
+  // Технический ключ: имя переменной окружения (Authorization, ROOT_PATH) или аргумента
+  name: string;
+  // Человеческая подпись («внутренний токен интеграции Notion»). Пусто — рисуем по `name`
+  description?: string | null;
+  // Обязательное для запуска. Без значения по умолчанию проба падает без объяснения —
+  // фронт рисует звёздочку и плашку «обязательное»
+  isRequired?: boolean;
+  // Значение секрета — хранится в защищённом сторе, не в архиве, не в логах
+  isSecret?: boolean;
+  // Дефолт из реестра. Секреты сюда НЕ кладутся (см. п.3 «Принципов» плана каталога)
+  default?: string | null;
+  // Плейсхолдер для поля ввода (ntn_…, https://…)
+  placeholder?: string | null;
+  // Признак «это АРГУМЕНТ запуска (argv), а не env». Для предпросмотра строки запуска
+  // аргумент подставляется в кавычках, env — отдельной строкой KEY=VALUE. Не задан — env
+  arg?: boolean;
+}
+
+// Транспорт сервера из каталога. stdio даёт npm-команду (npx -y …) и параметры; remote
+// даёт URL. Поле «почему нельзя подключить» приезжает с сервером, у которого транспорт
+// или источник пакета не поддержан первой волной (Docker/oci/mcpb/nuget, чужой
+// package registry, помеченный deprecated — отдельные статусы)
+export type McpCatalogTransport = 'npm' | 'remote';
+
+export interface McpCatalogServer {
+  // Реестровое имя («@modelcontextprotocol/server-filesystem») — идёт в CatalogRef.name
+  name: string;
+  // Человекочитаемое имя для карточки («Filesystem»)
+  displayName: string;
+  description: string;
+  // Точная semver-версия из реестра — фиксируется в CatalogRef.version, чтобы запись
+  // не «уплыла» при выходе новой
+  version: string;
+  // Репозиторий автора: «github.com/...» без схемы (для UI) и полный URL для ссылки
+  repository: string;
+  repositoryUrl?: string;
+  // «В реестре с …»: месяц/год для подписи «сентября 2025»
+  publishedAt: string;
+  // Статус реестра. deprecated — карточка серая, без кнопки «Подключить». deleted в
+  // волне 1 не показываем (фильтр на бэке, см. план §5)
+  status?: 'active' | 'deprecated' | null;
+  // Транспорт: npm (stdio) или remote (http/sse). От транспорта зависит состав полей
+  transport: McpCatalogTransport;
+  // Команда запуска (npm) или адрес (remote). У npm идёт с фиксированной версией
+  // (npx -y @pkg@1.2.3) — иначе превью строки противоречило бы реальности
+  command?: string;
+  url?: string;
+  // Поля формы в порядке реестра. Описание и обязательность едут ТОЛЬКО сюда и в
+  // сессии импорта — в McpServerRecord не кладутся
+  fields: McpCatalogField[];
+  // Причина отказа в подключении: неподдержанный транспорт/источник, deprecated и пр.
+  // Задана → карточка без кнопки «Подключить» и первой строкой выводится эта причина
+  unsupportedReason?: string | null;
+  // Метка причины отказа для бейджа («Устарел», «Нельзя подключить»)
+  unsupportedTag?: string | null;
+}
+
+// Ответ GET /api/mcp/catalog/search: список и курсор пагинации. q поиска — на бэке,
+// пустой запрос возвращает свежий срез каталога. error — поле фетча (сеть/500),
+// бэкенд в успешном 200 его не возвращает
+export interface McpCatalogSearchResult {
+  servers: McpCatalogServer[];
+  cursor?: string | null;
   error?: string | null;
 }
 

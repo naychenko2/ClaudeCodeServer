@@ -178,8 +178,10 @@ public sealed class CloudCheapClient
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-            // Рассуждающие модели кладут ход мысли в message.reasoning отдельно от content —
-            // берём именно content, парсеры потребителей ждут чистый ответ
+            // Часть рассуждающих моделей кладёт ход мысли в message.reasoning отдельно от
+            // content — тогда достаточно взять content. Но не все: MiniMax-M3 отдельного поля
+            // не заводит вовсе (в message приходят content/role/name/audio_content) и пишет
+            // рассуждение ПРЯМО В content тегом <think>…</think> — снимаем его ниже
             var content = json.TryGetProperty("choices", out var choices)
                 && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0
                 && choices[0].TryGetProperty("message", out var msg)
@@ -200,8 +202,19 @@ public sealed class CloudCheapClient
                         source.Key, maxTokens, model, label ?? "-");
             }
             if (string.IsNullOrWhiteSpace(content)) return new CloudTextResult(null, truncated);
+            // Расход пишем по ФАКТУ ответа, до срезки рассуждения: токены потрачены в любом
+            // случае, а вызов, у которого ответ оказался одним лишь ходом мысли, из статистики
+            // исчезать не должен — иначе самый дорогой класс вызовов невидим
             RecordSpend(model, source.Key, json, ownerId, label);
-            return new CloudTextResult(content, truncated);
+            var answer = StripReasoning(content!);
+            if (string.IsNullOrWhiteSpace(answer))
+            {
+                _logger.LogWarning(
+                    "{Route} ответ содержит только ход мысли, без самого ответа (модель {Model}, label={Label})",
+                    source.Key, model, label ?? "-");
+                return new CloudTextResult(null, truncated);
+            }
+            return new CloudTextResult(answer, truncated);
         }
         catch (Exception ex)
         {
@@ -219,6 +232,24 @@ public sealed class CloudCheapClient
     {
         var result = await GenerateDetailedAsync(model, prompt, timeout, maxTokens, ownerId, label, ct);
         return result.Text;
+    }
+
+    // Снять ход мысли рассуждающей модели, приехавший внутри content тегом <think>…</think>
+    // (MiniMax-M3; отдельного поля reasoning у неё нет). Берём то, что ПОСЛЕ последнего
+    // закрывающего тега: рассуждение всегда идёт первым, а закрытий может быть несколько.
+    //
+    // Открытый <think> без закрытия — не «ответ с мусором», а его отсутствие: модель
+    // израсходовала бюджет вывода на рассуждение и до ответа не дошла. Возвращаем пусто,
+    // и вызывающий уходит дальше по цепочке — это честнее, чем отдать потребителю
+    // рассуждение вместо результата (прод 28.08.2026: сводка «Что нового» разбирала
+    // ход мысли как JSON — ExtractJsonArray хватал первую же скобку ВНУТРИ рассуждения,
+    // и день уходил в fallback с сырыми коммитами).
+    internal static string? StripReasoning(string content)
+    {
+        const string close = "</think>";
+        var end = content.LastIndexOf(close, StringComparison.OrdinalIgnoreCase);
+        if (end >= 0) return content[(end + close.Length)..].Trim();
+        return content.Contains("<think", StringComparison.OrdinalIgnoreCase) ? null : content;
     }
 
     private static bool IsTruncatedFinish(JsonElement choice) =>

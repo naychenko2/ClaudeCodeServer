@@ -244,6 +244,66 @@ public class CloudCheapClientTests
         }
         """;
 
+    // MiniMax-M3 отдельного поля reasoning не заводит и пишет ход мысли прямо в content
+    // тегом <think>…</think>. Потребителю обязан доехать ТОЛЬКО ответ: сводка «Что нового»
+    // разбирала рассуждение как JSON и уходила в fallback с сырыми коммитами (прод 28.08.2026).
+    private const string ThinkJson = """
+        {
+          "choices": [{
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "<think>\nЗдесь скобка [1] и рассуждение\n</think>\n[{\"title\":\"ответ\"}]"}
+          }],
+          "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        }
+        """;
+
+    // Бюджет вывода кончился на рассуждении: закрывающего тега нет, ответа нет вовсе.
+    // Отдать рассуждение вместо результата нельзя — вызывающий должен уйти по цепочке
+    private const string ThinkOnlyJson = """
+        {
+          "choices": [{
+            "index": 0,
+            "finish_reason": "length",
+            "message": {"role": "assistant", "content": "<think>\nдумаю и не успел ответить"}
+          }],
+          "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        }
+        """;
+
+    [Fact]
+    public async Task GenerateDetailedAsync_StripsThinkBlock_KeepsAnswer()
+    {
+        var config = TestConfig.Build(WithMinimax(new()));
+        var providers = new LlmProviderRegistry(config);
+        var client = new CloudCheapClient(new StubHttpFactory(ThinkJson), config, providers,
+            NullLogger<CloudCheapClient>.Instance);
+
+        var result = await client.GenerateDetailedAsync("direct:MiniMax-M3", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Equal("[{\"title\":\"ответ\"}]", result.Text);
+    }
+
+    [Fact]
+    public async Task GenerateDetailedAsync_ThinkWithoutAnswer_ReturnsNull()
+    {
+        var config = TestConfig.Build(WithMinimax(new()));
+        var providers = new LlmProviderRegistry(config);
+        var client = new CloudCheapClient(new StubHttpFactory(ThinkOnlyJson), config, providers,
+            NullLogger<CloudCheapClient>.Instance);
+
+        var result = await client.GenerateDetailedAsync("direct:MiniMax-M3", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Null(result.Text);
+        Assert.True(result.Truncated);
+    }
+
+    [Fact]
+    public void StripReasoning_WithoutThink_ReturnsAsIs()
+    {
+        Assert.Equal("[{}]", CloudCheapClient.StripReasoning("[{}]"));
+    }
+
     // Без per-source override температуры CloudCheapClient шлёт temperature=0 — детерминированность
     // фоновых one-shot действий (теги, сводки, JSON-парсинг). Проверяем на нескольких источниках,
     // включая kimi без override: пока CheapHttpSources:kimi:Temperature не задан — тоже 0.

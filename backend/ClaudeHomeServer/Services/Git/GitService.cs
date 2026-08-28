@@ -176,6 +176,14 @@ public sealed class GitService(ILauncherFactory launchers)
     // Сколько неотслеживаемых файлов считаем построчно (см. комментарий в цикле ниже)
     private const int UntrackedNumstatLimit = 200;
 
+    // Потолок размера файла, который отдаём в `git diff --no-index`. Git читает файл целиком,
+    // и на гигабайтном бинаре (hang-дамп от `dotnet test`, архив, видео) один такой вызов
+    // занимает секунды: 1.5 ГБ — ~9 с, то есть весь git/status упирался в DefaultTimeoutMs
+    // и панель изменений получала 409 «git не ответил вовремя» (28.08.2026, бой).
+    // Цена пропуска нулевая: у крупных файлов почти всегда бинарный вывод «-/-», а «+N/−M»
+    // в панели для них и так бессмысленно.
+    private const long UntrackedNumstatMaxBytes = 2L * 1024 * 1024;
+
     private async Task<Dictionary<string, (int add, int del, bool binary)>> NumstatAsync(
         string? ownerId, string root, IEnumerable<string> untracked, CancellationToken ct)
     {
@@ -189,12 +197,27 @@ public sealed class GitService(ILauncherFactory launchers)
         // свои файлы (репо без .gitignore даёт их сотнями). Сверх лимита панель просто без «+N/−M».
         foreach (var rel in untracked.Take(UntrackedNumstatLimit))
         {
+            if (IsTooBigForNumstat(root, rel)) continue;
             var r = await RunAsync(ownerId, root,
                 ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", rel], ct: ct);
             // --no-index при различиях возвращает exit 1 — это норма, парсим stdout независимо от Ok
             ParseNumstatZ(r.Stdout, map);
         }
         return map;
+    }
+
+    // Крупный ли файл (см. UntrackedNumstatMaxBytes). Размер спрашиваем у ФС на хосте: для
+    // container-пользователя git идёт в песочницу, но root у нас хостовый — файл тот же.
+    // Любая осечка (файл исчез между status и замером, отказ доступа) — считаем «не крупный»
+    // и идём прежним путём: поведение остаётся тем же, что до фикса.
+    internal static bool IsTooBigForNumstat(string root, string rel)
+    {
+        try
+        {
+            var info = new FileInfo(Path.Combine(root, rel));
+            return info.Exists && info.Length > UntrackedNumstatMaxBytes;
+        }
+        catch { return false; }
     }
 
     // Парсер `--numstat -z`: записи `add\tdel\tpath\0`; для rename — `add\tdel\t\0old\0new\0`

@@ -87,6 +87,23 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         st.Untracked.Should().NotContain(f => f.Path.EndsWith('/'));
     }
 
+    // Крупный неотслеживаемый файл в статус попадает, но построчную статистику по нему не
+    // считаем: `git diff --no-index` читает файл целиком, и на hang-дампе `dotnet test` в 1.5 ГБ
+    // один вызов занимал ~9 с — весь git/status упирался в таймаут и отдавал 409.
+    [Fact]
+    public async Task Status_Крупный_Untracked_Без_Построчной_Статистики()
+    {
+        await File.WriteAllBytesAsync(Path.Combine(_repo, "dump.bin"), new byte[3 * 1024 * 1024]);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "small.txt"), "раз\nдва\n");
+
+        var st = await _git.StatusAsync(null, _repo);
+
+        st.Untracked.Should().ContainSingle(f => f.Path == "dump.bin")
+            .Which.Added.Should().BeNull();
+        st.Untracked.Should().ContainSingle(f => f.Path == "small.txt")
+            .Which.Added.Should().Be(2);
+    }
+
     [Fact]
     public async Task Commit_Кириллица_И_Amend()
     {

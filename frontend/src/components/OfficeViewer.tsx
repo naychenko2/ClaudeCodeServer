@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { C } from '../lib/design';
+import { readStoredToken } from '../lib/offline';
 import { getEffectiveTheme } from '../lib/themeMode';
 
 interface OfficeConfig {
@@ -283,9 +284,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
     async function init() {
       setError(null);
 
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
       let cfg: OfficeConfig;

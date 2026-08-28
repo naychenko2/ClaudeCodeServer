@@ -3,6 +3,7 @@ import type { ModuleInfo } from '../../lib/api';
 import { loadModuleTab, type ModuleTabComponent, type AIHomeModuleContext } from '../../lib/modules';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { C, FONT } from '../../lib/design';
+import { readStoredToken } from '../../lib/offline';
 import { DESIGN_KIT_VERSION } from '../../lib/design-kit';
 
 // Плашка деградации (R9) — общая для ошибки загрузки remote и ошибки его рендера.
@@ -52,7 +53,7 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
   const ctx: AIHomeModuleContext = {
     user,
     apiBase: module.apiBase,
-    getToken: () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'),
+    getToken: () => readStoredToken(),
     theme: { mode: theme },
     navigate: (hash: string) => { window.location.hash = hash; },
     onTitleChange,

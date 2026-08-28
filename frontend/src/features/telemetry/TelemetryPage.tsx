@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Gauge, Unplug } from 'lucide-react';
 import type { AuthState } from '../../types';
+import { readStoredToken } from '../../lib/offline';
 import type { HubTabValue } from '../../components/HubTabs';
 import { TAB_LABELS } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -41,7 +42,7 @@ interface Props {
 // сабресурсы не могут слать Authorization). Ставим её из токена сессии перед загрузкой
 // iframe — по образцу preview (cc_preview). Secure — только на https.
 function ensureTelemetryCookie() {
-  const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token');
+  const token = readStoredToken();
   if (!token) return;
   const secure = location.protocol === 'https:' ? '; Secure' : '';
   document.cookie = `cc_telemetry=${token}; path=/telemetry-proxy; SameSite=Strict${secure}`;

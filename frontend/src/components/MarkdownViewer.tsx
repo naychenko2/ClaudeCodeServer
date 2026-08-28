@@ -10,6 +10,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { MermaidDiagram } from './MermaidDiagram';
 import { C, FONT, R, SHADOW, Z } from '../lib/design';
+import { readStoredToken } from '../lib/offline';
 import { HTML_SCHEMA } from '../lib/markdownHtml';
 
 // Результат резолва вики-имени (для hover-preview и embed-вставок)
@@ -319,7 +320,7 @@ const components: Components = {
 
 // URL картинки-вложения из vault (JWT в query — <img> не шлёт заголовки)
 function attachmentUrl(path: string, source?: string): string {
-  const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || '';
+  const token = readStoredToken();
   const qs = new URLSearchParams({ source: source ?? 'personal', path });
   if (token) qs.set('access_token', token);
   return `/api/notes/attachment?${qs}`;

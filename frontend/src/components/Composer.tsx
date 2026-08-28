@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -7,6 +7,7 @@ import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
+import { useActionVisibility } from '../hooks/useActionVisibility';
 import { ComposerModelPicker } from './ComposerModelPicker';
 import { USAGE } from '../lib/models';
 import { ComposerEffortPicker } from './ComposerEffortPicker';
@@ -20,6 +21,7 @@ import { teamImplementModeLocked, TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP } from '../
 import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
+import { QuickPhrasesDialog, QuickPhrasesIcon, QuickPhrasesMenu } from './QuickPhrases';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { showToast } from '../lib/toast';
@@ -846,6 +848,9 @@ export function Composer({
   })();
   // Раскрывашка «Обсудить с командой»: выбранная механика + её настройки живут здесь
   // (TeamDrawer — контролируемый компонент), тема пишется в само поле композера
+  // Быстрые фразы: rect кнопки-триггера (открытый попап) и модалка правки набора
+  const [phrasesAnchor, setPhrasesAnchor] = useState<DOMRect | null>(null);
+  const [phrasesEditOpen, setPhrasesEditOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [teamMech, setTeamMech] = useState<TeamMechanicId | null>(null);
   const [teamSettings, setTeamSettings] = useState<TeamMechanicSettings>(DEFAULT_TEAM_SETTINGS);
@@ -1963,6 +1968,27 @@ export function Composer({
     </div>
   );
 
+  // Быстрые фразы: попап у кнопки слева от микрофона. Якорь — rect самой кнопки
+  // (Menu развернёт карточку вверх, композер стоит у нижней кромки)
+  const phrasesButton = (
+    <button
+      type="button"
+      onClick={e => setPhrasesAnchor(e.currentTarget.getBoundingClientRect())}
+      onContextMenu={(e) => e.preventDefault()}
+      title="Быстрые фразы: готовое сообщение уходит одним нажатием"
+      aria-label="Быстрые фразы"
+      style={{
+        ...iconBtnGuard,
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        background: 'none', cursor: 'pointer', color: C.textMuted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        transition: 'color 0.15s, background 0.15s',
+      }}
+    >
+      <QuickPhrasesIcon />
+    </button>
+  );
+
   const micButton = hasSpeech ? (
     <button
       type="button"
@@ -2152,12 +2178,22 @@ export function Composer({
     + (teamImplementBadge && !krInMenu ? krBadgeW : 0)
     + (loopPill && !loopInMenu ? loopPillW : 0);
 
+  // === Видимость кнопок губы ===
+  // «⋯» стоит в полосе ВСЕГДА, тумблеры внутри решают, что показывать рядом с ним.
+  // Скрытые пользователем в ряд не встают и в подсчёте ширины не участвуют — они
+  // живут пунктами меню; показанные сворачиваются по ширине, как раньше.
+  // По умолчанию снаружи — «Прикрепить» и «Обсудить с командой»; скилл, цикл и
+  // отдельное дерево живут в «⋯» (у режимов и так есть пилюли состояния)
+  const composerVis = useActionVisibility('composer', ['slash', 'loop', 'worktree']);
+  const shownCollapsible = collapsible.filter(c => composerVis.isVisible(c.key));
+
   const visibleCount = useToolbarOverflow({
     stripRef,
     leftBlock: STRIP_LEFT_NOMINAL[isMobile ? 'm' : 'd'],
     badgesWidth,
     rightWidth,
-    count: collapsible.length,
+    // Считаем только показанные: скрытых в ряду нет вовсе
+    count: shownCollapsible.length,
     // Всегда включено (как в шапке FileViewer): решает замер полосы, а не ширина окна.
     // Гейт по isMobile оставлял планшет и телефон в ландшафте вовсе без сворачивания —
     // кнопки с flexShrink:0 выдавливали строку за край губы
@@ -2212,7 +2248,35 @@ export function Composer({
         sublabel: `Включено · ${teamMechMeta?.name ?? ''}`,
         toggle: true, onClick: () => setTeamMech(null) },
   ].filter(Boolean) as OverflowItem[]);
-  const hiddenItems = [...collapsible.slice(visibleCount).map(c => c.item), ...activeModeItems];
+  // Глазик-спутник строки: показывает, стоит ли кнопка в самой полосе, и переключает
+  // это по клику (меню не закрывается — набор выставляется одним заходом)
+  const visAction = (key: string) => ({
+    icon: composerVis.isVisible(key)
+      ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+    title: composerVis.isVisible(key) ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
+    onClick: () => composerVis.toggle(key),
+  });
+  // В «⋯» — ВСЕ кнопки ряда: клик по строке выполняет действие, глазик справа решает,
+  // стоит ли кнопка в самой полосе. Не влезшие по ширине и скрытые пользователем
+  // отличаются только состоянием глаза — отдельных секций не нужно
+  const hiddenItems: OverflowItem[] = [
+    ...collapsible.map(c => ({ ...c.item, action: visAction(c.key) })),
+    ...activeModeItems,
+  ];
+
+  // Индикатор на «⋯» означает «живое состояние спрятано»: считаем только по строкам,
+  // которых в самой полосе сейчас нет: в hiddenItems теперь входит ВЕСЬ ряд
+  // (ради глазиков), проверка «есть toggle» без этого гейта горела бы и тогда, когда
+  // включённая кнопка стоит на виду
+  const stripKeys = new Set(shownCollapsible.slice(0, visibleCount).map(c => c.key));
+  const menuOnlyActive = hiddenItems.some(i => i.toggle && !stripKeys.has(i.key));
+
+  // Right-click по губе (desktop) открывает то же «Ещё» — но ВСЕГДА в полном составе,
+  // независимо от того, что реально спрятано шириной: жест должен быть путём ко всем
+  // кнопкам, а не только к тем, что не влезли. Счётчик counter отличает открытия
+  const [ctxOpen, setCtxOpen] = useState(0);
+  const ctxAnchorRef = useRef<DOMRect | null>(null);
 
   // Офлайн: заглушка вместо полей. Компонент остаётся смонтированным, поэтому
   // набранный текст (text) сохраняется до возврата в онлайн. Ранний return строго
@@ -2420,7 +2484,7 @@ export function Composer({
             ? talkStopButton
             : isListening
               ? <>{cancelRecBtn}{confirmRecBtn}</>
-              : <>{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
+              : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
       </div>
@@ -2436,7 +2500,12 @@ export function Composer({
         zIndex тут ЗАПРЕЩЁН: стокинг-контекст запер бы попапы губы (Z.dropdown)
         под карточкой — «композер над попапами». Губа и так ниже карточки: она
         стоит в DOM раньше и обе позиционированы в одном контексте обёртки */}
-    <div ref={stripRef} style={{
+    <div ref={stripRef} className={isMobile ? undefined : 'cc-ghost-zone'} onContextMenu={isMobile ? undefined : e => {
+      // Правый клик по губе (desktop) — полное меню всех кнопок ряда у курсора
+      e.preventDefault();
+      ctxAnchorRef.current = new DOMRect(e.clientX, e.clientY, 0, 0);
+      setCtxOpen(c => c + 1);
+    }} style={{
       position: 'relative',
       display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4,
       flexWrap: 'nowrap', minWidth: 0,
@@ -2454,7 +2523,21 @@ export function Composer({
       <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
         {modeButton}
       </div>
-      {collapsible.slice(0, visibleCount).map(c => <span key={c.key} style={{ display: 'flex', flexShrink: 0 }}>{c.node}</span>)}
+      {/* Ghost-заглушение сворачиваемого ряда (только десктоп — класс гасится вне
+          hover-media): спан-обёртки кнопок остаются «своими» для арифметики
+          useToolbarOverflow, заглушку несёт каждая. В ряду — только показанные
+          пользователем, из них по ширине помещается visibleCount */}
+      {shownCollapsible.slice(0, visibleCount).map(c => (
+        <span key={c.key} className={isMobile ? undefined : 'cc-ghost-actions'} style={{ display: 'flex', flexShrink: 0 }}>{c.node}</span>
+      ))}
+      {/* Скрытое ctx-меню правого клика: без триггера, открывается внешним сигналом.
+          Живёт отдельно от «⋯»: тот показывает состав ряда, а жест обязан давать
+          доступ ко ВСЕМ кнопкам независимо от ширины полосы */}
+      {!isMobile && hiddenItems.length > 0 && (
+        <ToolbarOverflowMenu items={hiddenItems} title="Все действия"
+          renderTrigger={() => null}
+          openTrigger={{ counter: ctxOpen, anchor: ctxAnchorRef.current }} />
+      )}
       {hiddenItems.length > 0 && (
         // Этап 2: triggerTitle динамический — если в меню есть активные (toggle=true)
         // строки, подсказываем, что внутри живое состояние, а не просто свёрнутые
@@ -2463,8 +2546,8 @@ export function Composer({
           isMobile={isMobile}
           items={hiddenItems}
           title="Ещё"
-          indicator={hiddenItems.some(i => i.toggle)}
-          triggerTitle={hiddenItems.some(i => i.toggle)
+          indicator={menuOnlyActive}
+          triggerTitle={menuOnlyActive
             ? 'Ещё · есть включённые режимы'
             : 'Ещё'}
         />
@@ -2504,6 +2587,19 @@ export function Composer({
 
     {/* Десктоп-только: на мобиле пояснение лока уходит в шторку (Modal внутри modeButton) */}
     {!isMobile && lockInfoCallout}
+
+    {/* Быстрые фразы: попап списка (клик по фразе = обычная отправка мимо поля ввода,
+        черновик в поле остаётся нетронутым) и модалка правки набора */}
+    {phrasesAnchor && (
+      <QuickPhrasesMenu
+        anchor={phrasesAnchor}
+        onClose={() => setPhrasesAnchor(null)}
+        onPick={text => void handleSend(text)}
+        onEdit={() => setPhrasesEditOpen(true)}
+      />
+    )}
+
+    {phrasesEditOpen && <QuickPhrasesDialog onClose={() => setPhrasesEditOpen(false)} />}
 
     {pendingMode && (
       <DangerModeConfirm

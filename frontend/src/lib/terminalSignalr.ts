@@ -1,9 +1,12 @@
-import * as signalR from '@microsoft/signalr'
+import * as signalR from '@microsoft/signalr';
+import { readStoredToken } from './offline';
 
 let connection: signalR.HubConnection | null = null
 
 function getToken(): string {
-  return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+  // readStoredToken() отсеивает мусор в storage («null»/«undefined»), иначе
+  // SignalR отправил бы ?access_token=null на /hubs/terminal
+  return readStoredToken() ?? ''
 }
 
 function getConnection(): signalR.HubConnection {

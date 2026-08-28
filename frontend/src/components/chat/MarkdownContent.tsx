@@ -9,6 +9,7 @@ import { CodeBlockFrame } from './CodeCopyButton';
 import { ReaderLinkWrap } from './ReaderLinkButton';
 import { api } from '../../lib/api';
 import { C, FONT, SP } from '../../lib/design';
+import { readStoredToken } from '../../lib/offline';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { relPathTree } from '../../lib/paths';
 import { useProjectFileIndex, lookupProjectFile, FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
@@ -415,9 +416,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
 
 // Оборачивает внешний URL через backend-прокси (/api/proxy) — поддерживает любой тип контента
 export function proxyUrl(url: string): string {
-  const token = typeof localStorage !== 'undefined'
-    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-    : null;
+  const token = readStoredToken();
   const params = new URLSearchParams({ url });
   if (token) params.set('access_token', token);
   return `/api/proxy?${params}`;

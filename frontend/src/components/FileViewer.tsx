@@ -23,7 +23,7 @@ import type { Project, GitBlameLine, GitLogEntry, ChangedBySession } from '../ty
 import { api } from '../lib/api';
 import { basename } from '../lib/paths';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
-import { OfflineError } from '../lib/offline';
+import { OfflineError, readStoredToken } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
 import { relTime } from '../lib/gitFormat';
@@ -143,9 +143,7 @@ interface FileContent {
 }
 
 function streamUrl(projectId: string, filePath: string): string {
-  const token = typeof localStorage !== 'undefined'
-    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-    : null;
+  const token = readStoredToken();
   const params = new URLSearchParams({ path: filePath });
   if (token) params.set('access_token', token);
   return `/api/projects/${projectId}/files/stream?${params}`;

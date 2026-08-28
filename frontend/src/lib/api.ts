@@ -1,5 +1,5 @@
 import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse } from '../types';
-import { request } from './offline';
+import { readStoredToken, request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -626,9 +626,7 @@ export const api = {
     // фон не сгенерирован, превью рисует стандартный паттерн.
     backgroundTileUrl: (project: Project): string | null => {
       if (project.background?.kind !== 'generated' || !project.background.tileVersion) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', project.background.tileVersion);
@@ -1016,9 +1014,7 @@ export const api = {
     // иначе после перегенерации браузер покажет старый кадр из кэша.
     avatarUrl: (persona: Persona): string | null => {
       if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
@@ -1047,9 +1043,7 @@ export const api = {
     // URL оригинала загруженного аватара (для перекропа) — токен через ?access_token=
     avatarOriginalUrl: (persona: Persona): string | null => {
       if (!persona.avatar?.originalFile) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.originalFile);
@@ -1057,9 +1051,7 @@ export const api = {
     },
     // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
     avatarCandidateUrl: (id: string, file: string): string => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
@@ -1429,9 +1421,7 @@ export const api = {
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(`/api/chats/${id}/files/upload`,
@@ -1644,9 +1634,7 @@ export const api = {
     // потому что тег не шлёт заголовки. Нужен картинкам в markdown — README ссылается
     // на них относительным путём, а base64 из files/content для <img src> не подходит
     fileUrl: (projectId: string, path: string): string => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams({ path });
       if (token) params.set('access_token', token);
       return `/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
@@ -1713,9 +1701,7 @@ export const api = {
     officeForceSave: (projectId: string, path: string) =>
       request<{ ok: boolean; reason?: string }>(`/projects/${projectId}/files/office-force-save?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(
@@ -1904,9 +1890,7 @@ export const api = {
       ),
     // Загрузить документ файлом (multipart — request() не ставит Content-Type для FormData)
     addDocumentFile: async (id: string, file: File, name?: string): Promise<{ id: string; name: string; indexingStatus: string }> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       if (name) form.append('name', name);

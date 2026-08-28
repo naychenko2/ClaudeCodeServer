@@ -54,7 +54,7 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
     setError(null);
     api.mcp.catalogSearch('')
       .then(res => {
-        setServers(res.servers ?? []);
+        setServers(res.items ?? []);
         if (res.error) setError(res.error);
       })
       .catch(e => setError(e instanceof Error && e.message ? e.message : 'Не удалось загрузить каталог'));

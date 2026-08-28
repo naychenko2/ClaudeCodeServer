@@ -3097,12 +3097,15 @@ export interface McpCatalogServer {
   unsupportedTag?: string | null;
 }
 
-// Ответ GET /api/mcp/catalog/search: список и курсор пагинации. q поиска — на бэке,
-// пустой запрос возвращает свежий срез каталога. error — поле фетча (сеть/500),
-// бэкенд в успешном 200 его не возвращает
+// Ответ GET /api/mcp/catalog/search: список и курсор пагинации. Имена полей
+// `items`/`nextCursor` зафиксированы на бэке (McpCatalogSearchResult в
+// backend/.../McpCatalogModels.cs) и в docs/architecture/mcp-registry.md —
+// фронт должен читать их как есть. q поиска — на бэке, пустой запрос
+// возвращает свежий срез каталога. error — поле фетча (сеть/500), бэкенд в
+// успешном 200 его не возвращает
 export interface McpCatalogSearchResult {
-  servers: McpCatalogServer[];
-  cursor?: string | null;
+  items: McpCatalogServer[];
+  nextCursor?: string | null;
   error?: string | null;
 }
 

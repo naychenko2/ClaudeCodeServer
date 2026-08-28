@@ -34,12 +34,12 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
   onManual: () => void;
   onClose: () => void;
 }) {
-  // useMe держит «обо мне» (role/defaultPersonaId); ExecutionEnvironment приходит с
-  // /api/auth/me — пробрасывается полем в типе Me, но useMe пока не отдаёт его. Карточка
-  // без него просто не показывает бейдж среды (см. readExecEnv). Когда useMe расширится,
-  // тут же появится реальное значение без правок компонента
-  useMe();
-  const env = readExecEnv();
+  // useMe держит «обо мне» (role/defaultPersonaId/executionEnvironment). Среда из
+  // /api/auth/me пробрасывается в стор в defaultPersona.ts: карточка без неё просто
+  // не показала бы бейдж среды и предупреждающую полосу (отказ от честной пометки
+  // был бы нарушением договорённости с владельцем — без неё человек не видит, что
+  // stdio-сервер запустится на его машине)
+  const env = useMe().executionEnvironment;
 
   const [q, setQ] = useState('');
   // Серверы из каталога: грузим с бэка (волна 1, задача 9fa075ec). Три состояния
@@ -254,6 +254,21 @@ function CatalogCard({ server, env, installed, isLocalStdioWarning, onPick }: {
         }}>{server.description}</div>
       )}
 
+      {server.prefill?.transport === 'stdio' && (server.prefill.command || server.prefill.args.length > 0) && (() => {
+        // Полная строка запуска из черновика каталога: то же, что уйдёт в запись
+        // после подстановки плейсхолдеров {name} в форме. На карточке каталога
+        // плейсхолдеры видны как есть — сигнал «форма спросит значения» до
+        // нажатия «Настроить подключение»
+        const parts = [server.prefill.command ?? '', ...server.prefill.args].filter(Boolean);
+        const line = parts.join(' ');
+        return (
+          <div title={line} style={{
+            fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono, lineHeight: 1.45,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{line}</div>
+        );
+      })()}
+
       <div style={{
         fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5,
       }}>
@@ -420,10 +435,5 @@ function formatMonth(iso: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-// === Чтение ExecutionEnvironment из текущего пользователя. ===
-// Сейчас стора для него нет (useMe отдаёт только role и defaultPersonaId), поэтому
-// безопасно возвращаем null — карточка просто не покажет бейдж среды. Когда стор
-// расширится, тут же появится реальное значение и бейдж оживёт без правок компонента
-function readExecEnv(): 'local' | 'container' | null {
-  return null;
-}
+// Старая заглушка readExecEnv удалена — executionEnvironment едет через useMe().
+// Заглушка жила ровно один релиз и выпилена вместе с добавлением поля в стор

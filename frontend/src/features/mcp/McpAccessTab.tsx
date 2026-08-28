@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { AlertTriangle, Folder, Info, MessageSquare, Plug, Plus, User } from 'lucide-react';
-import { Button, EmptyState, Menu, Modal, TextField } from '../../components/ui';
+import { Button, ConfirmDialog, EmptyState, Menu, Modal, TextField } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, MODAL_W, R, SHADOW, SP } from '../../lib/design';
@@ -105,6 +105,17 @@ function ServerAccessCard({ server, data, projects, personas, onClose, onEdit }:
   const [expanded, setExpanded] = useState(false);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const isMobile = useIsMobile();
+  // Подтверждение включения каталожного stdio-сервера у local-владельца:
+  // бэк вернул 400 с requiresConfirmation=true, диалог живёт до согласия/отказа
+  const [pendingConfirm, setPendingConfirm] = useState<
+    { project: Project; servers: { key: string; command: string }[] } | null
+  >(null);
+  // Включение проекта в allow-list — единая точка: обрабатывает ответ бэка и
+  // открывает диалог подтверждения при каталожной stdio-записи у local-владельца
+  const toggleProject = async (project: Project, desired: boolean) => {
+    const result = await data.setProjectOn(project, server.key, desired);
+    if (result.kind === 'needsConfirmation') setPendingConfirm({ project, servers: result.servers });
+  };
 
   const rows = buildRows(server, projects, personas);
   const disabled = server.enabled === false;
@@ -123,6 +134,39 @@ function ServerAccessCard({ server, data, projects, personas, onClose, onEdit }:
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
       overflow: 'hidden', flexShrink: 0, opacity: disabled ? 0.62 : 1,
     }}>
+      {pendingConfirm && (
+        <ConfirmDialog
+          title="Включить каталожный сервер в проекте?"
+          subtitle={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warningText} style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  AI Home выполнит эту команду целиком на вашем компьютере. Код сервера
+                  писали не мы, и после включения он попадёт в ходы проекта.
+                </span>
+              </div>
+              <div style={{
+                fontFamily: FONT.mono, fontSize: FS.xs, lineHeight: 1.45,
+                background: C.bgInset, border: `1px solid ${C.border}`, borderRadius: R.md,
+                padding: '8px 10px', color: C.textPrimary,
+                wordBreak: 'break-all', whiteSpace: 'pre-wrap',
+              }}>
+                {pendingConfirm.servers.map(s => s.command).join('\n')}
+              </div>
+            </div>
+          }
+          confirmLabel="Включить"
+          confirmVariant="danger"
+          onConfirm={async () => {
+            const p = pendingConfirm.project;
+            setPendingConfirm(null);
+            try { await data.confirmSetProjectOn(p, server.key); }
+            catch { /* ошибка уже в data.error через setProjectOn/confirmSetProjectOn */ }
+          }}
+          onCancel={() => setPendingConfirm(null)}
+        />
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, padding: '11px 13px', flexWrap: 'wrap' }}>
         <span title={server.label || server.key} style={{
           fontSize: 13.5, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0,
@@ -179,6 +223,7 @@ function ServerAccessCard({ server, data, projects, personas, onClose, onEdit }:
               grantedProjectIds={grantedProjectIds}
               onClose={onClose}
               onEdit={onEdit}
+              onToggleProject={toggleProject}
             />
           ))}
           {hiddenCount > 0 && (
@@ -219,7 +264,7 @@ function ServerAccessCard({ server, data, projects, personas, onClose, onEdit }:
       {anchor && (
         isMobile ? (
           <Modal title={`Кому выдать доступ к «${server.label || server.key}»?`} onClose={() => setAnchor(null)} width={MODAL_W.form}>
-            <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} onEdit={onEdit} />
+            <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} onEdit={onEdit} onToggleProject={toggleProject} />
           </Modal>
         ) : (
           <Menu anchor={anchor} onClose={() => setAnchor(null)} minWidth={330} maxWidth={330} maxHeight={420}>
@@ -227,7 +272,7 @@ function ServerAccessCard({ server, data, projects, personas, onClose, onEdit }:
               <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, padding: '2px 3px' }}>
                 Кому выдать доступ к «{server.label || server.key}»?
               </div>
-              <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} onEdit={onEdit} />
+              <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} onEdit={onEdit} onToggleProject={toggleProject} />
             </div>
           </Menu>
         )
@@ -242,9 +287,10 @@ function rowKey(row: AccessRow): string {
   return `persona:${row.persona.id}`;
 }
 
-function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose, onEdit }: {
+function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose, onEdit, onToggleProject }: {
   row: AccessRow; server: McpServer; data: McpData; projects: Project[];
   grantedProjectIds: Set<string>; onClose: () => void; onEdit: (server: McpServer) => void;
+  onToggleProject: (project: Project, desired: boolean) => void;
 }) {
   const rowStyle: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: SP.sm, padding: '9px 13px',
@@ -273,7 +319,7 @@ function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose
             Проект · все его чаты{covered > 0 ? ` и ${covered} ${plural(covered, 'персону', 'персоны', 'персон')}` : ''}
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => data.setProjectOn(project, server.key, false)}>Убрать</Button>
+        <Button variant="ghost" size="sm" onClick={() => onToggleProject(project, false)}>Убрать</Button>
       </div>
     );
   }
@@ -345,9 +391,10 @@ function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose
 
 // === Пикер выдачи: один на две оси (сегменты «Проекты | Персоны») ===
 
-function GrantPickerBody({ server, data, projects, personas, onDone, onEdit }: {
+function GrantPickerBody({ server, data, projects, personas, onDone, onEdit, onToggleProject }: {
   server: McpServer; data: McpData; projects: Project[]; personas: Persona[]; onDone: () => void;
   onEdit: (server: McpServer) => void;
+  onToggleProject: (project: Project, desired: boolean) => void;
 }) {
   const [segment, setSegment] = useState<'projects' | 'personas'>('projects');
   const searchAutoFocus = useListAutoFocus();
@@ -420,7 +467,7 @@ function GrantPickerBody({ server, data, projects, personas, onDone, onEdit }: {
                 icon={<Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
                 title={project.name}
                 granted={grantedProjectIds.has(project.id)}
-                onClick={() => data.setProjectOn(project, server.key, !grantedProjectIds.has(project.id))}
+                onClick={() => onToggleProject(project, !grantedProjectIds.has(project.id))}
               />
             ))}
           </>

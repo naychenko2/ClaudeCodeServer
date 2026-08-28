@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plug } from 'lucide-react';
+import { AlertTriangle, Plug } from 'lucide-react';
 import { api } from '../../lib/api';
-import { C, FS, SP } from '../../lib/design';
-import { Toggle } from '../../components/ui';
+import { C, FONT, FS, R, SP } from '../../lib/design';
+import { ConfirmDialog, Toggle } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import type { McpServer, Project } from '../../types';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
+
+// Серверы, которые требуют подтверждения включения (каталог + stdio + local-владелец):
+// бэк возвращает массив {key, command} с ПОЛНОЙ строкой запуска — её показываем
+// человеку перед повторным запросом с mcpCatalogConfirmed=true
+interface PendingCatalogConfirm {
+  // Хранится в state для повторного запроса с mcpCatalogConfirmed=true
+  next: string[];
+  servers: { key: string; command: string }[];
+}
 
 // Секция «MCP-серверы» в настройках проекта: тумблеры своих серверов в этом проекте.
 // Allow-list модель: Project.McpServersOn — сервер не едет никуда, пока его здесь
@@ -16,6 +26,10 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
   const [servers, setServers] = useState<McpServer[]>([]);
   const [on, setOn] = useState<string[]>(project.mcpServersOn ?? []);
   const [err, setErr] = useState('');
+  // Подтверждение включения каталожной stdio-записи у local-владельца: бэк отдаёт
+  // 400 с requiresConfirmation=true и полной строкой запуска в servers[].command.
+  // Показываем диалог, по согласию шлём тот же запрос с mcpCatalogConfirmed=true
+  const [pending, setPending] = useState<PendingCatalogConfirm | null>(null);
   // Тумблеры бьют пачкой — счётчик защищает от устаревшего ответа (тот же приём,
   // что в useMcpData и «Поставщиках моделей»)
   const seqRef = useRef(0);
@@ -30,13 +44,12 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
 
   if (servers.length === 0) return null;
 
-  const toggleOn = (key: string, checked: boolean) => {
-    const next = checked ? [...on.filter(k => k !== key), key] : on.filter(k => k !== key);
-    const prev = on;
-    const seq = ++seqRef.current;
-    setOn(next);
-    setErr('');
-    api.projects.update(project.id, { mcpServersOn: next })
+  // Дёргаем сервер ровно один раз: первый запрос — без флага (поймаем 400 с
+  // requiresConfirmation), второй — с mcpCatalogConfirmed=true поверх уже
+  // подтверждённого состояния. Бэкенд отличает «новые ключи» от «уже включённых»,
+  // поэтому повторный запрос не провоцирует новый диалог
+  const sendUpdate = (next: string[], confirmed: boolean, prev: string[], seq: number) =>
+    api.projects.update(project.id, { mcpServersOn: next, mcpCatalogConfirmed: confirmed })
       .then(saved => {
         if (seqRef.current !== seq) return;
         setOn(saved.mcpServersOn ?? []);
@@ -44,9 +57,32 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       })
       .catch((e: unknown) => {
         if (seqRef.current !== seq) return;
+        const body = (e as { body?: { requiresConfirmation?: boolean; servers?: { key: string; command: string }[] } } | null)?.body;
+        if (!confirmed && body?.requiresConfirmation && body.servers) {
+          // Откатываем оптимистичный апдейт и открываем диалог с командами
+          setOn(prev);
+          setPending({ next, servers: body.servers });
+          return;
+        }
         setOn(prev);
         setErr(e instanceof Error && e.message ? e.message : 'Не удалось сохранить');
       });
+
+  const toggleOn = (key: string, checked: boolean) => {
+    const next = checked ? [...on.filter(k => k !== key), key] : on.filter(k => k !== key);
+    const prev = on;
+    const seq = ++seqRef.current;
+    setOn(next);
+    setErr('');
+    void sendUpdate(next, false, prev, seq);
+  };
+
+  const confirmPending = () => {
+    if (!pending) return;
+    const seq = ++seqRef.current;
+    setOn(pending.next);
+    setPending(null);
+    void sendUpdate(pending.next, true, pending.next, seq);
   };
 
   // Сводка статуса в заголовке аккордеона: сколько серверов включено. Считаем по
@@ -92,6 +128,34 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
         <div style={{
           padding: '7px 4px', fontSize: FS.sm, color: C.dangerText, background: C.dangerBg,
         }}>{err}</div>
+      )}
+      {pending && (
+        <ConfirmDialog
+          title="Включить каталожный сервер в проекте?"
+          subtitle={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warningText} style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  AI Home выполнит эту команду целиком на вашем компьютере. Код сервера
+                  писали не мы, и после включения он попадёт в ходы проекта.
+                </span>
+              </div>
+              <div style={{
+                fontFamily: FONT.mono, fontSize: FS.xs, lineHeight: 1.45,
+                background: C.bgInset, border: `1px solid ${C.border}`, borderRadius: R.md,
+                padding: '8px 10px', color: C.textPrimary,
+                wordBreak: 'break-all', whiteSpace: 'pre-wrap',
+              }}>
+                {pending.servers.map(s => s.command).join('\n')}
+              </div>
+            </div>
+          }
+          confirmLabel="Включить"
+          confirmVariant="danger"
+          onConfirm={confirmPending}
+          onCancel={() => setPending(null)}
+        />
       )}
     </AccordionSection>
   );

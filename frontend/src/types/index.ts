@@ -1802,6 +1802,11 @@ export interface Me {
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;
   onboardingSessionId?: string | null;
+  // Среда исполнения процессов пользователя: 'local' — на хосте, 'container' —
+  // в общей Docker-песочнице cc-sandbox. Карточка каталога MCP-серверов рисует по
+  // нему бейдж среды и предупреждение для stdio-записей у local-владельцев. Бэк
+  // отдаёт поле в AuthController.MeResponse наравне с role
+  executionEnvironment?: 'local' | 'container';
 }
 
 export interface AuthState {
@@ -3069,9 +3074,15 @@ export interface McpCatalogPrefill {
   description?: string | null;
   // Способ подключения из реестра. stdio даёт npm-команду, remote — URL
   transport: McpCatalogTransport;
-  // Команда запуска (npm) с фиксированной версией (npx -y @pkg@1.2.3) — иначе
-  // превью строки противоречило бы реальности
+  // Рантайм stdio-сервера (npx/uvx/…) — фиксированная версия в Args, не здесь. У
+  // http-серверов поле остаётся пустым, имя хоста лежит в Url
   command?: string;
+  // Полный argv stdio-сервера (рантайм-флаги, имя пакета@версия, позиционные и
+  // именованные аргументы). Плейсхолдеры {name} подставляет форма значениями
+  // соответствующих полей с target='args' — без этого запись создалась бы без
+  // пакета (McpCatalogMapper кладёт `pkg@version` сюда). Совпадает с DTO
+  // McpCatalogPrefillDto.Args 1:1
+  args: string[];
   // Адрес remote-сервера
   url?: string;
   // Поля формы в порядке реестра. Описание и обязательность едут ТОЛЬКО сюда и в
@@ -3153,30 +3164,37 @@ export interface McpServerCatalogDraft {
 
 // Ревизия каталожной записи (волна 2). Бэк возвращает по батчу имён (POST /mcp/catalog/revisions).
 // Один заход ревизии — одна карточка в McpServerList. status: явно deprecated/deleted — отзыв
-// в реестре, рисуем плашкой; checkFailed: реестр лежит/неизвестная ошибка, НЕ отзыв, тон
-// нейтральный (ТЗ «проверить не удалось» — не пугать); latestVersion: что в реестре сейчас,
-// сверяем semver с версией записи и при новизне показываем пометку «в реестре новее».
-// active: всё в порядке, но latestVersion всё равно отдаётся — на случай если сервер уже
-// новее (проверка наоборот: «мы новее реестра» не нужна, hasNewer=false).
+// в реестре, рисуем плашкой; deprecated=true поднимается из явного status или как самостоятельный
+// сигнал бэка (для записей, где реестр отдаёт deprecated флагом без status); checkFailed: реестр
+// лежит/неизвестная ошибка, НЕ отзыв, тон нейтральный (ТЗ «проверить не удалось» — не пугать);
+// latestVersion: что в реестре сейчас, сверяем semver с версией записи и при новизне показываем
+// пометку «в реестре новее». Совпадает с DTO McpCatalogRevisionItem на бэке
 export interface McpCatalogRevision {
   name: string;
   // Статус реестра. Не задан — реестр ответил, но статуса у записи нет (нормально для active)
   status?: 'active' | 'deprecated' | 'deleted' | null;
+  // Сервер явно помечен устаревшим (отдельный флаг бэка помимо status). Дублирует status='deprecated'
+  // для записей, у которых реестр отдаёт deprecated флагом, а не строкой
+  deprecated?: boolean | null;
   // Последняя версия из реестра (semver-строка). Не задан — реестр не отдал её
   latestVersion?: string | null;
   // Реестр временно/постоянно недоступен. ОТЛИЧНО от deprecated — рисуем нейтрально
   checkFailed?: boolean | null;
-  // true — latestVersion выше, чем версия в McpServerCatalogDraft.version
-  hasNewer?: boolean | null;
+  // Сырой текст ошибки проверки (сеть/5xx/таймаут). Показывается только под плашкой
+  // «проверить не удалось» — нейтральный тон, НЕ «отозван»
+  error?: string | null;
+  // true — latestVersion выше, чем версия в McpServerCatalogDraft.version. Совпадает с
+  // DTO McpCatalogRevisionItem.HasNewerVersion 1:1
+  hasNewerVersion?: boolean | null;
 }
 
-// Ответ батч-эндпоинта. revisions: всё, что реестр отдал по запрошенным именам.
-// missing: имена, по которым реестр ничего не нашёл (404/пусто) — НЕ то же, что checkFailed.
+// Ответ батч-эндпоинта. items: всё, что реестр отдал по запрошенным именам —
+// совпадает с бэковым { items = await catalog.ReviseAsync(queries, ct) }.
+// missing: бэк НЕ возвращает; вычисляем фронтом как «запрашивали имя, а его нет в items».
 // checkFailed: батч целиком не дошёл (сеть/5xx) — никаких индивидуальных пометок ставить
 // нельзя, фронт раскладывает только то, что пришло. error: общая ошибка запроса
 export interface McpCatalogRevisionResult {
-  revisions: McpCatalogRevision[];
-  missing?: string[];
+  items: McpCatalogRevision[];
   checkFailed?: boolean | null;
   error?: string | null;
 }

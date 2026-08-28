@@ -403,7 +403,7 @@ function CatalogRevisionNote({ revision, checkFailed }: {
   } else if (revision?.status === 'deleted') {
     tone = 'warn';
     text = 'Сервер удалён из реестра. Лучше выключить и завести замену вручную.';
-  } else if (revision?.hasNewer) {
+  } else if (revision?.hasNewerVersion) {
     tone = 'info';
     text = revision.latestVersion
       ? `В реестре вышла новее: ${revision.latestVersion}. Можно обновить вручную.`

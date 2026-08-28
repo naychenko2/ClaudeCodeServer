@@ -127,11 +127,17 @@ export function McpServerForm({ data, server, catalogDraft, onDone, onCancel }: 
   });
   const [args, setArgs] = useState(() => {
     if (catalogDraft) {
-      // В argv идут только поля с target='args' и непустым default. Бэкенд в DTO
-      // кладёт target строго из 'env' | 'header' | 'url' | 'args' — старого флага
-      // arg нет, его роль играет target
-      const argPairs = catalogDraft.fieldsDraft.filter(f => f.target === 'args' && f.default);
-      return argPairs.map(f => quoteIfNeeded(f.default ?? '')).join(' ');
+      // argv берём из prefill.args целиком: бэк уже сложил туда рантайм-флаги,
+      // `pkg@version` и пакетные аргументы, а поля target='args' с default'ом
+      // и без подставили прямо в эту строку. Осталось подменить плейсхолдеры
+      // {name} значениями одноимённых полей (бэк кладёт {name}, форма подставляет
+      // введённое человеком). Сохраняем строкой, чтобы кавычки были видны
+      const prefillArgs = catalogDraft.source.prefill?.args ?? [];
+      const valuesByName: Record<string, string> = {};
+      for (const f of catalogDraft.fieldsDraft) {
+        if (f.target === 'args' && f.default != null) valuesByName[f.name] = f.default;
+      }
+      return prefillArgs.map(a => quoteIfNeeded(substitutePlaceholders(a, valuesByName))).join(' ');
     }
     return (server?.args ?? []).join(' ');
   });
@@ -609,4 +615,16 @@ function quoteIfNeeded(value: string): string {
   // либо экранирование, не наше дело)
   if (/[\s"'\\$`<>|&;]/.test(value)) return `"${value}"`;
   return value;
+}
+
+// Подстановка плейсхолдеров {name} в строке argv-аргумента. Бэк кладёт {имя} в
+// prefill.args, когда у именованного пакета нет default — форма подменяет его на
+// введённое человеком значение из fieldsDraft с тем же именем. Неизвестные
+// плейсхолдеры (нет поля с таким именем) оставляем как есть — это сигнал
+// реестру/мапперу, что в DTO что-то развалилось, а не наша ошибка
+function substitutePlaceholders(value: string, valuesByName: Record<string, string>): string {
+  return value.replace(/\{([^{}]+)\}/g, (whole, name: string) => {
+    const v = valuesByName[name];
+    return v === undefined || v === '' ? whole : v;
+  });
 }

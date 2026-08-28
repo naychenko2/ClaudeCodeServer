@@ -120,3 +120,95 @@ test('каталог MCP не падает на поиске, показывае
 
   expect(errors.filter(e => !e.includes('ResizeObserver') && !e.includes('favicon'))).toEqual([]);
 });
+
+// Дефект D5 (из задачи f1ad4c71): McpServerForm при импорте из каталога собирал
+// argv только из полей target='args' с default'ом, игнорируя prefill.args. В итоге
+// запись создавалась с command='npx' и пустыми args — сервер не запускался. Тест
+// импортирует stdio-запись через настоящий бэкенд и проверяет, что в записи args
+// содержит имя пакета с версией (подстрока '@' + semver)
+test('импорт stdio-сервера из каталога кладёт имя пакета с версией в args', async ({ page, request }) => {
+  const token = await login(request);
+  await ensureCatalogFlag(request, token);
+
+  await loginAndOpenMcpCatalog(page);
+
+  // Поиск 'filesystem' — реестр почти всегда содержит такую запись. Если карточек
+  // нет — пропускаем (каталог недоступен, тест не проваливаем ложно)
+  const search = page.locator('input[placeholder*="Поиск" i]').first();
+  await expect(search).toBeVisible();
+  await search.fill('filesystem');
+  await page.waitForTimeout(2000);
+
+  const firstCard = page.locator('button.card-act').first();
+  if (await firstCard.count() === 0) {
+    test.skip(true, 'каталог пуст — пропускаем до наличия карточек');
+    return;
+  }
+  await firstCard.click();
+  await page.waitForTimeout(2000);
+
+  // Жмём «Сохранить выключенным» — это и есть сценарий «импорт каталожной записи»
+  const saveBtn = page.getByRole('button', { name: /Сохранить выключенным/ });
+  await expect(saveBtn).toBeVisible({ timeout: 5000 });
+  await saveBtn.click();
+  // Модалка закрывается после onDone, ждём пока список серверов отрендерится
+  await page.waitForTimeout(3000);
+
+  // Тянем список серверов тем же токеном и ищем только что импортированную запись.
+  // Критерий «правильной» строки запуска: у stdio-записи из каталога args содержит
+  // подстроку '@' (пакет@версия). Без D5-fix там оставалось пусто, и сервер бы не
+  // запустился (один npx без аргументов ничего не делает)
+  const list = await request.get('/api/mcp/servers', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(list.ok(), 'GET /api/mcp/servers должен пройти').toBeTruthy();
+  const servers = await list.json() as Array<{
+    key: string; transport: string; command?: string | null;
+    args?: string[]; catalogRef?: { name: string } | null;
+  }>;
+  // Каталожные записи — те, у кого заполнен catalogRef.name. Ищем stdio среди них
+  const catalogStdio = servers.find(s =>
+    s.transport === 'stdio' && !!s.catalogRef?.name);
+  if (!catalogStdio) {
+    test.skip(true, 'после импорта нет stdio-записи с catalogRef — пропускаем');
+    return;
+  }
+  // argv содержит имя пакета с версией — substring вида 'pkg@x.y.z' или 'pkg@x'
+  const argv = catalogStdio.args ?? [];
+  expect(argv.length, 'argv должен быть непустым у импортированной stdio-записи').toBeGreaterThan(0);
+  const hasPkgVersion = argv.some(a => /@[\d.]+/.test(a));
+  expect(hasPkgVersion,
+    `в argv должен быть токен вида pkg@1.2.3 — фактический argv: ${JSON.stringify(argv)}`
+  ).toBeTruthy();
+  // command тоже не пустой (фиксированный рантайм, npx/uvx)
+  expect(catalogStdio.command, 'command у импортированной записи не должен быть пустым').toBeTruthy();
+});
+
+// Дефект D6 (из задачи f1ad4c71): фронт звонил на /mcp/catalog/revisions (мн.ч.),
+// бэк отдаёт 404. Обёртка ответа тоже была сломанной: фронт читал res.revisions, бэк
+// отдаёт res.items. Оба пути мы уже обжигали (поиск: servers/items; ревизия:
+// revisions/revision) — фиксируем тестом, чтобы третий раз не ходить
+test('ревизия каталога отвечает 200 и возвращает items', async ({ request }) => {
+  const token = await login(request);
+  await ensureCatalogFlag(request, token);
+
+  // Имя, по которому реестр обычно что-то отдаёт — точное содержимое не важно:
+  // бэк сам фильтрует по «есть ли у владельца запись с таким CatalogRef.name»,
+  // отсутствующее имя просто игнорирует в ответе. Здесь нас интересует сам факт
+  // 200 + тело {items: [...]}, а не наполнение
+  const r = await request.post('/api/mcp/catalog/revision', {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { names: ['io.modelcontextprotocol/filesystem'] },
+  });
+  // 200 — путь единственного числа не сломан. 503 — каталог выключен на сервере,
+  // не наша ошибка контракта. Всё остальное — регрессия
+  expect([200, 503]).toContain(r.status());
+  if (r.status() !== 200) {
+    test.skip(true, `каталог выключен (${r.status()}) — пропускаем проверку items`);
+    return;
+  }
+  const body = await r.json() as { items?: unknown[] };
+  expect(Array.isArray(body.items),
+    `ответ POST /api/mcp/catalog/revision обязан содержать items[], получено: ${JSON.stringify(body).slice(0)}`
+  ).toBeTruthy();
+});

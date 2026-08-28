@@ -19,9 +19,17 @@ interface MeState {
   role: string;
   needsOnboarding: boolean;
   onboardingSessionId: string | null;
+  // Среда исполнения процессов пользователя: 'local' — на хосте, 'container' — в
+  // общей Docker-песочнице cc-sandbox. Карточка каталога MCP-серверов рисует по
+  // нему бейдж среды и предупреждение у stdio-записей у local-владельцев. null —
+  // /me ещё не ответил; устаревшее значение не показываем, чтобы сигнал был свежим
+  executionEnvironment: 'local' | 'container' | null;
 }
 
-let _me: MeState = { loaded: false, userId: null, defaultPersonaId: null, role: '', needsOnboarding: false, onboardingSessionId: null };
+let _me: MeState = {
+  loaded: false, userId: null, defaultPersonaId: null, role: '',
+  needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null,
+};
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
 
@@ -54,13 +62,17 @@ export function setMeFromServer(me: Me): void {
     role: me.role ?? '',
     needsOnboarding: !!me.needsOnboarding,
     onboardingSessionId: me.onboardingSessionId ?? null,
+    executionEnvironment: me.executionEnvironment ?? null,
   };
   emit();
 }
 
 // Сброс при разлогине — данные не должны протечь следующему аккаунту
 export function clearMe(): void {
-  _me = { loaded: false, userId: null, defaultPersonaId: null, role: '', needsOnboarding: false, onboardingSessionId: null };
+  _me = {
+    loaded: false, userId: null, defaultPersonaId: null, role: '',
+    needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null,
+  };
   emit();
 }
 

@@ -6,6 +6,7 @@ import { archiveApi } from '../api/chats';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
+import { showArchivedToast } from '../lib/archiveToast';
 import { C, FONT, CHAT_COLUMN_W, SPLASH_W } from '../lib/design';
 import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { Button, Island, IslandScaffold } from '../components/ui';
@@ -275,22 +276,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     const neighbor = chats.find(c => c.id !== updated.id && !isArchivedChat(c));
     if (neighbor) queueMicrotask(() => selectChat(neighbor));
     else queueMicrotask(() => backToList());
-    showToast(
-      'Чат убран в архив',
-      `«${updated.name ?? 'Без названия'}» больше не в общем списке.`,
-      'info',
-      {
-        label: 'Отменить',
-        onClick: async () => {
-          try {
-            const fresh = await archiveApi.setArchived(updated.id, false);
-            handleChatEdited(fresh);
-          } catch (e) {
-            showToast('Архив', e instanceof Error ? e.message : 'Не удалось вернуть чат из архива');
-          }
-        },
-      },
-    );
+    showArchivedToast(updated, handleChatEdited);
   };
 
   // Чат удалён — убрать из списка; если был активным — вернуться к списку

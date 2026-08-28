@@ -18,7 +18,6 @@ import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
-import { archiveApi } from '../api/chats';
 import { isArchivedChat } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
@@ -32,6 +31,7 @@ import { BackButton, Button, IconButton } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
+import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
@@ -981,22 +981,7 @@ const windowWidth = useWindowWidth();
         const neighbor = list.find(s => s.id !== updated.id && !isArchivedChat(s));
         if (neighbor) handleSelectSession(neighbor);
         else handleClearSession();
-        showToast(
-          'Чат убран в архив',
-          `«${updated.name ?? 'Без названия'}» больше не в общем списке.`,
-          'info',
-          {
-            label: 'Отменить',
-            onClick: async () => {
-              try {
-                const fresh = await archiveApi.setArchived(updated.id, false);
-                handleSessionUpdated(fresh);
-              } catch (e) {
-                showToast('Архив', e instanceof Error ? e.message : 'Не удалось вернуть чат из архива');
-              }
-            },
-          },
-        );
+        showArchivedToast(updated, handleSessionUpdated);
       }).catch(() => { /* офлайн — без соседа, без тоста; карточка в SessionList подтянется */ });
     }
   };

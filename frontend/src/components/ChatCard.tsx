@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Sparkles, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -15,7 +15,7 @@ import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
 import { updateChatFields } from '../lib/chatUpdate';
 import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
 import { showToast } from '../lib/toast';
-import { ChatArchiveActions } from './ChatArchiveActions';
+import { isFreshArchiveSummary } from '../lib/archiveCard';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { TagChip } from './TagChip';
 import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
@@ -160,10 +160,10 @@ interface Props {
   // тостом. Не задан — пункта меню «В архив» нет (например, витрина UI-кита)
   onArchive?: (archived: boolean) => void;
   // Сводка чата (модель по ленте). Сеть на стороне списка (archiveApi.buildDigest).
-  // Не задан — подвал у архивной карточки пуст
+  // Не задан — пункта меню «Собрать сводку» у архивного чата нет
   onBuildDigest?: () => Promise<unknown>;
   // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
-  // Не задан — кнопки в подвале нет
+  // Не задан — пункта меню «Сохранить в заметки» нет
   onSaveAsNote?: () => Promise<unknown>;
   // Изменение чата из меню карточки (мьют уведомлений, срок хранения) — обновлённую
   // сессию возвращает бэкенд, список обновляет ею своё состояние. Не задан — пунктов нет
@@ -1081,6 +1081,29 @@ export function ChatCard({
               onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
             />
           )}
+          {/* Действия над архивным чатом: раньше жили в подвале карточки, теперь —
+              строками меню (карточка в списке остаётся обычной). Показываются только
+              у архивного чата и только когда список дал канал: сеть, тосты и
+              обновление записи — на его стороне. Оба зова асинхронные (сборка сводки
+              идёт к модели секундами), меню закрывается сразу: держать его открытым
+              под ожидание нельзя — пользователь всё равно уходит по списку */}
+          {isArchivedChat(s) && onBuildDigest && (
+            <MenuItem
+              icon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              // Свежая сводка уже лежит в чате — предлагаем обновить, а не собрать заново
+              label={isFreshArchiveSummary(s) ? 'Обновить сводку' : 'Собрать сводку'}
+              isMobile={isMobile}
+              onClick={e => { e.stopPropagation(); setMenu(null); void onBuildDigest(); }}
+            />
+          )}
+          {isArchivedChat(s) && onSaveAsNote && (
+            <MenuItem
+              icon={<FileText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label="Сохранить в заметки"
+              isMobile={isMobile}
+              onClick={e => { e.stopPropagation(); setMenu(null); void onSaveAsNote(); }}
+            />
+          )}
           <MenuItem
             icon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             label="Удалить"
@@ -1107,18 +1130,6 @@ export function ChatCard({
         </Menu>
       )}
 
-      {/* Подвал архивной карточки — то полезное, что раньше жило на отдельной
-          странице «Архив» (её больше нет — архив стал РЕЖИМОМ списка). Показывается
-          только у архивных карточек И только когда список дал все три канала —
-          иначе часть кнопок была бы мёртвой */}
-      {isArchivedChat(s) && onArchive && onBuildDigest && onSaveAsNote && (
-        <ChatArchiveActions
-          chat={s}
-          onRestore={() => onArchive(false)}
-          onBuildDigest={onBuildDigest}
-          onSaveAsNote={onSaveAsNote}
-        />
-      )}
     </div>
   );
 }

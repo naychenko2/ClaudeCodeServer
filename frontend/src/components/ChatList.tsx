@@ -136,7 +136,12 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // последующие отдаются из кэша.
   const handleBuildDigest = async (chat: Session) => {
     try {
-      onEdited(await archiveApi.buildDigest(chat.id));
+      const updated = await archiveApi.buildDigest(chat.id);
+      onEdited(updated);
+      // Сводку показываем тостом: карточка в списке её больше не рисует
+      // (подвал убран), а ход к модели занимает секунды — без ответа кажется,
+      // что пункт меню ничего не сделал
+      showToast('Сводка', updated.archiveSummary?.trim() || 'Сводка готова', 'info');
     } catch (e) {
       showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
     }

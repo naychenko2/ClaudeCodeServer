@@ -243,6 +243,18 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         ));
         return;
       }
+      // Чат убран/возвращён из архива на другом клиенте/устройстве: рефетчим
+      // конкретный чат и кладём обновление в список — иначе archived-флаг
+      // залежался бы до следующего тика поллинга (5с) и карточка висела бы
+      // в списке, уже уйдя в архив. Локальная мутация из ChatCard идёт через
+      // handleArchive и СИЛЬНЕЕ этого refetch (обновляет state синхронно, до
+      // прихода события). Форма — как в ChatsPage и wallStore
+      if (msg.type === 'chat_archived' && msg.sessionId) {
+        api.chats.get(msg.sessionId)
+          .then(updated => setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s)))
+          .catch(() => { /* чат ушёл из набора или офлайн — ignore */ });
+        return;
+      }
       if (msg.type !== 'status_changed') return;
       setSessions(prev => prev.map(s =>
         s.id === msg.sessionId
@@ -332,7 +344,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // 502 «модель упала» приходят человеческим текстом.
   const handleBuildDigest = async (s: Session) => {
     try {
-      handleSessionUpdated(await archiveApi.buildDigest(s.id));
+      const updated = await archiveApi.buildDigest(s.id);
+      handleSessionUpdated(updated);
+      // Сводку показываем тостом: карточка в списке её больше не рисует
+      // (подвал убран), а ход к модели занимает секунды — без ответа кажется,
+      // что пункт меню ничего не сделал
+      showToast('Сводка', updated.archiveSummary?.trim() || 'Сводка готова', 'info');
     } catch (e) {
       showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
     }

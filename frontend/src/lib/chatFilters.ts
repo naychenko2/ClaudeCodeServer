@@ -150,6 +150,28 @@ export function persistChatFilters(scopeKey: string, v: ChatFilters): void {
   } catch { /* квота/приватный режим */ }
 }
 
+
+// Область фильтров, к которой относится чат: чаты проекта живут в списке своего
+// проекта (scope = projectId), остальные — в глобальном списке
+export function chatFilterScope(s: { projectId?: string | null }): string {
+  return s.projectId ?? 'global';
+}
+
+// Внешний выход из архивного вида. Состояние фильтров у каждого списка своё
+// (useChatFilters — локальный state поверх localStorage), поэтому снять архив
+// «издалека» — из шапки открытого чата, где своих фильтров нет вовсе — можно
+// только сигналом: пишем в хранилище (оно и есть истина) и будим подписчиков.
+// Смонтированного списка может не быть совсем (мобильная раскладка, свёрнутая
+// панель) — тогда запись просто дождётся следующего чтения хранилища.
+const archiveExitListeners = new Set<(scopeKey: string) => void>();
+
+export function leaveChatArchiveView(scopeKey: string): void {
+  const cur = loadChatFilters(scopeKey);
+  if (!cur.archived) return;
+  persistChatFilters(scopeKey, { ...cur, archived: false });
+  archiveExitListeners.forEach(fn => fn(scopeKey));
+}
+
 // Состояние фильтров для одной области. Перечитывает хранилище при смене scopeKey,
 // поэтому сохранность не зависит от того, размонтируется ли панель (key проекта,
 // переключение вкладок сайдбара, смена мобильной/десктопной раскладки).
@@ -161,6 +183,13 @@ export function useChatFilters(scopeKey: string) {
     if (scopeRef.current === scopeKey) return;
     scopeRef.current = scopeKey;
     setFilters(loadChatFilters(scopeKey));
+  }, [scopeKey]);
+
+  // Фильтры этой области сняли снаружи (leaveChatArchiveView) — перечитываем хранилище
+  useEffect(() => {
+    const onExternal = (key: string) => { if (key === scopeKey) setFilters(loadChatFilters(scopeKey)); };
+    archiveExitListeners.add(onExternal);
+    return () => { archiveExitListeners.delete(onExternal); };
   }, [scopeKey]);
 
   const patch = (p: Partial<ChatFilters>) => {

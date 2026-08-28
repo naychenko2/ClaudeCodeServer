@@ -40,6 +40,7 @@ import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
+import { chatFilterScope, leaveChatArchiveView } from '../../lib/chatFilters';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -1466,11 +1467,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'archive':
         // Архивация из шапки: владелец экрана реагирует на onSessionUpdated сам — центр
         // воркспейса/«Чатов» уходит на соседа по списку, колонка стены убирается.
-        // Здесь только запрос и тост; вернуть чат можно из архивного вида списка
+        // Здесь только запрос и тост.
         void updateChatFields(session, { archived: !session.archivedAt })
           .then(s => {
             onSessionUpdated?.(s);
             showToast('Архив', s.archivedAt ? 'Чат убран в архив' : 'Чат вернулся в список', 'info');
+            // Вернули из архива: список своей области выходит из архивного вида. Чат
+            // и так открыт — переключать нечего, но оставлять список показывать архив,
+            // где этого чата уже нет, значит прятать его от человека второй раз
+            if (session.archivedAt && !s.archivedAt) leaveChatArchiveView(chatFilterScope(s));
           })
           .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
         break;

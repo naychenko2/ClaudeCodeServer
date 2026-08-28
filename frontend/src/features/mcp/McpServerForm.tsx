@@ -95,7 +95,7 @@ export function McpServerForm({ data, server, catalogDraft, onDone, onCancel }: 
   data: McpData;
   server: McpServer | null;      // null — создание
   // Предзаполнение из каталога. Когда задано — форма понимает, что её открыли как
-  // продолжение карточки каталога: режим фиксируется (stdio/http по draft.source.transport),
+  // продолжение карточки каталога: режим фиксируется (stdio/http по draft.source.prefill.transport),
   // transport заблокирован на переключение, описание и обязательность едут с полями,
   // кнопка сохранения говорит «Сохранить выключенным» с плашкой-объяснением
   catalogDraft?: McpServerCatalogDraft | null;
@@ -108,63 +108,68 @@ export function McpServerForm({ data, server, catalogDraft, onDone, onCancel }: 
   // подкидывать незачем — это ручной путь, ему каталог не нужен
   const fromCatalog = !!catalogDraft;
   const [mode, setMode] = useState<Mode>(() => {
-    if (catalogDraft) return catalogDraft.source.transport === 'npm' ? 'stdio' : 'http';
+    if (catalogDraft) return catalogDraft.source.prefill?.transport === 'http' ? 'http' : 'stdio';
     if (server) return server.transport === 'stdio' ? 'stdio' : 'http';
     return 'stdio';
   });
   const [label, setLabel] = useState(() => {
-    if (catalogDraft) return catalogDraft.source.displayName;
+    if (catalogDraft) return catalogDraft.source.title ?? catalogDraft.source.name;
     return server?.label ?? '';
   });
   const [key, setKey] = useState(() => {
-    if (catalogDraft) return slugify(catalogDraft.source.displayName, true);
+    if (catalogDraft) return slugify(catalogDraft.source.title ?? catalogDraft.source.name, true);
     return server?.key ?? '';
   });
   const [keyTouched, setKeyTouched] = useState(editing || fromCatalog);
   const [command, setCommand] = useState(() => {
-    if (catalogDraft) return catalogDraft.source.command ?? '';
+    if (catalogDraft) return catalogDraft.source.prefill?.command ?? '';
     return server?.command ?? '';
   });
   const [args, setArgs] = useState(() => {
     if (catalogDraft) {
-      const argPairs = catalogDraft.fieldsDraft.filter(f => f.arg && f.default);
+      // В argv идут только поля с target='args' и непустым default. Бэкенд в DTO
+      // кладёт target строго из 'env' | 'header' | 'url' | 'args' — старого флага
+      // arg нет, его роль играет target
+      const argPairs = catalogDraft.fieldsDraft.filter(f => f.target === 'args' && f.default);
       return argPairs.map(f => quoteIfNeeded(f.default ?? '')).join(' ');
     }
     return (server?.args ?? []).join(' ');
   });
   const [url, setUrl] = useState(() => {
-    if (catalogDraft) return catalogDraft.source.url ?? '';
+    if (catalogDraft) return catalogDraft.source.prefill?.url ?? '';
     return server?.url ?? '';
   });
   const [env, setEnv] = useState<Pair[]>(() => {
     if (catalogDraft) {
-      const envFields = catalogDraft.fieldsDraft.filter(f => !f.arg);
+      // env-поля — target='env' или target='url' (URL-плейсхолдер пока в env для совместимости
+      // с текущим UI: отдельной формы для шаблонов URL в первой волне нет)
+      const envFields = catalogDraft.fieldsDraft.filter(f => f.target === 'env' || f.target === 'url');
       if (envFields.length === 0) return [];
       return envFields.map(f => ({
         name: f.name,
         value: f.default ?? '',
-        secret: !!f.isSecret,
+        secret: !!f.secret,
         stored: false,
         description: f.description ?? null,
-        isRequired: !!f.isRequired,
-        placeholder: f.placeholder ?? null,
+        isRequired: !!f.required,
+        placeholder: null,
       }));
     }
     return toPairs(server?.env);
   });
   const [headers, setHeaders] = useState<Pair[]>(() => {
     if (catalogDraft) {
-      // remote-серверы тоже едут с полями формы (те самые, что идут в headers)
-      const hdrFields = catalogDraft.fieldsDraft.filter(f => !f.arg && f.where === 'headers');
+      // http-поля — target='header'. Имя DTO-поля единственное ('header'), а не 'headers'
+      const hdrFields = catalogDraft.fieldsDraft.filter(f => f.target === 'header');
       if (hdrFields.length === 0) return toPairs(server?.headers);
       return hdrFields.map(f => ({
         name: f.name,
         value: f.default ?? '',
-        secret: !!f.isSecret,
+        secret: !!f.secret,
         stored: false,
         description: f.description ?? null,
-        isRequired: !!f.isRequired,
-        placeholder: f.placeholder ?? null,
+        isRequired: !!f.required,
+        placeholder: null,
       }));
     }
     return toPairs(server?.headers);

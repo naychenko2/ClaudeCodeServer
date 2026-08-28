@@ -10,6 +10,7 @@ import { moduleIdOf } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
 import { loadModules } from './lib/modules'
 import { VideoFloat } from './features/video/VideoFloat'
+import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
@@ -1188,6 +1189,10 @@ export default function App() {
           переход между проектами и разделами — панель и центр этого не умеют,
           они часть страницы и размонтируются вместе с ней. */}
       {auth && floatingVideo?.mode === 'float' && <VideoFloat stage={floatingVideo} />}
+      {/* Кадр панели и центрального острова — тоже НАД страницами: сами панель и
+          остров отдают ему только место, а iframe живёт здесь и переживает
+          перемонтаж страницы при смене проекта. */}
+      {auth && <VideoStageFrame />}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth

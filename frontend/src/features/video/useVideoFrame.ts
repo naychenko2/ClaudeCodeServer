@@ -15,10 +15,8 @@ import type { VideoChannel } from '../../types';
  *   а кадр остаётся жить.
  */
 export function useVideoFrame(channel: VideoChannel | null) {
-  const [audioBusy, setAudioBusy] = useState(isAudioBusy);
+  const audioBusy = useAudioBusy();
   const frameRef = useRef<HTMLIFrameElement | null>(null);
-
-  useEffect(() => onAudioFocusChange(setAudioBusy), []);
 
   // Ролик глушим командой, а не снятием: позиция просмотра сохраняется
   const mutable = channel?.provider === 'youtube';
@@ -39,7 +37,23 @@ export function useVideoFrame(channel: VideoChannel | null) {
   return {
     frameRef,
     /** Показывать ли кадр: у эфира под занятый звук его снимают. */
-    visible: !audioBusy || mutable,
+    visible: frameVisible(channel, audioBusy),
     audioBusy,
   };
+}
+
+/**
+ * Занят ли звук продукта (озвучка ответа, разговор без рук). Отдельно от кадра:
+ * место показа рисует по этому признаку свою подпись («Эфир приостановлен»), а сам
+ * кадр живёт не в нём, а в общем оверлее.
+ */
+export function useAudioBusy(): boolean {
+  const [audioBusy, setAudioBusy] = useState(isAudioBusy);
+  useEffect(() => onAudioFocusChange(setAudioBusy), []);
+  return audioBusy;
+}
+
+/** Виден ли кадр под занятый звук: эфир снимают, ролик остаётся (его глушат командой). */
+export function frameVisible(channel: VideoChannel | null, audioBusy: boolean): boolean {
+  return !audioBusy || channel?.provider === 'youtube';
 }

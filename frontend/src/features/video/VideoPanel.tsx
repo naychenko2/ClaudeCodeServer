@@ -5,7 +5,8 @@ import { Button, IconButton, PanelHeaderSlot } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { api } from '../../lib/api';
-import { useVideoFrame } from './useVideoFrame';
+import { useAudioBusy, frameVisible } from './useVideoFrame';
+import { useVideoSlot } from './useVideoSlot';
 import {
   setPanelChannel, setVideoPicker, setVideoStage, usePanelChannel, useVideoCenterBlocked, useVideoStage,
 } from '../../lib/videoStage';
@@ -13,8 +14,10 @@ import {
 /**
  * Панель «Видео» в рельсе чатов и проекта: эфир сбоку, пока идёт работа.
  *
- * Панель монтируется страницей и живёт, пока человек ходит по чатам ВНУТРИ неё.
- * Переход между проектами страницу пересоздаёт — эфир начнётся заново.
+ * Сам кадр панель НЕ рисует: она отдаёт под него место (useVideoSlot), а живой
+ * iframe кладёт поверх общий оверлей из App (VideoStageFrame). Только так эфир
+ * переживает переход между проектами — страница вместе с панелью перемонтируется,
+ * а кадр этого не замечает.
  *
  * Кадр здесь маленький: панель для фона. Кнопка разворота переносит канал в
  * ЦЕНТРАЛЬНЫЙ остров страницы, и тогда панель свой плеер снимает.
@@ -53,8 +56,13 @@ export function VideoPanel() {
   // Что панель ОТРАЖАЕТ: уехавший в центр или окно кадр она показать не может, но
   // обязана о нём сказать — иначе писала бы «выберите канал», пока эфир идёт правее.
   const displayed = staged?.channel ?? own;
-  // Плеер заводим только под СВОЙ кадр: уехавший рисует центр или окно
-  const { frameRef, visible, audioBusy } = useVideoFrame(staged ? null : own);
+  const audioBusy = useAudioBusy();
+  // Показывать ли кадр вообще: у эфира под занятый звук продукта его снимают
+  const visible = frameVisible(own, audioBusy);
+  // Место под кадр отдаём, только пока кадр ЗДЕСЬ: уехавший в центр или окно рисуют
+  // они сами, и лишний слот сбивал бы оверлей с толку. Занятый звук на слот не
+  // влияет — снимает кадр сам оверлей, а место его дожидается на своём месте.
+  const { frameRef, clipRef } = useVideoSlot('panel', !staged && !!own);
 
   if (failed) {
     return (
@@ -86,7 +94,7 @@ export function VideoPanel() {
   };
 
   return (
-    <PanelBody>
+    <PanelBody bodyRef={clipRef}>
       {/* Выбор канала — переключатель вида этой панели («что смотрим»), поэтому
           левый слот шапки, у самого названия. В теле полоса съедала высоту, которой
           и так мало: панель узкая, и каждый её пиксель нужен кадру */}
@@ -116,7 +124,7 @@ export function VideoPanel() {
           channel={displayed}
           audioBusy={audioBusy}
           visible={visible}
-          frameRef={frameRef}
+          slotRef={frameRef}
           stagedHere={stagedHere}
           stagedMode={staged?.mode}
           onOpenPicker={centerBlocked ? undefined : () => setVideoPicker(true)}
@@ -150,7 +158,7 @@ export function VideoPanel() {
               size="sm"
               title={stagedHere && staged?.mode === 'float'
                 ? 'Вернуть кадр в панель'
-                : 'В плавающее окно — его двигают и тянут за угол, и оно переживает переходы'}
+                : 'В плавающее окно — его двигают и тянут за угол, и оно остаётся поверх любого раздела'}
               onClick={() => setVideoStage(
                 stagedHere && staged?.mode === 'float' ? null : displayed, 'float')}
             >
@@ -177,12 +185,13 @@ export function VideoPanel() {
  * iframe нельзя — он не слушает сообщений извне. Для ПРЯМОГО эфира это честная замена
  * приглушению: вернувшись, попадаешь в текущую минуту, а не в пропущенную.
  */
-function Stage({ channel, audioBusy, visible, frameRef, stagedHere, stagedMode, onOpenPicker }: {
+function Stage({ channel, audioBusy, visible, slotRef, stagedHere, stagedMode, onOpenPicker }: {
   channel: VideoChannel | null;
   audioBusy: boolean;
   /** Кадр разрешён к показу: у эфира под занятый звук его снимают, ролик глушат. */
   visible: boolean;
-  frameRef: React.RefObject<HTMLIFrameElement | null>;
+  /** Место под кадр: сюда его кладёт оверлей из App, сама панель iframe не рисует. */
+  slotRef: React.RefObject<HTMLDivElement | null>;
   /** Этот же канал показывают вне панели (центр или окно) — здесь кадр не дублируем. */
   stagedHere: boolean;
   /** Куда именно уехал: для подписи в пустом кадре. */
@@ -193,21 +202,13 @@ function Stage({ channel, audioBusy, visible, frameRef, stagedHere, stagedMode, 
   onOpenPicker?: () => void;
 }) {
   return (
-    <div style={{
-      position: 'relative', width: '100%', aspectRatio: '16 / 9',
-      background: C.mediaBackdrop, borderRadius: R.md, overflow: 'hidden',
-    }}>
-      {channel && visible && !stagedHere && (
-        <iframe
-          ref={frameRef}
-          key={channel.embedUrl!}
-          src={channel.embedUrl!}
-          title={channel.title}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
-          allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-          allowFullScreen
-        />
-      )}
+    <div
+      ref={slotRef}
+      style={{
+        position: 'relative', width: '100%', aspectRatio: '16 / 9',
+        background: C.mediaBackdrop, borderRadius: R.md, overflow: 'hidden',
+      }}
+    >
 
       {(!channel || !visible || stagedHere) && (
         <div style={{
@@ -283,9 +284,13 @@ function ChannelStrip({ channels, activeId, onPick }: {
   );
 }
 
-function PanelBody({ children }: { children: React.ReactNode }) {
+function PanelBody({ children, bodyRef }: {
+  children: React.ReactNode;
+  /** Тело панели режет кадр по своему краю: в короткой панели он вылезал бы наружу. */
+  bodyRef?: React.RefObject<HTMLDivElement | null>;
+}) {
   return (
-    <div style={{
+    <div ref={bodyRef} style={{
       flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
       background: C.bgWhite, overflow: 'hidden',
     }}>

@@ -1,14 +1,16 @@
 import { useEffect, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
-import { GripVertical, Maximize2, X } from 'lucide-react';
+import { GripVertical, PanelTop, X } from 'lucide-react';
 import { IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import { NAV_CHANGE_EVENT } from '../../lib/nav';
 import { useVideoFrame } from './useVideoFrame';
+import { VideoStrip } from './VideoStrip';
 import {
   FLOAT_HEADER_H, FLOAT_MAX_W, FLOAT_MIN_W, getFloatRect,
-  setFloatRect, setVideoStage, useFloatRect, useVideoCenterBlocked, type VideoStageState,
+  setFloatRect, setVideoPicker, setVideoStage, useFloatRect, useVideoCenterBlocked,
+  type VideoStageState,
 } from '../../lib/videoStage';
 
 /**
@@ -30,7 +32,7 @@ export function VideoFloat({ stage }: { stage: VideoStageState }) {
   // строкой — за `&&` он вызывался бы через раз, а это нарушение правил хуков
   const centerBlocked = useVideoCenterBlocked();
   const hasCenter = onCenterScreen && !centerBlocked;
-  const { frameRef, visible, audioBusy } = useVideoFrame(stage.channel);
+  const { frameRef, visible, player } = useVideoFrame(stage.channel);
   // Пока тащим, экран накрыт прозрачным слоем: курсор идёт над ЧУЖИМИ iframe (видео,
   // панель «Сервисы», проброс телеметрии), а те съедают pointermove — без слоя
   // перетаскивание обрывается на первом же кадре, попавшем под курсор.
@@ -115,16 +117,26 @@ export function VideoFloat({ stage }: { stage: VideoStageState }) {
       >
         <GripVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} />
         <div style={{
-          flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textHeading,
+          flex: '0 1 auto', minWidth: 0, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textHeading,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {stage.channel.title}
         </div>
+        {/* Полоса избранного и здесь: окно живёт поверх ЛЮБОГО раздела, и переключать
+            канал, не возвращаясь за ним в панель, — единственный способ им пользоваться
+            вне «Чатов» и проекта. Окно узкое, поэтому чаще всего от полосы остаётся
+            одна кнопка «⋯» — раскладка это предусматривает.
+            Каталог открывается в центре: на экранах без него кнопку не показываем. */}
+        <VideoStrip
+          activeId={stage.channel.id}
+          onPick={next => setVideoStage(next, 'float')}
+          onOpenCatalog={hasCenter ? () => setVideoPicker(true) : undefined}
+        />
         {/* Центр рисуют только «Чаты» и проект. На прочих экранах кнопка увела бы
             кадр в никуда: он исчез бы, а вернуть его было бы нечем. */}
         {hasCenter && (
           <IconButton size="xs" title="Развернуть в центре" onClick={() => setVideoStage(stage.channel, 'center')}>
-            <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            <PanelTop size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
         <IconButton size="xs" title="Вернуть кадр в панель" onClick={() => setVideoStage(null)}>
@@ -144,12 +156,12 @@ export function VideoFloat({ stage }: { stage: VideoStageState }) {
             allowFullScreen
           />
         )}
-        {!visible && audioBusy && (
+        {!visible && (
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: C.onDark, fontFamily: FONT.sans, fontSize: FS.xs, textAlign: 'center', padding: SP.sm,
           }}>
-            Эфир приостановлен — идёт разговор
+            {player.paused ? 'Пауза' : 'Эфир приостановлен — идёт разговор'}
           </div>
         )}
 

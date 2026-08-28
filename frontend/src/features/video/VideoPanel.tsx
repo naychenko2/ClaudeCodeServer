@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, ListVideo, Maximize2, MonitorOff, PictureInPicture2, Radio } from 'lucide-react';
+import { ListVideo, MonitorOff, PanelTop, Pause, PictureInPicture2, Play, Radio, Volume2, VolumeX } from 'lucide-react';
 import type { VideoChannel } from '../../types';
 import { Button, IconButton, PanelHeaderSlot } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { api } from '../../lib/api';
+import { useLiveChannelsState } from '../../lib/videoFavorites';
 import { useAudioBusy, frameVisible } from './useVideoFrame';
 import { useVideoSlot } from './useVideoSlot';
+import { VideoStrip } from './VideoStrip';
 import {
-  setPanelChannel, setVideoPicker, setVideoStage, usePanelChannel, useVideoCenterBlocked, useVideoStage,
+  setPanelChannel, setVideoPicker, setVideoPlayerState, setVideoStage,
+  usePanelChannel, useVideoCenterBlocked, useVideoPlayerState, useVideoStage,
 } from '../../lib/videoStage';
 
 /**
@@ -23,8 +24,9 @@ import {
  * ЦЕНТРАЛЬНЫЙ остров страницы, и тогда панель свой плеер снимает.
  */
 export function VideoPanel() {
-  const [channels, setChannels] = useState<VideoChannel[]>([]);
-  const [failed, setFailed] = useState(false);
+  // Каталог каналов — из ОБЩЕГО стора: ту же полосу рисуют центральный остров и
+  // плавающее окно, и три собственных запроса на один переезд кадра были бы лишними
+  const { failed } = useLiveChannelsState();
   // Свой канал панель держит в ОБЩЕМ сторе: выбирают его и здесь, полосой в шапке,
   // и в каталоге — тот стоит в центре и до локального состояния не дотянулся бы
   const own = usePanelChannel();
@@ -35,30 +37,13 @@ export function VideoPanel() {
   // туда кнопки гаснут. Молча «съесть» нажатие нельзя: кадр исчез бы и отсюда тоже
   const centerBlocked = useVideoCenterBlocked();
 
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const res = await api.video.channels('smotrim');
-        if (!alive) return;
-        // В узкой панели место есть только у того, что реально играет: карточки-ссылки
-        // на чужой сайт сюда не помещаются и смысла не несут
-        const playable = res.channels.filter(c => c.embeddable && c.embedUrl);
-        setChannels(playable);
-        setFailed(playable.length === 0);
-      } catch {
-        if (alive) setFailed(true);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
   // Что панель ОТРАЖАЕТ: уехавший в центр или окно кадр она показать не может, но
   // обязана о нём сказать — иначе писала бы «выберите канал», пока эфир идёт правее.
   const displayed = staged?.channel ?? own;
   const audioBusy = useAudioBusy();
-  // Показывать ли кадр вообще: у эфира под занятый звук продукта его снимают
-  const visible = frameVisible(own, audioBusy);
+  const player = useVideoPlayerState();
+  // Показывать ли кадр вообще: у эфира под занятый звук продукта или паузу его снимают
+  const visible = frameVisible(displayed, audioBusy, player.paused);
   // Место под кадр отдаём, только пока кадр ЗДЕСЬ: уехавший в центр или окно рисуют
   // они сами, и лишний слот сбивал бы оверлей с толку. Занятый звук на слот не
   // влияет — снимает кадр сам оверлей, а место его дожидается на своём месте.
@@ -83,9 +68,7 @@ export function VideoPanel() {
   // Пока кадр показывают ВНЕ панели, выбор канала уводит новый канал туда же.
   // Иначе панель завела бы собственный плеер рядом с уехавшим — два эфира разом,
   // причём второй не видно: панель узкая и стоит с краю.
-  const pick = (id: string) => {
-    const next = channels.find(c => c.id === id);
-    if (!next) return;
+  const pick = (next: VideoChannel) => {
     // Пока кадр показывают ВНЕ панели, выбор канала уводит новый канал туда же:
     // иначе панель завела бы собственный плеер рядом с уехавшим — два эфира разом,
     // причём второй не видно (панель узкая и стоит с краю).
@@ -98,11 +81,13 @@ export function VideoPanel() {
       {/* Выбор канала — переключатель вида этой панели («что смотрим»), поэтому
           левый слот шапки, у самого названия. В теле полоса съедала высоту, которой
           и так мало: панель узкая, и каждый её пиксель нужен кадру */}
-      {channels.length > 0 && (
-        <PanelHeaderSlot side="left">
-          <ChannelStrip channels={channels} activeId={displayed?.id ?? null} onPick={pick} />
-        </PanelHeaderSlot>
-      )}
+      <PanelHeaderSlot side="left">
+        <VideoStrip
+          activeId={displayed?.id ?? null}
+          onPick={pick}
+          onOpenCatalog={centerBlocked ? undefined : () => setVideoPicker(true)}
+        />
+      </PanelHeaderSlot>
 
       <PanelHeaderSlot>
         {/* Каталог открывается в ЦЕНТРАЛЬНОМ острове, а не второй панелью сбоку:
@@ -124,6 +109,7 @@ export function VideoPanel() {
           channel={displayed}
           audioBusy={audioBusy}
           visible={visible}
+          paused={player.paused}
           slotRef={frameRef}
           stagedHere={stagedHere}
           stagedMode={staged?.mode}
@@ -131,49 +117,12 @@ export function VideoPanel() {
         />
 
         {displayed && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
-            <div style={{
-              flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {displayed.nowPlaying || displayed.title}
-            </div>
-            {/* Кнопки паузы здесь нет намеренно: у прямого эфира паузы не бывает.
-                Кадр пришлось бы снять целиком, а вернувшись — попасть в текущую
-                минуту; «пауза», после которой продолжения нет, только врёт. */}
-            <IconButton
-              size="sm"
-              title={stagedHere && staged?.mode === 'center'
-                ? 'Вернуть кадр в панель'
-                : centerBlocked
-                  ? 'В центре сейчас файл или задача — закройте, чтобы смотреть там'
-                  : 'Развернуть в центре — панель узкая, там кадр крупнее'}
-              disabled={centerBlocked}
-              onClick={() => setVideoStage(
-                stagedHere && staged?.mode === 'center' ? null : displayed, 'center')}
-            >
-              <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            <IconButton
-              size="sm"
-              title={stagedHere && staged?.mode === 'float'
-                ? 'Вернуть кадр в панель'
-                : 'В плавающее окно — его двигают и тянут за угол, и оно остаётся поверх любого раздела'}
-              onClick={() => setVideoStage(
-                stagedHere && staged?.mode === 'float' ? null : displayed, 'float')}
-            >
-              <PictureInPicture2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            {displayed.externalUrl && (
-              <IconButton
-                size="sm"
-                title="Открыть на сайте канала"
-                onClick={() => window.open(displayed.externalUrl!, '_blank', 'noopener,noreferrer')}
-              >
-                <ExternalLink size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            )}
-          </div>
+          <PlayerRow
+            channel={displayed}
+            stagedHere={stagedHere}
+            stagedMode={staged?.mode}
+            centerBlocked={centerBlocked}
+          />
         )}
       </div>
     </PanelBody>
@@ -185,11 +134,13 @@ export function VideoPanel() {
  * iframe нельзя — он не слушает сообщений извне. Для ПРЯМОГО эфира это честная замена
  * приглушению: вернувшись, попадаешь в текущую минуту, а не в пропущенную.
  */
-function Stage({ channel, audioBusy, visible, slotRef, stagedHere, stagedMode, onOpenPicker }: {
+function Stage({ channel, audioBusy, visible, paused, slotRef, stagedHere, stagedMode, onOpenPicker }: {
   channel: VideoChannel | null;
   audioBusy: boolean;
   /** Кадр разрешён к показу: у эфира под занятый звук его снимают, ролик глушат. */
   visible: boolean;
+  /** Пауза нажата кнопкой: подпись в пустом кадре обязана говорить правду, почему пусто. */
+  paused: boolean;
   /** Место под кадр: сюда его кладёт оверлей из App, сама панель iframe не рисует. */
   slotRef: React.RefObject<HTMLDivElement | null>;
   /** Этот же канал показывают вне панели (центр или окно) — здесь кадр не дублируем. */
@@ -224,8 +175,9 @@ function Stage({ channel, audioBusy, visible, slotRef, stagedHere, stagedMode, o
                 : <span>Выберите канал</span>}
             </>
           )}
-          {channel && audioBusy && <span>Эфир приостановлен — идёт разговор</span>}
-          {channel && !audioBusy && stagedHere && (
+          {channel && paused && <span>Пауза — нажмите ▶, чтобы продолжить</span>}
+          {channel && audioBusy && !paused && <span>Эфир приостановлен — идёт разговор</span>}
+          {channel && !audioBusy && !paused && stagedHere && (
             <span>{stagedMode === 'float' ? 'Идёт в плавающем окне' : 'Идёт в центре экрана'}</span>
           )}
         </div>
@@ -234,52 +186,90 @@ function Stage({ channel, audioBusy, visible, slotRef, stagedHere, stagedMode, o
   );
 }
 
-/** Полоса каналов: в узкой панели список вертикальный не помещается, а горизонтальный — да. */
-function ChannelStrip({ channels, activeId, onPick }: {
-  channels: VideoChannel[];
-  activeId: string | null;
-  onPick: (id: string) => void;
+/**
+ * Строка плеера под кадром: что идёт в эфире + управление.
+ *
+ * Кнопки делятся на две группы, отсюда сепаратор: play/pause и mute управляют
+ * самим показом, а правые — ГДЕ он идёт (центр, плавающее окно). Ссылки на сайт
+ * канала здесь нет намеренно: уводить из продукта туда, где тот же эфир идёт
+ * прямо в кадре, незачем — наружу отправляют только каналы БЕЗ своего потока,
+ * и делает это карточка каталога.
+ *
+ * Развилка по провайдеру — та же, что у занятого звука (useVideoFrame):
+ * - эфир (СМОТРИМ): плеер команд не слушает, «пауза» = снять кадр (вернёшься в
+ *   текущую минуту), а mute невозможен вовсе — кнопку не рисуем;
+ * - ролик YouTube: настоящие pause/mute командами плеера, кадр живёт.
+ */
+function PlayerRow({ channel, stagedHere, stagedMode, centerBlocked }: {
+  channel: VideoChannel;
+  stagedHere: boolean;
+  stagedMode?: 'center' | 'float';
+  centerBlocked: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const player = useVideoPlayerState();
+  const isLive = channel.provider !== 'youtube';
 
-  // Выбранный канал держим на виду: полоса узкая, и после перезахода он мог остаться за краем
-  const scrollToActive = useCallback(() => {
-    const el = ref.current?.querySelector<HTMLElement>('[data-active="1"]');
-    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, []);
-  useEffect(scrollToActive, [activeId, scrollToActive]);
+  const togglePause = () => setVideoPlayerState(!player.paused, player.muted);
+  const toggleMute = () => setVideoPlayerState(player.paused, !player.muted);
 
   return (
-    <div
-      ref={ref}
-      style={{
-        display: 'flex', gap: 3, overflowX: 'auto', flex: '0 1 auto', minWidth: 0,
-        // Полоса прокрутки в шапке высотой 32px не помещается и режет кнопки
-        scrollbarWidth: 'none',
-      }}
-    >
-      {channels.map(c => {
-        const on = c.id === activeId;
-        return (
-          <button
-            key={c.id}
-            data-active={on ? '1' : undefined}
-            onClick={() => onPick(c.id)}
-            title={c.nowPlaying ? `${c.title} — ${c.nowPlaying}` : c.title}
-            aria-label={c.title}
-            style={{
-              flex: 'none', display: 'flex', alignItems: 'center', height: 22,
-              padding: `0 ${SP.xs}px`, cursor: 'pointer',
-              background: on ? C.bgSelected : 'transparent',
-              border: `1px solid ${on ? C.accentMuted : 'transparent'}`,
-              borderRadius: R.sm, fontFamily: FONT.sans, fontSize: FS.xs,
-              color: on ? C.textHeading : C.textMuted, whiteSpace: 'nowrap',
-            }}
-          >
-            {c.title}
-          </button>
-        );
-      })}
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+      <IconButton
+        size="sm"
+        title={player.paused
+          ? 'Продолжить'
+          : isLive
+            ? 'Приостановить эфир — звук прекратится, а вернётесь в текущую минуту'
+            : 'Пауза'}
+        onClick={togglePause}
+      >
+        {player.paused
+          ? <Play size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          : <Pause size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      </IconButton>
+      {!isLive && (
+        <IconButton
+          size="sm"
+          title={player.muted ? 'Включить звук' : 'Выключить звук'}
+          onClick={toggleMute}
+        >
+          {player.muted
+            ? <VolumeX size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            : <Volume2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+        </IconButton>
+      )}
+      {/* Сепаратор групп: управление показом против «где смотреть» */}
+      <div aria-hidden style={{ width: 1, height: 16, flexShrink: 0, background: C.border }} />
+
+      <div style={{
+        flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {channel.nowPlaying || channel.title}
+      </div>
+      <IconButton
+        size="sm"
+        title={stagedHere && stagedMode === 'float'
+          ? 'Вернуть кадр в панель'
+          : 'В плавающее окно — его двигают и тянут за угол, и оно остаётся поверх любого раздела'}
+        onClick={() => setVideoStage(
+          stagedHere && stagedMode === 'float' ? null : channel, 'float')}
+      >
+        <PictureInPicture2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      <IconButton
+        size="sm"
+        title={stagedHere && stagedMode === 'center'
+          ? 'Вернуть кадр в панель'
+          : centerBlocked
+            ? 'В центре сейчас файл или задача — закройте, чтобы смотреть там'
+            : 'Развернуть в центре — панель узкая, там кадр крупнее'}
+        disabled={centerBlocked}
+        onClick={() => setVideoStage(
+          stagedHere && stagedMode === 'center' ? null : channel, 'center')}
+      >
+        <PanelTop size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
     </div>
   );
 }

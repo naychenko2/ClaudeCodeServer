@@ -3014,6 +3014,14 @@ export interface VideoChannelsResponse {
   channels: VideoChannel[];
 }
 
+export interface VideoFavoritesResponse {
+  // Настраивал ли человек набор сам. false — keys это дефолт сервера, и пустым он не
+  // бывает; true с пустым keys — осознанно снятые звёздочки, полоса честно пуста.
+  configured: boolean;
+  // Ключи каналов вида "smotrim:1" (провайдер + id).
+  keys: string[];
+}
+
 export interface VideoFeedResponse {
   error: VideoError | null;
   items: VideoItem[];

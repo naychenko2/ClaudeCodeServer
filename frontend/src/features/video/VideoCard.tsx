@@ -7,12 +7,16 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
  * успела разъехаться по размеру заголовка, и рядом на экране это читалось как две
  * сетки из разных приложений.
  */
-export function VideoCard({ coverUrl, fallbackIcon, badge, title, subtitle, note, hint, onClick }: {
+export function VideoCard({ coverUrl, fallbackIcon, badge, corner, title, subtitle, note, hint, onClick }: {
   coverUrl: string | null;
   /** Что показать, когда обложки нет ИЛИ она не открылась. */
   fallbackIcon: ReactNode;
   /** Значок в углу обложки: сорт карточки (играем у себя / уводим наружу). */
   badge?: ReactNode;
+  /** Кнопка в левом верхнем углу (звёздочка избранного). Рисуется ПОВЕРХ карточки и
+      ВНЕ её кнопки: <button> внутри <button> — невалидная разметка, и вложенная
+      кнопка не получала бы собственных нажатий. */
+  corner?: ReactNode;
   title: string;
   subtitle: string;
   /** Мелкая пометка справа от названия — например, что канал откроется на чужом сайте. */
@@ -27,14 +31,17 @@ export function VideoCard({ coverUrl, fallbackIcon, badge, title, subtitle, note
   const [broken, setBroken] = useState(false);
 
   return (
+    <div
+      style={{ position: 'relative', display: 'flex', minWidth: 0 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
     <button
       // cc-card-shadow ДО cc-card-press: тень задаётся классом через переменную, иначе
       // inline-boxShadow перебивал бы тень нажатия — и в режиме уменьшенной анимации,
       // где сжатие выключено, карточка не отзывалась бы на нажатие вовсе
       className="cc-card-shadow cc-card-press"
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       // Та же рамка при переходе по Tab: общей подсветки фокуса в продукте нет,
       // и с клавиатуры не было видно, на какой карточке стоишь
       onFocus={() => setHovered(true)}
@@ -44,6 +51,7 @@ export function VideoCard({ coverUrl, fallbackIcon, badge, title, subtitle, note
       // пользы мало — дублируем доступным именем
       aria-label={hint}
       style={{
+        flex: 1, minWidth: 0,
         display: 'flex', flexDirection: 'column', alignItems: 'stretch',
         background: C.bgWhite, borderRadius: R.lg,
         border: `1px solid ${hovered ? C.accentMuted : C.border}`,
@@ -99,5 +107,12 @@ export function VideoCard({ coverUrl, fallbackIcon, badge, title, subtitle, note
         </div>
       </div>
     </button>
+
+    {corner && (
+      <div style={{ position: 'absolute', left: SP.sm, top: SP.sm, display: 'flex' }}>
+        {corner}
+      </div>
+    )}
+    </div>
   );
 }

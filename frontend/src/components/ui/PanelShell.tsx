@@ -355,9 +355,14 @@ export function PanelShell({
         title={title}
         badge={badge}
         actions={actions ? <span {...controlsHoverProps} style={{ display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }}>{actions}</span> : actions}
-        // Левый слот — у самого названия панели (PanelHeaderSlot side="left")
+        // Левый слот — у самого названия панели (PanelHeaderSlot side="left").
+        // Сжимаемый (0 1 auto + minWidth 0), а не flexShrink: 0: содержимое слота бывает
+        // шире шапки — полоса каналов «Видео» тому пример, — и нежёсткий слот даёт ей
+        // измерить ДОСТУПНОЕ место и убрать лишнее под «⋯». С flexShrink: 0 слот
+        // распирало содержимым, шапка обрезала его по своему краю, и лишнее просто
+        // пропадало из виду, оставаясь в разметке.
         leading={<div ref={setSlotLeftEl} draggable={false} onDragStart={e => e.preventDefault()}
-          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }} />}
+          style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }} />}
         headerProps={mergedHeaderProps}
       >
         {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot.

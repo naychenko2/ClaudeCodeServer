@@ -6,7 +6,7 @@ import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
-import { Modal, ModalActions } from './ui';
+import { Modal, ModalActions, Button } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { showToast } from '../lib/toast';
@@ -548,11 +548,29 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         // Фон явный — по той же причине, что в ChatList: прозрачные строки и липкая
         // подпись группы держатся на том, что под ними именно bgWhite
         style={{ flex: 1, overflowY: 'auto', background: C.bgWhite, padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+        {/* Все чаты проекта в архиве — то же состояние, что у глобального списка:
+            иное пустое состояние молчит (чаты есть), и панель без этого блока
+            оставалась бы белой дырой. Кнопки создания нет — «Новый» в тулбаре панели */}
+        {loaded && !filters.archivedOnly && sessions.length > 0 && scoped.length === 0 && (
+          <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+            <EmptyState
+              compact
+              icon={<Archive size={20} strokeWidth={2} />}
+              title="Все чаты в архиве"
+              subtitle="Список пуст: живых чатов нет, архив не считается."
+              action={
+                <Button variant="ghost" size="sm" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archivedOnly: true })}>
+                  Открыть архив
+                </Button>
+              }
+            />
+          </div>
+        )}
         {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
             в тулбаре панели сверху, дублировать его в empty незачем. */}
-        {loaded && scoped.length === 0 && (
+        {loaded && scoped.length === 0 && sessions.length === 0 && (
           filters.archivedOnly ? (
             // Режим архива, а убранных чатов нет вовсе — рассказываем, откуда они
             // берутся и что архив ничего не теряет

@@ -4,7 +4,7 @@ import type { Session } from '../types';
 import { api } from '../lib/api';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { useOnline } from '../hooks/useOnline';
-import { C, ISLAND, MODAL_W } from '../lib/design';
+import { C, ISLAND, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -224,7 +224,35 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // есть, но фильтры всё скрыли — подсказка со сбросом.
   const listContent = (
     <>
-      {scoped.length === 0 && (
+      {/* Все чаты области лежат в архиве: chats.length > 0, так что empty «здесь будут
+          чаты» не срабатывает, а viewTotal === 0 гасит и «Ничего не нашлось» — без этого
+          состояния панель оставалась бы белой дырой. В отличие от «пусто», здесь
+          человек должен вспомнить про архив, а не про создание */}
+      {!filters.archivedOnly && chats.length > 0 && scoped.length === 0 && (
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
+          <EmptyState
+            compact={!isMobile}
+            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="Все чаты в архиве"
+            subtitle="Список пуст: живых чатов нет, архив не считается."
+            action={
+              <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <Button variant="ghost" size="md" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archivedOnly: true })}>
+                  Открыть архив
+                </Button>
+                <Button
+                  variant="primary" size="md" loading={creating}
+                  onClick={onNew}
+                  leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+                >
+                  Создать первый чат
+                </Button>
+              </div>
+            }
+          />
+        </div>
+      )}
+      {scoped.length === 0 && chats.length === 0 && (
         filters.archivedOnly ? (
           <EmptyState
             compact={!isMobile}

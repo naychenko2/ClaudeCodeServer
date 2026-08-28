@@ -336,8 +336,9 @@ https, npm с точным semver и `runtimeHint: npx|пусто`, pypi → `uv
 → «проверить не удалось», сторож в тестах — лежащий preview-сервис не выключает рабочие
 серверы), кэш суток на имя, только имена владельца с `CatalogRef`. Пустой `Mcp:Catalog:BaseUrl`
 — каталог выключен. Подробности — раздел «Каталог MCP-серверов»
-в [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md), план —
-[docs/research/mcp-catalog-plan.md](docs/research/mcp-catalog-plan.md).
+в [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md), план и грабли
+контракта — [docs/research/mcp-catalog-plan.md](docs/research/mcp-catalog-plan.md), тексты
+интерфейса и продуктовые решения — [docs/features/mcp-catalog.md](docs/features/mcp-catalog.md).
 
 ## Заметки и Знания (Dify RAG)
 

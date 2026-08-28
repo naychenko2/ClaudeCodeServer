@@ -13,7 +13,7 @@ import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
-import { useAgentsPresence } from '../lib/agentsPresence';
+import { useBgWorkPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
@@ -323,8 +323,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const inArchive = filters.archived;
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
-  // Чаты с живыми фоновыми агентами — считаются работающими в счётчике свёрнутой ветки
-  const agentsRunningIds = useAgentsPresence();
+  // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
+  // в счётчике свёрнутой ветки, как и в переливе самой карточки
+  const bgWorkIds = useBgWorkPresence();
 
   // Персоны в списке (для селектора фильтра)
   const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
@@ -340,10 +341,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const activeSessionId = activeSession?.id ?? null;
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, agentsRunningIds })
+      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, agentsRunningIds],
+    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, bgWorkIds],
   );
   // Архив проекта: счёт для кнопки в шапке и плашки над списком; бейджи и «скрыто
   // фильтрами» считаются в пределах ТЕКУЩЕГО вида (архив — не «скрытое фильтром»)

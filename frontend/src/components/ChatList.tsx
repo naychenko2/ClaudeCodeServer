@@ -13,7 +13,7 @@ import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
-import { useAgentsPresence } from '../lib/agentsPresence';
+import { useBgWorkPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
@@ -70,8 +70,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const groupBy: ChatGroupBy = GROUP_BY_OPTIONS.includes(filters.groupBy) ? filters.groupBy : 'days';
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
-  // Чаты с живыми фоновыми агентами — считаются работающими в счётчике свёрнутой ветки
-  const agentsRunningIds = useAgentsPresence();
+  // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
+  // в счётчике свёрнутой ветки, как и в переливе самой карточки
+  const bgWorkIds = useBgWorkPresence();
 
   // Список лежит в карточке с шапкой — контролы уедут туда сами (PanelHeaderSlot),
   // и собственная полоса тулбара в теле не нужна
@@ -97,10 +98,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // исходные данные покрывает зависимость filters
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, agentsRunningIds })
+      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, agentsRunningIds],
+    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, bgWorkIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно.
   // Считаем в пределах ТЕКУЩЕГО вида: архив — не «скрытые фильтром» чаты, и без этого

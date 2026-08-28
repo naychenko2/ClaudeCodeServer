@@ -95,11 +95,12 @@ const activity = (c: Session) => new Date(c.updatedAt).getTime();
 // просто жив, и ореола у него нет вовсе — ровно как «не работа».
 const RUNNING_STATUSES = new Set<Session['status']>(['starting', 'working', 'waiting']);
 
-// agentsRunningIds — чаты с живыми ФОНОВЫМИ агентами (стор agentsPresence): статус у них
-// уже Active, но работа идёт, и в счётчике свёрнутой ветки они обязаны считаться живыми —
-// иначе бейдж разъедется с переливом самой карточки
-export const isChatRunning = (c: Session, agentsRunningIds?: ReadonlySet<string>) =>
-  RUNNING_STATUSES.has(c.status) || agentsRunningIds?.has(c.id) === true;
+// bgWorkIds — чаты с живой ФОНОВОЙ работой любого вида (стор agentsPresence: агенты либо
+// команда в фоне — дев-сервер, watch): статус у них уже Active, но работа идёт, и в счётчике
+// свёрнутой ветки они обязаны считаться живыми — иначе бейдж разъедется с переливом самой
+// карточки, который у обоих видов фона одинаковый
+export const isChatRunning = (c: Session, bgWorkIds?: ReadonlySet<string>) =>
+  RUNNING_STATUSES.has(c.status) || bgWorkIds?.has(c.id) === true;
 
 // Потолок числа в бейдже свёрнутой ветки: бейдж вылезает из своей gutter-колонки поверх
 // карточки, и «128/12» накрыл бы точку статуса вместе с началом названия чата
@@ -146,9 +147,9 @@ export function buildChatTreeRows(
     activeId: string | null;
     // Направление сортировки детей и корней (дефолт — свежие сверху)
     sortOrder?: ChatSortOrder;
-    // Чаты с живыми фоновыми агентами (стор agentsPresence) — в счётчике свёрнутой
-    // ветки они живые, хотя статус сессии у них уже Active
-    agentsRunningIds?: ReadonlySet<string>;
+    // Чаты с живой фоновой работой (стор agentsPresence: агенты или команда в фоне) —
+    // в счётчике свёрнутой ветки они живые, хотя статус сессии у них уже Active
+    bgWorkIds?: ReadonlySet<string>;
   },
 ): ChatTreeResult {
   const dir = opts.sortOrder === 'oldest' ? 1 : -1;
@@ -179,7 +180,7 @@ export function buildChatTreeRows(
       maxActivity: Math.max(activity(chat), ...kids.map(k => k.maxActivity)),
       groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
       groupRunningCount: kids.reduce(
-        (n, k) => n + (isChatRunning(k.chat, opts.agentsRunningIds) ? 1 : 0) + k.groupRunningCount, 0),
+        (n, k) => n + (isChatRunning(k.chat, opts.bgWorkIds) ? 1 : 0) + k.groupRunningCount, 0),
     };
   };
   const topNodes = topCandidates.map(buildNode);
@@ -204,7 +205,7 @@ export function buildChatTreeRows(
           maxActivity: Math.max(activity(node.chat), ...kids.map(k => k.maxActivity)),
           groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
           groupRunningCount: kids.reduce(
-            (n, k) => n + (isChatRunning(k.chat, opts.agentsRunningIds) ? 1 : 0) + k.groupRunningCount, 0),
+            (n, k) => n + (isChatRunning(k.chat, opts.bgWorkIds) ? 1 : 0) + k.groupRunningCount, 0),
         });
       } else {
         // узел скрыт фильтром — прокол: его видимые дети уходят уровнем выше

@@ -26,6 +26,7 @@ import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
+import { useCanHover } from '../lib/pointer';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -51,9 +52,11 @@ const TWO_LINES = 42;
 export const ROW_R = R.md;
 export const ROW_GAP = 2;
 
-// Умеет ли устройство наводить курсор. На тач-экранах hover не наступает никогда,
-// поэтому кнопки действий там показываем постоянно (приём как в MarkdownViewer)
-const CAN_HOVER = typeof window !== 'undefined' && !window.matchMedia('(hover: none)').matches;
+// Умеет ли устройство наводить курсор — берём общий useCanHover() из lib/pointer
+// (см. ниже по коду). Своя копия на matchMedia('(hover: none)') здесь и стояла, и
+// врала: медиа-запрос описывает ПЕРВИЧНЫЙ указатель, поэтому планшет со стилусом
+// отвечает «наводить умею», хотя человек тычет пальцем. Хук смотрит на реальный
+// ввод — первый же pointerdown пальцем переключает его в capture-фазе.
 
 // Подложки под кнопкой действий нет: в покое видна только иконка, фон появляется
 // под курсором — его рисует сам IconButton
@@ -242,7 +245,14 @@ export function ChatCard({
   const SWIPE_BTN_W = 44;
   // editing объявлен ниже; его состояние важно только в момент жеста, поэтому в
   // гейт здесь не включаем (beginLongPress уже проверяет editing на месте)
-  const swipeCanWork = isMobile && online && !!onSwipeToggle;
+  //
+  // Признака устройства в гейте НЕТ намеренно. Раньше стоял isMobile (≤600), и жест
+  // не доставался планшету: HUAWEI MatePad 11.5 S даёт 736 CSS в портрете и 1120 в
+  // ландшафте (замер — docs/design/target-devices.md), то есть «широкий» по любому
+  // порогу, а пальцем при этом остаётся пальцем. Проверять вместо ширины «умеет ли
+  // наводить» тоже нечем: жест висит на onTouch*, а эти события шлёт ТОЛЬКО палец —
+  // мышь не активирует свайп физически, сколько бы указателей ни объявило устройство.
+  const swipeCanWork = online && !!onSwipeToggle;
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeActive = useRef(false);   // ось зафиксирована как горизонталь
   const swipeStartX = useRef(0);
@@ -255,7 +265,9 @@ export function ChatCard({
   const swipeMoved = useRef(false);    // был ли горизонтальный сдвиг — глушит клик
 
   const beginLongPress = (e: React.TouchEvent) => {
-    if (!isMobile || !online || editing) return;   // editing здесь уже объявлен ниже по коду, но вызов идёт по событию — безопасно
+    // Гейта по ширине нет по той же причине, что у свайпа: обработчик висит на
+    // onTouchStart, и вызвать его может только палец
+    if (!online || editing) return;   // editing здесь уже объявлен ниже по коду, но вызов идёт по событию — безопасно
     const t = e.touches[0];
     lpStart.current = { x: t.clientX, y: t.clientY };
     lpFired.current = false;
@@ -551,7 +563,15 @@ export function ChatCard({
   // Во время правки названия действий нет: кнопка «⋮» стоит вплотную к полю ввода,
   // и её меню (закрепить/теги/удалить) применялось бы к чату, имя которого ещё не
   // сохранено. Уходит вся кнопка, а не только меню — раскладку она не двигает (absolute)
-  const showActions = online && !editing && (CAN_HOVER ? hovered : isActive);
+  const canHover = useCanHover();
+  const showActions = online && !editing && (canHover ? hovered : isActive);
+
+  // Кластер быстрых кнопок — только там, где к нему реально подводят курсор. На тач
+  // те же действия приезжают свайпом, и рисовать оба набора нельзя: кнопки стоят
+  // ровно там, откуда выезжает свайп-панель, и палец попадал бы по верхнему слою
+  // вместо жеста. Мобильная раскладка с мышью (узкое окно на десктопе) остаётся как
+  // была — там кластера нет и не было
+  const quickCluster = !isMobile && canHover;
 
   // Строка общих тегов (макет chat-tags-switch): чипы идут ТРЕТЬЕЙ строкой — под
   // превью или статусом задачи, а не сразу под названием, чтобы метки не разрывали
@@ -981,7 +1001,7 @@ export function ChatCard({
           Ghost-класса здесь НЕТ намеренно: кластер и так появляется только по
           наведению (showActions), и приглушать уже проявленные кнопки — значит
           показывать их выключенными */}
-      {showActions && !isMobile && quickButtons.length > 0 && (
+      {showActions && quickCluster && quickButtons.length > 0 && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
           right: ACTIONS_RIGHT, zIndex: 2, display: 'flex', alignItems: 'center',
@@ -1011,7 +1031,7 @@ export function ChatCard({
       {showActions && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-          right: isMobile ? ACTIONS_RIGHT : ACTIONS_RIGHT + quickButtons.length * ACTION_BOX,
+          right: quickCluster ? ACTIONS_RIGHT + quickButtons.length * ACTION_BOX : ACTIONS_RIGHT,
           zIndex: 1, display: 'flex',
         }}>
           <IconButton

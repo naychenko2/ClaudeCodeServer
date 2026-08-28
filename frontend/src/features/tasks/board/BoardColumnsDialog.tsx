@@ -8,6 +8,7 @@ import type { BoardColumn, Project, TaskStatus } from '../../../types';
 import { C, FONT, R, SHADOW, Z, MODAL_W, GROUP_COLORS } from '../../../lib/design';
 import { STATUS_LABEL, STATUS_ORDER, columnColor } from '../../../lib/tasks';
 import { api } from '../../../lib/api';
+import { NO_AUTOFILL } from '../../../lib/noAutofill';
 
 const CATEGORIES: TaskStatus[] = ['todo', 'inProgress', 'done'];
 const PALETTE = [...GROUP_COLORS, C.accent];
@@ -106,7 +107,7 @@ export function BoardColumnsDialog({ projectId, columns, taskCounts, onSaved, on
                 <ColorPicker value={columnColor(r)} onPick={color => update(i, { color })} />
                 {/* Название */}
                 <input
-                  autoComplete="off"
+                  {...NO_AUTOFILL}
                   value={r.name}
                   onChange={e => update(i, { name: e.target.value })}
                   placeholder="Название"

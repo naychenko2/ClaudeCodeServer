@@ -161,7 +161,7 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
           ) : (
             <>
               <Field label="Адрес">
-                <TextField value={url} onChange={setUrl} mono placeholder="https://mcp.example.com/mcp" />
+                <TextField value={url} onChange={setUrl} mono autoComplete="url" placeholder="https://mcp.example.com/mcp" />
               </Field>
               <Field
                 label="Способ входа"
@@ -183,7 +183,7 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
                   label="Client ID"
                   hint="Нужен только серверам без автоматической регистрации клиента (DCR). Если сервер её поддерживает — оставьте пустым, AI Home зарегистрируется сам при первом входе."
                 >
-                  <TextField value={oauthClientId} onChange={setOauthClientId} mono placeholder="необязательно" />
+                  <TextField value={oauthClientId} onChange={setOauthClientId} mono autoComplete="on" placeholder="необязательно" />
                 </Field>
               )}
               <PairList
@@ -263,11 +263,12 @@ function PairList({ title, addLabel, pairs, onChange }: {
             display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr) auto auto',
             gap: 6, alignItems: 'center',
           }}>
-            <TextField value={pair.name} onChange={v => patch(i, { name: v })} mono placeholder="Ключ" />
+            <TextField value={pair.name} onChange={v => patch(i, { name: v })} mono autoComplete="on" placeholder="Ключ" />
             <TextField
               value={pair.stored ? '' : pair.value}
               onChange={v => patch(i, { value: v, stored: false })}
               mono
+              autoComplete="on"
               disabled={pair.stored}
               placeholder={pair.stored ? 'задано' : 'Значение'}
             />

@@ -12,6 +12,7 @@ import { api } from '../../lib/api'
 import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
 import type * as ts from '../../lib/terminalSignalr'
 import type { ProjectService } from '../../types'
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 type ToolsTab = 'terminal' | 'preview'
 
@@ -129,7 +130,7 @@ export function ToolsSidebar({
               } />
               {renaming?.id === t.id ? (
                 <input
-                  autoComplete="off"
+                  {...NO_AUTOFILL}
                   autoFocus
                   value={renaming.value}
                   onChange={e => setRenaming({ id: t.id, value: e.target.value })}

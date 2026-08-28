@@ -39,6 +39,7 @@ import { EmptyState } from './EmptyState';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 interface Props {
   project: Project;
@@ -597,7 +598,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
         {inlineRename ? (
           <input
-            autoComplete="off"
+            {...NO_AUTOFILL}
             ref={inputRef}
             value={p.renameValue}
             onChange={e => p.onRenameChange(e.target.value)}
@@ -1669,6 +1670,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
               style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
             <TextField
+              type="search"
               value={search}
               onChange={handleSearch}
               placeholder="Поиск по файлам"
@@ -1808,7 +1810,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             }
           >
             <input
-              autoComplete="off"
+              {...NO_AUTOFILL}
               ref={renameModalInputRef}
               value={renameValue}
               onChange={e => setRenameValue(e.target.value)}

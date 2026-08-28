@@ -69,12 +69,25 @@ interface TextFieldProps {
   style?: CSSProperties;
 }
 
+// Разметка поля, которому автозаполнение выключено. Chrome на Android вешает полосу
+// автозаполнения (пароли, карты, адреса) над клавиатурой на ЛЮБОЙ однострочный input, а
+// autocomplete="off" игнорирует умышленно — так решили в самом Chrome ещё в 2014-м. Единственный
+// рычаг, который он слушает, — классификация поля: поля поиска автозаполнением не трогаются,
+// это проверено на планшете. Отсюда подмена типа для полей с autoComplete="off".
+// Роль возвращаем явно: без неё скринридер объявил бы «поле поиска» там, где вводят название
+// заметки. Формально ARIA для type="search" роль textbox не разрешает — осознанный размен:
+// живому человеку с озвучкой важнее правда о поле, чем чистота по букве спецификации.
+function noFillProps(type: string, autoComplete: string) {
+  const swap = type === 'text' && autoComplete === 'off';
+  return { type: swap ? 'search' : type, role: swap ? 'textbox' : undefined };
+}
+
 // === Однострочное поле ввода с focus-ring ===
 export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, autoComplete = 'off', style }: TextFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
     <input
-      type={type}
+      {...noFillProps(type, autoComplete)}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
@@ -189,7 +202,7 @@ export function IconField({
       )}
       <input
         ref={inputRef}
-        type={type}
+        {...noFillProps(type, autoComplete)}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}

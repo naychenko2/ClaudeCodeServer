@@ -10,6 +10,7 @@ import { requestNewPreset } from '../lib/modelProvidersNav';
 import { newPresetId, withNewPreset } from '../lib/specialties';
 import type { ModelOption } from '../lib/models';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 // Доступ к слоям специальностей для inline-сборки цепочки (см. RoutePicker.presetCreation).
 // Без него «Собрать цепочку…» ведёт себя по-старому — открывает раздел (PersonaForm).
@@ -105,8 +106,7 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
           {copyOf ? `Копия «${copyOf}»` : 'Новая цепочка'}
         </div>
         <input
-          autoComplete="off"
-          type="text"
+          {...NO_AUTOFILL}
           value={draftName}
           onChange={e => setDraftName(e.target.value)}
           placeholder="Например: «Экономная, но живая»"

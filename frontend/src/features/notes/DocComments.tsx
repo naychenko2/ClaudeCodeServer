@@ -12,6 +12,7 @@ import { startChatFromPanel } from '../../lib/ai/startChat';
 import { docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from '../../lib/ai/annotationsPrompt';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», подсветка якорных
@@ -541,7 +542,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                   ))}
                   <div style={{ display: 'flex', gap: 6 }}>
                     <input
-                      autoComplete="off"
+                      {...NO_AUTOFILL}
                       value={replyDraft[a.noteId] ?? ''}
                       onChange={e => setReplyDraft(d => ({ ...d, [a.noteId]: e.target.value }))}
                       onKeyDown={e => { if (e.key === 'Enter') void sendReply(a); }}
@@ -685,7 +686,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                 );
               })}
               <input
-                autoComplete="off"
+                {...NO_AUTOFILL}
                 value={customTag} onChange={e => setCustomTag(e.target.value)}
                 onKeyDown={e => {
                   if (e.key !== 'Enter') return;

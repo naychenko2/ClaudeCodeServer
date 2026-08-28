@@ -66,6 +66,7 @@ import { isTasksCreate } from './chat/TaskCreatedView';
 import { isWidgetShow } from './chat/WidgetView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
 import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
@@ -2520,7 +2521,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   <span style={{ fontSize: 12, color: C.textMuted }}>Ветка</span>
                   <input
-                    autoComplete="off"
+                    {...NO_AUTOFILL}
                     value={worktreeBranchInput}
                     onChange={e => setWorktreeBranchInput(e.target.value)}
                     spellCheck={false}

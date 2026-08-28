@@ -15,6 +15,7 @@ import { C, FONT, FS, R, SHADOW, Z, FIELD } from '../lib/design';
 import { incPopupDepth } from '../lib/popupEscape';
 import type { ModelOption } from '../lib/models';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;
@@ -361,7 +362,7 @@ function RouteManualEntry({ draft, onChange, onBlur, showError, error, canSave, 
         onFocus={() => setFocused(true)}
         placeholder="tier:strong · preset:{id} · local · id модели"
         spellCheck={false}
-        autoComplete="off"
+        {...NO_AUTOFILL}
         aria-invalid={err}
         aria-describedby={err ? 'route-manual-err' : undefined}
         style={fieldStyle}

@@ -7,6 +7,7 @@ import { C, FONT, FS, R, SHADOW } from '../../lib/design';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { ConfirmDialog, IconButton } from '../../components/ui';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 // Форматирует остаток времени от ISO-строки expiresAt
 const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {
   if (!expiresAt) return null;
@@ -277,7 +278,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `3px 8px 3px ${10 + depth * 14}px` }}>
       <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
       <input
-        autoComplete="off"
+        {...NO_AUTOFILL}
         autoFocus
         value={newFolderValue}
         onChange={e => setNewFolderValue(e.target.value)}
@@ -421,7 +422,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `3px 8px 3px ${10 + depth * 14}px` }}>
             <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
             <input
-              autoComplete="off"
+              {...NO_AUTOFILL}
               autoFocus
               value={renameValue}
               onChange={e => setRenameValue(e.target.value)}

@@ -8,6 +8,7 @@ import { Modal, ModalActions } from '../ui';
 import { proxyUrl } from './MarkdownContent';
 import { ChatProjectContext } from './contexts';
 import { fmtCredits } from './glifStats';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -545,7 +546,7 @@ export function MediaBlock({
               overflow: 'hidden', background: C.bgMain,
             }}>
               <input
-                autoComplete="off"
+                {...NO_AUTOFILL}
                 value={saveDialog.baseName}
                 onChange={e => setSaveDialog({ ...saveDialog, baseName: e.target.value })}
                 placeholder="имя файла"

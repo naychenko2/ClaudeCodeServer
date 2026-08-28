@@ -5,6 +5,7 @@ import { C, R, FONT, GROUP_COLORS, MODAL_W } from '../../../lib/design';
 import { Modal, Button } from '../../../components/ui';
 import { ChevronUp, ChevronDown, Trash2 } from 'lucide-react';
 import { ICON_SIZE } from '../../../components/ui/icons';
+import { NO_AUTOFILL } from '../../../lib/noAutofill';
 
 interface Props {
   groups: ProjectGroup[];
@@ -110,7 +111,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
               />
               {/* Имя (инлайн-редактирование по blur/Enter) */}
               <input
-                autoComplete="off"
+                {...NO_AUTOFILL}
                 defaultValue={g.name}
                 onBlur={e => handleRename(g.id, e.target.value.trim())}
                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
@@ -170,7 +171,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
       {/* Новая группа */}
       <div style={{ display: 'flex', gap: 8 }}>
         <input
-          autoComplete="off"
+          {...NO_AUTOFILL}
           value={newName}
           onChange={e => setNewName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleCreate(); }}

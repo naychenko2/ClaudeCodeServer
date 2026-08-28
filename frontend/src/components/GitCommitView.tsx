@@ -7,6 +7,7 @@ import { C, FONT, MODAL_W, R } from '../lib/design';
 import { DiffView } from './DiffView';
 import { IconButton, Menu, MenuItem, Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 // Цвета статус-бейджей — как в панели «Изменения» и дереве файлов
 const BADGE: Record<string, { color: string; bg: string; label: string }> = {
@@ -190,7 +191,7 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 9px', height: 30 }}>
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
           <input
-            autoComplete="off"
+            {...NO_AUTOFILL}
             value={filter}
             onChange={e => setFilter(e.target.value)}
             placeholder="Файл или путь…"

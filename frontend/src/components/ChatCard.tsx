@@ -27,6 +27,7 @@ import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { useCanHover } from '../lib/pointer';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -854,7 +855,7 @@ export function ChatCard({
             // перестраивается, соседние метки не прыгают. Клики гасим — иначе
             // попытка поставить курсор открывала бы чат (onClick всей карточки)
             <input
-              autoComplete="off"
+              {...NO_AUTOFILL}
               ref={inputRef}
               value={draft}
               disabled={saving}

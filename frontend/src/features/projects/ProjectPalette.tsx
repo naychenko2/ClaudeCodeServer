@@ -6,6 +6,7 @@ import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
 import { useAllProjects, openProjectViaEvent, openAllProjects, openNewProjectFlow } from './useAllProjects';
 import { usePinnedIds, useRecentIds, isPinned, togglePin } from '../../lib/pinnedProjects';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Командная палитра переключения проектов: поиск + секции «Закреплённые» и «Недавние».
 // Открывается лупой в зоне проектов (Ctrl+K занят AI-палитрой). Значки — projectColor/Initial.
@@ -131,7 +132,7 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: `1px solid ${C.border}` }}>
           <Search size={18} strokeWidth={2} color={C.textMuted} />
           <input
-            autoComplete="off"
+            {...NO_AUTOFILL}
             ref={inputRef}
             value={q}
             onChange={e => setQ(e.target.value)}

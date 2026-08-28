@@ -20,6 +20,11 @@ public static class McpCatalogMapper
     private static readonly Regex NpmNamePattern =
         new(@"^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$", RegexOptions.Compiled);
 
+    // Имя проекта PyPI: буква/цифра в начале и в конце, внутри [. _ -] (правила PyPI).
+    // Отсекает git+https://…, *.tgz, file:… и версию-диапазон, вписанную в имя (pkg>=1)
+    private static readonly Regex PyPiNamePattern =
+        new(@"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$", RegexOptions.Compiled);
+
     // Точный semver (без диапазонов ^~&gt;= и dist-тегов latest/next); prerelease/build допустимы
     private static readonly Regex SemVerPattern =
         new(@"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$", RegexOptions.Compiled);
@@ -87,6 +92,22 @@ public static class McpCatalogMapper
     // kept опубликован не позже card? Известный publishedAt «новее» неизвестного
     private static bool FirstIsFresher(McpCatalogCardDto kept, McpCatalogCardDto card) =>
         (kept.PublishedAt ?? DateTime.MinValue) >= (card.PublishedAt ?? DateTime.MinValue);
+
+    /// <summary>
+    /// Разбор ответа GET /v0.1/servers/{name}/versions/latest (ревизия, волна 2):
+    /// статус — из официального блока _meta, версия — из server.version. Мусорный
+    /// корень даёт (null, null): «проверить не удалось» на стороне клиента решается
+    /// по исключению разбора, а здесь остаются только честные отсутствия полей.
+    /// </summary>
+    public static (string? Status, string? Version) MapLatestVersion(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return (null, null);
+        var status = CleanText(Str(OfficialMeta(root), "status"), 40)?.ToLowerInvariant();
+        var version = root.TryGetProperty("server", out var server)
+            && server.ValueKind == JsonValueKind.Object
+            ? CleanText(Str(server, "version"), 40) : null;
+        return (status, version);
+    }
 
     /// <summary>Одна запись ответа (<c>{ server, _meta }</c>) → карточка; null — пропустить.</summary>
     public static McpCatalogCardDto? MapEntry(JsonElement entry)
@@ -218,7 +239,7 @@ public static class McpCatalogMapper
         return (null, firstNotice);
     }
 
-    // ── packages[] npm → Stdio ───────────────────────────────────────────────────────
+    // ── packages[] npm/pypi → Stdio ──────────────────────────────────────────────────
 
     private static (McpCatalogPrefillDto? Prefill, string? Notice) MapPackage(
         JsonElement server, string name, string? title, string? description)
@@ -230,34 +251,41 @@ public static class McpCatalogMapper
         {
             if (pkg.ValueKind != JsonValueKind.Object) continue;
 
-            var registryType = Str(pkg, "registryType");
-            if (!string.Equals(registryType, "npm", StringComparison.OrdinalIgnoreCase))
+            // npm и pypi — две экосистемы, которые умеем запускать; рантайм у каждой свой
+            var registryType = Str(pkg, "registryType")?.ToLowerInvariant();
+            var runtime = registryType switch { "npm" => "npx", "pypi" => "uvx", _ => null };
+            if (runtime is null)
             {
                 firstNotice ??= $"Тип пакета «{registryType}» не поддерживается";
                 continue;
             }
-            // npm-пакеты с http/sse-транспортом поднимают адрес сами ({port} локально) —
+            // пакеты с http/sse-транспортом поднимают адрес сами ({port} локально) —
             // как stdio их не запустить, а адрес придумал пакет, не реестр
             if (pkg.TryGetProperty("transport", out var transport) && transport.ValueKind == JsonValueKind.Object
                 && !string.Equals(Str(transport, "type"), "stdio", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            // runtimeHint: реестр оставляет его пустым у 28 из 29 npm-пакетов (спека не
-            // требует) — отсутствие трактуем как npx, дефолт npm-экосистемы. Любой другой
-            // рантайм (docker, bunx…) — не наш: как запускать пакет, мы не знаем
+            // runtimeHint: спека его не требует — у обоих реестров отсутствие трактуем
+            // как дефолт своей экосистемы (npx/uvx). Любой другой рантайм (docker,
+            // bunx…) — не наш: как запускать пакет, мы не знаем
             var runtimeHint = Str(pkg, "runtimeHint")?.Trim().ToLowerInvariant();
-            if (runtimeHint is not null and not "npx")
+            if (runtimeHint is not null && runtimeHint != runtime)
             {
                 firstNotice ??= $"Запуск пакета через «{runtimeHint}» не поддерживается";
                 continue;
             }
 
             var identifier = Str(pkg, "identifier")?.Trim() ?? "";
-            if (!NpmNamePattern.IsMatch(identifier))
+            var nameValid = runtime == "uvx" ? PyPiNamePattern.IsMatch(identifier)
+                : NpmNamePattern.IsMatch(identifier);
+            if (!nameValid)
             {
                 firstNotice ??= $"Имя пакета «{identifier.Crop(60)}» не подходит";
                 continue;
             }
+            // PyPI-имя нормализуем по PEP 503: серии «-_.» и регистр схлопываются —
+            // предпросмотр показывает каноническое имя, которое и запустит uvx
+            if (runtime == "uvx") identifier = NormalizePyPiName(identifier);
             var version = Str(pkg, "version")?.Trim();
             if (version is null || !SemVerPattern.IsMatch(version))
             {
@@ -265,8 +293,11 @@ public static class McpCatalogMapper
                 continue;
             }
 
-            // runtimeArguments — жёсткий allow-list: только молчаливое подтверждение npx.
-            // --registry/-p подменяют источник пакета — предпросмотр строки перестаёт
+            // runtimeArguments — жёсткий allow-list, у каждого рантайма свой: npx —
+            // только молчаливое подтверждение -y; uvx — пуст (у него нет ни
+            // подтверждений, ни безобидных флагов: --from/--with/--index/--index-url/
+            // --extra-index-url/--find-links подменяют источник пакета ровно как
+            // --registry у npx). Всё прочее — предпросмотр строки перестал бы
             // описывать то, что реально запустится
             var args = new List<string>();
             var runtimeArgs = ArrayOf(pkg, "runtimeArguments");
@@ -277,7 +308,8 @@ public static class McpCatalogMapper
                     firstNotice ??= "В аргументах запуска есть секрет — из каталога не подключить";
                     goto nextPackage;
                 }
-                if (string.Equals(Str(runtimeArg, "type"), "positional", StringComparison.OrdinalIgnoreCase)
+                if (runtime == "npx"
+                    && string.Equals(Str(runtimeArg, "type"), "positional", StringComparison.OrdinalIgnoreCase)
                     && Str(runtimeArg, "value") == "-y")
                 {
                     args.Add("-y");
@@ -345,7 +377,7 @@ public static class McpCatalogMapper
 
             return (new McpCatalogPrefillDto(
                 Key: SlugOf(name), Label: title, Description: description, Transport: "stdio",
-                Command: "npx", Args: args, Url: null, Fields: fields), null);
+                Command: runtime, Args: args, Url: null, Fields: fields), null);
             nextPackage: ;
         }
         return (null, firstNotice);
@@ -377,6 +409,11 @@ public static class McpCatalogMapper
             if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    // PEP 503: регистр не значим, серия «-_.» эквивалентна одному «-» (My_Pkg.js →
+    // my-pkg-js). Валидацию имени делает PyPiNamePattern — здесь только канонизация
+    private static string NormalizePyPiName(string name) =>
+        Regex.Replace(name.ToLowerInvariant(), @"[-_.]+", "-");
 
     /// <summary>
     /// Ключ записи: slug последнего сегмента name (io.github.owner/filesystem → filesystem),

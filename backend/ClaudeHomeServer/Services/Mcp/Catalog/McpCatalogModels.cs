@@ -30,3 +30,19 @@ public sealed record McpCatalogCardDto(
 
 /// <summary>Страница результатов поиска по каталогу.</summary>
 public sealed record McpCatalogSearchResult(IReadOnlyList<McpCatalogCardDto> Items, string? NextCursor);
+
+/// <summary>
+/// Вход ревизии: имя записи каталога и версия, зашедшая в запись при импорте
+/// (импортированной может не быть — тогда сверка версий молча не проводится).
+/// </summary>
+public sealed record McpCatalogRevisionQuery(string Name, string? ImportedVersion);
+
+/// <summary>
+/// Итог сверки одной импортированной записи с живым реестром. «Отозван» (Deprecated)
+/// ставится ТОЛЬКО по явному status: deprecated/deleted в разобранном ответе; любая
+/// беда проверки — CheckFailed с причиной в Error, и это НЕ «отозван»: preview-сервис
+/// имеет полное право лежать, и в этот момент человек не должен гасить рабочие серверы.
+/// </summary>
+public sealed record McpCatalogRevisionItem(
+    string Name, string? Status, bool Deprecated, bool HasNewerVersion,
+    string? LatestVersion, bool CheckFailed, string? Error);

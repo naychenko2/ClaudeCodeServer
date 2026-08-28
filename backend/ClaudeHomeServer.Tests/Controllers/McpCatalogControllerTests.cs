@@ -11,7 +11,6 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -23,10 +22,10 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
     // Фейковый клиент: FetchAndMapAsync переопределён, кэш не задействован
     private sealed class FakeCatalogClient(McpCatalogSearchResult page, bool enabled = true,
         Exception? failWith = null)
-        : McpCatalogClient(new StubFactory(), Options.Create(new McpCatalogOptions
+        : McpCatalogClient(new StubFactory(), new McpCatalogOptions
         {
             BaseUrl = enabled ? "https://registry.example" : "",
-        }))
+        })
     {
         protected override Task<McpCatalogSearchResult> FetchAndMapAsync(
             string q, string? cursor, CancellationToken ct)

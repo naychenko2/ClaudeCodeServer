@@ -148,6 +148,137 @@ public class McpCatalogMapperTests
         card.Prefill!.Args.Should().Contain("pre-mcp@3.0.0-rc.1");
     }
 
+    // --- pypi → uvx (волна 2) ---
+
+    // Живой реестр: pypi-записи (io.github.Oncorporation/filesystem-server) идут без
+    // runtimeHint и runtimeArguments — отсутствие трактуем как uvx, дефолт экосистемы
+    [Fact]
+    public void Pypi_без_runtimeHint_запускается_через_uvx()
+    {
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"io.github.o/py","version":"0.1.3",
+            "packages":[{"registryType":"pypi","identifier":"vs-filesystem-mcp-server",
+            "version":"0.1.3","transport":{"type":"stdio"}}]
+            """));
+        card!.Connectable.Should().BeTrue();
+        card.Prefill!.Command.Should().Be("uvx");
+        card.Prefill.Args.Should().Equal("vs-filesystem-mcp-server@0.1.3");
+        card.Version.Should().Be("0.1.3");
+    }
+
+    [Fact]
+    public void Pypi_runtimeHint_uvx_проходит_аргументы_пакета_собираются()
+    {
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"io.github.o/py2","version":"1.0.0",
+            "packages":[{"registryType":"pypi","identifier":"py2-mcp","version":"1.2.0",
+            "runtimeHint":"uvx","transport":{"type":"stdio"},
+            "packageArguments":[
+              {"type":"named","name":"root","description":"Разрешённая папка","isRequired":true},
+              {"type":"named","name":"mode","default":"fast"}],
+            "environmentVariables":[{"name":"API_KEY","isSecret":true}]}]
+            """));
+        card!.Connectable.Should().BeTrue();
+        card.Prefill!.Command.Should().Be("uvx");
+        card.Prefill.Args.Should().Equal("py2-mcp@1.2.0", "--root", "{root}", "--mode", "fast");
+        card.Prefill.Fields.Should().Contain(f => f.Target == "args" && f.Name == "root" && f.Required);
+        card.Prefill.Fields.Should().Contain(f => f.Target == "env" && f.Name == "API_KEY" && f.Secret);
+    }
+
+    [Fact]
+    public void Pypi_runtimeHint_не_uvx_отказ()
+    {
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"io.github.o/pyd","version":"1.0.0",
+            "packages":[{"registryType":"pypi","identifier":"pyd-mcp","version":"1.0.0",
+            "runtimeHint":"docker","transport":{"type":"stdio"}}]
+            """));
+        card!.Connectable.Should().BeFalse();
+        card.Notice.Should().Contain("docker");
+    }
+
+    // Allow-list рантайм-флагов uvx ПУСТ: у npx есть -y, у uvx нет ни подтверждений,
+    // ни безобидных флагов — --from/--with/--index* подменяют источник пакета, как
+    // --registry у npx. Разрешённый набор — пустой, всё остальное отказ
+    [Theory]
+    [InlineData("""{"value":"--from","type":"named","name":"from"}""")]
+    [InlineData("""{"value":"--with","type":"named","name":"with"}""")]
+    [InlineData("""{"value":"--index","type":"named","name":"index"}""")]
+    [InlineData("""{"value":"--index-url","type":"named","name":"index-url"}""")]
+    [InlineData("""{"value":"--extra-index-url","type":"named","name":"extra-index-url"}""")]
+    [InlineData("""{"value":"--find-links","type":"named","name":"find-links"}""")]
+    [InlineData("""{"value":"-y","type":"positional"}""")]
+    public void Pypi_любой_рантайм_флаг_отказ(string runtimeArg)
+    {
+        var card = McpCatalogMapper.MapEntry(Entry(
+            "\"name\":\"io.github.o/pyr\",\"version\":\"1.0.0\"," +
+            "\"packages\":[{\"registryType\":\"pypi\",\"identifier\":\"pyr-mcp\",\"version\":\"1.0.0\"," +
+            "\"runtimeHint\":\"uvx\",\"transport\":{\"type\":\"stdio\"}," +
+            "\"runtimeArguments\":[" + runtimeArg + "]}]"));
+        card!.Connectable.Should().BeFalse();
+        card.Notice.Should().Contain("не поддерживается");
+    }
+
+    [Theory]
+    [InlineData("git+https://evil.tld/pkg.git")]
+    [InlineData("https://evil.tld/pkg-1.0.0.tar.gz")]
+    [InlineData("file:../local/pkg")]
+    [InlineData("pkg>=1.0")]
+    [InlineData("-leading-dash")]
+    [InlineData("trailing-dash-")]
+    [InlineData("space in name")]
+    public void Pypi_имя_вне_правил_PyPI_отказ(string identifier)
+    {
+        var card = McpCatalogMapper.MapEntry(Entry(
+            "\"name\":\"io.github.o/pyn\",\"version\":\"1.0.0\"," +
+            "\"packages\":[{\"registryType\":\"pypi\",\"identifier\":\"" + identifier + "\"," +
+            "\"version\":\"1.0.0\",\"runtimeHint\":\"uvx\",\"transport\":{\"type\":\"stdio\"}}]"));
+        card!.Connectable.Should().BeFalse();
+        card.Notice.Should().Contain("Имя пакета");
+    }
+
+    [Fact]
+    public void Pypi_имя_нормализуется_по_PEP_503()
+    {
+        // Серии «-_.» и регистр эквивалентны одному «-»: предпросмотр показывает
+        // каноническое имя, которое и запустит uvx
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"io.github.o/pynorm","version":"1.0.0",
+            "packages":[{"registryType":"pypi","identifier":"My_Pkg.js-Server",
+            "version":"1.0.0","runtimeHint":"uvx","transport":{"type":"stdio"}}]
+            """));
+        card!.Connectable.Should().BeTrue();
+        card.Prefill!.Args.Should().Contain("my-pkg-js-server@1.0.0");
+    }
+
+    [Theory]
+    [InlineData("^1.0.0")]
+    [InlineData(">=2")]
+    [InlineData("latest")]
+    [InlineData("")]
+    public void Pypi_версия_неточная_отказ(string version)
+    {
+        var card = McpCatalogMapper.MapEntry(Entry(
+            "\"name\":\"io.github.o/pyv\",\"version\":\"1.0.0\"," +
+            "\"packages\":[{\"registryType\":\"pypi\",\"identifier\":\"pyv-mcp\",\"version\":\"" + version + "\"," +
+            "\"runtimeHint\":\"uvx\",\"transport\":{\"type\":\"stdio\"}}]"));
+        card!.Connectable.Should().BeFalse();
+        card.Notice.Should().Contain("Версия пакета");
+    }
+
+    [Fact]
+    public void Pypi_env_чёрный_список_тот_же()
+    {
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"io.github.o/pye","version":"1.0.0",
+            "packages":[{"registryType":"pypi","identifier":"pye-mcp","version":"1.0.0",
+            "runtimeHint":"uvx","transport":{"type":"stdio"},
+            "environmentVariables":[{"name":"UV_INDEX_URL"}]}]
+            """));
+        card!.Connectable.Should().BeFalse();
+        card.Notice.Should().Contain("UV_INDEX_URL");
+    }
+
     // --- env: чёрный список ---
 
     [Theory]
@@ -322,15 +453,16 @@ public class McpCatalogMapperTests
     // --- registryType / status / дедуп ---
 
     [Fact]
-    public void RegistryType_не_npm_и_не_remote_помеченная_карточка()
+    public void RegistryType_не_npm_pypi_и_не_remote_помеченная_карточка()
     {
+        // pypi с волны 2 поддерживается — неподдержанный пример теперь oci из спеки реестра
         var card = McpCatalogMapper.MapEntry(Entry("""
-            "name":"io.github.o/py","version":"1.0.0",
-            "packages":[{"registryType":"pypi","identifier":"py-mcp","version":"1.0.0",
-            "runtimeHint":"uvx","transport":{"type":"stdio"}}]
+            "name":"io.github.o/oci","version":"1.0.0",
+            "packages":[{"registryType":"oci","identifier":"ghcr.io/o/oci-mcp","version":"1.0.0",
+            "runtimeHint":"docker","transport":{"type":"stdio"}}]
             """));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("pypi");
+        card.Notice.Should().Contain("oci");
     }
 
     [Fact]

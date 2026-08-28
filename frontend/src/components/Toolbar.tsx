@@ -24,18 +24,19 @@ export const tbBtnGhost: CSSProperties = {
 // строку. Отсюда же minHeight вместо фиксированной height и вертикальный padding:
 // в одну строку высота прежняя (32px контрол + 16 паддинга < TB.height), в две —
 // тулбар честно вырастает.
-export function Toolbar({ isMobile, noBorder, bg, children, style, rootRef }: {
+export function Toolbar({ isMobile, noBorder, bg, children, style, onContextMenu, rootRef }: {
   isMobile?: boolean;
   noBorder?: boolean;
   bg?: string;
   children: ReactNode;
   style?: CSSProperties;
+  onContextMenu?: (e: React.MouseEvent) => void;
   // Ref на корень — для замера ширины КОНТЕЙНЕРА (useContainerWidth), когда
   // раскладка тулбара зависит от места, а не от ширины окна
   rootRef?: RefCallback<HTMLDivElement>;
 }) {
   return (
-    <div ref={rootRef} style={{
+    <div ref={rootRef} onContextMenu={onContextMenu} style={{
       display: 'flex', alignItems: 'center', gap: TB.gap,
       flexWrap: 'wrap', rowGap: SP.sm,
       minHeight: isMobile ? TB.heightMobile : TB.heightDesktop,
@@ -54,7 +55,7 @@ export function Toolbar({ isMobile, noBorder, bg, children, style, rootRef }: {
 // Сохранена для обратной совместимости API (isMobile → размер тач-таргета).
 // Кнопки рельсы — круглые (borderRadius 32), дефолт задаётся здесь, а не в
 // каждом вызове через style. Если нужен override — передать style (мержится).
-export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, disabled, active, style, children }: {
+export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, disabled, active, style, className, children }: {
   onClick?: (e: MouseEvent) => void;
   title?: string;
   // Имя без нативного тултипа — когда подсказку рисует кто-то другой (см. IconButton)
@@ -64,12 +65,13 @@ export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, 
   disabled?: boolean;
   active?: boolean;
   style?: CSSProperties;
+  className?: string;
   children: ReactNode;
 }) {
   return (
     <IconButton
       onClick={onClick} title={title} ariaLabel={ariaLabel} disabled={disabled} active={active} color={color}
-      size={isMobile ? 'lg' : 'md'} style={style}
+      size={isMobile ? 'lg' : 'md'} style={style} className={className}
     >
       {children}
     </IconButton>

@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Collections.Generic;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -144,6 +145,79 @@ public class JwtService
             if (principal.FindFirstValue("oo_pid") != projectId) return null;
             if (principal.FindFirstValue("oo_path") != path) return null;
             return principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        }
+        catch { return null; }
+    }
+
+    // --- Внешний доступ к дев-серверу по поддомену (preview) ---
+    // Audience preview: ссылки живут в закладках и почте, ходят за пределы сети.
+    // Порт в токен НЕ кладём намеренно: он резолвится по serviceId на месте, иначе ссылка
+    // пережила бы смену конфигурации сервиса и увела на посторонний процесс.
+    public const string PreviewAudience = "preview";
+
+    /// <summary>
+    /// Выдаёт ссылку внешнего доступа к дев-серверу. Срок действия — часы: браузер на
+    /// машину наружу, и выход из аккаунта обязан закрывать доступ.
+    /// </summary>
+    public string IssuePreviewToken(string userId, string projectId, string serviceId, string jti, TimeSpan lifetime)
+    {
+        var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, userId),
+            new(JwtRegisteredClaimNames.Jti, jti),
+            new("pv_pid", projectId),
+            new("pv_sid", serviceId),
+        };
+        // Без tv токен не отозвать выходом из аккаунта: IsSessionCurrent такому откажет,
+        // и это правильный исход — доступ наружу без права на отзыв не выдаём
+        var version = _users.GetById(userId)?.TokenVersion;
+        if (version is not null)
+            claims.Add(new Claim(TokenVersionClaim, version.Value.ToString(CultureInfo.InvariantCulture)));
+
+        var jwt = new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: PreviewAudience,
+            claims: claims,
+            expires: DateTime.UtcNow.Add(lifetime),
+            signingCredentials: creds);
+        return new JwtSecurityTokenHandler().WriteToken(jwt);
+    }
+
+    /// <summary>
+    /// Проверяет ссылку внешнего доступа: подпись, срок, аудиторию и версию сессий.
+    /// Возвращает (userId, projectId, serviceId, jti) либо null.
+    ///
+    /// Не отозвана ли ссылка — проверяет вызывающий по jti в реестре: подпись об этом
+    /// не знает ничего.
+    /// </summary>
+    public (string UserId, string ProjectId, string ServiceId, string Jti)? ValidatePreviewToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        try
+        {
+            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = "ClaudeHomeServer",
+                ValidateAudience = true,
+                ValidAudience = PreviewAudience,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = _key,
+                ClockSkew = TimeSpan.Zero,
+                NameClaimType = ClaimTypes.Name,
+                RoleClaimType = ClaimTypes.Role,
+            }, out _);
+
+            if (!IsSessionCurrent(principal)) return null;
+
+            var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+            var projectId = principal.FindFirstValue("pv_pid");
+            var serviceId = principal.FindFirstValue("pv_sid");
+            var jti = principal.FindFirstValue(JwtRegisteredClaimNames.Jti);
+            if (userId is null || projectId is null || serviceId is null || jti is null) return null;
+            return (userId, projectId, serviceId, jti);
         }
         catch { return null; }
     }

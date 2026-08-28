@@ -48,6 +48,7 @@ public class FallbackEgressDownTests
         public bool OrchestrationActive => false;
         public bool HasPendingBg => false;
         public bool HasTrackedBg => false;
+        public bool HasTrackedCommandBg => false;
         public bool IsContinuationInFlight => false;
         public long SubmittedTurnSeq { get; private set; }
 

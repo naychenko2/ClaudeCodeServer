@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
+import { archiveApi } from '../../api/chats';
+import { isArchivedChat } from '../../lib/chatFilters';
 import { HandsBadge } from '../../features/desktop/HandsBadge';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
@@ -1411,6 +1413,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     notify: online && isNotifySupported(),
     dossier: !!project && online,
     expiry: online,
+    // Архив всегда доступен: сетевой клиент PUT /api/chats/{id}/archived есть в
+    // любом онлайн-чате, и compact-колонка стены намеренно оставляет архив снаружи —
+    // она и так узкая, и в архивный чат возвращают из той же колонки через шапку
+    archive: online && !compact,
     delete: !!onChatDeleted && online && !compact,
   };
   const headerActions = CHAT_ACTION_ORDER.filter(k => headerActionAvailable[k]);
@@ -1452,6 +1458,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
+      case 'archive':
+        void archiveApi.setArchived(session.id, !isArchivedChat(session))
+          .then(s => onSessionUpdated?.(s))
+          .catch((e) => showToast('Архив чата', e instanceof Error ? e.message : 'Не удалось изменить архив', 'info'));
+        break;
       case 'delete': setDeleteAsk(true); break;
     }
   };
@@ -1485,6 +1496,16 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         icon: <Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.expiresAfterMinutes != null ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения',
         active: session.expiresAfterMinutes != null,
+      };
+      // Направление архива читаем через isArchivedChat (НЕ archivedAt) — наш
+      // производный bool с бэка, иконка и подпись переключаются по нему. 409
+      // «в чате идёт ход» приходит текстом сервера в e.message и уходит в тост
+      // без нашей обёртки (как в ChatsPage.handleArchive и SessionList)
+      case 'archive': return {
+        icon: isArchivedChat(session)
+          ? <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: isArchivedChat(session) ? 'Вернуть из архива' : 'В архив',
       };
       case 'delete': return { icon: <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Удалить чат', danger: true };
     }

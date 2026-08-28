@@ -142,6 +142,11 @@ public class McpRegistry
             existing.Enabled = draft.Enabled;
             existing.AlwaysLoad = draft.AlwaysLoad;
             existing.AllowReadOnlyPersonas = draft.AllowReadOnlyPersonas;
+            // Ось «чаты вне проектов» переносится наравне с остальными: без этой строки
+            // PUT молча сбрасывал разрешение — а это единственный способ его выдать
+            existing.AllowOutsideProjects = draft.AllowOutsideProjects;
+            // CatalogRef намеренно не переносится: указатель на реестр переживает любую
+            // правку записи сам (план «Каталог», п.4), а в черновике его нет
             existing.AuthVersion++;
             existing.UpdatedAt = DateTime.UtcNow;
             Save();

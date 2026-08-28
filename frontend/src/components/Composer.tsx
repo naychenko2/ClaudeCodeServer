@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from 'react';
 import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Eye, EyeOff, Mic, Paperclip, Plus, RefreshCw, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -19,6 +19,7 @@ import {
 import { TeamImplementBadge } from '../features/team/TeamImplementBadge';
 import { teamImplementModeLocked, TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
+import { TOUCH_CALLOUT_GUARD } from '../lib/pointer';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { QuickPhrasesDialog, QuickPhrasesIcon, QuickPhrasesMenu } from './QuickPhrases';
@@ -169,16 +170,11 @@ export interface ComposerProps {
 const STRIP_COMPACT = 640;
 const STRIP_WIDE = 900;
 
-// Гасим нативный touch-callout / контекстное меню на иконочных кнопках.
-// На планшете long-press по SVG-иконке внутри кнопки иначе вызывает меню
-// браузера «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод
-// не стартует). Подавляем callout и выделение; onContextMenu гасит и правый клик.
-const iconBtnGuard: CSSProperties = {
-  WebkitTouchCallout: 'none',
-  WebkitUserSelect: 'none',
-  userSelect: 'none',
-  touchAction: 'manipulation',
-};
+// Гасим нативный touch-callout / контекстное меню на иконочных кнопках: на планшете
+// long-press по SVG-иконке внутри кнопки иначе вызывает меню браузера
+// «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод не стартует).
+// Щит общий — им же закрыты кнопки рельс, поднимающие плашку по удержанию.
+const iconBtnGuard = TOUCH_CALLOUT_GUARD;
 
 // Получить имя файла из пути
 function basename(filePath: string): string {

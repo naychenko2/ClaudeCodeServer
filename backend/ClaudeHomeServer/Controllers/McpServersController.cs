@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe,
-    PersonaManager personas, ProjectManager projects) : ControllerBase
+    PersonaManager personas, ProjectManager projects, FeatureFlagService flags) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -89,8 +89,16 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     [HttpPost]
     public IActionResult Create([FromBody] McpServerUpsertRequest req)
     {
+        // Указатель на реестр-каталог принимаем только под флагом: dark launch прячет
+        // и поиск, и сам способ пометить запись каталожной (гейты безопасности у записи
+        // при этом работают всегда — они не зависят от флага)
+        if (req.CatalogRef is not null && !flags.IsEnabled(UserId, FeatureFlagKeys.McpCatalog))
+            return BadRequest(new { error = "Каталог MCP-серверов выключен" });
         var draft = new McpServerRecord { Key = req.Key ?? "" };
         if (Apply(draft, req, existing: null) is { } error) return BadRequest(new { error });
+        // Каталожная запись заводится строго выключенной: «настройки взяты из каталога,
+        // осталось вписать ваш ключ» — включение отдельным осознанным шагом
+        if (draft.CatalogRef is not null) draft.Enabled = false;
         try
         {
             return Ok(McpServerMapper.ToDto(registry.Create(UserId, draft)));
@@ -192,6 +200,24 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     // Возвращает текст ошибки или null.
     private string? Apply(McpServerRecord draft, McpServerUpsertRequest req, McpServerRecord? existing)
     {
+        // Указатель на реестр клеится только при создании: правка его не принимает,
+        // поэтому McpRegistry.Update его и не переносит — CatalogRef переживает PUT сам
+        if (existing is null && req.CatalogRef is { } catalogRef)
+        {
+            var name = catalogRef.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                return "CatalogRef: не задано имя записи каталога";
+            draft.CatalogRef = new McpCatalogRef
+            {
+                Name = name,
+                Version = catalogRef.Version,
+                PublishedAt = catalogRef.PublishedAt,
+                // Импортированный адрес — фактический Url записи после подстановки
+                // шаблонов и Trim (draft.Url уже такой): разошлись — гейт пробы снят
+                Url = draft.Transport == McpTransport.Stdio ? null : draft.Url,
+            };
+        }
+
         draft.Label = req.Label ?? existing?.Label ?? draft.Key;
         draft.Description = req.Description ?? existing?.Description;
         draft.Enabled = req.Enabled ?? existing?.Enabled ?? true;
@@ -293,10 +319,17 @@ public record McpValueInput(string Name, string? Value, bool Secret = false);
 
 public record McpAuthInput(string? Kind, string? HeaderName, string? Secret, string? ClientId);
 
+/// <summary>
+/// Указатель на запись каталога при заведении сервера (флаг mcp-catalog). Url сюда не
+/// входит: сервер берёт фактический Url записи — строку после подстановки шаблонов.
+/// </summary>
+public record McpCatalogRefInput(string Name, string? Version, DateTime? PublishedAt);
+
 public record McpServerUpsertRequest(
     string? Key, string? Label, string? Description, string? Transport,
     string? Command, List<string>? Args, List<McpValueInput>? Env,
     string? Url, List<McpValueInput>? Headers, McpAuthInput? Auth,
-    bool? Enabled, bool? AlwaysLoad, bool? AllowReadOnlyPersonas, bool? AllowOutsideProjects);
+    bool? Enabled, bool? AlwaysLoad, bool? AllowReadOnlyPersonas, bool? AllowOutsideProjects,
+    McpCatalogRefInput? CatalogRef = null);
 
 public record McpEnableRequest(bool Enabled);

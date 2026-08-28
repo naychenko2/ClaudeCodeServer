@@ -21,7 +21,7 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
+import { C, FONT, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
@@ -823,6 +823,9 @@ interface ChatHeaderBarProps {
   // Лента прокручена от начала — шапка отрывается от текста тенью (на стене мягче,
   // см. ниже). Лента в начале — тени нет: отрываться не от чего
   scrolled?: boolean;
+  // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
+  // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
+  contextBar?: ReactNode;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -957,7 +960,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, scrolled, contextBar }: ChatHeaderBarProps) {
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1894,6 +1897,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
+        {/* Контекст чата — своей строкой под заголовком, в том же острове: материалы
+            стоят над лентой, а не сбоку от неё */}
+        {contextBar && <div style={{ padding: '0 18px 10px' }}>{contextBar}</div>}
         {tagMenuEl}
         {ctxMenuEl}
         {ctxExpiryMenuEl}
@@ -1902,7 +1908,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     );
   }
 
-  return (
+  const toolbarEl = (
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
     <Toolbar isMobile={isCompact} noBorder={island || compact} bg={island || compact ? 'transparent' : undefined}
@@ -1927,5 +1933,20 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {ctxExpiryMenuEl}
       {actionDialogsEl}
     </Toolbar>
+  );
+  if (!contextBar) return toolbarEl;
+  // Контекст чата — строкой под тулбаром, до ленты: фон свой не нужен (шапка уже
+  // отделена), линия снизу отбивает материалы от переписки
+  return (
+    <>
+      {toolbarEl}
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center',
+        padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
+        borderBottom: `1px solid ${C.border}`,
+      }}>
+        {contextBar}
+      </div>
+    </>
   );
 }

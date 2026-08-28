@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
 import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
-import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
+import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -38,11 +38,13 @@ import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
 import { TaskBoard } from '../features/tasks/board/TaskBoard';
 import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
-import { resolveColumns, taskColumnKey, ensureTasksLoaded } from '../lib/tasks';
+import { resolveColumns, taskColumnKey, ensureTasksLoaded, getTaskById } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
 import { useGitState, ensureGit, loadUnpushedLog, setActiveSessionForChangedBy } from '../lib/git';
+import { useExternalPreviewLinksState, ensureExternalPreviewLinks } from '../hooks/useExternalPreviewLinks';
 import { plural } from '../lib/spend';
+import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { useFeature, FLAGS } from '../lib/featureFlags';
@@ -66,6 +68,10 @@ import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
 import { buildCodeGraph } from '../lib/codeGraph';
 import { useReaderPanel } from './workspace/reader/useReaderPanel';
+import { ReaderHeaderBar } from './workspace/reader/ReaderHeaderBar';
+import { ReaderBody } from './workspace/reader/ReaderBody';
+import { ChatContextBar } from '../features/chatContext/ChatContextBar';
+import { useHasChatContext } from '../lib/chatContext';
 
 interface Props {
   project: Project;
@@ -521,7 +527,15 @@ const windowWidth = useWindowWidth();
   // Все источники — уже подписанные сторы/стейт; git тянем тем же глобальным стором
   // (ensureGit — идемпотентная первичная загрузка, чтобы кружок был виден до открытия панели).
   const gitState = useGitState(project.id);
+  // Открытые наружу дев-серверы — второй кружок «Сервисов». Список сквозной по проектам
+  // владельца (тот же, что в блоке «Открыто наружу» внутри панели): забытая витрина
+  // соседнего проекта — ровно то, ради чего индикатор и нужен, и прятать её за
+  // «не тот проект» значило бы гасить единственное напоминание о ней.
+  const extLinks = useExternalPreviewLinksState();
   useEffect(() => {
+    // Кружок обязан гореть ДО первого открытия панели — иначе о забытом доступе
+    // узнаёшь, только заглянув туда, куда без повода не заглядывают
+    ensureExternalPreviewLinks();
     ensureGit(project.id);
     // Стек незапушенных коммитов нужен второму (серому) кружку «Изменений» ДО открытия
     // панели: ensureGit грузит только статус. Realtime и focus-обработчик стора
@@ -544,6 +558,18 @@ const windowWidth = useWindowWidth();
     if (unpushed > 0) changesHint.push({ text: `${unpushed} ${plural(unpushed, 'неопубликованный', 'неопубликованных', 'неопубликованных')}`, tone: 'accent' });
     const activeTasks = allTasks.filter(t => t.projectId === project.id && t.status !== 'done').length;
     const startedPreviews = previewServices.filter(s => s.status === 'started').length;
+    // Доступ наружу: жёлтый — не «посмотри», а «ты, кажется, забыл это закрыть».
+    // Считаем ВСЕ ссылки владельца, в тултипе разделяя свои и чужие: число из
+    // соседнего проекта иначе выглядело бы ошибкой счётчика. Выключенный рубильник
+    // обнуляет счёт — выданные до него ссылки в сторе сервера остаются, но доступа
+    // по ним уже нет (так же гейтит свой блок и сама панель)
+    const shared = extLinks.enabled ? extLinks.links : [];
+    const sharedHere = shared.filter(l => l.projectId === project.id).length;
+    const sharedElsewhere = shared.length - sharedHere;
+    const previewHint: { text: string; tone: 'accent' | 'muted' | 'warning' }[] = [];
+    if (startedPreviews > 0) previewHint.push({ text: `${startedPreviews} ${plural(startedPreviews, 'запущенный', 'запущенных', 'запущенных')}`, tone: 'accent' });
+    if (sharedHere > 0) previewHint.push({ text: `${sharedHere} ${plural(sharedHere, 'открыт', 'открыты', 'открыто')} наружу`, tone: 'warning' });
+    if (sharedElsewhere > 0) previewHint.push({ text: `${sharedElsewhere} наружу в других проектах`, tone: 'warning' });
     return {
       changes: {
         primary: changesFiles || undefined,
@@ -562,10 +588,12 @@ const windowWidth = useWindowWidth();
       },
       preview: {
         primary: startedPreviews || undefined,
-        hint: startedPreviews > 0 ? `${startedPreviews} ${plural(startedPreviews, 'запущенный', 'запущенных', 'запущенных')}` : undefined,
+        secondary: shared.length || undefined,
+        secondaryTone: 'warning',
+        hint: previewHint.length > 0 ? previewHint : undefined,
       },
     };
-  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices]);
+  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices, extLinks]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
@@ -1069,6 +1097,17 @@ const windowWidth = useWindowWidth();
     setActiveSessionForChangedBy(project.id, activeSessionWorktree ? null : activeSessionId ?? null);
   }, [project.id, activeSessionId, activeSessionWorktree]);
 
+  // Открытый чат — кнопкам «в контекст чата» (флаг chat-context): они стоят далеко
+  // от владельца сессии (строка дерева файлов, шапка просмотрщика, карточка задачи)
+  // и берут его из того же стора, что и состав контекста. Состав грузим сразу:
+  // без него кнопка не отличит «уже приложено» от «ещё нет»
+  useEffect(() => {
+    if (!activeSessionId) { setActiveChatForContext(null); return; }
+    setActiveChatForContext({ projectId: project.id, sessionId: activeSessionId });
+    void loadChatContext(project.id, activeSessionId);
+    return () => setActiveChatForContext(null);
+  }, [project.id, activeSessionId]);
+
   // activeSession.updatedAt при ходе агента НЕ обновляется (status_changed несёт
   // только status, user_message/exited не трогают activeSession вовсе) — поэтому
   // эффект выше не срабатывает на новом ходе, и карточка помечалась непрочитанной,
@@ -1226,6 +1265,9 @@ const windowWidth = useWindowWidth();
       if (msg.type === 'status_changed' || msg.type === 'user_message' || msg.type === 'exited') {
         refreshProjectActivity();
       }
+      // Контекст чата заменили (в этом или другом окне) — кладём свежий состав в кеш
+      // chatContext; полоса контекста и кнопки «в контекст» читают его оттуда
+      if (msg.type === 'context_updated') applyContextUpdated(msg);
     });
   }, []);
 
@@ -1414,6 +1456,12 @@ const windowWidth = useWindowWidth();
     if (isMobile) setMobileView('sidebar');
     navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
   };
+  // «Закрыть» у ридера на мобиле — назад к чату: ридер открыт из контекста чата,
+  // контентная зона возвращается тому, кто её отдал (механика та же, что у файла)
+  const closeReaderMobile = () => {
+    reader.actions.closeReader();
+    navReplace({ screen: 'project', project, view: 'chat', file: null, task: null });
+  };
   // Инструменты (терминал/preview): выбор в сайдбаре → на мобиле уходим в контент;
   // «назад» в шапке контента вернёт к сайдбару инструментов (двухуровневая навигация).
   const handleSelectTerminal = (id: string | null) => { setActiveTerminalId(id); if (isMobile && id) setMobileView('chat'); };
@@ -1529,6 +1577,33 @@ const windowWidth = useWindowWidth();
     </div>
   );
 
+  // === Контекст чата на мобиле (фича chat-context, хвост B3) ===
+  // Чипы в шапке чата — тот же ChatContextBar variant='chips', что у планшета в
+  // DesktopWorkspace, но с тач-габаритом 40 (isMobile). Сплита на телефоне нет,
+  // поэтому клик по чипу ведёт штатным полноэкранным путём: файл — FileViewer
+  // fullscreen, ссылка — ридер на всю контентную зону, задача — карточка в центре.
+  const contextOn = useFeature(FLAGS.chatContext);
+  const hasContext = useHasChatContext(activeSession?.id ?? null);
+  const contextVisibleMobile = contextOn && !!activeSession && hasContext;
+  const openContextEntryMobile = (e: SessionContextEntry) => {
+    if (e.type === 'file') { handleOpenFileFromChat(e.id); return; }
+    if (e.type === 'url') { handleOpenReader(e.id); return; }
+    // Задача открывается объектом из общего стора: карточка встаёт в центр,
+    // а вкладка уводится на «Задачи», чтобы «назад» возвращал к списку
+    const task = getTaskById(e.id);
+    if (task) { setLeftTab('tasks'); handleSelectTask(task); }
+    else showToast('Контекст чата', 'Задача не найдена в этом проекте');
+  };
+  const contextChipsMobile = contextVisibleMobile ? (
+    <ChatContextBar
+      projectId={project.id} sessionId={activeSession!.id} variant="chips"
+      onOpen={openContextEntryMobile} isMobile
+    />
+  ) : null;
+  // Ридер на мобиле — на всю контентную зону, как открытый файл (сплита нет).
+  // Переключатель режима не нужен: разворачивать некуда — он и у планшета скрыт.
+  const readerOpenMobile = !openFile && !openCommitSha && reader.state.open;
+
   if (isMobile) {
     return (
       // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях.
@@ -1562,8 +1637,9 @@ const windowWidth = useWindowWidth();
             </div>
           </div>
         )}
-        {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}
-        <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида.
+            Ридер, как и файл, занимает контентную зону целиком — сайдбар уступает */}
+        <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
@@ -1611,8 +1687,9 @@ const windowWidth = useWindowWidth();
             isMobile={isMobile}
           />
         )}
-        {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
-        <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM; ридер,
+            как и файл, вытесняет его из контентной зоны */}
+        <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {leftTab === 'tools'
             ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
             : personasMode
@@ -1630,7 +1707,7 @@ const windowWidth = useWindowWidth();
               // Чат + сессионная рельса в одной строке (пейн колоночный — нужна row-обёртка)
               <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} />
+                  <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} />
                 </div>
                 <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty compact panels={{}} sessionPanels={sessionPanels} />
               </div>
@@ -1642,6 +1719,14 @@ const windowWidth = useWindowWidth();
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
+          </div>
+        )}
+        {/* Ридер ссылок из контекста чата — та же контентная зона, что у файла.
+            isTablet=true убирает тумблер «Сплит|Полный»: разворачивать некуда */}
+        {readerOpenMobile && (
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <ReaderHeaderBar state={reader.state} actions={reader.actions} onClose={closeReaderMobile} isTablet />
+            <ReaderBody state={reader.state} actions={reader.actions} onClose={closeReaderMobile} />
           </div>
         )}
         {/* Просмотр коммита из git-«Истории» */}

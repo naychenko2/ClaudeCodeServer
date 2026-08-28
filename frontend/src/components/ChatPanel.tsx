@@ -120,6 +120,10 @@ interface Props {
   embedded?: boolean;
   // Растущий счётчик «поставь курсор в поле ввода» (колонка стены стала активной)
   composerFocusSignal?: number;
+  // Полоса контекста чата (фича chat-context) — собирается владельцем экрана: он
+  // знает и состояние центра, и пути открытия материалов. Здесь она только
+  // передаётся шапке, которая ставит её отдельной строкой под заголовком
+  contextBar?: React.ReactNode;
   // Атрибуты перетаскивания для ШАПКИ чата (колонка стены): за неё двигают саму
   // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
   // чата — самая заметная его часть.
@@ -197,7 +201,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -2106,6 +2110,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onSessionUpdated={onSessionUpdated}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
+      contextBar={contextBar}
     />
   );
 

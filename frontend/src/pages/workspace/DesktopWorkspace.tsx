@@ -6,8 +6,8 @@
 // пропсами (контент панелек тоже собирается там); HubHeader и диалоги тоже там.
 import { useState, useRef, useEffect, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
-import type { Project, Session, Task, SkillInfo, AgentInfo, ChangedBySession } from '../../types';
-import { C, FONT, ISLAND, CHAT_COLUMN_W, SPLASH_W } from '../../lib/design';
+import type { Project, Session, Task, SkillInfo, AgentInfo, ChangedBySession, SessionContextEntry } from '../../types';
+import { C, FONT, ISLAND, SP, R, CHAT_COLUMN_W, SPLASH_W } from '../../lib/design';
 import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
@@ -34,6 +34,10 @@ import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPan
 import { wsPanels } from './panelStackState';
 import { VideoCenter } from '../../features/video/VideoCenter';
 import { setVideoCenterBlocked, useVideoCenter, VIDEO_PANEL_EVENT } from '../../lib/videoStage';
+import { ChatContextBar, type ContextTarget } from '../../features/chatContext/ChatContextBar';
+import { useHasChatContext } from '../../lib/chatContext';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { getTaskById } from '../../lib/tasks';
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -261,10 +265,60 @@ export function DesktopWorkspace(p: Props) {
 
   const videoCenter = useVideoCenter();
 
+  // === Контекст чата (флаг chat-context) ===
+  // Полоса — тонкий слой НАД существующей маршрутизацией: клик по материалу ведёт
+  // ровно тем же путём, что клик по нему в панели (open-file из ленты, ридер,
+  // задача-aside). Своей маршрутизации у неё нет.
+  const contextOn = useFeature(FLAGS.chatContext);
+  const hasContext = useHasChatContext(p.activeSession?.id ?? null);
+  const contextVisible = contextOn && !!p.activeSession && hasContext;
+  const openContextEntry = (e: SessionContextEntry) => {
+    if (e.type === 'file') { p.onOpenFileFromChat(e.id); return; }
+    if (e.type === 'url') { p.onOpenReader?.(e.id); return; }
+    // Задача открывается объектом, а не id: он уже загружен общим стором задач
+    const task = getTaskById(e.id);
+    if (task) p.onOpenTaskAside?.(task);
+    else showToast('Контекст чата', 'Задача не найдена в этом проекте');
+  };
+  // Активная вкладка ВЫЧИСЛЯЕТСЯ из состояния центра — отдельного «что выбрано»
+  // у полосы нет: оно разошлось бы с настоящим при любом открытии мимо неё
+  const contextActive: ContextTarget | null = p.openFile ? { type: 'file', id: p.openFile }
+    : p.readerState.open && p.readerState.url ? { type: 'url', id: p.readerState.url }
+    : p.selectedTask ? { type: 'task', id: p.selectedTask.id }
+    : null;
+  // Вкладки — отдельной строкой сверху правого острова, над собственной шапкой
+  // вьювера. Обёртку (фон, высоту, скругление под остров) рисуем здесь: пустой
+  // контекст не должен оставлять от полосы даже отступа
+  const contextTabs = contextVisible ? (
+    <div style={{
+      flexShrink: 0, display: 'flex', alignItems: 'center',
+      padding: `${SP.xs}px ${SP.sm}px`, background: ISLAND.headerBg,
+      borderBottom: `1px solid ${C.border}`,
+      borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+    }}>
+      <ChatContextBar
+        projectId={p.project.id} sessionId={p.activeSession!.id} variant="tabs"
+        active={contextActive} onOpen={openContextEntry}
+      />
+    </div>
+  ) : null;
+
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
   // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова.
+  // Чипы контекста — в шапке чата и ТОЛЬКО когда правой половины нет: при открытом
+  // сплите полоса живёт вкладками над вьювером (см. contextTabs), и два ряда одних
+  // и тех же материалов на экране были бы дублем. headerIsland здесь и есть признак
+  // «чат занимает центр один» — сплит зовёт фабрику с false
+  const contextChips = contextVisible ? (
+    <ChatContextBar
+      projectId={p.project.id} sessionId={p.activeSession!.id} variant="chips"
+      onOpen={openContextEntry} isTablet={p.isTablet}
+    />
+  ) : null;
+
   const chatPanel = (headerIsland: boolean) => p.activeSession ? (
     <ChatPanel
+      contextBar={headerIsland ? contextChips : undefined}
       session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat} onOpenReader={p.onOpenReader}
       // Задача рядом с лентой — только там, где для split'а есть ширина: на планшете
       // центр отдан одному режиму целиком, и карточка доклада откроет детали модалкой
@@ -405,6 +459,7 @@ export function DesktopWorkspace(p: Props) {
           </Island>
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            {contextTabs}
             <div style={{ flex: 1, overflow: 'hidden' }}>
               <TaskDetailsPane key={p.selectedTask!.id} task={p.selectedTask!} project={p.project} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
             </div>
@@ -474,6 +529,7 @@ export function DesktopWorkspace(p: Props) {
           </Island>
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            {contextTabs}
             <div style={{ flex: 1, overflow: 'hidden' }}>
               <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
             </div>
@@ -499,6 +555,7 @@ export function DesktopWorkspace(p: Props) {
           </Island>
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            {contextTabs}
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <ReaderHeaderBar state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
               <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />

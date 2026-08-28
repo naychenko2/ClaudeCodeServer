@@ -258,9 +258,40 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (activeChatId) markChatRead(activeChatId);
   }, [activeChatId, activeChatUpdatedAt]);
 
-  // Чат отредактирован/закреплён — обновить в списке
-  const handleChatEdited = (updated: Session) =>
+  // ЕДИНСТВЕННАЯ точка реакции на обновление чата: обновляем список и —
+  // если только что ушёл в архив АКТИВНЫЙ чат — уводим центр на соседа и
+  // показываем тост с «Отменить». Сюда стекаются оба пути архивации:
+  //   • ChatCard.handleArchive → handleArchive → archiveApi → handleChatEdited
+  //   • ChatHeaderBar.handleArchive → ChatPanel.onSessionUpdated → handleChatEdited
+  // Гейт по `!isArchivedChat(prev)`: повторный апдейт уже-архивного чата
+  // (realtime `chat_archived` от другой вкладки) реакцию не запускает —
+  // уводить центр и тостить второй раз бессмысленно.
+  const handleChatEdited = (updated: Session) => {
     setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+    if (updated.id !== activeId) return;
+    if (!isArchivedChat(updated)) return;
+    const prev = chats.find(c => c.id === updated.id);
+    if (!prev || isArchivedChat(prev)) return;
+    const neighbor = chats.find(c => c.id !== updated.id && !isArchivedChat(c));
+    if (neighbor) queueMicrotask(() => selectChat(neighbor));
+    else queueMicrotask(() => backToList());
+    showToast(
+      'Чат убран в архив',
+      `«${updated.name ?? 'Без названия'}» больше не в общем списке.`,
+      'info',
+      {
+        label: 'Отменить',
+        onClick: async () => {
+          try {
+            const fresh = await archiveApi.setArchived(updated.id, false);
+            handleChatEdited(fresh);
+          } catch (e) {
+            showToast('Архив', e instanceof Error ? e.message : 'Не удалось вернуть чат из архива');
+          }
+        },
+      },
+    );
+  };
 
   // Чат удалён — убрать из списка; если был активным — вернуться к списку
   const handleChatDeleted = (id: string) => {
@@ -268,13 +299,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (activeId === id) backToList();
   };
 
-  // Убрать чат в архив или вернуть из архива. После успеха обновляем запись в списке —
-  // matchChatFilter сам уберёт карточку из обычного списка, если чат теперь архивный.
-  // 409 «в чате идёт ход» ловим и показываем тостом серверный текст.
+  // Убрать чат в архив или вернуть из архива (пункт меню карточки и кнопка в шапке).
+  // Реакция на сам факт архивации активного чата — единая в handleChatEdited:
+  // здесь только сетевой запрос и прокидывание обновления туда же, куда оно
+  // приходит от ChatHeaderBar (onSessionUpdated). 409 «в чате идёт ход» ловим
+  // и показываем тостом серверный текст.
   const handleArchive = async (chat: Session, archived: boolean) => {
     try {
       const updated = await archiveApi.setArchived(chat.id, archived);
-      setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+      handleChatEdited(updated);
     } catch (e) {
       showToast('Архив чата', e instanceof Error ? e.message : 'Не удалось изменить архив');
     }
@@ -307,7 +340,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 skills={skills}
                 attachedFiles={attachedFiles}
                 onAttachedFilesChange={setAttachedFiles}
-                onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
+                onSessionUpdated={handleChatEdited}
                 onWorkflowRunning={handleWorkflowRunning}
               />
             </div>

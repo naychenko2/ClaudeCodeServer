@@ -41,16 +41,17 @@ export function wallWidgetView(chatCount: number, candidateCount: number): WallW
 // error НАРОЧНО не подсвечиваем красным: на дашборде это читалось бы как «сломалось
 // сейчас», хотя ход давно завершён — про ошибку скажет сам чат, когда его откроют.
 // unread вычисляет вызывающий (hasUnread трогает localStorage) — так функция
-// остаётся чистой и проверяемой; agentsRunning приходит оттуда же (стор присутствия).
+// остаётся чистой и проверяемой; bgWorkRunning приходит оттуда же (стор присутствия).
 //
-// agentsRunning — живые ФОНОВЫЕ агенты чата: ход завершён и статус уже active, но
-// работа идёт. Без него строка получала бы серую непульсирующую точку «сюда не
-// заходили» — прямо противоположное происходящему.
+// bgWorkRunning — любая живая ФОНОВАЯ работа чата (агенты либо команда в фоне:
+// дев-сервер, watch): ход завершён и статус уже active, но работа идёт. Без него строка
+// получала бы серую непульсирующую точку «сюда не заходили» — прямо противоположное
+// происходящему. Вид фона тут не различаем: точка отвечает на «идёт ли работа».
 export function wallRowStatus(
-  status: Session['status'] | string, unread: boolean, agentsRunning = false,
+  status: Session['status'] | string, unread: boolean, bgWorkRunning = false,
 ): ActivityStatus | null {
   if (status === 'waiting') return 'waiting';
   if (status === 'starting' || status === 'working') return 'working';
-  if (agentsRunning) return 'working';
+  if (bgWorkRunning) return 'working';
   return unread ? 'unread' : null;
 }

@@ -312,12 +312,18 @@ export const api = {
       request<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>('/mcp/servers/import', {
         method: 'POST', body: JSON.stringify(fragment),
       }),
-    // Поиск по реестру MCP-серверов (волна 1, задача 9fa075ec). Делает Денис в соседнем
-    // дереве; пока эндпоинта нет — фронт мокает в useMcpCatalog и пишет в стор.
+    // Поиск по реестру MCP-серверов (волна 1, задача 9fa075ec). Ищет БЭКЕНД: реестр
+    // отдаёт результат страницами, и подходящей записи на первой странице может не
+    // быть вовсе (QA: «filesystem» — 14 записей, ни одной на первой). Поэтому q едет
+    // в запрос, а не фильтрует загруженный массив. cursor — следующая страница из
+    // nextCursor предыдущего ответа; пустой q = витрина каталога.
     // Каталог не критичный: ошибка сети показывается плашкой, ручной путь «Добавить»
     // остаётся рабочим
-    catalogSearch: (q: string) =>
-      request<McpCatalogSearchResult>(`/mcp/catalog/search?q=${encodeURIComponent(q)}`),
+    catalogSearch: (q: string, cursor?: string | null) => {
+      const params = new URLSearchParams({ q });
+      if (cursor) params.set('cursor', cursor);
+      return request<McpCatalogSearchResult>(`/mcp/catalog/search?${params.toString()}`);
+    },
     // Батч-ревизия импортированных записей (волна 2): фронт шлёт имена каталожных серверов,
     // бэк для каждого отдаёт статус в реестре и факт «есть версия новее». Запрос идёт
     // ОТДЕЛЬНО от основного списка, после отрисовки раздела — реестр в статусе preview

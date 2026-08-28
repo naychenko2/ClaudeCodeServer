@@ -416,6 +416,42 @@ public class UserStore
         }
     }
 
+    /// <summary>
+    /// Избранные каналы «Видео». null — человек ничего не настраивал (показываем дефолт),
+    /// пустой список — снял все звёздочки. Различать обязательно: иначе снятие последней
+    /// звёздочки возвращало бы дефолтный набор, и убрать канал из полосы стало бы нельзя.
+    /// </summary>
+    public IReadOnlyList<string>? GetFavoriteVideoChannels(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            return user?.FavoriteVideoChannels;
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет избранные каналы. Список приходит уже нормализованным (VideoFavorites),
+    /// стор лишь фиксирует его — включая ПУСТОЙ, который здесь значим и в null не сворачивается.
+    /// Возвращает false, если пользователь не найден.
+    /// </summary>
+    public bool SetFavoriteVideoChannels(string id, IReadOnlyList<string> keys)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            // Повторное сохранение того же состава файл не трогает; null здесь НЕ равен
+            // пустому списку — переход «не настраивал → пусто» это настоящее изменение
+            if (user.FavoriteVideoChannels is not null && user.FavoriteVideoChannels.SequenceEqual(keys))
+                return true;
+
+            user.FavoriteVideoChannels = [.. keys];
+            Save();
+            return true;
+        }
+    }
+
     /// <summary>Быстрые фразы композера пользователя в порядке показа; пусто — не заведены.</summary>
     public IReadOnlyList<QuickPhrase> GetQuickPhrases(string id)
     {

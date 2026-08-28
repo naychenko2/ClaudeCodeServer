@@ -46,6 +46,7 @@ public static class PersonaAccessPolicy
         "mcp__wsp__files_to_markdown", "mcp__wsp__files_delete",
         "mcp__wsp__git_commit", "mcp__wsp__git_stage",
         "mcp__wsp__projects_create", "mcp__wsp__projects_update", "mcp__wsp__tags_apply",
+        "mcp__wsp__tags_remove",
         "mcp__wsp__knowledge_index", "mcp__wsp__kb_add_document",
         "mcp__wsp__chats_create", "mcp__wsp__chats_update", "mcp__wsp__chats_delete",
     ];

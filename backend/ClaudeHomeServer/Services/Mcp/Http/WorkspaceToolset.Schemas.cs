@@ -80,6 +80,29 @@ public sealed partial class WorkspaceToolset
                     ["description"] = "Теги для присвоения (добавляются к существующим, без удаления)",
                 },
             }, "entityType", "entityId", "tags")),
+        Tool("tags_remove",
+            "Снять теги с сущности (сессии или задачи): перечисленные теги удаляются, остальные "
+            + "не трогаются; сравнение без учёта регистра, отсутствующий тег — не ошибка "
+            + "(идемпотентно). Реестр тегов проекта не чистится — это словарь доступных имён. "
+            + "entityType=\"session\" — projectId обязателен; entityType=\"task\" — projectId "
+            + "опционален.",
+            Obj(new JsonObject
+            {
+                ["entityType"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["enum"] = StrEnum("session", "task"),
+                    ["description"] = "Тип сущности",
+                },
+                ["entityId"] = Str("ID сессии или задачи"),
+                ["projectId"] = Str("ID проекта (для session обязательно; для task опционален)"),
+                ["tags"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["items"] = new JsonObject { ["type"] = "string" },
+                    ["description"] = "Теги для снятия (остальные теги сущности не трогаются)",
+                },
+            }, "entityType", "entityId", "tags")),
 
         // --- files ---
         Tool("files_tree",

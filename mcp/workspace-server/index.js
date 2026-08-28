@@ -256,6 +256,23 @@ function unionStrings(existing, incoming) {
   return result;
 }
 
+// Вычитание списков строк по регистру (ключ тот же, что у unionStrings): снимаемые имена
+// сравниваются без учёта регистра, остальные не трогаются. removed — реально снятые имена
+// в каноническом написании сущности; отсутствующий тег — не ошибка (идемпотентность).
+function subtractStrings(existing, removing) {
+  const set = new Set(
+    (removing ?? []).map(r => String(r ?? '').trim().toLowerCase()).filter(Boolean));
+  const kept = [];
+  const removed = [];
+  for (const raw of existing ?? []) {
+    const name = String(raw ?? '').trim();
+    if (!name) continue;
+    if (set.has(name.toLowerCase())) removed.push(name);
+    else kept.push(name);
+  }
+  return { kept, removed };
+}
+
 // Автосоздание тегов в реестре проекта: недостающие (case-insensitive) имена добавляются
 // с order = max+1 и color = null, реестр сохраняется целиком (PUT .../tags). Бэкенд сам
 // перенормирует order по позиции массива и требует уникальность имён без учёта регистра —
@@ -357,6 +374,31 @@ const SECTION_TOOLS = {
             type: 'array',
             items: { type: 'string' },
             description: 'Теги для присвоения (добавляются к существующим, без удаления)',
+          },
+        },
+      },
+    },
+    {
+      name: 'tags_remove',
+      description: 'Снять теги с сущности (сессии или задачи): перечисленные теги удаляются, остальные ' +
+        'не трогаются; сравнение без учёта регистра, отсутствующий тег — не ошибка ' +
+        '(идемпотентно). Реестр тегов проекта не чистится — это словарь доступных имён. ' +
+        'entityType="session" — projectId обязателен; entityType="task" — projectId ' +
+        'опционален.',
+      inputSchema: {
+        type: 'object',
+        required: ['entityType', 'entityId', 'tags'],
+        properties: {
+          entityType: { type: 'string', enum: ['session', 'task'], description: 'Тип сущности' },
+          entityId: { type: 'string', description: 'ID сессии или задачи' },
+          projectId: {
+            type: 'string',
+            description: 'ID проекта (для session обязательно; для task опционален)',
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Теги для снятия (остальные теги сущности не трогаются)',
           },
         },
       },
@@ -1408,6 +1450,57 @@ async function callTool(name, args) {
         projectId: projectId ?? task?.projectId ?? null,
         labels: mergedLabels,
         ...(registryAdded.length ? { registryAdded } : {}),
+      });
+    }
+
+    case 'tags_remove': {
+      const entityType = String(args.entityType ?? '').trim();
+      if (entityType !== 'session' && entityType !== 'task')
+        throw new Error('entityType должен быть "session" или "task"');
+      const entityId = String(args.entityId ?? '').trim();
+      if (!entityId) throw new Error('Не указан entityId');
+      const removing = Array.isArray(args.tags)
+        ? args.tags.map(t => String(t ?? '').trim()).filter(Boolean)
+        : [];
+      if (!removing.length) throw new Error('Список tags пуст');
+      const projectId = args.projectId ? String(args.projectId).trim() : null;
+
+      // session: теги живут на проектной сессии — projectId нужен для маршрута.
+      // Реестр проекта НЕ чистим: это словарь доступных имён, а не «висящие» теги.
+      if (entityType === 'session') {
+        if (!projectId) throw new Error('Для session обязателен projectId');
+        checkProjectAllowed(projectId);
+        const sessions = await api(`/api/projects/${projectId}/sessions`);
+        const found = (sessions ?? []).find(s => s.id === entityId);
+        if (!found) throw new Error(`Сессия ${entityId} не найдена в проекте ${projectId}`);
+        const { kept, removed } = subtractStrings(found.tags, removing);
+        const updated = await api(
+          `/api/projects/${projectId}/sessions/${encodeURIComponent(entityId)}`,
+          { method: 'PUT', body: JSON.stringify({ tags: kept }) },
+        );
+        return json({
+          entityType: 'session',
+          id: updated?.id ?? entityId,
+          projectId,
+          tags: updated?.tags ?? kept,
+          removed,
+        });
+      }
+
+      // task: projectId фактически не нужен (реестр не трогаем), при переданном —
+      // проверяем зону, чтобы параметр не был тихим обходом проверок
+      if (projectId) checkProjectAllowed(projectId);
+      const task = await api(`/api/tasks/${encodeURIComponent(entityId)}`);
+      const { kept, removed } = subtractStrings(task?.labels, removing);
+      await api(`/api/tasks/${encodeURIComponent(entityId)}`, {
+        method: 'PUT', body: JSON.stringify({ labels: kept }),
+      });
+      return json({
+        entityType: 'task',
+        id: entityId,
+        projectId: projectId ?? task?.projectId ?? null,
+        labels: kept,
+        removed,
       });
     }
 

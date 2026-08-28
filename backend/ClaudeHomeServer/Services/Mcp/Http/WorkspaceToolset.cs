@@ -124,6 +124,7 @@ public sealed partial class WorkspaceToolset(
             ["projects_create"] = "projects",
             ["projects_update"] = "projects",
             ["tags_apply"] = "projects",
+            ["tags_remove"] = "projects",
             ["files_tree"] = "files",
             ["files_read"] = "files",
             ["files_document_read"] = "files",
@@ -289,7 +290,7 @@ public sealed partial class WorkspaceToolset(
         };
     }
 
-    // --- Секция projects (projects_* + tags_apply) ---
+    // --- Секция projects (projects_* + tags_*) ---
 
     private async Task<McpToolCallResult> ProjectsCall(string tool, JsonObject arguments,
         McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
@@ -487,6 +488,71 @@ public sealed partial class WorkspaceToolset(
                 return Json(taskAnswer);
             }
 
+            case "tags_remove":
+            {
+                var entityType = StringArg(arguments, "entityType").Trim();
+                if (entityType is not ("session" or "task"))
+                    return Deny("entityType должен быть \"session\" или \"task\"");
+                var entityId = StringArg(arguments, "entityId").Trim();
+                if (entityId.Length == 0) return Deny("Не указан entityId");
+                var removing = StringsArg(arguments, "tags")
+                    .Select(t => t.Trim()).Where(t => t.Length > 0).ToList();
+                if (removing.Count == 0) return Deny("Список tags пуст");
+                var projectId = OptionalArg(arguments, "projectId");
+
+                if (entityType == "session")
+                {
+                    // session: теги живут на проектной сессии — projectId нужен для маршрута
+                    if (projectId is null) return Deny("Для session обязателен projectId");
+                    if (!TryGetProject(context, plan, arguments, out var project, out var denied))
+                        return Deny(denied);
+                    var target = sessions.GetByProject(project.Id)
+                        .FirstOrDefault(s => s.Id == entityId);
+                    if (target is null)
+                        return Deny($"Сессия {entityId} не найдена в проекте {project.Id}");
+                    // Реестр проекта НЕ чистим: это словарь доступных имён, а не «висящие» теги
+                    var (kept, removed) = SubtractStrings(target.Tags, removing);
+                    var updated = await sessions.UpdateAsync(entityId, context.OwnerId,
+                        name: null, model: null, effort: null, tags: kept);
+                    return Json(new Dictionary<string, object?>
+                    {
+                        ["entityType"] = "session",
+                        ["id"] = updated?.Id ?? entityId,
+                        ["projectId"] = project.Id,
+                        ["tags"] = updated?.Tags ?? kept,
+                        ["removed"] = removed,
+                    });
+                }
+
+                // task: projectId фактически не нужен (реестр не трогаем), при переданном —
+                // проверяем владение и зону, чтобы параметр не был тихим обходом проверок
+                if (projectId is not null
+                    && !TryGetProject(context, plan, arguments, out _, out var taskDenied))
+                    return Deny(taskDenied);
+                var task = tasks.GetById(entityId);
+                if (task is null || task.OwnerId != context.OwnerId)
+                    return Deny($"Задача {entityId} не найдена.");
+                // Зона сессии — как у tags_apply: при суженной зоне доступен только
+                // проектный ряд, личные задачи и чужие проекты вне зоны
+                if (plan.AllowedProjectIds is { Count: > 0 } allowed
+                    && (task.ProjectId is null || !allowed.Contains(task.ProjectId)))
+                    return Deny($"Задача {entityId} вне разрешённой зоны этой сессии");
+                var (keptLabels, removedLabels) = SubtractStrings(task.Labels, removing);
+                var updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels));
+                // Бродкаст task_changed(updated) — как tags_apply (блокер волны 3.1): без него
+                // интерфейс жил бы с устаревшими метками до перезагрузки
+                if (updatedTask is not null)
+                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updatedTask);
+                return Json(new Dictionary<string, object?>
+                {
+                    ["entityType"] = "task",
+                    ["id"] = entityId,
+                    ["projectId"] = projectId ?? task.ProjectId,
+                    ["labels"] = keptLabels,
+                    ["removed"] = removedLabels,
+                });
+            }
+
             default:
                 return Deny($"Неизвестный инструмент: {tool}");
         }
@@ -526,6 +592,26 @@ public sealed partial class WorkspaceToolset(
             result.Add(name);
         }
         return result;
+    }
+
+    // Вычитание списков строк по регистру (компаратор тот же, что у UnionStrings): снимаемые
+    // имена сравниваются без учёта регистра, остальные не трогаются. Возвращает итог и реально
+    // снятые имена в каноническом написании сущности; отсутствующий тег — не ошибка.
+    private static (List<string> Kept, List<string> Removed) SubtractStrings(
+        IEnumerable<string>? existing, IEnumerable<string> removing)
+    {
+        var set = removing.Select(r => r.Trim()).Where(r => r.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var kept = new List<string>();
+        var removed = new List<string>();
+        foreach (var raw in existing ?? Enumerable.Empty<string>())
+        {
+            var name = (raw ?? "").Trim();
+            if (name.Length == 0) continue;
+            if (set.Contains(name)) removed.Add(name);
+            else kept.Add(name);
+        }
+        return (kept, removed);
     }
 
     // --- Секция files (files_*): все пути — только через FileService (SafeJoin внутри него) ---

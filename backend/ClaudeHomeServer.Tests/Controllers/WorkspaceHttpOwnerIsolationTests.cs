@@ -462,5 +462,147 @@ public class WorkspaceHttpOwnerIsolationTests : IDisposable
         var allow = await CallToolAsync(client, sessionId, "tags_apply", new
         { entityType = "task", entityId = inTaskId, tags = new[] { "в-зону" } });
         IsError(allow).Should().BeFalse(TextOf(allow));
+
+        // tags_remove: снятие меток — та же зона, снимается только у задачи проекта зоны
+        var denyRemoveForeign = await CallToolAsync(client, sessionId, "tags_remove", new
+        { entityType = "task", entityId = outTaskId, tags = new[] { "не-туда" } });
+        IsError(denyRemoveForeign).Should().BeTrue("задача чужого проекта — вне зоны");
+        TextOf(denyRemoveForeign).Should().Contain("вне разрешённой зоны");
+
+        var removeInZone = await CallToolAsync(client, sessionId, "tags_remove", new
+        { entityType = "task", entityId = inTaskId, tags = new[] { "в-зону" } });
+        IsError(removeInZone).Should().BeFalse(TextOf(removeInZone));
+    }
+
+    // ---------- tags_remove: снятие тегов (зеркало tags_apply) ----------
+
+    /// <summary>
+    /// Roundtrip снятия на сессии: apply навешивает [alpha, Готово], remove снимает —
+    /// сравнение без учёта регистра («готово» снимает «Готово»), остальные теги целы.
+    /// removed — реально снятые имена в написании сущности; повторное снятие — не ошибка
+    /// с пустым removed (идемпотентность).
+    /// </summary>
+    [Fact]
+    public async Task TagsRemove_Сессия_СнимаетПеречисленноеБезУчётаРегистра()
+    {
+        var client = Client;
+        var projectId = await CreateProjectAsync(client, "wsp-tags-rm");
+        var caller = await CreateSessionAsync(client, projectId);
+        var target = await CreateSessionAsync(client, projectId);
+
+        var applied = await CallToolAsync(client, caller, "tags_apply", new
+        { entityType = "session", entityId = target, projectId, tags = new[] { "alpha", "Готово" } });
+        IsError(applied).Should().BeFalse(TextOf(applied));
+
+        var removed = await CallToolAsync(client, caller, "tags_remove", new
+        { entityType = "session", entityId = target, projectId, tags = new[] { "готово" } });
+        IsError(removed).Should().BeFalse(TextOf(removed));
+        var body = JsonSerializer.Deserialize<JsonElement>(TextOf(removed));
+        body.GetProperty("removed").EnumerateArray().Select(t => t.GetString())
+            .Should().Equal(["Готово"], "снятое — в каноническом написании сущности");
+        body.GetProperty("tags").EnumerateArray().Select(t => t.GetString())
+            .Should().Equal(["alpha"], "неперечисленные теги не трогаются");
+
+        // Повторное снятие того же тега — идемпотентность: не ошибка, removed пуст
+        var again = await CallToolAsync(client, caller, "tags_remove", new
+        { entityType = "session", entityId = target, projectId, tags = new[] { "готово" } });
+        IsError(again).Should().BeFalse(TextOf(again));
+        var againBody = JsonSerializer.Deserialize<JsonElement>(TextOf(again));
+        againBody.GetProperty("removed").EnumerateArray()
+            .Should().BeEmpty("снимать уже нечего — но это не ошибка");
+        againBody.GetProperty("tags").EnumerateArray().Select(t => t.GetString())
+            .Should().Equal(["alpha"]);
+    }
+
+    /// <summary>
+    /// session-ветка tags_remove: чужой и несуществующий projectId — отказ, как у всех
+    /// инструментов с проектным маршрутом (владение и зона проверяются на каждый вызов).
+    /// </summary>
+    [Fact]
+    public async Task TagsRemove_Сессия_ЧужойИлиНесуществующийПроект_Отказ()
+    {
+        var clientA = Client;
+        using var clientB = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var projectA = await CreateProjectAsync(clientA, "wsp-rm-a");
+        var caller = await CreateSessionAsync(clientA, projectA);
+        var projectB = await CreateProjectAsync(clientB, "wsp-rm-b");
+
+        var denyForeign = await CallToolAsync(clientA, caller, "tags_remove", new
+        { entityType = "session", entityId = "whatever", projectId = projectB, tags = new[] { "x" } });
+        IsError(denyForeign).Should().BeTrue("проект владельца B недоступен токену владельца A");
+        TextOf(denyForeign).Should().Contain("не найден или недоступен");
+
+        var denyMissing = await CallToolAsync(clientA, caller, "tags_remove", new
+        { entityType = "session", entityId = "whatever", projectId = "proj-missing", tags = new[] { "x" } });
+        IsError(denyMissing).Should().BeTrue("несуществующий проект — тот же отказ");
+        TextOf(denyMissing).Should().Contain("не найден или недоступен");
+    }
+
+    /// <summary>
+    /// Зеркало «Блокера 4» для снятия: tags_remove у задачи шлёт task_changed(updated) в
+    /// группу владельца — интерфейс не должен жить с устаревшими метками после снятия.
+    /// Метку навешиваем до подключения, чтобы событие apply не попало в подписку.
+    /// </summary>
+    [Fact]
+    public async Task TagsRemove_Задача_ШлётTaskUpdated()
+    {
+        var client = Client;
+        var projectId = await CreateProjectAsync(client, "wsp-tags-rm-task");
+        var sessionId = await CreateSessionAsync(client, projectId);
+
+        var task = await client.PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Задача со снятием метки" });
+        task.EnsureSuccessStatusCode();
+        var taskId = JsonSerializer.Deserialize<JsonElement>(
+            await task.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var applied = await CallToolAsync(client, sessionId, "tags_apply", new
+        { entityType = "task", entityId = taskId, tags = new[] { "снять-меня" } });
+        IsError(applied).Should().BeFalse(TextOf(applied));
+
+        var me = await client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+        var updated = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (msg.TryGetProperty("type", out var type) && type.GetString() == "task_changed"
+                && msg.GetProperty("action").GetString() == "updated"
+                && msg.GetProperty("task").GetProperty("id").GetString() == taskId
+                // Только событие снятия: labels уже без метки (события apply отфильтруются)
+                && !msg.GetProperty("task").GetProperty("labels").EnumerateArray()
+                    .Any(l => l.GetString() == "снять-меня"))
+                updated.TrySetResult(msg);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var removed = await CallToolAsync(client, sessionId, "tags_remove", new
+            {
+                entityType = "task",
+                entityId = taskId,
+                tags = new[] { "Снять-Меня" },
+            });
+            IsError(removed).Should().BeFalse(TextOf(removed));
+            JsonSerializer.Deserialize<JsonElement>(TextOf(removed))
+                .GetProperty("removed").EnumerateArray().Select(t => t.GetString())
+                .Should().Equal(["снять-меня"], "снятие без учёта регистра — в написании сущности");
+
+            var received = await Task.WhenAny(updated.Task, Task.Delay(15_000));
+            received.Should().Be(updated.Task, "task_changed(updated) обязан прийти в группу владельца");
+            updated.Task.Result.GetProperty("task").GetProperty("labels").EnumerateArray()
+                .Should().BeEmpty("в событии — уже обновлённая задача без метки");
+        }
+        finally { await connection.DisposeAsync(); }
     }
 }

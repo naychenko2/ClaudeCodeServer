@@ -17,6 +17,10 @@ export const FLAGS = {
   // ТОЛЬКО автоправило и его настройки; ручной архив, раздел «Архив» и сводка
   // карточки работают без флага.
   chatAutoArchive: 'chat-auto-archive',
+  // Каталог MCP-серверов (волна 1, задача 9fa075ec): поиск по реестру и предзаполнение
+  // формы из черновика записи. Флаг — на вход в раздел; ручной путь «Добавить» работает
+  // всегда.
+  mcpCatalog: 'mcp-catalog',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

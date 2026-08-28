@@ -213,8 +213,8 @@ public class McpCatalogClient
         Name: name, Status: null, Deprecated: false, HasNewerVersion: false,
         LatestVersion: null, CheckFailed: true, Error: error);
 
-    // Ход за последней версией записи. Отдельный virtual-метод: контроллерные тесты
-    // подменяют его фейком, не затрагивая кэш (как FetchAndMapAsync у поиска)
+    // Ход за последней версией записи. Отдельный virtual-метод — шов для
+    // контроллерных тестов (как FetchAndMapAsync у поиска)
     protected virtual async Task<string> FetchLatestAsync(string name, CancellationToken ct)
     {
         var url = $"{_options.BaseUrl.TrimEnd('/')}/v0.1/servers/" +

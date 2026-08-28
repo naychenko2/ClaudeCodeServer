@@ -193,4 +193,49 @@ describe('sliceSection', () => {
     expect(sec).toContain('## Последний');
     expect(sec).toContain('хвост');
   });
+
+  it('режет ВТОРОЕ одноимённое вхождение по паре (text, occurrence)', () => {
+    // Главный кейс починки: при двух «Дизайн» срез для occurrence=1
+    // должен вернуть тело ВТОРОГО раздела, а не первого.
+    const plan = [
+      '# План',
+      '',
+      '## Дизайн',
+      '',
+      'тело первого дизайна',
+      '',
+      '## Тесты',
+      '',
+      'первые тесты',
+      '',
+      '## Дизайн',
+      '',
+      'тело второго дизайна',
+      '',
+      '## Заключение',
+      '',
+      'итог',
+    ].join('\n');
+    const headings = [
+      makeHeading('Дизайн', 0, 2),
+      makeHeading('Тесты', 0, 2),
+      makeHeading('Дизайн', 1, 2),
+      makeHeading('Заключение', 0, 2),
+    ];
+    const second = sliceSection(plan, headings[2], headings);
+    expect(second).toContain('тело второго дизайна');
+    expect(second).not.toContain('тело первого дизайна');
+    expect(second).not.toContain('первые тесты');
+    expect(second).not.toContain('итог');
+  });
+
+  it('возвращает пустую строку, если occurrence выходит за число вхождений', () => {
+    const plan = [
+      '## Дизайн',
+      '',
+      'единственное тело',
+    ].join('\n');
+    const headings = [makeHeading('Дизайн', 0, 2)];
+    expect(sliceSection(plan, makeHeading('Дизайн', 5, 2), headings)).toBe('');
+  });
 });

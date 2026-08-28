@@ -28,6 +28,10 @@ export function headingHasDuplicates(text: string, headings: Heading[]): boolean
 // собирает markdown между двумя соседними заголовками того же или более высокого
 // уровня.
 //
+// Резолв по паре (heading.text, heading.occurrence): при двух одноимённых
+// разделах «Дизайн» идём во второе вхождение, а не в первое. Это клейка блока
+// карты с конкретным разделом ради которой на бэке заводили AnchorIndex.
+//
 // Нормализует ОБЕ стороны сравнения: текст в DOM может быть без inline-разметки
 // (textContent даёт «Шаг — код»), а в исходнике остаётся «Шаг — `код`». Без
 // нормализации заголовки с inline-кодом/жирным/ссылками не находились бы.
@@ -35,15 +39,18 @@ export function sliceSection(planText: string, heading: Heading, _all?: Heading[
   const lines = planText.split('\n');
   const prefix = '#'.repeat(heading.level) + ' ';
   const target = stripInlineMarkdown(heading.text);
+  // Счётчик встреч нужного заголовка в исходнике — по нему находим именно то
+  // вхождение, на которое указывает occurrence. Первое совпадение текста
+  // больше не подходит (см. эпиграф).
   let startLine = -1;
+  let seen = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.startsWith(prefix)) continue;
     const lineText = stripInlineMarkdown(line.slice(prefix.length).trim());
-    if (lineText === target) {
-      startLine = i;
-      break;
-    }
+    if (lineText !== target) continue;
+    if (seen === heading.occurrence) { startLine = i; break; }
+    seen++;
   }
   if (startLine < 0) return '';
   const sameOrHigher = new RegExp(`^#{1,${heading.level}}\\s+`);

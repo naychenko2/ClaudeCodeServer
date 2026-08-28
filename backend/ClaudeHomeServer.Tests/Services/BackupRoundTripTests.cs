@@ -126,6 +126,25 @@ public class BackupRoundTripTests : IDisposable
     }
 
     [Fact]
+    public void Снимок_УдаляетОсиротевшиеЧастиАрхивов()
+    {
+        // Крах процесса между CreateFromDirectory и Move оставлял *.zip.part навсегда:
+        // свой part снапшот убирает, чужие лежали вечно (прод: файлы от 26.07 до 11.08)
+        var orphanArchive = Path.Combine(BackupDir, "ccs-deadbeef-20260726-030000.zip.part");
+        var orphanSecret = Path.Combine(SecretsDir, "ccs-secrets-20260726-030000.zip.part");
+        Directory.CreateDirectory(BackupDir);
+        Directory.CreateDirectory(SecretsDir);
+        File.WriteAllText(orphanArchive, "обрывок");
+        File.WriteAllText(orphanSecret, "обрывок");
+
+        var result = BackupCore.Snapshot(Context());
+
+        result.Ok.Should().BeTrue(result.Error);
+        File.Exists(orphanArchive).Should().BeFalse("осиротевший .part основного архива обязан уходить при старте снапшота");
+        File.Exists(orphanSecret).Should().BeFalse("осиротевший .part архива секретов тоже");
+    }
+
+    [Fact]
     public void Снимок_МатериализуетОтпечатокИнстанса()
     {
         // До первого снимка файла нет — иначе ветка «усыновить id из архива»

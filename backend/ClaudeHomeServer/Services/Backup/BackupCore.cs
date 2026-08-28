@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -47,6 +48,11 @@ public static class BackupCore
             DeleteDirectoryForce(staging);
             Directory.CreateDirectory(staging);
             Directory.CreateDirectory(ctx.BackupDir);
+            // Осиротевшие .part от прерванных снимков: свой part снапшот убирает сам,
+            // но файл после краха между CreateFromDirectory и Move лежал вечно (прод:
+            // четыре шт. от 26.07 до 11.08). Мьютекс уже наш — параллельного снапшота нет.
+            DeleteOrphanParts(ctx.BackupDir);
+            DeleteOrphanParts(ctx.SecretsDir);
 
             var copied = CopyDataTo(ctx, staging, log);
             var manifest = BuildManifest(ctx, staging, copied);
@@ -63,7 +69,11 @@ public static class BackupCore
             // copy+delete, и синхронизатор успел бы подхватить недописанный архив
             var partPath = finalPath + ".part";
             if (File.Exists(partPath)) File.Delete(partPath);
-            ZipFile.CreateFromDirectory(staging, partPath, CompressionLevel.Optimal, false);
+            // Fastest вместо Optimal по замеру на прод-корпусе (4.7 ГБ, ~26 тыс. файлов):
+            // 61 с против 237 с (в 3.9 раза быстрее, zip — 61% времени всего снапшота)
+            // ценой +37% размера (1789 → 2453 МБ). Время критичнее: таймаут агента
+            // выкатки на съёмке бэкапа уже поднимали до 2400 с, снапшот рос с транскриптами
+            ZipFile.CreateFromDirectory(staging, partPath, CompressionLevel.Fastest, false);
             if (File.Exists(finalPath)) File.Delete(finalPath);
             File.Move(partPath, finalPath);
 
@@ -101,37 +111,125 @@ public static class BackupCore
         return result;
     }
 
-    // Копирование data в staging. Возвращает относительные пути скопированного.
-    private static List<string> CopyDataTo(BackupContext ctx, string staging, ILogger? log)
+    // Удаление осиротевших временных файлов архива (*.zip.part). Неудача удаления
+    // одного файла не должна ронять снимок.
+    private static void DeleteOrphanParts(string dir)
     {
-        var result = new List<string>();
+        try
+        {
+            if (!Directory.Exists(dir)) return;
+            foreach (var part in Directory.GetFiles(dir, "*" + ArchiveExtension + ".part"))
+            {
+                try { File.Delete(part); }
+                catch { /* занят или нет прав — оставим, не повод ронять снимок */ }
+            }
+        }
+        catch { /* каталог не читается — пропускаем чистку */ }
+    }
+
+    // Копирование data в staging; SHA-256 считается конвейером параллельно копированию
+    // (хеш-воркеры читают только что записанные копии из кэша записи), а не отдельным
+    // линейным проходом по staging после — на проде тот проход стоил ещё ~4 ГБ чтения
+    // поверх копирования. Само копирование оставлено на File.Copy: kernel-путь
+    // (CopyFileW) стабильно быстр, user-mode пострельное копирование на загруженной
+    // машине деградирует в разы (замер: 21 с против 233 с на одном корпусе).
+    private static List<BackupFile> CopyDataTo(BackupContext ctx, string staging, ILogger? log)
+    {
+        var copied = new List<string>();
         var backupDirFull = SafeFull(ctx.BackupDir);
         var secretsDirFull = SafeFull(ctx.SecretsDir);
 
-        foreach (var absolute in Directory.EnumerateFiles(ctx.DataDir, "*", SearchOption.AllDirectories))
+        using var queue = new BlockingCollection<(string Target, string Rel)>();
+        var entries = new ConcurrentDictionary<string, BackupFile>();
+        var hashFailures = new ConcurrentQueue<Exception>();
+        var workers = new Thread[Math.Clamp(Environment.ProcessorCount - 1, 1, 4)];
+        for (var i = 0; i < workers.Length; i++)
         {
-            var relative = Path.GetRelativePath(ctx.DataDir, absolute).Replace('\\', '/');
-
-            if (!BackupPaths.ShouldInclude(relative)) continue;
-            // Папки архивов могли быть настроены куда угодно, в том числе внутрь data
-            // под нестандартным именем — их ловим по абсолютному пути
-            var fullPath = SafeFull(absolute);
-            if (IsUnder(fullPath, backupDirFull) || IsUnder(fullPath, secretsDirFull)) continue;
-            // Лог событий уносим отдельно, вместе с WAL-хвостом
-            if (Path.GetFileName(relative).StartsWith(EventsDbName, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var target = Path.Combine(staging, relative.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            CopyWithRetry(absolute, target);
-            result.Add(relative);
+            workers[i] = new Thread(() =>
+            {
+                foreach (var (target, rel) in queue.GetConsumingEnumerable())
+                {
+                    try
+                    {
+                        var info = new FileInfo(target);
+                        entries[rel] = new BackupFile
+                        {
+                            Path = rel,
+                            Size = info.Length,
+                            Sha256 = HashFile(target),
+                        };
+                    }
+                    catch (Exception ex)
+                    {
+                        // Хеш обязан быть у каждой записи манифеста — иначе сверка
+                        // контрольных сумм при восстановлении слабеет. Ошибку копим
+                        // и роняем снимок после Join, а не молчим.
+                        hashFailures.Enqueue(ex);
+                    }
+                }
+            });
+            workers[i].Start();
         }
 
-        var eventsDb = Path.Combine(ctx.DataDir, EventsDbName);
-        if (File.Exists(eventsDb))
+        try
         {
-            var target = Path.Combine(staging, EventsDbName);
-            if (TryBackupSqlite(eventsDb, target, log)) result.Add(EventsDbName);
+            foreach (var absolute in Directory.EnumerateFiles(ctx.DataDir, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(ctx.DataDir, absolute).Replace('\\', '/');
+
+                if (!BackupPaths.ShouldInclude(relative)) continue;
+                // Папки архивов могли быть настроены куда угодно, в том числе внутрь data
+                // под нестандартным именем — их ловим по абсолютному пути
+                var fullPath = SafeFull(absolute);
+                if (IsUnder(fullPath, backupDirFull) || IsUnder(fullPath, secretsDirFull)) continue;
+                // Лог событий уносим отдельно, вместе с WAL-хвостом
+                if (Path.GetFileName(relative).StartsWith(EventsDbName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var target = Path.Combine(staging, relative.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                CopyWithRetry(absolute, target);
+                copied.Add(relative);
+                queue.Add((target, relative));
+            }
+
+            var eventsDb = Path.Combine(ctx.DataDir, EventsDbName);
+            if (File.Exists(eventsDb))
+            {
+                var target = Path.Combine(staging, EventsDbName);
+                if (TryBackupSqlite(eventsDb, target, log)) copied.Add(EventsDbName);
+            }
+        }
+        finally
+        {
+            // Join обязан быть рядом с CompleteAdding: при исключении в цикле копирования
+            // Snapshot из своего finally начнёт DeleteDirectoryForce(staging), и без
+            // дожидания воркеров удаление ловило бы sharing violation на читаемых файлах
+            queue.CompleteAdding();
+            foreach (var worker in workers) worker.Join();
+        }
+
+        if (!hashFailures.IsEmpty) throw hashFailures.First();
+
+        // Порядок записей — порядок обхода (как в манифесте до конвейера); events db,
+        // скопированный последним, хешируем тут же: это один файл, а не проход по staging
+        var result = new List<BackupFile>(copied.Count);
+        foreach (var relative in copied)
+        {
+            if (relative == EventsDbName)
+            {
+                var target = Path.Combine(staging, EventsDbName);
+                result.Add(new BackupFile
+                {
+                    Path = EventsDbName,
+                    Size = new FileInfo(target).Length,
+                    Sha256 = HashFile(target),
+                });
+            }
+            else
+            {
+                result.Add(entries[relative]);
+            }
         }
 
         return result;
@@ -246,26 +344,10 @@ public static class BackupCore
         return false;
     }
 
-    private static BackupManifest BuildManifest(BackupContext ctx, string staging, List<string> files)
-    {
-        var entries = new List<BackupFile>(files.Count);
-        long total = 0;
-
-        foreach (var relative in files)
-        {
-            var path = Path.Combine(staging, relative.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(path)) continue;
-            var info = new FileInfo(path);
-            total += info.Length;
-            entries.Add(new BackupFile
-            {
-                Path = relative,
-                Size = info.Length,
-                Sha256 = HashFile(path),
-            });
-        }
-
-        return new BackupManifest
+    // Записи манифеста приходят из CopyDataTo — они появляются строго после успешного
+    // копирования, поэтому «манифест только из реально скопированного» держится по построению
+    private static BackupManifest BuildManifest(BackupContext ctx, string staging, List<BackupFile> files) =>
+        new()
         {
             // Снимок — единственное место, где отпечаток инстанса материализуется:
             // архив без него нельзя было бы проверить при восстановлении
@@ -277,10 +359,9 @@ public static class BackupCore
             DifyNamespace = ctx.DifyNamespace,
             CreatedAt = DateTime.Now,
             Owners = BackupSummaryBuilder.ReadOwners(staging),
-            Files = entries,
-            Summary = BackupSummaryBuilder.Build(staging, total),
+            Files = files,
+            Summary = BackupSummaryBuilder.Build(staging, files.Sum(f => f.Size)),
         };
-    }
 
     private static string HashFile(string path)
     {

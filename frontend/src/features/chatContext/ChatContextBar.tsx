@@ -264,7 +264,7 @@ function RepointDialog({ projectId, sessionId, entry, onClose }: {
     && (!query.trim() || t.title.toLowerCase().includes(query.trim().toLowerCase())));
   return (
     <Modal width={MODAL_W.form} title="Указать заново" subtitle="Задача проекта" onClose={onClose}>
-      <TextField value={query} onChange={setQuery} placeholder="Поиск по названию" autoFocus onEscape={onClose} />
+      <TextField type="search" value={query} onChange={setQuery} placeholder="Поиск по названию" autoFocus onEscape={onClose} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, maxHeight: 320, overflowY: 'auto', marginTop: SP.sm }}>
         {found.length === 0 && (
           <div style={{ fontFamily: FONT.sans, fontSize: FS.base, color: C.textMuted, padding: `${SP.sm}px 0` }}>

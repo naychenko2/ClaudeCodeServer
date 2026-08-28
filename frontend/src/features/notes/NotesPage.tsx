@@ -295,6 +295,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, height: 30, padding: '0 8px', color: C.textMuted }}>
           <IconSearch />
           <input
+            type="search"
             autoComplete="off"
             ref={searchInputRef}
             value={query} onChange={e => setQuery(e.target.value)}

@@ -100,6 +100,7 @@ export function ToolTargetPicker({ personaId, bindings, onSetMode, onOpenRule }:
     <>
       <div style={{ marginTop: SP.md }}>
         <IconField
+          type="search"
           value={query}
           onChange={setQuery}
           placeholder="Найти инструмент…"

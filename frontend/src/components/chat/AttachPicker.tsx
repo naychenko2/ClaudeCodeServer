@@ -90,6 +90,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload,
       )}
       <div style={{ marginBottom: SP.sm }}>
         <input
+          type="search"
           autoComplete="off"
           autoFocus
           value={query}

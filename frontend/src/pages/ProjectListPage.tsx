@@ -384,6 +384,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
               <Search size={ICON_SIZE.sm} strokeWidth={2} />
             </span>
             <input
+              type="search"
               autoComplete="off"
               placeholder="Поиск проектов…"
               value={search}

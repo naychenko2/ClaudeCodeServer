@@ -69,6 +69,7 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <IconField
+          type="search"
           icon={<Search size={14} strokeWidth={ICON_STROKE} />}
           value={query}
           onChange={setQuery}

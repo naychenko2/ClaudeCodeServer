@@ -156,7 +156,7 @@ function DocRefPicker({ def, value, link, index, saving, onSave, style }: {
   const list = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
       <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>
-        <TextField value={q} onChange={setQ} placeholder="Поиск документа" autoFocus />
+        <TextField type="search" value={q} onChange={setQ} placeholder="Поиск документа" autoFocus />
       </div>
       {value && (
         <MenuItem icon={<X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} label="Очистить"

@@ -185,6 +185,7 @@ function FilterContent({
       }}>
         <Search size={15} strokeWidth={2} style={{ color: C.textMuted, flexShrink: 0 }} />
         <input
+          type="search"
           autoComplete="off"
           ref={searchRef}
           value={q}

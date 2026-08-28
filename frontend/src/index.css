@@ -864,3 +864,20 @@ body {
   background-size: 200% 100%;
   animation: cc-skeleton 1.4s infinite;
 }
+
+/* Поля поиска размечены type="search": Chrome на Android считает обычный
+   однострочный input заполняемым и вешает над клавиатурой полосу
+   автозаполнения (autocomplete="off" он для неё игнорирует умышленно), а поля
+   поиска в эту классификацию не попадают. Плата за разметку — нативный крестик
+   очистки и внутренние декорации WebKit: гасим, вид поля задаёт дизайн-система.
+   Псевдоэлементы инлайновым стилем не задать, отсюда глобальное правило. */
+input[type="search"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  display: none;
+}

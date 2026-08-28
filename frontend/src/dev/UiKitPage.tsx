@@ -25,7 +25,7 @@ import {
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -2839,8 +2839,9 @@ function PanelsSection() {
 // ProjectRail (док проектов второй левой рельсой воркспейса) и
 // IslandHeader как атомарный паттерн шапки острова/панели рельсы.
 // Живая демонстрация RailFlyout: кнопка рельсы с подписью сбоку, при action —
-// ещё и с кнопкой в подписи (у дока проектов так открываются настройки).
-function RailFlyoutDemo({ label, action }: { label: string; action?: boolean }) {
+// ещё и с кнопками в подписи (у дока проектов так открываются настройки, у кнопки
+// панели — «убрать в ящик» и «перенести на другую сторону»).
+function RailFlyoutDemo({ label, action, twoActions }: { label: string; action?: boolean; twoActions?: boolean }) {
   const [hover, setHover] = useState(false);
   return (
     <span
@@ -2853,7 +2854,12 @@ function RailFlyoutDemo({ label, action }: { label: string; action?: boolean }) 
         label={label}
         open={hover}
         railWidth={0}
-        action={action ? { Icon: Settings, title: 'Настройки проекта', onClick: () => {} } : undefined}
+        actions={action
+          ? [
+            { Icon: Settings, title: 'Настройки проекта', onClick: () => {} },
+            ...(twoActions ? [{ Icon: ArrowRightToLine, title: 'Перенести панель вправо', onClick: () => {} }] : []),
+          ]
+          : undefined}
       >
         <IconButton size="md" ariaLabel={label}>
           {action
@@ -3107,6 +3113,7 @@ function HeadersSection() {
           }}>
             <RailFlyoutDemo label="Задачи" />
             <RailFlyoutDemo label="ClaudeCodeServer" action />
+            <RailFlyoutDemo label="Изменения" action twoActions />
           </div>
           <p style={{
             margin: 0, marginTop: SP.sm,
@@ -3118,7 +3125,10 @@ function HeadersSection() {
             продолжение кнопки: та же высота, тот же тон, что у кнопки под курсором,
             примыкает вплотную, а кнопка на стыке теряет скругление и раскрывается в
             неё. Курсор доходит до действия, не теряя подсказку; у кнопок БЕЗ действия
-            она гаснет сразу.
+            она гаснет сразу. Действий может быть несколько (третья кнопка) — у правой
+            рельсы их порядок зеркалится, чтобы они одинаково отстояли от иконки.
+            На таче наведения нет вовсе: там ту же плашку поднимает ДОЛГОЕ НАЖАТИЕ
+            (~500мс), кнопки в ней вырастают до тач-цели 40px, а гасит её тап мимо.
           </p>
         </SubBlock>
 

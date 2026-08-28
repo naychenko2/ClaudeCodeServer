@@ -1,0 +1,47 @@
+{
+  "alert": "Не индексируются документы знаний",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "В базах знаний Dify есть документы в статусе error, которые не удалось проиндексировать. Реконсайлер пересоздаёт их автоматически; алерт смотрит только на лечимые (healable) — неустранимые сироты не должны держать его зажжённым вечно.",
+  "evalWindow": "30m",
+  "frequency": "10m",
+  "labels": { "severity": "warning" },
+  "annotations": {
+    "description": "Лечимые error-документы дольше 30 минут: авто-переиндексация не справляется. Лежит провайдер эмбеддингов Dify (временные ошибки) или сам документ падает по контенту. Разрез dataset_type подсказывает, какие базы болеют; поимённый список — в UI «Знаний».",
+    "summary": "Знания не индексируются"
+  },
+  "preferredChannels": ["ccs-alerts-email"],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "at_least_once",
+    "target": 0,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.dify.error_documents",
+                "temporality": "Unspecified",
+                "timeAggregation": "max",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": { "expression": "healability = 'healable'" },
+            "groupBy": [
+              { "name": "deployment.environment", "fieldDataType": "string" },
+              { "name": "dataset_type", "fieldDataType": "string" }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

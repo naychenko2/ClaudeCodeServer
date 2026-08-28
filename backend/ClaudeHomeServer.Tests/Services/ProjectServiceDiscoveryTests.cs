@@ -500,4 +500,66 @@ public class ProjectServiceDiscoveryTests : IDisposable
         // Битый файл пропущен, остальной инференс работает
         svcs.Should().Contain(s => s.Source == "npm" && s.Args.Contains("dev"));
     }
+
+    /// <summary>
+    /// Запуск node-скрипта (NodeJSConfigurationType). Раньше такой тип пропускался целиком,
+    /// и сервис не появлялся в списке вовсе. Порт при этом задан аргументом — без него
+    /// продукт не опознаёт живой процесс и предлагает запустить его поверх работающего.
+    /// </summary>
+    [Fact]
+    public async Task Rider_NodeJs_ChitaetPortIzArgumentov()
+    {
+        Write(".run/single.run.xml", """
+        <component name="ProjectRunConfigurationManager">
+          <configuration default="false" name="Витрина: один адрес" type="NodeJSConfigurationType"
+                         application-parameters="--port 5590"
+                         path-to-js-file="$PROJECT_DIR$/serve-single.mjs"
+                         working-dir="$PROJECT_DIR$" />
+        </component>
+        """);
+
+        var services = await _svc.DiscoverAsync(Project());
+
+        var svc = services.Should().ContainSingle(s => s.Name == "Витрина: один адрес").Subject;
+        svc.Source.Should().Be("rider");
+        svc.Command.Should().Be("node");
+        svc.SuggestedPort.Should().Be(5590);
+        svc.Args.Should().Contain(a => a.EndsWith("serve-single.mjs"));
+        svc.Args.Should().Contain("--port").And.Contain("5590");
+    }
+
+    [Fact]
+    public async Task Rider_NodeJs_PonimaetPortCherezRavno()
+    {
+        Write(".run/single.run.xml", """
+        <component name="ProjectRunConfigurationManager">
+          <configuration default="false" name="Одним адресом" type="NodeJSConfigurationType"
+                         application-parameters="--host 127.0.0.1 --port=4321"
+                         path-to-js-file="$PROJECT_DIR$/serve.mjs" />
+        </component>
+        """);
+
+        var services = await _svc.DiscoverAsync(Project());
+
+        services.Should().ContainSingle(s => s.Name == "Одним адресом")
+            .Which.SuggestedPort.Should().Be(4321);
+    }
+
+    /// <summary>Чужой флаг с похожим именем портом не считается.</summary>
+    [Fact]
+    public async Task Rider_NodeJs_BezPorta_OstavlyaetPustym()
+    {
+        Write(".run/single.run.xml", """
+        <component name="ProjectRunConfigurationManager">
+          <configuration default="false" name="Без порта" type="NodeJSConfigurationType"
+                         application-parameters="--watch --reporter dot"
+                         path-to-js-file="$PROJECT_DIR$/serve.mjs" />
+        </component>
+        """);
+
+        var services = await _svc.DiscoverAsync(Project());
+
+        services.Should().ContainSingle(s => s.Name == "Без порта")
+            .Which.SuggestedPort.Should().BeNull();
+    }
 }

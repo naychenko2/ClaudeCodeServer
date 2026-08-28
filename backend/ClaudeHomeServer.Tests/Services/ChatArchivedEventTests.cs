@@ -108,8 +108,6 @@ public class ChatArchivedEventTests : IDisposable
             .Matches(cutoff, "закреплённый — «чат нужен»");
         Old().Tap(s => s.ExpiresAfterMinutes = 60)
             .Matches(cutoff, "временным управляет их собственный срок");
-        Old().Tap(s => s.OnboardingKind = "user")
-            .Matches(cutoff, "онбординг — человек в середине знакомства");
         Old().Tap(s => s.ArchivedAt = DateTime.UtcNow)
             .Matches(cutoff, "уже в архиве повторно не архивируем");
         Old().Tap(s => s.TaskId = "task-1")
@@ -125,26 +123,36 @@ public class ChatArchivedEventTests : IDisposable
             }
             finally { Session.TaskDoneResolver = null; }
         });
-        Old().Tap(s => s.TeamImplement = new SessionTeamImplement
-        {
-            Stage = TeamImplementStage.Wave, WaveNumber = 1, ClosedWave = 0,
-        }).Matches(cutoff, "штаб в волне");
-        Old().Tap(s => s.TeamImplement = new SessionTeamImplement
-        {
-            Stage = TeamImplementStage.Planning,
-        }).Matches(cutoff, "штаб в планировании");
     }
 
-    [Fact]
-    public void Предикат_ЗавершённыйШтаб_Кандидат()
+    // Исключение снято 28.08.2026: брошенное знакомство иначе не архивировалось никогда
+    [Theory]
+    [InlineData("user")]
+    [InlineData("project")]
+    public void Предикат_СтарыйОнбординговыйЧат_Кандидат(string kind)
     {
-        // Idle и все волны закрыты — не по «TeamImplement != null», а по живости режима
+        var s = Old();
+        s.OnboardingKind = kind;
+        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue(
+            "порог сам по себе означает, что знакомство не продолжают");
+    }
+
+    // Исключение снято 28.08.2026: штаб, остывший дольше порога, — тоже кандидат,
+    // в какой бы стадии его ни бросили
+    [Theory]
+    [InlineData(TeamImplementStage.Idle, 2, 2)]
+    [InlineData(TeamImplementStage.Wave, 4, 4)]
+    [InlineData(TeamImplementStage.Planning, 0, 0)]
+    [InlineData(TeamImplementStage.AwaitingDecision, 1, 0)]
+    public void Предикат_СтарыйШтаб_Кандидат(TeamImplementStage stage, int wave, int closed)
+    {
         var s = Old();
         s.TeamImplement = new SessionTeamImplement
         {
-            Stage = TeamImplementStage.Idle, WaveNumber = 2, ClosedWave = 2,
+            Stage = stage, WaveNumber = wave, ClosedWave = closed,
         };
-        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue();
+        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue(
+            "живой ход и фоновые агенты отсекаются отдельно, в GetArchiveRuleCandidates");
     }
 
     [Fact]

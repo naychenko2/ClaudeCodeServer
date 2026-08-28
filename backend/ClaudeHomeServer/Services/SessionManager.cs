@@ -1244,19 +1244,23 @@ public class SessionManager : IDisposable
         return result;
     }
 
-    // Чистая часть предиката правила (порог + исключения плана v4; живость хода/фоновых
-    // агентов — в GetArchiveRuleCandidates). internal static для юнит-тестов, образец —
-    // ShouldExpire в ChatExpiryService. Исключения: закреплённые («чат нужен»), временные
-    // (ими управляет свой срок), онбординг (человек в середине знакомства), штаб в работе
-    // (Idle с закрытыми волнами — можно), чат живой задачи-исполнителя (выполненной — можно).
+    // Чистая часть предиката правила (порог + исключения; живость хода/фоновых агентов —
+    // в GetArchiveRuleCandidates). internal static для юнит-тестов, образец — ShouldExpire
+    // в ChatExpiryService. Исключения ровно три: закреплённые («чат нужен»), временные
+    // (ими управляет свой срок) и чат живой задачи-исполнителя (выполненной — можно).
+    //
+    // Исключения по онбордингу (OnboardingKind) и по штабу в работе (TeamImplement не в
+    // Idle) сняты 28.08.2026: они были бессрочными, и брошенное знакомство или штаб,
+    // остывший полгода назад, не уходили в архив никогда — мусор копился (12 «вечных»
+    // чатов у владельца на момент решения). Проверки активности в них не было, а сам порог
+    // «без активности N дней» её и означает; архив при этом ничего не удаляет, и первая же
+    // запись в чат возвращает его из архива автоматически (IsArchived — производный от
+    // UpdatedAt <= ArchivedAt).
     internal static bool MatchesArchiveRule(Session s, DateTime cutoff) =>
         !s.IsArchived
         && !s.IsPinned
         && s.ExpiresAfterMinutes is null
-        && s.OnboardingKind is null
         && s.UpdatedAt <= cutoff
-        && (s.TeamImplement is not { } ti
-            || (ti.Stage == TeamImplementStage.Idle && ti.WaveNumber <= ti.ClosedWave))
         && (s.TaskId is null || s.TaskDone);
 
     // Число сессий проекта — для карточки проекта (без аллокации списка)

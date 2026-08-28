@@ -3,7 +3,7 @@ import { ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ChevronsLeft, Chevr
 import { C, FONT, FS, ISLAND, R, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { Menu, MenuItem } from './Menu';
-import { CountBadge } from './CountBadge';
+import { CountBadge, type BadgeTone } from './CountBadge';
 import { PanelDropLine } from './PanelDropGuide';
 import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 import { RailHat, RAIL_HAT_H } from './RailHat';
@@ -38,16 +38,18 @@ export interface RailItem {
   badge?: number | null;
   // Тон основного кружка (дефолт 'accent' — оранжевый). 'muted' — серый: «Изменения»
   // так рисуют незафиксированные файлы (норма), отдавая акцент неопубликованным.
-  badgeTone?: 'accent' | 'muted';
+  // 'warning' — жёлтый: состояние, которое стоит закрыть («Сервисы» так помечают
+  // открытый наружу доступ к дев-серверу).
+  badgeTone?: BadgeTone;
   // Второй индикатор — кружок в правом НИЖНЕМ углу иконки (под основным).
   // Дефолт тона 'muted' (серый); «Изменения» делают его 'accent' для неопубликованных.
   // В ящике «…» не рисуется и в сумму ящика не входит.
   badgeSecondary?: number | null;
-  badgeSecondaryTone?: 'accent' | 'muted';
+  badgeSecondaryTone?: BadgeTone;
   // Подзаголовок тултипа-плашки: расшифровка чисел. Строка — одна линия с оранжевой
   // точкой (как primary); массив линий — каждая со своим тоном под кружок на иконке
   // (accent/primary, muted/secondary). Не задан — плашка из одной строки (как раньше).
-  hint?: string | readonly { text: string; tone?: 'accent' | 'muted' }[];
+  hint?: string | readonly { text: string; tone?: BadgeTone }[];
   onClick: () => void;
   // Иконка — ручка перетаскивания панели: закрытую можно вытащить из рельсы
   // прямо в нужное место раскладки, не открывая её кликом наугад

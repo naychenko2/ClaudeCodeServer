@@ -3,6 +3,7 @@ import { useCanHover } from '../../lib/pointer';
 import { IconButton, type IconButtonVariant } from './IconButton';
 import { RailFlyout, type RailFlyoutAction } from './RailFlyout';
 import { RAIL_W } from './RailCapsule';
+import type { BadgeTone } from './CountBadge';
 
 // Кнопка вертикальной рельсы: icon-кнопка плюс подпись сбоку по наведению. Общая
 // для рельсы панелей (иконки панелей, тумблер режима, «свернуть все») и дока
@@ -31,7 +32,7 @@ export function RailIconButton({
   // Подзаголовок-расшифровка под названием в плашке (что значит число-кружок).
   // Строка или список линий с тоном; в ariaLabel сцепляем с названием — на таче плашки
   // нет, и скринридер так дочитает.
-  hint?: string | readonly { text: string; tone?: 'accent' | 'muted' }[];
+  hint?: string | readonly { text: string; tone?: BadgeTone }[];
   // Кнопка внутри подписи (у иконки проекта — настройки). Не задана — подпись просто
   // называет кнопку.
   action?: RailFlyoutAction;

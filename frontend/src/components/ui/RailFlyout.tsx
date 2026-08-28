@@ -4,6 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW, Z } from '../../lib/design';
 import { IconButton } from './IconButton';
 import { ICON_STROKE } from './icons';
+import type { BadgeTone } from './CountBadge';
 
 // Подсказка кнопки рельсы: пока курсор на кнопке, сбоку (со стороны центра окна)
 // висит плашка с её названием, а при необходимости — и кнопка-действие.
@@ -40,7 +41,7 @@ export function RailFlyout({ side, label, hint, open, action, railWidth, hostSty
   // Подзаголовок под названием (расшифровка чисел-кружков). Строка — одна линия с
   // оранжевой точкой; массив — по линии на каждый индикатор, точка в цвет кружка на
   // иконке (accent/primary, muted/secondary). Не задан — плашка из одной строки.
-  hint?: string | readonly { text: string; tone?: 'accent' | 'muted' }[];
+  hint?: string | readonly { text: string; tone?: BadgeTone }[];
   // Курсор на кнопке. Состояние держит вызывающий — он же гасит его на старте
   // перетаскивания (браузер во время drag мышиных событий не шлёт, и hover залипает).
   open: boolean;
@@ -214,8 +215,9 @@ export function RailFlyout({ side, label, hint, open, action, railWidth, hostSty
                       <span style={{
                         width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
                         // Тон точки повторяет кружок на иконке: accent (оранжевый,
-                        // primary) или muted (серый, secondary)
-                        background: ln.tone === 'muted' ? C.textMuted : C.accent,
+                        // primary), muted (серый, secondary) или warning (жёлтый)
+                        background: ln.tone === 'muted' ? C.textMuted
+                          : ln.tone === 'warning' ? C.warning : C.accent,
                       }} />
                       <span style={{
                         fontSize: FS.xs, color: C.textMuted, lineHeight: 1.3,

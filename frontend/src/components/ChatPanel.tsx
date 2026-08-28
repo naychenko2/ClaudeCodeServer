@@ -663,7 +663,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
-    showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
+    showScrollDown, scrolled, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
   // Компенсация перекоса «боковое поле слева против полосы прокрутки справа» — см.
   // lib/chatGutter. В обычном чате она держит колонку сообщений по центру окна; на
@@ -2047,6 +2047,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     <ChatHeaderBar
       island={headerIsland}
       compact={embedded}
+      scrolled={scrolled}
       session={session}
       project={project}
       hasMessages={hasMessages}

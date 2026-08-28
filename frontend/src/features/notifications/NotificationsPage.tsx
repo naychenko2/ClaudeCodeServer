@@ -349,6 +349,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                     transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none',
                   }} />
                   <input
+                    autoComplete="off"
                     placeholder="Поиск..."
                     value={search}
                     onChange={e => setSearch(e.target.value)}
@@ -411,6 +412,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
               <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                 <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
                 <input
+                  autoComplete="off"
                   placeholder="Поиск..." value={search} onChange={e => setSearch(e.target.value)}
                   style={{ width: '100%', height: 38, padding: '0 12px 0 32px', border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgCard, fontFamily: FONT.sans, fontSize: 16, color: C.textPrimary, outline: 'none', boxSizing: 'border-box' }}
                 />

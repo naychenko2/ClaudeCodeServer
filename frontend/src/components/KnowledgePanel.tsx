@@ -159,6 +159,7 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
 
           {/* Ввод нового тега */}
           <input
+            autoComplete="off"
             ref={inputRef}
             value={input}
             onChange={e => { setInput(e.target.value); setSuggestionsExpanded(false); }}
@@ -534,6 +535,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </span>
         <input
+          autoComplete="off"
           value={searchQuery}
           autoFocus
           onChange={e => setSearchQuery(e.target.value)}

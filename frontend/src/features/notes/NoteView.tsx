@@ -429,6 +429,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         {onBack && !editing && <BackButton onClick={onBack} title="К списку" style={{ height: 32 }} />}
         {editing
           ? <input
+              autoComplete="off"
               value={draftTitle}
               onChange={e => setDraftTitle(e.target.value)}
               // Переименование меняет id файла и каскадно правит [[ссылки]] — только онлайн
@@ -542,6 +543,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             {/* Ручное добавление тега */}
             {addingTag ? (
                 <input
+                  autoComplete="off"
                   autoFocus
                   value={newTag}
                   onChange={e => setNewTag(e.target.value)}
@@ -713,6 +715,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 ))}
                 <div style={{ display: 'flex', gap: 6 }}>
                   <input
+                    autoComplete="off"
                     value={annReplyDraft}
                     onChange={e => setAnnReplyDraft(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') void sendAnnReply(); }}
@@ -868,7 +871,7 @@ function MoveDialog({ currentDir, currentSource, sources, foldersFor, error, onM
         {folders.map(f => row(f, f))}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <input value={custom} onChange={e => setCustom(e.target.value)}
+        <input autoComplete="off" value={custom} onChange={e => setCustom(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) onMove(custom.trim(), src); }}
           placeholder="Новая папка (Идеи/Черновики)"
           style={{ flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, padding: '7px 10px', fontSize: 13, fontFamily: FONT.sans, color: C.textHeading, outline: 'none' }} />

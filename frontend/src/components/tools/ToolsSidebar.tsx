@@ -129,6 +129,7 @@ export function ToolsSidebar({
               } />
               {renaming?.id === t.id ? (
                 <input
+                  autoComplete="off"
                   autoFocus
                   value={renaming.value}
                   onChange={e => setRenaming({ id: t.id, value: e.target.value })}

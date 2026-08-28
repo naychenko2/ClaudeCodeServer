@@ -190,6 +190,7 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 9px', height: 30 }}>
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
           <input
+            autoComplete="off"
             value={filter}
             onChange={e => setFilter(e.target.value)}
             placeholder="Файл или путь…"

@@ -824,6 +824,7 @@ export function ChatCard({
             // перестраивается, соседние метки не прыгают. Клики гасим — иначе
             // попытка поставить курсор открывала бы чат (onClick всей карточки)
             <input
+              autoComplete="off"
               ref={inputRef}
               value={draft}
               disabled={saving}

@@ -2510,6 +2510,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   <span style={{ fontSize: 12, color: C.textMuted }}>Ветка</span>
                   <input
+                    autoComplete="off"
                     value={worktreeBranchInput}
                     onChange={e => setWorktreeBranchInput(e.target.value)}
                     spellCheck={false}

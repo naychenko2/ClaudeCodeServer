@@ -152,7 +152,7 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
       padding: '0 11px', borderRadius: R.lg, background: C.bgCard, border: `1px solid ${C.border}`, color: C.textMuted,
     }}>
       <IconSearch size={15} />
-      <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
+      <input autoComplete="off" ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
         placeholder={mode === 'semantic' ? 'Поиск по смыслу…' : 'Полнотекстовый поиск…'}
         style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }} />
       <button

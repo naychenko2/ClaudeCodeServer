@@ -44,6 +44,7 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
 
   const searchInput = (
     <input
+      autoComplete="off"
       value={search}
       onChange={e => setSearch(e.target.value)}
       placeholder="Поиск…"

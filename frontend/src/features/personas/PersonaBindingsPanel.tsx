@@ -1478,6 +1478,7 @@ function CondTextArea({ value, onChange, onBlur }: {
   }, [value]);
   return (
     <textarea
+      autoComplete="off"
       ref={ref}
       value={value}
       rows={2}

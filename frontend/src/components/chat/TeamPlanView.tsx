@@ -605,6 +605,7 @@ export function TeamPlanView({ item, online }: {
             Что поправить в плане? Сообщение уйдёт координатору — он пересоберёт план
           </div>
           <textarea
+            autoComplete="off"
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
             autoFocus

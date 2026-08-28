@@ -110,6 +110,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
               />
               {/* Имя (инлайн-редактирование по blur/Enter) */}
               <input
+                autoComplete="off"
                 defaultValue={g.name}
                 onBlur={e => handleRename(g.id, e.target.value.trim())}
                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
@@ -169,6 +170,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
       {/* Новая группа */}
       <div style={{ display: 'flex', gap: 8 }}>
         <input
+          autoComplete="off"
           value={newName}
           onChange={e => setNewName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleCreate(); }}

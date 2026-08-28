@@ -248,6 +248,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
 
         {/* Название проекта — крупный serif-ввод рядом с иконкой. */}
         <input
+          autoComplete="off"
           value={name}
           onChange={e => onNameChange(e.target.value)}
           placeholder="Название проекта"
@@ -266,6 +267,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
         <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           <div style={{ display: 'flex', gap: 6 }}>
             <input
+              autoComplete="off"
               value={suggInput}
               onChange={e => setSuggInput(e.target.value)}
               placeholder={PLACEHOLDER_PROMPT}

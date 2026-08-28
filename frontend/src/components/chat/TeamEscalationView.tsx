@@ -69,6 +69,7 @@ function ReplyBox({ hint, onSend, onCancel, sendLabel = 'Отправить' }: 
     }}>
       {hint && <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>{hint}</div>}
       <textarea
+        autoComplete="off"
         value={text}
         onChange={e => setText(e.target.value)}
         autoFocus={!!onCancel}

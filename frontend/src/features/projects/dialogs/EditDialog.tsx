@@ -413,6 +413,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
               {r.action === 'deny' ? 'Запретить' : 'Разрешить'}
             </button>
             <input
+              autoComplete="off"
               value={r.pattern}
               onChange={e => updateRule(i, { pattern: e.target.value })}
               placeholder="Bash(npm run *)"

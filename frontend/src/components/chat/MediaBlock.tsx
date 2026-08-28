@@ -545,6 +545,7 @@ export function MediaBlock({
               overflow: 'hidden', background: C.bgMain,
             }}>
               <input
+                autoComplete="off"
                 value={saveDialog.baseName}
                 onChange={e => setSaveDialog({ ...saveDialog, baseName: e.target.value })}
                 placeholder="имя файла"

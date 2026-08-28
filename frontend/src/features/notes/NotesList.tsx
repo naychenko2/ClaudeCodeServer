@@ -277,6 +277,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `3px 8px 3px ${10 + depth * 14}px` }}>
       <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
       <input
+        autoComplete="off"
         autoFocus
         value={newFolderValue}
         onChange={e => setNewFolderValue(e.target.value)}
@@ -420,6 +421,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `3px 8px 3px ${10 + depth * 14}px` }}>
             <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
             <input
+              autoComplete="off"
               autoFocus
               value={renameValue}
               onChange={e => setRenameValue(e.target.value)}

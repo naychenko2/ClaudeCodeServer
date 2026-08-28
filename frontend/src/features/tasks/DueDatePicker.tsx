@@ -207,6 +207,7 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
               }}>
                 <Clock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={customActive ? C.accent : C.textMuted} style={{ flexShrink: 0 }} />
                 <input
+                  autoComplete="off"
                   value={timeDraft}
                   onChange={e => setTimeDraft(maskTime(e.target.value))}
                   onBlur={() => {

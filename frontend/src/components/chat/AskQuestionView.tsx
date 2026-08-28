@@ -161,6 +161,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               {open && (
                 <div style={{ padding: '0 10px 10px' }}>
                   <textarea
+                    autoComplete="off"
                     value={customText[qi] ?? ''}
                     onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
                     onClick={e => e.stopPropagation()}

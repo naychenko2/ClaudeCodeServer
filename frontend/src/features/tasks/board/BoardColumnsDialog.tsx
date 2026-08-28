@@ -106,6 +106,7 @@ export function BoardColumnsDialog({ projectId, columns, taskCounts, onSaved, on
                 <ColorPicker value={columnColor(r)} onPick={color => update(i, { color })} />
                 {/* Название */}
                 <input
+                  autoComplete="off"
                   value={r.name}
                   onChange={e => update(i, { name: e.target.value })}
                   placeholder="Название"

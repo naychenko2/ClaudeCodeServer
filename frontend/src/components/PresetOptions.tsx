@@ -105,6 +105,7 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
           {copyOf ? `Копия «${copyOf}»` : 'Новая цепочка'}
         </div>
         <input
+          autoComplete="off"
           type="text"
           value={draftName}
           onChange={e => setDraftName(e.target.value)}

@@ -90,7 +90,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div>
           <label style={fieldLabel}>Заголовок</label>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
+          <input autoComplete="off" autoFocus value={title} onChange={e => setTitle(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') create(); }}
             placeholder="Название заметки"
             style={fieldInput} />
@@ -110,7 +110,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
         </div>
         <div>
           <label style={fieldLabel}>Папка</label>
-          <input value={folder} onChange={e => setFolder(e.target.value)}
+          <input autoComplete="off" value={folder} onChange={e => setFolder(e.target.value)}
             list="note-folders" placeholder="Корень (или введи новую: Идеи/Черновики)"
             style={fieldInput} />
           <datalist id="note-folders">

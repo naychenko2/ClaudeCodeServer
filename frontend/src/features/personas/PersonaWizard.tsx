@@ -608,6 +608,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
               )}
               <Field label="Роль">
                 <input
+                  autoComplete="off"
                   value={role} onChange={e => setRole(e.target.value)}
                   placeholder="Дизайнер, PM, Тестировщик…" autoFocus
                   style={{

@@ -718,6 +718,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <FieldLabel>Роль *</FieldLabel>
             {/* Крупный serif-ввод продукта — как заголовок в TaskEditForm */}
             <input
+              autoComplete="off"
               value={role}
               onChange={e => setRole(e.target.value)}
               placeholder="Дизайнер, PM, Тестировщик…"
@@ -750,6 +751,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               }}>
                 <span style={{ color: C.textSecondary, fontFamily: FONT.mono, fontSize: 13 }}>@</span>
                 <input
+                  autoComplete="off"
                   value={handle}
                   onChange={e => { setHandle(slugifyHandle(e.target.value, true)); setHandleEdited(true); }}
                   placeholder="masha"

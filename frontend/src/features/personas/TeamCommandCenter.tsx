@@ -657,7 +657,7 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {teamJob.status !== 'done' && (
           <>
-            <textarea value={prompt} onChange={e => setPrompt(e.target.value)} autoFocus placeholder="Напр.: команда для бэкенда на .NET — аналитик, разработчик, ревьюер и тестировщик." style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} />
+            <textarea autoComplete="off" value={prompt} onChange={e => setPrompt(e.target.value)} autoFocus placeholder="Напр.: команда для бэкенда на .NET — аналитик, разработчик, ревьюер и тестировщик." style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} />
             {(error || (teamJob.status === 'error' && teamJob.error)) && (
               <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error || teamJob.error}</div>
             )}

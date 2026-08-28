@@ -42,6 +42,7 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
       {/* --- Фильтры --- */}
       <CollapseGroup title={<SectionTitle>Фильтры</SectionTitle>}>
         <input
+          autoComplete="off"
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Поиск…"
@@ -119,7 +120,7 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
             <input type="color" value={g.color}
               onChange={e => onChange(s => ({ ...s, groups: s.groups.map((x, j) => j === i ? { ...x, color: e.target.value } : x) }))}
               style={{ width: 22, height: 22, padding: 0, border: `1px solid ${C.border}`, borderRadius: 5, background: 'none', cursor: 'pointer', flex: 'none' }} />
-            <input value={g.query} placeholder="tag:идея / слово"
+            <input autoComplete="off" value={g.query} placeholder="tag:идея / слово"
               onChange={e => onChange(s => ({ ...s, groups: s.groups.map((x, j) => j === i ? { ...x, query: e.target.value } : x) }))}
               style={{ ...textInput, marginBottom: 0, flex: 1, minWidth: 0 }} />
             <button title="Удалить группу"

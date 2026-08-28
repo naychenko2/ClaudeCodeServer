@@ -1400,6 +1400,7 @@ export function Composer({
     // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
     <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex' }}>
       <textarea
+        autoComplete="off"
         ref={textareaRef}
         className="cc-composer-input"
         value={text}

@@ -131,6 +131,7 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: `1px solid ${C.border}` }}>
           <Search size={18} strokeWidth={2} color={C.textMuted} />
           <input
+            autoComplete="off"
             ref={inputRef}
             value={q}
             onChange={e => setQ(e.target.value)}

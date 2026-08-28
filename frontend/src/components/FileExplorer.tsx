@@ -597,6 +597,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
         {inlineRename ? (
           <input
+            autoComplete="off"
             ref={inputRef}
             value={p.renameValue}
             onChange={e => p.onRenameChange(e.target.value)}
@@ -1807,6 +1808,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             }
           >
             <input
+              autoComplete="off"
               ref={renameModalInputRef}
               value={renameValue}
               onChange={e => setRenameValue(e.target.value)}

@@ -636,6 +636,24 @@ builder.Services.AddQuietHttpClient(
         Category: "ClaudeHomeServer.Mcp.OAuth",
         Subject: "сервером авторизации MCP",
         Consequence: "Вход в сервер не выполнен — инструменты этого сервера в ход не поедут."));
+// Официальный реестр MCP (каталог MCP-серверов, волна 1): сервис зарубежный — клиент ходит
+// ЧЕРЕЗ egress-прокси (WithoutEgressProxy тут НЕ звать). Опциональная зависимость: пустой
+// Mcp:Catalog:BaseUrl выключает каталог целиком, раздел продолжает работать вручную.
+builder.Services.AddSingleton(ClaudeHomeServer.Services.Mcp.Catalog.McpCatalogOptions.FromConfig(
+    builder.Configuration));
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.Catalog.McpCatalogClient.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Catalog",
+        Subject: "реестром MCP registry.modelcontextprotocol.io",
+        Consequence: "Поиск по каталогу MCP-серверов недоступен — добавить сервер можно вручную."))
+    .ConfigureHttpClient(c =>
+    {
+        c.Timeout = TimeSpan.FromSeconds(5);
+        // Реестр публичный и маленький, но доверять его размеру не обязаны: бьём oversized-ответ
+        c.MaxResponseContentBufferSize = 2 * 1024 * 1024;
+    });
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Catalog.McpCatalogClient>();
 // Сторонний провайдер — опциональная зависимость: баланс уходит в протухший кэш, каталог
 // моделей — в дефолтный список, фоновое действие — к другой модели. Мёртвый провайдер
 // не должен засыпать консоль стектрейсами (см. QuietHttpLogger)

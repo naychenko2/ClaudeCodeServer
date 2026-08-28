@@ -7,7 +7,7 @@
 // ВСЕ визуальные значения — из токенов design.ts (C, FS, SP, ISLAND) и
 // компонентов ui/. Ни одного hex-литерала: lint:design проходит зелёным.
 
-import { useState, useEffect, type CSSProperties, Fragment } from 'react';
+import { useState, useEffect, useRef, type CSSProperties, Fragment } from 'react';
 import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
@@ -24,6 +24,7 @@ import {
   ChevronRight, Folder,
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
+  Network, FileText,
 } from 'lucide-react';
 import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
@@ -31,7 +32,9 @@ import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from '../components/StatusIndicator';
 import { ProviderLimitCard } from '../components/chat/ChatItemView';
-import type { Session, ChatItem, Persona } from '../types';
+import type { Session, ChatItem, Persona, PlanMap } from '../types';
+import { MarkdownContent } from '../components/chat/MarkdownContent';
+import { PlanScheme } from '../components/plan/PlanScheme';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
@@ -112,6 +115,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-islands',    label: 'Острова и холст'   },
   { id: 'sec-colors',     label: 'Цвета'             },
   { id: 'sec-panels',     label: 'Панели'             },
+  { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
 ];
 
@@ -247,6 +251,14 @@ export function UiKitPage() {
             {/* Секция «Панели» — правая рельса + левые сайдбары + чаты + тона */}
             <div id="sec-panels" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <PanelsSection />
+            </div>
+
+            {/* Секция «Визуальный разворот плана» — карточка плана + живая схема на
+                фиктивной карте. Демо без живого ExitPlanMode и без вызова модели:
+                карта уже собрана (статичный JSON ниже), остаётся переключать
+                уровни и проверять разворот. */}
+            <div id="sec-visual-plan" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <VisualPlanSection />
             </div>
 
             {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
@@ -3236,6 +3248,248 @@ function ToolbarAndEmptySection() {
               }
             />
           </div>
+        </SubBlock>
+      </div>
+    </Island>
+  );
+}
+
+// === Секция «Визуальный разворот плана» ============================
+// Демо карточки плана и фиктивной PlanMap для приёмки без живой модели и без
+// plan-режима. Раньше QA не могла проверить разворот схемой: карточка плана
+// рождается только от ExitPlanMode, и без живого режима планирования на
+// стенде проверить нечего. Здесь весь сценарий живёт без сети: карта —
+// статичный JSON, разворот строится по клику в PlanScheme, на «Блок»
+// показывается настоящий markdown раздела через sliceSection.
+//
+// План содержит два одноимённых раздела «Дизайн» и два «Тесты» — главный
+// кейс починки: для второй итерации дизайна / стабилизации уровень «Блок»
+// должен показать СВОЁ тело, а не тело первого одноимённого. Один из
+// заголовков несёт inline-жирный (`**Ключевой** поворот`) — это проверка
+// stripInlineMarkdown в sliceSection.
+const VISUAL_PLAN_DEMO_TEXT = [
+  '# План: перевод воркспейса на новые раскладки',
+  '',
+  '## Введение',
+  '',
+  'Сейчас воркспейс живёт на старой раскладке. Переезд большой, но без него',
+  'дальше расти нельзя: место кончилось и по вертикали, и по семантике.',
+  '',
+  '## Дизайн',
+  '',
+  'Главное — сохранить текущий ритм: левая рельса, центральный остров,',
+  'правая рельса. На десктопе всё так же, на мобиле — те же две колонки.',
+  '',
+  '### **Ключевой** поворот',
+  '',
+  'Внутри острова появятся дополнительные слоты под новые острова.',
+  '',
+  '## Тесты',
+  '',
+  'Сначала визуальные проверки на текущей раскладке, потом — e2e.',
+  '',
+  '## Дизайн',
+  '',
+  'Вторая итерация дизайна — мобильная. Здесь выкатим новую раскладку',
+  'и проверим её на всех целевых устройствах.',
+  '',
+  '## Тесты',
+  '',
+  'После второй итерации — регрессии и стабилизация.',
+  '',
+  '## Заключение',
+  '',
+  'К концу релиза обе раскладки синхронизированы.',
+].join('\n');
+
+// Фиктивная PlanMap: 6 блоков, два из которых ссылаются на вторые вхождения
+// «Дизайн» и «Тесты» (anchorIndex=1). Граница одна — у «Заключение», оно
+// уйдёт в блок «Чего этот план не делает» на «Сути».
+const VISUAL_PLAN_DEMO_MAP: PlanMap = {
+  genre: 'framework',
+  oneLine: 'Перевести воркспейс на новые раскладки с сохранением ритма.',
+  numbers: [
+    { value: '6', label: 'разделов' },
+    { value: '2', label: 'итерации дизайна' },
+  ],
+  blocks: [
+    { id: 'b1', title: 'Введение',                 type: 'step',      flags: [],                          anchor: 'Введение',    anchorIndex: 0, dependsOn: [] },
+    { id: 'b2', title: 'Дизайн — десктоп',         type: 'step',      flags: ['needs-decision'],          anchor: 'Дизайн',      anchorIndex: 0, dependsOn: ['b1'] },
+    { id: 'b3', title: 'Дизайн — мобила',          type: 'step',      flags: ['expands-scope'],           anchor: 'Дизайн',      anchorIndex: 1, dependsOn: ['b2'] },
+    { id: 'b4', title: 'Тесты — регрессии',        type: 'criterion', flags: ['blocking'],                 anchor: 'Тесты',       anchorIndex: 0, dependsOn: ['b2'] },
+    { id: 'b5', title: 'Тесты — стабилизация',     type: 'criterion', flags: ['review-fix'],              anchor: 'Тесты',       anchorIndex: 1, dependsOn: ['b3'] },
+    { id: 'b6', title: 'Согласование с владельцем', type: 'boundary', flags: [],                          anchor: 'Заключение',  anchorIndex: 0, dependsOn: [] },
+  ],
+};
+
+function VisualPlanSection() {
+  // Реф на контейнер, в котором живут и PlanScheme, и скрытый исходный
+  // markdown. useHeadings в PlanScheme ищет h1–h6 по этому рефу —
+  // без скрытого слоя он вернул бы [], и весь разворот выродился бы в
+  // жанр/фразу/числа (та самая починка Critical 1).
+  const planRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={
+          <Network
+            size={ICON_SIZE.md}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.accent, flexShrink: 0 }}
+          />
+        }
+        title="Визуальный разворот плана"
+        badge="visual-plan"
+      />
+      <div style={{
+        padding: ISLAND.pad,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: ISLAND.gap,
+      }}>
+        <p style={{
+          margin: 0, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5,
+          fontFamily: FONT.sans,
+        }}>
+          Демо карточки плана (ожидает) и живой схемы на фиктивной карте.
+          Карта уже собрана — без модели и без plan-режима; все три уровня
+          («Суть», «Карта», «Блок») переключаются кликом. План содержит
+          два «Дизайн» и два «Тесты» — для второго вхождения уровень
+          «Блок» должен показать СВОЁ тело, а не первое.
+        </p>
+
+        {/* === SubBlock 1: карточка плана (ожидает) === */}
+        {/* Имитация PlanReviewView без контекста проекта и без живой модели.
+            Внешний вид и кнопки совпадают с боевой карточкой (borderLeft на
+            C.plan, тело на C.bgWhite, primary-кнопка «Одобрить и выполнить»),
+            но без зависимости от сигналок и project context. */}
+        <SubBlock label="Карточка плана — статус «ожидает», фиктивный план">
+          <div style={{
+              border: `1px solid ${C.planBorder}`,
+              borderLeft: `4px solid ${C.plan}`,
+              borderRadius: R.xl, padding: '14px 16px',
+              background: C.bgCard, boxShadow: SHADOW.card,
+              display: 'flex', flexDirection: 'column', gap: SP.md,
+            }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{
+                width: 28, height: 28, borderRadius: R.md, background: C.plan,
+                flexShrink: 0, display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+              }}>
+                <ClipboardList size={15} color={C.onAccent} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontFamily: FONT.serif, fontSize: 15, fontWeight: 700,
+                  color: C.textHeading, lineHeight: 1.2,
+                }}>
+                  План готов
+                </div>
+                <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+                  Ассистент предлагает план. Файлы пока не изменялись.
+                </div>
+              </div>
+              <span style={{
+                flexShrink: 0, background: C.planLight, color: C.planText,
+                borderRadius: R.sm, padding: '2px 8px',
+                fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+              }}>
+                v1 · на согласовании
+              </span>
+            </div>
+
+            {/* Переключатель «Текстом / Схемой» — заглушка для визуала. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '4px 10px', borderRadius: R.pill,
+                background: 'transparent', border: `1px solid ${C.border}`,
+                color: C.textSecondary, fontFamily: FONT.sans, fontSize: FS.sm,
+                fontWeight: 600,
+              }}>
+                <FileText size={12} /> Текстом
+              </span>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '4px 10px', borderRadius: R.pill,
+                background: C.plan, color: C.onAccent,
+                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+              }}>
+                <Network size={12} /> Схемой
+              </span>
+              <span style={{
+                padding: '4px 10px', borderRadius: R.md,
+                background: 'transparent', border: `1px solid ${C.border}`,
+                color: C.textSecondary, fontFamily: FONT.sans, fontSize: FS.sm,
+                fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}>
+                <Network size={12} /> Собрать схему
+              </span>
+            </div>
+
+            {/* Тело: белый блок с maxHeight, как у PlanReviewView. */}
+            <div style={{
+              position: 'relative',
+              background: C.bgWhite, border: `1px solid ${C.border}`,
+              borderRadius: R.lg, padding: '10px 12px',
+              maxHeight: 220, overflow: 'auto',
+              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+            }}>
+              <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+            </div>
+
+            <Button
+              fullWidth
+              variant="primary"
+              size="md"
+              glow
+              leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
+            >
+              Одобрить и выполнить
+            </Button>
+          </div>
+        </SubBlock>
+
+        {/* === SubBlock 2: разворот схемой на фиктивной карте === */}
+        <SubBlock label="Разворот схемой — три уровня и блок внимания (живой PlanScheme)">
+          <div ref={planRef} style={{
+            position: 'relative',
+            background: C.bgWhite, border: `1px solid ${C.border}`,
+            borderRadius: R.lg, padding: '12px 14px',
+            maxHeight: 520, overflow: 'auto',
+            fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+          }}>
+            {/* Скрытый исходный план нужен PlanScheme: useHeadings берёт
+                заголовки из реального DOM. Узлы в DOM, но вне потока —
+                aria-hidden снимает со скринридеров (контент уже виден
+                через схему). */}
+            <div aria-hidden="true" style={{
+              position: 'absolute', top: 0, left: 0,
+              width: 1, height: 1, opacity: 0,
+              overflow: 'hidden', pointerEvents: 'none',
+            }}>
+              <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+            </div>
+            <PlanScheme
+              map={VISUAL_PLAN_DEMO_MAP}
+              planText={VISUAL_PLAN_DEMO_TEXT}
+              contentRef={planRef}
+            />
+          </div>
+          <p style={{
+            margin: `${SP.sm}px 0 0`,
+            fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5,
+          }}>
+            Что проверить руками: «Суть» показывает 4 пункта внимания
+            («нужно решение», «расширяет рамку», «блокирует», «проверить
+            починку») — каждый ведёт в свой блок. На «Карте» строки
+            «Дизайн — мобила» и «Тесты — стабилизация» — вторые одноимённые
+            разделы, при открытии «Блок» показывают СВОЁ тело. Граница
+            «Согласование с владельцем» — отдельный блок внимания
+            «Чего этот план не делает».
+          </p>
         </SubBlock>
       </div>
     </Island>

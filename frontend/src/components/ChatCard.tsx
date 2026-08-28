@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -138,6 +138,10 @@ interface Props {
   agentsRunning?: boolean;
   // То же для фоновой команды (Bash в фоне) — тихий значок терминала
   bgCommandRunning?: boolean;
+  // За чатом числятся правки, не зафиксированные в git (dirtySessionIds из lib/git.ts) —
+  // тихий значок в строке названия. Не задан — признак неизвестен или не применим:
+  // чаты вне проектов, витрина UI-кита, недоступный git-статус
+  hasUncommitted?: boolean;
   onSelect: () => void;
   onHover: (hovered: boolean) => void;
   onDelete: () => void;
@@ -180,7 +184,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp,
+  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, hasUncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
   onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
@@ -868,6 +872,21 @@ export function ChatCard({
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
           {s.isPinned && (
             <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />
+          )}
+          {/* Правки чата не зафиксированы в git. Значок-СОСТОЯНИЕ, поэтому глиф взят из
+              git-семейства и намеренно не FileDiff — тот в продукте занят кнопкой
+              «показать дифф» (GitChangesRail), и одинаковый глиф читался бы как действие.
+              Формулировка тултипа про ПРАВКИ ЧАТА, а не про состояние репозитория:
+              множество берётся из атрибуции файлов чату, а она врёт в известных случаях
+              (коммит при погашенном сервере, чужая правка «его» файла) — обещать
+              «в репозитории есть незакоммиченное» значок не вправе. На мобиле тултип по
+              тапу не всплывает — значок остаётся без пояснения осознанно, прятать его
+              там хуже, чем показать молча */}
+          {hasUncommitted && (
+            <span title="Правки этого чата не зафиксированы в git" aria-label="Правки этого чата не зафиксированы в git"
+              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              <GitCommitVertical size={13} strokeWidth={2.2} />
+            </span>
           )}
           {/* Работают фоновые агенты. Это единственное, чем такой чат отличим от чата
               с идущим ходом: волна у них одна и та же (работа и там, и там реальная).

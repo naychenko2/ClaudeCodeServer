@@ -2272,6 +2272,10 @@ function PanelsSection() {
                     online={true}
                     hovered={false}
                     workflowRunning={false}
+                    // Второй карточке — значок «правки не зафиксированы в git». Состояние
+                    // живёт ТОЛЬКО в списке чатов проекта: в разделе «Чаты» чаты вне
+                    // проектов, там значка нет, поэтому эталон ему здесь
+                    hasUncommitted={i === 1}
                     onSelect={() => {}}
                     onHover={() => {}}
                     onDelete={() => {}}

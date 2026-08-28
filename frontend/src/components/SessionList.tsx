@@ -14,6 +14,7 @@ import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, chatCountWord } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
+import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
@@ -82,6 +83,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSelectRef.current = onSelect; });
   const onClearedRef = useRef(onCleared);
   useEffect(() => { onClearedRef.current = onCleared; });
+
+  // Значок «правки чата не зафиксированы в git». Стор подключаем сами: список живёт не
+  // только в мастерской (WorkspacePage уже зовёт ensureGit), но и на Стене, где git
+  // мог не понадобиться никому. Вызов идемпотентен — повторный ничего не грузит
+  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const { dirtySessionIds } = useGitState(project.id);
 
   // === Реестр общих тегов проекта ===
   // Optimistic state поверх project.tagRegistry: reorder/создание видны сразу, ответ
@@ -417,6 +424,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         online={online}
         hovered={hoveredId === s.id}
         workflowRunning={workflowRunningFor === s.id}
+        hasUncommitted={dirtySessionIds?.has(s.id) ?? false}
         onSelect={() => onSelect(s)}
         onHover={h => setHoveredId(h ? s.id : null)}
         onDelete={() => setDeleteTarget(s)}

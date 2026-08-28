@@ -59,6 +59,10 @@ interface TextFieldProps {
   onFocus?: () => void;
   onBlur?: () => void;
   onEscape?: () => void;
+  // Автозаполнение. Дефолт «off»: иначе Android над клавиатурой выкидывает системную
+  // плашку автозаполнения (пароли/карты/адреса) на любом поле, которое его эвристика
+  // сочла формой. Настоящим полям логина и пароля значение передают явно
+  autoComplete?: string;
   // Подсказка при наведении: нужна там, где под полем нет места для строки-пояснения
   // (поле в ряду чипов — вторая строка растянула бы ряд)
   title?: string;
@@ -66,7 +70,7 @@ interface TextFieldProps {
 }
 
 // === Однострочное поле ввода с focus-ring ===
-export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, style }: TextFieldProps) {
+export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, autoComplete = 'off', style }: TextFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
     <input
@@ -75,6 +79,7 @@ export function TextField({ value, onChange, placeholder, type = 'text', mono, a
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       title={title}
+      autoComplete={autoComplete}
       autoFocus={autoFocus}
       disabled={disabled}
       onFocus={() => { setFocused(true); onFocus?.(); }}
@@ -98,13 +103,14 @@ interface TextAreaProps {
   // (иначе очень длинный текст разносит форму по высоте)
   maxHeight?: number;
   disabled?: boolean;
+  autoComplete?: string;
   autoFocus?: boolean;
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   style?: CSSProperties;
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, style }: TextAreaProps) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, autoComplete = 'off', style }: TextAreaProps) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -125,6 +131,7 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
       placeholder={placeholder}
       disabled={disabled}
       autoFocus={autoFocus}
+      autoComplete={autoComplete}
       onKeyDown={onKeyDown}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
@@ -151,6 +158,9 @@ interface IconFieldProps {
   radius?: number;
   fontSize?: number;
   style?: CSSProperties;
+  // Дефолт «off» — см. комментарий у TextFieldProps: системная плашка автозаполнения
+  // Android иначе лезет и на поля поиска
+  autoComplete?: string;
   autoFocus?: boolean;
   onEnter?: () => void;
   inputRef?: Ref<HTMLInputElement>;
@@ -160,7 +170,7 @@ interface IconFieldProps {
 export function IconField({
   icon, value, onChange, placeholder, type = 'text', mono, disabled,
   letterSpacing, height = 50, radius = R.xxl, fontSize = 15, style,
-  autoFocus, onEnter, inputRef,
+  autoFocus, onEnter, inputRef, autoComplete = 'off',
 }: IconFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
@@ -184,6 +194,7 @@ export function IconField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
+        autoComplete={autoComplete}
         autoFocus={autoFocus}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}

@@ -199,6 +199,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // открыт именно потому, что доживали bg-агенты — их task_notification запускает продолжение.
     private static readonly TimeSpan ContinuationStartGrace = TimeSpan.FromMinutes(2);
 
+    // Грейс на штатный EOF stdout после смерти процесса. Обычно pipe закрывается сразу, и
+    // финализацию делает сам цикл чтения (его finally). Но write-end могли унаследовать
+    // потомки CLI (node-процессы MCP), а Kill дерева их не достаёт: к моменту вызова родитель
+    // уже мёртв, дети осиротели (на Linux ppid=1) и в дерево не попадают. Тогда EOF не придёт
+    // вовсе, и завязанная на него финализация не стартует — ни ExitedMessage (чат залипает в
+    // Working до часового watchdog), ни уборки temp-конфига с сервисным токеном, ни закрытия
+    // карточек фоновых задач. По истечении грейса финализируем прогон САМИ, не трогая поток:
+    // закрывать stdout под висящим ReadLineAsync нельзя (проверено — вешает процесс целиком).
+    private static readonly TimeSpan ReaderEofGrace = TimeSpan.FromSeconds(5);
+
     // Потолок доживания процесса с работающими фоновыми агентами после конца хода.
     // Агенты (Agent run_in_background, Workflow) живут ВНУТРИ процесса CLI: убить его
     // по грейсу — значит убить их на середине (наблюдалось на проде: task-notification
@@ -225,6 +235,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // ссылаются на него (inheritedFromId): их собственный промпт модели не уходил.
         public string? PromptSnapshotId { get; init; }
         public Task? ReaderTask { get; set; }
+        // Гард однократной финализации: путей входа два — finally цикла чтения (штатный EOF) и
+        // грейс обработчика смерти (EOF не пришёл, stdout держат осиротевшие потомки). Кто успел
+        // первым, тот и финализирует; второй выходит без побочных эффектов. Interlocked, а не
+        // volatile bool: нужна атомарная проверка-и-взятие, иначе оба пути прошли бы разом.
+        public int FinalizeGate;
         // Смерть прогона зафиксирована диагностирована (маркер в лог + ErrorMessage клиенту).
         // Взводит HandleProcessExitedAsync по событию Exited (опережает финализацию), либо — для гонки
         // EOF-раньше-callback — ветка activeTurnDied в FinalizeRunAsync. Гарантирует ровно один
@@ -2749,6 +2764,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
 
                 if (line is null) break; // stdout закрыт — процесс завершился
+                // Прогон уже финализирован по смерти процесса (EOF не пришёл — stdout держат его
+                // потомки): выдача мёртвого прогона в ленту не нужна, ход давно завершён
+                if (Volatile.Read(ref run.FinalizeGate) == 1) break;
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 await ProcessLineAsync(run, line);
             }
@@ -2804,6 +2822,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // Финализация прогона: единственная точка уборки после смерти процесса
     private async Task FinalizeRunAsync(CliRun run)
     {
+        // Прогон уже финализирован другим путём (см. FinalizeGate) — второй проход послал бы
+        // дубль ExitedMessage и подчистил чужие ресурсы нового прогона
+        if (Interlocked.Exchange(ref run.FinalizeGate, 1) == 1) return;
         CloseStdin(run);
         // Всегда убиваем процесс. На Windows дочерние node-процессы MCP-серверов
         // НЕ завершаются автоматически при выходе родителя — без явного Kill с
@@ -2825,7 +2846,14 @@ public class ClaudeSession : ILlmSessionAdapter
         int? exitCode = null;
         try { if (run.Process.HasExited) exitCode = run.Process.ExitCode; }
         catch (Exception) { /* ExitCode бросает, если процесс ещё не вышел или не задан код */ }
-        run.Process.Dispose();
+        // Dispose закрывает потоки процесса, поэтому он ЗАПРЕЩЁН, пока в stdout висит чтение:
+        // закрытие потока под активным ReadLineAsync — неподдерживаемая гонка (наблюдалось
+        // зависание тестового хоста целиком). Ридер ещё жив — вешаем Dispose на его завершение.
+        if (run.ReaderTask is { IsCompleted: false } liveReader)
+            _ = liveReader.ContinueWith(
+                _ => { try { run.Process.Dispose(); } catch { /* уже освобождён */ } },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        else run.Process.Dispose();
         if (ReferenceEquals(_currentProcess, run.Process)) _currentProcess = null;
         // Прогон всё ещё «текущий»? Если его уже заместил новый (несовместимый ход убил
         // старый, финализация опоздала) — общие пер-сессионные ресурсы (file watcher,
@@ -3015,6 +3043,12 @@ public class ClaudeSession : ILlmSessionAdapter
             $"pendingControlResponse={pendingControlResponse} interruptedByUser={_interruptedByUser} " +
             $"turnSeq={Interlocked.Read(ref run.LastTurnSeq)})");
 
+        // Финализация прогона не должна зависеть от EOF в stdout — его может не быть вовсе
+        // (осиротевшие потомки держат write-end). Страхуем независимо от активности хода:
+        // уборка temp-конфига с сервисным токеном и закрытие карточек фоновых задач нужны и при
+        // смерти между ходами. Гейт однократности внутри — штатный EOF по-прежнему выигрывает.
+        _ = FinalizeAfterEofGraceAsync(run);
+
         if (!activeTurn) return;
 
         // Обрыв активного хода без ретрая: клиент обязан видеть ошибку, иначе гибель процесса
@@ -3041,6 +3075,33 @@ public class ClaudeSession : ILlmSessionAdapter
         // без этого висящее ReadLineAsync не вернётся и финализация не стартует.
         try { _launcher.Kill(run.Process, run.LaunchTurnId); }
         catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] Kill прогона при смерти не удался: {ex.Message}"); }
+    }
+
+    // Страховка от прогона, который некому финализировать: Kill дерева не достаёт потомков,
+    // осиротевших к моменту вызова, — унаследованный stdout остаётся открытым, EOF не приходит
+    // и finally цикла чтения (единственная штатная точка финализации) не отрабатывает вовсе.
+    // Ждём штатный EOF грейс, затем финализируем сами. Ридер при этом НЕ трогаем: он либо
+    // выйдет позже сам, либо останется висеть до конца сессии — терминалу хода он больше не нужен.
+    private async Task FinalizeAfterEofGraceAsync(CliRun run)
+    {
+        try
+        {
+            if (run.ReaderTask is { } reader)
+            {
+                try { await reader.WaitAsync(ReaderEofGrace, CancellationToken.None); return; }
+                catch (TimeoutException) { /* EOF не пришёл — финализируем ниже */ }
+                catch { return; } // ридер упал сам — его finally уже финализирует прогон
+            }
+            if (Volatile.Read(ref run.FinalizeGate) == 1) return;
+            Console.Error.WriteLine(
+                $"[ClaudeSession] stdout мёртвого прогона держат его потомки — финализируем без EOF " +
+                $"(session={Info.Id} cli={Info.ClaudeSessionId ?? "-"})");
+            await FinalizeRunAsync(run);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] Финализация прогона без EOF не удалась: {ex}");
+        }
     }
 
     /// <summary>

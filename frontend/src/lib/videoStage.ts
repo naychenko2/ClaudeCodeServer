@@ -107,6 +107,75 @@ export function clampRect(r: FloatRect): FloatRect {
   return { x, y, w, h };
 }
 
+/**
+ * ГЕОМЕТРИЯ МЕСТА ПОД КАДР («слот»).
+ *
+ * Живой кадр рисует не панель и не остров, а один оверлей в App — иначе эфир
+ * обрывался бы на каждом переходе между проектами: страница перемонтируется, а
+ * вместе с ней умирает iframe. Панель и центр вместо кадра держат ПУСТОЕ место и
+ * сообщают сюда его прямоугольник, оверлей же кладётся поверх.
+ *
+ * frame — куда встаёт кадр, clip — чем его обрезать: тело панели ниже кадра быть
+ * не обязано, узкая панель режет его своим краем, и fixed-оверлей без клипа вылез
+ * бы поверх соседей.
+ */
+export type VideoSlotKind = 'panel' | 'center';
+
+export interface SlotBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface VideoSlot {
+  frame: SlotBox;
+  clip: SlotBox;
+}
+
+let slots: Record<VideoSlotKind, VideoSlot | null> = { panel: null, center: null };
+
+function sameBox(a: SlotBox, b: SlotBox): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
+function sameSlot(a: VideoSlot | null, b: VideoSlot | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return sameBox(a.frame, b.frame) && sameBox(a.clip, b.clip);
+}
+
+/**
+ * Сообщить (или снять) прямоугольник места. Зовётся из петли измерения на каждом
+ * кадре, поэтому равные значения не публикуются: иначе оверлей перерисовывался бы
+ * шестьдесят раз в секунду впустую.
+ */
+export function setVideoSlot(kind: VideoSlotKind, slot: VideoSlot | null): void {
+  if (sameSlot(slots[kind], slot)) return;
+  slots = { ...slots, [kind]: slot };
+  emit();
+}
+
+export function getVideoSlots(): Record<VideoSlotKind, VideoSlot | null> {
+  return slots;
+}
+
+/**
+ * Где сейчас место живого кадра: панель, центральный остров — или нигде.
+ *
+ * null означает две разные вещи, и для оверлея они одинаковы: канала нет вовсе либо
+ * кадр показывают в плавающем окне (у того свой кадр — он и так переживает переходы).
+ * Оверлей в этом случае снимается НЕМЕДЛЕННО, без отсрочки: два живых iframe одного
+ * эфира дают два звука внахлёст.
+ */
+export function videoFramePlace(
+  stage: VideoStageState | null,
+  panel: VideoChannel | null,
+): VideoSlotKind | null {
+  if (stage) return stage.mode === 'center' ? 'center' : null;
+  return panel ? 'panel' : null;
+}
+
 export function getVideoStage(): VideoStageState | null {
   return state;
 }
@@ -267,4 +336,9 @@ export function useVideoCenterBlocked(): boolean {
 
 export function useFloatRect(): FloatRect {
   return useSyncExternalStore(subscribe, getFloatRect, getFloatRect);
+}
+
+/** Прямоугольники мест под кадр: их публикуют панель и центральный остров. */
+export function useVideoSlots(): Record<VideoSlotKind, VideoSlot | null> {
+  return useSyncExternalStore(subscribe, getVideoSlots, getVideoSlots);
 }

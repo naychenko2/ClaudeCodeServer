@@ -229,6 +229,9 @@ AddHosted<PersonaProjectBindingsMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
+// Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
+// для REST фронта и MCP-тула context_list
+builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();

@@ -588,6 +588,10 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<string, Task<string?>>? _bindingsProvider;
     // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
     private readonly Func<string?, Task<string?>>? _codeGraphProvider;
+    // Состав контекста чата (фича chat-context) — вызывается на каждый ход: материал,
+    // добавленный в идущем разговоре, попадает в подсказку следующего хода. Только промпт,
+    // состав MCP-инструментов от него не зависит.
+    private readonly Func<IReadOnlyList<SessionContextEntry>>? _chatContextProvider;
     // Снимок промпта хода: черновик → id записанного снимка. null — снимки не ведутся.
     private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
     // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
@@ -679,6 +683,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
         _codeGraphProvider = context.CodeGraphProvider;
+        _chatContextProvider = context.ChatContextProvider;
         _promptSnapshotSink = context.PromptSnapshotSink;
         _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
         _subagentRunSink = context.SubagentRunSink;
@@ -1077,6 +1082,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 // (files_write, projects_create, git_commit, knowledge_index) доступны всегда,
                 // safety-уровень — право доступа персоны (Persona.Tools / ExtraDisallowedTools).
                 var workspaceWrite = "1";
+                // Инструмент context_list: включён флагом владельца chat-context (решение
+                // принято в SessionManager.BuildWorkspaceContext, от хода не зависит)
+                var workspaceChatContext = _workspaceMcp.ChatContextEnabled ? "1" : "0";
                 // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
                 // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
                 // (сервер не стартует, инструменты не появляются). Отсюда же префикс
@@ -1105,14 +1113,20 @@ public class ClaudeSession : ILlmSessionAdapter
                         // workspace-server): их состав должен быть одинаков на всех ходах, иначе
                         // инструменты «мерцают» между ходами вместе с сигнатурой MCP.
                         ["WORKSPACE_WRITE"] = workspaceWrite,
+                        // context_list (материалы чата) — гейт по флагу ВЛАДЕЛЬЦА chat-context,
+                        // как MEMORY_DOSSIER_TOOLS: значение постоянно в рамках сессии, а от
+                        // СОДЕРЖИМОГО контекста состав инструментов не зависит вовсе (иначе
+                        // добавление материала мид-сессию перезапускало бы CLI).
+                        ["WORKSPACE_CHAT_CONTEXT"] = workspaceChatContext,
                     },
                     // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
                 };
-                // Состав wsp-инструментов зависит от write-режима и набора секций — в сигнатуру
-                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}";
+                // Состав wsp-инструментов зависит от write-режима, набора секций и базового
+                // context_list — в сигнатуру (переключение флага корректно перезапустит CLI)
+                shapes["wsp"] = $"w{workspaceWrite}c{workspaceChatContext}:{sectionsJoined}";
             }
 
             if (hasNotifications)
@@ -2308,6 +2322,16 @@ public class ClaudeSession : ILlmSessionAdapter
                     " Если вызов вернул «No such tool available» — сервер ещё подключается: " +
                     "подожди мгновение и повтори тот же вызов.";
                 Add("mcp-workspace", "Как искать по проектам и файлам", workspaceHint, group: "mcp");
+
+                // Материалы, закреплённые за чатом (фича chat-context). Три условия, и все
+                // обязательны: инструмент context_list живёт в wsp-сервере (здесь он есть по
+                // определению — мы внутри его блока), флаг владельца поднимает его в составе,
+                // а сам состав контекста берётся ЖИВЫМ провайдером — материал, добавленный
+                // в идущем разговоре, попадает в подсказку следующего хода. Пустой контекст
+                // секции не даёт: звать инструмент незачем.
+                if (_workspaceMcp.ChatContextEnabled
+                    && Prompts.ChatContextPrompts.SectionFor(_chatContextProvider?.Invoke()) is { } chatContextHint)
+                    Add("mcp-context", "Что приложено к этому чату", chatContextHint, group: "mcp");
             }
 
             // Подсказка про долгую память. Персонная сессия — личная (memory_*) + командная (team_*);

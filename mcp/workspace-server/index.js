@@ -17,6 +17,10 @@
 //   WORKSPACE_SELF_SESSION_ID — id самой сессии: запрет chats_send самому себе + заголовок
 //                               X-Caller-Session-Id (по нему бэкенд сам определяет глубину
 //                               делегирования идущего хода и гейтит chats_send/удаление)
+//   WORKSPACE_CHAT_CONTEXT    — "1" = у владельца включён флаг chat-context: в составе появляется
+//                               context_list (материалы, закреплённые за чатом). Гейт по ВЛАДЕЛЬЦУ,
+//                               не по ходу: значение постоянно в рамках сессии, состав tools/list
+//                               от содержимого контекста не зависит (см. BASE_TOOLS ниже)
 //   WORKSPACE_WRITE           — "0" = скрыть write-инструменты (projects_create/update,
 //                               files_write/mkdir/rename, knowledge_index, git_commit/stage,
 //                               kb_add_document). ClaudeSession выключает их на ходах без интента
@@ -65,6 +69,8 @@ const ALLOWED_PROJECT_IDS = (process.env.WORKSPACE_PROJECT_IDS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 // Секция chats: id собственной сессии (self-send запрещён; он же — X-Caller-Session-Id)
 const SELF_SESSION_ID = process.env.WORKSPACE_SELF_SESSION_ID || null;
+// Контекст чата (флаг владельца chat-context): включает context_list в BASE_TOOLS
+const CHAT_CONTEXT = process.env.WORKSPACE_CHAT_CONTEXT === '1';
 // Write-инструменты рабочего пространства — скрыты при WORKSPACE_WRITE="0" (гейт по интенту хода).
 // Выключается только явным "0" (обратная совместимость прямых запусков). Тяжёлые схемы записи
 // (files_write с content, projects_create/update) не грузятся в контекст на ходах чтения.
@@ -816,10 +822,28 @@ const SECTION_TOOLS = {
   ],
 };
 
-const TOOLS = Object.entries(SECTION_TOOLS)
-  .filter(([section]) => SECTIONS.has(section))
-  .flatMap(([, tools]) => tools)
-  .filter(t => WRITE || !WRITE_TOOLS.has(t.name));
+// Инструменты, живущие при ЛЮБОМ составе секций: они относятся к самому чату, а не к
+// доступу в чужие проекты, и делить их по секциям (projects/files/knowledge/…) не за что.
+// Гейт у каждого свой и решается на СТАРТЕ сессии (флаг владельца), а не по ходу: состав
+// tools/list обязан быть постоянным — от содержимого контекста он не зависит вовсе,
+// иначе добавление материала мид-сессию перезапускало бы CLI со всеми MCP-серверами.
+const BASE_TOOLS = [
+  ...(CHAT_CONTEXT ? [{
+    name: 'context_list',
+    description: 'Материалы, закреплённые пользователем за ЭТИМ чатом («контекст чата»: файлы, ' +
+      'ссылки, задачи — то, что видно вкладками справа). Это ручной выбор человека, а не история ' +
+      'чата: зови в начале работы и когда речь заходит «про этот файл/задачу», чтобы понять, о чём ' +
+      'именно речь. Возвращает projectId чата и список записей с подсказкой, чем каждую раскрыть.',
+    inputSchema: { type: 'object', properties: {} },
+  }] : []),
+];
+
+const TOOLS = [
+  ...BASE_TOOLS,
+  ...Object.entries(SECTION_TOOLS)
+    .filter(([section]) => SECTIONS.has(section))
+    .flatMap(([, tools]) => tools),
+].filter(t => WRITE || !WRITE_TOOLS.has(t.name));
 
 // --- Реализация инструментов ---
 
@@ -831,15 +855,63 @@ function json(data) {
 const TOOL_SECTION = new Map(
   Object.entries(SECTION_TOOLS).flatMap(([section, tools]) => tools.map(t => [t.name, section])));
 
+// Инструмент из BASE_TOOLS → его собственный гейт (секции у них нет): defense-in-depth
+// того же рода, что проверка секции ниже — вызов выключённого инструмента не должен
+// исполниться даже при ошибке экспозиции.
+const BASE_TOOL_GATES = new Map([
+  ['context_list', () => CHAT_CONTEXT],
+]);
+
 async function callTool(name, args) {
   // Секция тула обязана быть включённой: список TOOLS фильтрует экспозицию, но исполнение
   // перепроверяем отдельно — деструктив не должен выполниться даже при ошибке экспозиции
   const section = TOOL_SECTION.get(name);
   if (section && !SECTIONS.has(section))
     throw new Error(`Инструмент ${name} недоступен: секция ${section} выключена для этой сессии`);
+  if (BASE_TOOL_GATES.get(name)?.() === false)
+    throw new Error(`Инструмент ${name} недоступен: фича выключена у пользователя`);
   if (!WRITE && WRITE_TOOLS.has(name))
     throw new Error(`Инструмент ${name} недоступен в этом ходе (только чтение). Попроси пользователя явно сформулировать запрос на запись/создание — тогда инструмент появится.`);
   switch (name) {
+    // Контекст ЭТОГО чата: сессию определяет бэкенд по заголовку X-Caller-Session-Id
+    // (его ставит общий api()), параметра нет намеренно — иначе модель спросила бы состав
+    // чужого чата. Признак «не найден» тоже считает бэкенд (одна точка с полосой вкладок).
+    case 'context_list': {
+      const data = await api('/api/mcp/session-context');
+      const projectId = data?.projectId ?? null;
+      const all = Array.isArray(data?.entries) ? data.entries : [];
+      // Битый адрес в состав не отдаём: модель пошла бы его читать и получила отказ.
+      // Вместо записи — строка-предупреждение: материал человек добавлял осознанно,
+      // и молчать о том, что он отвалился, нельзя.
+      const warnings = all.filter(e => e.missing).map(e =>
+        `не найден: ${e.type} «${e.title || e.id}» (${e.id}) — `
+        + (e.type === 'task'
+          ? 'задача не резолвится в этом проекте. '
+          : 'файла нет по этому пути. ')
+        + 'Скажи пользователю: запись в контексте чата устарела.');
+      const entries = all.filter(e => !e.missing).map(e => ({
+        type: e.type,
+        id: e.id,
+        title: e.title ?? null,
+        open: e.type === 'file'
+          ? (SECTIONS.has('files') && projectId
+            ? `files_read(projectId: "${projectId}", path: "${e.id}")`
+            : 'встроенным Read — путь указан от корня проекта')
+          : e.type === 'task'
+            ? 'mcp__tasks__tasks_get(id) — если сервер задач доступен в этом чате'
+            : 'открой у себя, если доступен WebFetch',
+      }));
+      return json({
+        projectId,
+        entries,
+        ...(warnings.length ? { warnings } : {}),
+        note: entries.length
+          ? 'Материалы выбрал сам пользователь — это то, о чём он говорит «этот файл», '
+            + '«эта задача». Раскрывай их по мере надобности инструментом из поля open.'
+          : 'К этому чату материалы не приложены.',
+      });
+    }
+
     case 'projects_list': {
       const [projects, groups] = await Promise.all([
         api('/api/projects'),

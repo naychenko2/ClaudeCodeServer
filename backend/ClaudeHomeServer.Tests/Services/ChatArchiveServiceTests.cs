@@ -240,6 +240,85 @@ public class ChatArchiveServiceTests : IDisposable
         new[] { a, b, c }.Should().OnlyContain(s => s.ArchiveBatchId == batchId);
     }
 
+    // --- Проход по одному проекту (сохранение порога в настройках проекта) ---
+
+    [Fact]
+    public async Task RunNowForProject_АрхивируетТолькоЧатыЭтогоПроекта()
+    {
+        // Гейта первого прохода у ручного прохода нет — залежи проекта убираются сразу
+        var owner = EnableRule(days: 30, firstRun: false);
+        var target = NewProject(owner.Id, "proj-run", days: 7);
+        var other = NewProject(owner.Id, "proj-other", days: 7);
+        var stale = await NewStaleProjectChat(target.Id, ageDays: 10);
+        var alien = await NewStaleProjectChat(other.Id, ageDays: 10);
+        var personal = NewStaleChat(_sessions, owner.Id, ageDays: 100);
+
+        var (archived, batchId) = await _sut.RunNowForProjectAsync(owner.Id, target.Id, DateTime.UtcNow);
+
+        archived.Should().Be(1);
+        batchId.Should().NotBeNullOrEmpty();
+        stale.IsArchived.Should().BeTrue();
+        stale.ArchivedBy.Should().Be("rule");
+        stale.ArchiveBatchId.Should().Be(batchId);
+        alien.IsArchived.Should().BeFalse("проход по одному проекту соседние проекты не трогает");
+        personal.IsArchived.Should().BeFalse("и чаты вне проектов тоже");
+    }
+
+    [Fact]
+    public async Task RunNowForProject_ПорогПроектаNull_НаследуетЛичный()
+    {
+        var owner = EnableRule(days: 7);
+        var project = NewProject(owner.Id, "proj-inherit", days: null);
+        var stale = await NewStaleProjectChat(project.Id, ageDays: 10);
+
+        var (archived, _) = await _sut.RunNowForProjectAsync(owner.Id, project.Id, DateTime.UtcNow);
+
+        archived.Should().Be(1, "null у проекта = наследовать личный порог владельца");
+        stale.IsArchived.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunNowForProject_ПорогНеЗаданНигде_ПустойПроход()
+    {
+        var owner = EnableRule(days: null);
+        var project = NewProject(owner.Id, "proj-no-days", days: null);
+        var stale = await NewStaleProjectChat(project.Id, ageDays: 100);
+
+        var (archived, batchId) = await _sut.RunNowForProjectAsync(owner.Id, project.Id, DateTime.UtcNow);
+
+        archived.Should().Be(0);
+        batchId.Should().BeNull();
+        stale.IsArchived.Should().BeFalse("порога нет ни у проекта, ни у владельца — правило не настроено");
+    }
+
+    [Fact]
+    public async Task RunNowForProject_ЧужойПроект_НичегоНеАрхивирует()
+    {
+        var owner = EnableRule(days: 7);
+        var stranger = EnableRule(days: 7);
+        var project = NewProject(stranger.Id, "proj-stranger", days: 7);
+        var stale = await NewStaleProjectChat(project.Id, ageDays: 30);
+
+        var (archived, _) = await _sut.RunNowForProjectAsync(owner.Id, project.Id, DateTime.UtcNow);
+
+        archived.Should().Be(0, "проект чужого владельца — не сфера вызывателя");
+        stale.IsArchived.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunNowForProject_ФлагВыключен_НичегоНеАрхивирует()
+    {
+        var owner = CreateUser(flagsOn: false);
+        _users.SetArchiveAfterDays(owner.Id, 7);
+        var project = NewProject(owner.Id, "proj-flag-off", days: 7);
+        var stale = await NewStaleProjectChat(project.Id, ageDays: 30);
+
+        var (archived, _) = await _sut.RunNowForProjectAsync(owner.Id, project.Id, DateTime.UtcNow);
+
+        archived.Should().Be(0, "флаг chat-auto-archive выключен — защита от вызова без проверки");
+        stale.IsArchived.Should().BeFalse();
+    }
+
     // --- Плюрализация текста уведомления ---
 
     [Theory]
@@ -273,6 +352,23 @@ public class ChatArchiveServiceTests : IDisposable
             [FeatureFlagKeys.ChatAutoArchive] = true,
         };
         return user;
+    }
+
+    // Проект владельца со своим порогом (null — наследовать личный)
+    private Project NewProject(string ownerId, string dirName, int? days)
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(_tempDir, dirName)).FullName;
+        var project = _projects.Create("Проект " + dirName, dir, ownerId, TestUsername);
+        project.ArchiveAfterDays = days;
+        return project;
+    }
+
+    // Чат проекта, остывший на ageDays
+    private async Task<Session> NewStaleProjectChat(string projectId, int ageDays)
+    {
+        var chat = await _sessions.CreateAsync(projectId, ClaudeMode.Auto);
+        CoolDown(chat, ageDays);
+        return chat;
     }
 
     // Чат вне проекта, остывший на ageDays (правило personal-сферы)

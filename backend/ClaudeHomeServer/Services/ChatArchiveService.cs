@@ -8,9 +8,11 @@ namespace ClaudeHomeServer.Services;
 // (единая точка для тика и превью), потолок 200 за проход и один ArchiveBatchId — откат
 // из уведомления возвращает ровно эту пачку.
 //
-// Накопившиеся старые чаты правило САМО не разгребает (решение человека): пока у владельца
-// не нажата кнопка «Применить сейчас» (User.ArchiveRuleFirstRunAt == null), фоновый тик
-// его не архивирует вовсе — первый проход запускает только кнопка, дальше правило фоном.
+// Накопившиеся старые чаты правило САМО не разгребает (решение человека): пока владелец
+// не дал согласия (User.ArchiveRuleFirstRunAt == null), фоновый тик его не архивирует
+// вовсе. Согласие — сохранение порога в настройках проекта (PUT /api/projects/{id}/archive-days)
+// или кнопка «Применить сейчас» по всем сферам (POST /api/chats/archive-run); дальше
+// правило работает фоном.
 public class ChatArchiveService(
     SessionManager sessions,
     ProjectManager projects,
@@ -29,8 +31,8 @@ public class ChatArchiveService(
     // Потолок пачки одного прохода (пре-мортем №2 — «молчаливое исчезновение сотен чатов»)
     public const int MaxBatchSize = 200;
 
-    // Тик и кнопка «Применить сейчас» сериализуются: одновременные проходы дважды писали
-    // бы стор и дрались за чаты, уже взятые в пачку.
+    // Тик и ручные проходы (по всем сферам и по одному проекту) сериализуются:
+    // одновременные проходы дважды писали бы стор и дрались за чаты, уже взятые в пачку.
     private readonly SemaphoreSlim _passLock = new(1, 1);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -78,6 +80,23 @@ public class ChatArchiveService(
         return (archived, batchId);
     }
 
+    // Проход по ОДНОМУ проекту (POST /api/projects/{id}/archive-run): сохранение порога в
+    // настройках проекта = согласие, оно же сразу убирает залежи этого проекта. Порог —
+    // свой проектный ?? личный владельца; не задан нигде — пустой проход, а не ошибка.
+    // Чужой проект контроллер отсекает 404-м, здесь — защита от вызова без проверки.
+    public async Task<(int Archived, string? BatchId)> RunNowForProjectAsync(string ownerId, string projectId, DateTime nowUtc)
+    {
+        var owner = users.GetById(ownerId)
+            ?? throw new InvalidOperationException($"Пользователь не найден: {ownerId}");
+        if (!flags.IsEnabled(owner.Id, FeatureFlagKeys.ChatAutoArchive)) return (0, null);
+        var project = projects.GetById(projectId);
+        if (project is null || project.OwnerId != ownerId) return (0, null);
+        if ((project.ArchiveAfterDays ?? owner.ArchiveAfterDays) is not int days) return (0, null);
+
+        var candidates = sessions.GetArchiveRuleCandidates(owner.Id, project.Id, days, nowUtc);
+        return await ArchiveCandidatesAsync(owner, candidates);
+    }
+
     // Проход по сферам одного владельца: чаты вне проектов (личный порог) и каждый проект
     // (порог проекта ?? личный — «null = наследовать»). Проект без порога ни прямо, ни
     // по наследию — не трогаем. Флаг — по владельцу (проектной сессии OwnerId нет, владелец
@@ -96,6 +115,13 @@ public class ChatArchiveService(
             candidates.AddRange(sessions.GetArchiveRuleCandidates(owner.Id, project.Id, days, nowUtc));
         }
 
+        return await ArchiveCandidatesAsync(owner, candidates);
+    }
+
+    // Общая половина любого прохода (тик, кнопка по всем сферам, проход по одному проекту):
+    // отобранные кандидаты → пачка → архивация → уведомление владельцу.
+    private async Task<(int Archived, string? BatchId)> ArchiveCandidatesAsync(User owner, IEnumerable<Session> candidates)
+    {
         // Один batchId на проход, потолок 200, самые старые первыми — пачка
         // детерминирована и справедлива к «самым остывшим».
         var batch = candidates

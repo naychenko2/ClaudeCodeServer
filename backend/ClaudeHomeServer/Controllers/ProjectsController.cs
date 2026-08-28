@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -290,7 +290,26 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (req.Days is not null && req.Days is not (>= 1 and <= 365))
             return BadRequest(new { error = "Порог должен быть от 1 до 365 дней" });
         var updated = projects.SetArchiveAfterDays(id, req.Days);
+        // Сохранение порога = согласие на правило: снимаем гейт первого прохода, иначе
+        // фоновый тик обходил бы владельца стороной до кнопки «Применить сейчас».
+        if (req.Days is not null && users.GetById(UserId)?.ArchiveRuleFirstRunAt is null)
+            users.SetArchiveRuleFirstRunAt(UserId, DateTime.UtcNow);
         return Ok(WithCount(updated));
+    }
+
+    // Проход правила по ОДНОМУ проекту: «Сохранить» в настройках проекта не только задаёт
+    // порог, но и сразу убирает залежи этого проекта — отдельной кнопки «Применить сейчас»
+    // у проекта нет. Порог не задан ни у проекта, ни у владельца — пустой проход (0), а не
+    // ошибка: настройки сохранены, убирать нечего.
+    [HttpPost("{id}/archive-run")]
+    public async Task<IActionResult> ArchiveRun(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChatAutoArchive))
+            return BadRequest(new { error = "Автоправило архива выключено: включите «Автоправило архива чатов» в экспериментальных функциях" });
+        var (archived, batchId) = await autoArchive.RunNowForProjectAsync(UserId, id, DateTime.UtcNow);
+        return Ok(new { archived, batchId });
     }
 
     // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)

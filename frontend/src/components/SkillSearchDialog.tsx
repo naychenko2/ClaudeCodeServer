@@ -12,12 +12,17 @@ import { SkillGenerateDialog } from './SkillGenerateDialog';
 // Контекст установки диалога определяет доступные действия:
 //  • persona     — «Установить персоне» (глобально + привязка Skill) и «✨ Подобрать под персону»;
 //  • projectId   — «В проект» / «Глобально» и «✨ Подобрать под проект»;
-//  • без обоих   — «Установить» (глобально) и подбор только по свободному запросу.
+//  • без обоих   — «Установить» (глобально) и подбор только по свободному запросу;
+//  • onPick      — режим выбора без установки: вместо кнопок установки — «Выбрать»,
+//                  install-вызовы не выполняются; после выбора диалог закрывается сам
+//                  (используется, например, умениями роли: навык лишь записывается
+//                  в черновик, установка произойдёт при создании персоны).
 interface Props {
   onClose: () => void;
   projectId?: string;
   persona?: { id: string; name: string };
   onInstalled?: () => void;
+  onPick?: (skill: RegistrySkill) => void;
 }
 
 type CardState = 'idle' | 'busy' | 'project-done' | 'global-done' | 'error';
@@ -31,7 +36,7 @@ interface SuggestJobResult {
 
 const keyOf = (s: RegistrySkill) => `${s.source}@${s.skill}`;
 
-export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: Props) {
+export function SkillSearchDialog({ onClose, projectId, persona, onInstalled, onPick }: Props) {
   const suggestKey = `skills-suggest:${persona ? `persona:${persona.id}` : projectId ? `project:${projectId}` : 'global'}`;
   const suggestJob = useAiJob<SuggestJobResult>(suggestKey);
   const canFocus = useListAutoFocus();
@@ -91,6 +96,15 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
   const setCard = (k: string, s: CardState) =>
     setCardStates(prev => ({ ...prev, [k]: s }));
 
+  // Режим выбора (onPick): отдать навык родителю и закрыться. Установки нет —
+  // родитель сам решает, что делать с выбранным именем (у умений роли оно просто
+  // попадает в черновик SpecialtyDefaultBinding).
+  const picking = !!onPick;
+  const pickSkill = (s: RegistrySkill) => {
+    onPick?.(s);
+    onClose();
+  };
+
   const installProject = async (s: RegistrySkill) => {
     if (!projectId) return;
     const k = keyOf(s);
@@ -121,7 +135,9 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
     } catch { setCard(k, 'error'); }
   };
 
-  const subtitle = persona
+  const subtitle = picking
+    ? 'Найдите навык и выберите его — без установки'
+    : persona
     ? `Найдите навык и добавьте его персоне «${persona.name}»`
     : projectId
     ? 'Найдите навык и установите в проект или глобально'
@@ -160,19 +176,23 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
         </div>
       )}
 
-      {/* Нет подходящего в реестре — сгенерировать свой навык по описанию */}
-      <div style={{ fontSize: 12, color: C.textMuted, marginTop: -4 }}>
-        Нет подходящего?{' '}
-        <button
-          onClick={() => setShowGenerate(true)}
-          style={{
-            background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
-            fontSize: 12, fontFamily: FONT.sans, textDecoration: 'underline', padding: 0,
-          }}
-        >
-          ✨ Создать навык по промпту
-        </button>
-      </div>
+      {/* Нет подходящего в реестре — сгенерировать свой навык по описанию.
+          В режиме выбора (onPick) ссылка не нужна: созданный навык ещё не в реестре,
+          выбрать его нельзя. */}
+      {!picking && (
+        <div style={{ fontSize: 12, color: C.textMuted, marginTop: -4 }}>
+          Нет подходящего?{' '}
+          <button
+            onClick={() => setShowGenerate(true)}
+            style={{
+              background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+              fontSize: 12, fontFamily: FONT.sans, textDecoration: 'underline', padding: 0,
+            }}
+          >
+            ✨ Создать навык по промпту
+          </button>
+        </div>
+      )}
 
       {(error || suggestError) && (
         <div style={{
@@ -216,6 +236,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
             state={cardStates[keyOf(s)] ?? 'idle'}
             persona={persona}
             projectId={projectId}
+            onPick={picking ? () => pickSkill(s) : undefined}
             onInstallProject={() => installProject(s)}
             onInstallGlobal={() => installGlobal(s)}
             onInstallPersona={() => installForPersona(s)}
@@ -236,7 +257,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
 }
 
 function SkillResultCard({
-  skill, reason, state, persona, projectId,
+  skill, reason, state, persona, projectId, onPick,
   onInstallProject, onInstallGlobal, onInstallPersona,
 }: {
   skill: RegistrySkill;
@@ -244,6 +265,8 @@ function SkillResultCard({
   state: CardState;
   persona?: { id: string; name: string };
   projectId?: string;
+  // Режим выбора без установки — приоритетнее контекста persona/projectId
+  onPick?: () => void;
   onInstallProject: () => void;
   onInstallGlobal: () => void;
   onInstallPersona: () => void;
@@ -300,6 +323,8 @@ function SkillResultCard({
           </span>
         ) : state === 'error' ? (
           <span style={{ fontSize: 12.5, color: C.dangerText }}>Ошибка установки</span>
+        ) : onPick ? (
+          <Button variant="primary" size="sm" onClick={onPick}>Выбрать</Button>
         ) : persona ? (
           <Button variant="primary" size="sm" loading={busy} onClick={onInstallPersona}>
             Установить персоне

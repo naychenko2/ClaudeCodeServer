@@ -2,6 +2,8 @@
 // Адресуется как #/personas/specialties (без roleKey) — на нём человек выбирает,
 // какую роль открыть. Роли в каталоге без служебной «Не задана» (отфильтровано
 // в realRoles локально). Карточка «Любая специальность» НЕ рисуется.
+// Все роли каталога показываются всегда (без тумблера): персонализировать можно
+// и роли, по которым пока никто не работает.
 //
 // С переходом на единый глобальный слой (f8e7d0e0) — все настройки ролей
 // общие, аватарки персон показываются всегда.
@@ -10,7 +12,6 @@ import { useMemo, useState } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
 import { RoleAvatar } from '../../components/specialties/RoleAvatar';
-import { Toggle } from '../../components/ui/Toggle';
 import type { Persona, SpecialtyCatalogEntry, SpecialtySettingsLayer } from '../../types';
 
 // Каталог без служебной «none» (она живёт на стороне персоны как specialty=undefined).
@@ -206,9 +207,6 @@ export interface SpecialtyListViewProps {
 export function SpecialtyListView({
   catalog, layerSettings, personas, onOpenRole,
 }: SpecialtyListViewProps): React.ReactElement {
-  // Состояние «Показать все роли каталога» (P15): персонализировать можно и роли
-  // без персон (например, назвать «Библиотекаря» до первой персоны).
-  const [showAll, setShowAll] = useState(false);
   const personasByRole = useRolePersonasOf(personas);
   const roles = useMemo(() => realRoles(catalog), [catalog]);
   // Сортировка — по подписи каталога (русская локаль).
@@ -219,16 +217,13 @@ export function SpecialtyListView({
     const t = tripleOfLayer(layerSettings, r.key);
     return t.some(v => !!v);
   }), [sorted, layerSettings]);
+  // Все остальные роли каталога — без своих правил, с персонами и без: показываем
+  // всегда, персонализировать можно и роли без персон (например, назвать
+  // «Библиотекаря» до первой персоны).
   const noRules = useMemo(() => sorted.filter(r => {
     const t = tripleOfLayer(layerSettings, r.key);
-    if (t.some(v => !!v)) return false;
-    return (personasByRole.get(r.key)?.length ?? 0) > 0;
-  }), [sorted, layerSettings, personasByRole]);
-  const rest = useMemo(() => sorted.filter(r => {
-    const t = tripleOfLayer(layerSettings, r.key);
-    if (t.some(v => !!v)) return false;
-    return (personasByRole.get(r.key)?.length ?? 0) === 0;
-  }), [sorted, layerSettings, personasByRole]);
+    return !t.some(v => !!v);
+  }), [sorted, layerSettings]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
@@ -254,8 +249,9 @@ export function SpecialtyListView({
         </div>
       )}
 
-      {/* Секция «Без своих правил» — роли без правил моделей, но с персонами.
-          На общем слое аватарки показываются всегда (нет отдельного owner/user). */}
+      {/* Секция «Без своих правил» — все роли каталога без правил моделей: и с
+          персонами, и без них. На общем слое аватарки показываются всегда
+          (нет отдельного owner/user). */}
       {noRules.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, marginTop: SP.sm }}>
           <div style={{
@@ -271,37 +267,6 @@ export function SpecialtyListView({
               onOpen={() => onOpenRole(r.key)} />
           ))}
           </div>
-        </div>
-      )}
-
-      {/* Переключатель «Показать все роли каталога» (P15) — Toggle из UI-кита,
-          с фокусом и стрелками ←/→ (см. components/ui/Toggle). */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm,
-      }}>
-        <Toggle
-          checked={showAll}
-          onChange={setShowAll}
-          focusable
-          ariaLabel="Показать все роли каталога"
-        />
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
-            Показать все роли каталога
-          </span>
-          <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
-            Роли, по которым пока никто не работает и правил нет — чтобы назвать их заранее.
-          </span>
-        </div>
-      </div>
-
-      {showAll && rest.length > 0 && (
-        <div style={roleGrid}>
-          {rest.map(r => (
-            <RoleCard key={r.key} role={r} layerSettings={layerSettings} dimmed
-              people={personasByRole.get(r.key) ?? []}
-              onOpen={() => onOpenRole(r.key)} />
-          ))}
         </div>
       )}
 

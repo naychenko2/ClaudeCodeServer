@@ -12,6 +12,10 @@
 //     gap:28, flexWrap:wrap — визитка flex:1 1 380px, правая колонка flex:1 1 300px;
 //   • отдельного hero (аватар + название) нет: идентичность роли несёт тулбар,
 //     второй заголовок дублировал его; описание на мобиле — строкой под полосой;
+//   • разделы визитки — сегмент в тулбаре (PillSwitch, по образцу вкладок
+//     персоны в PersonaToolbar): «Общая информация» (секции «Настройки» и
+//     «Секции промпта») и «Умения» (типовой профиль привязок — RoleBindingsBlock
+//     в режиме view); правая колонка RolePeopleSlice общая для обоих разделов;
 //   • блоки — плоские секции на общем фоне, без белых коробок:
 //     { borderTop:'1px solid C.borderLight', paddingTop:20 }, заголовки через
 //     общий SectionLabel; внутренние чипы фактов — как factChip в PersonaPreview;
@@ -19,20 +23,21 @@
 //
 // Карточка «Любая специальность» НЕ рисуется.
 
-import { useMemo } from 'react';
-import { ChevronLeft, Pencil } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Book, ChevronLeft, Info, Pencil } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { roleColorKey } from '../../lib/specialties';
 import { RoleAvatar } from '../../components/specialties/RoleAvatar';
+import { RoleBindingsBlock } from '../../components/specialties/RoleBindingsBlock';
 import { RolePeopleSlice } from '../../components/specialties/RolePeopleSlice';
 import { RolePresetsBlock } from '../../components/specialties/RolePresetsBlock';
 import { SectionLabel } from '../../features/tasks/bits';
 import { useIsMobile } from '../../lib/breakpoints';
-import { Toolbar, ToolbarIconButton, tbBtnGhost } from '../../components/Toolbar';
+import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnGhost } from '../../components/Toolbar';
 import type {
-  Persona, PersonaAccess, SpecialtyCatalogEntry, SpecialtyDefaultBinding,
+  Persona, PersonaAccess, SpecialtyCatalogEntry,
   SpecialtyPromptSectionsCatalog, SpecialtySettingsLayer, ModelRoutePreset,
 } from '../../types';
 
@@ -79,8 +84,8 @@ const factChip: React.CSSProperties = {
 // === Подпись значения уровня модели (tierStrong/Medium/Weak) ===
 //
 // «preset:{id}» — это ссылка на пресет, не сама модель. Раскрывать её здесь
-// не нужно: пресеты показаны отдельным блоком «Пресеты» ниже; подпись
-// ограничивается именем пресета, чтобы человек понял, что модель — не прямая.
+// не нужно: подпись ограничивается именем пресета, чтобы человек понял,
+// что модель — не прямая (состав цепочки настраивается в «Моделях по умолчанию»).
 function tierLabel(value: string | null | undefined, presets: ModelRoutePreset[]): string {
   if (!value) return '';
   if (value.startsWith('preset:')) {
@@ -91,30 +96,18 @@ function tierLabel(value: string | null | undefined, presets: ModelRoutePreset[]
   return value;
 }
 
-// === Список строк умений по умолчанию ===
+// === Разделы визитки: «Общая информация» | «Умения» ===
 //
-// Каждая привязка — тип + условие + режим. Тип переводится в человеческое имя;
-// режим — в «по событию / всегда / выключен». Условие (когда применять)
-// приклеивается следом через « · ». «Навык» дополнительно несёт skillName.
-function defaultBindingLabel(b: SpecialtyDefaultBinding): string {
-  const typeLabel = b.type === 'skill'
-    ? `Навык «${b.skillName ?? '?'}»`
-    : b.type === 'project'
-      ? 'Проект'
-      : b.type === 'projectPath'
-        ? 'Путь проекта'
-        : b.type === 'knowledge'
-          ? 'Знание'
-          : b.type === 'notes'
-            ? 'Заметки'
-            : b.type === 'tool'
-              ? 'Инструмент'
-              : 'Команда проекта';
-  const modeLabel = b.mode === 'auto' ? 'по событию' : b.mode === 'always' ? 'всегда' : 'выключен';
-  const condition = b.condition?.trim();
-  const head = condition ? `${typeLabel} · ${condition}` : typeLabel;
-  return `${head} (${modeLabel})`;
-}
+// Сегмент в тулбаре — по образцу вкладок персоны (PersonaToolbar). Выбор —
+// ЛОКАЛЬНОЕ состояние: при уходе с визитки (смена viewMode в родителе)
+// компонент размонтируется и раздел сбрасывается на «Общую информацию».
+// Иконки — как у видов персоны (ICON_SIZE.xs), на мобиле сегмент компактный.
+type RoleTab = 'general' | 'skills';
+
+const TAB_OPTIONS: { value: RoleTab; label: string; icon: React.ReactElement }[] = [
+  { value: 'general', label: 'Общая информация', icon: <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
+  { value: 'skills', label: 'Умения', icon: <Book size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
+];
 
 // === Основной экран ===
 export interface SpecialtyRoleViewProps {
@@ -138,6 +131,9 @@ export function SpecialtyRoleView({
   personas, onPersonaUpdated, onBack, onEdit, isAdmin,
 }: SpecialtyRoleViewProps): React.ReactElement {
   const isMobile = useIsMobile();
+  // Активный раздел визитки — локальное состояние (без persistKey): уход с
+  // экрана размонтирует визитку, и раздел сбрасывается на «Общую информацию».
+  const [tab, setTab] = useState<RoleTab>('general');
   const role = useMemo(() => catalog.find(r => r.key === roleKey) ?? null, [catalog, roleKey]);
   const accent = role ? (AGENT_COLORS[roleColorKey(role, roleKey)] ?? C.textHeading) : C.textHeading;
 
@@ -270,77 +266,36 @@ export function SpecialtyRoleView({
     </div>
   );
 
-  // === Привязки по умолчанию ===
-  // Типовой профиль умений роли: каждая строка — типовая привязка из каталога
-  // секций промптов. Пусто — короткая подпись «Типовых умений нет».
-  const bindingsSection = (
+  // === Умения (типовой профиль привязок) — раздел «Умения» ===
+  // Карточки типовых умений роли — RoleBindingsBlock в режиме view (по образцу
+  // вкладки «Умения» персоны): заголовок с счётчиком блок рисует сам.
+  const skillsSection = (
     <div style={section}>
-      <SectionLabel style={{ marginBottom: 12 }}>Привязки по умолчанию</SectionLabel>
-      {defaultBindings.length === 0 ? (
-        <div style={{
-          fontSize: FS.base, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5,
-        }}>
-          Типовых умений нет — персоны роли стартуют с пустым набором привязок.
-        </div>
-      ) : (
-        <ul style={{
-          margin: 0, padding: 0, listStyle: 'none',
-          display: 'flex', flexDirection: 'column', gap: 6,
-        }}>
-          {defaultBindings.map((b, i) => (
-            <li key={i} style={{
-              fontSize: FS.base, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.5,
-            }}>
-              <span style={{
-                display: 'inline-block', minWidth: 0, flexShrink: 0,
-              }}>{defaultBindingLabel(b)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-
-  // === Пресеты (цепочки моделей) ===
-  const presetListSection = (
-    <div style={section}>
-      <SectionLabel style={{ marginBottom: 12 }}>Пресеты</SectionLabel>
-      {presets.length === 0 ? (
-        <div style={{
-          fontSize: FS.base, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5,
-        }}>
-          Цепочек моделей нет — ячейки уровней задаются напрямую именем модели.
-        </div>
-      ) : (
-        <ul style={{
-          margin: 0, padding: 0, listStyle: 'none',
-          display: 'flex', flexDirection: 'column', gap: 6,
-        }}>
-          {presets.map(p => (
-            <li key={p.id} style={{
-              fontSize: FS.base, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.5,
-            }}>
-              <span style={{ fontWeight: 600, color: C.textHeading }}>{p.name}</span>
-              {p.description?.trim() && (
-                <span style={{ color: C.textSecondary }}> · {p.description}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+      <RoleBindingsBlock
+        roleKey={roleKey}
+        bindings={defaultBindings}
+        mode="view"
+        accent={accent}
+      />
     </div>
   );
 
   // === Колонка-визитка (левая на десктопе, на мобиле во всю ширину) ===
+  // Состав — по активному разделу: «Общая информация» (настройки + секции
+  // промпта) или «Умения» (типовой профиль привязок).
   const mainColumn = (
     <div style={{
       flex: '1 1 380px', minWidth: 0,
       display: 'flex', flexDirection: 'column', gap: 24,
     }}>
-      {settingsSection}
-      {presetsSection}
-      {bindingsSection}
-      {presetListSection}
+      {tab === 'general' ? (
+        <>
+          {settingsSection}
+          {presetsSection}
+        </>
+      ) : (
+        skillsSection
+      )}
     </div>
   );
 
@@ -410,6 +365,24 @@ export function SpecialtyRoleView({
             )}
           </div>
         )}
+        {/* Сегмент разделов «Общая информация | Умения» — по образцу вкладок
+            персоны (PersonaToolbar). На десктопе живёт в строке тулбара между
+            именем роли и кнопкой «Редактировать»; на мобиле уходит своей строкой
+            во всю ширину (Toolbar переносит детей) и сжимается до иконок —
+            компактно уже на 360 CSS. */}
+        <div style={{
+          display: 'flex', minWidth: 0,
+          flex: isMobile ? '1 0 100%' : '0 0 auto',
+          overflowX: 'auto',
+        }}>
+          <PillSwitch<RoleTab>
+            value={tab}
+            onChange={setTab}
+            options={TAB_OPTIONS}
+            compact={isMobile}
+            isMobile={isMobile}
+          />
+        </div>
         {isAdmin && onEdit && (
           <button
             type="button"

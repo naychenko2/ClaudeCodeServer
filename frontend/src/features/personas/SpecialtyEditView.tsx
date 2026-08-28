@@ -5,23 +5,29 @@
 // Полноценная форма правки по образцу PersonaForm:
 //   • шапка-тулбар с акцентной полосой во всю ширину центра (как у персоны),
 //     под ними центрированное полотно maxWidth 680;
+//   • два раздела с переключателем в тулбаре (симметрично визитке роли):
+//     «Общая информация» — доступ, инструменты, свой список запретов, секции
+//     промпта, модели по уровням, уровень по умолчанию; «Умения» — типовой
+//     профиль привязок через RoleBindingsBlock (mode='edit');
 //   • плоские секции, разделённые тонкой линией (паттерн TaskEditForm/PersonaForm);
-//   • кнопки «Сохранить»/«Отмена» в шапке-тулбаре; у «Сохранить» точка-индикатор
-//     dirty (как у PersonaToolbar); отмена с несохранённым — через ConfirmDialog;
+//   • кнопки «Сохранить»/«Отмена» и dirty-индикатор в шапке-тулбаре — ОБЩИЕ для
+//     всей формы (обоих разделов): черновик один, dirty считается по всему
+//     черновику; отмена с несохранённым — через ConfirmDialog (учитывает dirty
+//     всей формы, а не активного раздела);
+//   • раздел «Умения» — черновик без своих запросов к API: правки через
+//     onChange → patch({ defaultBindings }), сохраняет общая кнопка формы;
 //   • все поля через общие примитивы Field/TextField/FieldLabel (UI-кит);
-//   • редактируемые поля: доступ, инструменты, свой список запретов, секции промпта,
-//     привязки по умолчанию, модели по уровням, уровень по умолчанию;
-//   • пресеты read-only; неизменяемые данные роли (имя, ключ, цвет) несёт тулбар —
-//     отдельного hero нет, он дублировал шапку;
+//   • неизменяемые данные роли (имя, ключ, цвет) несёт тулбар — отдельного
+//     hero нет, он дублировал шапку;
 //   • запись через LayerReducer в глобальный слой (см. lib/presets.ts);
 //   • мобильная раскладка: одна колонка, поля во всю ширину (нижний ориентир 360 CSS).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Plus, Trash2 } from 'lucide-react';
+import { Book, ChevronLeft, Info } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
-  Button, ConfirmDialog, Field, PillSwitch, TextField,
+  ConfirmDialog, Field, PillSwitch, TextField,
 } from '../../components/ui';
 import { Toolbar, ToolbarIconButton, tbBtnGhost, tbBtnPrimary } from '../../components/Toolbar';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -29,6 +35,7 @@ import type { LayerReducer } from '../../lib/presets';
 import { useModels } from '../../lib/models';
 import { TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import { RoutePicker } from '../../components/RoutePicker';
+import { RoleBindingsBlock } from '../../components/specialties/RoleBindingsBlock';
 import { RolePresetsBlock } from '../../components/specialties/RolePresetsBlock';
 import { RoleAvatar } from '../../components/specialties/RoleAvatar';
 import { AGENT_COLORS } from '../../components/AgentSelector';
@@ -39,7 +46,7 @@ import {
 } from '../../lib/specialties';
 import { usePresets, usePreview, formatEffectiveLine, routeDisplayLabel } from '../../lib/presets';
 import type {
-  ModelTierValue, PersonaAccess, PersonaBindingMode, PersonaBindingType,
+  ModelTierValue, PersonaAccess,
   SpecialtyCatalogEntry, SpecialtyDefaultBinding, SpecialtyPromptSection,
   SpecialtyPromptSectionsCatalog, SpecialtySettingsLayer, SpecialtyTemplateSettings,
 } from '../../types';
@@ -62,21 +69,16 @@ const TOOL_LABEL: Record<ToolKey, string> = {
 // SpecialtyTemplate). В UI режим «Все» отображается как включённые все три чипа.
 const ALL_TOOLS: ToolKey[] = ['tasks', 'notes', 'web'];
 
-const BINDING_TYPE_OPTIONS: { value: PersonaBindingType; label: string }[] = [
-  { value: 'project', label: 'Проект' },
-  { value: 'projectPath', label: 'Путь проекта' },
-  { value: 'knowledge', label: 'Знание' },
-  { value: 'notes', label: 'Заметки' },
-  { value: 'tool', label: 'Инструмент' },
-  { value: 'skill', label: 'Навык' },
-  { value: 'projectPersonas', label: 'Персоны проекта' },
-  { value: 'projectTasks', label: 'Задачи проекта' },
-];
+// === Разделы формы: «Общая информация» | «Умения» ===
+//
+// Сегмент в тулбаре — симметрично визитке роли (SpecialtyRoleView): те же
+// подписи и иконки. Выбор — ЛОКАЛЬНОЕ состояние; черновик и кнопки
+// «Сохранить»/«Отмена» общие для обоих разделов, dirty считается по всей форме.
+type RoleTab = 'general' | 'skills';
 
-const BINDING_MODE_OPTIONS: { value: PersonaBindingMode; label: string }[] = [
-  { value: 'auto', label: 'по событию' },
-  { value: 'always', label: 'всегда' },
-  { value: 'off', label: 'выключен' },
+const TAB_OPTIONS: { value: RoleTab; label: string; icon: React.ReactElement }[] = [
+  { value: 'general', label: 'Общая информация', icon: <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
+  { value: 'skills', label: 'Умения', icon: <Book size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
 ];
 
 const DEFAULT_TIER_OPTIONS: { value: ModelTierValue | ''; label: string }[] = [
@@ -125,6 +127,14 @@ export function SpecialtyEditView({
   onBack, onSave, onStatus,
 }: SpecialtyEditViewProps): React.ReactElement {
   const isMobile = useIsMobile();
+
+  // Активный раздел формы — локальное состояние (как у визитки роли). При смене
+  // roleKey (родитель не перемонтирует экран) возвращаемся на «Общую информацию».
+  const [tab, setTab] = useState<RoleTab>('general');
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс локального UI при смене роли
+    setTab('general');
+  }, [roleKey]);
 
   // Резолв роли из каталога (системные подписи — не редактируются)
   const role = useMemo(() => catalog.find(r => r.key === roleKey) ?? null, [catalog, roleKey]);
@@ -323,6 +333,8 @@ export function SpecialtyEditView({
         roleLabel={role.label}
         roleAvatar={<RoleAvatar catalog={role} roleKey={roleKey} size={isMobile ? 32 : 40} />}
         isMobile={isMobile}
+        tab={tab}
+        onTab={setTab}
         canSave={canSave}
         saving={saving}
         dirty={dirty}
@@ -346,111 +358,118 @@ export function SpecialtyEditView({
           }}>{role.description}</div>
         )}
 
-        {/* Доступ */}
-        <Section>
-          <SectionLabel style={{ marginBottom: 10 }}>Доступ</SectionLabel>
-          <PillSwitch<PersonaAccess>
-            fill
-            value={recDraft.access}
-            onChange={(v) => patch({ access: v })}
-            options={ACCESS_OPTIONS}
-          />
-          <Hint>
-            {recDraft.access === 'full' && 'Персоны этой роли имеют полный доступ ко всем функциям.'}
-            {recDraft.access === 'readOnly' && 'Персоны этой роли могут только читать — никаких команд, заметок или веб-инструмента.'}
-            {recDraft.access === 'custom' && 'Задайте свой список запретов ниже — он ограничит возможности персон этой роли.'}
-          </Hint>
-        </Section>
-
-        {/* Инструменты */}
-        <Section>
-          <SectionLabel style={{ marginBottom: 10 }}>Инструменты</SectionLabel>
-          <ToolsRow
-            value={recDraft.tools === undefined ? null : recDraft.tools}
-            onChange={(v) => patch({ tools: v })}
-          />
-        </Section>
-
-        {/* Свой список запретов — только при custom */}
-        {recDraft.access === 'custom' && (
-          <Section>
-            <Field label="Свой список запретов" hint="Через запятую — какие возможности недоступны персоне этой роли">
-              <TextField
-                value={(recDraft.disallowedTools ?? []).join(', ')}
-                onChange={(v) => patch({ disallowedTools: v.split(',').map(s => s.trim()).filter(Boolean) })}
-                placeholder="tasks, notes"
+        {tab === 'general' ? (
+          <>
+            {/* Доступ */}
+            <Section>
+              <SectionLabel style={{ marginBottom: 10 }}>Доступ</SectionLabel>
+              <PillSwitch<PersonaAccess>
+                fill
+                value={recDraft.access}
+                onChange={(v) => patch({ access: v })}
+                options={ACCESS_OPTIONS}
               />
-            </Field>
-          </Section>
+              <Hint>
+                {recDraft.access === 'full' && 'Персоны этой роли имеют полный доступ ко всем функциям.'}
+                {recDraft.access === 'readOnly' && 'Персоны этой роли могут только читать — никаких команд, заметок или веб-инструмента.'}
+                {recDraft.access === 'custom' && 'Задайте свой список запретов ниже — он ограничит возможности персон этой роли.'}
+              </Hint>
+            </Section>
+
+            {/* Инструменты */}
+            <Section>
+              <SectionLabel style={{ marginBottom: 10 }}>Инструменты</SectionLabel>
+              <ToolsRow
+                value={recDraft.tools === undefined ? null : recDraft.tools}
+                onChange={(v) => patch({ tools: v })}
+              />
+            </Section>
+
+            {/* Свой список запретов — только при custom */}
+            {recDraft.access === 'custom' && (
+              <Section>
+                <Field label="Свой список запретов" hint="Через запятую — какие возможности недоступны персоне этой роли">
+                  <TextField
+                    value={(recDraft.disallowedTools ?? []).join(', ')}
+                    onChange={(v) => patch({ disallowedTools: v.split(',').map(s => s.trim()).filter(Boolean) })}
+                    placeholder="tasks, notes"
+                  />
+                </Field>
+              </Section>
+            )}
+
+            {/* Секции промпта — через готовый блок RolePresetsBlock (mode='edit') */}
+            <Section>
+              <SectionLabel style={{ marginBottom: 10 }}>Секции промпта</SectionLabel>
+              <RolePresetsBlock
+                roleKey={roleKey}
+                catalog={promptSectionsCatalog}
+                editLayer={editLayerForBlock}
+                globalLayer={layerSettings}
+                userLayer={null}
+                mode="edit"
+                onSave={applySectionReducer}
+                showTitle={false}
+              />
+            </Section>
+
+            {/* Модели по уровням — три RoutePicker */}
+            <Section>
+              <TierModelsSection
+                roleKey={roleKey}
+                strong={recDraft.tierStrong ?? ''}
+                medium={recDraft.tierMedium ?? ''}
+                weak={recDraft.tierWeak ?? ''}
+                onStrong={(v) => patch({ tierStrong: v.trim() || null })}
+                onMedium={(v) => patch({ tierMedium: v.trim() || null })}
+                onWeak={(v) => patch({ tierWeak: v.trim() || null })}
+              />
+            </Section>
+
+            {/* Уровень по умолчанию */}
+            <Section>
+              <SectionLabel style={{ marginBottom: 10 }}>Уровень по умолчанию</SectionLabel>
+              <Field
+                label=""
+                hint="Каким уровнем работает персона этой роли, если у неё не задана своя ячейка уровня"
+              >
+                <PillSwitch<ModelTierValue | ''>
+                  // На 360 CSS 4 опции в fill-режиме вылезают за поле формы (~21 px).
+                  // Снимаем fill на мобиле — опции занимают естественную ширину и
+                  // помещаются (тот же приём, что у «Доступ», но там 3 опции).
+                  fill={!isMobile}
+                  value={recDraft.defaultTier ?? ''}
+                  onChange={(v) => patch({ defaultTier: v || null })}
+                  options={DEFAULT_TIER_OPTIONS}
+                />
+              </Field>
+            </Section>
+
+            {/* Подсказка под формой — общий инвариант раздела */}
+            <div style={{
+              fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5, padding: '0 2px',
+            }}>
+              Поле персоны сильнее правила специальности; специальность без правила
+              наследует «Любая специальность» → «Модели по умолчанию».
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Умения — типовой профиль привязок роли (RoleBindingsBlock, mode='edit'):
+                карточки с инлайн-правкой, степпер добавления и «Найти навык» из реестра.
+                Правки уходят в черновик формы (onChange → patch), своих запросов к API
+                раздел не делает — сохраняет общая кнопка «Сохранить» в шапке. */}
+            <Section>
+              <RoleBindingsBlock
+                roleKey={roleKey}
+                bindings={recDraft.defaultBindings ?? []}
+                mode="edit"
+                accent={accent}
+                onChange={(v) => patch({ defaultBindings: v })}
+              />
+            </Section>
+          </>
         )}
-
-        {/* Секции промпта — через готовый блок RolePresetsBlock (mode='edit') */}
-        <Section>
-          <SectionLabel style={{ marginBottom: 10 }}>Секции промпта</SectionLabel>
-          <RolePresetsBlock
-            roleKey={roleKey}
-            catalog={promptSectionsCatalog}
-            editLayer={editLayerForBlock}
-            globalLayer={layerSettings}
-            userLayer={null}
-            mode="edit"
-            onSave={applySectionReducer}
-            showTitle={false}
-          />
-        </Section>
-
-        {/* Привязки по умолчанию (типовой профиль умений роли) */}
-        <Section>
-          <DefaultBindingsSection
-            bindings={recDraft.defaultBindings ?? []}
-            onChange={(v) => patch({ defaultBindings: v })}
-          />
-        </Section>
-
-        {/* Модели по уровням — три RoutePicker */}
-        <Section>
-          <TierModelsSection
-            roleKey={roleKey}
-            strong={recDraft.tierStrong ?? ''}
-            medium={recDraft.tierMedium ?? ''}
-            weak={recDraft.tierWeak ?? ''}
-            onStrong={(v) => patch({ tierStrong: v.trim() || null })}
-            onMedium={(v) => patch({ tierMedium: v.trim() || null })}
-            onWeak={(v) => patch({ tierWeak: v.trim() || null })}
-          />
-        </Section>
-
-        {/* Уровень по умолчанию */}
-        <Section>
-          <SectionLabel style={{ marginBottom: 10 }}>Уровень по умолчанию</SectionLabel>
-          <Field
-            label=""
-            hint="Каким уровнем работает персона этой роли, если у неё не задана своя ячейка уровня"
-          >
-            <PillSwitch<ModelTierValue | ''>
-              // На 360 CSS 4 опции в fill-режиме вылезают за поле формы (~21 px).
-              // Снимаем fill на мобиле — опции занимают естественную ширину и
-              // помещаются (тот же приём, что у «Доступ», но там 3 опции).
-              fill={!isMobile}
-              value={recDraft.defaultTier ?? ''}
-              onChange={(v) => patch({ defaultTier: v || null })}
-              options={DEFAULT_TIER_OPTIONS}
-            />
-          </Field>
-        </Section>
-
-        {/* Пресеты (read-only список ModelRoutePreset из слоя) */}
-        <Section>
-          <PresetsSection layerSettings={layerSettings} />
-        </Section>
-
-        {/* Подсказка под формой — общий инвариант раздела */}
-        <div style={{
-          fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5, padding: '0 2px',
-        }}>
-          Поле персоны сильнее правила специальности; специальность без правила
-          наследует «Любая специальность» → «Модели по умолчанию».
-        </div>
 
         {error && (
           <div style={{
@@ -493,12 +512,14 @@ function Hint({ children }: { children: React.ReactNode }): React.ReactElement |
 }
 
 // === Шапка-тулбар роли ===
-function ToolbarRow({ accent, roleKey, roleLabel, roleAvatar, isMobile, canSave, saving, dirty, onBack, onCancel, onSave }: {
+function ToolbarRow({ accent, roleKey, roleLabel, roleAvatar, isMobile, tab, onTab, canSave, saving, dirty, onBack, onCancel, onSave }: {
   accent: string;
   roleKey: string;
   roleLabel: string;
   roleAvatar: React.ReactNode;
   isMobile: boolean;
+  tab: RoleTab;
+  onTab: (t: RoleTab) => void;
   canSave: boolean;
   saving: boolean;
   dirty: boolean;
@@ -540,8 +561,24 @@ function ToolbarRow({ accent, roleKey, roleLabel, roleAvatar, isMobile, canSave,
       ) : (
         <div style={{ flex: 1, minWidth: 0 }} />
       )}
+      {/* Сегмент разделов «Общая информация | Умения» — симметрично визитке роли:
+          на десктопе живёт в строке тулбара между именем и кнопками, на мобиле
+          уходит своей строкой во всю ширину (Toolbar переносит детей). */}
+      <div style={{
+        display: 'flex', minWidth: 0,
+        flex: isMobile ? '1 0 100%' : '0 0 auto',
+        overflowX: 'auto',
+      }}>
+        <PillSwitch<RoleTab>
+          value={tab}
+          onChange={onTab}
+          options={TAB_OPTIONS}
+          compact={isMobile}
+          isMobile={isMobile}
+        />
+      </div>
       {/* Кнопки действий — как у PersonaToolbar: точка dirty + primary «Сохранить»,
-          слева ghost «Отмена» */}
+          слева ghost «Отмена». Общие для обоих разделов: черновик формы один. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
         <button type="button" onClick={onCancel} style={tbBtnGhost}>Отмена</button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -615,131 +652,6 @@ function ToolsRow({ value, onChange }: {
           </button>
         );
       })}
-    </div>
-  );
-}
-
-// === Привязки по умолчанию (типовой профиль умений роли) ===
-function DefaultBindingsSection({ bindings, onChange }: {
-  bindings: SpecialtyDefaultBinding[];
-  onChange: (v: SpecialtyDefaultBinding[]) => void;
-}): React.ReactElement {
-  // Ключ в React — стабильная строка по позиции и содержимому: на бэке у
-  // SpecialtyDefaultBinding id нет (это просто запись в массиве слоя), а новый
-  // uuid на каждом рендере ронял бы фокус в инпутах правки.
-  type Row = SpecialtyDefaultBinding & { _uiId: string };
-  const keyed: Row[] = bindings.map((b, i) => ({ ...b, _uiId: `b-${i}-${b.type}-${b.condition}` }));
-
-  const updateAt = (i: number, patch: Partial<SpecialtyDefaultBinding>) => {
-    const next = bindings.map((b, j) => j === i ? { ...b, ...patch } : b);
-    onChange(next);
-  };
-  const removeAt = (i: number) => {
-    onChange(bindings.filter((_, j) => j !== i));
-  };
-  const add = () => {
-    onChange([...bindings, { type: 'knowledge', mode: 'auto', condition: '', skillName: null }]);
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <SectionLabel>Привязки по умолчанию</SectionLabel>
-      <Hint>Типовые умения роли: при создании персоны этой специальности они материализуются в её личные привязки.</Hint>
-
-      {keyed.length === 0 ? (
-        <div style={{
-          border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
-          padding: '14px 14px', textAlign: 'center',
-          fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
-        }}>
-          Пока нет типовых умений — нажмите «Добавить умение» ниже.
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {keyed.map((b, i) => (
-            <BindingRow
-              key={b._uiId}
-              binding={b}
-              onChange={(patch) => updateAt(i, patch)}
-              onRemove={() => removeAt(i)}
-            />
-          ))}
-        </div>
-      )}
-
-      <div>
-        <Button variant="ghost" size="sm" onClick={add}>
-          <Plus size={14} strokeWidth={ICON_STROKE} style={{ marginRight: 4 }} />
-          Добавить умение
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// Одна строка привязки: тип · режим · условие · (skill name при типе skill)
-function BindingRow({ binding, onChange, onRemove }: {
-  binding: SpecialtyDefaultBinding;
-  onChange: (patch: Partial<SpecialtyDefaultBinding>) => void;
-  onRemove: () => void;
-}): React.ReactElement {
-  const isSkill = binding.type === 'skill';
-  return (
-    <div style={{
-      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-      padding: '10px 12px',
-      display: 'flex', flexDirection: 'column', gap: 8,
-    }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select
-          value={binding.type}
-          onChange={(e) => onChange({ type: e.target.value as PersonaBindingType, skillName: e.target.value === 'skill' ? (binding.skillName ?? '') : null })}
-          aria-label="Тип умения"
-          style={selectStyle}
-        >
-          {BINDING_TYPE_OPTIONS.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <select
-          value={binding.mode}
-          onChange={(e) => onChange({ mode: e.target.value as PersonaBindingMode })}
-          aria-label="Режим"
-          style={{ ...selectStyle, maxWidth: 160, flex: '1 1 120px' }}
-        >
-          {BINDING_MODE_OPTIONS.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label="Удалить умение"
-          title="Удалить"
-          className="cc-binding-remove"
-          style={{
-            flexShrink: 0, width: 28, height: 28, borderRadius: R.full,
-            background: 'transparent', border: `1px solid ${C.border}`,
-            color: C.textMuted, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            outline: 'none',
-          }}
-        >
-          <Trash2 size={13} strokeWidth={ICON_STROKE} />
-        </button>
-      </div>
-      <TextField
-        value={binding.condition}
-        onChange={(v) => onChange({ condition: v })}
-        placeholder="Когда применять (например: при правке tsx)"
-      />
-      {isSkill && (
-        <TextField
-          value={binding.skillName ?? ''}
-          onChange={(v) => onChange({ skillName: v.trim() || null })}
-          placeholder="Имя скилла из каталога владельца"
-        />
-      )}
     </div>
   );
 }
@@ -843,41 +755,6 @@ function TierPreviewRow({ tier, preview, hasValue }: {
   );
 }
 
-// === Пресеты (read-only список) ===
-function PresetsSection({ layerSettings }: { layerSettings: SpecialtySettingsLayer | null }): React.ReactElement {
-  const presets = layerSettings?.presets ?? [];
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <SectionLabel>Пресеты</SectionLabel>
-      <Hint>Именованные цепочки моделей — управляются в отдельной вкладке. Здесь список только для справки.</Hint>
-      {presets.length === 0 ? (
-        <div style={{
-          border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
-          padding: '14px 14px', textAlign: 'center',
-          fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
-        }}>
-          Цепочек моделей нет — ячейки уровней задаются напрямую именем модели.
-        </div>
-      ) : (
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {presets.map(p => (
-            <li key={p.id} style={{
-              fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.5,
-              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md,
-              padding: '8px 12px',
-            }}>
-              <span style={{ fontWeight: 600, color: C.textHeading }}>{p.name}</span>
-              {p.description?.trim() && (
-                <span style={{ color: C.textSecondary }}> · {p.description}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 // === Стрелка «Назад» в пустом состоянии (роль не найдена) ===
 function BackRow({ onBack }: { onBack: () => void }): React.ReactElement {
   return (
@@ -894,12 +771,3 @@ function BackRow({ onBack }: { onBack: () => void }): React.ReactElement {
     </div>
   );
 }
-
-// === Стиль select в форме — единый с Field (UI-кит) ===
-const selectStyle: React.CSSProperties = {
-  width: '100%', boxSizing: 'border-box',
-  background: C.bgWhite, border: `1px solid ${C.border}`,
-  borderRadius: R.xl, padding: '10px 13px', fontSize: 14,
-  fontFamily: FONT.sans, color: C.textHeading,
-  outline: 'none', cursor: 'pointer',
-};

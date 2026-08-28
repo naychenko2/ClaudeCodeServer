@@ -16,6 +16,7 @@ import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
+import { useHoverWarm } from '../hooks/useSession';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
@@ -45,6 +46,8 @@ const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
 export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
+  // История чата под курсором едет до клика — открытие обходится без спиннера
+  const warmHover = useHoverWarm();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
   // Подписка на стор механик — перерисовать список при запуске новой механики
@@ -144,6 +147,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     setClearArchiveAsk(false);
   };
 
+
   // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
   // groupBy уже клампнут к GROUP_BY_OPTIONS выше — ветка 'tags' сюда не доходит.
   // Сегменты дерева — как в SessionList: корень секционируется по maxActivity поддерева.
@@ -179,7 +183,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       hovered={hoveredId === chat.id}
       workflowRunning={workflowRunningFor === chat.id}
       onSelect={() => { setOpenSwipeId(null); onSelect(chat); }}
-      onHover={h => setHoveredId(h ? chat.id : null)}
+      onHover={h => { setHoveredId(h ? chat.id : null); warmHover(h && online ? chat : null); }}
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}

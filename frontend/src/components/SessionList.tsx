@@ -4,6 +4,7 @@ import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
+import { useHoverWarm } from '../hooks/useSession';
 import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Button, ConfirmDialog, Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -57,6 +58,8 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
 
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   const online = useOnline();
+  // История чата под курсором едет до клика — открытие обходится без спиннера
+  const warmHover = useHoverWarm();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
   // Подписка на стор механик — перерисовать список при запуске новой механики
@@ -435,7 +438,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         workflowRunning={workflowRunningFor === s.id}
         uncommitted={dirtySessionIds?.has(s.id) ? 'own' : (dirtyBranchIds?.has(s.id) ? 'descendants' : undefined)}
         onSelect={() => onSelect(s)}
-        onHover={h => setHoveredId(h ? s.id : null)}
+        onHover={h => { setHoveredId(h ? s.id : null); warmHover(h && online ? s : null); }}
         onDelete={() => setDeleteTarget(s)}
         tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
         onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}

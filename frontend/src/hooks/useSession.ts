@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision } from '../types';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import type { ChatItem, Session, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision } from '../types';
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
@@ -115,6 +115,8 @@ function evictColdSessions() {
   for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
     _store.delete(sid);
     _lastSeen.delete(sid);
+    // Выселенную сессию разрешаем греть заново: её ленты в сторе больше нет
+    _warmed.delete(sid);
   }
 }
 
@@ -393,6 +395,55 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
     })
     .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
+}
+
+// --- Прогрев чата (наведение курсора на карточку в списке) ---
+// История подтягивается ДО клика: пока рука доводит курсор, лента уже в сторе, и
+// открытие обходится без промежуточного спиннера. Греем ТОЛЬКО историю — вход в
+// SignalR-группу при наведении не делаем: подписка на каждый чат под курсором стоит
+// дороже, чем экономит. Прогрев необязателен: не вышло — чат откроется штатно.
+const _warmed = new Set<string>();
+const _warming = new Set<string>();
+
+export function warmSession(sid: string, projectId?: string, isGroup?: boolean) {
+  if (_warming.has(sid) || _warmed.has(sid)) return;
+  // Стор уже знает эту сессию (открывали, идёт ход, история пришла) — греть нечего
+  const st = _store.get(sid);
+  if (st && !st.isHistoryLoading) return;
+  _warming.add(sid);
+  // Признак группового чата ставим ДО нормализации: иначе прогретая лента осталась бы
+  // без разделителей «Теперь отвечает…», а повторная загрузка при открытии сочла бы её
+  // не старее серверной и не заменила.
+  if (isGroup !== undefined && getState(sid).isGroup !== isGroup)
+    setState(sid, prev => ({ ...prev, isGroup }));
+  loadHistory(sid, projectId)
+    .then(raw => {
+      const items = normalizeFor(sid, raw);
+      setState(sid, prev => {
+        if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
+        return { ...prev, items, isHistoryLoading: false };
+      });
+      _warmed.add(sid);
+    })
+    .catch(() => { /* прогрев необязателен — откроется штатно, со спиннером */ })
+    .finally(() => _warming.delete(sid));
+}
+
+// Прогрев чата под курсором — для списков чатов. Пауза отсекает проброс мыши через
+// список: без неё один проход по колонке дёрнул бы историю у всех карточек по пути.
+const HOVER_WARM_MS = 120;
+
+export function useHoverWarm(enabled = true) {
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return useCallback((chat: Session | null) => {
+    window.clearTimeout(timer.current);
+    if (!chat || !enabled) return;
+    timer.current = window.setTimeout(
+      () => warmSession(chat.id, chat.projectId, (chat.participants?.length ?? 0) > 1),
+      HOVER_WARM_MS,
+    );
+  }, [enabled]);
 }
 
 // --- React-хук ---

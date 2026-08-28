@@ -820,6 +820,9 @@ interface ChatHeaderBarProps {
   island?: boolean;
   // Узкая колонка «Стены»: прячем кнопку настроек чата (её диалог шире колонки)
   compact?: boolean;
+  // Лента прокручена от начала — шапка отрывается от текста тенью (на стене мягче,
+  // см. ниже). Лента в начале — тени нет: отрываться не от чего
+  scrolled?: boolean;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -954,7 +957,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, scrolled }: ChatHeaderBarProps) {
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1861,7 +1864,25 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // БЕЗ overflow:hidden — поповеры бейджей (контекст, стоимость, участники)
       // выпадают ниже шапки и не должны обрезаться её границей.
       // openBtn обязателен: без него свёрнутый сайдбар не вернуть при открытом чате
-      <div style={{ position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box', borderBottom: `1px solid ${C.border}` }}>
+      <div style={{
+        position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto',
+        boxSizing: 'border-box',
+        // borderBottom нет намеренно: шапку от ленты отделяет тень, а линия поверх неё
+        // читалась бы вторым разделителем подряд.
+        // Стекло: сквозь шапку виден дудл-холст и подпал цветом проекта, а размытие
+        // отделяет заголовок от рисунка под ним. Плотная заливка закрыла бы и то и
+        // другое, поэтому берём то же «сильное стекло», что у колонок «Стены».
+        // Браузер без backdrop-filter покажет шапку почти прозрачной — ровно так,
+        // как она выглядела до этой правки
+        background: C.glassStrong,
+        backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+        // Верхние углы — по подпалу цветом проекта, он скруглён так же
+        borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+        // Лента уехала под шапку — приподнимаем её тенью над текстом (тень острова:
+        // контакт + разлёт, шапка читается как отдельный слой, а не как полоска)
+        boxShadow: scrolled ? SHADOW.island : 'none',
+        transition: 'box-shadow 0.18s ease-out',
+      }}>
         {/* flexWrap: при узком окне правый кластер уходит второй строкой — остров подрастает */}
         <div
           onContextMenu={e => {
@@ -1884,7 +1905,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   return (
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
-    <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
+    <Toolbar isMobile={isCompact} noBorder={island || compact} bg={island || compact ? 'transparent' : undefined}
       // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
       onContextMenu={isCompact ? undefined : e => {
         e.preventDefault();
@@ -1894,6 +1915,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
         ...(isCompact ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
+        // Лента уехала под шапку — приподнимаем её тенью над текстом. На стене
+        // (compact) тень мягче: колонка узкая, и глубокая тень острова в ней читается
+        // как грязь, а не как слой. Подложки там нет — её даёт стеклянный остров колонки
+        boxShadow: scrolled ? (compact ? SHADOW.card : SHADOW.island) : 'none',
+        transition: 'box-shadow 0.18s ease-out',
       }}>
       {openBtn}{titleEl}{rightCluster}
       {tagMenuEl}

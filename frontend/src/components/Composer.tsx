@@ -24,6 +24,7 @@ import { DangerModeConfirm } from './DangerModeConfirm';
 import { QuickPhrasesDialog, QuickPhrasesIcon, QuickPhrasesMenu } from './QuickPhrases';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
 import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -182,14 +183,6 @@ const iconBtnGuard: CSSProperties = {
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-}
-
-// Длинное имя режем по середине, а не с конца: расширение должно остаться видно
-function middleEllipsis(name: string, max = 30): string {
-  if (name.length <= max) return name;
-  const head = Math.ceil((max - 1) / 2);
-  const tail = max - 1 - head;
-  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
 }
 
 // Иконка файла по расширению

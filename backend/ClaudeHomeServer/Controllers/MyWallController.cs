@@ -22,8 +22,9 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
     // Состав стены — ПОЛНЫЕ Session в порядке набора (фронту не нужен ни резолв по id,
-    // ни N+1). Ленивая фильтрация мёртвых id: чат удалён или протух по ExpiresAfterMinutes —
-    // молча выпадает из ответа; users.json при чтении не мутируем (чистка при PUT).
+    // ни N+1). Ленивая фильтрация мёртвых id: чат удалён, протух по ExpiresAfterMinutes
+    // или ушёл в архив — молча выпадает из ответа; users.json при чтении не мутируем
+    // (чистка при PUT).
     [HttpGet]
     public IActionResult Get()
     {
@@ -56,10 +57,17 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
     public IActionResult Candidates()
     {
         if (UserId is null) return Unauthorized();
-        return Ok(sessions.GetAllOwnedBy(UserId).OrderByDescending(s => s.UpdatedAt).Take(200).ToList());
+        return Ok(sessions.GetAllOwnedBy(UserId)
+            .Where(s => s.ArchivedAt is null) // архивный чат на стену не зовут — он там и не встанет
+            .OrderByDescending(s => s.UpdatedAt).Take(200).ToList());
     }
 
-    // id → живые Session владельца, с дедупликацией и сохранением порядка
+    // id → живые Session владельца, с дедупликацией и сохранением порядка.
+    // Архивный чат для стены — такой же мёртвый id, как удалённый: он скрыт из списков и
+    // счётчиков и молчит, колонка стала бы призраком. Фильтр стоит ЗДЕСЬ, а не только во
+    // фронтовом сторе, потому что архивировать чат могли откуда угодно (список чатов,
+    // другое устройство, MCP) — инвариант «на стене нет архивных» держит сервер.
+    // Побочно состав чистится при первом же PUT: ResolveChats общий для GET и PUT.
     private List<Session> ResolveChats(IEnumerable<string> chatIds, string ownerId)
     {
         var result = new List<Session>();
@@ -68,7 +76,7 @@ public class MyWallController(UserStore users, SessionManager sessions) : Contro
         {
             if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
             var s = sessions.GetOwned(id, ownerId);
-            if (s is not null) result.Add(s);
+            if (s is not null && s.ArchivedAt is null) result.Add(s);
         }
         return result;
     }

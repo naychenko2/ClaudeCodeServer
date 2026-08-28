@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -19,6 +21,12 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
 
     private static string UserIdOf(TestWebApplicationFactory factory) =>
         factory.Services.GetRequiredService<UserStore>().GetFirst()!.Id;
+
+    // Тесты класса делят один UserStore: включённый другим тестом флаг не должен
+    // протекать в проверки выключенного состояния
+    private static void SetFlag(TestWebApplicationFactory factory, bool enabled) =>
+        factory.Services.GetRequiredService<UserStore>()
+            .SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, enabled).Should().BeTrue();
 
     private static async Task<JsonElement> CreateServerAsync(HttpClient client, object? catalogRef = null)
     {
@@ -40,8 +48,7 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Create_сCatalogRef_выключенИПомечен()
     {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
+        SetFlag(factory, enabled: true);
 
         var created = await CreateServerAsync(_client, new
         {
@@ -53,14 +60,15 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
         var catalogRef = created.GetProperty("catalogRef");
         catalogRef.GetProperty("name").GetString().Should().Be("io.github.owner/filesystem");
         catalogRef.GetProperty("version").GetString().Should().Be("1.2.0");
-        // stdio-запись: импортированного адреса нет
-        catalogRef.TryGetProperty("url", out _).Should().BeFalse();
+        // stdio-запись: импортированного адреса нет (поле сериализуется как null)
+        catalogRef.GetProperty("url").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
     public async Task Create_сCatalogRef_безФлага_отказ()
     {
-        // Флаг по умолчанию выключен (dark launch) — тест его не включает
+        // Флаг по умолчанию выключен (dark launch); соседние тесты его включают — гасим явно
+        SetFlag(factory, enabled: false);
         var resp = await _client.PostAsJsonAsync("/api/mcp/servers", new Dictionary<string, object?>
         {
             ["key"] = "flagged",
@@ -74,8 +82,7 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Create_http_сCatalogRef_импортированныйUrlСовпадаетСЗаписью()
     {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
+        SetFlag(factory, enabled: true);
 
         var resp = await _client.PostAsJsonAsync("/api/mcp/servers", new Dictionary<string, object?>
         {
@@ -96,8 +103,7 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Put_безEnabled_не_выключает_каталожную_запись()
     {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
+        SetFlag(factory, enabled: true);
         var created = await CreateServerAsync(_client, new { name = "io.github.owner/one", version = "1.0.0" });
         var id = created.GetProperty("id").GetString()!;
 
@@ -117,8 +123,7 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Put_сохраняетCatalogRefИПереноситAllowOutsideProjects()
     {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
+        SetFlag(factory, enabled: true);
         var created = await CreateServerAsync(_client, new { name = "io.github.owner/two", version = "1.0.0" });
         var id = created.GetProperty("id").GetString()!;
 
@@ -153,7 +158,7 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     // --- Совместимость стора ---
 
     [Fact]
-    public void Стор_неизвестноеСвойствоВЗаписи_не роняетФайл()
+    public void Стор_неизвестноеСвойство_не_роняет_файл()
     {
         // Откат/старые клиенты кладут в mcp-servers.json поля, которых новый код не знает
         // (и наоборот) — Load обязан их пропускать, а не уносить файл в .corrupt-*.bak
@@ -164,7 +169,7 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
             var path = Path.Combine(dir, "mcp-servers.json");
             File.WriteAllText(path, """
                 {"u1":[{"id":"s1","OwnerId":"u1","Key":"old","futureField":123,
-                "catalogRef":{"Name":"io.github.owner/x","Version":"1.0.0","Url":null}}]}
+                "CatalogRef":{"Name":"io.github.owner/x","Version":"1.0.0","Url":null}}]}
                 """);
             var config = new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?> { ["DataPath"] = Path.Combine(dir, "projects.json") }).Build();

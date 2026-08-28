@@ -200,24 +200,6 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     // Возвращает текст ошибки или null.
     private string? Apply(McpServerRecord draft, McpServerUpsertRequest req, McpServerRecord? existing)
     {
-        // Указатель на реестр клеится только при создании: правка его не принимает,
-        // поэтому McpRegistry.Update его и не переносит — CatalogRef переживает PUT сам
-        if (existing is null && req.CatalogRef is { } catalogRef)
-        {
-            var name = catalogRef.Name?.Trim();
-            if (string.IsNullOrWhiteSpace(name))
-                return "CatalogRef: не задано имя записи каталога";
-            draft.CatalogRef = new McpCatalogRef
-            {
-                Name = name,
-                Version = catalogRef.Version,
-                PublishedAt = catalogRef.PublishedAt,
-                // Импортированный адрес — фактический Url записи после подстановки
-                // шаблонов и Trim (draft.Url уже такой): разошлись — гейт пробы снят
-                Url = draft.Transport == McpTransport.Stdio ? null : draft.Url,
-            };
-        }
-
         draft.Label = req.Label ?? existing?.Label ?? draft.Key;
         draft.Description = req.Description ?? existing?.Description;
         draft.Enabled = req.Enabled ?? existing?.Enabled ?? true;
@@ -288,6 +270,24 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             };
         }
         draft.Auth = auth;
+
+        // Указатель на реестр клеится только при создании (правка его не принимает,
+        // поэтому McpRegistry.Update его и не переносит — CatalogRef переживает PUT сам).
+        // Здесь, в конце: импортированный адрес — фактический Url записи ПОСЛЕ подстановки
+        // шаблонов и Trim, а он разобран выше
+        if (existing is null && req.CatalogRef is { } catalogRef)
+        {
+            var name = catalogRef.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                return "CatalogRef: не задано имя записи каталога";
+            draft.CatalogRef = new McpCatalogRef
+            {
+                Name = name,
+                Version = catalogRef.Version,
+                PublishedAt = catalogRef.PublishedAt,
+                Url = draft.Transport == McpTransport.Stdio ? null : draft.Url,
+            };
+        }
         return null;
     }
 

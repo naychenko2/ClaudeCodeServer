@@ -3,7 +3,7 @@ import { api } from '../../lib/api';
 import { C } from '../../lib/design';
 import { relTime } from '../../lib/gitFormat';
 import type {
-  McpBuiltinServer, McpProbeResult, McpServer, McpServerUpsert, Persona, Project,
+  McpBuiltinServer, McpCatalogRevision, McpProbeResult, McpServer, McpServerUpsert, Persona, Project,
 } from '../../types';
 
 // Popup входа + таймер опроса «окно закрыли» на сервер — не состояние React: перекладывать
@@ -158,6 +158,12 @@ export interface McpData {
   // решает, чистить ли форму — на отказе поле с кодом должно остаться для повтора
   completeOAuth: (server: McpServer, code: string) => Promise<boolean>;
   dismissOAuthNotice: (server: McpServer) => void;
+  // Ревизия каталожных записей (волна 2): ключ — McpCatalogRef.name. Карточка сервера
+  // ищет ревизию по своему catalogRef.name. checkFailed: запрос целиком не дошёл —
+  // показываем «проверить не удалось» нейтрально у всех карточек с catalogRef (НЕ
+  // пугаем отзывом — реестр в preview, лежать ему не запрещено)
+  revisions: Record<string, McpCatalogRevision>;
+  revisionsCheckFailed: boolean;
 }
 
 export function useMcpData(): McpData {
@@ -188,6 +194,43 @@ export function useMcpData(): McpData {
     api.projects.list().then(setProjects).catch(() => { /* матрица доступа покажет пусто */ });
     api.personas.list().then(setPersonas).catch(() => { /* обзор персон покажет пусто */ });
   }, [loadServers]);
+
+  // Ревизия каталожных записей — ОТДЕЛЬНЫЙ эффект (не внутри loadServers). Следит за
+  // servers: когда приходит свежий список, отбирает уникальные name из catalogRef и
+  // зовёт api.mcp.catalogRevisions. TTL 1 час на фронте: модалка могла открываться
+  // и закрываться — повторно в течение часа не переспрашиваем. На мутациях (save,
+  // remove) ключевой набор имён может измениться — invalidate вызывается явно ниже
+  useEffect(() => {
+    if (servers === null) return;
+    const names = new Set<string>();
+    for (const s of servers) {
+      const n = s.catalogRef?.name;
+      if (n) names.add(n);
+    }
+    if (names.size === 0) {
+      setRevisions({});
+      setRevisionsCheckFailed(false);
+      return;
+    }
+    const ONE_HOUR = 60 * 60 * 1000;
+    if (Date.now() - revisionsCheckedAt.current < ONE_HOUR) return;
+    const seq = ++revisionsSeq.current;
+    api.mcp.catalogRevisions([...names]).then(res => {
+      if (revisionsSeq.current !== seq) return; // устаревший ответ
+      revisionsCheckedAt.current = Date.now();
+      const next: Record<string, McpCatalogRevision> = {};
+      for (const r of res.revisions ?? []) next[r.name] = r;
+      setRevisions(next);
+      setRevisionsCheckFailed(!!res.checkFailed);
+    }).catch(() => {
+      if (revisionsSeq.current !== seq) return;
+      revisionsCheckedAt.current = Date.now();
+      // Общий отказ батча: НЕ молчим (отзыв тут не рисуем, но нейтральная пометка
+      // «проверить не удалось» у карточек с catalogRef полезна — иначе человек
+      // решит, что всё ок, и не догадается проверить руками)
+      setRevisionsCheckFailed(true);
+    });
+  }, [servers]);
 
   const replace = (updated: McpServer) =>
     setServers(list => list?.map(s => (s.id === updated.id ? updated : s)) ?? list);
@@ -244,6 +287,18 @@ export function useMcpData(): McpData {
   const [oauthSessions, setOauthSessions] = useState<Record<string, { key: string; state: string }>>({});
   const [oauthNotice, setOauthNotice] = useState<Record<string, string>>({});
   const oauthWindows = useRef<Record<string, OAuthWindow>>({});
+
+  // Ревизия каталожных записей в реестре (волна 2). Запрос идёт ОТДЕЛЬНО от списка
+  // серверов и ПОСЛЕ его отрисовки: реестр в статусе preview может лежать, а раздел
+  // обязан открываться. TTL кэша — час: фронт сам не дёргает ревизию чаще, даже если
+  // модалка переоткроется. Инвалидация — любая мутация, которая могла поменять состав
+  // каталожных записей (save/remove/reload)
+  const [revisions, setRevisions] = useState<Record<string, McpCatalogRevision>>({});
+  const [revisionsCheckFailed, setRevisionsCheckFailed] = useState(false);
+  const revisionsCheckedAt = useRef<number>(0);
+  // Защита от гонок: параллельные перезагрузки списка могли бы стартовать два запроса,
+  // и более старый ответ перезаписал бы свежий. Тот же приём, что в probe/setEnabled
+  const revisionsSeq = useRef(0);
 
   const stopOAuthPoll = (id: string) => {
     const w = oauthWindows.current[id];
@@ -328,6 +383,9 @@ export function useMcpData(): McpData {
     // Сервер мог быть выключен в проектах — deny-list на бэке чистится вместе с записью
     // только у персон, поэтому список проектов перечитываем
     api.projects.list().then(setProjects).catch(() => { /* не критично */ });
+    // Удаление каталожной записи могло изменить набор имён — следующий рендер списка
+    // сходит в реестр. Сбрасываем метку времени, чтобы эффект не ждал положенный час
+    revisionsCheckedAt.current = 0;
   };
 
   const save = async (id: string | null, data: McpServerUpsert) => {
@@ -336,6 +394,10 @@ export function useMcpData(): McpData {
       if (!list) return [saved];
       return id ? list.map(s => (s.id === saved.id ? saved : s)) : [...list, saved];
     });
+    // Правка каталожной записи могла сменить version/name (или удалить catalogRef вовсе).
+    // Невалидируем — следующий рендер сходит в реестр. Создание новой записи с catalogRef
+    // тоже меняет набор имён, та же логика
+    revisionsCheckedAt.current = 0;
     return saved;
   };
 
@@ -406,6 +468,7 @@ export function useMcpData(): McpData {
     setEnabled, probe, remove, save, importJson,
     setProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
     oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
+    revisions, revisionsCheckFailed,
   };
 }
 

@@ -7,7 +7,7 @@ import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { accessSummaryOn, mcpAuthLine, mcpStatusTone, plural } from './useMcpData';
 import type { McpData } from './useMcpData';
-import type { McpBuiltinServer, McpServer } from '../../types';
+import type { McpBuiltinServer, McpCatalogRevision, McpServer } from '../../types';
 
 // Вкладка «Серверы»: свои записи полноразмерными карточками, всё остальное — компактными
 // плитками по группам. Ось группировки — кто подключил сервер и кто им управляет:
@@ -78,7 +78,11 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
           <EmptyState
             icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
             title="Своих серверов пока нет"
-            subtitle="Пока подключены только встроенные серверы продукта. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
+            // Что такое внешний MCP-сервер: программа, которую AI Home запускает
+            // рядом с собой, чтобы дать чатам новые возможности — файлы, БД, поиск
+            // по API. Это первое, что видит новый человек в разделе, и без строчки
+            // «а зачем» кнопки «Найти» и «Добавить» выглядели бы как ритуал
+            subtitle="Внешний MCP-сервер — это программа, которую AI Home запускает рядом с собой, чтобы дать чатам новые возможности: чтение файлов, доступ к базе, поиск по API. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
             action={
               <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
                 {onCatalog && <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>}
@@ -256,6 +260,14 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
   const target = server.transport === 'stdio'
     ? [server.command, ...server.args].filter(Boolean).join(' ')
     : server.url ?? '';
+  // Ревизия из реестра (волна 2). Карточка ничего не знает про запрос — он идёт
+  // от родителя ОТДЕЛЬНО от списка, чтобы раздел открывался при лежащем реестре.
+  // Здесь только показ: deprecated/deleted → warningBg, новее → нейтральный info,
+  // общий отказ батча → нейтральная «проверить не удалось» (НЕ отзыв, иначе при
+  // лежащем реестре люди выключат рабочие серверы)
+  const revision = server.catalogRef?.name
+    ? data.revisions[server.catalogRef.name]
+    : undefined;
 
   return (
     <div style={{
@@ -294,6 +306,10 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
           fontFamily: FONT.mono, fontSize: 11, color: C.textMuted,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{target}</div>
+      )}
+
+      {(revision || data.revisionsCheckFailed) && (
+        <CatalogRevisionNote revision={revision} checkFailed={data.revisionsCheckFailed} />
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: FS.sm }}>
@@ -367,6 +383,48 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
         <ManualOAuthCode server={server} data={data} />
       )}
     </div>
+  );
+}
+
+// Плашка ревизии каталожной записи (волна 2): три варианта по серьёзности.
+// deprecated/deleted — точно отзыв, тон warning (как у unsupportedReason в каталоге);
+// hasNewer — информационная, нейтральный тон; общий отказ батча (checkFailed) — НЕ
+// отзыв, нейтрально-приглушённый, чтобы при лежащем реестре не выглядело как «беда»
+// и человек не выключил рабочий сервер.
+function CatalogRevisionNote({ revision, checkFailed }: {
+  revision: McpCatalogRevision | undefined;
+  checkFailed: boolean;
+}) {
+  let tone: 'warn' | 'info' | 'muted' = 'muted';
+  let text: string | null = null;
+  if (revision?.status === 'deprecated') {
+    tone = 'warn';
+    text = 'Автор пометил сервер устаревшим в реестре. Работает как раньше, но новые подключения лучше не делать.';
+  } else if (revision?.status === 'deleted') {
+    tone = 'warn';
+    text = 'Сервер удалён из реестра. Лучше выключить и завести замену вручную.';
+  } else if (revision?.hasNewer) {
+    tone = 'info';
+    text = revision.latestVersion
+      ? `В реестре вышла новее: ${revision.latestVersion}. Можно обновить вручную.`
+      : 'В реестре вышла новее. Можно обновить вручную.';
+  } else if (checkFailed) {
+    tone = 'muted';
+    text = 'Не удалось проверить состояние в реестре. Это не значит, что сервер сломан.';
+  }
+  if (!text) return null;
+
+  const skin = tone === 'warn'
+    ? { background: C.warningBg, color: C.warningText }
+    : tone === 'info'
+      ? { background: C.bgInset, color: C.textSecondary }
+      : { background: 'transparent', color: C.textMuted, border: `1px dashed ${C.dashed}` };
+
+  return (
+    <div style={{
+      fontSize: FS.xs, lineHeight: 1.45, padding: '6px 10px',
+      borderRadius: R.md, ...skin,
+    }}>{text}</div>
   );
 }
 

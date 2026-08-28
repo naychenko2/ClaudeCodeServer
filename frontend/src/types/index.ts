@@ -3130,6 +3130,36 @@ export interface McpServerCatalogDraft {
   fieldsDraft: McpCatalogFieldDraft[];
 }
 
+// Ревизия каталожной записи (волна 2). Бэк возвращает по батчу имён (POST /mcp/catalog/revisions).
+// Один заход ревизии — одна карточка в McpServerList. status: явно deprecated/deleted — отзыв
+// в реестре, рисуем плашкой; checkFailed: реестр лежит/неизвестная ошибка, НЕ отзыв, тон
+// нейтральный (ТЗ «проверить не удалось» — не пугать); latestVersion: что в реестре сейчас,
+// сверяем semver с версией записи и при новизне показываем пометку «в реестре новее».
+// active: всё в порядке, но latestVersion всё равно отдаётся — на случай если сервер уже
+// новее (проверка наоборот: «мы новее реестра» не нужна, hasNewer=false).
+export interface McpCatalogRevision {
+  name: string;
+  // Статус реестра. Не задан — реестр ответил, но статуса у записи нет (нормально для active)
+  status?: 'active' | 'deprecated' | 'deleted' | null;
+  // Последняя версия из реестра (semver-строка). Не задан — реестр не отдал её
+  latestVersion?: string | null;
+  // Реестр временно/постоянно недоступен. ОТЛИЧНО от deprecated — рисуем нейтрально
+  checkFailed?: boolean | null;
+  // true — latestVersion выше, чем версия в McpServerCatalogDraft.version
+  hasNewer?: boolean | null;
+}
+
+// Ответ батч-эндпоинта. revisions: всё, что реестр отдал по запрошенным именам.
+// missing: имена, по которым реестр ничего не нашёл (404/пусто) — НЕ то же, что checkFailed.
+// checkFailed: батч целиком не дошёл (сеть/5xx) — никаких индивидуальных пометок ставить
+// нельзя, фронт раскладывает только то, что пришло. error: общая ошибка запроса
+export interface McpCatalogRevisionResult {
+  revisions: McpCatalogRevision[];
+  missing?: string[];
+  checkFailed?: boolean | null;
+  error?: string | null;
+}
+
 // Вход по OAuth (волна 7) — ответы POST .../oauth/start и .../oauth/complete
 export interface McpOAuthStartResult {
   authorizeUrl: string;

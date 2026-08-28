@@ -15,21 +15,29 @@ export function FieldLabel({ children }: { children: ReactNode }) {
 }
 
 // === Обёртка «лейбл + контрол + подсказка» ===
-export function Field({ label, hint, children }: { label?: ReactNode; hint?: ReactNode; children: ReactNode }) {
+// error: текст ошибки у конкретного поля. Задан — рендерится вместо hint, цветом
+// dangerText. Раньше поле не могло показать свою ошибку — общая шла плашкой выше
+// формы, и человек не понимал, к чему она. Теперь фронт ошибки привязывает сюда
+export function Field({ label, hint, error, children }: {
+  label?: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode;
+}) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {label && <FieldLabel>{label}</FieldLabel>}
       {children}
-      {hint && <span style={{ fontSize: 11.5, color: C.textMuted }}>{hint}</span>}
+      {error
+        ? <span style={{ fontSize: 11.5, color: C.dangerText }}>{error}</span>
+        : hint && <span style={{ fontSize: 11.5, color: C.textMuted }}>{hint}</span>}
     </div>
   );
 }
 
-// Базовый стиль контрола ввода с учётом фокуса
-function controlStyle(focused: boolean, mono?: boolean, extra?: CSSProperties): CSSProperties {
+// Базовый стиль контрола ввода с учётом фокуса и состояния ошибки
+function controlStyle(focused: boolean, mono?: boolean, invalid?: boolean, extra?: CSSProperties): CSSProperties {
+  const borderColor = invalid ? C.dangerBorder : (focused ? FIELD.borderFocus : C.border);
   return {
     background: FIELD.background,
-    border: `1px solid ${focused ? FIELD.borderFocus : C.border}`,
+    border: `1px solid ${borderColor}`,
     borderRadius: FIELD.borderRadius,
     padding: '10px 13px',
     fontSize: FIELD.fontSize,
@@ -38,7 +46,7 @@ function controlStyle(focused: boolean, mono?: boolean, extra?: CSSProperties): 
     fontFamily: mono ? FONT.mono : 'inherit',
     width: '100%',
     boxSizing: 'border-box',
-    boxShadow: focused ? SHADOW.focus : 'none',
+    boxShadow: invalid ? 'none' : (focused ? SHADOW.focus : 'none'),
     transition: 'border-color 0.15s, box-shadow 0.15s',
     ...extra,
   };
@@ -62,11 +70,14 @@ interface TextFieldProps {
   // Подсказка при наведении: нужна там, где под полем нет места для строки-пояснения
   // (поле в ряду чипов — вторая строка растянула бы ряд)
   title?: string;
+  // Подкрашивает бордер C.dangerBorder и убирает focus-ring (красный сам по себе
+  // уже достаточно заметный сигнал — лишний синий ореол перебивал бы тон)
+  invalid?: boolean;
   style?: CSSProperties;
 }
 
 // === Однострочное поле ввода с focus-ring ===
-export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, style }: TextFieldProps) {
+export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, style }: TextFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
     <input
@@ -83,7 +94,7 @@ export function TextField({ value, onChange, placeholder, type = 'text', mono, a
         if (e.key === 'Enter') onEnter?.();
         if (e.key === 'Escape') onEscape?.();
       } : undefined}
-      style={controlStyle(focused, mono, { letterSpacing, ...style })}
+      style={controlStyle(focused, mono, invalid, { letterSpacing, ...style })}
     />
   );
 }
@@ -128,7 +139,7 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
       onKeyDown={onKeyDown}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
-      style={controlStyle(focused, false, {
+      style={controlStyle(focused, false, false, {
         minHeight, maxHeight, resize: 'none',
         // С потолком высоты нужен скролл, даже когда включён autoGrow
         overflow: autoGrow && !maxHeight ? 'hidden' : 'auto',

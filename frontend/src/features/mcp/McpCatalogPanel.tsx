@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ArrowLeft, Ban, Box, Cloud, Monitor, Search } from 'lucide-react';
-import { Button, EmptyState } from '../../components/ui';
+import { ArrowLeft, Ban, Box, Cloud, Monitor, RefreshCw, Search, X } from 'lucide-react';
+import { api } from '../../lib/api';
+import { Button, EmptyState, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { useMe } from '../../lib/defaultPersona';
@@ -41,16 +42,28 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
   const env = readExecEnv();
 
   const [q, setQ] = useState('');
-  // Серверы из каталога (пока статичный мок — бэкенд-эндпоинт делает Денис в соседнем дереве;
-  // формат уже подогнан под контракт). useState + локальный фильтр: на каждом символе
-  // мгновенно без сети, иначе ввод лагает на 200мс+
-  const [servers] = useState<McpCatalogServer[]>(() => mockCatalogServers());
+  // Серверы из каталога: грузим с бэка (волна 1, задача 9fa075ec). Три состояния
+  // жёстко разделены: loading (скелетоны), error (плашка с «Повторить»), loaded.
+  // Реестр в preview может лежать — это НЕ блокирует раздел: ручной путь «Добавить
+  // вручную» всегда рядом
+  const [servers, setServers] = useState<McpCatalogServer[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Дебаунс ТОЛЬКО для UI-сигнала «идёт поиск» — локальный фильтр и так мгновенный. Сейчас
-  // оставлен индикатор, чтобы будущий вызов api.mcp.catalogSearch мог на нём повиснуть
-  const [searching] = useState(false);
+  const load = () => {
+    setServers(null);
+    setError(null);
+    api.mcp.catalogSearch('')
+      .then(res => {
+        setServers(res.servers ?? []);
+        if (res.error) setError(res.error);
+      })
+      .catch(e => setError(e instanceof Error && e.message ? e.message : 'Не удалось загрузить каталог'));
+  };
+
+  useEffect(() => { load(); }, []);
 
   const filtered = useMemo(() => {
+    if (!servers) return [];
     const term = q.trim().toLowerCase();
     if (!term) return servers;
     return servers.filter(s => {
@@ -83,13 +96,28 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
         </div>
       </div>
 
-      <SearchField value={q} onChange={setQ} loading={searching} />
+      <SearchField value={q} onChange={setQ} loading={servers === null} />
 
-      {filtered.length === 0 ? (
+      {servers === null && !error ? (
+        <CatalogSkeletons />
+      ) : error ? (
+        <EmptyState
+          compact
+          icon={<RefreshCw size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+          title="Каталог недоступен"
+          subtitle={error}
+          action={
+            <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Button variant="primary" size="sm" onClick={load}>Повторить</Button>
+              <Button variant="ghost" size="sm" onClick={onManual}>Добавить вручную</Button>
+            </div>
+          }
+        />
+      ) : filtered.length === 0 ? (
         <EmptyState
           compact
           icon={<Search size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
-          title={q.trim() ? `По запросу «${q.trim()}» ничего не нашлось` : 'Каталог пуст'}
+          title={q.trim() ? `По запросу «${q.trim()}» ничего не нашлось` : 'В каталоге пока пусто'}
           subtitle="Каталог ведётся на английском — попробуйте английское название сервиса."
           action={
             <Button variant="ghost" size="sm" onClick={onManual}>
@@ -115,6 +143,31 @@ export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
         <Button variant="ghost" size="sm" onClick={onManual}>Добавить сервер вручную</Button>
       </div>
+    </div>
+  );
+}
+
+// Скелетоны каталожных карточек: пять «костей», имитирующих размер заполненной карточки.
+// Пульсирующий фон через CSS-анимацию; короче простой @keyframes на шимминг не нужен —
+// достаточно чуть приглушённой заливки, и взгляд понимает «грузятся»
+function CatalogSkeletons() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }} aria-hidden>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} style={{
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+          padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: SP.xs,
+          opacity: 0.55,
+        }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+            <div style={{ width: 130, height: 13, borderRadius: R.sm, background: C.bgInset }} />
+            <div style={{ marginLeft: 'auto', width: 70, height: 13, borderRadius: R.sm, background: C.bgInset }} />
+          </div>
+          <div style={{ width: '90%', height: 10, borderRadius: R.sm, background: C.bgInset }} />
+          <div style={{ width: '60%', height: 10, borderRadius: R.sm, background: C.bgInset }} />
+          <div style={{ width: '40%', height: 9, borderRadius: R.sm, background: C.bgInset }} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -156,9 +209,14 @@ function CatalogCard({ server, env, installed, isLocalStdioWarning, onPick }: {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
-        <span style={{
+        {/* Длинные имена (в реестре встречаются записи вида io.github.<id>) обрезаются
+            многоточием: без minWidth:0 имя выдавило бы бейджи в новую строку и карточка
+            «прыгала» по высоте. Полное имя в title — посмотреть можно, наведя курсор */}
+        <span title={server.displayName} style={{
           fontSize: FS.md, fontWeight: 600,
           color: blocked ? C.textMuted : C.textHeading,
+          minWidth: 0, flex: '1 1 auto',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{server.displayName}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
           {installed && (
@@ -249,7 +307,9 @@ function envBadgeFor(server: McpCatalogServer, env: 'local' | 'container' | null
   return null;
 }
 
-// Поле поиска с иконкой и плейсхолдером из макета
+// Поле поиска с иконкой и плейсхолдером из макета. На мобиле стереть запрос иначе
+// стоит девяти нажатий — крестик справа всегда под рукой, появляется только когда
+// поле не пустое (визуальный шум в покое не нужен)
 function SearchField({ value, onChange, loading }: {
   value: string;
   onChange: (v: string) => void;
@@ -262,6 +322,11 @@ function SearchField({ value, onChange, loading }: {
     const t = setTimeout(() => inputRef.current?.focus(), 100);
     return () => clearTimeout(t);
   }, []);
+
+  const clear = () => {
+    onChange('');
+    inputRef.current?.focus();
+  };
 
   return (
     <div style={{
@@ -287,6 +352,11 @@ function SearchField({ value, onChange, loading }: {
       />
       {loading && (
         <span style={{ fontSize: FS.xs, color: C.textMuted }}>ищем…</span>
+      )}
+      {value.length > 0 && !loading && (
+        <IconButton size="sm" title="Очистить" onClick={clear}>
+          <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
       )}
     </div>
   );
@@ -325,112 +395,10 @@ function formatMonth(iso: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-// === Заглушка каталога (мок) ===
-//
-// Бэкенд-эндпоинт GET /api/mcp/catalog/search делает Денис в соседнем дереве — пока
-// используем локальный набор. Источник значений — каталог из макета
-// docs/mockups/mcp-catalog-v1.html. Когда бэк ответит, useEffect дёрнет api.mcp.catalogSearch
-// и положит результат в state; сейчас компонент держит мок в useState-инициализаторе, чтобы
-// не показывать «каталог недоступен» до прихода бэка (сознательно НЕ в этой волне).
-function mockCatalogServers(): McpCatalogServer[] {
-  return [
-    {
-      name: '@notion/mcp-server-notion',
-      displayName: 'Notion',
-      description: 'Читать и править страницы и базы Notion.',
-      version: '2.1.0',
-      repository: 'github.com/makenotion/notion-mcp',
-      repositoryUrl: 'https://github.com/makenotion/notion-mcp',
-      publishedAt: '2025-09-15',
-      status: 'active',
-      transport: 'remote',
-      url: 'https://mcp.notion.com/mcp',
-      fields: [
-        { name: 'Authorization', description: 'внутренний токен интеграции Notion', isSecret: true, isRequired: true, placeholder: 'ntn_…' },
-      ],
-    },
-    {
-      name: '@modelcontextprotocol/server-filesystem',
-      displayName: 'Filesystem',
-      description: 'Чтение и запись файлов в разрешённой папке.',
-      version: '1.2.0',
-      repository: 'github.com/modelcontextprotocol/servers',
-      repositoryUrl: 'https://github.com/modelcontextprotocol/servers',
-      publishedAt: '2025-11-08',
-      status: 'active',
-      transport: 'npm',
-      command: 'npx -y @modelcontextprotocol/server-filesystem@1.2.0',
-      fields: [
-        { name: 'ROOT_PATH', description: 'папка, к которой открыт доступ', isRequired: true, placeholder: 'C:\\Мои проекты\\docs', arg: true },
-      ],
-    },
-    {
-      name: '@modelcontextprotocol/server-postgres',
-      displayName: 'PostgreSQL',
-      description: 'Запросы к базе только на чтение.',
-      version: '0.6.0',
-      repository: 'github.com/modelcontextprotocol/servers',
-      repositoryUrl: 'https://github.com/modelcontextprotocol/servers',
-      publishedAt: '2025-10-22',
-      status: 'active',
-      transport: 'npm',
-      command: 'npx -y @modelcontextprotocol/server-postgres@0.6.0',
-      fields: [
-        { name: 'DATABASE_URL', description: 'строка подключения к базе', isSecret: true, isRequired: true, placeholder: 'postgresql://…' },
-      ],
-    },
-    {
-      name: 'io.github.acme/analytics',
-      displayName: 'Analytics Pro',
-      description: 'Отчёты и дашборды Acme.',
-      version: '0.3.1',
-      repository: 'github.com/acme/analytics-mcp',
-      repositoryUrl: 'https://github.com/acme/analytics-mcp',
-      publishedAt: '2026-03-12',
-      status: 'deprecated',
-      transport: 'remote',
-      url: 'https://mcp.acme.dev/mcp',
-      fields: [],
-      unsupportedReason: 'Автор пометил сервер устаревшим. Из каталога подключить нельзя — если он всё-таки нужен, добавьте вручную.',
-      unsupportedTag: 'Устарел',
-    },
-    {
-      name: 'io.github.acme/legacy-docs',
-      displayName: 'Legacy Docs',
-      description: 'Поиск по внутренней базе документов.',
-      version: '1.0.0',
-      repository: 'github.com/acme/legacy-docs',
-      repositoryUrl: 'https://github.com/acme/legacy-docs',
-      publishedAt: '2026-01-04',
-      status: 'active',
-      transport: 'remote',
-      url: 'https://mcp.acme.dev/legacy/mcp',
-      fields: [],
-      unsupportedReason: 'Подключается через Docker — в этой версии AI Home так подключать нельзя.',
-      unsupportedTag: 'Нельзя подключить',
-    },
-    {
-      name: 'io.github.unknown/fast-fetch',
-      displayName: 'Fast Fetch',
-      description: 'Быстрая загрузка страниц.',
-      version: '2.0.0',
-      repository: 'github.com/unknown/fast-fetch',
-      repositoryUrl: 'https://github.com/unknown/fast-fetch',
-      publishedAt: '2026-08-01',
-      status: 'active',
-      transport: 'npm',
-      command: 'npx -y @unknown/fast-fetch@2.0.0',
-      fields: [],
-      unsupportedReason: 'Сервер просит скачивать себя из чужого источника пакетов — такие подключать нельзя.',
-      unsupportedTag: 'Нельзя подключить',
-    },
-  ];
-}
-
-// Чтение ExecutionEnvironment из текущего пользователя. Сейчас стора для него нет (useMe
-// отдаёт только role и defaultPersonaId), поэтому безопасно возвращаем null — карточка
-// просто не покажет бейдж среды. Когда стор расширится, тут же появится реальное значение
-// и бейдж оживёт без правок компонента
+// === Чтение ExecutionEnvironment из текущего пользователя. ===
+// Сейчас стора для него нет (useMe отдаёт только role и defaultPersonaId), поэтому
+// безопасно возвращаем null — карточка просто не покажет бейдж среды. Когда стор
+// расширится, тут же появится реальное значение и бейдж оживёт без правок компонента
 function readExecEnv(): 'local' | 'container' | null {
   return null;
 }

@@ -37,8 +37,9 @@ public class McpCatalogMapperTests
         card.Prefill.Should().NotBeNull();
         card.Prefill!.Transport.Should().Be("stdio");
         card.Prefill.Command.Should().Be("npx");
-        // порядок: -y из runtimeArguments, затем pkg@version, затем packageArguments по порядку:
-        // позиционный без default → плейсхолдер-поле; named с default → значение; named без → плейсхолдер
+        // порядок: -y (кладём сами первым), затем pkg@version, затем packageArguments
+        // по порядку: позиционный без default → плейсхолдер-поле; named с default →
+        // значение; named без → плейсхолдер
         card.Prefill.Args.Should().Equal("-y", "pkg-mcp@2.0.1", "{arg1}", "--mode", "fast", "--token", "{token}");
         card.Prefill.Fields.Should().Contain(f => f.Target == "args" && f.Name == "arg1" && f.Required);
         card.Prefill.Fields.Should().Contain(f => f.Target == "args" && f.Name == "token" && !f.Required);
@@ -58,6 +59,36 @@ public class McpCatalogMapperTests
             """));
         card!.Connectable.Should().BeTrue();
         card.Prefill!.Command.Should().Be("npx");
+        // -y кладём сами и всегда: без него npx ждёт интерактивного подтверждения
+        // установки, и сервер не стартует (блокер приёмки D5)
+        card.Prefill.Args.Should().Equal("-y", "plain-mcp@1.0.0");
+    }
+
+    [Fact]
+    public void Package_без_runtimeArguments_y_всё_равно_первый_аргумент()
+    {
+        // agency.kesey/pretrip из живого реестра: runtimeArguments нет вовсе —
+        // декларации на него полагаться нельзя, неинтерактивность — наша забота
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"agency.kesey/pretrip","version":"1.0.0",
+            "packages":[{"registryType":"npm","identifier":"pretrip-mcp","version":"1.0.1",
+            "runtimeHint":"npx","transport":{"type":"stdio"}}]
+            """));
+        card!.Connectable.Should().BeTrue();
+        card.Prefill!.Args.Should().Equal("-y", "pretrip-mcp@1.0.1");
+    }
+
+    [Fact]
+    public void Package_явный_y_из_декларации_не_задваивается()
+    {
+        var card = McpCatalogMapper.MapEntry(Entry("""
+            "name":"io.github.o/yes","version":"1.0.0",
+            "packages":[{"registryType":"npm","identifier":"yes-mcp","version":"1.0.0",
+            "runtimeHint":"npx","transport":{"type":"stdio"},
+            "runtimeArguments":[{"value":"-y","type":"positional"}]}]
+            """));
+        card!.Connectable.Should().BeTrue();
+        card.Prefill!.Args.Should().Equal("-y", "yes-mcp@1.0.0");
     }
 
     [Fact]

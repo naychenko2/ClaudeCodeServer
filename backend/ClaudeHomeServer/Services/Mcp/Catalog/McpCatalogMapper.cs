@@ -297,13 +297,18 @@ public static class McpCatalogMapper
                 continue;
             }
 
-            // runtimeArguments — жёсткий allow-list, у каждого рантайма свой: npx —
-            // только молчаливое подтверждение -y; uvx — пуст (у него нет ни
-            // подтверждений, ни безобидных флагов: --from/--with/--index/--index-url/
-            // --extra-index-url/--find-links подменяют источник пакета ровно как
-            // --registry у npx). Всё прочее — предпросмотр строки перестал бы
-            // описывать то, что реально запустится
+            // -y для npx кладём всегда и сами: это не аргумент автора сервера, а наше
+            // условие неинтерактивного запуска — без него npx ждёт подтверждения
+            // установки, и сервер не стартует. Большинство деклараций реестра
+            // runtimeArguments вообще не присылают, полагаться на декларацию нельзя
             var args = new List<string>();
+            if (runtime == "npx") args.Add("-y");
+            // runtimeArguments — жёсткий allow-list, у каждого рантайма свой: npx —
+            // только -y (уже добавлен первым, из декларации не дублируем); uvx — пуст
+            // (у него нет ни подтверждений, ни безобидных флагов: --from/--with/
+            // --index/--index-url/--extra-index-url/--find-links подменяют источник
+            // пакета ровно как --registry у npx). Всё прочее — предпросмотр строки
+            // перестал бы описывать то, что реально запустится
             var runtimeArgs = ArrayOf(pkg, "runtimeArguments");
             foreach (var runtimeArg in runtimeArgs)
             {
@@ -315,10 +320,7 @@ public static class McpCatalogMapper
                 if (runtime == "npx"
                     && string.Equals(Str(runtimeArg, "type"), "positional", StringComparison.OrdinalIgnoreCase)
                     && Str(runtimeArg, "value") == "-y")
-                {
-                    args.Add("-y");
                     continue;
-                }
                 firstNotice ??= $"Сервер просит запускаться с флагом «{Str(runtimeArg, "value") ?? Str(runtimeArg, "name")}» — он подменяет источник кода, поэтому подключить нельзя";
                 goto nextPackage;
             }
@@ -485,7 +487,7 @@ file static class StringExtensions
 file static class PrefillVersionExtensions
 {
     // Версия карточки = версия выбранного артефакта; у stdio она же уходит в CatalogRef.
-    // Это первый аргумент вида pkg@version (npx -y pkg@1.2.3 — или сразу pkg@1.2.3)
+    // Это первый аргумент вида pkg@version (npx -y pkg@1.2.3; uvx pkg@1.2.3)
     public static string? VersionOf(this McpCatalogPrefillDto prefill)
     {
         if (prefill.Transport != "stdio") return null;

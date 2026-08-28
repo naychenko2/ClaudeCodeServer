@@ -3106,6 +3106,30 @@ export interface McpCatalogSearchResult {
   error?: string | null;
 }
 
+// Описание поля формы, прочитанное из реестра. Живёт ТОЛЬКО в сессии импорта
+// каталога — в McpServerRecord НЕ кладётся (план §7): в записи секреты хранятся в
+// защищённом сторе, а подписи полей к ней не нужны, они нужны ТОЛЬКО предзаполнению
+// формы. Когда человек открывает существующую запись на правку, источник описаний —
+// бэкенд (для каталожной записи он их отдаёт), а не реестр. McpServerForm принимает
+// такой черновик от McpCatalogPanel и кладёт в локальный стейт формы
+export interface McpCatalogFieldDraft extends McpCatalogField {
+  // Куда положить значение: 'env' для stdio, 'headers' для http. Дублируем type явно —
+  // на стороне формы проще ветвиться по `where`, чем нести транспорт в каждый
+  // вызов. Для args-полей в черновике не бывает
+  where: 'env' | 'headers';
+}
+
+// Превью черновика, который каталог передаёт форме. Поля формы (fieldsDraft) едут
+// вместе с каталожными метаданными (CatalogRef, имя), чтобы бэкенд увидел полный
+// слепок происхождения уже на POST /api/mcp/servers
+export interface McpServerCatalogDraft {
+  source: McpCatalogServer;
+  // Указатель, который ляжет в McpServerDto.catalogRef и в McpServerUpsert.catalogRef
+  catalogRef: McpCatalogRef;
+  // Поля черновика: форма раскидает их по env/headers
+  fieldsDraft: McpCatalogFieldDraft[];
+}
+
 // Вход по OAuth (волна 7) — ответы POST .../oauth/start и .../oauth/complete
 export interface McpOAuthStartResult {
   authorizeUrl: string;

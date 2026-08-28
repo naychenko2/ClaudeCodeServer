@@ -43,10 +43,14 @@ const hintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
 };
 
-export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
+export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, onDelete }: {
   data: McpData;
   onEdit: (server: McpServer) => void;
   onAdd: () => void;
+  // Кнопка «Найти сервер» в шапке раздела: ведёт в каталог (фича mcp-catalog).
+  // Список сам не знает, включён ли флаг — это решает родитель и не передаёт
+  // колбэк, если каталог выключен (тогда и кнопки нет)
+  onCatalog?: () => void;
   onOpenAccess: () => void;
   onDelete: (server: McpServer) => void;
 }) {
@@ -74,8 +78,13 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
           <EmptyState
             icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
             title="Своих серверов пока нет"
-            subtitle="Пока подключены только встроенные серверы продукта. Добавьте свой — например, Miro или файловый сервер — и он станет доступен в чатах и персонам"
-            action={<Button variant="primary" size="sm" onClick={onAdd}>Добавить сервер</Button>}
+            subtitle="Пока подключены только встроенные серверы продукта. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
+            action={
+              <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {onCatalog && <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>}
+                <Button variant="ghost" size="sm" onClick={onAdd}>Добавить вручную</Button>
+              </div>
+            }
           />
         </div>
       ) : (
@@ -98,6 +107,13 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
               который AI&nbsp;Home не редактирует.
             </div>
           )}
+        </div>
+      )}
+
+      {onCatalog && (
+        <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
+          <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>
+          <Button variant="ghost" size="sm" onClick={onAdd}>Добавить вручную</Button>
         </div>
       )}
 

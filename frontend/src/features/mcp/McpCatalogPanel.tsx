@@ -21,7 +21,14 @@ export type CatalogOpenTarget =
   | { kind: 'detail'; server: McpCatalogServer }
   | { kind: 'manual' };
 
-export function McpCatalogPanel({ onPick, onManual, onClose }: {
+export function McpCatalogPanel({ installedNames, onPick, onManual, onClose }: {
+  // Имена уже подключённых каталожных серверов (по CatalogRef.name). Сверка по
+  // name, а не по key — у каталожной записи ключ подбирает бэкенд из имени и
+  // slug'а, а человек в карточке каталога видит именно реестровое имя. Если
+  // такой сервер уже есть — карточка красится бейджем «Уже добавлен», а кнопка
+  // «Настроить подключение» всё равно открывает форму, чтобы можно было дойти
+  // до правки ключа/секрета (план §4)
+  installedNames?: ReadonlySet<string>;
   onPick: (server: McpCatalogServer) => void;
   onManual: () => void;
   onClose: () => void;
@@ -97,6 +104,7 @@ export function McpCatalogPanel({ onPick, onManual, onClose }: {
               key={s.name}
               server={s}
               env={env}
+              installed={!!installedNames?.has(s.name)}
               isLocalStdioWarning={isStdioLocal && s.transport === 'npm'}
               onPick={onPick}
             />
@@ -121,9 +129,12 @@ export function McpCatalogPanel({ onPick, onManual, onClose }: {
 // Бейдж среды — по факту env владельца (план §1). Никакой галочки «только удалённые»:
 // стdio-сервер на карточке у local-владельца несёт предупреждающую полосу (по §2)
 
-function CatalogCard({ server, env, isLocalStdioWarning, onPick }: {
+function CatalogCard({ server, env, installed, isLocalStdioWarning, onPick }: {
   server: McpCatalogServer;
   env: 'local' | 'container' | null;
+  // Сервер с таким реестровым именем уже подключён (есть в McpServerDto.catalogRef.name).
+  // Кнопка «Настроить подключение» остаётся — через неё открывается правка ключа/секрета
+  installed: boolean;
   isLocalStdioWarning: boolean;
   onPick: (server: McpCatalogServer) => void;
 }) {
@@ -150,6 +161,9 @@ function CatalogCard({ server, env, isLocalStdioWarning, onPick }: {
           color: blocked ? C.textMuted : C.textHeading,
         }}>{server.displayName}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
+          {installed && (
+            <span style={badgeStyle('ok')}>Уже добавлен</span>
+          )}
           {tag && (
             <span style={badgeStyle('warn')}>{tag}</span>
           )}
@@ -278,12 +292,19 @@ function SearchField({ value, onChange, loading }: {
   );
 }
 
-function badgeStyle(tone: 'neutral' | 'warn'): CSSProperties {
+function badgeStyle(tone: 'neutral' | 'warn' | 'ok'): CSSProperties {
   if (tone === 'warn') {
     return {
       display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap',
       fontSize: FS.xs, fontWeight: 600, lineHeight: 1.4, padding: '3px 8px',
       borderRadius: R.max, background: C.warningBg, color: C.warningText,
+    };
+  }
+  if (tone === 'ok') {
+    return {
+      display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap',
+      fontSize: FS.xs, fontWeight: 600, lineHeight: 1.4, padding: '3px 8px',
+      borderRadius: R.max, background: C.successBg, color: C.successText,
     };
   }
   return {

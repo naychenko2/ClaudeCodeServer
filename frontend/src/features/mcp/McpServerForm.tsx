@@ -6,7 +6,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { slugify } from '../../lib/slug';
 import type { McpData } from './useMcpData';
-import type { McpServer, McpValueInput } from '../../types';
+import type { McpServer, McpServerCatalogDraft, McpValueInput } from '../../types';
 
 // Вкладка «Добавить» (она же форма правки существующей записи): stdio / http /
 // вставка готового JSON-фрагмента. Секретные значения после сохранения не приходят
@@ -21,27 +21,98 @@ interface Pair {
   secret: boolean;
   // Значение уже лежит в защищённом хранилище: поле пустое и заблокировано
   stored: boolean;
+  // Человеческая подпись поля, приехавшая из каталога. Только в сессии импорта
+  // (план §7): в запись не кладётся, в правке не показывается. Нужна ТОЛЬКО на
+  // предзаполнении — без неё обязательное поле без дефолта приезжает пустым и
+  // безымянным, а проба падает без объяснения
+  description?: string | null;
+  // Обязательное для запуска (без значения по умолчанию). Аналогично description
+  // живёт только в сессии импорта: на форме показывается звёздочкой, в запись не идёт
+  isRequired?: boolean;
+  // Плейсхолдер из реестра — виден на форме, пока поле пустое
+  placeholder?: string | null;
 }
 
 const hintStyle: CSSProperties = { fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 };
 
-export function McpServerForm({ data, server, onDone, onCancel }: {
+export function McpServerForm({ data, server, catalogDraft, onDone, onCancel }: {
   data: McpData;
   server: McpServer | null;      // null — создание
+  // Предзаполнение из каталога. Когда задано — форма понимает, что её открыли как
+  // продолжение карточки каталога: режим фиксируется (stdio/http по draft.source.transport),
+  // transport заблокирован на переключение, описание и обязательность едут с полями,
+  // кнопка сохранения говорит «Сохранить выключенным» с плашкой-объяснением
+  catalogDraft?: McpServerCatalogDraft | null;
   onDone: () => void;
   onCancel: () => void;
 }) {
   const editing = server !== null;
-  const [mode, setMode] = useState<Mode>(
-    server ? (server.transport === 'stdio' ? 'stdio' : 'http') : 'stdio');
-  const [label, setLabel] = useState(server?.label ?? '');
-  const [key, setKey] = useState(server?.key ?? '');
-  const [keyTouched, setKeyTouched] = useState(editing);
-  const [command, setCommand] = useState(server?.command ?? '');
-  const [args, setArgs] = useState((server?.args ?? []).join(' '));
-  const [url, setUrl] = useState(server?.url ?? '');
-  const [env, setEnv] = useState<Pair[]>(() => toPairs(server?.env));
-  const [headers, setHeaders] = useState<Pair[]>(() => toPairs(server?.headers));
+  // При импорте из каталога — режим зафиксирован по типу сервера. Переключатель stdio/http
+  // прячем, чтобы человек не выкинул команду из черновика. JSON-фрагмент из каталога
+  // подкидывать незачем — это ручной путь, ему каталог не нужен
+  const fromCatalog = !!catalogDraft;
+  const [mode, setMode] = useState<Mode>(() => {
+    if (catalogDraft) return catalogDraft.source.transport === 'npm' ? 'stdio' : 'http';
+    if (server) return server.transport === 'stdio' ? 'stdio' : 'http';
+    return 'stdio';
+  });
+  const [label, setLabel] = useState(() => {
+    if (catalogDraft) return catalogDraft.source.displayName;
+    return server?.label ?? '';
+  });
+  const [key, setKey] = useState(() => {
+    if (catalogDraft) return slugify(catalogDraft.source.displayName, true);
+    return server?.key ?? '';
+  });
+  const [keyTouched, setKeyTouched] = useState(editing || fromCatalog);
+  const [command, setCommand] = useState(() => {
+    if (catalogDraft) return catalogDraft.source.command ?? '';
+    return server?.command ?? '';
+  });
+  const [args, setArgs] = useState(() => {
+    if (catalogDraft) {
+      const argPairs = catalogDraft.fieldsDraft.filter(f => f.arg && f.default);
+      return argPairs.map(f => quoteIfNeeded(f.default ?? '')).join(' ');
+    }
+    return (server?.args ?? []).join(' ');
+  });
+  const [url, setUrl] = useState(() => {
+    if (catalogDraft) return catalogDraft.source.url ?? '';
+    return server?.url ?? '';
+  });
+  const [env, setEnv] = useState<Pair[]>(() => {
+    if (catalogDraft) {
+      const envFields = catalogDraft.fieldsDraft.filter(f => !f.arg);
+      if (envFields.length === 0) return [];
+      return envFields.map(f => ({
+        name: f.name,
+        value: f.default ?? '',
+        secret: !!f.isSecret,
+        stored: false,
+        description: f.description ?? null,
+        isRequired: !!f.isRequired,
+        placeholder: f.placeholder ?? null,
+      }));
+    }
+    return toPairs(server?.env);
+  });
+  const [headers, setHeaders] = useState<Pair[]>(() => {
+    if (catalogDraft) {
+      // remote-серверы тоже едут с полями формы (те самые, что идут в headers)
+      const hdrFields = catalogDraft.fieldsDraft.filter(f => !f.arg && f.where === 'headers');
+      if (hdrFields.length === 0) return toPairs(server?.headers);
+      return hdrFields.map(f => ({
+        name: f.name,
+        value: f.default ?? '',
+        secret: !!f.isSecret,
+        stored: false,
+        description: f.description ?? null,
+        isRequired: !!f.isRequired,
+        placeholder: f.placeholder ?? null,
+      }));
+    }
+    return toPairs(server?.headers);
+  });
   // Способ входа — только у http/sse (OAuth ограничен транспортом на бэке). 'headers' —
   // всё как раньше (заголовки вручную, включая apikey/bearer из наследства); переключение
   // на него у записи с oauth2 явно сбрасывает kind — иначе тумблер соврал бы о состоянии
@@ -84,6 +155,10 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
         key: key.trim(),
         label: label.trim() || key.trim(),
         transport: mode,
+        // Каталожная запись идёт с enabled=false принудительно (план §4: импорт
+        // безопасной зоной не делает). Для правки enabled НЕ передаём — бэкенд
+        // сохраняет прежнее значение. Включает запись человек отдельным действием
+        ...(fromCatalog ? { enabled: false, catalogRef: catalogDraft!.catalogRef } : {}),
         allowReadOnlyPersonas,
         ...(mode === 'stdio'
           ? { command: command.trim(), args: splitArgs(args), env: toInputs(env) }
@@ -99,13 +174,34 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
     }
   };
 
+  // Поля, отмеченные в черновике как обязательные, должны быть заполнены перед
+  // сохранением. Без этого импорт «проходит» на пустых env — и проба падает без
+  // объяснения, в каком поле. Дефолт из реестра кладётся, но секрет-поля приезжают
+  // пустыми по построению (значения секретов из реестра НЕ передаются, план §3)
+  const requiredMissing = (() => {
+    if (mode === 'stdio') {
+      return env.some(p => p.isRequired && !p.stored && p.value.trim().length === 0);
+    }
+    return headers.some(p => p.isRequired && !p.stored && p.value.trim().length === 0);
+  })();
+
   const canSubmit = mode === 'json'
     ? json.trim().length > 0
-    : key.trim().length > 0 && (mode === 'stdio' ? command.trim().length > 0 : url.trim().length > 0);
+    : key.trim().length > 0
+      && (mode === 'stdio' ? command.trim().length > 0 : url.trim().length > 0)
+      && !requiredMissing;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-      {!editing && (
+      {fromCatalog && (
+        <div style={{
+          padding: '8px 12px', borderRadius: R.lg, fontSize: FS.sm, lineHeight: 1.5,
+          color: C.textSecondary, background: C.bgInset,
+        }}>
+          Настройки взяты из каталога. Проверьте их и заполните недостающее.
+        </div>
+      )}
+      {!editing && !fromCatalog && (
         <InlineSegmented
           value={mode}
           options={[
@@ -233,13 +329,25 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
         }}>{imported}</div>
       )}
 
+      {fromCatalog && (
+        <div style={{
+          padding: '8px 12px', borderRadius: R.lg, fontSize: FS.sm, lineHeight: 1.5,
+          color: C.textSecondary, background: C.bgInset,
+        }}>
+          Сервер сохранится <b style={{ color: C.textHeading }}>выключенным</b>. Включить
+          его вы решите сами — в нужном проекте или для конкретной персоны.
+        </div>
+      )}
+
       <div style={{
         display: 'flex', justifyContent: 'flex-end', gap: SP.sm,
         paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
       }}>
         <Button variant="ghost" size="sm" onClick={onCancel}>Отмена</Button>
         <Button variant="primary" size="sm" loading={busy} disabled={!canSubmit || busy} onClick={() => void submit()}>
-          {mode === 'json' ? 'Добавить из JSON' : editing ? 'Сохранить' : 'Добавить сервер'}
+          {mode === 'json' ? 'Добавить из JSON'
+            : fromCatalog ? 'Сохранить выключенным'
+              : editing ? 'Сохранить' : 'Добавить сервер'}
         </Button>
       </div>
     </div>
@@ -259,39 +367,71 @@ function PairList({ title, addLabel, pairs, onChange }: {
     <Field label={title}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {pairs.map((pair, i) => (
-          <div key={i} style={{
-            display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr) auto auto',
-            gap: 6, alignItems: 'center',
-          }}>
-            <TextField value={pair.name} onChange={v => patch(i, { name: v })} mono placeholder="Ключ" />
-            <TextField
-              value={pair.stored ? '' : pair.value}
-              onChange={v => patch(i, { value: v, stored: false })}
-              mono
-              disabled={pair.stored}
-              placeholder={pair.stored ? 'задано' : 'Значение'}
-            />
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 5, fontSize: FS.xs,
-              color: C.textSecondary, cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
-              fontFamily: FONT.sans,
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {/* Подпись строки: человекочитаемое имя поля (из каталога) + технический
+                ключ + маркер обязательности. Сборная подпись — НЕ FieldLabel (тот
+                uppercase, а описательная подпись в uppercase читается как крик).
+                Шрифт обычный, размер FS.sm, цвет textHeading — обычный для подписей
+                полей в формах. Маркер обязательности — звёздочка цветом C.danger
+                (в системе такого токена нет; C.danger — самое близкое к «ошибка»,
+                что достаточно читаемо и не путает с акцентом) */}
+            {pair.description && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
+                  {pair.description}
+                </span>
+                <span style={{
+                  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+                  border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 6px',
+                }}>{pair.name}</span>
+                {pair.isRequired && (
+                  <span style={{ fontSize: FS.sm, fontWeight: 700, color: C.danger }} aria-label="обязательное">*</span>
+                )}
+              </div>
+            )}
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr) auto auto',
+              gap: 6, alignItems: 'center',
             }}>
-              <input
-                type="checkbox"
-                checked={pair.secret}
-                onChange={e => patch(i, { secret: e.target.checked })}
-                style={{ accentColor: C.accent, width: 14, height: 14, cursor: 'pointer' }}
+              {/* Если описание из каталога уже показало имя, ключ в TextField-плейсхолдере
+                  не дублируем — оставляем технический ключ в самом инпуте. Это поле остаётся
+                  редактируемым, чтобы человек мог чинить неточности реестра (план §4) */}
+              <TextField
+                value={pair.name}
+                onChange={v => patch(i, { name: v })}
+                mono
+                placeholder={pair.description ? undefined : 'Ключ'}
               />
-              секрет
-            </label>
-            <IconButton
-              size="sm"
-              tone="danger"
-              title="Убрать"
-              onClick={() => onChange(pairs.filter((_, idx) => idx !== i))}
-            >
-              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
+              <TextField
+                value={pair.stored ? '' : pair.value}
+                onChange={v => patch(i, { value: v, stored: false })}
+                mono
+                disabled={pair.stored}
+                placeholder={pair.stored ? 'задано' : (pair.placeholder ?? 'Значение')}
+                type={pair.secret ? 'password' : 'text'}
+              />
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 5, fontSize: FS.xs,
+                color: C.textSecondary, cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
+                fontFamily: FONT.sans,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={pair.secret}
+                  onChange={e => patch(i, { secret: e.target.checked })}
+                  style={{ accentColor: C.accent, width: 14, height: 14, cursor: 'pointer' }}
+                />
+                секрет
+              </label>
+              <IconButton
+                size="sm"
+                tone="danger"
+                title="Убрать"
+                onClick={() => onChange(pairs.filter((_, idx) => idx !== i))}
+              >
+                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+              </IconButton>
+            </div>
           </div>
         ))}
         <Button
@@ -328,4 +468,17 @@ function splitArgs(line: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(line)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
   return out;
+}
+
+// Кавычки в значении argv-аргумента: пробел или иной «особый» символ — оборачиваем
+// в двойные кавычки. Зеркально splitArgs: что splitArgs разобрал, quoteIfNeeded
+// собирает обратно. Используется при предзаполнении аргументов из черновика каталога
+function quoteIfNeeded(value: string): string {
+  if (!value) return value;
+  // Кавычки нужны, если в строке есть символ, который оболочка трактовала бы
+  // иначе. Самый частый случай — пробел в путях Windows. Кавычки в самом значении
+  // оставляем на совести каталога (план §7: аргумент с кавычкой → отказ импорта
+  // либо экранирование, не наше дело)
+  if (/[\s"'\\$`<>|&;]/.test(value)) return `"${value}"`;
+  return value;
 }

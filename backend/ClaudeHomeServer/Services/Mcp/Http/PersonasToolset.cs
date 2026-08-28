@@ -619,11 +619,15 @@ public sealed partial class PersonasToolset(
     }
 
     // null — в аргументах не было ни одного изменяемого поля (только привязки)
-    private static UpdatePersonaRequest? BuildUpdateRequest(JsonObject arguments, string? sessionProjectId)
+    // tier-ячейки пробрасываются через ContainsKey + StringArg (а не OptionalArg):
+    // семантика бэкенда null = не менять, "" = сбросить к наследованию, иначе значение;
+    // OptionalArg проглотил бы "" как null и сброс стал бы недоступен.
+    internal static UpdatePersonaRequest? BuildUpdateRequest(JsonObject arguments, string? sessionProjectId)
     {
         string[] fields = ["name", "role", "description", "systemPrompt", "effort", "color", "greeting",
             "memoryEnabled", "scope", "projectId", "handle", "modelTier", "specialty",
-            "character", "tone", "mustDo", "mustNot", "outputFormat", "speechExamples"];
+            "character", "tone", "mustDo", "mustNot", "outputFormat", "speechExamples",
+            "tierStrong", "tierMedium", "tierWeak"];
         if (!fields.Any(arguments.ContainsKey)) return null;
 
         PersonaScope? scope = arguments.ContainsKey("scope")
@@ -649,7 +653,10 @@ public sealed partial class PersonasToolset(
             Contract: contract,
             Specialty: SpecialtyArg(arguments),
             Handle: OptionalArg(arguments, "handle"),
-            ModelTier: arguments.ContainsKey("modelTier") ? StringArg(arguments, "modelTier") : null);
+            ModelTier: arguments.ContainsKey("modelTier") ? StringArg(arguments, "modelTier") : null,
+            TierStrong: arguments.ContainsKey("tierStrong") ? StringArg(arguments, "tierStrong") : null,
+            TierMedium: arguments.ContainsKey("tierMedium") ? StringArg(arguments, "tierMedium") : null,
+            TierWeak: arguments.ContainsKey("tierWeak") ? StringArg(arguments, "tierWeak") : null);
     }
 
     private static List<PersonaBindingRequest> BindingRequests(JsonObject arguments, string name)

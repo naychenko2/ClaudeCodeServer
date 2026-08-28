@@ -239,6 +239,23 @@ const PERSONA_FIELDS = {
     description: 'strong — архитектура, ревью, запутанный баг; medium — работа по плану; '
       + 'weak — рутина. Сомневаешься — не указывай',
   },
+  // Личные ячейки матрицы персоны (ADR-007 §2): переопределяют модель конкретного уровня.
+  // Валидация значений — на бэке; здесь ограничений сознательно нет.
+  tierStrong: {
+    type: 'string',
+    description: 'Своя модель для сильных задач: id модели или "preset:{id}"; '
+      + 'пустая строка — сбросить к наследованию от специальности',
+  },
+  tierMedium: {
+    type: 'string',
+    description: 'Своя модель для средних задач: id модели или "preset:{id}"; '
+      + 'пустая строка — сбросить к наследованию от специальности',
+  },
+  tierWeak: {
+    type: 'string',
+    description: 'Своя модель для слабых задач: id модели или "preset:{id}"; '
+      + 'пустая строка — сбросить к наследованию от специальности',
+  },
   effort: { type: 'string', description: 'Усилие рассуждения модели' },
   color: { type: 'string', enum: COLORS },
   greeting: { type: 'string' },
@@ -684,7 +701,7 @@ function personaBody(args, keys) {
 // model сознательно отсутствует: конкретная модель персоне через MCP не задаётся (поле
 // «Модель» убрано из карточки — настраивается только ячейками уровней), и даже явная
 // передача model в аргументах сюда не попадёт — поле не попадёт и в body запроса
-const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'modelTier', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
+const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'modelTier', 'tierStrong', 'tierMedium', 'tierWeak', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
 
 // Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
 // (проверка до любого fetch — изменение прав себе блокируется по построению)

@@ -107,13 +107,21 @@ export function PersonasSpecialties(props: PersonasSpecialtiesProps): React.Reac
     scrollRef.current?.scrollTo({ top: 0 });
   }, [viewMode, roleKey]);
 
+  // Витрина живёт на сетке раздела (CONTENT_MAX_W по центру), визитка и форма —
+  // резиновые: их шапка-тулбар тянется во всю ширину центра, как у персоны
+  // (PersonasPage → PersonaStudio), а полотно центрируется уже внутри экрана.
+  const detail = effectiveViewMode !== 'list';
+
   return (
     // Фон прозрачный: под центром виден дудл-фон страницы (CanvasBackdrop).
     // Скролл — свой, как у PersonasHub (см. PersonasHub.tsx:60): иначе на длинном
     // списке ролей десктоп не прокручивался, а мобила подменю проваливалась за
     // нижнюю кромку. Нижний ориентир ширины — 360 CSS.
-    <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto', padding: '0 32px' }}>
-      <div style={{ maxWidth: CONTENT_MAX_W, margin: '0 auto', padding: '28px 0 60px' }}>
+    <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto', padding: detail ? 0 : '0 32px' }}>
+      <div style={{
+        maxWidth: detail ? undefined : CONTENT_MAX_W, margin: '0 auto',
+        padding: detail ? '0 0 60px' : '28px 0 60px',
+      }}>
         {/* Hero-заголовок раздела — только на витрине. На визитке и форме заголовком
             служит тулбар (как у персоны): лишний hero отжимал контент за первый экран
             и дублировал тулбар. Тот же язык, что у PersonasHub: serif 28/500 +
@@ -138,7 +146,8 @@ export function PersonasSpecialties(props: PersonasSpecialtiesProps): React.Reac
 
         {settingsError && (
           <div style={{
-            margin: `0 0 12px`, padding: '7px 10px', borderRadius: 8, fontSize: FS.xs,
+            margin: detail ? '0 16px 12px' : '0 0 12px',
+            padding: '7px 10px', borderRadius: 8, fontSize: FS.xs,
             color: C.dangerText, background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
           }}>{settingsError}</div>
         )}

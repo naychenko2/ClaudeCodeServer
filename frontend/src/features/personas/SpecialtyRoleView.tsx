@@ -7,11 +7,11 @@
 //   • шапка-тулбар: стрелка «Назад», аватар роли 40, название роли serif 28/500
 //     в цвете роли, подпись, справа кнопка «Редактировать» (только админу);
 //   • под тулбаром акцентная полоса `height:2, background:{accent}55`;
-//   • полотно: свой скроллер, maxWidth isMobile ? 680 : 1020, margin 0 auto,
-//     раскладка display:flex, gap:28, flexWrap:wrap — визитка flex:1 1 380px,
-//     правая колонка flex:1 1 300px;
-//   • hero: аватар 80, название serif 26 (22 на мобиле)/600 в цвете роли,
-//     описание 13.5 C.textSecondary; на мобиле по центру;
+//   • шапка и полоса — во всю ширину центра (как у персоны), полотно под ними:
+//     maxWidth isMobile ? 680 : 1020, margin 0 auto, раскладка display:flex,
+//     gap:28, flexWrap:wrap — визитка flex:1 1 380px, правая колонка flex:1 1 300px;
+//   • отдельного hero (аватар + название) нет: идентичность роли несёт тулбар,
+//     второй заголовок дублировал его; описание на мобиле — строкой под полосой;
 //   • блоки — плоские секции на общем фоне, без белых коробок:
 //     { borderTop:'1px solid C.borderLight', paddingTop:20 }, заголовки через
 //     общий SectionLabel; внутренние чипы фактов — как factChip в PersonaPreview;
@@ -145,7 +145,7 @@ export function SpecialtyRoleView({
   // пустое состояние с возвратом.
   if (!role) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: isMobile ? '20px 0 32px' : '26px 0 40px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, padding: isMobile ? '20px 16px 32px' : '26px 32px 40px' }}>
         <BackRow onBack={onBack} />
         <div style={{
           border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -191,41 +191,6 @@ export function SpecialtyRoleView({
   const subtitle = roleDescription
     ? (roleDescription.split('\n')[0]?.trim() || '')
     : '';
-
-  // === Hero визитки ===
-  const hero = (
-    <div style={{
-      display: 'flex', gap: 18, alignItems: 'flex-start',
-      flexDirection: isMobile ? 'column' : 'row',
-    }}>
-      <div style={{
-        flexShrink: 0,
-        alignSelf: isMobile ? 'center' : 'flex-start',
-      }}>
-        <RoleIcon catalog={role} roleKey={roleKey} size={80} />
-      </div>
-      <div style={{
-        flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined,
-        display: 'flex', flexDirection: 'column', gap: 6,
-        textAlign: isMobile ? 'center' : 'left',
-      }}>
-        <div style={{
-          fontFamily: FONT.serif, fontSize: isMobile ? FS.h2 : FS.h1, fontWeight: 600,
-          color: accent, lineHeight: 1.25, letterSpacing: '-0.01em',
-          overflowWrap: 'break-word',
-        }}>
-          {roleName}
-        </div>
-        {roleDescription?.trim() && (
-          <div style={{
-            fontSize: FS.base, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
-          }}>
-            {roleDescription}
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   // === Настройки: доступ · инструменты · модели по уровням ===
   const settingsSection = (
@@ -372,7 +337,6 @@ export function SpecialtyRoleView({
       flex: '1 1 380px', minWidth: 0,
       display: 'flex', flexDirection: 'column', gap: 24,
     }}>
-      {hero}
       {settingsSection}
       {presetsSection}
       {bindingsSection}
@@ -405,75 +369,85 @@ export function SpecialtyRoleView({
   );
 
   return (
-    // Прокрутка и горизонтальные поля живут у родителя (PersonasSpecialties):
-    // двойные скроллеры съедали место на 360 CSS и резали PillSwitch доступа.
-    // Здесь только вертикальные отступы и центрированное полотно.
+    // Прокрутка живёт у родителя (PersonasSpecialties): двойные скроллеры съедали
+    // место на 360 CSS и резали PillSwitch доступа. Шапка и акцентная полоса идут
+    // во всю ширину центра — как у персоны (PersonaStudio), где тулбар не сидит
+    // внутри центрированного полотна; полотно центрируется уже под ними.
     <div>
-      <div style={{
-        maxWidth: isMobile ? 680 : 1020, margin: '0 auto', boxSizing: 'border-box',
-        padding: isMobile ? '20px 0 32px' : '26px 0 40px',
-      }}>
-        {/* Шапка-тулбар визитки — единый Toolbar из кита с полосой цвета роли
-            слева (как у PersonaToolbar). Заголовок раздела — тулбар, а не hero. */}
-        <Toolbar
-          isMobile={isMobile}
-          noBorder
-          bg="transparent"
-          style={{ borderLeft: `3px solid ${accent}` }}
-        >
-          <ToolbarIconButton onClick={onBack} title="Назад" isMobile={isMobile}>
-            <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
-          </ToolbarIconButton>
-          <RoleIcon catalog={role} roleKey={roleKey} size={isMobile ? 32 : 40} />
-          {/* На мобиле имя роли и подпись уже есть в шапке экрана (PersonasPage);
-              в тулбаре их рисовать не надо — текст сжимается до одной буквы
-              и дублирует шапку. */}
-          {!isMobile && (
+      {/* Шапка-тулбар визитки — единый Toolbar из кита с полосой цвета роли
+          слева (как у PersonaToolbar). Заголовок раздела — тулбар, а не hero. */}
+      <Toolbar
+        isMobile={isMobile}
+        noBorder
+        bg="transparent"
+        style={{ borderLeft: `3px solid ${accent}` }}
+      >
+        <ToolbarIconButton onClick={onBack} title="Назад" isMobile={isMobile}>
+          <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+        </ToolbarIconButton>
+        <RoleIcon catalog={role} roleKey={roleKey} size={isMobile ? 32 : 40} />
+        {/* На мобиле имя роли и подпись уже есть в шапке экрана (PersonasPage);
+            в тулбаре их рисовать не надо — текст сжимается до одной буквы
+            и дублирует шапку. */}
+        {!isMobile && (
+          <div style={{
+            flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1,
+          }}>
             <div style={{
-              flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1,
+              fontFamily: FONT.serif, fontSize: 28, fontWeight: 500,
+              color: accent, letterSpacing: '-0.01em', lineHeight: 1.2,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
+              {roleName}
+            </div>
+            {subtitle && (
               <div style={{
-                fontFamily: FONT.serif, fontSize: 28, fontWeight: 500,
-                color: accent, letterSpacing: '-0.01em', lineHeight: 1.2,
+                fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>
-                {roleName}
+                {subtitle}
               </div>
-              {subtitle && (
-                <div style={{
-                  fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {subtitle}
-                </div>
-              )}
-            </div>
-          )}
-          {isAdmin && onEdit && (
-            <button
-              type="button"
-              onClick={onEdit}
-              title="Редактировать"
-              style={{
-                ...tbBtnGhost,
-                display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
-              }}
-            >
-              <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-              Редактировать
-            </button>
-          )}
-        </Toolbar>
+            )}
+          </div>
+        )}
+        {isAdmin && onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            title="Редактировать"
+            style={{
+              ...tbBtnGhost,
+              display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+            }}
+          >
+            <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            Редактировать
+          </button>
+        )}
+      </Toolbar>
 
-        {/* Тонкая акцентная полоса роли — разделитель шапки и контента, как у
-            персоны (PersonaStudio). Внутри Toolbar полоса уже есть слева, но
-            между тулбаром и контентом нужна отдельная черта на всю ширину. */}
-        <div style={{ flex: 'none', height: 2, background: `${accent}55`, marginTop: 4 }} />
+      {/* Тонкая акцентная полоса роли — разделитель шапки и контента, как у
+          персоны (PersonaStudio). Внутри Toolbar полоса уже есть слева, но
+          между тулбаром и контентом нужна отдельная черта на всю ширину. */}
+      <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
+
+      {/* Полотно контента — центрированное, с горизонтальными полями. */}
+      <div style={{
+        maxWidth: isMobile ? 680 : 1020, margin: '0 auto', boxSizing: 'border-box',
+        padding: isMobile ? '20px 16px 32px' : '26px 32px 40px',
+      }}>
+        {/* Описание роли: на десктопе его несёт подпись тулбара, на мобиле
+            тулбар текста не рисует — там показываем строку описания здесь. */}
+        {isMobile && roleDescription?.trim() && (
+          <div style={{
+            fontSize: FS.base, color: C.textSecondary, fontFamily: FONT.sans,
+            lineHeight: 1.5, marginBottom: 22,
+          }}>{roleDescription}</div>
+        )}
 
         {/* Контент — две колонки, переносятся сами, когда не помещаются. */}
         <div style={{
           display: 'flex', gap: 28, alignItems: 'flex-start', flexWrap: 'wrap',
-          marginTop: 22,
         }}>
           {mainColumn}
           {peopleColumn}

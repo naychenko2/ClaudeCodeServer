@@ -3,14 +3,16 @@
 // «Редактировать» рисуется только админу на визитке).
 //
 // Полноценная форма правки по образцу PersonaForm:
-//   • свой скроллер, центрированное полотно maxWidth 680;
+//   • шапка-тулбар с акцентной полосой во всю ширину центра (как у персоны),
+//     под ними центрированное полотно maxWidth 680;
 //   • плоские секции, разделённые тонкой линией (паттерн TaskEditForm/PersonaForm);
 //   • кнопки «Сохранить»/«Отмена» в шапке-тулбаре; у «Сохранить» точка-индикатор
 //     dirty (как у PersonaToolbar); отмена с несохранённым — через ConfirmDialog;
 //   • все поля через общие примитивы Field/TextField/FieldLabel (UI-кит);
 //   • редактируемые поля: доступ, инструменты, свой список запретов, секции промпта,
 //     привязки по умолчанию, модели по уровням, уровень по умолчанию;
-//   • пресеты и hero-данные роли (имя, описание, ключ, цвет) — read-only;
+//   • пресеты read-only; неизменяемые данные роли (имя, ключ, цвет) несёт тулбар —
+//     отдельного hero нет, он дублировал шапку;
 //   • запись через LayerReducer в глобальный слой (см. lib/presets.ts);
 //   • мобильная раскладка: одна колонка, поля во всю ширину (нижний ориентир 360 CSS).
 
@@ -282,7 +284,7 @@ export function SpecialtyEditView({
       <div>
         <div style={{
           maxWidth: 680, margin: '0 auto', boxSizing: 'border-box',
-          padding: isMobile ? '18px 0 32px' : '22px 0 40px',
+          padding: isMobile ? '18px 16px 32px' : '22px 32px 40px',
         }}>
           <BackRow onBack={onBack} />
           <div style={{
@@ -310,31 +312,39 @@ export function SpecialtyEditView({
   };
 
   return (
-    // Прокрутка и горизонтальные поля — у родителя (PersonasSpecialties):
-    // двойные скроллеры съедали место на 360 CSS и резали PillSwitch доступа.
-    // Здесь вертикальные отступы и центрированное полотно.
+    // Прокрутка — у родителя (PersonasSpecialties): двойные скроллеры съедали
+    // место на 360 CSS и резали PillSwitch доступа. Шапка и акцентная полоса идут
+    // во всю ширину центра (как у персоны), полотно формы центрируется под ними.
     <div>
+      {/* Шапка-тулбар роли: стрелка «Назад», название, кнопки действий */}
+      <ToolbarRow
+        accent={accent}
+        roleKey={roleKey}
+        roleLabel={role.label}
+        roleAvatar={<RoleAvatar catalog={role} roleKey={roleKey} size={isMobile ? 32 : 40} />}
+        isMobile={isMobile}
+        canSave={canSave}
+        saving={saving}
+        dirty={dirty}
+        onBack={onBack}
+        onCancel={handleCancel}
+        onSave={handleSave}
+      />
+      <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
+
       <div style={{
         maxWidth: 680, margin: '0 auto', boxSizing: 'border-box',
-        padding: isMobile ? '18px 0 32px' : '22px 0 40px',
+        padding: isMobile ? '18px 16px 32px' : '22px 32px 40px',
         display: 'flex', flexDirection: 'column', gap: 28,
       }}>
-        {/* Шапка-тулбар роли: стрелка «Назад», название, кнопки действий */}
-        <ToolbarRow
-          accent={accent}
-          roleLabel={role.label}
-          roleAvatar={<RoleAvatar catalog={role} roleKey={roleKey} size={isMobile ? 32 : 40} />}
-          isMobile={isMobile}
-          canSave={canSave}
-          saving={saving}
-          dirty={dirty}
-          onBack={onBack}
-          onCancel={handleCancel}
-          onSave={handleSave}
-        />
-
-        {/* Hero — фиксированные данные роли (имя, описание, ключ, цвет) */}
-        <HeroSection role={role} roleKey={roleKey} accent={accent} isMobile={isMobile} />
+        {/* Описание роли: на десктопе его несёт подпись тулбара, на мобиле
+            тулбар текста не рисует — там показываем строку описания здесь.
+            Отдельного hero (аватар + название) нет: он дублировал тулбар. */}
+        {isMobile && role.description?.trim() && (
+          <div style={{
+            fontSize: FS.base, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
+          }}>{role.description}</div>
+        )}
 
         {/* Доступ */}
         <Section>
@@ -483,8 +493,9 @@ function Hint({ children }: { children: React.ReactNode }): React.ReactElement |
 }
 
 // === Шапка-тулбар роли ===
-function ToolbarRow({ accent, roleLabel, roleAvatar, isMobile, canSave, saving, dirty, onBack, onCancel, onSave }: {
+function ToolbarRow({ accent, roleKey, roleLabel, roleAvatar, isMobile, canSave, saving, dirty, onBack, onCancel, onSave }: {
   accent: string;
+  roleKey: string;
   roleLabel: string;
   roleAvatar: React.ReactNode;
   isMobile: boolean;
@@ -512,11 +523,20 @@ function ToolbarRow({ accent, roleLabel, roleAvatar, isMobile, canSave, saving, 
           его рисовать не надо — текст сжимается и дублирует шапку. */}
       {!isMobile ? (
         <div style={{
-          flex: 1, minWidth: 140,
-          fontFamily: FONT.serif, fontSize: FS.h1, fontWeight: 600,
-          color: accent, letterSpacing: '-0.01em', lineHeight: 1.25,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{roleLabel}</div>
+          flex: 1, minWidth: 140, display: 'flex', flexDirection: 'column', gap: 1,
+        }}>
+          <div style={{
+            fontFamily: FONT.serif, fontSize: FS.h1, fontWeight: 600,
+            color: accent, letterSpacing: '-0.01em', lineHeight: 1.25,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{roleLabel}</div>
+          {/* Ключ роли — единственное, что было только в hero; здесь он остаётся
+              на месте подписи (у визитки на этой строке живёт описание). */}
+          <div style={{
+            fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>ключ: {roleKey}</div>
+        </div>
       ) : (
         <div style={{ flex: 1, minWidth: 0 }} />
       )}
@@ -544,50 +564,6 @@ function ToolbarRow({ accent, roleLabel, roleAvatar, isMobile, canSave, saving, 
         </div>
       </div>
     </Toolbar>
-  );
-}
-
-// === Hero: аватар 80 + название + описание + ключ (read-only) ===
-function HeroSection({ role, roleKey, accent, isMobile }: {
-  role: SpecialtyCatalogEntry;
-  roleKey: string;
-  accent: string;
-  isMobile: boolean;
-}): React.ReactElement {
-  return (
-    <div style={{
-      display: 'flex', gap: 18, alignItems: 'flex-start',
-      flexDirection: isMobile ? 'column' : 'row',
-    }}>
-      <div style={{ flexShrink: 0, alignSelf: isMobile ? 'center' : 'flex-start' }}>
-        <RoleAvatar catalog={role} roleKey={roleKey} size={80} />
-      </div>
-      <div style={{
-        flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined,
-        display: 'flex', flexDirection: 'column', gap: 6,
-      }}>
-        <div style={{
-          fontFamily: FONT.serif, fontSize: isMobile ? 22 : 26, fontWeight: 600,
-          color: accent, lineHeight: 1.25, letterSpacing: '-0.01em',
-          overflowWrap: 'break-word',
-        }}>{role.label}</div>
-        {role.description?.trim() && (
-          <div style={{
-            fontSize: FS.base, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
-          }}>{role.description}</div>
-        )}
-        <div style={{
-          fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, marginTop: 4,
-          display: 'flex', gap: 8, flexWrap: 'wrap',
-        }}>
-          <span style={{
-            padding: '2px 8px', borderRadius: R.max,
-            background: C.bgSelected, color: C.textSecondary,
-            fontFamily: FONT.mono, fontSize: FS.xs,
-          }}>ключ: {roleKey}</span>
-        </div>
-      </div>
-    </div>
   );
 }
 

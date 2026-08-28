@@ -295,6 +295,20 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
                 padding: '12px 14px', maxHeight: 360, overflow: 'auto',
                 fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
               }}>
+                {/* Исходный план нужен PlanScheme: useHeadings берёт заголовки
+                    из реального DOM, и без него резолв блоков возвращает пустой
+                    список (карта вырождается в жанр/фразу/числа). Скрываем
+                    position:absolute+1×1+opacity:0 — узлы остаются в DOM и
+                    доступны querySelectorAll, но не ломают раскладку карточки
+                    (visibility:hidden сохранил бы высоту и сдвинул схему).
+                    aria-hidden снимает со скринридеров: контент уже виден
+                    через схему. */}
+                <div aria-hidden="true" style={{
+                  position: 'absolute', top: 0, left: 0, width: 1, height: 1,
+                  opacity: 0, overflow: 'hidden', pointerEvents: 'none',
+                }}>
+                  <MarkdownContent text={plan || '_(пустой план)_'} />
+                </div>
                 <PlanScheme map={map} planText={plan} contentRef={planBodyRef} />
               </div>
               {overflowing && (

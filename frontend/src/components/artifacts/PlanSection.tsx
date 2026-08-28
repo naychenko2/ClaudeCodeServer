@@ -245,7 +245,21 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
 
         {schemeView === 'scheme' && visualPlanEnabled ? (
           schemeStatus === 'ready' && map ? (
-            <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+            <div ref={planContentRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', position: 'relative' }}>
+              {/* Исходный план нужен PlanScheme: useHeadings берёт заголовки
+                  из реального DOM, и без него резолв блоков возвращает пустой
+                  список (карта вырождается в жанр/фразу/числа). Скрываем
+                  position:absolute+1×1+opacity:0 — узлы остаются в DOM и
+                  доступны querySelectorAll, но не ломают раскладку панели
+                  (visibility:hidden сохранил бы высоту и сдвинул схему).
+                  aria-hidden снимает со скринридеров: контент уже виден
+                  через схему. */}
+              <div aria-hidden="true" style={{
+                position: 'absolute', top: 0, left: 0, width: 1, height: 1,
+                opacity: 0, overflow: 'hidden', pointerEvents: 'none',
+              }}>
+                <MarkdownViewer content={curPlan.plan} />
+              </div>
               <PlanScheme map={map} planText={curPlan.plan} contentRef={planContentRef} />
             </div>
           ) : schemeStatus === 'failed' ? (
@@ -301,9 +315,9 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             «Схемой» размонтировало бы его и унесло несобранные черновики
             (отзыв ревью: «план из 15 разделов — замечания не должны пропадать
             от смены вкладки»). При schemeView='scheme' contentRef указывает на
-            контейнер схемы — useHeadings там даёт [] и кнопки у заголовков
-            временно не показываются; сам черновик в state живёт, и при возврате
-            на «Текстом» заголовки снова оживают. */}
+            контейнер схемы; внутри лежит скрытый исходный markdown, чтобы
+            useHeadings находил h1–h6, — кнопки замечаний у заголовков
+            показываются и в режиме схемы. */}
         {visualPlanEnabled && (
           <PlanRemarks
             contentRef={planContentRef}

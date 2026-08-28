@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { C, FONT } from '../../lib/design';
+import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
+import { useLongPress } from '../../hooks/useLongPress';
 import { ICON_STROKE } from './icons';
 import { RailFlyout } from './RailFlyout';
 import { RAIL_W } from './RailCapsule';
@@ -54,6 +56,17 @@ export function RailHat({ side, label, title, collapse, railHover }: {
   railHover?: boolean;
 }) {
   const [hover, setHover] = useState(false);
+  // Плашка по долгому нажатию — как у кнопок рельсы (RailIconButton): пальцем
+  // наведения нет, а название рельсы и подсказка про сворачивание живут только в
+  // плашке. Короткий тап при этом остаётся тумблером сворачивания.
+  const [pressed, setPressed] = useState(false);
+  // Жест ловим ВСЕГДА, а не только в тач-режиме: на гибриде (планшет с
+  // клавиатурой) media query отвечает «наведение умею», и до первого касания
+  // canHover ещё true — обработчики, навешанные по нему, пропустили бы как раз
+  // первое долгое нажатие. Мышь touch-событий не шлёт вовсе, так что лишним
+  // это не будет.
+  const { pressProps } = useLongPress(true);
+  const press = pressProps('hat', () => setPressed(true));
 
   // Стрелки всегда указывают К краю окна при сворачивании и от него — при
   // разворачивании (тот же знак, что стоял на бывшей кнопке столбца).
@@ -72,16 +85,20 @@ export function RailHat({ side, label, title, collapse, railHover }: {
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      {...press}
+      // Тот же щит, что у кнопок рельсы: удержание не должно поднимать меню браузера
+      // поверх плашки с названием (см. TOUCH_CALLOUT_GUARD)
+      onContextMenu={e => e.preventDefault()}
       {...(collapse ? {
         role: 'button',
         'aria-label': collapse.collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели',
-        onClick: collapse.onToggle,
+        onClick: () => { setPressed(false); collapse.onToggle(); },
       } : null)}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
         // Ширина именно 100%, а не alignSelf: stretch: с плашкой шляпка живёт внутри
         // якоря RailFlyout (строчный flex), и растягиваться ей надо по нему
-        width: '100%', flexShrink: 0, userSelect: 'none',
+        width: '100%', flexShrink: 0, ...TOUCH_CALLOUT_GUARD,
         ...(collapse ? { cursor: 'pointer' } : null),
       }}
     >
@@ -125,7 +142,8 @@ export function RailHat({ side, label, title, collapse, railHover }: {
       hint={collapse
         ? [{ text: collapse.collapsed ? 'Нажмите, чтобы вернуть панели' : 'Нажмите, чтобы свернуть все', tone: 'muted' as const }]
         : undefined}
-      open={hover}
+      open={hover || pressed}
+      onDismiss={() => setPressed(false)}
       railWidth={RAIL_W}
       hostStyle={{ alignSelf: 'stretch' }}
       // Таблетка со скруглениями с обеих сторон: подпись рельсы — не язычок кнопки

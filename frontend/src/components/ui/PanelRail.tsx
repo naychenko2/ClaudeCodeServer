@@ -8,6 +8,7 @@ import { PanelDropLine } from './PanelDropGuide';
 import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 import { RailHat, RAIL_HAT_H } from './RailHat';
 import { RailIconButton } from './RailIconButton';
+import type { RailFlyoutAction } from './RailFlyout';
 import { RailSep } from './RailSep';
 
 // Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1, плюс
@@ -65,6 +66,12 @@ export interface RailItem {
   // перетаскивание на «…» остаётся, но целиться мышью в 40px-полосу необязательно.
   // Не задан — прятать эту кнопку нельзя (последняя в столбце, компактный режим).
   onTuck?: () => void;
+  // Перенести панель в ПРОТИВОПОЛОЖНУЮ зону — кнопка рядом с «убрать в ящик».
+  // Тот же исход, что у перетаскивания кнопки на чужую рельсу, только одним
+  // нажатием: на таче перетаскивания нет вовсе, да и мышью тащить панель через
+  // весь экран ради смены стороны — работа. Не задан — переносить некуда
+  // (соседней зоны на экране нет или она такую панель не показывает).
+  onFlip?: () => void;
 }
 
 interface Props {
@@ -186,6 +193,9 @@ function RailOverflow({ side, overflow, collapse }: {
   // Стрелка возврата смотрит В СТОРОНУ своей рельсы (она у края окна, меню — от неё
   // внутрь экрана): «кнопка уедет обратно туда»
   const RestoreIcon = side === 'left' ? ArrowLeftToLine : ArrowRightToLine;
+  // Перенос — стрелка в ПРОТИВОПОЛОЖНУЮ сторону от возврата: та ведёт кнопку к своей
+  // рельсе, эта уводит панель к чужой.
+  const FlipIcon = flipIcon(side);
   const hostRef = useRef<HTMLDivElement>(null);
   // rect кнопки — якорь меню. Держим сам rect, а не флаг: меню живёт порталом и
   // считает своё место от координат окна.
@@ -268,14 +278,25 @@ function RailOverflow({ side, overflow, collapse }: {
                     </>
                   }
                   onClick={() => { it.onClick(); close(); }}
-                  // Кнопка-спутник справа: вернуть иконку в столбец, не открывая панель.
-                  // Меню держим открытым — кнопки обычно возвращают пачкой; закрываем,
-                  // только когда ящик опустел (показывать пустой список незачем).
-                  action={onRestore && {
-                    icon: <RestoreIcon size={14} strokeWidth={ICON_STROKE} />,
-                    title: 'Вернуть кнопку на рельсу',
-                    onClick: () => { onRestore(it.key); if (items.length <= 1) close(); },
-                  }}
+                  // Кнопки-спутники справа. Первая — вернуть иконку в столбец, не
+                  // открывая панель: меню держим открытым (кнопки обычно возвращают
+                  // пачкой) и закрываем, только когда ящик опустел. Вторая —
+                  // перенести панель на другую сторону: спрятанная кнопка не стоит в
+                  // столбце, и плашки с этим действием у неё нет вовсе — в ящике это
+                  // единственный вход. Меню после переноса закрываем всегда: строка
+                  // уезжает в чужой ящик, и список под пальцем меняется.
+                  actions={[
+                    ...(onRestore ? [{
+                      icon: <RestoreIcon size={14} strokeWidth={ICON_STROKE} />,
+                      title: 'Вернуть кнопку на рельсу',
+                      onClick: () => { onRestore(it.key); if (items.length <= 1) close(); },
+                    }] : []),
+                    ...(it.onFlip ? [{
+                      icon: <FlipIcon size={14} strokeWidth={ICON_STROKE} />,
+                      title: FLIP_TITLE[side],
+                      onClick: () => { it.onFlip?.(); close(); },
+                    }] : []),
+                  ]}
                   // Строка — ручка перетаскивания. Меню закрываем в КОНЦЕ жеста, а не
                   // на старте: исчезнувший источник не дождался бы dragend, и
                   // состояние перетаскивания залипло бы на весь экран.
@@ -345,6 +366,23 @@ function RailOverflow({ side, overflow, collapse }: {
 // Иконка ВСЕГДА своя, сколько бы кнопок ни осталось в столбце. Раньше единственная
 // иконка зоны подменялась стрелками сворачивания насовсем — и панель выглядела
 // пропавшей: на её месте стояла стрелка, в которой человек свою панель не узнавал.
+// Стрелка переноса смотрит на ПРОТИВОПОЛОЖНУЮ кромку окна: панель левой рельсы
+// уезжает вправо, правой — влево. Тот же знак носит строка ящика.
+function flipIcon(side: 'left' | 'right'): LucideIcon {
+  return side === 'left' ? ArrowRightToLine : ArrowLeftToLine;
+}
+const FLIP_TITLE = { left: 'Перенести панель вправо', right: 'Перенести панель влево' } as const;
+
+// Кнопки в плашке подписи кнопки панели. Порядок постоянный: сперва «убрать в
+// ящик» (частое), потом «перенести» — иначе кнопки прыгали бы местами у панелей,
+// которым доступно только одно из двух.
+function railActions(item: RailItem, side: 'left' | 'right'): RailFlyoutAction[] | undefined {
+  const acts: RailFlyoutAction[] = [];
+  if (item.onTuck) acts.push({ Icon: ArrowDownToLine, title: 'Убрать кнопку в «Ещё»', onClick: item.onTuck });
+  if (item.onFlip) acts.push({ Icon: flipIcon(side), title: FLIP_TITLE[side], onClick: item.onFlip });
+  return acts.length > 0 ? acts : undefined;
+}
+
 function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) {
   // Во время HTML5-drag браузер не шлёт mouse-события, поэтому hover, поднятый при
   // захвате иконки, залипает: после дропа панель могла стать активной, и залипший
@@ -388,12 +426,14 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
       hint={item.hint}
       active={item.active}
       onClick={item.onClick}
-      // Кнопка в плашке подписи — «убрать в ящик»: тот же жест, что дроп иконки на
-      // «…», только кликом. Знак — стрелка ВНИЗ к черте: ящик стоит последней
-      // кнопкой столбца, туда иконка и уезжает. Парная ей стрелка вбок в строках
-      // ящика возвращает кнопку обратно. Пока кнопку тащат, плашки нет вовсе
-      // (hoverSuppressed), так что действие жесту не мешает.
-      action={item.onTuck && { Icon: ArrowDownToLine, title: 'Убрать кнопку в «Ещё»', onClick: item.onTuck }}
+      // Кнопки в плашке подписи. Первая — «убрать в ящик»: тот же жест, что дроп
+      // иконки на «…», только кликом. Знак — стрелка ВНИЗ к черте: ящик стоит
+      // последней кнопкой столбца, туда иконка и уезжает. Парная ей стрелка вбок в
+      // строках ящика возвращает кнопку обратно. Вторая — «перенести на другую
+      // сторону»: стрелка к ПРОТИВОПОЛОЖНОЙ кромке окна, то есть туда, куда уедет
+      // панель. Пока кнопку тащат, плашки нет вовсе (hoverSuppressed), так что
+      // действия жесту не мешают.
+      actions={railActions(item, side)}
       // Пока кнопку тащат, подпись не нужна: она вылезала бы поверх места вставки
       hoverSuppressed={dragging}
       onHoverChange={h => (h ? item.onHoverStart?.() : item.onHoverEnd?.())}

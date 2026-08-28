@@ -1740,7 +1740,7 @@ public class SessionManager : IDisposable
         {
             _subagentRuns.Record(passport);
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-            if (passport.Truncated)
+            if (passport.Truncated && passport.FinishedBy != "interrupted")
             {
                 entry.TruncatedSubagent = passport;
                 // Фоновый агент: продукт ТОЛЬКО ЧТО объявил его результат готовым посреди хода
@@ -8306,10 +8306,17 @@ public class SessionManager : IDisposable
     /// (под тестом). Уступаем всем, у кого свой протокол продолжения: цикл «до готово» и штаб
     /// продолжат ход сами, непустая очередь продолжит его сообщением, а параллельный ход цикла
     /// (LoopTurnInFlight) уже в пути — второй systemDirective ушёл бы в тот же процесс.
+    ///
+    /// <paramref name="isInterruptedRun"/> — признак обрыва класса «убит прерыванием хода»
+    /// (паспорт FinishedBy == "interrupted"): такие обрывы счётчик MaxSubagentNudges не
+    /// расходуют (причина в нашем коде и не свидетельствует о неисправном агенте), а
+    /// автоматически слать сообщение «продолжи» означало бы действовать за человека — он
+    /// сам нажал «Стоп», решение о продолжении принадлежит ему.
     /// </summary>
     internal static bool ShouldNudgeSubagent(int nudgesSent, bool workLoopActive, bool teamActive,
-        bool hasPending, bool loopTurnInFlight) =>
-        nudgesSent < MaxSubagentNudges && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
+        bool hasPending, bool loopTurnInFlight, bool isInterruptedRun = false) =>
+        !isInterruptedRun && nudgesSent < MaxSubagentNudges
+        && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
 
     /// <summary>
     /// Ход координатора в полёте: сообщение ему уже отдано в процесс и result ещё не пришёл.
@@ -8335,7 +8342,8 @@ public class SessionManager : IDisposable
         // Оборвался другой агент — у него своя серия попыток (счётчик per-agentId)
         if (StartsNudgeSeries(entry.NudgeAgentId, run.AgentId)) entry.SubagentNudges = 0;
         if (!ShouldNudgeSubagent(entry.SubagentNudges, entry.Info.WorkLoop is not null,
-                entry.Info.TeamImplement is not null, HasPending(entry), entry.LoopTurnInFlight)) return;
+                entry.Info.TeamImplement is not null, HasPending(entry), entry.LoopTurnInFlight,
+                isInterruptedRun: run.FinishedBy == "interrupted")) return;
 
         // Разбираем отметку здесь — иначе по ближайшему result добивание ушло бы вторым разом
         entry.TruncatedSubagent = null;
@@ -8389,7 +8397,10 @@ public class SessionManager : IDisposable
 
     // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
     // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же
-    // потолком попыток — см. SubagentPrompts.ResumeTruncated.
+    // потолком попыток — см. SubagentPrompts.ResumeTruncated. Для класса «убит прерыванием»
+    // (FinishedBy == "interrupted") политика сюда не пустит (ShouldNudgeSubagent с
+    // isInterruptedRun: true), но если когда-то дойдёт — текст берётся по-другому
+    // (ResumeInterrupted: не «дослать продолжить», а «ход прерван, транскрипт цел»).
     private async Task NudgeTruncatedSubagentAsync(string sessionId,
         Llm.Claude.SubagentRunPassport run, int attempt)
     {
@@ -8403,10 +8414,13 @@ public class SessionManager : IDisposable
         if (entry.TruncatedBgNote?.AgentId == run.AgentId) entry.TruncatedBgNote = null;
         _subagentRuns?.NoteNudge(run.AgentId);
         _log.LogWarning("Сабагент {AgentId} ({AgentType}) оборвался на {Tool} после {Tools} вызовов " +
-            "и {Seconds} с (контекст {Context} токенов) — добивание {Attempt}/{Max}, чат {SessionId}",
+            "и {Seconds} с (контекст {Context} токенов) — добивание {Attempt}/{Max}, класс {Class}, чат {SessionId}",
             run.AgentId, run.AgentType, run.LastTool, run.ToolUses, run.DurationSeconds,
-            run.ContextTokens, attempt, MaxSubagentNudges, sessionId);
-        await SendMessageAsync(sessionId, Prompts.SubagentPrompts.ResumeTruncated(run, attempt, MaxSubagentNudges),
+            run.ContextTokens, attempt, MaxSubagentNudges, run.FinishedBy, sessionId);
+        var directive = run.FinishedBy == "interrupted"
+            ? Prompts.SubagentPrompts.ResumeInterrupted(run, attempt, MaxSubagentNudges)
+            : Prompts.SubagentPrompts.ResumeTruncated(run, attempt, MaxSubagentNudges);
+        await SendMessageAsync(sessionId, directive,
             [], systemDirective: true, cause: DeliveryCause.SubagentNudge);
     }
 
@@ -9145,7 +9159,8 @@ public class SessionManager : IDisposable
                 if (StartsNudgeSeries(entry.NudgeAgentId, cutAgent.AgentId)) entry.SubagentNudges = 0;
                 if (msg is ResultMessage && ShouldNudgeSubagent(entry.SubagentNudges,
                         entry.Info.WorkLoop is not null, entry.Info.TeamImplement is not null,
-                        HasPending(entry), entry.LoopTurnInFlight && entry.Info.WorkLoop is not null))
+                        HasPending(entry), entry.LoopTurnInFlight && entry.Info.WorkLoop is not null,
+                        isInterruptedRun: cutAgent.FinishedBy == "interrupted"))
                 {
                     entry.NudgeAgentId = cutAgent.AgentId;
                     var attempt = ++entry.SubagentNudges;

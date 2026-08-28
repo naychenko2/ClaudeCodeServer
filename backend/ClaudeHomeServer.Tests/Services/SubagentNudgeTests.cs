@@ -261,4 +261,92 @@ public class SubagentNudgeTests : IDisposable
         // Обрывок не должен уехать в итог как готовый результат
         text.Should().Contain("обрывок");
     }
+
+    // ─── Политика потолка добиваний: класс «убит прерыванием» НЕ расходует счётчик ────
+
+    [Fact]
+    public void ShouldNudge_Interrupted_СчётчикНеРасходуется()
+    {
+        // Прерванный ход: даже attempt == MaxSubagentNudges политика не пускает —
+        // причина известна достоверно, признака неисправного агента нет.
+        SessionManager.ShouldNudgeSubagent(SessionManager.MaxSubagentNudges, false, false, false, false,
+            isInterruptedRun: true).Should().BeFalse();
+        // И даже с attempt = 0 — всё равно не слать, чтобы не действовать за человека
+        SessionManager.ShouldNudgeSubagent(0, false, false, false, false,
+            isInterruptedRun: true).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldNudge_ОбычныйОбрыв_isInterruptedRunНеВлияет()
+    {
+        // run_end/tool_result + Truncated=true: поведение прежнее — политика смотрит
+        // на счётчик и чужие протоколы, isInterruptedRun = false ничего не меняет
+        SessionManager.ShouldNudgeSubagent(0, false, false, false, false,
+            isInterruptedRun: false).Should().BeTrue();
+        SessionManager.ShouldNudgeSubagent(SessionManager.MaxSubagentNudges, false, false, false, false,
+            isInterruptedRun: false).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldNudge_Interrupted_ЧужойПротоколУжеНеНужен()
+    {
+        // «Стоп» — единственный разумный повод прерывания, цикл «до готово» и штаб
+        // рядом не живут: проверка «уступаем чужому протоколу» остаётся прежней
+        SessionManager.ShouldNudgeSubagent(0, true, false, false, false,
+            isInterruptedRun: true).Should().BeFalse();
+        SessionManager.ShouldNudgeSubagent(0, false, true, false, false,
+            isInterruptedRun: true).Should().BeFalse();
+    }
+
+    // ─── Текст директивы для «убит прерыванием» ────────────────────────────────────
+
+    [Fact]
+    public void ResumeInterrupted_ЧестныйТекстОПрерывании()
+    {
+        var run = new SubagentRunPassport("a1", "mark", "Волна 1: агент деплоя", "sess-1", "toolu_1",
+            DateTime.UtcNow.AddMinutes(-17), DateTime.UtcNow, 1020, 51, 130, 1, 133_000, 4000,
+            "tool_use", true, "Bash", "claude-opus-5", 1024, 0, false, "interrupted", DateTime.UtcNow);
+
+        var text = SubagentPrompts.ResumeInterrupted(run, attempt: 1, max: SessionManager.MaxSubagentNudges);
+
+        // Этот класс обрыва — НЕ «замолчал»: причина известна
+        text.Should().NotContain("замолчал");
+        // Досылать «продолжай» не нужно: человек сам нажал «Стоп»
+        text.Should().Contain("прерван человеком");
+        text.Should().Contain("Стоп");
+        // Транскрипт цел, контекст пригоден для следующего хода — это честно
+        text.Should().Contain("Транскрипт");
+        text.Should().Contain("контекст");
+        // Обрывок реплики тоже нельзя выдать за итог
+        text.Should().Contain("обрывок");
+        // Номер попытки есть (API совместим с ResumeTruncated)
+        text.Should().Contain("1/2");
+    }
+
+    [Fact]
+    public void ResumeInterrupted_ОтличаетсяОтResumeTruncatedПоКлассу()
+    {
+        // Тот же паспорт, тот же attempt/max — разный FinishedBy даёт разные тексты
+        var baseRun = new SubagentRunPassport("a1", "mark", "Деплой", "sess-1", "toolu_1",
+            DateTime.UtcNow, DateTime.UtcNow, 495, 34, 90, 1, 146_000, 4000,
+            "tool_use", true, "Bash", "claude-opus-5", 1024, 0, false, "x", DateTime.UtcNow);
+        var truncated = SubagentPrompts.ResumeTruncated(baseRun with { FinishedBy = "bg_done" },
+            attempt: 1, max: 2);
+        var interrupted = SubagentPrompts.ResumeInterrupted(baseRun with { FinishedBy = "interrupted" },
+            attempt: 1, max: 2);
+
+        truncated.Should().NotBe(interrupted,
+            "текст директивы ОБЯЗАН различаться по классу обрыва — иначе координатор не увидит разницы");
+        // «Замолчал» — формулировка для run_end/tool_result, не для interrupted
+        truncated.Should().Contain("замолчал");
+        interrupted.Should().NotContain("замолчал");
+    }
+
+    [Fact]
+    public void FinishedInBackground_Interrupted_НеСчитаетсяФоновым()
+    {
+        BgRun(finishedBy: "interrupted").FinishedInBackground.Should().BeFalse(
+            "interrupted — НЕ фоновый класс, иначе SessionManager поедет по ветке bg_done и\n" +
+            "запустит NoteTruncatedBgAgent для убитого хода");
+    }
 }

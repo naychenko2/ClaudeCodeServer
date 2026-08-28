@@ -353,6 +353,112 @@ public class SubagentStreamWatcherTests : IDisposable
         finally { WorkflowAgentParser.ProfilesRoot = null; }
     }
 
+    // ─── Причина конца прогона: «убит прерыванием» vs «обычная смерть» ──────
+    // Один и тот же tool_use-хвост у паспорта раньше маскировал оба класса под run_end —
+    // координатор не мог отличить «агент замолчал сам» от «его убили прерыванием».
+    // ClaudeSession перед Dispose ватчера ставит RunEndReason = "interrupted"; в Дефолт
+    // она "run_end". Ветка bg_done этим полем не управляется.
+
+    [Fact]
+    public async Task ОбычныйКонец_RunEndПоУмолчанию()
+    {
+        // Без FinalizeAsync и без MarkRunInterrupted: путь Dispose идёт через дефолт
+        // причины конца прогона. FeedCall должен быть true — иначе Dispose пропустит файл.
+        // Файл создаём ПОСЛЕ Start (как в проде — стартующий ватчер видит свежий транскрипт):
+        // иначе Start выставлял бы офсет до конца существующего файла, и Dispose видел бы
+        // его как «старый без новых строк».
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var seen = 0;
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId,
+                _ => { seen++; return Task.CompletedTask; },
+                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+            watcher.Start();
+            SetupProfileSubagent("sub-test", _sessionId, "agent-end", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+            WaitUntil(() => seen >= 1, timeoutMs: 5000);
+            watcher.Dispose();
+
+            _passports.Should().HaveCount(1);
+            _passports[0].FinishedBy.Should().Be("run_end",
+                "без MarkRunInterrupted причина конца прогона — дефолтная run_end");
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
+    public async Task ПрерванныйХод_ПаспортInterrutpted()
+    {
+        // ClaudeSession перед Dispose ватчера ставит MarkRunInterrupted — паспорт
+        // должен уйти с FinishedBy = "interrupted", ровно отличаясь от обычной смерти.
+        // Файл — после Start, чтобы ватчер увидел новые строки.
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var seen = 0;
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId,
+                _ => { seen++; return Task.CompletedTask; },
+                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+            watcher.Start();
+            SetupProfileSubagent("sub-test", _sessionId, "agent-killed", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+            WaitUntil(() => seen >= 1, timeoutMs: 5000);
+            // ClaudeSession ст.3358/3837/4881: перед Dispose ватчера выставляется
+            // RunEndReason = "interrupted", если ход убит пользовательским прерыванием
+            watcher.MarkRunInterrupted();
+            watcher.Dispose();
+
+            _passports.Should().HaveCount(1);
+            _passports[0].FinishedBy.Should().Be("interrupted",
+                "прерванный ход обязан отличаться от обычной смерти прогона");
+            _passports[0].Truncated.Should().BeTrue();
+            // Класс НЕ попадает в фоновые: иначе SessionManager погонит NoteTruncatedBgAgent
+            // и счётчик MaxSubagentNudges будет расходоваться на закономерном прерывании
+            _passports[0].FinishedInBackground.Should().BeFalse();
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
+    [Fact]
+    public async Task BgDoneПрерванПользователем_ВсёРавноBgDone()
+    {
+        // bg_done — финал фонового агента по сигналу CLI; MarkRunInterrupted НЕ должен
+        // перебивать эту ветку. Прерывание хода координатора не меняет класс фонового
+        // агента, потому что для фона он уже завершён.
+        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        try
+        {
+            var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
+            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
+                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+            {
+                BgDoneRecheckDelay = TimeSpan.FromMilliseconds(100),
+            };
+            var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-bg-killed", cwd,
+                Prompt("2026-08-22T10:00:00.000Z", "Задача"),
+                ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
+
+            await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
+            // Симулируем: пока шла перепроверка, координатор был убит — MarkRunInterrupted
+            // дёргается ДО Dispose, но bg_done перебивает его в эмиссии
+            watcher.MarkRunInterrupted();
+            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15))))
+                .Should().Be(got.Task, "перепроверка обязана эмитить паспорт");
+            watcher.Dispose();
+
+            _passports.Should().HaveCount(1);
+            _passports[0].FinishedBy.Should().Be("bg_done",
+                "bg_done-ветка эмитится как bg_done даже при MarkRunInterrupted");
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = null; }
+    }
+
     // ─── «Свой» профиль первым ───────────────────────────────────────────────
     // Папка сессии живёт сразу в нескольких профилях, когда у чата были фолбэк-ходы через
     // другие провайдеры; перебор в порядке ФС находил первую попавшуюся — старую копию без

@@ -61,6 +61,20 @@ internal sealed class SubagentStreamWatcher : IDisposable
 
     public bool IsDisposed { get; private set; }
 
+    // Причина конца прогона для ветки НЕ-bg_done. По умолчанию "run_end" — обычная смерть
+    // прогона по окончании хода. ClaudeSession ставит "interrupted" перед Dispose ватчера,
+    // когда ход был убит пользовательским прерыванием: эта ветка раньше маскировалась под
+    // обычную смерть, и координатор не мог отличить «агент замолчал сам» от «его убили» —
+    // класс «убит прерыванием» отдельно выделяется в паспорте и в текстах директив.
+    // Ветка bg_done (BgDoneRecheckDelay) этим полем НЕ управляется — она отдаётся как "bg_done".
+    internal string RunEndReason { get; private set; } = "run_end";
+
+    /// <summary>
+    /// Пометить прогон как убитый пользовательским прерыванием хода. Dispose использует
+    /// эту причину вместо дефолтного "run_end" — переход отражается и в дневном jsonl.
+    /// </summary>
+    internal void MarkRunInterrupted() => RunEndReason = "interrupted";
+
     // Тот же контекст наблюдения? Same-process ход (init повторяется в том же процессе)
     // переиспользует живой ватчер — пересоздание без дренажа теряло бы хвост транскриптов.
     // Профиль входит в контекст: прогон под другим CLAUDE_CONFIG_DIR пишет в другую папку,
@@ -445,8 +459,10 @@ internal sealed class SubagentStreamWatcher : IDisposable
                     // Агент, чью перепроверку оборвала остановка ватчера (ход кончился раньше
                     // BgDoneRecheckDelay), закрыт продуктом как bg_done — так и отдаём: run_end
                     // для SessionManager не фоновый, и реальный обрыв остался бы без добивания,
-                    // а конец хода его уже не разберёт
-                    Emit(file, _bgRechecks.Remove(file) ? "bg_done" : "run_end");
+                    // а конец хода его уже не разберёт. Не-bg_done ветка берёт настраиваемую
+                    // причину: "run_end" по умолчанию, "interrupted" если ClaudeSession пометил
+                    // прогон как убитый пользовательским прерыванием хода.
+                    Emit(file, _bgRechecks.Remove(file) ? "bg_done" : RunEndReason);
                 }
             }
             finally { _scanLock.Release(); }

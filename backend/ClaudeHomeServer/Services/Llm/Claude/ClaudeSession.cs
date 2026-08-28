@@ -3357,6 +3357,10 @@ public class ClaudeSession : ILlmSessionAdapter
             // Дочитываем хвосты транскриптов сабагентов и останавливаем ватчеры прогона
             if (_subagentWatcher is not null)
             {
+                // Ход убит пользовательским прерыванием: класс «убит прерыванием» отдельно
+                // виден в паспорте (FinishedBy == "interrupted") — иначе неотличимо от обычной
+                // смерти прогона (run_end) и маскирует настоящий класс обрыва.
+                if (_interruptedByUser) _subagentWatcher.MarkRunInterrupted();
                 await _subagentWatcher.DrainAsync();
                 _subagentWatcher.Dispose();
                 _subagentWatcher = null;
@@ -3834,6 +3838,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         if (_subagentWatcher is not null)
                         {
+                            // Прогон прерван пользователем — отдельный класс в паспорте, по нему
+                            // тексты директив и политика добиваний отличают «убит» от «замолчал».
+                            if (_interruptedByUser) _subagentWatcher.MarkRunInterrupted();
                             await _subagentWatcher.DrainAsync();
                             _subagentWatcher.Dispose();
                         }
@@ -4877,6 +4884,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // семафорах (гасится в QueueTurnAsync). Строка в логе — след для разбора
         if (_run is not null || Volatile.Read(ref _queuedTurns) > 0)
             Console.Error.WriteLine($"[ClaudeSession] DisposeAsync под живым ходом (session {Info.Id}, run={_run is not null}, queued={Volatile.Read(ref _queuedTurns)})");
+        // Ход мог быть прерван пользователем перед утилизацией адаптера: класс обрыва
+        // остаётся в паспорте при любом пути Dispose ватчера.
+        if (_subagentWatcher is not null && _interruptedByUser) _subagentWatcher.MarkRunInterrupted();
         _fileWatcher.Dispose();
         _subagentWatcher?.Dispose();
         _subagentWatcher = null;

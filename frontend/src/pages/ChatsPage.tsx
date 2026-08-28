@@ -112,6 +112,20 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           ? { ...c, name: msg.name, topic: msg.topic ?? c.topic }
           : c));
       }
+      // Чат убран/возвращён из архива на другом клиенте/устройстве: сервер шлёт
+      // chat_archived, мы рефетчим конкретный чат и кладём обновление в список —
+      // иначе archived-флаг залежался бы до следующего тика поллинга (5с).
+      // Локальная мутация из ChatCard.handleArchive идёт через handleArchive и
+      // СИЛЬНЕЕ этого refetch (обновляет state синхронно, до прихода события).
+      // Паттерн взят из wallStore.ts:147 — единая форма внешней синхронизации.
+      // Возврат из архива (msg.archived === false) тем же каналом: archived-флаг
+      // мог уже стать true, и без рефетча карточка пряталась бы от фильтра,
+      // пока человек ждёт поллинга
+      if (msg.type === 'chat_archived' && msg.sessionId) {
+        api.chats.get(msg.sessionId)
+          .then(updated => setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c)))
+          .catch(() => { /* чат ушёл из набора или офлайн — ignore */ });
+      }
     });
     return () => {
       clearInterval(poll);

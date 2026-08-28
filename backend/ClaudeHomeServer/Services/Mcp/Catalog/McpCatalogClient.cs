@@ -69,7 +69,7 @@ public class McpCatalogClient
     /// Бьётся в сеть только мимо кэша; любая беда (таймаут, 5xx, битый JSON, тело сверх
     /// буфера) — McpCatalogUnavailableException.
     /// </summary>
-    public async Task<McpCatalogSearchResult> SearchAsync(string q, string? cursor,
+    public virtual async Task<McpCatalogSearchResult> SearchAsync(string q, string? cursor,
         CancellationToken ct = default)
     {
         var query = (q ?? "").Trim();
@@ -89,7 +89,9 @@ public class McpCatalogClient
         return page;
     }
 
-    private async Task<McpCatalogSearchResult> FetchAndMapAsync(string q, string? cursor,
+    // Ход в реестр и разбор ответа. Отдельный virtual-метод (а не часть SearchAsync):
+    // контроллерные тесты подменяют его фейком, не затрагивая кэш
+    protected virtual async Task<McpCatalogSearchResult> FetchAndMapAsync(string q, string? cursor,
         CancellationToken ct)
     {
         var limit = Math.Clamp(_options.PageSize, 1, 100);

@@ -829,6 +829,24 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             });
     });
+    // Поиск по каталогу MCP-серверов: потолок запросов обязан стоять на бэке —
+    // дебаунс фронта не защита. Партиция — владелец: реестр внешний, и молотить его
+    // от одного аккаунта нельзя; без sub (запрос до авторизации) — фолбэк на IP
+    options.AddPolicy("mcp-catalog", ctx =>
+    {
+        var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
+            .GetValue("Mcp:Catalog:RateLimit", 30);
+        var partitionKey = ctx.User.FindFirst("sub")?.Value
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            });
+    });
 });
 
 // CORS: только белый список origin'ов из конфига (Cors:AllowedOrigins).

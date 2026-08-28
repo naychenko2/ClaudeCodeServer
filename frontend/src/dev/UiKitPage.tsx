@@ -1771,7 +1771,7 @@ const DEMO_SESSIONS: Session[] = [
 // следом спокойные. Подписи и цвета не дублируем — берём боевые таблицы
 // STATUS_CONFIG / STATUS_GLOW, чтобы витрина не разъезжалась с карточкой.
 const GLOW_STATES: VisualStatus[] = [
-  'starting', 'working', 'agents', 'waiting', 'error', 'active', 'orphaned', 'finished',
+  'starting', 'working', 'agents', 'command', 'waiting', 'error', 'active', 'orphaned', 'finished',
 ];
 
 // Чем состояние себя ведёт — подпись под демо-карточкой
@@ -2663,10 +2663,11 @@ function PanelsSection() {
               {GLOW_STATES.map(st => (
                 <div key={st}>
                   <ChatCard
-                    // 'agents' — не статус CLI, а вид: сессия при живом фоне Active
+                    // 'agents' и 'command' — не статусы CLI, а виды: сессия при живом фоне Active
                     session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`,
-                      status: st === 'agents' ? 'active' : st, isPinned: false }}
+                      status: st === 'agents' || st === 'command' ? 'active' : st, isPinned: false }}
                     agentsRunning={st === 'agents'}
+                    bgCommandRunning={st === 'command'}
                     isActive={false}
                     isMobile={false}
                     fallbackName="Новый чат"
@@ -2697,11 +2698,11 @@ function PanelsSection() {
           </p>
         </SubBlock>
 
-        {/* Фоновая команда — единственная фоновая работа БЕЗ ореола: Bash с
-            run_in_background (дев-сервер, watch) живёт часами и о завершении не
-            сообщает, поэтому светиться ей нельзя, а молчать — значит скрывать
-            причину, по которой чат держит живой процесс CLI. */}
-        <SubBlock label="ChatCard — в фоне работает команда (без ореола)">
+        {/* Фоновая команда (Bash с run_in_background: дев-сервер, watch) держит чат живым
+            так же, как агенты, — и светится так же. Отличает её значок терминала: работа
+            эта не ход и не агент, о завершении она не сообщает, и без пометки было бы
+            непонятно, почему чат держит живой процесс CLI. */}
+        <SubBlock label="ChatCard — в фоне работает команда">
           <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
             <div style={{ padding: SP.md, maxWidth: 320 }}>
               <ChatCard
@@ -2721,11 +2722,13 @@ function PanelsSection() {
           </Island>
 
           <p style={{ margin: `${SP.sm}px 0 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
-            Значок терминала на <code>C.textMuted</code> — приглушённый намеренно: акцент,
-            горящий часами, перестают замечать. Робота (<code>C.accent</code>) и ореол
-            «агенты работают» команда не получает, статус карточки остаётся «активна».
-            При живых агентах значок команды не показываем — свечение уже объясняет,
-            почему чат жив, а два значка подряд сливаются в шум.
+            Значок терминала на <code>C.accent</code> — под цвет волны: чат с живой фоновой
+            командой светится так же, как с агентами (вид <code>command</code> в
+            <code>STATUS_GLOW</code>), и серый значок читался бы как рассинхрон. Робота
+            команда не получает — по значку и отличают, что именно работает; статус самой
+            сессии при этом остаётся «активна». При живых агентах значок команды не
+            показываем — свечение уже объясняет, почему чат жив, а два значка подряд
+            сливаются в шум.
           </p>
         </SubBlock>
 

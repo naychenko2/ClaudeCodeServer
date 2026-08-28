@@ -561,18 +561,22 @@ export function ChatCard({
   // Переключаем визуал статуса на 'waiting' (медовый, slow) — он усиливает жёлтый
   // маркер, а не спорит с ним. Сам s.status не трогаем: это факт CLI, а не визуал
   const teamWait = !!s.teamImplement && teamImplementTone(s.teamImplement.stage) === 'wait';
-  // Фоновые агенты доживают уже после конца хода: статус сессии при этом Active, у него
+  // Фоновая работа доживает уже после конца хода: статус сессии при этом Active, у него
   // нулевое свечение — карточка выглядела остывшей, хотя работа идёт. Приоритет ниже
   // teamWait (там ждут ЧЕЛОВЕКА — это важнее) и выше собственного статуса сессии:
   // перебиваем только спокойные состояния, живой working подменять незачем
   const agentsRunningLive = useAgentsRunning(s.id);
   const agentsRunning = agentsRunningProp ?? agentsRunningLive;
-  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
+  // Фоновая команда (дев-сервер, watch) светится наравне с агентами: чат с живым процессом
+  // не должен выглядеть остывшим, а какая именно работа идёт — говорит значок в строке имени.
+  // Своё значение visualStatus, а не 'agents': подпись «агенты работают» тут была бы враньём
   const bgCommandRunningLive = useBgCommandRunning(s.id);
   const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
   const visualStatus: VisualStatus = teamWait ? 'waiting'
-    : agentsRunning && !STATUS_GLOW[s.status].breath ? 'agents'
-      : s.status;
+    : STATUS_GLOW[s.status].breath ? s.status
+      : agentsRunning ? 'agents'
+        : bgCommandRunning ? 'command'
+          : s.status;
   const glow = STATUS_GLOW[visualStatus];
   const hasGlow = glow.alpha > 0;
   const glowClass = !hasGlow ? ''
@@ -874,14 +878,14 @@ export function ChatCard({
               <Bot size={13} strokeWidth={2.2} />
             </span>
           )}
-          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
-              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
-              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
-              перестают замечать. При работающих агентах не показываем — свечение уже
-              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
+          {/* Фоновая команда (дев-сервер, watch): волна по плитке у неё та же, что у агентов
+              (чат с живым процессом не выглядит остывшим), а вид работы называет этот значок.
+              Цвет акцентный — под цвет волны: серый значок на акцентной подсветке читался бы
+              как рассинхрон. При работающих агентах не показываем — свечение уже объясняет,
+              почему чат жив, а два значка подряд сливаются в шум */}
           {bgCommandRunning && !agentsRunning && !workflowRunning && (
             <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
-              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              style={{ display: 'flex', flexShrink: 0, color: C.accent }}>
               <Terminal size={13} strokeWidth={2.2} />
             </span>
           )}

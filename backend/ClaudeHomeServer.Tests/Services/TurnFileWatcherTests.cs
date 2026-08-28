@@ -25,13 +25,23 @@ public class TurnFileWatcherTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
+    // Тайминги тестов: паузы на порядок короче боевых (400мс debounce + 1.5с retry). Ожидание
+    // боевого сна и делало эти тесты мигающими на CI: раннер слабее, ThreadPool голодает, и
+    // карточка не укладывалась в таймаут. Гонка «заявка пришла внутри retry-окна»
+    // воспроизводится хуком BeforeExternalRetry, а не сном на глазок.
+    private static FileWatcherTiming TestTiming(Func<string, Task>? beforeExternalRetry = null) =>
+        new(Debounce: TimeSpan.FromMilliseconds(80),
+            ExternalRetry: TimeSpan.FromMilliseconds(150),
+            BeforeExternalRetry: beforeExternalRetry);
+
     private static TurnFileWatcher CreateWatcher(string root, ConcurrentQueue<FileChangedMessage> received,
-        SemaphoreSlim signal, FileChangeAttributor? attributor = null, string? ownerSessionId = null) =>
+        SemaphoreSlim signal, FileChangeAttributor? attributor = null, string? ownerSessionId = null,
+        FileWatcherTiming? timing = null) =>
         new(root, msg =>
         {
             if (msg is FileChangedMessage fcm) { received.Enqueue(fcm); signal.Release(); }
             return Task.CompletedTask;
-        }, attributor: attributor, ownerSessionId: ownerSessionId);
+        }, attributor: attributor, ownerSessionId: ownerSessionId, timing: timing ?? TestTiming());
 
     private static async Task<FileChangedMessage?> WaitForMessageAsync(
         SemaphoreSlim signal, ConcurrentQueue<FileChangedMessage> received, TimeSpan timeout)
@@ -96,8 +106,7 @@ public class TurnFileWatcherTests : IDisposable
         // Сценарий "правка вне чата": заявок на путь нет ни у кого (эмулирует bash-команду
         // без Edit/Write). Проверяет, что ветка External=true технически достижима, когда
         // diff вообще замечен (см. следующий тест на случай, когда он НЕ замечен).
-        // Карточка теперь приходит после retry-паузы атрибуции (~400мс + 1.5с) — ожидание
-        // с запасом, CI-раннер слабее локального.
+        // Карточка приходит после retry-паузы атрибуции (в тестах она укорочена — TestTiming).
         var path = Path.Combine(_root, "file.txt");
         File.WriteAllText(path, "a\nb");
 
@@ -120,7 +129,7 @@ public class TurnFileWatcherTests : IDisposable
     {
         // Регресс на гонку параллельных ходов: файл правит чат A (Edit/Write), но его
         // заявка подтверждается по tool_result ПОЗЖЕ самого файла. Ватчер чата B на
-        // момент debounce (400мс) заявок не видит — раньше сразу выносил вердикт
+        // момент debounce заявок не видит — раньше сразу выносил вердикт
         // external=true, и правка A уезжала в ленту B как «Изменение вне чата».
         // Теперь кандидат на «вне чата» перепроверяется после паузы: опоздавшая чужая
         // заявка гасит карточку (её покажет собственный ватчер A).
@@ -130,7 +139,11 @@ public class TurnFileWatcherTests : IDisposable
         var received = new ConcurrentQueue<FileChangedMessage>();
         var signal = new SemaphoreSlim(0);
         var attributor = new FileChangeAttributor();
-        using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-b");
+        // Заявку подаём не по таймеру, а из хука ватчера — на прогреве кэша хук молчит
+        // (иначе подавился бы и прогрев), на целевой правке подаёт заявку «чата A»
+        Func<string, Task>? claimInRetryWindow = null;
+        using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-b",
+            timing: TestTiming(_ => claimInRetryWindow?.Invoke(path) ?? Task.CompletedTask));
         watcher.Start();
         await Task.Delay(200);
 
@@ -139,11 +152,11 @@ public class TurnFileWatcherTests : IDisposable
         var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
         warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");
 
-        // Правка «чата A»: файл меняется, заявка A приходит ВНУТРИ retry-окна — уже
-        // после debounce (400мс), но до перепроверки (~400мс + 1.5с)
+        // Правка «чата A»: файл меняется, заявка A приходит ВНУТРИ retry-окна — уже после
+        // debounce, но до перепроверки. Момент подачи заявки задаёт сам ватчер (хук на входе
+        // в окно), поэтому попадание в окно не зависит от скорости раннера.
+        claimInRetryWindow = _ => { attributor.Claim("session-a", path); return Task.CompletedTask; };
         File.WriteAllText(path, "a\nb\nc\nd");
-        await Task.Delay(700);
-        attributor.Claim("session-a", path);
 
         var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(4));
 
@@ -162,7 +175,9 @@ public class TurnFileWatcherTests : IDisposable
         var received = new ConcurrentQueue<FileChangedMessage>();
         var signal = new SemaphoreSlim(0);
         var attributor = new FileChangeAttributor();
-        using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-a");
+        Func<string, Task>? claimInRetryWindow = null;
+        using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-a",
+            timing: TestTiming(_ => claimInRetryWindow?.Invoke(path) ?? Task.CompletedTask));
         watcher.Start();
         await Task.Delay(200);
 
@@ -170,9 +185,8 @@ public class TurnFileWatcherTests : IDisposable
         var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
         warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");
 
+        claimInRetryWindow = _ => { attributor.Claim("session-a", path); return Task.CompletedTask; };
         File.WriteAllText(path, "a\nb\nc\nd");
-        await Task.Delay(700);
-        attributor.Claim("session-a", path);
 
         var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(4));
 
@@ -200,7 +214,7 @@ public class TurnFileWatcherTests : IDisposable
 
         // Прогрев кэша: без него oldContent=null и любое изменение даёт ненулевой diff —
         // это маскировало бы проверяемый сценарий. Обе карточки здесь с атрибутором,
-        // т.е. идут через retry-паузу (~1.9с) — ожидания с запасом под CI.
+        // т.е. идут через retry-паузу (укороченную TestTiming).
         File.WriteAllText(path, "line1\nline2X\nline3");
         var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
         warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");

@@ -60,6 +60,27 @@ public class McpAuthConfig
 }
 
 /// <summary>
+/// Указатель на запись официального реестра MCP, из которой сервер заведён (план
+/// «Каталог MCP-серверов», волна 1). Самодекларация клиента — доверия на ней строить
+/// нельзя; нужна фронту для сверки «уже подключён» и пробе — для SSRF-гейта.
+/// Отдельного значения McpServerSource НЕ заводим: откат кода на старую версию
+/// должен читать mcp-servers.json, а неизвестный enum-член уносит файл в .corrupt.
+/// </summary>
+public class McpCatalogRef
+{
+    /// <summary>Имя записи в реестре (например io.github.owner/filesystem) — ключ сверки.</summary>
+    public string Name { get; set; } = "";
+    public string? Version { get; set; }
+    public DateTime? PublishedAt { get; set; }
+    /// <summary>
+    /// Адрес, зашедший в запись при импорте — ПОСЛЕ подстановки шаблонов и Trim.
+    /// Если текущий Url записи разошёлся с ним, адрес объявил человек, и SSRF-гейт
+    /// пробы снимается (иначе гейт снимал бы сам себя у remotes с переменными).
+    /// </summary>
+    public string? Url { get; set; }
+}
+
+/// <summary>
 /// Запись MCP-сервера в личном реестре владельца (data/mcp-servers.json).
 /// Секретных ЗНАЧЕНИЙ здесь нет: в Env/Headers на их месте стоит плейсхолдер
 /// <c>secret:{id}</c> (см. <see cref="Services.Mcp.McpSecretStore"/>), у Auth — SecretRef.
@@ -103,6 +124,9 @@ public class McpServerRecord
     public bool AllowOutsideProjects { get; set; }
 
     public McpServerSource Source { get; set; } = McpServerSource.Manual;
+
+    /// <summary>Запись заведена из каталога официального реестра; null — вручную.</summary>
+    public McpCatalogRef? CatalogRef { get; set; }
 
     /// <summary>
     /// Версия авторизации: растёт при правке записи, ре-авторизации и рефреше токена.

@@ -16,7 +16,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe,
-    PersonaManager personas, ProjectManager projects) : ControllerBase
+    PersonaManager personas, ProjectManager projects, FeatureFlagService flags,
+    UserStore users) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -69,11 +70,37 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
 
     // Разовая проверка «по кнопке»: поднимаем сервер как это сделал бы ход и спрашиваем
     // список инструментов. Результат кладётся в стор наблюдений и возвращается человеку.
+    // Тело читаем сами, а не [FromBody]: фронт шлёт пробу БЕЗ тела, обязательный
+    // биндер дал бы 415 (план «Каталог», п.6)
     [HttpPost("{id}/probe")]
     public async Task<IActionResult> Probe(string id, CancellationToken ct)
     {
         var record = registry.Get(UserId, id);
         if (record is null) return NotFound(new { error = "Сервер не найден" });
+
+        var confirmed = false;
+        if (Request.ContentLength is > 0)
+        {
+            try
+            {
+                var body = await Request.ReadFromJsonAsync<JsonElement>(ct);
+                confirmed = body.TryGetProperty("confirmed", out var flag)
+                    && flag.ValueKind == JsonValueKind.True;
+            }
+            catch (JsonException) { /* мусорное тело = неподтверждение */ }
+        }
+
+        // Каталожный stdio-сервер у local-владельца запустится на его компьютере —
+        // проба обязана пройти через явное подтверждение с полной строкой запуска.
+        // У container-владельца порога нет: процесс родится в песочнице
+        if (!confirmed && RequiresLaunchConfirmation(record))
+            return BadRequest(new
+            {
+                error = "Этот сервер запустится на вашем компьютере — подтвердите запуск с полной строкой",
+                requiresConfirmation = true,
+                command = LaunchPreviewOf(record),
+            });
+
         var result = await probe.ProbeAsync(UserId, record, ct);
         return Ok(new
         {
@@ -86,11 +113,44 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         });
     }
 
-    [HttpPost]
-    public IActionResult Create([FromBody] McpServerUpsertRequest req)
+    // Каталожная stdio-запись у local-владельца: чужой код исполнится на машине человека
+    private bool RequiresLaunchConfirmation(McpServerRecord record) =>
+        record.CatalogRef is not null
+        && record.Transport == McpTransport.Stdio
+        && users.GetById(UserId)?.ExecutionEnvironment != ExecutionEnvironments.Container;
+
+    // Полная строка запуска для диалога подтверждения (моноширинно на фронте);
+    // секретных значений в ней нет никогда — они лежат в McpSecretStore
+    internal static string LaunchPreviewOf(McpServerRecord record)
     {
+        var command = record.Command ?? "";
+        var args = string.Join(" ", record.Args ?? []);
+        return args.Length > 0 ? command + " " + args : command;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] McpServerUpsertRequest req, CancellationToken ct)
+    {
+        // Указатель на реестр-каталог принимаем только под флагом: dark launch прячет
+        // и поиск, и сам способ пометить запись каталожной (гейты безопасности у записи
+        // при этом работают всегда — они не зависят от флага)
+        if (req.CatalogRef is not null && !flags.IsEnabled(UserId, FeatureFlagKeys.McpCatalog))
+            return BadRequest(new { error = "Каталог MCP-серверов выключен" });
         var draft = new McpServerRecord { Key = req.Key ?? "" };
         if (Apply(draft, req, existing: null) is { } error) return BadRequest(new { error });
+        // Каталожная запись заводится строго выключенной: «настройки взяты из каталога,
+        // осталось вписать ваш ключ» — включение отдельным осознанным шагом
+        if (draft.CatalogRef is not null) draft.Enabled = false;
+
+        // Ранний отказ по адресу из каталога (митигация — гейт пробы, это лишь экономия
+        // хождения по заведомо приватному адресу; TOCTOU здесь не защита)
+        if (draft.CatalogRef is not null && draft.Transport != McpTransport.Stdio
+            && Uri.TryCreate(draft.Url, UriKind.Absolute, out var importedUri)
+            && await SsrfGuard.CheckAsync(importedUri, ct) == SsrfGuard.AddressCheck.Private)
+            return BadRequest(new
+            {
+                error = "Адрес сервера из каталога указывает на частную сеть — подключить нельзя",
+            });
         try
         {
             return Ok(McpServerMapper.ToDto(registry.Create(UserId, draft)));
@@ -262,6 +322,24 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             };
         }
         draft.Auth = auth;
+
+        // Указатель на реестр клеится только при создании (правка его не принимает,
+        // поэтому McpRegistry.Update его и не переносит — CatalogRef переживает PUT сам).
+        // Здесь, в конце: импортированный адрес — фактический Url записи ПОСЛЕ подстановки
+        // шаблонов и Trim, а он разобран выше
+        if (existing is null && req.CatalogRef is { } catalogRef)
+        {
+            var name = catalogRef.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                return "CatalogRef: не задано имя записи каталога";
+            draft.CatalogRef = new McpCatalogRef
+            {
+                Name = name,
+                Version = catalogRef.Version,
+                PublishedAt = catalogRef.PublishedAt,
+                Url = draft.Transport == McpTransport.Stdio ? null : draft.Url,
+            };
+        }
         return null;
     }
 
@@ -293,10 +371,17 @@ public record McpValueInput(string Name, string? Value, bool Secret = false);
 
 public record McpAuthInput(string? Kind, string? HeaderName, string? Secret, string? ClientId);
 
+/// <summary>
+/// Указатель на запись каталога при заведении сервера (флаг mcp-catalog). Url сюда не
+/// входит: сервер берёт фактический Url записи — строку после подстановки шаблонов.
+/// </summary>
+public record McpCatalogRefInput(string Name, string? Version, DateTime? PublishedAt);
+
 public record McpServerUpsertRequest(
     string? Key, string? Label, string? Description, string? Transport,
     string? Command, List<string>? Args, List<McpValueInput>? Env,
     string? Url, List<McpValueInput>? Headers, McpAuthInput? Auth,
-    bool? Enabled, bool? AlwaysLoad, bool? AllowReadOnlyPersonas, bool? AllowOutsideProjects);
+    bool? Enabled, bool? AlwaysLoad, bool? AllowReadOnlyPersonas, bool? AllowOutsideProjects,
+    McpCatalogRefInput? CatalogRef = null);
 
 public record McpEnableRequest(bool Enabled);

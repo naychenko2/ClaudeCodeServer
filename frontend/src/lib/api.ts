@@ -1,5 +1,5 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap } from '../types';
-import { request } from './offline';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap } from '../types';
+import { readStoredToken, request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -299,13 +299,38 @@ export const api = {
         method: 'POST', body: JSON.stringify({ enabled }),
       }),
     delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов
-    probe: (id: string) =>
-      request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(id)}/probe`, { method: 'POST' }),
+    // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов.
+    // Для записи из каталога + stdio + local-владелец передаём confirmed:true — иначе сервер
+    // отвечает отказом (план §6). Запрос без тела оставлен работающим: ручные записи идут без
+    // подтверждения, [FromBody] опциональный
+    probe: (id: string, body?: { confirmed?: boolean }) =>
+      request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(id)}/probe`, {
+        method: 'POST', body: JSON.stringify(body ?? {}),
+      }),
     // Импорт фрагмента {"mcpServers": {...}} — записи заводятся выключенными
     import: (fragment: unknown) =>
       request<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>('/mcp/servers/import', {
         method: 'POST', body: JSON.stringify(fragment),
+      }),
+    // Поиск по реестру MCP-серверов (волна 1, задача 9fa075ec). Ищет БЭКЕНД: реестр
+    // отдаёт результат страницами, и подходящей записи на первой странице может не
+    // быть вовсе (QA: «filesystem» — 14 записей, ни одной на первой). Поэтому q едет
+    // в запрос, а не фильтрует загруженный массив. cursor — следующая страница из
+    // nextCursor предыдущего ответа; пустой q = витрина каталога.
+    // Каталог не критичный: ошибка сети показывается плашкой, ручной путь «Добавить»
+    // остаётся рабочим
+    catalogSearch: (q: string, cursor?: string | null) => {
+      const params = new URLSearchParams({ q });
+      if (cursor) params.set('cursor', cursor);
+      return request<McpCatalogSearchResult>(`/mcp/catalog/search?${params.toString()}`);
+    },
+    // Батч-ревизия импортированных записей (волна 2): фронт шлёт имена каталожных серверов,
+    // бэк для каждого отдаёт статус в реестре и факт «есть версия новее». Запрос идёт
+    // ОТДЕЛЬНО от основного списка, после отрисовки раздела — реестр в статусе preview
+    // может лежать, а раздел обязан открываться. names: уникальные CatalogRef.name
+    catalogRevisions: (names: string[]) =>
+      request<McpCatalogRevisionResult>('/mcp/catalog/revision', {
+        method: 'POST', body: JSON.stringify({ names }),
       }),
     // Диагностика вызовов инструментов — только админ (данные всех владельцев)
     calls: (failures = 50) => request<McpCallsResponse>(`/mcp/calls?failures=${failures}`),
@@ -526,7 +551,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean; mcpCatalogConfirmed?: boolean }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
     // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
@@ -607,9 +632,7 @@ export const api = {
     // фон не сгенерирован, превью рисует стандартный паттерн.
     backgroundTileUrl: (project: Project): string | null => {
       if (project.background?.kind !== 'generated' || !project.background.tileVersion) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', project.background.tileVersion);
@@ -997,9 +1020,7 @@ export const api = {
     // иначе после перегенерации браузер покажет старый кадр из кэша.
     avatarUrl: (persona: Persona): string | null => {
       if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
@@ -1028,9 +1049,7 @@ export const api = {
     // URL оригинала загруженного аватара (для перекропа) — токен через ?access_token=
     avatarOriginalUrl: (persona: Persona): string | null => {
       if (!persona.avatar?.originalFile) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.originalFile);
@@ -1038,9 +1057,7 @@ export const api = {
     },
     // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
     avatarCandidateUrl: (id: string, file: string): string => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
@@ -1410,9 +1427,7 @@ export const api = {
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(`/api/chats/${id}/files/upload`,
@@ -1625,9 +1640,7 @@ export const api = {
     // потому что тег не шлёт заголовки. Нужен картинкам в markdown — README ссылается
     // на них относительным путём, а base64 из files/content для <img src> не подходит
     fileUrl: (projectId: string, path: string): string => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const params = new URLSearchParams({ path });
       if (token) params.set('access_token', token);
       return `/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
@@ -1694,9 +1707,7 @@ export const api = {
     officeForceSave: (projectId: string, path: string) =>
       request<{ ok: boolean; reason?: string }>(`/projects/${projectId}/files/office-force-save?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(
@@ -1885,9 +1896,7 @@ export const api = {
       ),
     // Загрузить документ файлом (multipart — request() не ставит Content-Type для FormData)
     addDocumentFile: async (id: string, file: File, name?: string): Promise<{ id: string; name: string; indexingStatus: string }> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       if (name) form.append('name', name);

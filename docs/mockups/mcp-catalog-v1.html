@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Макет: каталог MCP-серверов (v1, после консенсуса и ревью)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================================
+   Токены — копия действующей дизайн-системы: значения из frontend/src/lib/theme.css,
+   семантика имён — объект C в frontend/src/lib/design.ts. Ничего не изобретаем:
+   новый оттенок в макете = дефект. Шкалы FS / SP / R / SHADOW вынесены в переменные,
+   чтобы «размер из шкалы» читался прямо в правиле, а не проверялся калькулятором.
+   ============================================================================ */
+:root{
+  /* --- Шрифты (FONT): PT Serif — заголовки, Hanken Grotesk — интерфейс, JetBrains Mono — код --- */
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+
+  /* --- Шкала кегля (FS) --- */
+  --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px;
+
+  /* --- Шкала отступов (SP, сетка 4px) --- */
+  --sp-xxs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px;
+
+  /* --- Шкала радиусов (R) --- */
+  --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:12px; --r-xxl:14px;
+  --r-modal:20px; --r-sheet:22px; --r-max:999px;
+
+  /* --- Цвета, светлая тема --- */
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  /* Тёмный «терминал» (C.termBg / C.termText). По design.ts он положен консольным
+     командам и ПРЕВЬЮ КОМАНД НА ЗАПУСК — строка запуска ровно этот случай. */
+  --c-term-bg:#2A251F; --c-term-text:#D8CFC0;
+  --c-overlay:rgba(23,19,15,0.42);
+
+  /* --- Тени (SHADOW) --- */
+  --shadow-card:0 2px 8px rgba(60,50,35,0.05);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,0.14);
+  --shadow-modal:0 24px 60px rgba(23,19,15,0.40);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,0.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,0.30);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,0.12);
+}
+:root[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-term-bg:#17140F; --c-term-text:#C9C0B0;
+  --c-overlay:rgba(0,0,0,0.62);
+  --shadow-card:0 2px 10px rgba(0,0,0,0.35);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,0.24);
+  --shadow-modal:0 28px 70px rgba(0,0,0,0.65);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,0.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,0.34);
+  --shadow-press:inset 0 1px 4px rgba(0,0,0,0.38);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-panel);color:var(--c-text-primary);
+  font-family:var(--font-sans);font-size:var(--fs-base);min-height:100vh}
+svg{display:block;flex-shrink:0}
+
+/* ==== Оправа демонстрации: в продукте её нет ==== */
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:var(--sp-xs);flex-wrap:wrap;
+  padding:var(--sp-sm) var(--sp-lg);background:var(--c-bg-white);border-bottom:1px solid var(--c-border)}
+.topbar h1{font-family:var(--font-serif);font-size:var(--fs-lg);font-weight:700;
+  color:var(--c-text-heading);margin:0 var(--sp-sm) 0 0}
+.topbar .sep{width:1px;height:22px;background:var(--c-border);margin:0 var(--sp-xs)}
+.tb{font:inherit;font-family:var(--font-sans);font-size:var(--fs-sm);font-weight:600;
+  color:var(--c-text-secondary);background:var(--c-bg-panel);border:1px solid var(--c-border);
+  border-radius:var(--r-md);padding:6px 10px;cursor:pointer}
+.tb:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.tb.on{background:var(--c-accent-light);color:var(--c-accent);border-color:var(--c-accent-muted)}
+.tb:focus-visible{outline:none;border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+
+.stage{padding:var(--sp-xl) var(--sp-lg) 64px;display:flex;justify-content:center}
+
+/* ==== Окно продукта ==== */
+/* Полотно раздела — C.bgMain. Брать сюда bgCard нельзя: в тёмной теме bgWhite и
+   bgCard — один и тот же тон, и карточки растворились бы в подложке */
+.app{position:relative;width:100%;max-width:720px;background:var(--c-bg-main);
+  border:1px solid var(--c-border-light);border-radius:var(--r-modal);
+  box-shadow:var(--shadow-modal);overflow:hidden}
+/* Шапка утоплена относительно полотна: ISLAND.headerBg = C.bgInset, высота headerH = 40 */
+.crumbs{display:flex;align-items:center;height:40px;padding:0 var(--sp-lg);
+  background:var(--c-bg-inset);border-bottom:1px solid var(--c-border);
+  font-size:var(--fs-sm);color:var(--c-text-muted)}
+.screen{padding:var(--sp-lg)}
+
+/* ==== Типографика ==== */
+h3{font-family:var(--font-serif);font-size:var(--fs-lg);font-weight:700;
+  color:var(--c-text-heading);margin:0 0 var(--sp-xs)}
+.lead{font-size:var(--fs-sm);color:var(--c-text-secondary);line-height:1.5}
+.hint{font-size:var(--fs-xs);color:var(--c-text-muted);line-height:1.45;margin-top:var(--sp-xs)}
+.blk{display:flex;align-items:center;gap:var(--sp-sm);font-size:var(--fs-sm);font-weight:600;
+  color:var(--c-text-secondary);margin:var(--sp-lg) 0 var(--sp-xs)}
+.blk .ic{color:var(--c-text-muted)}
+.link{color:var(--c-accent);text-decoration:none}
+.link:hover{text-decoration:underline}
+.link svg{display:inline-block;vertical-align:-2px;margin-left:3px}
+.mono{font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6}
+
+/* ==== Кнопки (Button.tsx: md — 11/16, R.xl, 40; sm — 7/13, R.lg, 32) ==== */
+.b{font:inherit;font-family:var(--font-sans);font-size:var(--fs-md);font-weight:600;
+  color:var(--c-text-secondary);background:var(--c-bg-panel);border:1px solid var(--c-border);
+  border-radius:var(--r-xl);padding:11px var(--sp-lg);min-height:40px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--sp-sm);
+  transition:background .15s,color .15s}
+.b:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.b:active{box-shadow:var(--shadow-press)}
+.b:focus-visible{outline:none;border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+/* Акцент — только главное действие экрана */
+.b.pri{background:var(--c-accent);border-color:var(--c-accent);color:var(--c-on-accent);
+  box-shadow:var(--shadow-button)}
+.b.pri:hover{background:var(--c-accent);color:var(--c-on-accent)}
+.b.pri:disabled{opacity:.7;cursor:not-allowed;box-shadow:none}
+/* Подтверждение запуска чужого кода — вариант danger дизайн-системы: заметно, но не акцентом */
+.b.danger{background:var(--c-danger);border-color:var(--c-danger);color:var(--c-on-accent)}
+.b.danger:hover{background:var(--c-danger);color:var(--c-on-accent)}
+.b.sm{font-size:var(--fs-base);padding:7px 13px;min-height:32px;border-radius:var(--r-lg)}
+
+/* ==== Карточки ==== */
+.card{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:var(--r-xl);
+  padding:var(--sp-md);margin-bottom:var(--sp-sm)}
+/* Кликабельная карточка — настоящая кнопка: клавиатура, роль, состояние нажатия */
+.card.act{display:block;width:100%;text-align:left;font:inherit;font-family:var(--font-sans);
+  color:inherit;cursor:pointer;transition:background .15s}
+.card.act:hover{background:var(--c-bg-selected)}
+.card.act:active{box-shadow:var(--shadow-press)}
+.card.act:focus-visible{outline:none;border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.chead{display:flex;gap:var(--sp-sm);align-items:baseline;flex-wrap:wrap}
+.cname{font-size:var(--fs-md);font-weight:600;color:var(--c-text-heading)}
+.cdesc{font-size:var(--fs-sm);color:var(--c-text-secondary);line-height:1.5;margin:var(--sp-xs) 0}
+/* Заблокированную карточку гасим цветом текста, а не opacity: причина отказа обязана
+   остаться контрастной — ради неё карточка и осталась в списке */
+.dim{color:var(--c-text-muted)}
+.why{display:flex;gap:var(--sp-sm);align-items:flex-start;margin:var(--sp-sm) 0 var(--sp-xs);
+  font-size:var(--fs-sm);line-height:1.5;color:var(--c-warning-text)}
+
+/* ==== Плашки состояния (Badge.tsx: тон = роль, R.max, FS.xs/600, без рамки) ==== */
+.badges{margin-left:auto;display:flex;gap:var(--sp-xs);flex-wrap:wrap}
+.bg{display:inline-flex;align-items:center;gap:var(--sp-xs);white-space:nowrap;
+  font-size:var(--fs-xs);font-weight:600;line-height:1.4;padding:3px var(--sp-sm);
+  border-radius:var(--r-max);background:var(--c-bg-inset);color:var(--c-text-muted)}
+.bg.warn{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.bg.ok{background:var(--c-success-bg);color:var(--c-success-text)}
+/* Технический ключ рядом с подписью поля — моно-чип, как «транспорт» на карточке сервера */
+.chip{font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:400;color:var(--c-text-muted);
+  border:1px solid var(--c-border);border-radius:var(--r-sm);padding:1px 6px}
+
+/* ==== Плашки-объяснения ==== */
+/* Утопленная ниша на полотне (C.bgInset): в тёмной теме bgPanel почти сливается с bgMain */
+.note{background:var(--c-bg-inset);border-radius:var(--r-lg);padding:10px var(--sp-md);
+  font-size:var(--fs-sm);line-height:1.5;color:var(--c-text-secondary);margin-top:var(--sp-md)}
+.note b{color:var(--c-text-heading);font-weight:600}
+/* Предупреждающая полоса — тон warning, не accent: это «посмотрите сюда», а не действие */
+.strip{display:flex;gap:var(--sp-sm);align-items:flex-start;margin-top:var(--sp-md);
+  background:var(--c-warning-bg);border:1px solid var(--c-warning);border-radius:var(--r-xl);
+  padding:11px var(--sp-md);font-size:var(--fs-sm);line-height:1.5;color:var(--c-text-secondary)}
+.strip .ic{color:var(--c-warning-text);margin-top:1px}
+.strip b{color:var(--c-warning-text)}
+
+/* ==== Блоки кода ==== */
+.run{background:var(--c-term-bg);color:var(--c-term-text);border-radius:var(--r-lg);
+  padding:10px var(--sp-md);margin-top:var(--sp-sm);white-space:pre;overflow-x:auto}
+/* Не команда (адрес, список инструментов) — нейтральная утопленная ниша, а не терминал */
+.box{background:var(--c-bg-inset);color:var(--c-text-primary);border-radius:var(--r-lg);
+  padding:10px var(--sp-md);margin-top:var(--sp-sm);white-space:pre;overflow-x:auto}
+
+/* ==== Поля (Field.tsx: bgWhite, R.xl, 10/13, FS.md, focus → accent + shadow-focus) ==== */
+.lbl{display:flex;align-items:center;gap:var(--sp-sm);flex-wrap:wrap;
+  font-size:var(--fs-sm);font-weight:600;color:var(--c-text-heading);margin:var(--sp-md) 0 var(--sp-xs)}
+.req{color:var(--c-danger)}
+.in{font:inherit;font-family:var(--font-sans);font-size:var(--fs-md);width:100%;max-width:420px;
+  padding:10px 13px;border-radius:var(--r-xl);border:1px solid var(--c-border);
+  background:var(--c-bg-white);color:var(--c-text-heading);outline:none;
+  transition:border-color .15s,box-shadow .15s}
+.in::placeholder{color:var(--c-text-muted)}
+.in:focus{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.in[readonly]{background:var(--c-bg-panel);color:var(--c-text-secondary)}
+.in.mono{font-family:var(--font-mono);font-size:var(--fs-base);max-width:none}
+.search{display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-md);
+  background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:var(--r-xl);
+  padding:10px 13px;color:var(--c-text-muted);transition:border-color .15s,box-shadow .15s}
+.search:focus-within{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.search input{font:inherit;font-family:var(--font-sans);font-size:var(--fs-md);
+  color:var(--c-text-heading);background:transparent;border:none;outline:none;width:100%;min-width:0}
+
+/* ==== Пустое состояние (EmptyState.tsx, compact) ==== */
+.empty{border:1px dashed var(--c-dashed);border-radius:var(--r-xxl);padding:var(--sp-xl) var(--sp-lg);
+  text-align:center;display:flex;flex-direction:column;align-items:center;gap:var(--sp-sm)}
+.empty .ic{width:44px;height:44px;border-radius:var(--r-xxl);background:var(--c-bg-selected);
+  color:var(--c-text-muted);display:flex;align-items:center;justify-content:center;margin-bottom:var(--sp-xs)}
+.empty .t{font-family:var(--font-serif);font-size:var(--fs-lg);font-weight:700;color:var(--c-text-heading)}
+.empty p{margin:0;font-size:var(--fs-sm);color:var(--c-text-secondary);line-height:1.5;max-width:340px}
+
+.row{display:flex;gap:var(--sp-sm);flex-wrap:wrap;align-items:center;margin-top:var(--sp-md)}
+.row.main{margin-top:var(--sp-lg)}
+
+/* ==== Модалка (Modal: R.modal, shadow-modal; ширина MODAL_W.form = 440) ==== */
+.overlay{position:absolute;inset:0;z-index:10;background:var(--c-overlay);
+  display:flex;align-items:center;justify-content:center;padding:var(--sp-lg)}
+.modal{width:100%;max-width:440px;background:var(--c-bg-card);border:1px solid var(--c-border-light);
+  border-radius:var(--r-modal);box-shadow:var(--shadow-modal);padding:18px 20px}
+.modal h4{display:flex;align-items:center;gap:var(--sp-sm);margin:0 0 var(--sp-xs);
+  font-family:var(--font-serif);font-size:var(--fs-lg);font-weight:700;color:var(--c-text-heading)}
+.modal p{margin:0;font-size:var(--fs-sm);color:var(--c-text-secondary);line-height:1.5}
+.ic-warn{color:var(--c-warning-text);display:flex}
+.ic-ok{color:var(--c-success-text);display:flex}
+.grab{display:none;width:36px;height:4px;border-radius:var(--r-max);
+  background:var(--c-dashed);margin:0 auto var(--sp-md)}
+/* ModalActions: «Отмена» слева (flex 1), основное справа (flex 1.5), на всю ширину */
+.macts{display:flex;gap:10px;margin-top:var(--sp-lg)}
+.macts .b{flex:1;width:100%}
+.macts .b:last-child{flex:1.5}
+
+/* ==== Мобильная раскладка: одни и те же правила и для настоящего узкого окна,
+        и для демо-рамки 360 внутри широкого ==== */
+.stage.mob{padding:var(--sp-lg) var(--sp-sm) 64px}
+.stage.mob .app{max-width:360px}
+.stage.mob .screen{padding:var(--sp-md)}
+.stage.mob .crumbs{padding:0 14px}
+.stage.mob .badges{margin-left:0;width:100%}
+.stage.mob .in{max-width:none}
+.stage.mob .row.main{flex-direction:column;align-items:stretch}
+.stage.mob .row.main .b{width:100%}
+.stage.mob .overlay{align-items:flex-end;padding:0}
+.stage.mob .modal{max-width:none;border-radius:var(--r-sheet) var(--r-sheet) 0 0;
+  box-shadow:var(--shadow-sheet);border-bottom:none;max-height:88%;overflow-y:auto;
+  padding:var(--sp-md) var(--sp-lg) var(--sp-lg)}
+.stage.mob .grab{display:block}
+@media(max-width:520px){
+  .stage{padding:var(--sp-lg) 0 64px}
+  .app{border-radius:0;border-left:none;border-right:none}
+  .screen{padding:var(--sp-md)}
+  .crumbs{padding:0 14px}
+  .badges{margin-left:0;width:100%}
+  .in{max-width:none}
+  .row.main{flex-direction:column;align-items:stretch}
+  .row.main .b{width:100%}
+  .overlay{align-items:flex-end;padding:0}
+  .modal{max-width:none;border-radius:var(--r-sheet) var(--r-sheet) 0 0;
+    box-shadow:var(--shadow-sheet);border-bottom:none;max-height:88%;overflow-y:auto;
+    padding:var(--sp-md) var(--sp-lg) var(--sp-lg)}
+  .grab{display:block}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Каталог MCP-серверов</h1>
+  <button class="tb" data-act="theme">Тёмная тема</button>
+  <button class="tb" data-act="mob">Мобильная 360px</button>
+  <button class="tb" data-act="env">Я container-владелец</button>
+  <span class="sep"></span>
+  <button class="tb" data-go="catalog">Каталог</button>
+  <button class="tb" data-go="detail">Карточка</button>
+  <button class="tb" data-go="form">Форма</button>
+  <button class="tb" data-go="servers">Мои серверы</button>
+  <button class="tb" data-go="empty">Пустой поиск</button>
+</div>
+
+<div class="stage" id="stage">
+  <div class="app" id="mc2">
+    <div class="crumbs"><span id="mc2-crumbs">Настройки · MCP-серверы</span></div>
+    <div id="mc2-screen" class="screen"></div>
+    <div id="mc2-modal"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+ var R=document.body,SC=document.getElementById('mc2-screen'),CR=document.getElementById('mc2-crumbs'),
+     MO=document.getElementById('mc2-modal'),ST=document.getElementById('stage');
+ var S={s:'catalog',q:'',pick:0,vals:{},cont:false,saved:null};
+
+ // Иконочный язык — lucide: viewBox 24, ICON_STROKE = 2, round caps, currentColor.
+ // Размеры строго из ICON_SIZE: xs 14, sm 16, md 18, lg 20.
+ function svg(size,body){return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" '
+   +'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+body+'</svg>'}
+ var I={
+  search: svg(16,'<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/>'),
+  searchX:svg(20,'<circle cx="11" cy="11" r="8"/><path d="m13.5 8.5-5 5"/><path d="m8.5 8.5 5 5"/><path d="m21 21-4.3-4.3"/>'),
+  monitor:svg(14,'<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>'),
+  box:    svg(14,'<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/>'),
+  cloud:  svg(14,'<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>'),
+  alert:  svg(18,'<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+  ban:    svg(14,'<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>'),
+  check:  svg(18,'<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
+  term:   svg(14,'<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+  ext:    svg(14,'<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+  back:   svg(14,'<path d="m15 18-6-6 6-6"/>')
+ };
+
+ var D=[
+  {n:'Notion',id:'com.notion/notion-mcp',rep:'github.com/makenotion/notion-mcp',v:'2.1.0',since:'сентября 2025',kind:'remote',host:'mcp.notion.com',d:'Читать и править страницы и базы Notion.',url:'https://mcp.notion.com/mcp',
+   f:[{k:'Authorization',l:'внутренний токен интеграции Notion',sec:true,req:true,ph:'ntn_…'}]},
+  {n:'Filesystem',id:'io.github.modelcontextprotocol/filesystem',rep:'github.com/modelcontextprotocol/servers',v:'1.2.0',since:'ноября 2025',kind:'npm',d:'Чтение и запись файлов в разрешённой папке.',cmd:'npx -y @modelcontextprotocol/server-filesystem@1.2.0',
+   f:[{k:'ROOT_PATH',l:'папка, к которой открыт доступ',sec:false,req:true,arg:true,ph:'C:\\Мои проекты\\docs',hold:'<папка>'}]},
+  {n:'PostgreSQL',id:'io.github.modelcontextprotocol/postgres',rep:'github.com/modelcontextprotocol/servers',v:'0.6.0',since:'октября 2025',kind:'npm',d:'Запросы к базе только на чтение.',cmd:'npx -y @modelcontextprotocol/server-postgres@0.6.0',
+   f:[{k:'DATABASE_URL',l:'строка подключения к базе',sec:true,req:true,ph:'postgresql://…'}]},
+  {n:'Analytics Pro',id:'io.github.acme/analytics',rep:'github.com/acme/analytics-mcp',v:'0.3.1',since:'марта 2026',kind:'remote',host:'mcp.acme.dev',d:'Отчёты и дашборды Acme.',url:'https://mcp.acme.dev/mcp',
+   why:'Автор пометил сервер устаревшим. Из каталога подключить нельзя — если он всё-таки нужен, добавьте вручную.',tag:'Устарел',f:[]},
+  {n:'Legacy Docs',id:'io.github.acme/legacy-docs',rep:'github.com/acme/legacy-docs',v:'1.0.0',since:'января 2026',kind:'oci',d:'Поиск по внутренней базе документов.',
+   why:'Подключается через Docker — в этой версии AI Home так подключать нельзя.',tag:'Нельзя подключить',f:[]},
+  {n:'Fast Fetch',id:'io.github.unknown/fast-fetch',rep:'github.com/unknown/fast-fetch',v:'2.0.0',since:'августа 2026',kind:'npm',d:'Быстрая загрузка страниц.',
+   why:'Сервер просит скачивать себя из чужого источника пакетов — такие подключать нельзя.',tag:'Нельзя подключить',f:[]}
+ ];
+ function e(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ function br(s){return e(s).replace(/\n/g,'<br>')}
+ function cap(s){return s.charAt(0).toUpperCase()+s.slice(1)}
+ // Бейджи параллельны по смыслу: все три отвечают на «где выполнится код».
+ // Тон «в песочнице» намеренно нейтральный, а не success: песочница — это факт,
+ // а не обещание безопасности.
+ function envTag(x){
+   if(x.kind==='remote') return '<span class="bg">'+I.cloud+'На сервере автора</span>';
+   if(x.kind==='oci') return '';
+   return S.cont?'<span class="bg">'+I.box+'В песочнице</span>'
+                :'<span class="bg warn">'+I.monitor+'На вашем компьютере</span>';
+ }
+ // Строка запуска — то же, что уйдёт в процесс: env-присвоения, команда, аргументы.
+ // Аргумент с пробелом в кавычках: иначе предпросмотр врал бы про argv.
+ function runLine(x){
+   if(x.kind!=='npm') return '';
+   var envs=x.f.filter(function(f){return !f.arg&&!f.sec}).map(function(f){return f.k+'='+(S.vals[f.k]||f.ph)});
+   var secs=x.f.filter(function(f){return f.sec&&!f.arg}).map(function(f){return f.k+'=•••'});
+   var args=x.f.filter(function(f){return f.arg}).map(function(f){
+     var v=S.vals[f.k]||'';
+     if(!v) return f.hold||'<значение>';
+     return /\s/.test(v)?'"'+v+'"':v;
+   });
+   var head=envs.concat(secs);
+   return (head.length?head.join('\n')+'\n':'')+x.cmd+(args.length?' '+args.join(' '):'');
+ }
+ function needs(x){var r=x.f.filter(function(f){return f.req});return r.length?r.map(function(f){return f.l}).join(', '):'ничего'}
+ function list(){var q=S.q.trim().toLowerCase();return D.filter(function(x){return !q||(x.n+' '+x.id+' '+x.d).toLowerCase().indexOf(q)>=0})}
+ function ready(){var x=D[S.pick];return x.f.filter(function(f){return f.req}).every(function(f){return (S.vals[f.k]||'').length>2})}
+ function localRun(x){return x.kind==='npm'&&!S.cont}
+
+ function draw(){
+  var x=D[S.pick],h='';
+  if(S.s==='catalog'||S.s==='empty'){
+   CR.textContent='MCP-серверы · Каталог';
+   var it=S.s==='empty'?[]:list();
+   h='<h3>Каталог MCP-серверов</h3>'
+    +'<div class="lead" style="margin-bottom:var(--sp-md)">Открытый список серверов сообщества. AI Home не проверяет их код — смотрите, кто автор и давно ли сервер в реестре.</div>'
+    +'<div class="search">'+I.search+'<input type="text" id="mc2-q" placeholder="Поиск: notion, файлы, база данных…" value="'+e(S.s==='empty'?'налоговая':S.q)+'"></div>';
+   if(!it.length){
+    h+='<div class="empty"><div class="ic">'+I.searchX+'</div>'
+     +'<div class="t">По запросу «налоговая» ничего не нашлось</div>'
+     +'<p>Каталог ведётся на английском — попробуйте английское название сервиса.</p>'
+     +'<button class="b" data-go="servers">Добавить сервер вручную</button></div>';
+   }
+   else it.forEach(function(o){var i=D.indexOf(o);var blocked=!!o.why;var mine=S.saved===i;
+    var tag=blocked?'div':'button';
+    h+='<'+tag+' class="card'+(blocked?'':' act')+'"'+(blocked?'':' type="button" data-p="'+i+'"')+'>'
+     +'<div class="chead"><span class="cname'+(blocked?' dim':'')+'">'+e(o.n)+'</span>'
+     +'<span class="badges">'+(mine?'<span class="bg ok">Уже добавлен</span>':'')
+     +(blocked?'<span class="bg warn">'+e(o.tag)+'</span>':'')+envTag(o)+'</span></div>'
+     +(blocked?'<div class="why">'+I.ban+'<span>'+e(o.why)+'</span></div>':'')
+     +'<div class="cdesc'+(blocked?' dim':'')+'">'+e(o.d)+'</div>'
+     +'<div class="hint mono">'+e(o.rep)+' · версия '+e(o.v)+' · в реестре с '+e(o.since)+'</div>'
+     +'</'+tag+'>';});
+  }
+  if(S.s==='detail'){
+   CR.textContent='Каталог · '+x.n;
+   h='<div class="chead" style="align-items:center"><h3 style="margin:0">'+e(x.n)+'</h3>'+envTag(x)+'</div>'
+    +'<div class="lead" style="margin-top:var(--sp-sm)">'+e(x.d)+'</div>';
+   if(localRun(x)) h+='<div class="strip"><span class="ic">'+I.alert+'</span><span><b>Запустится на вашем компьютере.</b> У сервера будет доступ ко всему, к чему есть доступ у вас: файлы, сеть, ключи в переменных окружения.</span></div>';
+   if(x.kind==='npm'&&S.cont) h+='<div class="note"><b>Запустится в песочнице.</b> До вашего компьютера не дотянется, но файлы ваших проектов внутри песочницы ему видны.</div>';
+   h+='<div class="note"><b>Что понадобится:</b> '+e(needs(x))+'</div>';
+   if(x.kind==='npm'){
+    h+='<div class="blk"><span class="ic">'+I.term+'</span>Что выполнится на запуске:</div><div class="run mono">'+br(runLine(x))+'</div>'
+     +'<div class="hint">Пакет скачается из npm при первом запуске. Версия зафиксирована — сама обновляться не будет.</div>';
+   } else {
+    h+='<div class="blk">Адрес сервера:</div><div class="box mono">'+e(x.url)+'</div>'
+     +'<div class="hint">Ничего не устанавливается и не запускается у вас. Взамен каждый запрос и его содержимое уходят на сервер автора.</div>';
+   }
+   h+='<div class="hint mono" style="margin-top:var(--sp-md)">'
+    +'<a class="link" href="https://'+e(x.rep)+'" target="_blank" rel="noopener noreferrer">'+e(x.rep)+I.ext+'</a>'
+    +' · в реестре с '+e(x.since)+' · '+e(x.id)+'</div>'
+    +'<div class="row main"><button class="b" data-go="form">Настроить подключение</button>'
+    +'<button class="b" data-go="catalog">'+I.back+'Назад к поиску</button></div>';
+  }
+  if(S.s==='form'){
+   CR.textContent='Каталог · '+x.n+' · Подключение';
+   h='<h3>Подключение: '+e(x.n)+'</h3><div class="note">Настройки взяты из каталога. Проверьте их и заполните недостающее.</div>'
+    +'<label class="lbl">Имя в AI Home</label><input class="in" type="text" value="'+e(x.n.toLowerCase().split(' ')[0])+'" readonly>'
+    +'<div class="hint">По нему сервер видно в списке и в настройках проекта. Латиницей, без пробелов</div>'
+    +(x.kind==='npm'
+      ?'<label class="lbl">Команда запуска</label><input class="in mono" type="text" value="'+e(x.cmd)+'" readonly>'
+      :'<label class="lbl">Адрес</label><input class="in mono" type="text" value="'+e(x.url)+'" readonly>');
+   x.f.forEach(function(f){
+    h+='<label class="lbl"><span>'+e(cap(f.l))+(f.req?' <span class="req">*</span>':'')+'</span><span class="chip">'+e(f.k)+'</span></label>'
+     +'<input class="in" type="'+(f.sec?'password':'text')+'" data-k="'+e(f.k)+'" placeholder="'+e(f.ph)+'" value="'+e(S.vals[f.k]||'')+'">'
+     +'<div class="hint">'+(f.sec
+        ?'Хранится в отдельном защищённом файле и не попадёт в резервную копию — после восстановления впишете заново.'+(x.kind==='remote'?' Отправляется на '+e(x.host)+' при каждом обращении.':'')
+        :'Подставится в строку запуска.')+'</div>';
+   });
+   if(x.kind==='npm') h+='<div class="blk"><span class="ic">'+I.term+'</span>Итоговая строка запуска:</div><div class="run mono">'+br(runLine(x))+'</div>';
+   h+='<div class="note">Сервер сохранится <b>выключенным</b>. Включить его вы решите сами — в нужном проекте или для конкретной персоны.</div>'
+    +'<div class="row main"><button class="b pri" data-go="save"'+(ready()?'':' disabled')+'>Сохранить выключенным</button>'
+    +'<button class="b" data-go="detail">Отмена</button>'
+    +(ready()?'':'<span class="hint" style="margin:0">Заполните обязательные поля, чтобы сохранить</span>')+'</div>';
+  }
+  if(S.s==='servers'){
+   CR.textContent='Настройки · MCP-серверы';
+   h='<h3>MCP-серверы</h3><div class="lead" style="margin-bottom:var(--sp-md)">Ваши внешние серверы.</div>';
+   if(S.saved!==null){var y=D[S.saved];
+    h+='<div class="card"><div class="chead"><span class="cname">'+e(y.n)+'</span>'
+     +'<span class="badges"><span class="bg warn">Выключен</span><span class="bg">Из каталога</span>'+envTag(y)+'</span></div>'
+     +'<div class="cdesc">Никуда не поедет, пока вы не включите его в проекте или не выдадите персоне.</div>'
+     +'<div class="row"><button class="b sm" data-go="probe">'+(y.kind==='npm'?'Пробный запуск':'Проверить связь')+'</button>'
+     +'<button class="b sm">Включить в проекте</button><button class="b sm">Изменить</button></div></div>';
+   }
+   h+='<div class="card"><div class="chead"><span class="cname">obsidian</span>'
+    +'<span class="badges"><span class="bg ok">Включён</span><span class="bg">Заведён вручную</span></span></div>'
+    +'<div class="row"><button class="b sm">Проверить связь</button><button class="b sm">Изменить</button></div></div>'
+    +'<div class="row main"><button class="b pri" data-go="catalog">Найти сервер</button>'
+    +'<button class="b">Добавить вручную</button></div>';
+  }
+  SC.innerHTML=h;
+  document.querySelectorAll('.topbar [data-go]').forEach(function(b){
+   b.classList.toggle('on',b.getAttribute('data-go')===S.s);
+  });
+ }
+ // Перерисовка пересоздаёт поля: без возврата фокуса и каретки в форме нельзя набрать
+ // даже один символ — фокус слетал бы после каждого нажатия.
+ function redrawKeepFocus(sel){
+  var pos=null,el=sel?document.querySelector(sel):null;
+  if(el&&el.selectionStart!==undefined&&el.selectionStart!==null) pos=el.selectionStart;
+  draw();
+  if(!sel) return;
+  var next=document.querySelector(sel);
+  if(!next) return;
+  next.focus();
+  if(pos!==null&&next.setSelectionRange){try{next.setSelectionRange(pos,pos)}catch(err){}}
+ }
+ function modal(html){MO.innerHTML=html?'<div class="overlay"><div class="modal"><div class="grab"></div>'+html+'</div></div>':''}
+ function askProbe(x){
+  modal('<h4><span class="ic-warn">'+I.alert+'</span>Запустить этот сервер на вашем компьютере?</h4>'
+   +'<p>AI Home выполнит эту команду целиком, вместе с переменными окружения. Код сервера писали не мы.</p>'
+   +'<div class="run mono">'+br(runLine(x))+'</div>'
+   +'<div class="macts"><button class="b" data-go="cancel">Отмена</button>'
+   +'<button class="b danger" data-go="result">Запустить</button></div>');
+ }
+ function showResult(x){
+  modal('<h4><span class="ic-ok">'+I.check+'</span>Сервер ответил</h4>'
+   +'<p>Доступно 3 инструмента — их увидит модель, когда вы включите сервер в проекте.</p>'
+   +'<div class="box mono">read_file\nwrite_file\nlist_directory</div>'
+   +'<div class="macts"><button class="b" data-go="cancel">Закрыть</button>'
+   +'<button class="b pri" data-go="cancel">Включить в проекте</button></div>');
+ }
+ // Оправа демонстрации: тема, узкий кадр, среда исполнения владельца
+ function demo(a,el){
+  if(a==='theme'){
+   var dark=document.documentElement.getAttribute('data-theme')==='dark';
+   document.documentElement.setAttribute('data-theme',dark?'light':'dark');
+   el.textContent=dark?'Тёмная тема':'Светлая тема';el.classList.toggle('on',!dark);
+   return;
+  }
+  if(a==='mob'){ST.classList.toggle('mob');el.classList.toggle('on',ST.classList.contains('mob'));return}
+  if(a==='env'){S.cont=!S.cont;el.classList.toggle('on',S.cont);modal('');draw()}
+ }
+ R.addEventListener('click',function(ev){
+  var t=ev.target.closest('[data-act]');
+  if(t){demo(t.getAttribute('data-act'),t);return}
+  var g=ev.target.closest('[data-go]');
+  if(g){ev.preventDefault();var a=g.getAttribute('data-go');
+   if(a==='save'){S.saved=S.pick;S.s='servers';modal('');draw();return}
+   if(a==='probe'){var y=D[S.saved];localRun(y)?askProbe(y):showResult(y);return}
+   if(a==='result'){showResult(D[S.saved]);return}
+   if(a==='cancel'){modal('');return}
+   S.s=a;if(a==='catalog')S.q='';modal('');draw();return}
+  var p=ev.target.closest('[data-p]');
+  if(p){S.pick=+p.getAttribute('data-p');S.vals={};S.s='detail';draw()}
+ });
+ R.addEventListener('input',function(ev){
+  if(ev.target.id==='mc2-q'){S.q=ev.target.value;S.s='catalog';redrawKeepFocus('#mc2-q');return}
+  if(ev.target.hasAttribute&&ev.target.hasAttribute('data-k')){
+   var k=ev.target.getAttribute('data-k');
+   S.vals[k]=ev.target.value;
+   redrawKeepFocus('[data-k="'+k.replace(/"/g,'\\"')+'"]');
+  }
+ });
+ draw();
+})();
+</script>
+</body>
+</html>

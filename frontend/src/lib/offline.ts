@@ -30,6 +30,36 @@ import { idbGet, idbSet } from './idb';
 
 const BASE = '/api';
 
+// === Безопасное чтение токена из storage ===
+//
+// cc_token из localStorage/sessionStorage читают ВСЕ места, где формируется
+// Authorization (REST-запросы, прямые fetch для FormData, SignalR для WebSocket).
+// Раньше каждый зов делал `localStorage.getItem('cc_token') || sessionStorage…`
+// и потом тернарник `token ? { Authorization: \`Bearer ${token}\` } : {}` —
+// а если в storage лежит строка `"null"`/`"undefined"` или пустая строка
+// (например, из-за миграции/внешнего вмешательства), она truthy, и запрос
+// уходит с заголовком `Bearer null`. Сервер отвечает 401, а дальше идёт
+// цикл cc-unauthorized → чистка storage → снова пустой токен → 401.
+//
+// Единый хелпер фильтрует мусор: вернёт только валидную непустую строку.
+// Невалидное значение приравнивается к отсутствию токена — запрос уходит
+// без Authorization, бэк отвечает 401 нормальным потоком, фронт уходит
+// на логин без «Bearer null» в логах. Источник мусора в storage не
+// разыскиваем (по QA-гипотезе — окно между cc-unauthorized и приходом
+// токена после /auth/me; реальный путь может быть и в миграции данных) —
+// защищаем чтение на выходе.
+export function readStoredToken(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  const raw = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token');
+  if (!raw) return null;
+  // Строки "null"/"undefined" — частый мусор: где-то в цепочке
+  // `setItem('cc_token', null|undefined)` молча сохранил их как строки.
+  // Пустая строка сюда не попадёт (отсечена выше), но на всяч — trim().
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
+  return trimmed;
+}
+
 // --- Состояние связи ---
 
 let _online = typeof navigator !== 'undefined' ? navigator.onLine : true;
@@ -196,9 +226,7 @@ function fireProbeNow() {
 // для зонда возврата провал не значит ничего, для подтверждающего пинга из request() —
 // это санкция уводить в офлайн.
 async function probeHealth(): Promise<boolean> {
-  const token = typeof localStorage !== 'undefined'
-    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-    : null;
+  const token = readStoredToken();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
   try {
@@ -317,9 +345,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     throw new OfflineError();
   }
 
-  const token = typeof localStorage !== 'undefined'
-    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-    : null;
+  const token = readStoredToken();
 
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).

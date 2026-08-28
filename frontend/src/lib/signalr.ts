@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import type { ServerMessage, TeamPlanDecision } from '../types';
-import { confirmOffline, setConnectionState } from './offline';
+import { confirmOffline, readStoredToken, setConnectionState } from './offline';
 
 let connection: signalR.HubConnection | null = null;
 
@@ -12,8 +12,11 @@ export function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
       .withUrl('/hubs/session', {
-        // JWT для WebSocket уходит как ?access_token= (заголовок задать нельзя)
-        accessTokenFactory: () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || '',
+        // JWT для WebSocket уходит как ?access_token= (заголовок задать нельзя).
+        // Через readStoredToken() отсеивается мусор в storage («null»/«undefined»),
+        // иначе SignalR отправил бы ?access_token=null — общая защита от той же
+        // грабли, что и в REST-запросах
+        accessTokenFactory: () => readStoredToken() ?? '',
       })
       // Смягчаем разрывы на дрожащем канале: клиент считает сервер живым 60 с
       // (дефолт 30 с рвал соединение при коротком отсутствии сообщений), пингует каждые 15 с.

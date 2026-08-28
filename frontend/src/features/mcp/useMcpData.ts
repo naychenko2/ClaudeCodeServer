@@ -3,7 +3,7 @@ import { api } from '../../lib/api';
 import { C } from '../../lib/design';
 import { relTime } from '../../lib/gitFormat';
 import type {
-  McpBuiltinServer, McpProbeResult, McpServer, McpServerUpsert, Persona, Project,
+  McpBuiltinServer, McpCatalogRevision, McpProbeResult, McpServer, McpServerUpsert, Persona, Project,
 } from '../../types';
 
 // Popup входа + таймер опроса «окно закрыли» на сервер — не состояние React: перекладывать
@@ -139,12 +139,24 @@ export interface McpData {
   probes: Record<string, McpProbeResult>;
   reload: () => void;
   setEnabled: (server: McpServer, enabled: boolean) => void;
-  probe: (server: McpServer) => Promise<void>;
+  // Проба каталожной stdio-записи у local-владельца требует подтверждения: бэк
+  // отдаёт 400 с {requiresConfirmation, command}. Вызывающий рисует диалог с этой
+  // строкой запуска и по согласию зовёт confirmProbe. 'done' — проба закончилась:
+  // либо успех, либо ошибка, которая уже легла в error
+  probe: (server: McpServer) => Promise<
+    { kind: 'done' } | { kind: 'needsConfirmation'; command: string }
+  >;
+  confirmProbe: (server: McpServer) => Promise<void>;
   remove: (server: McpServer) => Promise<void>;
   save: (id: string | null, data: McpServerUpsert) => Promise<McpServer>;
   importJson: (fragment: unknown) => Promise<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>;
-  // Allow-модель: выдача доступа, а не исключение из него
-  setProjectOn: (project: Project, serverKey: string, on: boolean) => void;
+  // Allow-модель: выдача доступа, а не исключение из него. Включение каталожной
+  // stdio-записи у local-владельца возвращает needsConfirmation — вызывающий
+  // показывает диалог с командой и зовёт confirmSetProjectOn по согласию
+  setProjectOn: (project: Project, serverKey: string, on: boolean) => Promise<
+    { kind: 'ok' } | { kind: 'needsConfirmation'; servers: { key: string; command: string }[] }
+  >;
+  confirmSetProjectOn: (project: Project, serverKey: string) => Promise<void>;
   projectsOnCount: (serverKey: string) => number;
   personasOnCount: (serverKey: string) => number;
   grantPersona: (persona: Persona, serverKey: string) => Promise<void>;
@@ -158,6 +170,12 @@ export interface McpData {
   // решает, чистить ли форму — на отказе поле с кодом должно остаться для повтора
   completeOAuth: (server: McpServer, code: string) => Promise<boolean>;
   dismissOAuthNotice: (server: McpServer) => void;
+  // Ревизия каталожных записей (волна 2): ключ — McpCatalogRef.name. Карточка сервера
+  // ищет ревизию по своему catalogRef.name. checkFailed: запрос целиком не дошёл —
+  // показываем «проверить не удалось» нейтрально у всех карточек с catalogRef (НЕ
+  // пугаем отзывом — реестр в preview, лежать ему не запрещено)
+  revisions: Record<string, McpCatalogRevision>;
+  revisionsCheckFailed: boolean;
 }
 
 export function useMcpData(): McpData {
@@ -189,6 +207,49 @@ export function useMcpData(): McpData {
     api.personas.list().then(setPersonas).catch(() => { /* обзор персон покажет пусто */ });
   }, [loadServers]);
 
+  // Ревизия каталожных записей — ОТДЕЛЬНЫЙ эффект (не внутри loadServers). Следит за
+  // servers: когда приходит свежий список, отбирает уникальные name из catalogRef и
+  // зовёт api.mcp.catalogRevisions. TTL 1 час на фронте: модалка могла открываться
+  // и закрываться — повторно в течение часа не переспрашиваем. На мутациях (save,
+  // remove) ключевой набор имён может измениться — invalidate вызывается явно ниже
+  useEffect(() => {
+    if (servers === null) return;
+    const names = new Set<string>();
+    for (const s of servers) {
+      const n = s.catalogRef?.name;
+      if (n) names.add(n);
+    }
+    if (names.size === 0) {
+      setRevisions({});
+      setRevisionsCheckFailed(false);
+      return;
+    }
+    const ONE_HOUR = 60 * 60 * 1000;
+    if (Date.now() - revisionsCheckedAt.current < ONE_HOUR) return;
+    const seq = ++revisionsSeq.current;
+    api.mcp.catalogRevisions([...names]).then(res => {
+      if (revisionsSeq.current !== seq) return; // устаревший ответ
+      revisionsCheckedAt.current = Date.now();
+      const next: Record<string, McpCatalogRevision> = {};
+      // Бэк возвращает items только по тем именам, по которым что-то нашлось.
+      // «Пропавшие» (реестр ответил, но конкретно эту запись не нашёл) считаем
+      // как отсутствие ревизии: никакой плашки на карточке не рисуем, чтобы
+      // «проверить не удалось» и «запись пропала из реестра» не путались. missing
+      // как поле DTO больше нет — фронт выводит «нет ответа по этой записи» из
+      // пустого ключа в next
+      for (const r of res.items ?? []) next[r.name] = r;
+      setRevisions(next);
+      setRevisionsCheckFailed(!!res.checkFailed);
+    }).catch(() => {
+      if (revisionsSeq.current !== seq) return;
+      revisionsCheckedAt.current = Date.now();
+      // Общий отказ батча: НЕ молчим (отзыв тут не рисуем, но нейтральная пометка
+      // «проверить не удалось» у карточек с catalogRef полезна — иначе человек
+      // решит, что всё ок, и не догадается проверить руками)
+      setRevisionsCheckFailed(true);
+    });
+  }, [servers]);
+
   const replace = (updated: McpServer) =>
     setServers(list => list?.map(s => (s.id === updated.id ? updated : s)) ?? list);
 
@@ -214,12 +275,18 @@ export function useMcpData(): McpData {
       });
   };
 
-  const probe = async (server: McpServer) => {
-    if (checking[server.id]) return;
+  // Проба «по кнопке». Каталожная stdio-запись у local-владельца запустится на машине
+  // человека, поэтому бэк отказывает без подтверждения (400 + requiresConfirmation +
+  // полная строка запуска). Возвращаем это вызывающему вместо общей плашки «Проверка
+  // не удалась»: та читалась как «сервер не отвечает», хотя разрешения просто не спросили
+  const runProbe = async (server: McpServer, confirmed: boolean): Promise<
+    { kind: 'done' } | { kind: 'needsConfirmation'; command: string }
+  > => {
+    if (checking[server.id]) return { kind: 'done' };
     setChecking(c => ({ ...c, [server.id]: true }));
     setError(null);
     try {
-      const result = await api.mcp.probe(server.id);
+      const result = await api.mcp.probe(server.id, confirmed ? { confirmed: true } : undefined);
       setProbes(p => ({ ...p, [server.id]: result }));
       // Наблюдение уже записано на бэке: тот же результат кладём в карточку,
       // чтобы статус и время проверки обновились без перезапроса списка
@@ -233,17 +300,41 @@ export function useMcpData(): McpData {
           error: result.error ?? null,
         },
       });
+      return { kind: 'done' };
     } catch (e) {
+      const body = (e as { body?: { requiresConfirmation?: boolean; command?: string } } | null)?.body;
+      if (!confirmed && body?.requiresConfirmation) {
+        // Ошибку НЕ показываем: отказа не было, был вопрос — его задаёт диалог
+        return { kind: 'needsConfirmation', command: body.command ?? '' };
+      }
       setError(msg(e, 'Проверка не удалась'));
+      return { kind: 'done' };
     } finally {
       setChecking(c => ({ ...c, [server.id]: false }));
     }
   };
 
+  const probe = (server: McpServer) => runProbe(server, false);
+
+  // Повторная проба с confirmed=true — после согласия в диалоге
+  const confirmProbe = async (server: McpServer) => { await runProbe(server, true); };
+
   // state сервера (не React-стейт, ключ oauth/start) → id записи, ждущей ответа окна входа
   const [oauthSessions, setOauthSessions] = useState<Record<string, { key: string; state: string }>>({});
   const [oauthNotice, setOauthNotice] = useState<Record<string, string>>({});
   const oauthWindows = useRef<Record<string, OAuthWindow>>({});
+
+  // Ревизия каталожных записей в реестре (волна 2). Запрос идёт ОТДЕЛЬНО от списка
+  // серверов и ПОСЛЕ его отрисовки: реестр в статусе preview может лежать, а раздел
+  // обязан открываться. TTL кэша — час: фронт сам не дёргает ревизию чаще, даже если
+  // модалка переоткроется. Инвалидация — любая мутация, которая могла поменять состав
+  // каталожных записей (save/remove/reload)
+  const [revisions, setRevisions] = useState<Record<string, McpCatalogRevision>>({});
+  const [revisionsCheckFailed, setRevisionsCheckFailed] = useState(false);
+  const revisionsCheckedAt = useRef<number>(0);
+  // Защита от гонок: параллельные перезагрузки списка могли бы стартовать два запроса,
+  // и более старый ответ перезаписал бы свежий. Тот же приём, что в probe/setEnabled
+  const revisionsSeq = useRef(0);
 
   const stopOAuthPoll = (id: string) => {
     const w = oauthWindows.current[id];
@@ -328,6 +419,9 @@ export function useMcpData(): McpData {
     // Сервер мог быть выключен в проектах — deny-list на бэке чистится вместе с записью
     // только у персон, поэтому список проектов перечитываем
     api.projects.list().then(setProjects).catch(() => { /* не критично */ });
+    // Удаление каталожной записи могло изменить набор имён — следующий рендер списка
+    // сходит в реестр. Сбрасываем метку времени, чтобы эффект не ждал положенный час
+    revisionsCheckedAt.current = 0;
   };
 
   const save = async (id: string | null, data: McpServerUpsert) => {
@@ -336,6 +430,10 @@ export function useMcpData(): McpData {
       if (!list) return [saved];
       return id ? list.map(s => (s.id === saved.id ? saved : s)) : [...list, saved];
     });
+    // Правка каталожной записи могла сменить version/name (или удалить catalogRef вовсе).
+    // Невалидируем — следующий рендер сходит в реестр. Создание новой записи с catalogRef
+    // тоже меняет набор имён, та же логика
+    revisionsCheckedAt.current = 0;
     return saved;
   };
 
@@ -345,8 +443,14 @@ export function useMcpData(): McpData {
     return result;
   };
 
-  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и остальные настройки
-  const setProjectOn = (project: Project, serverKey: string, on: boolean) => {
+  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и остальные настройки.
+  // Включение каталожной stdio-записи у local-владельца требует подтверждения: бэк
+  // отдаёт 400 с {requiresConfirmation, servers[{key, command}]}. Резолв промиса —
+  // способ синхронизировать UI вызывающего (McpAccessTab) с решением бэка, не
+  // заводя второй стор pending-подтверждений
+  const setProjectOn = (project: Project, serverKey: string, on: boolean): Promise<
+    { kind: 'ok' } | { kind: 'needsConfirmation'; servers: { key: string; command: string }[] }
+  > => {
     const current = project.mcpServersOn ?? [];
     const next = on
       ? [...current.filter(k => k !== serverKey), serverKey]
@@ -355,14 +459,38 @@ export function useMcpData(): McpData {
     saveSeq.current[project.id] = seq;
     setProjects(list => list.map(p => (p.id === project.id ? { ...p, mcpServersOn: next } : p)));
     setError(null);
-    api.projects.update(project.id, { mcpServersOn: next })
+    return api.projects.update(project.id, { mcpServersOn: next })
+      .then(saved => {
+        if (saveSeq.current[project.id] !== seq) return { kind: 'ok' as const };
+        setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
+        return { kind: 'ok' as const };
+      })
+      .catch((e: unknown) => {
+        if (saveSeq.current[project.id] !== seq) throw e;
+        setProjects(list => list.map(p => (p.id === project.id ? project : p)));
+        const body = (e as { body?: { requiresConfirmation?: boolean; servers?: { key: string; command: string }[] } } | null)?.body;
+        if (body?.requiresConfirmation && body.servers) {
+          // Откатываем оптимистичный апдейт: сервер ещё не включён, решение — за человеком
+          return { kind: 'needsConfirmation' as const, servers: body.servers };
+        }
+        setError(msg(e, 'Не удалось сохранить'));
+        throw e;
+      });
+  };
+
+  // Повторный запрос с mcpCatalogConfirmed=true — после согласия в диалоге
+  const confirmSetProjectOn = (project: Project, serverKey: string): Promise<void> => {
+    const current = project.mcpServersOn ?? [];
+    const next = [...current.filter(k => k !== serverKey), serverKey];
+    const seq = (saveSeq.current[project.id] ?? 0) + 1;
+    saveSeq.current[project.id] = seq;
+    return api.projects.update(project.id, { mcpServersOn: next, mcpCatalogConfirmed: true })
       .then(saved => {
         if (saveSeq.current[project.id] !== seq) return;
         setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
       })
-      .catch(e => {
-        if (saveSeq.current[project.id] !== seq) return;
-        setProjects(list => list.map(p => (p.id === project.id ? project : p)));
+      .catch((e: unknown) => {
+        if (saveSeq.current[project.id] !== seq) throw e;
         setError(msg(e, 'Не удалось сохранить'));
       });
   };
@@ -403,9 +531,10 @@ export function useMcpData(): McpData {
   return {
     servers, builtin, projects, personas, error, setError,
     checking, probes, reload: loadServers,
-    setEnabled, probe, remove, save, importJson,
-    setProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
+    setEnabled, probe, confirmProbe, remove, save, importJson,
+    setProjectOn, confirmSetProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
     oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
+    revisions, revisionsCheckFailed,
   };
 }
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
 
@@ -44,6 +45,9 @@ public class McpProbeService(
 
     // Одна проба на (владелец, сервер): повторный клик по кнопке не должен плодить процессы
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _perServer = new();
+
+    // Незаполненная шаблонная переменная в адресе ({COMPANY} из декларации реестра)
+    private static readonly Regex UrlTemplatePattern = new(@"\{[A-Za-z0-9_.-]+\}", RegexOptions.Compiled);
 
     /// <summary>
     /// Пробует сервер и записывает наблюдение в стор. Исключений не бросает: любая беда —
@@ -221,6 +225,21 @@ public class McpProbeService(
     {
         if (string.IsNullOrWhiteSpace(original.Url))
             return Failed("У записи не задан адрес сервера");
+
+        // SSRF-гейт для каталожной записи (адрес объявил реестр, а не человек; ручные записи
+        // не трогаем — http://localhost:3000/mcp для них штатный сценарий). Снимается, когда
+        // Url разошёлся с импортированным: адрес тогда правил человек. Фильтр от объявленного
+        // приватного адреса, а не защита от активного обхода (резолв гейта и соединение через
+        // egress-прокси видят разные адреса) — митигация живёт в выключенности записи
+        if (original.CatalogRef is { } catalogRef
+            && string.Equals(original.Url, catalogRef.Url, StringComparison.Ordinal))
+        {
+            if (UrlTemplatePattern.IsMatch(original.Url))
+                return Failed("В адресе не заполнены переменные — подставьте значения в настройках сервера");
+            if (Uri.TryCreate(original.Url, UriKind.Absolute, out var imported)
+                && await SsrfGuard.CheckAsync(imported, ct) != SsrfGuard.AddressCheck.Public)
+                return Failed("Адрес сервера из каталога указывает на частную сеть — подключить нельзя");
+        }
 
         // Тот же шаг, что и перед ходом: истекающий токен OAuth обновляем, провал — «нужен вход».
         // Иначе проба говорила бы «сервер не пускает» про запись, которую ход бы починил сам

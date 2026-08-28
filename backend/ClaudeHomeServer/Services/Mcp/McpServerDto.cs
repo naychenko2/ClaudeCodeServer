@@ -16,6 +16,9 @@ public sealed record McpAuthDto(string Kind, string? HeaderName, bool HasSecret,
 public sealed record McpServerStatusDto(string Status, DateTime ObservedAt, string Source,
     string? SessionId, string? Error);
 
+/// <summary>Указатель на запись реестра-каталога, из которой сервер заведён; null — вручную.</summary>
+public sealed record McpCatalogRefDto(string Name, string? Version, DateTime? PublishedAt, string? Url);
+
 /// <summary>Запись реестра для выдачи наружу — маскированная (см. McpServerMapper).</summary>
 public sealed record McpServerDto(
     string Id, string Key, string ToolKey, string Label, string? Description,
@@ -23,7 +26,7 @@ public sealed record McpServerDto(
     string? Url, IReadOnlyList<McpValueDto> Headers, McpAuthDto Auth,
     bool Enabled, bool AlwaysLoad, bool AllowReadOnlyPersonas, bool AllowOutsideProjects,
     string Source, int AuthVersion, DateTime CreatedAt, DateTime UpdatedAt,
-    McpServerStatusDto? Status = null);
+    McpCatalogRefDto? CatalogRef = null, McpServerStatusDto? Status = null);
 
 /// <summary>
 /// ЕДИНСТВЕННАЯ точка выхода записей реестра наружу. Всегда маскирует: значение, лежащее
@@ -55,6 +58,9 @@ public static class McpServerMapper
         AuthVersion: r.AuthVersion,
         CreatedAt: r.CreatedAt,
         UpdatedAt: r.UpdatedAt,
+        CatalogRef: r.CatalogRef is null ? null
+            : new McpCatalogRefDto(r.CatalogRef.Name, r.CatalogRef.Version,
+                r.CatalogRef.PublishedAt, r.CatalogRef.Url),
         Status: MapStatus(status));
 
     private static McpServerStatusDto? MapStatus(McpServerStatusEntry? status) =>

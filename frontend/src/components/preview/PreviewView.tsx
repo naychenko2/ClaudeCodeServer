@@ -4,6 +4,7 @@ import { C, FONT } from '../../lib/design'
 import { IconButton, Button, PillSwitch } from '../ui'
 import { PreviewLogView, type LogSource } from './PreviewLogView'
 import type { ProjectService } from '../../types'
+import { readStoredToken } from '../../lib/offline'
 import { getExternalUrl } from '../../lib/externalPreviewUrls'
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
 // Preview-прокси /preview/* аутентифицируется по cookie cc_preview (iframe и его сабресурсы
 // не могут слать Authorization). Ставим её из токена сессии перед загрузкой iframe.
 function ensurePreviewCookie() {
-  const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+  const token = readStoredToken()
   if (!token) return
   const secure = location.protocol === 'https:' ? '; Secure' : ''
   document.cookie = `cc_preview=${token}; path=/preview; SameSite=Strict${secure}`

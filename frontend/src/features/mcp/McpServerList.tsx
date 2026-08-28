@@ -1,13 +1,13 @@
 import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Plug, X } from 'lucide-react';
-import { Button, Dot, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
+import { ChevronDown, ChevronRight, AlertTriangle, Pencil, Plug, X } from 'lucide-react';
+import { Button, ConfirmDialog, Dot, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { accessSummaryOn, mcpAuthLine, mcpStatusTone, plural } from './useMcpData';
 import type { McpData } from './useMcpData';
-import type { McpBuiltinServer, McpServer } from '../../types';
+import type { McpBuiltinServer, McpCatalogRevision, McpServer } from '../../types';
 
 // Вкладка «Серверы»: свои записи полноразмерными карточками, всё остальное — компактными
 // плитками по группам. Ось группировки — кто подключил сервер и кто им управляет:
@@ -43,10 +43,14 @@ const hintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
 };
 
-export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
+export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, onDelete }: {
   data: McpData;
   onEdit: (server: McpServer) => void;
   onAdd: () => void;
+  // Кнопка «Найти сервер» в шапке раздела: ведёт в каталог (фича mcp-catalog).
+  // Список сам не знает, включён ли флаг — это решает родитель и не передаёт
+  // колбэк, если каталог выключен (тогда и кнопки нет)
+  onCatalog?: () => void;
   onOpenAccess: () => void;
   onDelete: (server: McpServer) => void;
 }) {
@@ -74,8 +78,17 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
           <EmptyState
             icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
             title="Своих серверов пока нет"
-            subtitle="Пока подключены только встроенные серверы продукта. Добавьте свой — например, Miro или файловый сервер — и он станет доступен в чатах и персонам"
-            action={<Button variant="primary" size="sm" onClick={onAdd}>Добавить сервер</Button>}
+            // Что такое внешний MCP-сервер: программа, которую AI Home запускает
+            // рядом с собой, чтобы дать чатам новые возможности — файлы, БД, поиск
+            // по API. Это первое, что видит новый человек в разделе, и без строчки
+            // «а зачем» кнопки «Найти» и «Добавить» выглядели бы как ритуал
+            subtitle="Внешний MCP-сервер — это программа, которую AI Home запускает рядом с собой, чтобы дать чатам новые возможности: чтение файлов, доступ к базе, поиск по API. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
+            action={
+              <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {onCatalog && <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>}
+                <Button variant="ghost" size="sm" onClick={onAdd}>Добавить вручную</Button>
+              </div>
+            }
           />
         </div>
       ) : (
@@ -98,6 +111,13 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
               который AI&nbsp;Home не редактирует.
             </div>
           )}
+        </div>
+      )}
+
+      {onCatalog && (
+        <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
+          <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>
+          <Button variant="ghost" size="sm" onClick={onAdd}>Добавить вручную</Button>
         </div>
       )}
 
@@ -240,6 +260,23 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
   const target = server.transport === 'stdio'
     ? [server.command, ...server.args].filter(Boolean).join(' ')
     : server.url ?? '';
+  // Ревизия из реестра (волна 2). Карточка ничего не знает про запрос — он идёт
+  // от родителя ОТДЕЛЬНО от списка, чтобы раздел открывался при лежащем реестре.
+  // Здесь только показ: deprecated/deleted → warningBg, новее → нейтральный info,
+  // общий отказ батча → нейтральная «проверить не удалось» (НЕ отзыв, иначе при
+  // лежащем реестре люди выключат рабочие серверы)
+  const revision = server.catalogRef?.name
+    ? data.revisions[server.catalogRef.name]
+    : undefined;
+  // Подтверждение запуска пробы: у каталожной stdio-записи local-владельца бэк
+  // отказывает без confirmed=true и присылает полную строку запуска. Без диалога
+  // человек видел «Проверка не удалась» и читал это как «сервер сломан»
+  const [pendingProbe, setPendingProbe] = useState<string | null>(null);
+
+  const startProbe = async () => {
+    const result = await data.probe(server);
+    if (result.kind === 'needsConfirmation') setPendingProbe(result.command);
+  };
 
   return (
     <div style={{
@@ -278,6 +315,10 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
           fontFamily: FONT.mono, fontSize: 11, color: C.textMuted,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{target}</div>
+      )}
+
+      {(revision || data.revisionsCheckFailed) && (
+        <CatalogRevisionNote revision={revision} checkFailed={data.revisionsCheckFailed} />
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: FS.sm }}>
@@ -331,7 +372,7 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
               onClick={() => void data.startOAuth(server)}
             >Войти</Button>
           )}
-          <Button variant="ghost" size="md" disabled={checking} onClick={() => void data.probe(server)}>
+          <Button variant="ghost" size="md" disabled={checking} onClick={() => void startProbe()}>
             Проверить
           </Button>
           <IconButton size="lg" title="Изменить" onClick={onEdit} disabled={checking}>
@@ -350,7 +391,81 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
       {canLogin && oauthBusy && (
         <ManualOAuthCode server={server} data={data} />
       )}
+
+      {pendingProbe !== null && (
+        <ConfirmDialog
+          title="Запустить этот сервер на вашем компьютере?"
+          subtitle={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warningText} style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  Чтобы спросить у сервера список инструментов, AI Home выполнит эту
+                  команду целиком на вашем компьютере. Код сервера писали не мы.
+                </span>
+              </div>
+              <div style={{
+                fontFamily: FONT.mono, fontSize: FS.xs, lineHeight: 1.45,
+                background: C.bgInset, border: `1px solid ${C.border}`, borderRadius: R.md,
+                padding: '8px 10px', color: C.textPrimary,
+                wordBreak: 'break-all', whiteSpace: 'pre-wrap',
+              }}>
+                {pendingProbe}
+              </div>
+            </div>
+          }
+          confirmLabel="Запустить"
+          confirmVariant="danger"
+          onConfirm={async () => {
+            setPendingProbe(null);
+            await data.confirmProbe(server);
+          }}
+          onCancel={() => setPendingProbe(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// Плашка ревизии каталожной записи (волна 2): три варианта по серьёзности.
+// deprecated/deleted — точно отзыв, тон warning (как у unsupportedReason в каталоге);
+// hasNewer — информационная, нейтральный тон; общий отказ батча (checkFailed) — НЕ
+// отзыв, нейтрально-приглушённый, чтобы при лежащем реестре не выглядело как «беда»
+// и человек не выключил рабочий сервер.
+function CatalogRevisionNote({ revision, checkFailed }: {
+  revision: McpCatalogRevision | undefined;
+  checkFailed: boolean;
+}) {
+  let tone: 'warn' | 'info' | 'muted' = 'muted';
+  let text: string | null = null;
+  if (revision?.status === 'deprecated') {
+    tone = 'warn';
+    text = 'Автор пометил сервер устаревшим в реестре. Работает как раньше, но новые подключения лучше не делать.';
+  } else if (revision?.status === 'deleted') {
+    tone = 'warn';
+    text = 'Сервер удалён из реестра. Лучше выключить и завести замену вручную.';
+  } else if (revision?.hasNewerVersion) {
+    tone = 'info';
+    text = revision.latestVersion
+      ? `В реестре вышла новее: ${revision.latestVersion}. Можно обновить вручную.`
+      : 'В реестре вышла новее. Можно обновить вручную.';
+  } else if (checkFailed) {
+    tone = 'muted';
+    text = 'Не удалось проверить состояние в реестре. Это не значит, что сервер сломан.';
+  }
+  if (!text) return null;
+
+  const skin = tone === 'warn'
+    ? { background: C.warningBg, color: C.warningText }
+    : tone === 'info'
+      ? { background: C.bgInset, color: C.textSecondary }
+      : { background: 'transparent', color: C.textMuted, border: `1px dashed ${C.dashed}` };
+
+  return (
+    <div style={{
+      fontSize: FS.xs, lineHeight: 1.45, padding: '6px 10px',
+      borderRadius: R.md, ...skin,
+    }}>{text}</div>
   );
 }
 

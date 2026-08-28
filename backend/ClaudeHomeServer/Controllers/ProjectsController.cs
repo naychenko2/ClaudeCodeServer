@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -222,6 +222,37 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Update мутирует объект проекта на месте — старые значения снимаем до вызова
         var oldName = p.Name;
         var oldRoot = p.RootPath;
+
+        // Включение каталожного stdio-сервера в проект — момент, когда чужой код впервые
+        // едет в ходы (решение владельца от 28.08.2026): до этого включать нечего.
+        // Гейт на сервере, а не только в диалоге — иначе он обходится прямым запросом.
+        // Проверяются только НОВЫЕ ключи: пересохранение уже включённых не спрашивает
+        if (req.McpServersOn is { } serversOn && req.McpCatalogConfirmed != true)
+        {
+            var existingOn = p.McpServersOn ?? [];
+            var added = serversOn
+                .Select(k => k.Trim().ToLowerInvariant())
+                .Where(k => k.Length > 0 && !existingOn.Contains(k, StringComparer.Ordinal))
+                .ToHashSet(StringComparer.Ordinal);
+            if (added.Count > 0
+                && users.GetById(UserId)?.ExecutionEnvironment != ExecutionEnvironments.Container)
+            {
+                // container-владельцу порога нет: процесс родится в песочнице
+                var risky = mcpRegistry.GetByOwner(UserId)
+                    .Where(r => r.CatalogRef is not null && r.Transport == McpTransport.Stdio
+                        && added.Contains(r.Key))
+                    .Select(r => new { key = r.Key, command = McpServersController.LaunchPreviewOf(r) })
+                    .ToList();
+                if (risky.Count > 0)
+                    return BadRequest(new
+                    {
+                        error = "Эти серверы запустятся на вашем компьютере — подтвердите включение, посмотрев строку запуска",
+                        requiresConfirmation = true,
+                        servers = risky,
+                    });
+            }
+        }
+
         try
         {
             var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.Color, req.McpServersOn, req.AutoImportDossiers);
@@ -516,6 +547,6 @@ public record SetDesktopAgentRequest(bool Enabled);
 // Порог автоправила архивации проекта (дней); null — наследовать личный порог владельца
 public record SetProjectArchiveDaysRequest(int? Days);
 
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOn = null, bool? AutoImportDossiers = null);
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOn = null, bool? AutoImportDossiers = null, bool? McpCatalogConfirmed = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
 public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

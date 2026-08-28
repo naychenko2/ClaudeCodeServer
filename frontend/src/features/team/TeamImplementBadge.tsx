@@ -6,13 +6,12 @@ import { Button, ConfirmDialog, Menu, Modal } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { api } from '../../lib/api';
 import {
-  teamImplementTone, teamImplementBadgeText, teamImplementStageShort, teamBudgetLine, teamBudgetTight,
-  teamImplementModeHeld,
+  teamBudgetLine, teamBudgetTight,
+  teamImplementBadgeAt, teamImplementModeHeld,
   TEAM_IMPLEMENT_DESCRIPTION, TEAM_IMPLEMENT_AUTO_TITLE,
   TEAM_IMPLEMENT_DISABLE_TITLE, TEAM_IMPLEMENT_DISABLE_TEXT,
   TEAM_IMPLEMENT_NO_CODE_ON, TEAM_IMPLEMENT_NO_CODE_OFF, TEAM_IMPLEMENT_MODE_HELD,
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
-  teamPulseTone, teamPulseBadgeText, teamPulseBadgeShort,
   teamPulseMeaning, teamPulseStage, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
   isTeamWavePulseStale,
   TEAM_WAVE_TASK_RESTART_TITLE, TEAM_WAVE_TASK_RESTART_HINT,
@@ -21,7 +20,6 @@ import {
   TEAM_TURN_RESTART_TITLE,
   TEAM_TURN_RESTART_DAMAGED_TITLE, TEAM_TURN_RESTART_DAMAGED_CONFIRM, TEAM_TURN_RESTART_DAMAGED_CANCEL,
 } from '../../lib/teamImplement';
-import { teamMechanic } from './teamMechanics';
 import { useOnline } from '../../hooks/useOnline';
 import type { Mode } from '../../lib/modes';
 
@@ -172,23 +170,18 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
     ? pulse
     : null;
 
-  // Эффективный тон на стадии волны/проверки: пульс живого бэка перебивает дефолтный
-  // тон стадии. Вне этих стадий или без (свежего) пульса — как раньше, по стадии
-  // liveness — снапшот свежее пульса (refetch при каждом открытии поповера);
-  // протухший пульс в расчёт не идёт: кнопки перезапуска не должны опираться
-  // на состояние, которого никто не подтверждал
+  // Эффективный тон и подпись бейджа — единая точка teamImplementBadgeAt:
+  //   1) stopped > всё остальное — практика остановлена, живой пульс (если ещё
+  //      приходит от дорабатывающих исполнителей) не перебивает главное сообщение
+  //      и не переключает тон обратно на work;
+  //   2) живой livePulse на стадии волны/проверки — показывает «N/M · активность»;
+  //   3) без пульса — по стадии режима.
+  // liveness остаётся из snapshot/livePulse — он нужен для кнопок перезапуска в
+  // поповере, но сам перезапуск при stopped скрываем ниже (см. RestartRows)
   const liveness: TeamWaveLiveness | undefined = snapshot?.liveness ?? livePulse?.liveness;
-  const stageTone = teamImplementTone(state.stage);
-  const effectiveTone: 'work' | 'wait' | 'idle' | 'warning' | 'danger' =
-    livePulse ? teamPulseTone(livePulse.liveness) : stageTone;
+  const badge = teamImplementBadgeAt(state, livePulse);
+  const effectiveTone = badge.tone;
 
-  // Полная и короткая подпись бейджа при ЖИВОМ пульсе на стадии волны/проверки
-  const pulseFullText = livePulse ? teamPulseBadgeText(state, livePulse) : null;
-  const pulseShortText = livePulse ? teamPulseBadgeShort(livePulse) : null;
-
-  // Дефолтные подписи (как раньше, без пульса)
-  const fullText = teamImplementBadgeText(state.stage, state.waveNumber, state.plannedWaves);
-  const text = `${teamMechanic('implementMode').shortName} · ${teamImplementStageShort(state.stage, state.waveNumber, state.plannedWaves)}`;
   const height = isMobile ? 26 : 24;
 
   // Тон бейджа: для warning/danger отдельные палитры, work/wait/idle — как раньше
@@ -221,20 +214,22 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
 
   // Текст и тултип бейджа с учётом пульса. На этапе 2: если чип «Авто» спрятан (узкая
   // полоса), добавляем состояние авто прямо в badgeTitle — человек видит включено/нет
-  // только через клик в поповер, и tooltip должен это объяснить
-  const badgeText = livePulse
-    ? (isMobile ? (pulseShortText ?? text) : (pulseFullText ?? text))
-    : text;
+  // только через клик в поповер, и tooltip должен это объяснить. badgeText приходит
+  // из teamImplementBadgeAt: при stopped это «остановлено», без livePulse — стадия,
+  // с livePulse — «КР · волна N · 2/5 · активность …»
+  const badgeText = isMobile ? badge.short : badge.full;
   const autoStateText = state.autoWaves ? 'авто-волны включены' : 'авто-волны выключены';
   // badgeTitle строится по единой формуле «что это — пульс — авто»: описание режима
-  // ВСЕГДА (это якорь), пульс добавляется при ЖИВОМ livePulse, авто — при спрятанном
-  // чипе (showAutoChip=false). Раньше проверка livePulse шла первой и при наличии пульса
+  // ВСЕГДА (это якорь), пульс добавляется при ЖИВОМ livePulse И если практика не
+  // остановлена (иначе живой пульс от дорабатывающих исполнителей врал бы «штаб
+  // работает» поверх «практика остановлена»), авто — при спрятанном чипе
+  // (showAutoChip=false). Раньше проверка livePulse шла первой и при наличии пульса
   // состояние авто в tooltip не попадало — находка QA 2026-08-24: чип «Авто» уезжает
   // в поповер именно когда идёт волна (то есть есть пульс), и человек без клика в
   // поповер не видел, включены ли авто-волны. Запятая склеивает части предложения
   const badgeTitle =
-    `${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`
-    + (livePulse ? `, ${teamPulseMeaning(livePulse.liveness)}` : '')
+    `${badge.full} — ${TEAM_IMPLEMENT_DESCRIPTION}`
+    + (!state.stopped && livePulse ? `, ${teamPulseMeaning(livePulse.liveness)}` : '')
     + (!showAutoChip ? `, ${autoStateText}` : '');
 
   // Иконка состояния пульса в бейдже: различает liveness ДО чтения текста — периферийным
@@ -322,8 +317,11 @@ export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId
         </div>
       )}
       {/* Перезапуск при зависании (этап 3): строки появляются только при stalled/dead —
-          живой волне перезапуск не нужен, а тихая в пределах нормы — не авария */}
-      {teamPulseStage(state.stage) && (liveness === 'stalled' || liveness === 'dead') && (
+          живой волне перезапуск не нужен, а тихая в пределах нормы — не авария.
+          При stopped перезапуск бессмыслен: практика остановлена человеком, и
+          предлагать «перезапустить волну» поверх кнопки «Продолжить» в карточке
+          остановки в ленте — лишний соблазн */}
+      {!state.stopped && teamPulseStage(state.stage) && (liveness === 'stalled' || liveness === 'dead') && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.divider}` }}>
           <RestartRows
             isMobile={isMobile}

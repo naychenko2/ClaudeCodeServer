@@ -6936,6 +6936,13 @@ public class SessionManager : IDisposable
             escalation?.Actions ?? [], escalation?.TaskId, escalation?.Wave ?? 0, true, actionId,
             escalation?.PersonaId));
 
+        // «Остановить» с информационной карточки добавочной волны (Э5) — той же точкой, что
+        // кнопка режима (ChatsController): состояние уже поставлено транзакцией выше, а повторный
+        // вызов идемпотентен — зато карточку возврата («Продолжить»/«Завершить итерацию»)
+        // публикует ОДНО место, и продолжить практику всегда есть чем (сбой 28.08.2026).
+        if (actionId == "stop" && entry.Info.TeamImplement is not null)
+            await StopTeamImplementAsync(sessionId, userId);
+
         // Раздача волны по решению человека — тем же путём, что автоволна: план лежит в
         // карточке, раздаёт TeamWaveService (хук разрывает цикл DI). Явных кнопок четыре:
         // «Запустить», «Добавить бюджет», «Продолжить» и «Перезапустить» — после них практика
@@ -7022,30 +7029,51 @@ public class SessionManager : IDisposable
         // Координатор узнаёт решение обычным ходом — как если бы человек написал его текстом.
         // В ленте — плашка механики, а не пузырь «Автоматически» с сырым текстом директивы.
         await SendOrEnqueueAsync(sessionId,
-            TeamImplementPrompts.EscalationResolvedTurn(escalation, label, comment),
+            TeamImplementPrompts.EscalationResolvedTurn(escalation, actionId, label, comment),
             senderPersonaId: null, silent: true, suppressTasksExecute: true,
             staffNote: TeamStaffNotes.EscalationResolved);
         return true;
     }
 
     // «Остановить» (кнопка человека): текущие исполнители дорабатывают, новые волны не
-    // стартуют. Карточку остановки публикует вызывающая сторона — здесь только состояние.
+    // стартуют. Единая точка остановки для кнопки режима (ChatsController) и кнопки
+    // «Остановить» информационной карточки волны (RespondTeamEscalationAsync): состояние И
+    // карточка возврата живут здесь — без карточки продолжать остановленную практику
+    // было бы нечем (сбой 28.08.2026).
     public async Task<Session?> StopTeamImplementAsync(string sessionId, string? userId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
         if (entry.Info.TeamImplement is null) return entry.Info;
 
-        WithTeamState(sessionId, t =>
+        var wave = WithTeamState(sessionId, t =>
         {
             t.Stopped = true;
             t.WaveStartedAt = null;
             t.WaveActivityAt = null;
-            return true;
+            return t.WaveNumber;
         });
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastTeamImplementAsync(sessionId, entry);
+
+        // Карточка возврата — один раз на остановку: повторное «Остановить» при уже открытой
+        // карточке Stopped второй не плодит, человек решает по той, что висит
+        if ((await GetOpenTeamEscalationsAsync(sessionId)).Any(e => e.Kind == TeamEscalationKind.Stopped))
+            return entry.Info;
+        var card = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Stopped,
+            Title = "Практика остановлена",
+            Details = "Новые волны не стартуют. Запущенные исполнители доработают начатое — " +
+                      "нажмите «Продолжить», когда команде можно идти дальше.",
+            Wave = wave,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Stopped),
+        };
+        // Через раизер — с уведомлением и push (TeamWaveService); без него карточка всё равно
+        // публикуется: молчаливых остановок в режиме не бывает
+        if (TeamEscalationRaiser is { } raise) await raise(entry.Info, card);
+        else await PublishTeamEscalationAsync(sessionId, card);
         return entry.Info;
     }
 

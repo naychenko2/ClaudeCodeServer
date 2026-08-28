@@ -346,6 +346,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const { filters, patch } = useChatFilters(project.id);
   const { groupBy, sortOrder, hierarchy } = filters;
   const inArchive = filters.archived;
+
+  // Возврат чата из архива: выходим из архивного вида и открываем этот чат — достают
+  // из архива, чтобы продолжить работу, а не чтобы остаться в архивном списке
+  const leaveArchiveAndOpen = (s: Session) => {
+    if (filters.archived) patch({ archived: false });
+    setOpenSwipeId(null);
+    onSelect(s);
+  };
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
   // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
@@ -451,6 +459,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
         onEdited={handleSessionUpdated}
+        onUnarchived={leaveArchiveAndOpen}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
       />

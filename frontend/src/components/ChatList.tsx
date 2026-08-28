@@ -111,6 +111,15 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // бейдж фильтров вечно горел бы числом архивных
   const hiddenCount = viewTotal - filteredChats.length;
 
+  // Возврат чата из архива: выходим из архивного вида и открываем этот чат. Человек
+  // достаёт чат из архива, чтобы продолжить в нём работу, — оставлять его после этого
+  // в списке архива (где чат к тому же тут же исчезает из вида) было бы тупиком
+  const leaveArchiveAndOpen = (chat: Session) => {
+    if (filters.archived) patch({ archived: false });
+    setOpenSwipeId(null);
+    onSelect(chat);
+  };
+
   const togglePin = async (chat: Session) => {
     try {
       const updated = await api.chats.update(chat.id, { pinned: !chat.isPinned });
@@ -188,6 +197,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
+      onUnarchived={leaveArchiveAndOpen}
       swipeOpen={openSwipeId === chat.id}
       onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}
     />

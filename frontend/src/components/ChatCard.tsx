@@ -164,6 +164,12 @@ interface Props {
   // Изменение чата из меню карточки (мьют уведомлений, срок хранения) — обновлённую
   // сессию возвращает бэкенд, список обновляет ею своё состояние. Не задан — пунктов нет
   onEdited?: (s: Session) => void;
+  // Чат вернули из архива. Отдельный колбэк, а не разбор onEdited владельцем: только
+  // здесь известно, что правка была именно возвратом, — снаружи пришлось бы сравнивать
+  // archivedAt до и после. Список по нему выходит из архивного вида и открывает чат:
+  // возврат из архива — намерение продолжить в нём работу, а не переложить в стопку.
+  // Не задан — карточка просто уходит из архивного списка
+  onUnarchived?: (s: Session) => void;
   // Доп. отступ содержимого слева (px). В дереве чатов контрол ветки садится в шов
   // на левый край карточки — под ним нужно освободить место, иначе он ляжет на
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
@@ -189,7 +195,7 @@ export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
-  onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
+  onEdited, onUnarchived, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -505,8 +511,12 @@ export function ChatCard({
   // сама уйдёт из основного вида (архивные там отфильтрованы) либо вернётся в него
   const toggleArchive = async () => {
     try {
-      onEdited?.(await updateChatFields(s, { archived: !archived }));
+      const updated = await updateChatFields(s, { archived: !archived });
+      onEdited?.(updated);
       showToast('Архив', archived ? 'Чат вернулся в список' : 'Чат убран в архив', 'info');
+      // Возврат из архива сообщаем владельцу отдельно — он выйдет из архивного вида и
+      // переключится на чат. Отдаём ОБНОВЛЁННУЮ сессию: у неё уже снят archivedAt
+      if (archived) onUnarchived?.(updated);
     } catch {
       showToast('Архив', archived ? 'Не удалось вернуть чат' : 'Не удалось убрать чат в архив', 'info');
     }

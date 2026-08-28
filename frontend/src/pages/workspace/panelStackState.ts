@@ -954,6 +954,21 @@ export interface PanelZonesApi {
   // сам этого не умеет и не должен: правило зависит от пикселей на экране.
   // Возвращает функцию отписки — вызывать в useEffect зоны.
   registerOpener: (zone: Zone, open: (k: PanelKey) => void) => () => void;
+  // Перенести панель в ДРУГУЮ зону одним действием: открытая переезжает открытой
+  // (её место в чужой раскладке считает зона-приёмник, как при дропе), закрытая —
+  // просто уводит свою кнопку на ту рельсу, спрятанная в ящик остаётся в ящике,
+  // но уже чужом. Ровно то же делает перетаскивание кнопки на соседнюю рельсу;
+  // здесь это доступно одним нажатием (и на таче, где перетаскивания нет).
+  moveTo: (zone: Zone, k: PanelKey) => void;
+  // Какие панели зона В ПРИНЦИПЕ показывает на этом экране (её allowedKeys с
+  // отсеянными «нет контента»). Объявляет сама зона — набор у каждой свой
+  // (в «Чатах» слева список чатов, справа только артефакты сессии). Нужен соседке:
+  // предлагать перенос туда, где панель не нарисуется, нельзя — она пропала бы с
+  // экрана целиком. Возвращает функцию отписки — вызывать в useEffect зоны.
+  registerZoneKeys: (zone: Zone, keys: readonly PanelKey[]) => () => void;
+  // Снимок объявленных наборов: undefined — зона не смонтирована (её нет на этом
+  // экране). Реактивен: смонтировалась соседка — кнопка переноса появляется сама.
+  zoneKeys: Partial<Record<Zone, readonly PanelKey[]>>;
 }
 
 export type PanelZonesStore = { use: () => PanelZonesApi };
@@ -1036,6 +1051,22 @@ function createPanelZones(ns: string, opts?: {
   // вызывающему, была ли панель открыта.
   const openers = new Map<Zone, (k: PanelKey) => void>();
 
+  // Наборы панелей смонтированных зон (см. registerZoneKeys). В отличие от
+  // открывателей это ДАННЫЕ, а не канал: по ним рисуется кнопка «перенести на
+  // другую сторону», то есть их читают в рендере — значит нужна подписка, иначе
+  // кнопка появлялась бы лишь со следующей случайной перерисовкой.
+  let _zoneKeys: Partial<Record<Zone, readonly PanelKey[]>> = {};
+  const zoneKeysListeners = new Set<() => void>();
+  function setZoneKeys(next: Partial<Record<Zone, readonly PanelKey[]>>) {
+    _zoneKeys = next;
+    zoneKeysListeners.forEach(l => l());
+  }
+  function subscribeZoneKeys(l: () => void) {
+    zoneKeysListeners.add(l);
+    return () => { zoneKeysListeners.delete(l); };
+  }
+
+
   function persist() {
     // exclusive/activeSide/сигналы — runtime: в localStorage не пишем,
     // иначе флаг поднимался бы на WallPage и при откате кода. sanitizeZones
@@ -1090,6 +1121,7 @@ function createPanelZones(ns: string, opts?: {
 
   function usePanelZones(): PanelZonesApi {
     const zones = useSyncExternalStore(subscribe, () => _zones);
+    const zoneKeys = useSyncExternalStore(subscribeZoneKeys, () => _zoneKeys);
 
     const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
       ensureWeight(k);
@@ -1235,6 +1267,38 @@ function createPanelZones(ns: string, opts?: {
       emit();
     }, []);
 
+    // Перенос панели в соседнюю зону. Открытую отдаём правилу размещения ЗОНЫ-ПРИЁМНИКА
+    // (тот же путь, что у дропа на её рельсу и у внешнего показа): вместимость колонки
+    // и порядок кнопок считаются по её пикселям, стору они неизвестны. Зоны на экране
+    // нет — фолбэк тем же правилом по каноническому порядку, что и у revealPanel.
+    // Закрытую переносить нечего: у неё переезжает только кнопка (home), а спрятанная
+    // остаётся спрятанной — уже в ящике той рельсы.
+    const moveTo = useCallback((zone: Zone, k: PanelKey) => {
+      const at = zoneOf(_zones, k);
+      if (at === zone) return;
+      if (at === null) {
+        commit(isTucked(_zones, k) ? tuckPanel(_zones, zone, k) : closePanelTo(_zones, zone, k));
+        return;
+      }
+      const open = openers.get(zone);
+      // openPanelIn внутри правила сам уберёт панель из прежней зоны — инвариант
+      // «панель лежит ровно в одной зоне» держится в обоих путях
+      if (open) { open(k); return; }
+      ensureWeight(k);
+      commit(markActiveSide(openPanelIn(_zones, zone, k), zone));
+    }, []);
+
+    const registerZoneKeys = useCallback((zone: Zone, keys: readonly PanelKey[]) => {
+      setZoneKeys({ ..._zoneKeys, [zone]: keys });
+      // Снимаем только СВОЙ набор — по той же причине, что и у открывателя: зона
+      // могла перемонтироваться, и её место уже занял новый экземпляр.
+      return () => {
+        if (_zoneKeys[zone] !== keys) return;
+        const { [zone]: _gone, ...rest } = _zoneKeys;
+        setZoneKeys(rest);
+      };
+    }, []);
+
     const registerOpener = useCallback((zone: Zone, open: (k: PanelKey) => void) => {
       openers.set(zone, open);
       // Снимаем только СВОЙ открыватель: зона могла перемонтироваться, и её место
@@ -1257,7 +1321,7 @@ function createPanelZones(ns: string, opts?: {
       return false;
     }, []);
 
-    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener };
+    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
   }
 
   return { use: usePanelZones };

@@ -37,7 +37,7 @@ import {
   isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
-import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, railSequence, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -113,7 +113,7 @@ export function PanelZone({
   railFooter, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener } = usePanels();
+  const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width, colFlex } = zoneState;
   const windowWidth = useWindowWidth();
@@ -214,12 +214,27 @@ export function PanelZone({
   const columns = compact ? [] : layout
     .map((col, ci) => ({ ci, keys: col.filter(keyAvailable) }))
     .filter(c => c.keys.length > 0);
+  // Порядок панелей КОМПАКТНОГО стека — по кнопкам рельсы, как на десктопе.
+  // Каноническую последовательность берём у стора (railSequence): здешний railSeq
+  // считается ниже и через railKeyVisible смотрит на openKeys — то есть на этот же
+  // стек, и вышел бы цикл. Разницы для порядка нет: railSequence отличается только
+  // отсутствием экранных фильтров, а те порядок сохраняют.
+  //
+  // Сортируем ПРОИЗВОДНЫЙ список, а не источники: у compactOverlay порядок
+  // tabletPanels — это очередь вытеснения (FIFO, третья панель выбивает самую
+  // старую), и пересортировав её, мы закрывали бы не ту панель.
+  const sortByRail = (keys: PanelKey[]): PanelKey[] => {
+    const seq = railSequence(zones.railOrder);
+    const rank = (k: PanelKey) => { const i = seq.indexOf(k); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+    return [...keys].sort((a, b) => rank(a) - rank(b));
+  };
+
   // Стек панелей для compactBody: на узком планшете (compactOverlay) — из
   // эфемерного стека, на широком планшете inline и десктопе — из раскладки
   // стора (persist, переживает смену проекта). Без compact — пусто, рендеринг
   // идёт по колонкам.
   const tabletKeys = compact
-    ? (compactOverlay
+    ? sortByRail(compactOverlay
       ? tabletPanels.filter(keyAvailable)
       : layout.flat().filter(keyAvailable))
     : [];
@@ -315,6 +330,12 @@ export function PanelZone({
   // зашита числом («по две на колонку»), и третья панель уезжала вбок при пустом
   // экране, а на тесной колонке новая, наоборот, ужимала всех соседей.
   const colCapNow = (): number => {
+    // В компакте колонок нет вовсе (columns пуст), и insertPlan всегда отвечает
+    // null — «не влезло». По такому счёту КАЖДАЯ панель заводила бы себе колонку,
+    // а у левой зоны новая колонка встаёт в начало массива: стек рисуется по
+    // layout.flat(), и свежая панель прыгала наверх, ломая порядок кнопок.
+    // Мерить там нечего — берём реестровый дефолт.
+    if (compact) return COL_CAP;
     const railCi = isLeft ? 0 : layout.length - 1;
     const len = layout[railCi]?.length ?? 0;
     if (len === 0) return COL_CAP;
@@ -464,6 +485,27 @@ export function PanelZone({
   useEffect(() => {
     evict(side, allowedKeys);
   }, [evict, side, allowedKeys, layout, zoneState.stash]);
+
+  // Объявляем стору свой набор — по нему СОСЕДНЯЯ зона решает, предлагать ли
+  // перенос панели сюда. Объявляем именно allowedKeys, а не «что сейчас есть чем
+  // нарисовать»: набор экрана статичен, а контент приезжает асинхронно, и по нему
+  // кнопка переноса мигала бы. Тот же довод, что у evict выше.
+  useEffect(() => registerZoneKeys(side, allowedKeys), [registerZoneKeys, side, allowedKeys]);
+
+  // Куда переносить панель кнопкой в плашке: противоположная зона, если она вообще
+  // есть на экране и показывает такую панель. Нет — кнопки не будет вовсе (панель,
+  // уехавшая туда, где её некому нарисовать, пропала бы с экрана целиком).
+  const flipSide: Zone = isLeft ? 'right' : 'left';
+  const flipTarget = zoneKeys[flipSide];
+  const canFlip = (k: PanelKey): boolean => !!flipTarget?.includes(k);
+  // Перенос: открытую в дровере планшета сперва закрываем здесь — её открытость
+  // живёт мимо стора (эфемерный стек), и стор о ней не знает.
+  const flip = (k: PanelKey) => {
+    hovered.leave();
+    peeked.clear();
+    if (compactOverlay && openKeys.includes(k)) closeCompact(k);
+    moveTo(flipSide, k);
+  };
 
   // Эксклюзив сторон на планшете: активность ушла в соседнюю зону — эфемерный
   // стек этой очищаем (открыли чат слева → правый drawer схлопнулся). На
@@ -858,6 +900,10 @@ export function PanelZone({
     ...(tucked || stashRevealed || !columnKeys.some(x => x !== k) ? null : {
       onTuck: () => { hovered.leave(); peeked.clear(); tuck(side, k); },
     }),
+    // «Перенести на другую сторону» — второй кнопкой в плашке (а в ящике «…» —
+    // спутником строки: плашки у спрятанной кнопки нет вовсе). Тот же исход, что у
+    // перетаскивания кнопки на чужую рельсу, но без жеста — на таче его и нет.
+    ...(canFlip(k) ? { onFlip: () => flip(k) } : null),
     onClick: () => {
       // Клик прерывает попап: назначенный уже не нужен, а показанный сменится
       // настоящей панелью. Если попап этой панели сейчас на экране — это

@@ -75,6 +75,12 @@ import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 // десктопное — размах колец индикатора. Сливать в одно не надо.
 const CHAT_GUTTER_MOBILE = 16;
 
+// Растворение верхнего края прокрученной ленты — им обозначена граница с шапкой
+// вместо линии, тени и стеклянной подложки: холст с рисунком под шапкой остаётся
+// чистым, а край читается по самому тексту. Чёрный и прозрачный здесь не цвета:
+// в маске значима только альфа, поэтому токенов темы тут нет и быть не может
+const FEED_FADE = 'linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.35) 14px, black 44px)';
+
 interface Props {
   session: Session;
   // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
@@ -2081,7 +2087,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     <ChatHeaderBar
       island={headerIsland}
       compact={embedded}
-      scrolled={scrolled}
       session={session}
       project={project}
       hasMessages={hasMessages}
@@ -2168,6 +2173,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // компенсировать некуда, поэтому остаток до CHAT_GUTTER_L добирается
         // паддингом — величину считает useChatGutter замером полосы.
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20,
+        // Верхний край ленты растворяется, когда она прокручена, — этим и обозначена
+        // граница с шапкой (ни линии, ни тени, ни подложки под шапкой нет: они мутили
+        // бы дудл-холст). В начале ленты маски нет, иначе первое сообщение всегда
+        // висело бы полупрозрачным
+        ...(scrolled ? { maskImage: FEED_FADE, WebkitMaskImage: FEED_FADE } : null),
         paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера

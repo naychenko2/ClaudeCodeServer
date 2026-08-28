@@ -211,17 +211,15 @@ export function chatStatusOf(s: Session): ChatStatusChip {
 }
 
 // Признак архива — производное бэка (ArchivedAt != null && UpdatedAt <= ArchivedAt),
-// отдаётся на фронт готовым bool в Session.archived / HomeSessionInfo.archived.
-// На фронте НЕ пересчитываем из updatedAt/archivedAt — это вторая копия правила,
-// плюс мигание на равных таймстемпах (см. docs/architecture/features.md, раздел
-// «Архив чатов»). Узкий type guard: тип Session/HomeSessionInfo сейчас не содержит
-// поля явно (тип обновляется параллельно), читаем без строгой типизации.
-// Сервер отдаёт `isArchived` (см. Session.DTO); на случай старого поля `archived`
-// — пробуем оба. Тип Session расширяется в рантайме: фронт не должен падать, если
-// бэкенд прислал только одно из двух.
+// отдаётся на фронт готовым bool: у Session это `isArchived` (Session.IsArchived в C#),
+// у сводки главной — `archived` (HomeSessionDto). На фронте НЕ пересчитываем из
+// updatedAt/archivedAt — это вторая копия правила, плюс мигание на равных таймстемпах
+// (см. docs/architecture/features.md, раздел «Архив чатов»). Порядок чтения не
+// случаен: сначала своё поле Session, потом запасное поле DTO главной — предикат
+// один на оба источника, и подменять его вторым нельзя.
 export function isArchivedChat(s: Session): boolean {
   const x = s as unknown as { archived?: unknown; isArchived?: unknown };
-  return Boolean(x.archived ?? x.isArchived);
+  return Boolean(x.isArchived ?? x.archived);
 }
 
 // Предикат видимости чата по фильтрам. Возвращается функцией, чтобы один и тот же

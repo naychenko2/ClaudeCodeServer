@@ -252,31 +252,34 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           />
         </div>
       )}
-      {scoped.length === 0 && chats.length === 0 && (
-        filters.archivedOnly ? (
-          <EmptyState
-            compact={!isMobile}
-            icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title={ARCHIVE_EMPTY_TITLE}
-            subtitle={ARCHIVE_EMPTY_SUBTITLE}
-          />
-        ) : (
-          <EmptyState
-            compact={!isMobile}
-            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title="Здесь будут ваши чаты"
-            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
-            action={
-              <Button
-                variant="primary" size="md" loading={creating}
-                onClick={onNew}
-                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-              >
-                Создать первый чат
-              </Button>
-            }
-          />
-        )
+      {/* Режим архива, а убранных чатов нет. Условие по scoped, а не по chats:
+          живые чаты в scoped не попадают, и при пяти живых с пустым архивом
+          проверка chats.length === 0 не срабатывала бы — панель оставалась пустой */}
+      {filters.archivedOnly && scoped.length === 0 && (
+        <EmptyState
+          compact={!isMobile}
+          icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+          title={ARCHIVE_EMPTY_TITLE}
+          subtitle={ARCHIVE_EMPTY_SUBTITLE}
+        />
+      )}
+      {/* Чатов нет вовсе — приглашение создать первый */}
+      {!filters.archivedOnly && chats.length === 0 && (
+        <EmptyState
+          compact={!isMobile}
+          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+          title="Здесь будут ваши чаты"
+          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+          action={
+            <Button
+              variant="primary" size="md" loading={creating}
+              onClick={onNew}
+              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+            >
+              Создать первый чат
+            </Button>
+          }
+        />
       )}
       {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && scoped.length > 0 && (
         <EmptyState

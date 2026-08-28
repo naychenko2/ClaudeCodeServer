@@ -662,14 +662,15 @@ export interface Session {
   // "project" — гейт проекта; отсутствует у обычных чатов. По признаку фронт прячет
   // командные механики («Обсудить с командой») — команды в интервью ещё нет
   onboardingKind?: 'user' | 'project' | null;
-  // Архив чатов (план «Архив чатов» v4, шаги 4-5). archived — готовый bool с бэка,
+  // Архив чатов (план «Архив чатов» v4, шаги 4-5). isArchived — готовый bool с бэка,
   // производный от ArchivedAt и UpdatedAt (см. Session.IsArchived в C#). На фронте
   // НЕ пересчитываем — вторая копия правила ломалась бы на равных таймстемпах.
+  // Читать поле напрямую не надо: единая точка — isArchivedChat (lib/chatFilters).
   // ArchiveSummary/ArchiveSummaryAt — кэш сводки карточки архива (ChatDigestService);
   // SummaryNoteId проставляется SessionSummaryService при «Сохранить в заметки».
   // ArchivedAt — для совместимости с серверной сериализацией (не используется на
-  // чтении фронтом: достаточно bool archived).
-  archived?: boolean;
+  // чтении фронтом: достаточно bool isArchived).
+  isArchived?: boolean;
   archivedAt?: string | null;
   archiveSummary?: string | null;
   archiveSummaryAt?: string | null;

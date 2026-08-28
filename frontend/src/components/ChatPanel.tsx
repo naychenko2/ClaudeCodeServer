@@ -349,10 +349,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onSessionUpdated?.(updated);
     } catch (err) {
       showToast('Архив', err instanceof Error ? err.message : 'Не удалось вернуть чат из архива');
+    } finally {
+      // Сбрасываем и на успехе: размонтируется только баннер, сам ChatPanel живёт
+      // дальше — уйди чат в архив снова (событие chat_archived), незакрытый лок
+      // оставил бы кнопку возврата в вечном loading
       setUnarchivePending(false);
     }
-    // На успехе setUnarchivePending(false) НЕ зовём: ветка баннера снимается переходом
-    // isArchived в false, и компонент размонтируется — сбрасывать нечего
   }, [unarchivePending, session.id, onSessionUpdated]);
 
   // Режим «Командная реализация»: live-состояние из событий team_implement,

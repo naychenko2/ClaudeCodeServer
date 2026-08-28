@@ -1077,6 +1077,7 @@ export function ChatCard({
                 : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={isArchivedChat(s) ? 'Вернуть из архива' : 'В архив'}
               isMobile={isMobile}
+              action={visAction('archive')}
               onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
             />
           )}

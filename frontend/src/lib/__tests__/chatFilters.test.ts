@@ -159,6 +159,12 @@ describe('matchChatFilter: архив', () => {
     expect(pred(mkSession({ id: 'c' }))).toBe(true);
   });
 
+  it('читается поле isArchived (Session с бэка), archived остаётся у сводки главной', () => {
+    const pred = matchChatFilter(defaultChatFilters());
+    expect(pred(mkSession({ id: 'a', isArchived: true }))).toBe(false);
+    expect(pred(mkSession({ id: 'b', isArchived: false }))).toBe(true);
+  });
+
   it('архив прячется независимо от остальных осей (origin/status/persona/search)', () => {
     const pred = matchChatFilter({ ...defaultChatFilters(), search: 'ревью' });
     const arch = mkSession({ id: 'a', archived: true, name: 'ревью' });

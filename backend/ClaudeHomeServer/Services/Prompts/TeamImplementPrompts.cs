@@ -426,13 +426,25 @@ public static class TeamImplementPrompts
 
     // Ход координатору с решением человека по карточке: кнопка — ярлык обычного сообщения,
     // особого протокола за ней нет, поэтому и передаём её как текст решения.
-    public static string EscalationResolvedTurn(TeamEscalation? escalation, string? actionLabel, string? comment)
+    public static string EscalationResolvedTurn(TeamEscalation? escalation, string? actionId,
+        string? actionLabel, string? comment)
     {
         var sb = new StringBuilder();
         sb.AppendLine("[Режим «Командная реализация»] Человек ответил на карточку остановки" +
                       (escalation is not null ? $" «{escalation.Title}»" : "") + ".");
         if (!string.IsNullOrWhiteSpace(actionLabel)) sb.AppendLine($"Решение: {actionLabel}.");
         if (!string.IsNullOrWhiteSpace(comment)) sb.AppendLine($"Комментарий: {comment.Trim()}");
+        // «Остановить» сервер применяет сам, поэтому «Продолжай с этого места» здесь было бы
+        // противоречием: стадия стоит, работа замерла, а ходу велено продолжать — координатор
+        // читал это как конфликт сигналов и уходил разбираться (сбой 28.08.2026).
+        if (actionId == "stop")
+        {
+            sb.Append("Остановку сервер уже применил: новые волны не раздаются, запущенные " +
+                      "исполнители дорабатывают начатое. Ничего не запускай и не раздавай. " +
+                      "Подведи короткий промежуточный итог и жди решения человека " +
+                      "по карточке остановки в ленте.");
+            return sb.ToString();
+        }
         sb.Append("Продолжай с этого места по решению человека.");
         return sb.ToString();
     }

@@ -247,7 +247,32 @@ export function computeTodoBatches(items: ChatItem[]): TodoBatch[] {
   // для сессий-исполнителей (там план-тулы закрыты) и для старых транскриптов.
   const hasBuiltInPlan = items.some(it => it.kind === 'tool_use' && it.name === 'TaskCreate');
 
+  // Статус MCP-задачи в прикладной семантике → ключ todo. Сводный маппинг: сервер пишет
+  // 'done'/'completed'/'inProgress'/'in_progress'/'todo' в зависимости от того, какой
+  // инструмент и кто вызвал — единая точка перевода, чтобы ветки tool_use ниже не дублировали.
+  const mapMcpStatus = (raw: string): 'completed' | 'in_progress' | 'pending' | null => {
+    if (raw === 'done' || raw === 'completed') return 'completed';
+    if (raw === 'inProgress' || raw === 'in_progress') return 'in_progress';
+    if (raw === 'todo' || raw === 'pending') return 'pending';
+    return null;
+  };
+
   items.forEach((it, i) => {
+    // Доклад о завершении делегированной задачи (user_message или text с delegationTaskId):
+    // приходит от чужой сессии-исполнителя, когда та закрыла задачу. Структурное поле, не
+    // текст маркера — матчим по ключу, который задал tasks_create (guid из result). Это
+    // единственный способ закрыть пункт, который был открыт не в этой сессии; «сверху» в
+    // ленте он выглядит как обычная реплика ассистента/пользователя, поэтому без явной
+    // проверки поля парсер его пропустит. Гейт hasBuiltInPlan тут не мешает: делегирование
+    // идёт в чатах-постановщиках, где встроенный план хода не используется.
+    if ((it.kind === 'user_message' || it.kind === 'text') && it.delegationTaskId) {
+      const t = tasks.get(it.delegationTaskId);
+      if (t && t.status !== 'completed') {
+        t.status = 'completed';
+        tasksIdx = i;
+      }
+      return;
+    }
     if (it.kind !== 'tool_use') return;
     if (hasBuiltInPlan && it.name.startsWith('mcp__tasks__')) return;
     if (it.name === 'TodoWrite') {
@@ -292,30 +317,78 @@ export function computeTodoBatches(items: ChatItem[]): TodoBatch[] {
         tasksIdx = i;
       }
     } else if (it.name === 'mcp__tasks__tasks_create') {
-      // Создание задачи в прикладном трекере через MCP
+      // Создание задачи в прикладном трекере через MCP. Ключ — настоящий guid из
+      // результата ("id": "<uuid>" в JSON-ответе сервера): это единственный способ
+      // связать create с полным апдейтом (tasks_update матчится по input.id, доклад —
+      // по delegationTaskId). Фолбэк на синтетический mcp-N — пока result не пришёл
+      // (стрим) или это старый транскрипт без id в ответе.
       const o = it.input as { title?: unknown; name?: unknown } | null;
       const title = typeof o?.title === 'string' && o.title
         ? o.title : typeof o?.name === 'string' && o.name ? o.name : '';
-      if (title) {
+      // Отказ сервера (Deny: невалидный personaId/projectId…) — задача не создана, пункта
+      // не будет: фантомный mcp-N навсегда остался бы pending (никакой id его не закроет)
+      if (title && it.isError !== true) {
+        // Та же граница пачки, что у встроенного TaskCreate: иначе за длинный чат
+        // счётчик соберёт ВСЕ когда-либо созданные задачи сессии вместо текущей волны.
+        if (tasks.size && [...tasks.values()].every(t => t.status === 'completed')) flush();
         taskAutoId += 1;
-        tasks.set(`mcp-${taskAutoId}`, { content: title, status: 'pending' });
+        const guidMatch = typeof it.result === 'string'
+          ? it.result.match(/"id"\s*:\s*"([0-9a-fA-F-]{36})"/)
+          : null;
+        const id = guidMatch ? guidMatch[1] : `mcp-${taskAutoId}`;
+        tasks.set(id, { content: title, status: 'pending' });
         tasksIdx = i;
       }
     } else if (it.name === 'mcp__tasks__tasks_update') {
-      // Обновление статуса задачи: ищем по совпадению заголовка в созданных MCP-задачах
-      // (полный taskId из прикладного трекера нам неизвестен — матчим по title)
-      const o = it.input as { title?: unknown; status?: unknown } | null;
+      // Обновление статуса задачи: матч по input.id (прикладной guid из прикладного трекера),
+      // фолбэк на title — для старых лент, где модель ещё присылала title вместо id. Статус
+      // мапим через mapMcpStatus: сервер прикладного трекера пишет 'done'/'completed',
+      // 'inProgress'/'in_progress', 'todo'/'pending' вразнобой.
+      const o = it.input as { id?: unknown; title?: unknown; status?: unknown } | null;
       const status = typeof o?.status === 'string' ? o.status : null;
-      const title = typeof o?.title === 'string' && o.title ? o.title : null;
-      if (status && title) {
-        for (const [, t] of tasks) {
-          if (t.content === title) {
-            if (status === 'done' || status === 'completed') t.status = 'completed';
-            else if (status === 'in_progress') t.status = 'in_progress';
-            tasksIdx = i;
-            break;
+      const mapped = status ? mapMcpStatus(status) : null;
+      if (mapped) {
+        const id = typeof o?.id === 'string' && o.id ? o.id : null;
+        let ex = id ? tasks.get(id) : undefined;
+        if (!ex && !id) {
+          // Фолбэк на title для старых лент: модель раньше не знала про guid и слала
+          // только заголовок. Если id ПРИСЛАН, но цели нет — это чужая задача (создана
+          // вне этой ленты): закрывать пункт по совпавшему названию нельзя, совпадение
+          // имени не означает намерения.
+          const title = typeof o?.title === 'string' && o.title ? o.title : null;
+          if (title) {
+            for (const t of tasks.values()) {
+              if (t.content === title) { ex = t; break; }
+            }
           }
         }
+        if (ex) {
+          // Переименование (title без смены статуса бывает) — отражаем в чек-листе,
+          // симметрично subject у встроенного TaskUpdate
+          if (typeof o?.title === 'string' && o.title) ex.content = o.title;
+          ex.status = mapped;
+          tasksIdx = i;
+        }
+      }
+    } else if (it.name === 'mcp__tasks__tasks_complete') {
+      // Закрытие задачи — явный инструмент прикладного трекера, в отличие от tasks_update,
+      // который на проде использовался почти всегда мимо title. Матч по input.id.
+      const o = it.input as { id?: unknown } | null;
+      const id = typeof o?.id === 'string' && o.id ? o.id : null;
+      const ex = id ? tasks.get(id) : undefined;
+      if (ex && ex.status !== 'completed') {
+        ex.status = 'completed';
+        tasksIdx = i;
+      }
+    } else if (it.name === 'mcp__tasks__tasks_run_executor') {
+      // Запуск исполнителя — фактическое «взял в работу»: ставим in_progress. Не трогаем
+      // уже закрытую задачу (complete мог прийти раньше run_executor по тайминку — это норма).
+      const o = it.input as { taskId?: unknown } | null;
+      const id = typeof o?.taskId === 'string' && o.taskId ? o.taskId : null;
+      const ex = id ? tasks.get(id) : undefined;
+      if (ex && ex.status !== 'completed') {
+        ex.status = 'in_progress';
+        tasksIdx = i;
       }
     }
   });

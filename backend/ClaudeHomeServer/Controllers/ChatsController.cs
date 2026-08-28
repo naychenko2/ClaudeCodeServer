@@ -334,24 +334,15 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     // «Остановить» (Э4): текущие исполнители дорабатывают, новые волны не стартуют.
-    // Снимается решением человека по карточке остановки («Продолжить»).
+    // Снимается решением человека по карточке остановки («Продолжить»). Карточку возврата
+    // публикует StopTeamImplementAsync — единая точка остановки вместе с кнопкой «Остановить»
+    // информационной карточки добавочной волны.
     [HttpPut("{id}/team-implement/stop")]
     public async Task<IActionResult> StopTeamImplement(string id)
     {
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
         var updated = await sessions.StopTeamImplementAsync(id, UserId);
-        if (updated is null) return NotFound();
-        if (updated.TeamImplement is { } team && sessions.TeamEscalationRaiser is { } raise)
-            await raise(updated, new Models.TeamEscalation
-            {
-                Kind = Models.TeamEscalationKind.Stopped,
-                Title = "Практика остановлена",
-                Details = "Новые волны не стартуют. Запущенные исполнители доработают начатое — " +
-                          "нажмите «Продолжить», когда команде можно идти дальше.",
-                Wave = team.WaveNumber,
-                Actions = Models.TeamEscalationActions.For(Models.TeamEscalationKind.Stopped),
-            });
-        return Ok(updated);
+        return updated is null ? NotFound() : Ok(updated);
     }
 
     // Переключение авто-волн на ходу (из бейджа режима): не трогает сам режим, только флаг.

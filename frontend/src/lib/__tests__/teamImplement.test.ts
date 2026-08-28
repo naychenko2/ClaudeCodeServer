@@ -5,6 +5,8 @@ import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage, SessionTeamImplement, TeamEscalationKind, TeamPlan, TeamWaveLiveness, TeamWavePulse, TeamWaveTask } from '../../types';
 import {
   teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
+  teamImplementBadgeAt, TEAM_IMPLEMENT_STOPPED_BADGE_FULL, TEAM_IMPLEMENT_STOPPED_BADGE_SHORT,
+  TEAM_IMPLEMENT_STOPPED_HINT,
   teamEscalationTone, teamEscalationInformational, teamEscalationDetailsMarkdown,
   teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
@@ -85,6 +87,87 @@ describe('подписи бейджа командной реализации', 
     expect(teamImplementStageShort('idle', 0, 0)).toBe('ожидает');
     expect(teamImplementTone('wave')).toBe('work');
     expect(teamImplementTone('awaitingDecision')).toBe('wait');
+  });
+});
+
+// Бейдж при остановленной практике (прод 28.08.2026: человек нажал «Остановить»,
+// бэк прислал stopped=true, а бейдж продолжал показывать «волна 1 из 2» тоном
+// «работаем» — человек не понимал, остановилось ли, и жал «Остановить» второй
+// раз). Поповер уже показывал TEAM_IMPLEMENT_STOPPED_HINT, но сам бейдж молчал
+// — главный визуальный сигнал должен кричать «остановлено» сразу, а живой пульс
+// от дорабатывающих исполнителей не должен это перебивать
+describe('бейдж при остановленной практике', () => {
+  const waveState = (over: Partial<SessionTeamImplement> = {}): SessionTeamImplement => ({
+    stage: 'wave', waveNumber: 1, plannedWaves: 2, autoWaves: true, stopped: false,
+    executorPersonaIds: [], coordinatorNoCode: true, planVersion: 0,
+    budget: {
+      tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 6, maxWaves: 4, maxRuns: 20, maxRetries: 3, maxWakeups: 3,
+    },
+    ...over,
+  });
+
+  const alivePulse: TeamWavePulse = {
+    stage: 'wave', waveNumber: 1, plannedWaves: 2,
+    tasksActive: 2, tasksTotal: 5,
+    lastActivityAt: '2026-08-28T11:00:00Z', quietSeconds: 60, liveness: 'alive',
+  };
+
+  it('полная подпись бейджа — дословно из спеки, без wire-токенов', () => {
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_FULL).toBe('Командная реализация · остановлено');
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_SHORT).toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · остановлено`);
+    // Продуктовый язык, без stopped/bool-токенов в тексте — та же договорённость,
+    // что для teamPulseMeaning: «похоже, зависло», а не «stalled»
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_FULL).not.toMatch(/\bstopped\b/i);
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_SHORT).not.toMatch(/\bstopped\b/i);
+    // Короткая форма начинается с КР — тот же префикс, что у пульсовой короткой
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_SHORT.startsWith(`${TEAM_IMPLEMENT_SHORT_NAME} · `)).toBe(true);
+  });
+
+  it('stopped без livePulse: бейдж показывает «остановлено» и спокойный тон', () => {
+    const r = teamImplementBadgeAt(waveState({ stopped: true }), null);
+    expect(r.full).toBe('Командная реализация · остановлено');
+    expect(r.short).toBe('КР · остановлено');
+    expect(r.tone).toBe('wait');
+  });
+
+  // Ключевая регрессия: живой пульс волны приходит и при stopped (исполнители
+  // дорабатывают начатое), но бейдж обязан показывать остановку — это главное,
+  // что человек должен увидеть, а не «волна 1 из 2 · 2/5 · активность»
+  it('stopped + живой пульс: подпись и тон остаются про остановку, пульс не перебивает', () => {
+    const r = teamImplementBadgeAt(waveState({ stopped: true }), alivePulse);
+    expect(r.full).toBe('Командная реализация · остановлено');
+    expect(r.short).toBe('КР · остановлено');
+    expect(r.tone).toBe('wait');
+    // Никаких следов пульса — иначе «волна 1 из 2» и «2/5» просочились бы в бейдж
+    expect(r.full).not.toContain('волна');
+    expect(r.short).not.toContain('2/5');
+    expect(r.full).not.toContain('активность');
+  });
+
+  it('stopped + пульс со stalled liveness: тон всё равно wait (спокойный), не danger', () => {
+    // Даже если процесс штаба «умер», при stopped главное сообщение — остановка,
+    // а не «похоже, зависло». Это согласуется с постановкой: «спокойный стоим и
+    // ждём человека». Иначе бейдж метался бы между двумя тревожными сообщениями
+    const stalledPulse: TeamWavePulse = { ...alivePulse, liveness: 'stalled', quietSeconds: 2400 };
+    const r = teamImplementBadgeAt(waveState({ stopped: true }), stalledPulse);
+    expect(r.tone).toBe('wait');
+  });
+
+  // Без stopped — пульс и стадия работают как раньше. Регрессия: рефакторинг
+  // teamImplementBadgeAt не должен сломать пульсовую ветку
+  it('без stopped + живой пульс: подпись и тон по livePulse, как раньше', () => {
+    const r = teamImplementBadgeAt(waveState(), alivePulse);
+    expect(r.full).toContain('волна 1 из 2');
+    expect(r.full).toContain('2/5');
+    expect(r.short).toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · 1 минуту назад`);
+    expect(r.tone).toBe('work');
+  });
+
+  it('без stopped + без livePulse: подпись и тон по стадии режима', () => {
+    const r = teamImplementBadgeAt(waveState({ stage: 'confirming', waveNumber: 0 }), null);
+    expect(r.full).toBe('Командная реализация · ждёт подтверждения');
+    expect(r.tone).toBe('wait');
   });
 });
 

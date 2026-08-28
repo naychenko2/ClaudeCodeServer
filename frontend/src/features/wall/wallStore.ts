@@ -138,6 +138,19 @@ function ensureWired() {
     setState({ statuses });
   });
 
+  // Архивирование чата с другого клиента/устройства: сервер шлёт chat_archived,
+  // мы рефетчим конкретный чат и кладём обновление в снимок стены — иначе
+  // archived-флаг на колонке и в `isArchivedChat` залежался бы до следующего
+  // refresh. Локальная мутация из ChatHeaderBar идёт мимо (через updateChat,
+  // напрямую) и сильнее этого refetch
+  onMessage((msg: ServerMessage) => {
+    if (msg.type !== 'chat_archived' || !msg.sessionId) return;
+    if (!_state.chats.some(c => c.id === msg.sessionId)) return;
+    api.chats.get(msg.sessionId)
+      .then(updated => { updateChat(updated); })
+      .catch(() => { /* чат ушёл из набора или офлайн — ignore */ });
+  });
+
   // SignalR-группы живут на сервере и теряются при разрыве: re-join всех групп +
   // перезапрос снимка (заодно доезжают статусы, сменившиеся за время разрыва —
   // сервер не шлёт status_changed при рестарте)

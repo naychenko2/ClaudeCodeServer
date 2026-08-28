@@ -1,11 +1,13 @@
 import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
-import { ArrowDown, ArrowUp, RotateCw, CircleHelp } from 'lucide-react';
+import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
+import { isArchivedChat } from '../lib/chatFilters';
+import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
 import { agentDotColor } from './AgentSelector';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
@@ -41,7 +43,7 @@ import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
-import { C, R, SHADOW, SP, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
+import { C, R, SHADOW, SP, FS, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { useIsTouch } from '../lib/breakpoints';
 import { projectTopWash } from '../lib/projectTone';
@@ -329,6 +331,31 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       throw err;
     }
   }, [session, onSessionUpdated, stopSpeech, voiceStyle]);
+
+  // Признак архива — производное от бэка (см. isArchivedChat). Плашка открытого
+  // архивного чата сидит над лентой; считаем прямо в рендере, useState тут не нужен —
+  // родительский рендер по onSessionUpdated/session перевычисляет значение и плашка
+  // исчезает сама, без локального хвоста.
+  const isArchived = isArchivedChat(session);
+  // Локальный лок запроса, чтобы кнопка не отстреливала повторно до прихода обновлённой
+  // сессии. onSessionUpdated возвращает новый объект, isArchivedChat на нём даёт false —
+  // баннер просто пропадает, без фокуса/спиннера на самой плашке.
+  const [unarchivePending, setUnarchivePending] = useState(false);
+  const handleUnarchive = useCallback(async () => {
+    if (unarchivePending) return;
+    setUnarchivePending(true);
+    try {
+      const updated = await archiveApi.setArchived(session.id, false);
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Архив', err instanceof Error ? err.message : 'Не удалось вернуть чат из архива');
+    } finally {
+      // Сбрасываем и на успехе: размонтируется только баннер, сам ChatPanel живёт
+      // дальше — уйди чат в архив снова (событие chat_archived), незакрытый лок
+      // оставил бы кнопку возврата в вечном loading
+      setUnarchivePending(false);
+    }
+  }, [unarchivePending, session.id, onSessionUpdated]);
 
   // Режим «Командная реализация»: live-состояние из событий team_implement,
   // до первого события — из Session.teamImplement; null — режим выключен
@@ -2103,6 +2130,64 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           рисует свою тонкую полосу-ярлык (проект + zoom), это не дубль шапки.
           headerDragProps — шапка работает второй ручкой перетаскивания колонки */}
       {headerDragProps ? <div {...headerDragProps}>{headerBar}</div> : headerBar}
+
+      {/* Плашка «Этот чат в архиве» — для случая, когда архивный чат открыт намеренно
+          (из режима «Архивные» или по прямой ссылке). Это НЕ случай увода центра при
+          архивации открытого — там плашку рисует владелец списка, без зацикливания.
+          Тон нейтральный (C.bgInset) — это состояние, а не ошибка (docs/mockups/
+          archive-chats-proposal.md, раздел «Плашка возврата у открытого архивного чата»).
+          Предупреждающий вариант (C.warningBg) для чатов без копии транскрипта сюда не
+          входит: признак «нет копии» живёт на бэке и пока не проброшен на фронт —
+          добавлять ветку без источника истины нельзя. Кнопка «Вернуть из архива» идёт
+          тем же archiveApi.setArchived, что и карточка архива; 409 от бэка ловим тостом. */}
+      {isArchived && (
+        <div style={{
+          // Ширина баннера — по колонке ленты (с боковыми полями), а не во весь экран:
+          // на широком центре плашка «в полокна» читалась бы как часть фона, а не
+          // как метка этого чата. На мобиле те же поля, что у ленты.
+          display: 'flex',
+          flexDirection: isMobile ? 'column' : 'row',
+          alignItems: isMobile ? 'stretch' : 'center',
+          gap: SP.sm,
+          margin: isMobile
+            ? `${SP.sm}px ${CHAT_GUTTER_MOBILE}px 0`
+            : `${SP.sm}px ${CHAT_GUTTER_L}px 0`,
+          padding: isMobile ? `${SP.md}px` : `10px ${SP.lg}px`,
+          background: C.bgInset,
+          border: `1px solid ${C.borderLight}`,
+          borderRadius: R.lg,
+        }}>
+          <Archive
+            size={isMobile ? 20 : 18}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.textSecondary, flexShrink: 0 }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+              // На мобиле заголовок и подсказка могут идти в две строки — без зазора
+              // между ними баннер выглядит слитным; на десктопе их разводит gap
+              // родителя, и отдельная нижняя граница не нужна.
+              marginBottom: isMobile ? SP.xxs : 0,
+            }}>
+              Этот чат в архиве
+            </div>
+            <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.4 }}>
+              Он не показывается в списке. Напишите сюда — и он вернётся сам.
+            </div>
+          </div>
+          <Button
+            variant="secondary"
+            size={isMobile ? 'md' : 'sm'}
+            fullWidth={isMobile}
+            leftIcon={<ArchiveRestore size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            onClick={handleUnarchive}
+            loading={unarchivePending}
+          >
+            Вернуть из архива
+          </Button>
+        </div>
+      )}
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса

@@ -4,7 +4,7 @@ import type { Session } from '../types';
 import { api } from '../lib/api';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { useOnline } from '../hooks/useOnline';
-import { C, ISLAND, MODAL_W } from '../lib/design';
+import { C, ISLAND, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -224,31 +224,62 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // есть, но фильтры всё скрыли — подсказка со сбросом.
   const listContent = (
     <>
-      {scoped.length === 0 && (
-        filters.archivedOnly ? (
+      {/* Все чаты области лежат в архиве: chats.length > 0, так что empty «здесь будут
+          чаты» не срабатывает, а viewTotal === 0 гасит и «Ничего не нашлось» — без этого
+          состояния панель оставалась бы белой дырой. В отличие от «пусто», здесь
+          человек должен вспомнить про архив, а не про создание */}
+      {!filters.archivedOnly && chats.length > 0 && scoped.length === 0 && (
+        <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
           <EmptyState
             compact={!isMobile}
             icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title={ARCHIVE_EMPTY_TITLE}
-            subtitle={ARCHIVE_EMPTY_SUBTITLE}
-          />
-        ) : (
-          <EmptyState
-            compact={!isMobile}
-            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title="Здесь будут ваши чаты"
-            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+            title="Все чаты в архиве"
+            subtitle="Список пуст: живых чатов нет, архив не считается."
             action={
-              <Button
-                variant="primary" size="md" loading={creating}
-                onClick={onNew}
-                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-              >
-                Создать первый чат
-              </Button>
+              <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <Button variant="ghost" size="md" style={{ whiteSpace: 'nowrap' }} onClick={() => patch({ archivedOnly: true })}>
+                  Открыть архив
+                </Button>
+                <Button
+                  variant="primary" size="md" loading={creating}
+                  onClick={onNew}
+                  leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+                >
+                  Создать первый чат
+                </Button>
+              </div>
             }
           />
-        )
+        </div>
+      )}
+      {/* Режим архива, а убранных чатов нет. Условие по scoped, а не по chats:
+          живые чаты в scoped не попадают, и при пяти живых с пустым архивом
+          проверка chats.length === 0 не срабатывала бы — панель оставалась пустой */}
+      {filters.archivedOnly && scoped.length === 0 && (
+        <EmptyState
+          compact={!isMobile}
+          icon={<Archive size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+          title={ARCHIVE_EMPTY_TITLE}
+          subtitle={ARCHIVE_EMPTY_SUBTITLE}
+        />
+      )}
+      {/* Чатов нет вовсе — приглашение создать первый */}
+      {!filters.archivedOnly && chats.length === 0 && (
+        <EmptyState
+          compact={!isMobile}
+          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+          title="Здесь будут ваши чаты"
+          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+          action={
+            <Button
+              variant="primary" size="md" loading={creating}
+              onClick={onNew}
+              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+            >
+              Создать первый чат
+            </Button>
+          }
+        />
       )}
       {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && scoped.length > 0 && (
         <EmptyState

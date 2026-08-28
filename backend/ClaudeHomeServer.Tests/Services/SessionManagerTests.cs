@@ -5806,8 +5806,11 @@ public class SessionManagerTests : IDisposable
         ti.LastPlanRequest.Should().BeNull("успешный план обнуляет сохранённую вводную");
     }
 
+    // «Остановить» с информационной карточки добавочной волны и кнопка режима — ОДНА точка
+    // (сбой 28.08.2026): раньше карточный путь ставил только состояние, карточки возврата
+    // («Продолжить»/«Завершить итерацию») не появлялось, и продолжить практику было нечем.
     [Fact]
-    public async Task ДобавочнаяВолна_КнопкаОстановить_ОстанавливаетПрактику()
+    public async Task ДобавочнаяВолна_КнопкаОстановить_ОстанавливаетИПубликуетКарточкуВозврата()
     {
         var (session, backend, _) = await MakeIdleStabAsync("ti-additional-stop");
         SetAdditionalPlannerAnswer(backend);
@@ -5821,7 +5824,50 @@ public class SessionManagerTests : IDisposable
         ok.Should().BeTrue();
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
         ti.Stopped.Should().BeTrue("новые волны не стартуют, пока человек не продолжит");
-        ti.Stage.Should().Be(TeamImplementStage.Wave, "«Остановить» не возобновляет работу и не двигает стадию");
+        // Работа не возобновляется: карточка возврата штатно переводит практику в «ждёт
+        // решения» — ровно как кнопка режима в ChatsController (единая точка остановки)
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        var stopCard = (await _sut.GetOpenTeamEscalationsAsync(session.Id))
+            .Single(e => e.Kind == TeamEscalationKind.Stopped);
+        stopCard.Actions.Select(a => a.Id).Should().Equal(["resume", "finish"],
+            "продолжить остановленную практику можно только по этой карточке");
+        Sent<TeamEscalationMessage>()
+            .Should().ContainSingle(m => m.Kind == "stopped" && !m.Resolved);
+    }
+
+    // Повторное «Остановить» (новая добавочная волна поверх уже остановленной практики либо
+    // повторный клик кнопки режима) не должно плодить вторую карточку возврата: человек
+    // решает по той, что уже висит открытой.
+    [Fact]
+    public async Task ДобавочнаяВолна_ПовторнаяОстановка_КарточкуВозвратаНеДублирует()
+    {
+        var (session, backend, _) = await MakeIdleStabAsync("ti-additional-stop-twice");
+        SetAdditionalPlannerAnswer(backend);
+        _sut.TeamWaveStarter = (_, _, _) => Task.CompletedTask;
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить XLSX</team>", failed: false);
+        var info = Sent<TeamEscalationMessage>().Last();
+        await _sut.RespondTeamEscalationAsync(session.Id, info.EscalationId, "stop", userId: TestUserId);
+
+        // Вторая добавочная волна — снова «Остановить», затем и кнопка режима
+        var second = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.WaveAdded,
+            Title = "Добавочная волна 2",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, second);
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, second.Id, "stop", userId: TestUserId);
+        ok.Should().BeTrue();
+        await _sut.StopTeamImplementAsync(session.Id, TestUserId);
+
+        (await _sut.GetOpenTeamEscalationsAsync(session.Id))
+            .Count(e => e.Kind == TeamEscalationKind.Stopped)
+            .Should().Be(1, "открытая карточка возврата уже висит — вторая была бы спамом");
+        Sent<TeamEscalationMessage>()
+            .Count(m => m.Kind == "stopped" && !m.Resolved)
+            .Should().Be(1, "и в ленте карточка остановки ровно одна");
+        _sut.GetById(session.Id)!.TeamImplement!.Stopped.Should().BeTrue();
     }
 
     // --- Э8: интервью, план-режим и перепланирование ---
@@ -6884,20 +6930,24 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task ReportBlocker_ПослеОстановкиЧеловеком_ХодаНет_НоКарточкаЕсть()
+    public async Task ReportBlocker_ПослеОстановкиЧеловеком_ХодаНет_КарточкаУжеВисит()
     {
         var (stab, _, _) = await MakeTeamStabAsync("ti-blocker-stopped");
         stab.ClaudeSessionId = "cli-" + Guid.NewGuid().ToString("N");
         var child = await _sut.CreateAsync(stab.ProjectId!, ClaudeMode.Auto, name: "Задача: эндпоинт");
         _sut.SetParent(child.Id, stab.Id, TestUserId);
         await _sut.StopTeamImplementAsync(stab.Id, TestUserId);
+        // Остановка больше не молчаливая: карточка возврата публикуется в момент стопа
+        Sent<TeamEscalationMessage>().Single().Kind.Should().Be("stopped");
         ClearSent();
 
         await _sut.ReportBlockerAsync(child.Id, "застрял", TestUserId);
 
         _sut.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
             "практика остановлена человеком — агент не поднимает её обратно");
-        Sent<TeamEscalationMessage>().Single().Kind.Should().Be("stopped");
+        // Карточка остановки уже висит открытой (стадия «ждёт решения») — доклад-блокер
+        // второй не поднимает: сигнал человеку уже дан, дублирование было бы спамом
+        Sent<TeamEscalationMessage>().Should().BeEmpty();
     }
 
     [Fact]

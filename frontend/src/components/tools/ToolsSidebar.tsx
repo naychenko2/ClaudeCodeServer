@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X } from 'lucide-react'
 import { C, R, FONT, FS, SP, SHADOW, Z } from '../../lib/design'
-import { Dot, EmptyState, IconButton, Button, PanelHeaderSlot, useHasPanelHeader } from '../ui'
+import { Dot, EmptyState, IconButton, Button, ConfirmDialog, PanelHeaderSlot, useHasPanelHeader } from '../ui'
 import { ListDateDivider } from '../ListDateDivider'
 import { ICON_STROKE } from '../ui/icons'
 import { statusColor } from '../preview/PreviewView'
@@ -202,6 +202,26 @@ export function PreviewServiceList({
   const { enabled: extEnabled, links: extLinks, refresh: refreshLinks, revoke, revokeAll } = useExternalPreviewLinks()
   const [shareError, setShareError] = useState<string | null>(null)
   const [shareNote, setShareNote] = useState<string | null>(null)
+  // Чужой процесс на порту: гасим только после явного согласия — там может оказаться
+  // не дев-сервер, а docker-proxy или системная служба
+  const [confirmStop, setConfirmStop] = useState<{ svc: ProjectService; pid: number; name: string | null } | null>(null)
+
+  const stopExternal = useCallback(async (svc: ProjectService, confirm = false) => {
+    setShareError(null)
+    try {
+      await api.projects.previewStopExternal(projectId, svc.id, confirm)
+      setConfirmStop(null)
+      onRefreshServices()
+    } catch (e) {
+      const err = e as Error & { status?: number; body?: { needsConfirm?: boolean; pid?: number; processName?: string } }
+      if (err.status === 409 && err.body?.needsConfirm) {
+        setConfirmStop({ svc, pid: err.body.pid ?? 0, name: err.body.processName ?? null })
+        return
+      }
+      setConfirmStop(null)
+      setShareError(err instanceof Error ? err.message : 'Не удалось остановить сервис')
+    }
+  }, [projectId, onRefreshServices])
   // Открытые ссылки ЭТОГО проекта — по ним у строк появляется значок и «закрыть»
   const sharedHere = new Map(extLinks.filter(l => l.projectId === projectId).map(l => [l.serviceId, l.jti]))
 
@@ -380,6 +400,7 @@ export function PreviewServiceList({
                     onSelect={() => onSelectPreview(svc.id)}
                     shared={sharedHere.has(svc.id)}
                     onShare={extEnabled ? () => void share(svc) : undefined}
+                    onStopExternal={() => void stopExternal(svc)}
                     onUnshare={() => {
                       const jti = sharedHere.get(svc.id)
                       if (!jti) return
@@ -398,6 +419,7 @@ export function PreviewServiceList({
                       onSelect={() => onSelectPreview(member.id)}
                       shared={sharedHere.has(member.id)}
                       onShare={extEnabled ? () => void share(member) : undefined}
+                      onStopExternal={() => void stopExternal(member)}
                       onUnshare={() => {
                         const jti = sharedHere.get(member.id)
                         if (!jti) return
@@ -431,6 +453,17 @@ export function PreviewServiceList({
         </div>
       )}
 
+      {confirmStop && (
+        <ConfirmDialog
+          title="Остановить чужой процесс?"
+          subtitle={`Порт держит процесс ${confirmStop.name ?? 'без имени'} (PID ${confirmStop.pid}), который продукт не запускал. Если это не дев-сервер, остановка может задеть что-то важное.`}
+          confirmLabel="Остановить"
+          confirmVariant="danger"
+          onConfirm={() => stopExternal(confirmStop.svc, true)}
+          onCancel={() => setConfirmStop(null)}
+        />
+      )}
+
       {adding && (
         <AddServiceDialog
           projectId={projectId}
@@ -454,7 +487,7 @@ const saveCollapsed = (projectId: string, value: Set<string>) => {
   try { localStorage.setItem(collapsedKey(projectId), JSON.stringify([...value])) } catch { /* ignore */ }
 }
 
-function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare, nested }: {
+function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare, onStopExternal, nested }: {
   svc: ProjectService
   memberNames?: string[]
   // Строка — участник составной конфигурации: рисуется под ней со сдвигом и направляющей
@@ -467,6 +500,9 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
   shared?: boolean
   onShare?: () => void
   onUnshare?: () => void
+  // Остановка процесса, поднятого вне продукта: своего объекта процесса у нас нет,
+  // поэтому путь отдельный от обычного «Стоп»
+  onStopExternal?: () => void
 }) {
   const [hover, setHover] = useState(false)
   const rowRef = useRef<HTMLDivElement>(null)
@@ -579,9 +615,16 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
       )}
       {hover && (
         external ? (
-          <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onSelect() }} title="Показать страницу">
-            <Monitor size={12} />
-          </IconButton>
+          <>
+            <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onSelect() }} title="Показать страницу">
+              <Monitor size={12} />
+            </IconButton>
+            {onStopExternal && (
+              <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStopExternal() }} title="Остановить процесс">
+                <Square size={10} />
+              </IconButton>
+            )}
+          </>
         ) : running ? (
           <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStop() }} title="Остановить">
             <Square size={10} />

@@ -267,6 +267,73 @@ public class PreviewController : ControllerBase
         return Ok(new { status = "stopped" });
     }
 
+    /// <summary>
+    /// Остановить сервис, поднятый ВНЕ продукта (или переживший его перезапуск).
+    ///
+    /// Штатный «Стоп» такому не годится: своего объекта процесса у нас нет. Поэтому ищем
+    /// владельца порта и гасим его — но с разбором, чей он:
+    ///
+    /// свой осиротевший (PID совпал с запомненным при запуске) гасится сразу, посторонний —
+    /// только с подтверждением человека. Разница существенная: на порту может оказаться не
+    /// дев-сервер, а docker-proxy или чужая служба, и убивать такое молча нельзя.
+    /// </summary>
+    [HttpPost("/api/projects/{projectId}/preview/stop-external")]
+    public async Task<IActionResult> StopExternal(string projectId, [FromBody] StopExternalRequest req)
+    {
+        var project = OwnedProject(projectId);
+        if (project is null) return Forbid();
+        if (string.IsNullOrWhiteSpace(req.ServiceId))
+            return BadRequest(new { error = "serviceId не указан" });
+
+        var port = await _external.ResolveServicePortAsync(project, req.ServiceId, UserId);
+        if (port is not > 0)
+            return BadRequest(new { error = "Не удалось определить порт сервиса" });
+
+        var owner = PortOwnerLookup.Find(port.Value);
+        if (owner is null)
+            return BadRequest(new { error = $"Не удалось определить процесс на порту {port}" });
+
+        // Самоубийство продукта выглядело бы как «кнопка гасит CCS» — такого не делаем
+        if (owner.Pid == Environment.ProcessId)
+            return BadRequest(new { error = "Этот порт слушает сам ClaudeCodeServer" });
+
+        var remembered = _portMemory.GetRun(projectId, req.ServiceId);
+        // Свой — только когда СОВПАЛИ и процесс, и порт: номера процессов система выдаёт
+        // повторно, и одного PID мало, чтобы считать процесс нашим
+        var isOurs = remembered is not null && remembered.Pid == owner.Pid && remembered.Port == port.Value;
+
+        if (!isOurs && !req.Confirm)
+        {
+            return Conflict(new
+            {
+                needsConfirm = true,
+                pid = owner.Pid,
+                processName = owner.ProcessName,
+                port = port.Value,
+                error = "Порт держит процесс, который продукт не запускал",
+            });
+        }
+
+        try
+        {
+            var process = System.Diagnostics.Process.GetProcessById(owner.Pid);
+            // Дерево целиком: dev-серверы почти всегда поднимают детей (node → vite → esbuild),
+            // и смерть одного лишь родителя оставила бы порт занятым
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(HttpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось остановить процесс {Pid} на порту {Port}", owner.Pid, port);
+            return StatusCode(500, new { error = $"Не удалось остановить процесс: {ex.Message}" });
+        }
+
+        _portMemory.Forget(projectId, req.ServiceId);
+        _log.LogInformation("Проект {ProjectId}: остановлен внешний процесс {Pid} ({Name}) на порту {Port}",
+            projectId, owner.Pid, owner.ProcessName ?? "?", port);
+        return Ok(new { status = "stopped", pid = owner.Pid });
+    }
+
     [HttpGet("/api/projects/{projectId}/preview/status")]
     public IActionResult Status(string projectId)
     {
@@ -414,5 +481,7 @@ public record PreviewStartRequest(
     bool AutoPort = false, Dictionary<string, string>? Env = null);
 
 public record PreviewStopRequest(string? ServiceId);
+/// <summary>Остановка процесса, поднятого вне продукта. Confirm — согласие гасить чужой.</summary>
+public record StopExternalRequest(string? ServiceId, bool Confirm = false);
 public record PreviewActiveRequest(string ServiceId);
 public record LaunchConfigPutRequest(List<LaunchConfigEntry>? Configurations);

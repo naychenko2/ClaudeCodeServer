@@ -582,6 +582,12 @@ export const api = {
       }),
     // Внешний доступ: ссылка на сервис по отдельному поддомену. Порт, как и выше, выбирает
     // сервер — принимать его от клиента нельзя, эндпоинт стал бы туннелем наружу.
+    // Остановить процесс, поднятый вне продукта. 409 с needsConfirm — порт держит чужой
+    // процесс, и гасить его можно только после явного согласия человека.
+    previewStopExternal: (id: string, serviceId: string, confirm = false) =>
+      request<{ status: string; pid: number }>(`/projects/${id}/preview/stop-external`, {
+        method: 'POST', body: JSON.stringify({ serviceId, confirm }),
+      }),
     previewExternalLink: (id: string, serviceId: string) =>
       request<ExternalLinkIssued>(`/projects/${id}/preview/external-link`, {
         method: 'POST', body: JSON.stringify({ serviceId }),

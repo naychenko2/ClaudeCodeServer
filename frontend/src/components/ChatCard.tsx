@@ -544,14 +544,14 @@ export function ChatCard({
   // Хук, а не голая функция: по подписке метка гаснет сразу при открытии чата
   const unread = useHasUnread(s.updatedAt, s.id, s.lastReadAt);
   const unreadClass = !hasGlow && unread ? ' cc-unread' : '';
+  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
+  const bgCommandRunningLive = useBgCommandRunning(s.id);
+  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
   const statusVars = {
     '--cc-status-c': STATUS_CONFIG[visualStatus].color,
     // Сила подмешивания в фон: alpha из STATUS_GLOW (45..72) задумана под
     // свечение — для заливки её ужимаем втрое и добавляем 10 п.п. Даёт 25..34%:
     // ниже ~10% подкраска на кремовом фоне уже неразличима
-  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
-  const bgCommandRunningLive = useBgCommandRunning(s.id);
-  const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
     '--cc-tint-a': `${Math.round(glow.alpha / 3) + 10}%`,
   } as CSSProperties;
 

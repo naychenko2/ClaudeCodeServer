@@ -41,7 +41,7 @@ import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
-import { C, R, SHADOW, SP, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
+import { C, R, SHADOW, SP, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { useIsTouch } from '../lib/breakpoints';
 import { projectTopWash } from '../lib/projectTone';
@@ -135,6 +135,8 @@ interface Props {
 const WINDOW_FIRST = 50;
 const WINDOW_STEP = 50;
 
+// Порог показа спиннера истории: всё, что грузится быстрее, открывается сразу лентой
+const HISTORY_SPINNER_MS = 200;
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const TOO_BIG_MSG = 'Файл больше 100 МБ — такой пока не загрузим';
 const UPLOAD_FAIL_MSG = 'Не удалось загрузить файл. Попробуйте ещё раз';
@@ -214,6 +216,34 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     if (items.length > 0) return;
     setEmptyChatFocus(n => n + 1);
   }, [session.id, isHistoryLoading, items.length, isMobile, isTouch, embedded]);
+
+
+
+  // Смена чата: лента проявляется, а не возникает щелчком. Первый кадр нового чата
+  // рисуется прозрачным (shownId ещё от прошлого), следующий отпускает его в единицу.
+  // Через key ленты этого делать нельзя: key пересоздаёт узел, а за ним следит
+  // ResizeObserver прилипания к низу — наблюдение осталось бы на выброшенном узле.
+  // Переход берём из PANEL_ANIM, новых значений в шкалы не заводим.
+  const [shownId, setShownId] = useState(session.id);
+  useEffect(() => {
+    const r = requestAnimationFrame(() => setShownId(session.id));
+    return () => cancelAnimationFrame(r);
+  }, [session.id]);
+  const chatFading = shownId !== session.id;
+
+  // Спиннер истории показываем не раньше HISTORY_SPINNER_MS. Прогретый (наведением) и
+  // просто быстрый чат открываются без промежуточного состояния вовсе, а спиннер,
+  // мигнувший на десятые доли секунды, читается как рывок, а не как загрузка.
+  const [showHistorySpinner, setShowHistorySpinner] = useState(false);
+  useEffect(() => {
+    if (!isHistoryLoading || items.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- гасим спиннер, когда лента приехала
+      setShowHistorySpinner(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShowHistorySpinner(true), HISTORY_SPINNER_MS);
+    return () => window.clearTimeout(t);
+  }, [session.id, isHistoryLoading, items.length]);
 
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -2138,9 +2168,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
         // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
-        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
         {/* Спиннер загрузки истории */}
-        {items.length === 0 && isHistoryLoading && (
+        {items.length === 0 && showHistorySpinner && (
           <div style={{
             position: 'absolute', inset: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',

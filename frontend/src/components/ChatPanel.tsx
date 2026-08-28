@@ -2537,6 +2537,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         {/* Перебой предлагаем только когда ход реально идёт: без него прерывать нечего,
             а кнопка на стоящей очереди читалась бы как сломанная */}
         <PendingMessageList items={pending} isMobile={isMobile}
+          sessionId={session.id}
           onCancel={online ? cancelPending : undefined}
           onPreempt={online && isWaiting ? preemptForPending : undefined} />
 

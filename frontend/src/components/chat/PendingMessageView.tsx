@@ -8,7 +8,7 @@
 // «создать», зона дропа). Глухой прозрачности нет: приглушение несут рамка и фон,
 // а opacity поверх C.textMuted роняла бы контраст подписей.
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CloudOff, Inbox, User } from 'lucide-react';
+import { AlertCircle, ChevronDown, CloudOff, Inbox, User } from 'lucide-react';
 import { C, FONT, R, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
@@ -17,6 +17,7 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
+import { useAgentsRunning } from '../../lib/agentsPresence';
 import type { PendingChatMessage } from '../../lib/chatReducer';
 
 // Длительность ухода строки после доставки/отмены — столько же держим её в DOM
@@ -58,9 +59,15 @@ interface RowProps {
   isMobile?: boolean;
   // Строка уходит (доставлена или отменена) — гасим её перед снятием с DOM
   leaving?: boolean;
+  // Нужен для признака «живые агенты в этом чате» — без него предупреждение у кнопки
+  // перебоя показало бы ложь
+  sessionId: string;
 }
 
-function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving }: RowProps) {
+function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessionId }: RowProps) {
+  // Предупреждаем только ради INLINE-агентов: фоновая команда (дев-сервер, watch) переживёт
+  // Interrupt и сообщение о ней было бы ложью. Источник — стор agentsPresence, ветка _ids
+  const agentsRunning = useAgentsRunning(sessionId);
   // Лицо отправителя: в не-персон-чате стор мог быть не загружен
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const [open, setOpen] = useState(false);
@@ -189,23 +196,48 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving }: Row
         // Свой ход в очереди: объясняем, почему карточка стоит, а не ушла в работу, и даём
         // явный перебой. Отправка сама ход не прерывает (иначе сделанная им работа и токены
         // выбрасываются) — «не жди, начинай сейчас» это отдельное осознанное действие.
-        <div style={{
-          padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
-          display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
-          fontSize: FS.xs, color: C.textMuted,
-        }}>
-          <span>Уйдёт в работу, когда Claude закончит текущий шаг</span>
-          {onPreempt && (
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={e => { e.stopPropagation(); onPreempt(); }}
-              title="Оборвать текущий ход, не дожидаясь его конца, и отправить это сообщение сейчас"
+        <>
+          {/* Предупреждение о цене перебоя: при Interrupt гибнет процесс CLI вместе с
+              живущими ВНУТРИ него inline-агентами. Workflow-агенты — отдельные процессы,
+              они переживают прерывание, поэтому смотрим именно на _ids, а не на _commandIds
+              (дев-сервер/watch там живут часами и «оборвутся» звучало бы ложно). Формулировка
+              называет последствие, а не пугает абстрактно. Без живых агентов — пусто: кнопка
+              выглядит ровно как раньше. */}
+          {agentsRunning && onPreempt && (
+            <div
+              role="status"
+              style={{
+                margin: `${SP.xs}px ${SP.md}px 0 ${isMobile ? SP.md : 38}px`,
+                padding: '8px 10px',
+                background: C.warningBg, border: `1px solid ${C.warning}`,
+                borderRadius: R.md,
+                display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+                fontSize: FS.xs, color: C.warningText, fontFamily: FONT.sans, lineHeight: 1.45,
+              }}
             >
-              Прервать и отправить
-            </Button>
+              <AlertCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden
+                style={{ color: C.warning, flexShrink: 0, marginTop: 2 }} />
+              <span>Прервёт ход — работающие агенты оборвутся вместе с ним</span>
+            </div>
           )}
-        </div>
+          <div style={{
+            padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
+            display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+            fontSize: FS.xs, color: C.textMuted,
+          }}>
+            <span>Уйдёт в работу, когда Claude закончит текущий шаг</span>
+            {onPreempt && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={e => { e.stopPropagation(); onPreempt(); }}
+                title="Оборвать текущий ход, не дожидаясь его конца, и отправить это сообщение сейчас"
+              >
+                Прервать и отправить
+              </Button>
+            )}
+          </div>
+        </>
       )}
       {open && !full && item.text.length > 220 && (
         <div style={{ padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px` }}>
@@ -230,11 +262,13 @@ interface Props {
   // Прервать ход ради очереди; undefined — нет связи или ход уже не идёт
   onPreempt?: () => void;
   isMobile?: boolean;
+  // ID чата — чтобы рядок мог спросить «есть ли тут живые агенты» у agentsPresence
+  sessionId: string;
 }
 
 // Держит ушедшие строки лишние 150мс, чтобы доставка/отмена не выглядела мгновенной
 // подменой. Сервер шлёт очередь полным снимком, поэтому «ушедшие» вычисляются здесь.
-export function PendingMessageList({ items, onCancel, onPreempt, isMobile }: Props) {
+export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessionId }: Props) {
   const [leavingIds, setLeavingIds] = useState<string[]>([]);
   const [shown, setShown] = useState(items);
   const prevRef = useRef(items);
@@ -265,6 +299,7 @@ export function PendingMessageList({ items, onCancel, onPreempt, isMobile }: Pro
           item={p}
           isMobile={isMobile}
           leaving={leavingIds.includes(p.id)}
+          sessionId={sessionId}
           onCancel={onCancel}
           // Перебой доставляет ГОЛОВУ очереди (DrainNextPendingAsync), а не ту строку, что
           // раскрыл пользователь — поэтому кнопка только у первой. Иначе «отправить это

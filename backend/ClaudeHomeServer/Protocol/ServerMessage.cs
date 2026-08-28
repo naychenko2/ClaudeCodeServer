@@ -311,6 +311,13 @@ public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, str
 public record WorkLoopStoppedMessage(string Reason, string Text)
     : ServerMessage("work_loop_stopped");
 
+// Состав контекста чата сменился (фича chat-context): полный снимок списка материалов —
+// как pending_messages, клиент может подключиться в любой момент, а список короткий
+// (потолок 50 на PUT), поэтому дельту не гоняем. SessionId — в базовом поле, рассылка
+// проставляет сама (msg with { SessionId = … }); здесь только состав.
+public record ContextUpdatedMessage(IReadOnlyList<Models.SessionContextEntry> Entries)
+    : ServerMessage("context_updated");
+
 // Карточка плана режима «Командная реализация» (Э2): структурный план в ленту штаба.
 // Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
 // а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене

@@ -1217,6 +1217,158 @@ public class SessionManagerTests : IDisposable
         _sut.SetExpiry("nonexistent", 60).Should().BeNull();
     }
 
+    // --- Контекст чата (фича chat-context, A1–A2) ---
+
+    [Fact]
+    public async Task SetContext_ЗаменяетСостав_ПереживаетПерезагрузку_НеТрогаетUpdatedAt_ИШлётСобытие()
+    {
+        var dir = MkProjectDir("ctx");
+        var project = _projectManager.Create("CTX", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-4);
+        var updatedAtBefore = session.UpdatedAt;
+        ClearSent();
+
+        var entries = new List<SessionContextEntry>
+        {
+            new() { Type = SessionContextTypes.File, Id = "docs/readme.md", Title = "README" },
+            new() { Type = SessionContextTypes.Task, Id = "task-1" },
+        };
+        var updated = await _sut.SetContextAsync(session.Id, entries);
+
+        // Замена состава целиком: второй PUT с одним файлом затирает прежние две записи
+        updated!.Context.Should().HaveCount(2);
+        await _sut.SetContextAsync(session.Id, [new SessionContextEntry { Type = SessionContextTypes.File, Id = "src/a.ts" }]);
+        session.Context.Should().ContainSingle().Which.Id.Should().Be("src/a.ts");
+        // Инвариант conventions.md: правка контекста — настройка, а не активность
+        session.UpdatedAt.Should().Be(updatedAtBefore, "контекст не должен двигать UpdatedAt");
+        // Событие ушло (полный снимок нового состава; SessionId ставит рассылка).
+        // Два вызова — два события, проверяем последнее
+        var msgs = Sent<ContextUpdatedMessage>();
+        msgs.Should().HaveCount(2, "по событию на каждый SetContext");
+        var msg = msgs.Last();
+        msg.SessionId.Should().Be(session.Id);
+        msg.Entries.Should().ContainSingle().Which.Id.Should().Be("src/a.ts");
+        // Значение доехало до стора: sessions.json сериализуется в SetContextAsync явно
+        var sessionsJson = await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json"));
+        sessionsJson.Should().Contain("src/a.ts");
+    }
+
+    // Перезагрузка: новый SessionManager на том же DataPath читает состав из sessions.json.
+    // Сборка — та же, что у основного _sut (по образцу BuildSut в SessionManagerSubscriptionMigrationTests)
+    [Fact]
+    public async Task SetContext_ПерезагрузкаМенеджера_СоставНаМесте()
+    {
+        var dir = MkProjectDir("ctx-reload");
+        var project = _projectManager.Create("CTXRL", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        await _sut.SetContextAsync(session.Id,
+        [
+            new SessionContextEntry { Type = SessionContextTypes.Url, Id = "https://example.com", Title = "Статья" },
+        ]);
+
+        var reloaded = BuildSecondManager();
+
+        var restored = reloaded.GetById(session.Id);
+        restored.Should().NotBeNull();
+        restored!.Context.Should().ContainSingle();
+        restored.Context[0].Type.Should().Be(SessionContextTypes.Url);
+        restored.Context[0].Id.Should().Be("https://example.com");
+        restored.Context[0].Title.Should().Be("Статья");
+    }
+
+    [Fact]
+    public async Task SetContext_NесуществующаяСессия_Null()
+    {
+        (await _sut.SetContextAsync("nonexistent", [])).Should().BeNull();
+    }
+
+    // A5: подсказку хода питает Func-провайдер, а не снимок при создании адаптера — материал,
+    // добавленный кнопкой в ЖИВОМ чате, обязан попасть в промпт следующего хода без
+    // пересоздания сессии. Провайдер берётся один раз (при создании LlmSessionContext),
+    // поэтому проверяем именно повторный вызов ТОГО ЖЕ делегата.
+    [Fact]
+    public async Task ChatContextProvider_ВидитМатериалДобавленныйПослеСозданияПровайдера()
+    {
+        var dir = MkProjectDir("ctx-live");
+        var project = _projectManager.Create("CTXLIVE", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var provider = _sut.BuildChatContextProvider(session.Id);
+        provider().Should().BeEmpty("контекст пуст — секции промпта не будет");
+
+        await _sut.SetContextAsync(session.Id,
+            [new SessionContextEntry { Type = SessionContextTypes.File, Id = "docs/readme.md" }]);
+
+        provider().Should().ContainSingle().Which.Id.Should().Be("docs/readme.md",
+            "тот же делегат обязан видеть новый состав — иначе подсказка врала бы о материалах");
+    }
+
+    [Fact]
+    public void ChatContextProvider_НесуществующаяСессия_ПустойСостав()
+    {
+        // Чат удалили посреди жизни адаптера: провайдер отдаёт пусто, а не роняет ход
+        _sut.BuildChatContextProvider("nonexistent")().Should().BeEmpty();
+    }
+
+    // Второй SessionManager на том же DataPath — чтение стора после «перезапуска сервера».
+    // Конструктор идентичен основному _sut (без teamPlanning/activity — те не участвуют
+    // в загрузке sessions.json), автосейв выключен тем же конфигом
+    private SessionManager BuildSecondManager()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                ["Session:AutoSaveSeconds"] = "0",
+                ["DefaultProjectsPath"] = Path.Combine(_tempDir, "homes"),
+                ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile"),
+            })
+            .Build();
+        var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var appSettings = new AppSettingsService(config);
+        var projectManager = new ProjectManager(config, userStore, appSettings);
+        var historyService = new ChatHistoryService(config);
+
+        var clients = new Mock<IHubClients>();
+        var clientProxy = new Mock<IClientProxy>();
+        clientProxy
+            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
+        var hub = new Mock<IHubContext<SessionHub>>();
+        hub.Setup(h => h.Clients).Returns(clients.Object);
+
+        var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
+        var subPool = new ClaudeSubscriptionPool(config);
+        var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
+            config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+        var usage = new UsageService(config);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
+        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var flags = new FeatureFlagService(userStore);
+        var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        var personas = new PersonaManager(config);
+        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+
+        return new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
+            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox);
+    }
+
     // --- Очередь сообщений занятой сессии (chats_send в идущий ход) ---
 
     // Сессия «занята»: статус выставляем напрямую — поднимать реальный ход claude.exe

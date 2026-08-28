@@ -1221,6 +1221,27 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Сменить состав контекста чата (фича chat-context): идемпотентная замена списка
+    // материалов целиком — «добавить материал» это PUT со старым составом + новая запись.
+    // Валидацию записей делает контроллер ДО этого вызова; сюда приезжают уже чистые
+    // данные. UpdatedAt не трогаем по той же причине, что в SetExpiry: контекст —
+    // настройка чата, а не активность (по UpdatedAt идут сортировка и непрочитанность).
+    // Broadcast — в session/project/user-группы (BroadcastSessionMessageAsync): событие
+    // внеходовое, вторая вкладка браузера должна увидеть состав без перезагрузки.
+    public async Task<Session?> SetContextAsync(string sessionId, IReadOnlyList<SessionContextEntry> entries)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.Context = [.. entries];
+        SaveSessions();
+        await BroadcastSessionMessageAsync(sessionId, new ContextUpdatedMessage(entry.Info.Context));
+        return entry.Info;
+    }
+
+    // Контекст чата, принадлежащего пользователю: для GET-эндпоинта и (вслед за ним)
+    // тула context_list. null — чужая/несуществующая сессия.
+    public IReadOnlyList<SessionContextEntry>? GetContext(string sessionId, string ownerId) =>
+        GetOwned(sessionId, ownerId) is { } s ? s.Context : null;
+
     // Все сессии (для планировщика авто-удаления временных чатов)
     public IReadOnlyCollection<Session> GetAll() =>
         _sessions.Values.Select(e => e.Info).ToList();
@@ -2435,8 +2456,12 @@ public class SessionManager : IDisposable
         }
 
         var token = GetServiceToken(ownerId);
+        // context_list (материалы контекста чата) — базовый инструмент wsp-сервера за флагом
+        // ВЛАДЕЛЬЦА chat-context: решение принимается по владельцу, а не по ходу и не по
+        // непустоте контекста, иначе состав tools/list мерцал бы между ходами.
         return new WorkspaceMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
-            sections, allowedIds, selfSessionId);
+            sections, allowedIds, selfSessionId,
+            ChatContextEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatContext));
     }
 
     // Контекст MCP-серверов внешних модулей (контракт §6, ТЗ R7): по каждому модулю
@@ -2469,6 +2494,17 @@ public class SessionManager : IDisposable
         }
         return servers.Count > 0 ? new ModulesMcpContext(servers) : null;
     }
+
+    // Живой состав контекста чата для подсказки хода (фича chat-context): читаем сессию из
+    // реестра на КАЖДЫЙ вызов — материал, добавленный кнопкой в идущем разговоре, обязан
+    // попасть в промпт следующего хода без пересоздания адаптера. Снимок здесь был бы
+    // тихой ложью: вкладки у человека есть, а модель о них не знает.
+    // На СОСТАВ инструментов не влияет — только на текст подсказки (гейт самого инструмента
+    // живёт в BuildWorkspaceContext и решается флагом владельца).
+    public Func<IReadOnlyList<SessionContextEntry>> BuildChatContextProvider(string sessionId) =>
+        () => _sessions.TryGetValue(sessionId, out var entry)
+            ? entry.Info.Context
+            : [];
 
     // Серверы личного реестра владельца в ход. Решение принимается ТОЛЬКО по
     // owner/project/persona — состав tools/list не смеет зависеть от свойств хода
@@ -2798,7 +2834,10 @@ public class SessionManager : IDisposable
             DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
-            OrchestrationDone: BuildOrchestrationDone(session.Id)));
+            OrchestrationDone: BuildOrchestrationDone(session.Id),
+            // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
+            // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
+            ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4163,7 +4202,8 @@ public class SessionManager : IDisposable
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
+                ChatContextProvider: BuildChatContextProvider(sessionId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

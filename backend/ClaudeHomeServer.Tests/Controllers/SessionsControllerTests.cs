@@ -285,4 +285,208 @@ public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
+
+    // --- Контекст чата: GET/PUT {sessionId}/context (фича chat-context, A3) ---
+
+    private async Task<(string ProjectId, string SessionId, string ProjectDir)> CreateSessionForContextAsync()
+    {
+        var projectId = await CreateProjectAsync();
+        var createResponse = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new
+        {
+            mode = "auto"
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var sessionBody = JsonSerializer.Deserialize<JsonElement>(await createResponse.Content.ReadAsStringAsync());
+        var sessionId = sessionBody.GetProperty("id").GetString()!;
+
+        // Корень проекта — по id (rootPath генерировался в CreateProjectAsync)
+        using var scope = _factory.Services.CreateScope();
+        var projects = scope.ServiceProvider.GetRequiredService<ClaudeHomeServer.Services.ProjectManager>();
+        var projectDir = projects.GetById(projectId)!.RootPath;
+
+        return (projectId, sessionId, projectDir);
+    }
+
+    private async Task<JsonElement> PutContextAsync(string projectId, string sessionId, object payload)
+    {
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/context", payload);
+        response.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Context_GetPut_Roundtrip()
+    {
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+
+        var put = await PutContextAsync(projectId, sessionId, new object[]
+        {
+            new { type = "file", id = "docs/readme.md", title = "README" },
+            new { type = "task", id = "08f79e36-7a45-4c9a-9fb4-6de676ab9522" }
+        });
+        put.GetArrayLength().Should().Be(2, "PUT возвращает новый состав");
+        put[0].GetProperty("type").GetString().Should().Be("file");
+        put[0].GetProperty("title").GetString().Should().Be("README");
+
+        var get = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/context");
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body.GetArrayLength().Should().Be(2, "GET отдаёт тот же состав");
+        body[0].GetProperty("type").GetString().Should().Be("file");
+        body[1].GetProperty("title").ValueKind.Should().Be(JsonValueKind.Null, "title опционален");
+    }
+
+    [Fact]
+    public async Task Context_Get_NonExistentSession_Returns404()
+    {
+        var projectId = await CreateProjectAsync();
+        var response = await _client.GetAsync($"/api/projects/{projectId}/sessions/nonexistent/context");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Context_Put_EmptyList_ClearsContext()
+    {
+        // Идемпотентный PUT: пустой список — законная операция «очистить контекст»
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+        await PutContextAsync(projectId, sessionId, new[]
+        {
+            new { type = "url", id = "https://example.com" }
+        });
+
+        await PutContextAsync(projectId, sessionId, Array.Empty<object>());
+
+        var get = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/context");
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body.GetArrayLength().Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("folder")]
+    [InlineData("")]
+    public async Task Context_Put_UnknownType_Returns400(string badType)
+    {
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/context",
+            new[] { new { type = badType, id = "x" } });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Context_Put_EmptyId_Returns400(string? badId)
+    {
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/context",
+            new[] { new { type = "file", id = badId } });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Context_Put_MoreThan50Entries_Returns400()
+    {
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+
+        var payload = Enumerable.Range(0, 51)
+            .Select(i => new { type = "url", id = $"https://example.com/{i}" })
+            .ToArray();
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/context", payload);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Context_Put_Exactly50Entries_Ok()
+    {
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+
+        var payload = Enumerable.Range(0, 50)
+            .Select(i => new { type = "url", id = $"https://example.com/{i}" })
+            .ToArray();
+        var put = await PutContextAsync(projectId, sessionId, payload);
+        put.GetArrayLength().Should().Be(50, "потолок включительно");
+    }
+
+    [Fact]
+    public async Task Context_Get_MissingFile_MarkedMissing()
+    {
+        var (projectId, sessionId, projectDir) = await CreateSessionForContextAsync();
+        // Файл существует в момент PUT (PUT существование не проверяет — только валидацию),
+        // затем удаляем: GET обязан показать missing
+        var filePath = Path.Combine(projectDir, "docs", "readme.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, "# readme");
+        await PutContextAsync(projectId, sessionId, new[]
+        {
+            new { type = "file", id = "docs/readme.md" },
+            new { type = "file", id = "docs/gone.md" }
+        });
+
+        var get = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/context");
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body.GetArrayLength().Should().Be(2);
+        body[0].GetProperty("missing").GetBoolean().Should().BeFalse("файл на месте");
+        body[1].GetProperty("missing").GetBoolean().Should().BeTrue("файла нет — missing");
+    }
+
+    [Fact]
+    public async Task Context_Get_TaskOutsideProject_MarkedMissing()
+    {
+        // Контекст проектного чата адресуется внутри проекта: задача из другого проекта
+        // (или чужая) — missing, а не молчаливое «найдено»
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+        var otherProjectId = await CreateProjectAsync();
+        var otherTaskResponse = await _client.PostAsJsonAsync($"/api/projects/{otherProjectId}/tasks", new
+        {
+            title = "Чужая задача"
+        });
+        otherTaskResponse.EnsureSuccessStatusCode();
+        var otherTask = JsonSerializer.Deserialize<JsonElement>(await otherTaskResponse.Content.ReadAsStringAsync());
+        var otherTaskId = otherTask.GetProperty("id").GetString()!;
+
+        await PutContextAsync(projectId, sessionId, new[]
+        {
+            new { type = "task", id = otherTaskId }
+        });
+
+        var get = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/context");
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body[0].GetProperty("missing").GetBoolean().Should().BeTrue("задача не из этого проекта");
+    }
+
+    [Fact]
+    public async Task Context_Get_FileEscapeOutsideProject_MarkedMissing()
+    {
+        // Путь «наружу проекта» — SafeJoin бросает, но это missing записи, а не 500 всего GET
+        var (projectId, sessionId, _) = await CreateSessionForContextAsync();
+        await PutContextAsync(projectId, sessionId, new[]
+        {
+            new { type = "file", id = "../outside.txt" }
+        });
+
+        var get = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/context");
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body[0].GetProperty("missing").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Context_Put_NonExistentSession_Returns404()
+    {
+        var projectId = await CreateProjectAsync();
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/sessions/nonexistent/context",
+            new[] { new { type = "url", id = "https://example.com" } });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
 }

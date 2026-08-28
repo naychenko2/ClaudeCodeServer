@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
     FeatureFlagService flags, DefaultAssistantProvisioner provisioner,
-    PersonaManager personas) : ControllerBase
+    PersonaManager personas, SessionContextResolver contextResolver) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -157,6 +157,59 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         return NoContent();
     }
 
+    // --- Контекст чата (фича chat-context) ---
+
+    // Потолок состава контекста: одна строка на запись, чат не витрина проекта
+    // (вне объёма — «закреплённые материалы проекта» из исходного ADR).
+    private const int MaxContextEntries = 50;
+
+    // GET — состав контекста с признаками missing. Признак считает единая точка
+    // SessionContextResolver: у неё же его берёт MCP-тул context_list, иначе фронт и тул
+    // разошлись бы в оценке одной записи. Битая запись отдаётся с missing=true
+    // (убрать/переуказать — решение клиента), молча не чистим: состав меняется только PUT.
+    [HttpGet("{sessionId}/context")]
+    public IActionResult GetContext(string projectId, string sessionId)
+    {
+        if (!OwnsProject(projectId)) return NotFound();
+        var session = sessions.GetById(sessionId);
+        if (session == null || session.ProjectId != projectId) return NotFound();
+
+        return Ok(contextResolver.Resolve(session, UserId));
+    }
+
+    // PUT — идемпотентная замена состава целиком. Валидация: Type из белого списка,
+    // непустой Id, потолок 50. Записи с несуществующими адресами НЕ отбиваются —
+    // «не найден» отображается (missing в GET), а PUT описывает желание человека,
+    // а не состояние файловой системы.
+    [HttpPut("{sessionId}/context")]
+    public async Task<IActionResult> PutContext(string projectId, string sessionId,
+        [FromBody] List<SessionContextItemRequest> req)
+    {
+        if (!OwnsProject(projectId)) return NotFound();
+        var session = sessions.GetById(sessionId);
+        if (session == null || session.ProjectId != projectId) return NotFound();
+
+        if (req.Count > MaxContextEntries)
+            return BadRequest(new { error = $"Контекст чата — не больше {MaxContextEntries} записей" });
+        foreach (var e in req)
+        {
+            if (!SessionContextTypes.IsKnown(e.Type))
+                return BadRequest(new { error = $"Неизвестный тип материала контекста: {e.Type}" });
+            if (string.IsNullOrWhiteSpace(e.Id))
+                return BadRequest(new { error = "Id материала контекста не может быть пустым" });
+        }
+
+        var entries = req.Select(e => new SessionContextEntry
+        {
+            Type = e.Type,
+            Id = e.Id.Trim(),
+            Title = string.IsNullOrWhiteSpace(e.Title) ? null : e.Title.Trim(),
+        }).ToList();
+
+        var updated = await sessions.SetContextAsync(sessionId, entries);
+        return updated == null ? NotFound() : Ok(updated.Context);
+    }
+
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки
     // тем» в разделе проекта). Возвращает счётчики для тоста.
     [HttpPost("icon-batch")]
@@ -175,6 +228,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
 // (либо resumeSessionId — продолжение существующего разговора).
 public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null);
+
+// Запись контекста чата на вход PUT (Type/Id/Title — см. SessionContextEntry; Title
+// необязателен — подпись со стороны добавившего, сервер только тримит).
+public record SessionContextItemRequest(string Type, string Id, string? Title = null);
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности

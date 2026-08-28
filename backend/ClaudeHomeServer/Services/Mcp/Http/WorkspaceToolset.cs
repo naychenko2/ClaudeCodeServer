@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
@@ -153,6 +153,7 @@ public sealed partial class WorkspaceToolset(
             ["chats_send"] = "chats",
             ["chats_report_up"] = "chats",
             ["chats_update"] = "chats",
+            ["chats_archive"] = "chats",
             ["files_delete"] = "destructive",
             ["chats_delete"] = "destructive",
             ["deploy_start"] = "deploy",
@@ -1124,7 +1125,10 @@ public sealed partial class WorkspaceToolset(
                 {
                     list = sessions.GetProjectlessChats(context.OwnerId);
                 }
-                var items = list.Select(s =>
+                // Архив по умолчанию спрятан — как в интерфейсе, где он живёт за отдельным
+                // режимом списка. Признак производный (Session.IsArchived), отдельно не хранится
+                var includeArchived = BoolArg(arguments, "includeArchived");
+                var items = list.Where(s => includeArchived || !s.IsArchived).Select(s =>
                 {
                     // isSelf — как stdio (s.id === SELF_SESSION_ID || undefined): ключа нет
                     // у чужих сессий
@@ -1136,6 +1140,7 @@ public sealed partial class WorkspaceToolset(
                         ["personaId"] = s.PersonaId,
                         ["model"] = s.Model,
                         ["updatedAt"] = s.UpdatedAt,
+                        ["isArchived"] = s.IsArchived,
                     };
                     if (s.Id == session.Id) item["isSelf"] = true;
                     return item;
@@ -1232,6 +1237,33 @@ public sealed partial class WorkspaceToolset(
                     : Json(new { id = updated.Id, name = updated.Name, projectId = updated.ProjectId });
             }
 
+            case "chats_archive":
+            {
+                var sid = StringArg(arguments, "sessionId");
+                if (sid.Length == 0) return Deny("Не указан sessionId");
+                // Направление обязано быть явным: пропущенный ключ трактовать как «вернуть»
+                // нельзя — модель просила бы архив, а получала возврат
+                if (arguments["archived"] is not JsonValue av || !av.TryGetValue<bool>(out var archived))
+                    return Deny("Не указан archived: true — убрать в архив, false — вернуть");
+                var target = sessions.GetOwned(sid, context.OwnerId);
+                if (target is null) return Deny($"Сессия {sid} не найдена.");
+                if (target.ProjectId is { } targetPid
+                    && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
+                    return Deny(zoneDenied);
+                // Тот же гейт, что у chats_send/chats_delete: делегированный ход не
+                // распоряжается чужими чатами
+                if (DelegatedDenied(context, session, "Архивация чата") is { } gateDenied)
+                    return Deny(gateDenied);
+                Session? archivedSession;
+                try { archivedSession = await sessions.SetArchivedAsync(sid, context.OwnerId, archived); }
+                // Идущий ход или живые фоновые агенты — человекочитаемый текст сервиса
+                // отдаём как есть (тот же 409, что у REST PUT /api/chats/{id}/archived)
+                catch (InvalidOperationException ex) { return Deny(ex.Message); }
+                return archivedSession is null
+                    ? Deny($"Сессия {sid} не найдена.")
+                    : Json(new { id = archivedSession.Id, isArchived = archivedSession.IsArchived });
+            }
+
             case "chats_send":
             {
                 var sid = StringArg(arguments, "sessionId");
@@ -1252,13 +1284,17 @@ public sealed partial class WorkspaceToolset(
                 // в третьи чаты)
                 if (DelegatedDenied(context, session, "Отправка сообщения в другой чат") is { } gateDenied)
                     return Deny(gateDenied);
+                // Отправка в архивный чат не запрещена, но она и есть активность: по
+                // производной модели (IsArchived = ArchivedAt != null && UpdatedAt <= ArchivedAt)
+                // сообщение вернуло чат из архива — молчать об этом нельзя
+                var wasArchived = target.IsArchived;
 
                 var outcome = await messaging.SendAsync(context.OwnerId, sid, text,
                     callerSessionId: session.Id, senderSessionId: session.Id,
                     agentDepthFallback: 0,
                     wait: OptionalArg(arguments, "wait"),
                     timeoutSec: IntArg(arguments, "timeoutSec"));
-                return outcome switch
+                var sent = outcome switch
                 {
                     SessionMessagingService.SendOutcome.NotFound => Deny($"Сессия {sid} не найдена."),
                     SessionMessagingService.SendOutcome.EmptyText => Deny("Текст сообщения пуст"),
@@ -1303,6 +1339,10 @@ public sealed partial class WorkspaceToolset(
                         hint = "ход продолжается — результат позже через chats_history",
                     }),
                 };
+                // Состояние ПОСЛЕ отправки: доставленное сообщение вернуло чат из архива,
+                // busy/queued — ещё нет
+                var stillArchived = sessions.GetOwned(sid, context.OwnerId)?.IsArchived ?? false;
+                return WithArchiveNote(sent, wasArchived, stillArchived);
             }
 
             case "chats_report_up":
@@ -1345,6 +1385,23 @@ public sealed partial class WorkspaceToolset(
             default:
                 return Deny($"Неизвестный инструмент: {tool}");
         }
+    }
+
+    // Пометка об архиве в ответе chats_send: отдельным полем, а не текстом в hint — у
+    // completed-исхода hint нет вовсе. Возврат подтверждаем ФАКТИЧЕСКИМ состоянием после
+    // отправки, а не намерением: busy/queued сообщение ещё не доставлено, и чат остался
+    // спрятанным — обещать возврат в этом случае было бы неправдой
+    private static McpToolCallResult WithArchiveNote(McpToolCallResult result, bool wasArchived,
+        bool stillArchived)
+    {
+        if (!wasArchived || result.IsError) return result;
+        if (JsonNode.Parse(result.Text) is not JsonObject body) return result;
+        body["restoredFromArchive"] = !stillArchived;
+        body["archiveHint"] = stillArchived
+            ? "чат в архиве: сообщение ещё не доставлено — он вернётся в обычный список, когда уйдёт"
+            : "чат был в архиве — это сообщение вернуло его в обычный список; чтобы спрятать "
+                + "снова, вызови chats_archive с archived: true";
+        return result with { Text = body.ToJsonString(JsonOpts) };
     }
 
     // Персона для нового чата: руководитель проекта (вживую, сирота не считается),

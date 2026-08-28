@@ -662,11 +662,13 @@ const SECTION_TOOLS = {
     {
       name: 'chats_list',
       description: 'Список чатов пользователя: без projectId — чаты вне проектов, с projectId — сессии проекта. ' +
-        'Компакт: id, name, status, personaId, model, updatedAt.',
+        'Компакт: id, name, status, personaId, model, updatedAt, isArchived. ' +
+        'Архивные чаты по умолчанию НЕ отдаются — чтобы увидеть их, передай includeArchived: true.',
       inputSchema: {
         type: 'object',
         properties: {
           projectId: { type: 'string', description: 'ID проекта (пусто — чаты вне проектов)' },
+          includeArchived: { type: 'boolean', description: 'Показывать и архивные чаты (по умолчанию false — только живые)' },
         },
       },
     },
@@ -744,6 +746,22 @@ const SECTION_TOOLS = {
         properties: {
           sessionId: { type: 'string', description: 'ID сессии' },
           name: { type: 'string', description: 'Новое название чата' },
+        },
+      },
+    },
+    {
+      name: 'chats_archive',
+      description: 'Убрать чат в архив (archived: true) или вернуть из архива (archived: false). ' +
+        'Архив ПРЯЧЕТ чат, а не удаляет: история, переписка и настройки целы, возврат — этим же ' +
+        'инструментом. Отказ, если в чате идёт ход или работают фоновые агенты. ' +
+        'Разбор залежей — это chats_list с includeArchived и chats_archive по каждому чату; ' +
+        'для безвозвратного удаления есть отдельный chats_delete, архив его не заменяет.',
+      inputSchema: {
+        type: 'object',
+        required: ['sessionId', 'archived'],
+        properties: {
+          sessionId: { type: 'string', description: 'ID сессии' },
+          archived: { type: 'boolean', description: 'true — убрать в архив, false — вернуть из архива' },
         },
       },
     },
@@ -1083,15 +1101,20 @@ async function callTool(name, args) {
       } else {
         sessions = await api('/api/chats');
       }
-      return json(sessions.map(s => ({
-        id: s.id,
-        name: s.name ?? null,
-        status: s.status,
-        personaId: s.personaId ?? null,
-        model: s.model ?? null,
-        updatedAt: s.updatedAt,
-        isSelf: s.id === SELF_SESSION_ID || undefined,
-      })));
+      // Архив по умолчанию спрятан — как в интерфейсе; признак производный, считает сервер
+      const includeArchived = args.includeArchived === true;
+      return json(sessions
+        .filter(s => includeArchived || !s.isArchived)
+        .map(s => ({
+          id: s.id,
+          name: s.name ?? null,
+          status: s.status,
+          personaId: s.personaId ?? null,
+          model: s.model ?? null,
+          updatedAt: s.updatedAt,
+          isArchived: s.isArchived === true,
+          isSelf: s.id === SELF_SESSION_ID || undefined,
+        })));
     }
 
     case 'chats_history': {
@@ -1146,6 +1169,22 @@ async function callTool(name, args) {
         });
       }
       return json({ id: updated.id, name: updated.name ?? null, projectId: updated.projectId ?? null });
+    }
+
+    case 'chats_archive': {
+      const sessionId = String(args.sessionId ?? '');
+      if (!sessionId) throw new Error('Не указан sessionId');
+      // Направление обязано быть явным: пропущенный ключ трактовать как «вернуть» нельзя
+      if (typeof args.archived !== 'boolean')
+        throw new Error('Не указан archived: true — убрать в архив, false — вернуть');
+      // Зона сессии: маршрут адресуется по sessionId в обход projectId (как chats_update)
+      const projectId = await resolveSessionProject(sessionId);
+      if (projectId) checkProjectAllowed(projectId);
+      // Один эндпоинт на оба направления и на оба типа чатов (проектный резолвится внутри)
+      const updated = await api(`/api/chats/${encodeURIComponent(sessionId)}/archived`, {
+        method: 'PUT', body: JSON.stringify({ archived: args.archived }),
+      });
+      return json({ id: updated.id, isArchived: updated.isArchived === true });
     }
 
     case 'chats_delete': {

@@ -330,10 +330,16 @@ public sealed partial class WorkspaceToolset
         // --- chats ---
         Tool("chats_list",
             "Список чатов пользователя: без projectId — чаты вне проектов, с projectId — сессии проекта. "
-            + "Компакт: id, name, status, personaId, model, updatedAt.",
+            + "Компакт: id, name, status, personaId, model, updatedAt, isArchived. "
+            + "Архивные чаты по умолчанию НЕ отдаются — чтобы увидеть их, передай includeArchived: true.",
             Obj(new JsonObject
             {
                 ["projectId"] = Str("ID проекта (пусто — чаты вне проектов)"),
+                ["includeArchived"] = new JsonObject
+                {
+                    ["type"] = "boolean",
+                    ["description"] = "Показывать и архивные чаты (по умолчанию false — только живые)",
+                },
             })),
         Tool("chats_history",
             "Последние сообщения чата/сессии по id (компактно: user/assistant/tool/result, тексты усечены).",
@@ -363,7 +369,8 @@ public sealed partial class WorkspaceToolset
             "Отправить сообщение в СУЩЕСТВУЮЩИЙ чат — полный ход, результат виден пользователю в ленте. "
             + "Для быстрого вопроса персоне без чата используй persona_ask. wait=\"turn\" (дефолт) ждёт ответ до timeoutSec; "
             + "wait=\"none\" — не ждать (результат позже через chats_history). Ответ queued — чат был занят, "
-            + "сообщение ПРИНЯТО и уйдёт само после текущего хода: не отправляй повторно, ответ смотри через chats_history.",
+            + "сообщение ПРИНЯТО и уйдёт само после текущего хода: не отправляй повторно, ответ смотри через chats_history. "
+            + "Отправка в архивный чат разрешена, но ВОЗВРАЩАЕТ его из архива — в ответе тогда придёт restoredFromArchive.",
             Obj(new JsonObject
             {
                 ["sessionId"] = Str("ID сессии-получателя (не своей!)"),
@@ -407,6 +414,21 @@ public sealed partial class WorkspaceToolset
                 ["sessionId"] = Str("ID сессии"),
                 ["name"] = Str("Новое название чата"),
             }, "sessionId", "name")),
+        Tool("chats_archive",
+            "Убрать чат в архив (archived: true) или вернуть из архива (archived: false). "
+            + "Архив ПРЯЧЕТ чат, а не удаляет: история, переписка и настройки целы, возврат — этим же "
+            + "инструментом. Отказ, если в чате идёт ход или работают фоновые агенты. "
+            + "Разбор залежей — это chats_list с includeArchived и chats_archive по каждому чату; "
+            + "для безвозвратного удаления есть отдельный chats_delete, архив его не заменяет.",
+            Obj(new JsonObject
+            {
+                ["sessionId"] = Str("ID сессии"),
+                ["archived"] = new JsonObject
+                {
+                    ["type"] = "boolean",
+                    ["description"] = "true — убрать в архив, false — вернуть из архива",
+                },
+            }, "sessionId", "archived")),
 
         // --- destructive (формулировки — часть защиты, не менять) ---
         Tool("files_delete",

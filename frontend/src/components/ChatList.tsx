@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { FilterX, MessageCircle, Plus, Archive } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
+import { saveArchiveSessionAsNote } from '../api/chats';
 import { useOnline } from '../hooks/useOnline';
 import { C, ISLAND, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
@@ -132,21 +132,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     setDeleteTarget(null);
   };
 
-  // Сводка карточки архива (место chat-digest): первая сборка зовёт модель,
-  // последующие отдаются из кэша.
-  const handleBuildDigest = async (chat: Session) => {
-    try {
-      const updated = await archiveApi.buildDigest(chat.id);
-      onEdited(updated);
-      // Сводку показываем тостом: карточка в списке её больше не рисует
-      // (подвал убран), а ход к модели занимает секунды — без ответа кажется,
-      // что пункт меню ничего не сделал
-      showToast('Сводка', updated.archiveSummary?.trim() || 'Сводка готова', 'info');
-    } catch (e) {
-      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
-    }
-  };
-
   // «Сохранить в заметки» — заметка создаётся и кладётся в vault.
   const handleSaveAsNote = async (chat: Session) => {
     try {
@@ -200,7 +185,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
       onArchive={online ? (archived) => onArchive(chat, archived) : undefined}
-      onBuildDigest={online ? () => handleBuildDigest(chat) : undefined}
       onSaveAsNote={online ? () => handleSaveAsNote(chat) : undefined}
       swipeOpen={openSwipeId === chat.id}
       onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}

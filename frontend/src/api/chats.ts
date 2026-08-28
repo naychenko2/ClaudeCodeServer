@@ -22,14 +22,6 @@ export const archiveApi = {
       method: 'PUT',
       body: JSON.stringify({ archived }),
     }),
-
-  // Сводка карточки архива: 2–3 предложения о чём был разговор (место chat-digest).
-  // Первая сборка зовёт модель, последующие (пока UpdatedAt <= ArchiveSummaryAt)
-  // отдаются из кэша без обращения к LLM. 409 на повторном клике в полёте —
-  // сводка уже собирается. 502 на ошибке модели. 400 для десктопного чата —
-  // описания экрана не покидают грань.
-  buildDigest: (id: string) =>
-    request<Session>(`/chats/${encodeURIComponent(id)}/digest`, { method: 'POST' }),
 } as const;
 
 // «Сохранить в заметки»: существующий POST /api/sessions/{id}/summary через

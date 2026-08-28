@@ -338,23 +338,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }
   };
 
-  // Сводка карточки архива (место chat-digest): первая сборка зовёт модель,
-  // последующие отдаются из кэша. Ответ — обновлённая сессия с ArchiveSummary.
-  // Ошибку рисует список, а не подвал карточки: 409 «сводка уже собирается» и
-  // 502 «модель упала» приходят человеческим текстом.
-  const handleBuildDigest = async (s: Session) => {
-    try {
-      const updated = await archiveApi.buildDigest(s.id);
-      handleSessionUpdated(updated);
-      // Сводку показываем тостом: карточка в списке её больше не рисует
-      // (подвал убран), а ход к модели занимает секунды — без ответа кажется,
-      // что пункт меню ничего не сделал
-      showToast('Сводка', updated.archiveSummary?.trim() || 'Сводка готова', 'info');
-    } catch (e) {
-      showToast('Сводка', e instanceof Error ? e.message : 'Не удалось собрать сводку', 'info');
-    }
-  };
-
   // «Сохранить в заметки» — существующий POST /api/sessions/{id}/summary. В ответе
   // приходит заметка, а SummaryNoteId сервер проставляет самой сессии: перечитываем
   // чат, иначе карточка покажет первые строки заметки только после поллинга (5с).
@@ -464,11 +447,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
         onEdited={handleSessionUpdated}
         // Архив и его действия — только онлайн: офлайн-кэш отдал бы «успех» на
-        // запрос, который до сервера не доехал. Сводка и заметка рисуются подвалом
-        // карточки лишь у архивного чата (см. ChatCard), обычной карточке они
-        // ничего не меняют
+        // запрос, который до сервера не доехал. «Сохранить в заметки» видно лишь
+        // у архивного чата (см. ChatCard), обычной карточке оно ничего не меняет
         onArchive={online ? archived => { void handleArchive(s, archived); } : undefined}
-        onBuildDigest={online ? () => handleBuildDigest(s) : undefined}
         onSaveAsNote={online ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}

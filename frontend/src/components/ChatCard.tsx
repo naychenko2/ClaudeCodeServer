@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Sparkles, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -15,7 +15,6 @@ import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
 import { updateChatFields } from '../lib/chatUpdate';
 import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
 import { showToast } from '../lib/toast';
-import { isFreshArchiveSummary } from '../lib/archiveCard';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { TagChip } from './TagChip';
 import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
@@ -159,9 +158,6 @@ interface Props {
   // Архив: убрать/вернуть. Вызывающая сторона ловит 409 «в чате идёт ход» и показывает
   // тостом. Не задан — пункта меню «В архив» нет (например, витрина UI-кита)
   onArchive?: (archived: boolean) => void;
-  // Сводка чата (модель по ленте). Сеть на стороне списка (archiveApi.buildDigest).
-  // Не задан — пункта меню «Собрать сводку» у архивного чата нет
-  onBuildDigest?: () => Promise<unknown>;
   // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
   // Не задан — пункта меню «Сохранить в заметки» нет
   onSaveAsNote?: () => Promise<unknown>;
@@ -193,7 +189,7 @@ export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
-  onArchive, onBuildDigest, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
+  onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -1081,21 +1077,12 @@ export function ChatCard({
               onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
             />
           )}
-          {/* Действия над архивным чатом: раньше жили в подвале карточки, теперь —
-              строками меню (карточка в списке остаётся обычной). Показываются только
-              у архивного чата и только когда список дал канал: сеть, тосты и
-              обновление записи — на его стороне. Оба зова асинхронные (сборка сводки
-              идёт к модели секундами), меню закрывается сразу: держать его открытым
-              под ожидание нельзя — пользователь всё равно уходит по списку */}
-          {isArchivedChat(s) && onBuildDigest && (
-            <MenuItem
-              icon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-              // Свежая сводка уже лежит в чате — предлагаем обновить, а не собрать заново
-              label={isFreshArchiveSummary(s) ? 'Обновить сводку' : 'Собрать сводку'}
-              isMobile={isMobile}
-              onClick={e => { e.stopPropagation(); setMenu(null); void onBuildDigest(); }}
-            />
-          )}
+          {/* Действие над архивным чатом: раньше жило в подвале карточки, теперь —
+              строкой меню (карточка в списке остаётся обычной). Показывается только
+              у архивного чата и только когда список дал канал: сеть, тост и
+              обновление записи — на его стороне. Зов асинхронный, меню закрывается
+              сразу: держать его открытым под ожидание нельзя — пользователь всё
+              равно уходит по списку */}
           {isArchivedChat(s) && onSaveAsNote && (
             <MenuItem
               icon={<FileText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}

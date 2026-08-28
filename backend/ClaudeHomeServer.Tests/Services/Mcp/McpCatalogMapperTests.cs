@@ -75,8 +75,8 @@ public class McpCatalogMapperTests
     // --- runtimeArguments: жёсткий allow-list ---
 
     [Theory]
-    [InlineData("""{"value":"--registry","type":"named","name":"registry"}""", "registry")]
-    [InlineData("""{"value":"-p","type":"positional"}""", "поддерж")]
+    [InlineData("""{"value":"--registry","type":"named","name":"registry"}""", "подменяет")]
+    [InlineData("""{"value":"-p","type":"positional"}""", "подменяет")]
     public void RuntimeArguments_вне_allow_list_отказ(string runtimeArg, string noticePart)
     {
         var card = McpCatalogMapper.MapEntry(Entry(
@@ -100,7 +100,7 @@ public class McpCatalogMapperTests
             "\"runtimeHint\":\"npx\",\"transport\":{\"type\":\"stdio\"}," +
             "\"" + section + "\":[" + argument + "]}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("секрет");
+        card.Notice.Should().Contain("в резервную копию");
     }
 
     // --- identifier и версия ---
@@ -117,7 +117,7 @@ public class McpCatalogMapperTests
             "\"packages\":[{\"registryType\":\"npm\",\"identifier\":\"" + identifier + "\"," +
             "\"version\":\"1.0.0\",\"runtimeHint\":\"npx\",\"transport\":{\"type\":\"stdio\"}}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("Имя пакета");
+        card.Notice.Should().Contain("имени пакета");
     }
 
     [Theory]
@@ -133,7 +133,7 @@ public class McpCatalogMapperTests
             "\"packages\":[{\"registryType\":\"npm\",\"identifier\":\"v-mcp\",\"version\":\"" + version + "\"," +
             "\"runtimeHint\":\"npx\",\"transport\":{\"type\":\"stdio\"}}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("Версия пакета");
+        card.Notice.Should().Contain("зафиксировал версию");
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class McpCatalogMapperTests
             "\"runtimeHint\":\"uvx\",\"transport\":{\"type\":\"stdio\"}," +
             "\"runtimeArguments\":[" + runtimeArg + "]}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("не поддерживается");
+        card.Notice.Should().Contain("подключить нельзя");
     }
 
     [Theory]
@@ -234,7 +234,7 @@ public class McpCatalogMapperTests
             "\"packages\":[{\"registryType\":\"pypi\",\"identifier\":\"" + identifier + "\"," +
             "\"version\":\"1.0.0\",\"runtimeHint\":\"uvx\",\"transport\":{\"type\":\"stdio\"}}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("Имя пакета");
+        card.Notice.Should().Contain("имени пакета");
     }
 
     [Fact]
@@ -263,7 +263,7 @@ public class McpCatalogMapperTests
             "\"packages\":[{\"registryType\":\"pypi\",\"identifier\":\"pyv-mcp\",\"version\":\"" + version + "\"," +
             "\"runtimeHint\":\"uvx\",\"transport\":{\"type\":\"stdio\"}}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("Версия пакета");
+        card.Notice.Should().Contain("зафиксировал версию");
     }
 
     [Fact]
@@ -369,7 +369,7 @@ public class McpCatalogMapperTests
             "remotes":[{"type":"http","url":"http://api.example.com/mcp"}]
             """));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("https");
+        card.Notice.Should().Contain("http://");
     }
 
     [Theory]
@@ -385,7 +385,7 @@ public class McpCatalogMapperTests
             "\"remotes\":[{\"type\":\"http\",\"url\":\"https://api.example.com/mcp\"," +
             "\"headers\":[{\"name\":\"" + headerName + "\"}]}]"));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("Заголовок");
+        card.Notice.Should().Contain("заголовок");
     }
 
     [Fact]
@@ -413,7 +413,7 @@ public class McpCatalogMapperTests
             "headers":[{"name":"API_KEY","isSecret":true}]}]
             """));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("секрет");
+        card.Notice.Should().Contain("в резервную копию");
     }
 
     // --- Ключ карточки ---
@@ -462,7 +462,7 @@ public class McpCatalogMapperTests
             "runtimeHint":"docker","transport":{"type":"stdio"}}]
             """));
         card!.Connectable.Should().BeFalse();
-        card.Notice.Should().Contain("oci");
+        card.Notice.Should().Contain("Docker-образ");
     }
 
     [Fact]
@@ -490,7 +490,7 @@ public class McpCatalogMapperTests
             """, """{"status":"deprecated","publishedAt":"2026-05-18T13:28:59Z","isLatest":true}"""));
         card!.Connectable.Should().BeFalse();
         card.Prefill.Should().BeNull();
-        card.Notice.Should().Contain("устаревший");
+        card.Notice.Should().Contain("устаревшим");
     }
 
     [Fact]

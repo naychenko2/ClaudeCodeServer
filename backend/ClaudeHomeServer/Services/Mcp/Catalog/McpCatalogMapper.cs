@@ -147,13 +147,13 @@ public static class McpCatalogMapper
             }
             else notice = null;
         }
-        else notice = "Сервер помечен в реестре как устаревший (deprecated)";
+        else notice = "Автор пометил сервер устаревшим. Подключить из каталога нельзя — если он всё-таки нужен, добавьте вручную";
 
         return new McpCatalogCardDto(
             Name: name, Title: title, Description: description, RepositoryUrl: repositoryUrl,
             Version: prefill?.VersionOf() ?? CleanText(Str(server, "version"), 40),
             PublishedAt: publishedAt, Status: status.ToLowerInvariant(), IsLatest: isLatest,
-            Connectable: prefill is not null, Notice: prefill is not null ? null : (notice ?? "Подключение из каталога не поддерживается"),
+            Connectable: prefill is not null, Notice: prefill is not null ? null : (notice ?? "Этот сервер нельзя подключить из каталога: в его описании не хватает данных для настройки"),
             Prefill: prefill);
     }
 
@@ -178,12 +178,12 @@ public static class McpCatalogMapper
             var url = Str(remote, "url");
             if (transport is null || string.IsNullOrWhiteSpace(url))
             {
-                firstNotice ??= "Транспорт сервера не поддерживается";
+                firstNotice ??= "Сервер подключается способом, которого AI Home пока не умеет";
                 continue;
             }
             if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
-                firstNotice ??= "Адрес сервера в реестре должен быть https";
+                firstNotice ??= "Адрес сервера начинается с http:// — по незащищённому каналу ваш ключ уехал бы открытым текстом";
                 continue;
             }
 
@@ -200,7 +200,7 @@ public static class McpCatalogMapper
                     || HeaderBlacklist.Contains(headerName, StringComparer.OrdinalIgnoreCase)
                     || headerName.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))
                 {
-                    firstNotice ??= $"Заголовок «{headerName}» из реестра не поддерживается";
+                    firstNotice ??= $"Сервер просит служебный заголовок «{headerName}» — такие мы не отправляем";
                     goto nextRemote;
                 }
                 var secret = Bool(header, "isSecret");
@@ -224,7 +224,7 @@ public static class McpCatalogMapper
                 var varName = match.Groups[1].Value;
                 if (secretNames.Contains(varName))
                 {
-                    firstNotice ??= "В адресе сервера есть секретная переменная — из каталога не подключить";
+                    firstNotice ??= "Ключ пришлось бы вписать прямо в адрес сервера — так он попал бы в резервную копию открытым. Такие серверы из каталога не подключаем";
                     goto nextRemote;
                 }
                 fields.Insert(0, new McpCatalogFieldDto("url", varName, null,
@@ -256,7 +256,11 @@ public static class McpCatalogMapper
             var runtime = registryType switch { "npm" => "npx", "pypi" => "uvx", _ => null };
             if (runtime is null)
             {
-                firstNotice ??= $"Тип пакета «{registryType}» не поддерживается";
+                // Для oci реестр имеет в виду Docker-образ — человеку полезнее прямое слово,
+                // а не кодовое «oci»; прочие registryType показываем как есть
+                firstNotice ??= registryType == "oci"
+                    ? "Сервер поставляется как Docker-образ — в этой версии AI Home так подключать нельзя"
+                    : $"Сервер поставляется в формате «{registryType}» — в этой версии AI Home так подключать нельзя";
                 continue;
             }
             // пакеты с http/sse-транспортом поднимают адрес сами ({port} локально) —
@@ -271,7 +275,7 @@ public static class McpCatalogMapper
             var runtimeHint = Str(pkg, "runtimeHint")?.Trim().ToLowerInvariant();
             if (runtimeHint is not null && runtimeHint != runtime)
             {
-                firstNotice ??= $"Запуск пакета через «{runtimeHint}» не поддерживается";
+                firstNotice ??= $"Сервер запускается через «{runtimeHint}» — в этой версии AI Home так нельзя";
                 continue;
             }
 
@@ -280,7 +284,7 @@ public static class McpCatalogMapper
                 : NpmNamePattern.IsMatch(identifier);
             if (!nameValid)
             {
-                firstNotice ??= $"Имя пакета «{identifier.Crop(60)}» не подходит";
+                firstNotice ??= $"В имени пакета «{identifier.Crop(60)}» вместо обычного имени ссылка или путь — код скачался бы из чужого места";
                 continue;
             }
             // PyPI-имя нормализуем по PEP 503: серии «-_.» и регистр схлопываются —
@@ -289,7 +293,7 @@ public static class McpCatalogMapper
             var version = Str(pkg, "version")?.Trim();
             if (version is null || !SemVerPattern.IsMatch(version))
             {
-                firstNotice ??= $"Версия пакета «{version ?? "—"}» не точная — подключать нельзя";
+                firstNotice ??= $"Автор не зафиксировал версию («{version ?? "—"}»): такой сервер обновлялся бы сам, без вашего ведома. Подключить нельзя";
                 continue;
             }
 
@@ -305,7 +309,7 @@ public static class McpCatalogMapper
             {
                 if (Bool(runtimeArg, "isSecret"))
                 {
-                    firstNotice ??= "В аргументах запуска есть секрет — из каталога не подключить";
+                    firstNotice ??= "Ключ пришлось бы передать прямо в строке запуска — так он попал бы в резервную копию открытым. Такие серверы из каталога не подключаем";
                     goto nextPackage;
                 }
                 if (runtime == "npx"
@@ -315,7 +319,7 @@ public static class McpCatalogMapper
                     args.Add("-y");
                     continue;
                 }
-                firstNotice ??= $"Аргумент запуска «{Str(runtimeArg, "value") ?? Str(runtimeArg, "name")}» не поддерживается";
+                firstNotice ??= $"Сервер просит запускаться с флагом «{Str(runtimeArg, "value") ?? Str(runtimeArg, "name")}» — он подменяет источник кода, поэтому подключить нельзя";
                 goto nextPackage;
             }
 
@@ -324,7 +328,7 @@ public static class McpCatalogMapper
             {
                 if (EnvBlacklisted(env.Name))
                 {
-                    firstNotice ??= $"Переменная окружения «{env.Name}» не поддерживается";
+                    firstNotice ??= $"Сервер просит переменную «{env.Name}» — ей можно подменить исполняемый код, поэтому подключить нельзя";
                     goto nextPackage;
                 }
                 // Значение по умолчанию переносим только у несекретных: секретных
@@ -340,7 +344,7 @@ public static class McpCatalogMapper
             {
                 if (Bool(arg, "isSecret"))
                 {
-                    firstNotice ??= "В аргументах командной строки есть секрет — из каталога не подключить";
+                    firstNotice ??= "Ключ пришлось бы передать прямо в строке запуска — так он попал бы в резервную копию открытым. Такие серверы из каталога не подключаем";
                     goto nextPackage;
                 }
                 var isNamed = string.Equals(Str(arg, "type"), "named", StringComparison.OrdinalIgnoreCase);

@@ -33,7 +33,7 @@ import { ReaderBody } from './reader/ReaderBody';
 import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPanel';
 import { wsPanels } from './panelStackState';
 import { VideoCenter } from '../../features/video/VideoCenter';
-import { setVideoCenterBlocked, useVideoCenter, VIDEO_PANEL_EVENT } from '../../lib/videoStage';
+import { setVideoCenterBlocked, useVideoCenter, useVideoCenterSplit, VIDEO_PANEL_EVENT } from '../../lib/videoStage';
 import { ChatContextBar, type ContextTarget } from '../../features/chatContext/ChatContextBar';
 import { useHasChatContext } from '../../lib/chatContext';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
@@ -373,6 +373,11 @@ export function DesktopWorkspace(p: Props) {
   // центра: те раскиданы по WorkspacePage, и один забытый вызов дал бы два острова
   // в одном месте раскладки.
   const videoInCenter = !!videoCenter && centerFree;
+  // Кадр рядом с лентой (split) — как файл: сам КАДР и только на широком экране.
+  // Каталог всегда во всю ширину: в половине от него остаётся один столбец обложек,
+  // а выбирают канал именно глазами. На планшете центр отдан одному режиму целиком.
+  const videoSplit = useVideoCenterSplit() && videoCenter === 'player' && !p.isTablet;
+  const videoSplitCenter = videoInCenter && videoSplit;
   const chatOnly = centerFree && !videoInCenter;
   const centerContentW = chatOnly ? (p.activeSession ? CHAT_COLUMN_W : SPLASH_W) : undefined;
   const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(centerContentW);
@@ -503,11 +508,26 @@ export function DesktopWorkspace(p: Props) {
         </div>
       )}
 
-      {/* Видео занимает центр ЦЕЛИКОМ — и кадр, и каталог. Кадр пробовали ставить
-          вторым островом рядом с лентой, как файл: в узкой половине от него мало
-          толку, а разворачивают его как раз тогда, когда хотят смотреть, а не
-          переписываться. Фоновый просмотр закрывает панель рельсы, она рядом. */}
-      {videoInCenter && centerIsland(<VideoCenter />)}
+      {/* Во всю ширину центра идут каталог (в половине от него остаётся один столбец
+          обложек) и кадр, развёрнутый тумблером в шапке. По умолчанию кадр стоит
+          рядом с лентой — см. ветку split ниже. */}
+      {videoInCenter && !videoSplitCenter && centerIsland(<VideoCenter />)}
+
+      {/* Split чат|видео — те же два острова и тот же сплиттер, что у файла и задачи:
+          смотреть, не бросая разговор, — то, ради чего кадр в центр и уводят */}
+      {videoSplitCenter && (
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {chatPanel(false)}
+            </div>
+          </Island>
+          <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
+          <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            <VideoCenter />
+          </Island>
+        </div>
+      )}
 
       {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка.
           overflow visible: композер стоит на нижней кромке зоны, и hidden срезал бы

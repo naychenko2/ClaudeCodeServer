@@ -18,7 +18,9 @@ import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { VideoCenter } from '../features/video/VideoCenter';
-import { useVideoCenter, VIDEO_PANEL_EVENT } from '../lib/videoStage';
+import { useVideoCenter, useVideoCenterSplit, useVideoPlaying, VIDEO_PANEL_EVENT } from '../lib/videoStage';
+import { useCenterSplit } from '../hooks/useCenterSplit';
+import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
@@ -216,12 +218,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
   const unreadCount = useUnreadChatCount(chats);
+  // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
+  const videoPlaying = useVideoPlaying();
+  // Кадр в центре стоит рядом с лентой или занимает её место целиком
+  const videoSplit = useVideoCenterSplit();
+  const split = useCenterSplit();
 
   // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
   // берутся по одной сессии.
   const sessionPanels = useSessionPanels(activeChat);
   // Кто занимает центральный остров, кроме ленты: кадр или каталог каналов
   const videoCenter = useVideoCenter();
+  // Кадр рядом с лентой: только сам КАДР (каталог всегда во всю ширину — там выбирают
+  // по обложкам) и только на широком экране. На планшете центр отдан одному режиму
+  // целиком: две половины по 200px не дадут ни читаемой ленты, ни смотрибельного кадра
+  const videoSplitCenter = videoCenter === 'player' && videoSplit && !isTablet;
 
   // Эксклюзив боковых сторон на планшете: гейт флагом exclusive в сторе chatPanels —
   // зеркально DesktopWorkspace. При входе в планшет активной становится левая
@@ -348,12 +359,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   // Центр раздела: лента активного чата или заставка. Функцией, а не готовым узлом,
   // чтобы не считать её, когда центр занят видео.
-  const chatCenter = () => activeChat ? (
+  const chatCenter = (headerIsland = true) => activeChat ? (
     <ChatPanel
       key={activeChat.id}
       session={activeChat}
       onChatDeleted={handleChatDeleted}
-      headerIsland
+      headerIsland={headerIsland}
       skills={skills}
       attachedFiles={attachedFiles}
       onAttachedFilesChange={setAttachedFiles}
@@ -407,7 +418,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 chats: sidebar,
                 video: <VideoPanel />,
               }}
-              railBadges={{ chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined } }}
+              railBadges={{
+                chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined },
+                // Точка на кнопке «Видео», пока идёт эфир: панель можно закрыть, а звук
+                // остаётся — без метки он шёл бы из ниоткуда и гасить его было бы нечем
+                video: videoPlaying ? { dot: 'accent', hint: 'эфир идёт' } : undefined,
+              }}
               sessionPanels={sessionPanels}
             />
           }
@@ -420,11 +436,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // её до ленты нельзя: на узком окне запаса не останется и заставку перекосит
           // Рядом с эфиром компенсировать нечего: центр делят два резиновых острова
           centerContentWidth={videoCenter ? undefined : (activeChat ? CHAT_COLUMN_W : SPLASH_W)}
-          center={videoCenter ? (
-            // Видео занимает центр ЦЕЛИКОМ — и кадр, и каталог. Кадр пробовали ставить
-            // вторым островом рядом с лентой, как файл в проекте: в узкой половине от
-            // него мало толку, а разворачивают его как раз тогда, когда хотят смотреть,
-            // а не переписываться. Фоновый просмотр закрывает панель рельсы, она рядом.
+          center={videoSplitCenter ? (
+            // Split чат|видео — ДВА острова, ресайз в зазоре между ними: тот же приём
+            // и тот же сплиттер, что у файла в проекте. Смотреть, не бросая разговор, —
+            // то, ради чего кадр в центр и уводят; вторым нажатием он разворачивается
+            // во всю ширину (тумблер в шапке).
+            <div ref={split.containerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
+              <Island bg={C.bgMain} style={{ flex: split.flex, minWidth: split.min }}>
+                <div style={{ flex: 1, overflow: 'hidden' }}>{chatCenter(false)}</div>
+              </Island>
+              <IslandSplitter orientation="v" active={split.dragging} onMouseDown={split.handleDrag} />
+              <Island bg={C.bgMain} style={{ flex: 1, minWidth: split.min }}><VideoCenter /></Island>
+            </div>
+          ) : videoCenter ? (
+            // Во всю ширину идут каталог (в половине от него остаётся один столбец
+            // карточек) и кадр, развёрнутый тумблером
             <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}><VideoCenter /></Island>
           ) : chatCenter()}
           // Сессионная рельса (План/Агенты/Персона) — только когда в чате есть

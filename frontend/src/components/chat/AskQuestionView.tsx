@@ -6,6 +6,7 @@ import { useAssistantName, PersonaContext } from './contexts';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { markdownToPlain } from '../../lib/markdownPlain';
+import { useIsMobile } from '../../lib/breakpoints';
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -33,6 +34,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   onInterrupt?: () => void;
 }) {
   const asstName = useAssistantName();
+  const isMobile = useIsMobile();
   const persona = useContext(PersonaContext);
   const questions = (() => {
     const q = (item.input as { questions?: unknown } | null)?.questions;
@@ -117,6 +119,19 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
     onAnswer(item.toolUseId, JSON.stringify({ questions, answers }));
   };
 
+  // Enter в поле «свой ответ» подтверждает (как кнопка внизу), Shift+Enter — перенос строки:
+  // иначе набор своего варианта заканчивался переводом строки, а не ответом
+  const onCustomKeyDown = (qi: number) => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // на мобиле Enter переносит строку, подтверждение — кнопкой (как в композере)
+    if (e.key !== 'Enter' || e.shiftKey || isMobile || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    if (disabled || !isAnswered(qi)) return;
+    if (allAnswered) { submit(); return; }
+    // остались неотвеченные вопросы — уводим на ближайший
+    const next = questions.findIndex((_, i) => i !== qi && !isAnswered(i));
+    if (next >= 0) setActiveTab(next);
+  };
+
   const renderQuestion = (q: QuestionDef, qi: number) => (
     <div>
       {/* Текст вопроса и подписи опций — от модели: строчный контекст, markdown снимаем */}
@@ -162,14 +177,21 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                 <div style={{ padding: '0 10px 10px' }}>
                   <textarea
                     autoComplete="off"
+                    autoFocus
                     value={customText[qi] ?? ''}
                     onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
+                    onKeyDown={onCustomKeyDown(qi)}
                     onClick={e => e.stopPropagation()}
                     disabled={disabled}
                     placeholder="Введите свой ответ…"
                     rows={2}
                     style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
                   />
+                  {!isMobile && (
+                    <div style={{ marginTop: 4, fontSize: FS.xs, color: C.textMuted }}>
+                      Enter — {!multiQ || allAnswered ? 'ответить' : 'к следующему вопросу'}, Shift+Enter — перенос строки
+                    </div>
+                  )}
                 </div>
               )}
             </div>

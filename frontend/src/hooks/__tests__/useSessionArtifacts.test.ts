@@ -241,10 +241,10 @@ describe('computeTodos', () => {
         { result: '{"id":"22222222-2222-2222-2222-222222222222"}' }),
       tool('mcp__tasks__tasks_create', { title: 'C' },
         { result: '{"id":"33333333-3333-3333-3333-333333333333"}' }),
-      // completed (cиноним done)
+      // completed (синоним done)
       tool('mcp__tasks__tasks_update',
         { id: '11111111-1111-1111-1111-111111111111', status: 'completed' }),
-      // inProgress (cиноним in_progress)
+      // inProgress (синоним in_progress)
       tool('mcp__tasks__tasks_update',
         { id: '22222222-2222-2222-2222-222222222222', status: 'inProgress' }),
       // todo → pending
@@ -364,6 +364,37 @@ describe('computeTodos', () => {
     ];
     expect(computeTodoBatches(items)).toHaveLength(1);
     expect(computeTodos(items).map(t => t.content)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('update с чужим id не закрывает пункт по совпавшему title', () => {
+    // id пришёл, но такой задачи в ленте нет (создана в другом чате) — совпадение
+    // названия не означает намерения: пункт остаётся в своём статусе
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Ревью кода' },
+        { result: '{"id":"11111111-1111-1111-1111-111111111111"}' }),
+      tool('mcp__tasks__tasks_update',
+        { id: '99999999-9999-9999-9999-999999999999', title: 'Ревью кода', status: 'done' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Ревью кода', status: 'pending' }]);
+  });
+
+  it('tasks_create с отказом сервера (isError) не добавляет фантомный пункт', () => {
+    // Deny: задача не создана — пункт mcp-N навсегда остался бы pending
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Сломалась' },
+        { result: 'Проект не найден или недоступен', isError: true }),
+    ];
+    expect(computeTodos(items)).toEqual([]);
+  });
+
+  it('переименование через tasks_update(id, title) обновляет пункт чек-листа', () => {
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Старое имя' },
+        { result: '{"id":"12121212-3434-5656-7878-909090909090"}' }),
+      tool('mcp__tasks__tasks_update',
+        { id: '12121212-3434-5656-7878-909090909090', title: 'Новое имя', status: 'in_progress' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Новое имя', status: 'in_progress' }]);
   });
 });
 

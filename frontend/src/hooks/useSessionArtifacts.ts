@@ -325,7 +325,9 @@ export function computeTodoBatches(items: ChatItem[]): TodoBatch[] {
       const o = it.input as { title?: unknown; name?: unknown } | null;
       const title = typeof o?.title === 'string' && o.title
         ? o.title : typeof o?.name === 'string' && o.name ? o.name : '';
-      if (title) {
+      // Отказ сервера (Deny: невалидный personaId/projectId…) — задача не создана, пункта
+      // не будет: фантомный mcp-N навсегда остался бы pending (никакой id его не закроет)
+      if (title && it.isError !== true) {
         // Та же граница пачки, что у встроенного TaskCreate: иначе за длинный чат
         // счётчик соберёт ВСЕ когда-либо созданные задачи сессии вместо текущей волны.
         if (tasks.size && [...tasks.values()].every(t => t.status === 'completed')) flush();
@@ -348,11 +350,11 @@ export function computeTodoBatches(items: ChatItem[]): TodoBatch[] {
       if (mapped) {
         const id = typeof o?.id === 'string' && o.id ? o.id : null;
         let ex = id ? tasks.get(id) : undefined;
-        if (!ex) {
+        if (!ex && !id) {
           // Фолбэк на title для старых лент: модель раньше не знала про guid и слала
-          // заголовок. Не маппим на синтетический mcp-N, потому что в этих лентах
-          // ключи mcp-N в tasks тоже нет — там ключ был mcp-${counter}, но content
-          // совпадает, поэтому поиск по содержимому всё ещё работает.
+          // только заголовок. Если id ПРИСЛАН, но цели нет — это чужая задача (создана
+          // вне этой ленты): закрывать пункт по совпавшему названию нельзя, совпадение
+          // имени не означает намерения.
           const title = typeof o?.title === 'string' && o.title ? o.title : null;
           if (title) {
             for (const t of tasks.values()) {
@@ -361,6 +363,9 @@ export function computeTodoBatches(items: ChatItem[]): TodoBatch[] {
           }
         }
         if (ex) {
+          // Переименование (title без смены статуса бывает) — отражаем в чек-листе,
+          // симметрично subject у встроенного TaskUpdate
+          if (typeof o?.title === 'string' && o.title) ex.content = o.title;
           ex.status = mapped;
           tasksIdx = i;
         }

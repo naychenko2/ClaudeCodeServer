@@ -1,5 +1,5 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check, ArrowRight } from 'lucide-react';
+import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check, ArrowRight, FileText, Network } from 'lucide-react';
 import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import { relPath, basename } from '../../lib/paths';
@@ -8,9 +8,12 @@ import { ensurePersonasLoaded, getPersonaById, usePersonas, usePersonasVersion }
 import { agentDotColor } from '../AgentSelector';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { teamPlanRunLabel } from '../../lib/teamImplement';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { Button } from '../ui/Button';
 import { Dot } from '../ui/Dot';
 import { Menu } from '../ui/Menu';
+import { InlineSegmented } from '../ui/InlineSegmented';
+import { TeamPlanScheme } from '../plan/TeamPlanScheme';
 import { FileLink, MarkdownContent } from './MarkdownContent';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { ChatProjectContext, ChatOpenFileContext, TeamPlanContext } from './contexts';
@@ -349,6 +352,38 @@ function PlanBody({ plan, candidates, onReassign, readOnly, isMobile, rootPath, 
   );
 }
 
+// Тело схемы (флаг visual-plan): TeamPlanScheme в той же рамке-скролле, что и
+// текстовое тело, — maxHeight + нижний fade, иначе длинная карта растянула бы
+// карточку на весь чат. Схема детерминированная, из структуры плана: ни модели,
+// ни кнопки «Собрать схему» (в отличие от plan_review) — вид доступен сразу.
+function SchemeBody({ plan, rootPath }: { plan: TeamPlan; rootPath?: string | null }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setOverflowing(el.scrollHeight - el.clientHeight > 8);
+  }, [plan]);
+  return (
+    <div style={{ position: 'relative', margin: '12px 0' }}>
+      <div ref={bodyRef} style={{
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+        padding: '12px 14px', maxHeight: 330, overflow: 'auto',
+      }}>
+        <TeamPlanScheme plan={plan} rootPath={rootPath} />
+      </div>
+      {overflowing && (
+        <div style={{
+          position: 'absolute', left: 1, right: 1, bottom: 1, height: 40,
+          borderRadius: `0 0 ${R.lg}px ${R.lg}px`,
+          background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
+          pointerEvents: 'none',
+        }} />
+      )}
+    </div>
+  );
+}
+
 // Свёрнутое тело решённой карточки — план остаётся в ленте референсом
 function CollapsedPlan({ plan, isMobile, rootPath }: {
   plan: TeamPlan; isMobile: boolean; rootPath?: string | null;
@@ -381,9 +416,13 @@ function CollapsedPlan({ plan, isMobile, rootPath }: {
 // Карточка плана «Командной реализации» (Э2): структурный план в ленте штаба.
 // Конструкция — как у plan_review, но на accent-оси: две карточки в одной ленте
 // не спутаешь. Единственная правка до запуска — исполнитель под-задачи (reassign).
-export function TeamPlanView({ item, online }: {
+export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
   item: Extract<ChatItem, { kind: 'team_plan' }>;
   online: boolean;
+  // Стартовый вид «Текстом/Схемой» — только для статик-тестов (клики в
+  // renderToStaticMarkup не воспроизвести), тот же приём, что initialView
+  // у TeamPlanScheme; в проде не передаётся
+  initialSchemeView?: 'text' | 'scheme';
 }) {
   const ctx = useContext(TeamPlanContext);
   const project = useContext(ChatProjectContext);
@@ -393,10 +432,18 @@ export function TeamPlanView({ item, online }: {
   usePersonasVersion();
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState('');
+  // Разворот схемой (флаг visual-plan): вид тела «Текстом/Схемой» — только у
+  // активной карточки на подтверждении. Схема строится из структуры плана
+  // детерминированно, модель не зовётся
+  const visualPlanEnabled = useFeature(FLAGS.visualPlan);
+  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>(initialSchemeView);
   // В не-персон-чате стор персон мог быть не загружен — резолвим имена исполнителей
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   const plan = item.plan;
+  // Смена плана или его версии сбрасывает вид на текст: «схемой» — свойство
+  // чтения конкретной версии, новая версия начинается с привычного текста
+  useEffect(() => { setSchemeView('text'); }, [plan.id, plan.version]);
   const rootPath = project?.rootPath;
   // Ссылка на файл полного плана — общая для всех состояний карточки (в т.ч. свёрнутых,
   // Э8): null у глобального чата без проекта или когда запись на сервере не удалась
@@ -587,8 +634,30 @@ export function TeamPlanView({ item, online }: {
           подтверждает именно дельту. Подпись — дословно из спеки */}
       <AnnotationBlock label="Что изменилось" items={plan.changes} />
 
-      <PlanBody plan={plan} candidates={candidates} onReassign={reassign}
-        readOnly={!canAct} isMobile={isMobile} rootPath={rootPath} />
+      {/* Переключатель «Текстом/Схемой» — по образцу plan_review, но на accent-оси
+          карточки. Кнопки «Собрать схему» нет: схема детерминированная, строится
+          из структуры плана без модели */}
+      {visualPlanEnabled && (
+        <div style={{ margin: '12px 0 -4px' }}>
+          <InlineSegmented
+            value={schemeView}
+            onChange={setSchemeView}
+            options={[
+              { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+                tone: { bg: C.accentLight, fg: C.accent } },
+              { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+                tone: { bg: C.accentLight, fg: C.accent } },
+            ]}
+          />
+        </div>
+      )}
+
+      {visualPlanEnabled && schemeView === 'scheme' ? (
+        <SchemeBody plan={plan} rootPath={rootPath} />
+      ) : (
+        <PlanBody plan={plan} candidates={candidates} onReassign={reassign}
+          readOnly={!canAct} isMobile={isMobile} rootPath={rootPath} />
+      )}
 
       {/* «Допущения» (Э8) — под телом, над кнопками: путь «вопросов нет» — главный
           носитель, декларируются вместе с планом. Текст фиксируется при составлении:

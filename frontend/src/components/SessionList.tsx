@@ -197,8 +197,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
         // центр показывает пустое состояние с кнопкой «Новый чат» (создание только по клику).
         // Читаем через ref-зеркала: эффект живёт на весь project.id, пропсы за это время свежие.
-        if (!activeRef.current && list.length > 0) {
-          onSelectRef.current(list[0], undefined, true);
+        // Архивные пропускаем: архивация не двигает UpdatedAt (иначе возврат из архива
+        // выкидывал бы чат в верх списка), поэтому заархивированный последним чат так и
+        // стоит первым в списке — без фильтра автовыбор открывал бы его призраком.
+        const live = list.filter(s => !s.archivedAt);
+        if (!activeRef.current && live.length > 0) {
+          onSelectRef.current(live[0], undefined, true);
         }
       }
     };

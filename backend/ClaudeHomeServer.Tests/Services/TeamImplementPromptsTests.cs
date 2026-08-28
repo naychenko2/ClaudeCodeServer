@@ -182,4 +182,38 @@ public class TeamImplementPromptsTests
         TeamImplementPrompts.EscalationTitle(TeamEscalationKind.Blocker, "## Не хватает **прав** на `data/`")
             .Should().Be("Исполнитель застрял: Не хватает прав на data/");
     }
+
+    // «Остановить» сервер применяет сам — ход с «Продолжай с этого места» противоречил
+    // остановке, и координатор уходил разбираться с «конфликтом сигналов» (сбой 28.08.2026).
+    [Fact]
+    public void EscalationResolvedTurn_Остановка_ВелитПодвестиИтогИЖдать_БезПродолжения()
+    {
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.WaveAdded,
+            Title = "Добавочная волна: выгрузка в XLSX",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
+        };
+
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(escalation, "stop", "Остановить", null);
+
+        turn.Should().Contain("Решение: Остановить");
+        turn.Should().NotContain("Продолжай с этого места",
+            "остановка уже применена сервером — «продолжай» противоречило бы ей");
+        turn.Should().Contain("сервер уже применил",
+            "координатор обязан знать, что остановка действует без его участия");
+        turn.Should().Contain("Ничего не запускай и не раздавай");
+        turn.Should().Contain("жди решения человека");
+    }
+
+    [Fact]
+    public void EscalationResolvedTurn_ДругоеДействие_ТекстПрежний()
+    {
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(null, "answer", "Ответить", "доступ выдал");
+
+        turn.Should().Contain("Решение: Ответить");
+        turn.Should().Contain("Комментарий: доступ выдал");
+        turn.Should().Contain("Продолжай с этого места",
+            "прочие решения работу возобновляют — их текст не меняется");
+    }
 }

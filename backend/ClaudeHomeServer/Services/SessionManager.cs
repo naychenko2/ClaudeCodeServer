@@ -7029,7 +7029,7 @@ public class SessionManager : IDisposable
         // Координатор узнаёт решение обычным ходом — как если бы человек написал его текстом.
         // В ленте — плашка механики, а не пузырь «Автоматически» с сырым текстом директивы.
         await SendOrEnqueueAsync(sessionId,
-            TeamImplementPrompts.EscalationResolvedTurn(escalation, label, comment),
+            TeamImplementPrompts.EscalationResolvedTurn(escalation, actionId, label, comment),
             senderPersonaId: null, silent: true, suppressTasksExecute: true,
             staffNote: TeamStaffNotes.EscalationResolved);
         return true;

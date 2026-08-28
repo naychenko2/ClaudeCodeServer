@@ -24,7 +24,7 @@ import {
   ChevronRight, Folder,
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
-  Network, FileText,
+  Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
 import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
@@ -48,10 +48,13 @@ import {
   TextField, TextArea, IconField, Field, FieldLabel,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout,
 } from '../components/ui';
+import { InlineSegmented } from '../components/ui/InlineSegmented';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import { EmptyState } from '../components/EmptyState';
+import { PlanRemarks } from '../features/plan/PlanRemarks';
+import { showToast } from '../lib/toast';
 import type {
   ButtonVariant, ButtonSize,
   IconButtonSize, IconButtonTone, IconButtonVariant,
@@ -3360,96 +3363,14 @@ function VisualPlanSection() {
         </p>
 
         {/* === SubBlock 1: карточка плана (ожидает) === */}
-        {/* Имитация PlanReviewView без контекста проекта и без живой модели.
-            Внешний вид и кнопки совпадают с боевой карточкой (borderLeft на
-            C.plan, тело на C.bgWhite, primary-кнопка «Одобрить и выполнить»),
-            но без зависимости от сигналок и project context. */}
-        <SubBlock label="Карточка плана — статус «ожидает», фиктивный план">
-          <div style={{
-              border: `1px solid ${C.planBorder}`,
-              borderLeft: `4px solid ${C.plan}`,
-              borderRadius: R.xl, padding: '14px 16px',
-              background: C.bgCard, boxShadow: SHADOW.card,
-              display: 'flex', flexDirection: 'column', gap: SP.md,
-            }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-              <span style={{
-                width: 28, height: 28, borderRadius: R.md, background: C.plan,
-                flexShrink: 0, display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-              }}>
-                <ClipboardList size={15} color={C.onAccent} />
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  fontFamily: FONT.serif, fontSize: 15, fontWeight: 700,
-                  color: C.textHeading, lineHeight: 1.2,
-                }}>
-                  План готов
-                </div>
-                <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
-                  Ассистент предлагает план. Файлы пока не изменялись.
-                </div>
-              </div>
-              <span style={{
-                flexShrink: 0, background: C.planLight, color: C.planText,
-                borderRadius: R.sm, padding: '2px 8px',
-                fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
-              }}>
-                v1 · на согласовании
-              </span>
-            </div>
-
-            {/* Переключатель «Текстом / Схемой» — заглушка для визуала. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                padding: '4px 10px', borderRadius: R.pill,
-                background: 'transparent', border: `1px solid ${C.border}`,
-                color: C.textSecondary, fontFamily: FONT.sans, fontSize: FS.sm,
-                fontWeight: 600,
-              }}>
-                <FileText size={12} /> Текстом
-              </span>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                padding: '4px 10px', borderRadius: R.pill,
-                background: C.plan, color: C.onAccent,
-                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
-              }}>
-                <Network size={12} /> Схемой
-              </span>
-              <span style={{
-                padding: '4px 10px', borderRadius: R.md,
-                background: 'transparent', border: `1px solid ${C.border}`,
-                color: C.textSecondary, fontFamily: FONT.sans, fontSize: FS.sm,
-                fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}>
-                <Network size={12} /> Собрать схему
-              </span>
-            </div>
-
-            {/* Тело: белый блок с maxHeight, как у PlanReviewView. */}
-            <div style={{
-              position: 'relative',
-              background: C.bgWhite, border: `1px solid ${C.border}`,
-              borderRadius: R.lg, padding: '10px 12px',
-              maxHeight: 220, overflow: 'auto',
-              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
-            }}>
-              <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
-            </div>
-
-            <Button
-              fullWidth
-              variant="primary"
-              size="md"
-              glow
-              leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
-            >
-              Одобрить и выполнить
-            </Button>
-          </div>
+        {/* Живая копия PlanReviewView без контекста проекта и без бэкенда:
+            переключатель «Текстом/Схемой», кнопка сборки с тремя состояниями,
+            слой замечаний с маркерами у заголовков, кнопки решения с
+            локальной обработкой и сменой акцента при появлении замечаний.
+            Сборка — имитация через setTimeout: успех кладёт VISUAL_PLAN_DEMO_MAP,
+            «имитация отказа» переключает следующий билд в failed. */}
+        <SubBlock label="Карточка плана — статус «ожидает», живой PlanRemarks и сборка">
+          <VisualPlanCardDemo />
         </SubBlock>
 
         {/* === SubBlock 2: разворот схемой на фиктивной карте === */}
@@ -3493,5 +3414,312 @@ function VisualPlanSection() {
         </SubBlock>
       </div>
     </Island>
+  );
+}
+
+// === Демо карточки плана для витрины =====================================
+// Копия PlanReviewView без контекста проекта и без бэкенда. Задача — сделать
+// приёмку фичи через витрину без живого ExitPlanMode: переключатель «Текстом/
+// Схемой», кнопка сборки с тремя состояниями (идёт → готово → не удалось),
+// живой слой замечаний с маркерами у заголовков и счётчиком, кнопки решения
+// с локальной обработкой и сменой акцента при появлении замечаний.
+//
+// Сборка имитируется через setTimeout: успех кладёт VISUAL_PLAN_DEMO_MAP,
+// «имитация отказа» переключает следующий билд в failed — так видны все
+// три состояния.
+function VisualPlanCardDemo() {
+  const planBodyRef = useRef<HTMLDivElement>(null);
+
+  const [schemeView, setSchemeView] = useState<'text' | 'scheme'>('text');
+  const [map, setMap] = useState<PlanMap | null>(null);
+  const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
+  const [schemeError, setSchemeError] = useState<string | null>(null);
+  const [simulateFail, setSimulateFail] = useState(false);
+
+  const [remarksCount, setRemarksCount] = useState(0);
+  const [rejecting, setRejecting] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  async function buildScheme() {
+    if (schemeStatus === 'building') return;
+    setSchemeStatus('building');
+    setSchemeError(null);
+    await new Promise<void>(resolve => window.setTimeout(resolve, 600));
+    if (simulateFail) {
+      setMap(null);
+      setSchemeError('Схему собрать не удалось — план открыт текстом, замечания работают.');
+      setSchemeStatus('failed');
+      return;
+    }
+    setMap(VISUAL_PLAN_DEMO_MAP);
+    setSchemeStatus('ready');
+  }
+
+  function approve() {
+    // Локальный «обработчик» витрины: тост и сброс. Боевой approve живёт
+    // только в PlanReviewView (через onRespond), тут его нет.
+    showToast(
+      remarksCount > 0
+        ? `Одобрено: ${remarksCount} ${remarksCount === 1 ? 'замечание' : remarksCount < 5 ? 'замечания' : 'замечаний'} потеряны`
+        : 'План одобрен',
+      'В бою ушло бы через /api/plans/respond.',
+    );
+    setRejecting(false);
+    setFeedback('');
+  }
+
+  function reject() {
+    // В PlanReviewView здесь был бы textarea; в витрине достаточно тоста,
+    // чтобы приёмщик увидел ветку «есть форма».
+    showToast(
+      feedback.trim() ? `Отправлено: «${feedback.trim().slice(0, 80)}…»` : 'Отклонено без комментария',
+      'В бою ушло бы через /api/plans/respond.',
+    );
+    setRejecting(false);
+    setFeedback('');
+  }
+
+  return (
+    <div style={{
+      border: `1px solid ${C.planBorder}`,
+      borderLeft: `4px solid ${C.plan}`,
+      borderRadius: R.xl, padding: '14px 16px',
+      background: C.bgCard, boxShadow: SHADOW.card,
+      display: 'flex', flexDirection: 'column', gap: SP.md,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <span style={{
+          width: 28, height: 28, borderRadius: R.md, background: C.plan,
+          flexShrink: 0, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          <ClipboardList size={15} color={C.onAccent} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontFamily: FONT.serif, fontSize: 15, fontWeight: 700,
+            color: C.textHeading, lineHeight: 1.2,
+          }}>
+            План готов
+          </div>
+          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+            Ассистент предлагает план. Файлы пока не изменялись.
+          </div>
+        </div>
+        <span style={{
+          flexShrink: 0, background: C.planLight, color: C.planText,
+          borderRadius: R.sm, padding: '2px 8px',
+          fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+        }}>
+          v1 · на согласовании
+        </span>
+      </div>
+
+      {/* Переключатель + кнопка сборки + служебный тоггл «имитировать отказ» */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap',
+      }}>
+        <InlineSegmented
+          value={schemeView}
+          onChange={setSchemeView}
+          options={[
+            { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+              tone: { bg: C.plan, fg: C.onAccent } },
+            { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+              tone: { bg: C.plan, fg: C.onAccent } },
+          ]}
+        />
+        {schemeView === 'scheme' && schemeStatus !== 'ready' && (
+          <Button
+            variant="ghostFilled"
+            size="sm"
+            loading={schemeStatus === 'building'}
+            onClick={buildScheme}
+            leftIcon={schemeStatus === 'building'
+              ? <Loader2 size={12} />
+              : <Network size={12} />}
+          >
+            {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
+          </Button>
+        )}
+        {/* Служебный тоггл — переключает, какой исход вернёт buildScheme:
+            следующий клик «Собрать схему» либо соберёт, либо провалится.
+            Только для приёмки через витрину. */}
+        <label style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          marginLeft: 'auto', cursor: 'pointer',
+          fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans,
+        }}>
+          <input
+            type="checkbox"
+            checked={simulateFail}
+            onChange={e => setSimulateFail(e.target.checked)}
+            style={{ margin: 0 }}
+          />
+          имитация отказа
+        </label>
+      </div>
+
+      {/* Тело карточки: один из вариантов по schemeStatus */}
+      <div style={{ position: 'relative' }}>
+        {schemeView === 'scheme' && schemeStatus === 'ready' && map ? (
+          <div style={{ position: 'relative' }}>
+            <div ref={planBodyRef} style={{
+              background: C.bgWhite, border: `1px solid ${C.border}`,
+              borderRadius: R.lg, padding: '12px 14px',
+              maxHeight: 360, overflow: 'auto',
+              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+            }}>
+              {/* Скрытый исходный markdown — useHeadings берёт заголовки из
+                  реального DOM. Без слоя разворот выродился бы в жанр/фразу/числа. */}
+              <div aria-hidden="true" style={{
+                position: 'absolute', top: 0, left: 0,
+                width: 1, height: 1, opacity: 0,
+                overflow: 'hidden', pointerEvents: 'none',
+              }}>
+                <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+              </div>
+              <PlanScheme
+                map={map}
+                planText={VISUAL_PLAN_DEMO_TEXT}
+                contentRef={planBodyRef}
+              />
+            </div>
+          </div>
+        ) : schemeView === 'scheme' && schemeStatus === 'failed' ? (
+          <div style={{
+            background: C.warningBg, border: `1px solid ${C.border}`,
+            borderRadius: R.lg, padding: '10px 12px',
+            display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+            fontSize: FS.sm, color: C.textHeading, fontFamily: FONT.sans,
+          }}>
+            <AlertCircle size={14} style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                {schemeError || 'Схему собрать не удалось — план открыт текстом, замечания работают.'}
+              </div>
+              <Button variant="ghostFilled" size="xs" onClick={buildScheme} style={{ marginTop: SP.xs }}>
+                Попробовать снова
+              </Button>
+            </div>
+          </div>
+        ) : schemeView === 'scheme' && schemeStatus === 'building' ? (
+          <div style={{
+            background: C.bgInset, border: `1px dashed ${C.border}`,
+            borderRadius: R.lg, padding: '14px', textAlign: 'center',
+            fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}>
+            <Loader2 size={14} style={{ animation: 'cc-spin 1s linear infinite' }} />
+            Собираю схему…
+          </div>
+        ) : (
+          <>
+            <div ref={planBodyRef} style={{
+              background: C.bgWhite, border: `1px solid ${C.border}`,
+              borderRadius: R.lg, padding: '10px 12px',
+              maxHeight: 220, overflow: 'auto',
+              fontSize: FS.md, color: C.textHeading, wordBreak: 'break-word',
+            }}>
+              <MarkdownContent text={VISUAL_PLAN_DEMO_TEXT} />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Слой замечаний — живой. containerToken=schemeView: при переключении
+          «Текстом ↔ Схемой» ref тот же, но контент другой — без явного токена
+          useHeadings не пересоберёт заголовки, и замечания поедут мимо разделов. */}
+      <PlanRemarks
+        contentRef={planBodyRef}
+        planText={VISUAL_PLAN_DEMO_TEXT}
+        containerToken={schemeView}
+        status="pending"
+        onSubmit={text => showToast('Замечания собраны', `Демо: ${text.slice(0, 60)}…`)}
+        onCountChange={setRemarksCount}
+      />
+
+      {/* Кнопки решения — локальные. При наличии замечаний одобрение
+          уходит в ghostFilled с честной подписью про потерю (та же логика,
+          что в боевой карточке: протокол ClaudeSession.RespondPlan при
+          approve=true не передаёт комментарий). */}
+      {rejecting ? (
+        <div>
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs }}>
+            Ассистент учтёт это и предложит новый план
+          </div>
+          <textarea
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            autoFocus
+            placeholder="Что поправить в плане? (необязательно)"
+            rows={3}
+            style={{
+              width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
+              border: `1px solid ${C.border}`, background: C.bgWhite,
+              padding: '8px 10px', fontSize: FS.sm, color: C.textHeading,
+              fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: SP.xs,
+            }}
+          />
+          <div style={{ display: 'flex', gap: SP.xs }}>
+            <Button fullWidth variant="primary" size="md" onClick={reject}>
+              Переработать план
+            </Button>
+            <Button variant="ghostFilled" size="md" onClick={() => { setRejecting(false); setFeedback(''); }}>
+              Назад
+            </Button>
+          </div>
+        </div>
+      ) : remarksCount > 0 ? (
+        <div>
+          <Button
+            fullWidth
+            variant="ghostFilled"
+            size="md"
+            onClick={approve}
+            style={{ color: C.planText, borderColor: C.planBorder }}
+            leftIcon={<Check size={16} color={C.planText} strokeWidth={2.4} />}
+          >
+            Одобрить и выполнить
+          </Button>
+          <div style={{
+            marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted,
+            textAlign: 'center', lineHeight: 1.35,
+          }}>
+            замечания ({remarksCount}) не отправятся
+          </div>
+          <Button
+            variant="ghostAccent"
+            size="md"
+            fullWidth
+            onClick={() => setRejecting(true)}
+            style={{ color: C.planText, borderColor: C.planBorder, marginTop: SP.xs }}
+          >
+            Отклонить
+          </Button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: SP.xs }}>
+          <Button
+            fullWidth
+            variant="primary"
+            size="md"
+            glow
+            onClick={approve}
+            leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
+          >
+            Одобрить и выполнить
+          </Button>
+          <Button
+            variant="ghostAccent"
+            size="md"
+            onClick={() => setRejecting(true)}
+            style={{ color: C.planText, borderColor: C.planBorder }}
+          >
+            Отклонить
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

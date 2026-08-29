@@ -10,6 +10,9 @@ import { api } from './api';
 import { isOnline, OfflineError } from './offline';
 import { outboxAll, outboxGet, outboxPut, outboxDelete } from './idb';
 import type { CreateTaskDto, Task, UpdateTaskDto } from '../types';
+import {
+  ensureNotClosedAtCreate, ensureVerificationOnClose,
+} from './tasks';
 
 export type OutboxKind = 'create' | 'update' | 'delete';
 
@@ -263,7 +266,13 @@ function nowIso(): string {
 }
 
 // Собрать оптимистичную задачу из CreateTaskDto (дефолты — как TaskManager.Create).
+// Перед построением прогоняет EnsureNotClosedAtCreate: дефект в Done отвергается
+// ДО upsert и ДО enqueue — иначе локальная задача появится в сторе, попадёт в outbox,
+// а на дренаже сервер вернёт 4xx, который провалится в handlePermanent как console.warn
+// (taskOutbox.ts:193-200), и пользователь об отказе не узнает.
 export function buildLocalTask(id: string, projectId: string | null, dto: CreateTaskDto, order: number): Task {
+  ensureNotClosedAtCreate({ kind: dto.kind, status: dto.status });
+
   const now = nowIso();
   return {
     id,
@@ -288,10 +297,20 @@ export function buildLocalTask(id: string, projectId: string | null, dto: Create
     order,
     createdAt: now,
     updatedAt: now,
+    // Дефект-поля (типы TaskKind/DefectRepro/etc. пришли в Task из types/index.ts волной 2)
+    kind: dto.kind,
+    repro: dto.repro ?? undefined,
+    verification: dto.verification ?? undefined,
+    outcome: undefined,    // CreateTaskDto не несёт outcome — он появляется через UpdateTaskDto
   };
 }
 
 // Применить UpdateTaskDto к задаче локально (зеркало семантики TaskManager.Update).
+// Перед возвратом прогоняет EnsureVerificationOnClose: дефект нельзя закрывать без
+// Verification (если Outcome != ClosedWithoutCheck) — иначе локальная правка применится,
+// уйдёт в outbox, а на дренаже 4xx провалится в handlePermanent (taskOutbox.ts:193-200)
+// тихим console.warn. Отказ ДО возврата гарантирует, что updateTaskOffline не дойдёт
+// ни до upsert, ни до enqueue.
 export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
   const next: Task = { ...task };
   if (dto.title !== undefined) next.title = dto.title;
@@ -327,6 +346,20 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
   else if (dto.status !== undefined) next.columnId = undefined;
   if (dto.subtasks !== undefined) next.subtasks = dto.subtasks.map(s => ({ id: s.id || crypto.randomUUID(), title: s.title, isDone: s.isDone ?? false }));
 
+  // Дефект-поля: null трактуем как сброс (как linkedSessionId '' для строковых полей).
+  if (dto.kind !== undefined) next.kind = dto.kind;
+  if (dto.repro !== undefined) next.repro = dto.repro ?? undefined;
+  if (dto.verification !== undefined) next.verification = dto.verification ?? undefined;
+  if (dto.outcome !== undefined) next.outcome = dto.outcome ?? undefined;
+
   next.updatedAt = nowIso();
+
+  ensureVerificationOnClose({
+    kind: next.kind,
+    status: next.status,
+    verification: next.verification,
+    outcome: next.outcome,
+  });
+
   return next;
 }

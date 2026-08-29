@@ -10,7 +10,7 @@ import { C, FONT, FS, R, SP, SHADOW, Z } from '../lib/design';
 import { ICON_STROKE } from './ui/icons';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
 import type { LocalToast, ToastAction } from '../lib/toast';
-import { KIND_LABELS } from '../features/notifications/kindMeta';
+import { KIND_LABELS, TOAST_META } from '../features/notifications/kindMeta';
 import { NotificationAvatar, hasPersona, notifPersonaLabel } from '../features/notifications/NotificationAvatar';
 
 interface ToastItem {
@@ -33,10 +33,21 @@ interface ToastItem {
 const AUTO_DISMISS_MS = 8000;
 const MAX_TOASTS = 4;   // на экране одновременно; переполнение вытесняет самый старый
 
-// Надзаголовок «кто · где»: персона → «Роль (Имя) · Проект», система → «Вид · Проект»
+// Надзаголовок «кто · где»: персона → «Роль (Имя) · Проект», система → «Вид · Проект».
+// Локальный тост 'error' использует TOAST_META.label и не показывает аватар персоны.
 function eyebrowText(t: ToastItem): string {
-  const who = hasPersona(t) ? notifPersonaLabel(t) : (KIND_LABELS[t.kind] ?? '');
+  const who = hasPersona(t)
+    ? notifPersonaLabel(t)
+    : (TOAST_META[t.kind]?.label ?? KIND_LABELS[t.kind] ?? '');
   return t.projectName ? (who ? `${who} · ${t.projectName}` : t.projectName) : who;
+}
+
+// Подпись вида для NotificationAvatar: персональный аватар (чаты) либо плитка-индикатор
+// системного вида. 'error' — локальный клиентский отказ, рисуется отдельной danger-плиткой
+// в NotificationAvatar, чтобы визуально отличаться от обычных info-уведомлений.
+function avatarKind(t: ToastItem): string {
+  if (hasPersona(t)) return t.kind;
+  return t.kind;
 }
 
 let nextId = 1;
@@ -100,6 +111,9 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
           t.action.onClick();
           setToasts(prev => prev.filter(x => x.id !== t.id));
         };
+        // 'error' — клиентский отказ (текст сервера в body). Рамка danger, чтобы
+        // оператор не перепутал с обычным info
+        const isError = t.kind === 'error';
         return (
           <div
             key={t.id}
@@ -107,7 +121,8 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
             style={{
               display: 'flex', gap: SP.md, alignItems: 'flex-start',
               padding: '13px 15px', cursor: t.url ? 'pointer' : 'default',
-              background: C.bgCard, border: `1px solid ${C.border}`,
+              background: C.bgCard,
+              border: `1px solid ${isError ? C.dangerBorder : C.border}`,
               borderRadius: R.xl, boxShadow: SHADOW.dropdown,
             }}
           >
@@ -116,7 +131,7 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
                 personaId={t.personaId}
                 personaName={t.personaName}
                 personaColor={t.personaColor}
-                kind={t.kind}
+                kind={avatarKind(t)}
                 size={36}
               />
             </div>
@@ -131,13 +146,16 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
                 </div>
               )}
               <div style={{
-                fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700, color: C.textHeading,
+                fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700,
+                color: isError ? C.danger : C.textHeading,
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               }}>
                 {t.title}
               </div>
               <div style={{
-                fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xxs,
+                fontFamily: FONT.sans, fontSize: FS.sm,
+                color: isError ? C.dangerText : C.textSecondary,
+                marginTop: SP.xxs,
                 overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
               }}>
                 {t.body}

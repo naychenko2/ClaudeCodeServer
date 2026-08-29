@@ -456,6 +456,14 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;      // дата+время завершения (статус стал done); null — не завершена
+  // Тип карточки: обычная задача или дефект (правила DefectRules). У обычных задач — 'task'
+  kind?: TaskKind;
+  // Шаги воспроизведения дефекта (null у обычных задач; для дефекта — всегда присылается)
+  repro?: DefectRepro | null;
+  // Подтверждение проверки (null — не подтверждено). Сбрасывается при уходе из Done
+  verification?: TaskVerification | null;
+  // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
+  outcome?: DefectOutcome | null;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
   // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
@@ -519,7 +527,44 @@ export interface CreateTaskDto {
   linkedFiles?: string[];
   subtasks?: { title: string }[];
   labels?: string[];
+  // Тип карточки: обычная задача или дефект (правила DefectRules на бэке).
+  // Не указано — сервер сохраняет прежний Kind. Repro/Verification имеют смысл
+  // только у дефектов, но бэк их не трогает если они при присылке type=task —
+  // переключение прячет блоки в UI, данные остаются в JSON
+  kind?: TaskKind;
+  // Шаги воспроизведения. Целиком заменяет объект на бэке — форма шлёт все
+  // три поля, иначе пользователь потерял бы expected/actual при правке только steps
+  repro?: DefectRepro | null;
+  // Подтверждение проверки: на бэке PersonaId подставляется из сессии (X-Caller-Session-Id),
+  // клиентский PersonaId не учитывается. null — очистить (снять вердикт)
+  verification?: TaskVerification | null;
 }
+
+// Тип карточки. Defect подчиняется правилам DefectRules на бэке: нельзя закрыть
+// без Verification (или Outcome=closedWithoutCheck), нельзя попасть в колонку Role=review
+// без Repro.steps
+export type TaskKind = 'task' | 'defect';
+
+// Шаги воспроизведения дефекта: steps — обязательное описание, expected/actual —
+// необязательные комментарии автора и наблюдателя
+export interface DefectRepro {
+  steps: string;
+  expected?: string;
+  actual?: string;
+}
+
+// Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
+// владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
+// Поле бэк подставляет из сессии, клиент его НЕ шлёт
+export interface TaskVerification {
+  verifiedAt: string;
+  personaId?: string | null;
+  notes?: string | null;
+}
+
+// Исход дефекта — сейчас только внутренний путь «снято без проверки»
+// (NoteTaskSyncService / TeamWaveService). Прочие исходы придут следующими волнами
+export type DefectOutcome = 'closedWithoutCheck';
 
 // Пустая строка в dueDate/dueTime/linkedSessionId = очистить поле, undefined = не менять
 export interface UpdateTaskDto {
@@ -548,6 +593,15 @@ export interface UpdateTaskDto {
   order?: number;            // порядок карточки на доске (drag); undefined = не менять
   columnId?: string;         // колонка доски проекта; undefined = не менять, '' = сброс на дефолт
   projectId?: string;        // смена проекта: guid = привязать, '' = сделать личной, undefined = не менять
+  // Тип карточки: undefined = не менять, 'defect'/'task' = сменить (см. CreateTaskDto)
+  kind?: TaskKind;
+  // Шаги воспроизведения дефекта. Целиком заменяет объект (как Labels) — форма шлёт
+  // все три поля разом. null — очистить
+  repro?: DefectRepro | null;
+  // Подтверждение проверки: null — очистить (например, при возврате из Done)
+  verification?: TaskVerification | null;
+  // Исход дефекта: только 'closedWithoutCheck' в этой волне. undefined = не менять
+  outcome?: DefectOutcome | null;
 }
 
 // Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)

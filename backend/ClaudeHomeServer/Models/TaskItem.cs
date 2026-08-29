@@ -97,6 +97,22 @@ public class TaskItem
     // double — чтобы вставлять между соседями через midpoint без перенумерации.
     // 0 = не назначен (миграция/сортировка по дефолту); задаётся в Create и при drag.
     public double Order { get; set; }
+    // Вид карточки: обычная задача или дефект. Дефект обязан пройти правила DefectRules
+    // (см. Services/DefectRules.cs): нельзя создать сразу в Done, требуются шаги Repro
+    // на review-колонке и вердикт Verification (или ClosedWithoutCheck) при закрытии.
+    public TaskKind Kind { get; set; } = TaskKind.Task;
+    // Шаги воспроизведения дефекта. Steps обязателен только при попадании в review-колонку
+    // (прочерчено в DefectRules.EnsureReproOnReview). Expected/Actual — свободные поля
+    // постановщика для контекста.
+    public DefectRepro? Repro { get; set; }
+    // Вердикт проверки дефекта. VerifiedAt ставит сервер, PersonaId — из X-Caller-Session-Id
+    // (заголовок подделываем — это гигиена атрибуции, не защита). What/Result присылает клиент.
+    // Сбрасывается при уходе из Done вместе с Outcome.
+    public TaskVerification? Verification { get; set; }
+    // Итоговый исход дефекта. ClosedWithoutCheck — для внутренних путей закрытия (галочка
+    // заметки, снятие волной), которые не оставляют системного Verification. Прочие значения
+    // ставит человек/персона. Сбрасывается при уходе из Done.
+    public DefectOutcome? Outcome { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.

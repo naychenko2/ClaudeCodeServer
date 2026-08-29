@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
-import { C, FONT, R, SHADOW, SP } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { Button, IconButton, Modal, BackButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useNarrowContainer } from '../../hooks/useContainerWidth';
@@ -26,6 +26,7 @@ import {
 import { useContextButton } from '../chatContext/useContextButton';
 import { TaskEditForm } from './TaskEditForm';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
+import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
 
 interface Props {
   task: Task;
@@ -88,7 +89,7 @@ function HeaderChip({ children, urgent }: { children: React.ReactNode; urgent?: 
       padding: '5px 11px', borderRadius: 999,
       border: `1px solid ${urgent ? C.dangerBorder : C.border}`,
       background: urgent ? C.dangerBg : C.bgWhite,
-      fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+      fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
       color: urgent ? C.danger : C.textPrimary, whiteSpace: 'nowrap',
     }}>
       {children}
@@ -127,17 +128,35 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   const color = projectColor(project ? project.id : null);
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
 
-  const setStatus = (status: TaskStatus) => { void updateTask(task.id, { status }); };
+  const setStatus = (status: TaskStatus) => {
+    // Отказ бэка (дефект в Done без Verification, попадание в review без Repro и т.п.)
+    // теперь не глотается молча — тост с серверным текстом, статус не меняется
+    void updateTask(task.id, { status }).catch(e => {
+      showToast('Не удалось изменить статус',
+        e instanceof Error ? e.message : 'Сервер отклонил изменение', 'error');
+    });
+  };
 
   const toggleSubtask = (subtaskId: string) => {
     void updateTask(task.id, {
       subtasks: task.subtasks.map(s => s.id === subtaskId ? { ...s, isDone: !s.isDone } : s),
+    }).catch(e => {
+      showToast('Не удалось изменить подзадачу',
+        e instanceof Error ? e.message : 'Сервер отклонил изменение', 'error');
     });
   };
 
   const handleSave = async (dto: UpdateTaskDto) => {
-    await updateTask(task.id, dto);
-    setEditing(false);
+    try {
+      await updateTask(task.id, dto);
+      setEditing(false);
+    } catch (e) {
+      // На ошибке форма правки остаётся открытой с уже введёнными данными — пользователь
+      // видит тост с серверным текстом и может поправить (например, добавить Verification)
+      showToast('Не удалось сохранить задачу',
+        e instanceof Error ? e.message : 'Сервер отклонил изменение', 'error');
+      throw e;
+    }
   };
 
   const handleDelete = async () => {
@@ -240,44 +259,33 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   );
 
   const executeButton = task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
-    <button
+    <Button
+      variant="primary"
+      size="sm"
+      loading={executing}
       onClick={handleExecute}
-      disabled={executing}
       title="Создать чат и поручить задачу AI"
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-        padding: '0 14px', height: 32, cursor: executing ? 'default' : 'pointer',
-        border: 'none', borderRadius: R.md,
-        background: C.accent, color: C.onAccent,
-        fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-        opacity: executing ? 0.6 : 1,
-      }}
+      style={{ flexShrink: 0 }}
+      leftIcon={(
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+          <polygon points="6 3 20 12 6 21" />
+        </svg>
+      )}
     >
-      {executing
-        ? <span className="tool-spinner" style={{ width: 12, height: 12, flexShrink: 0 }} />
-        : (
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-            <polygon points="6 3 20 12 6 21" />
-          </svg>
-        )}
       {executing ? 'Запуск…' : 'Выполнить с AI'}
-    </button>
+    </Button>
   );
 
   const editButton = (
-    <button
+    <Button
+      variant="ghostFilled"
+      size="sm"
       onClick={() => setEditing(true)}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-        padding: '0 14px', height: 32, cursor: 'pointer',
-        border: `1px solid ${C.border}`, borderRadius: R.md,
-        background: C.bgCard, color: C.textPrimary,
-        fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-      }}
+      style={{ flexShrink: 0 }}
+      leftIcon={<SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
     >
-      <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       Изменить
-    </button>
+    </Button>
   );
 
   const deleteConfirmModal = confirmDelete && (
@@ -327,7 +335,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           borderRadius: R.xl,
           background: active ? C.accent : C.bgWhite,
           color: active ? C.onAccent : C.textPrimary,
-          fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600,
+          fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600,
           boxShadow: active ? SHADOW.button : 'none',
           transition: 'background 0.12s, border-color 0.12s',
         }}
@@ -344,9 +352,9 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {project ? (
           <div style={{
-            width: 22, height: 22, borderRadius: 7, flexShrink: 0,
+            width: 22, height: 22, borderRadius: R.md, flexShrink: 0,
             background: color.soft, color: color.main,
-            fontFamily: FONT.sans, fontSize: 11, fontWeight: 700,
+            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             {projectInitial(project.name)}
@@ -354,7 +362,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         ) : (
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0, marginLeft: 4 }} />
         )}
-        <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textSecondary }}>
+        <span style={{ fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>
           {project ? project.name : NO_PROJECT_LABEL}
         </span>
       </div>
@@ -487,6 +495,70 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
+      {/* Шаги воспроизведения дефекта. Показываем только если kind=defect и есть Repro:
+          переключение дефекта в обычную задачу прячет блок, данные на бэке остаются */}
+      {task.kind === 'defect' && task.repro && (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Шаги воспроизведения</SectionLabel>
+          <div style={{
+            background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+            borderRadius: R.xl, padding: '14px 18px', fontSize: 14,
+          }}>
+            <div style={{ fontFamily: FONT.sans, whiteSpace: 'pre-wrap', color: C.textPrimary, lineHeight: 1.5 }}>
+              {task.repro.steps}
+            </div>
+            {(task.repro.expected || task.repro.actual) && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.borderLight}` }}>
+                {task.repro.expected && (
+                  <div style={{ marginBottom: task.repro.actual ? 10 : 0 }}>
+                    <div style={{
+                      fontFamily: FONT.sans, fontSize: 11, fontWeight: 700,
+                      color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em',
+                      marginBottom: 4,
+                    }}>
+                      Ожидалось
+                    </div>
+                    <div style={{
+                      fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary,
+                      whiteSpace: 'pre-wrap', lineHeight: 1.4,
+                    }}>
+                      {task.repro.expected}
+                    </div>
+                  </div>
+                )}
+                {task.repro.actual && (
+                  <div>
+                    <div style={{
+                      fontFamily: FONT.sans, fontSize: 11, fontWeight: 700,
+                      color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em',
+                      marginBottom: 4,
+                    }}>
+                      Получилось
+                    </div>
+                    <div style={{
+                      fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary,
+                      whiteSpace: 'pre-wrap', lineHeight: 1.4,
+                    }}>
+                      {task.repro.actual}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Вердикт проверки дефекта. Автор — персона (PersonaId != null) либо человек.
+          Без Verification блок скрыт: для закрытого дефекта он обязателен (DefectRules),
+          но пока дефект в работе, вердикт может быть ещё не выставлен */}
+      {task.kind === 'defect' && task.verification && (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Вердикт проверки</SectionLabel>
+          <DefectVerificationBlock task={task} />
+        </div>
+      )}
+
       {/* Метки */}
       {task.labels.length > 0 && (
         <div style={{ marginBottom: 26 }}>
@@ -518,10 +590,10 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
               <MessageCircle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.info} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 700, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {linkedSession?.name || 'Диалог'}
               </div>
-              <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Открыть диалог</div>
+              <div style={{ fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>Открыть диалог</div>
             </div>
             <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
           </button>
@@ -637,6 +709,64 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       </div>
 
       {deleteConfirmModal}
+    </div>
+  );
+}
+
+// Блок «Вердикт проверки» с шапкой автора: персона → аватар + подпись, человек → «Я».
+// Данные вердикта присылает бэк (Verification.PersonaId из сессии проверки), карточка
+// дефекта только показывает. Загружаем персону по id и через personaLabel собираем
+// строку автора
+function DefectVerificationBlock({ task }: { task: Task }) {
+  const verification = task.verification!;
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const personaId = verification.personaId ?? null;
+  const persona = personaId ? getPersonaById(personaId) : null;
+  const authorLabel = persona ? personaLabel(persona) : 'Проверено человеком';
+  const verifiedAtLabel = verification.verifiedAt
+    ? new Date(verification.verifiedAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : '';
+  return (
+    <div style={{
+      background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+      borderRadius: R.xl, padding: '14px 18px',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: verification.notes ? 10 : 0,
+      }}>
+        {persona ? (
+          <TaskPersonaBadge personaId={persona.id} size={20} />
+        ) : (
+          <div style={{
+            width: 20, height: 20, borderRadius: '50%',
+            background: C.bgPanel, border: `1px solid ${C.border}`,
+            color: C.textSecondary, fontSize: FS.xs - 1, fontWeight: 700, fontFamily: FONT.sans,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>я</div>
+        )}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{
+            fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, color: C.textPrimary,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {authorLabel}
+          </div>
+          {verifiedAtLabel && (
+            <div style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>
+              {verifiedAtLabel}
+            </div>
+          )}
+        </div>
+      </div>
+      {verification.notes && (
+        <div style={{
+          fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary,
+          paddingTop: 10, borderTop: `1px solid ${C.borderLight}`,
+          whiteSpace: 'pre-wrap', lineHeight: 1.45,
+        }}>
+          {verification.notes}
+        </div>
+      )}
     </div>
   );
 }

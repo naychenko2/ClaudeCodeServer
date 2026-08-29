@@ -16,8 +16,9 @@ namespace ClaudeHomeServer.Models;
 /// <summary>Файл-заготовка: путь от корня проекта (прямые слэши) и содержимое целиком.</summary>
 public record PresetFile(string Path, string Content);
 
-/// <summary>Колонка Kanban-доски пресета: имя и категория статусов задач в ней.</summary>
-public record PresetColumn(string Name, TaskItemStatus Category);
+/// <summary>Колонка Kanban-доски пресета: имя, категория статусов задач в ней и необязательная
+/// роль (см. BoardColumn.Role — "review" требует у дефектов заполненные шаги воспроизведения).</summary>
+public record PresetColumn(string Name, TaskItemStatus Category, string? Role = null);
 
 /// <summary>
 /// Пресет каркаса. <see cref="Files"/> — только добавление: существующие файлы
@@ -244,7 +245,7 @@ public static class PresetCatalog
             [
                 new PresetColumn("Разобрать", TaskItemStatus.Todo),
                 new PresetColumn("В работе", TaskItemStatus.InProgress),
-                new PresetColumn("На согласовании", TaskItemStatus.InProgress),
+                new PresetColumn("На согласовании", TaskItemStatus.InProgress, Role: "review"),
                 new PresetColumn("Готово", TaskItemStatus.Done),
             ]),
 
@@ -283,7 +284,7 @@ public static class PresetCatalog
             [
                 new PresetColumn("Бэклог", TaskItemStatus.Todo),
                 new PresetColumn("В работе", TaskItemStatus.InProgress),
-                new PresetColumn("Ревью", TaskItemStatus.InProgress),
+                new PresetColumn("Ревью", TaskItemStatus.InProgress, Role: "review"),
                 new PresetColumn("Готово", TaskItemStatus.Done),
             ]),
 

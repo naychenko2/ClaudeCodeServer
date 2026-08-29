@@ -13,16 +13,17 @@ import { ChevronRight } from 'lucide-react';
 import type { BoardColumn as BoardColumnType, Project, Task, TaskAssignee, TaskPriority, UpdateTaskDto } from '../../../types';
 import { C, FONT, R, SHADOW } from '../../../lib/design';
 import {
-  boardCardSort, boardLanes, columnColor, computeOrder, createTask, reloadTasks,
+  boardCardSort, boardLanes, columnColor, computeOrder, createTask, isOpenDefect, reloadTasks,
   taskColumnKey, updateTask, upsertTaskLocal, type BoardGroupBy,
 } from '../../../lib/tasks';
+import { showToast } from '../../../lib/toast';
 import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
 import { OfflineError } from '../../../lib/offline';
 import { useWindowWidth, TABLET_MAX } from '../../../lib/breakpoints';
 import { TaskCard } from '../TaskCard';
 import { BoardCell, ColumnHeader } from './BoardColumn';
-import { BoardToolbar } from './BoardToolbar';
+import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 
 // Геометрия доски: гэп между колонками и зазор справа под бегунок 6px (см. скролл-контейнер
 // ниже). Колонка живёт в диапазоне [COL_MIN, COL_MAX] — конкретная ширина считается от
@@ -51,6 +52,7 @@ export function TaskBoard({
   quickAddProjectId = null, scope = 'hub', inlineToolbar = true, onEditColumns,
 }: Props) {
   const { groupBy, search, priorities, assignee, wip } = useBoardControls();
+  const defectsOnly = useDefectsOnly();
   const [activeId, setActiveId] = useState<string | null>(null);
 
   // В проекте группировка «по проекту» бессмысленна — сбрасываем на «без дорожек»
@@ -74,13 +76,16 @@ export function TaskBoard({
       if (t.virtual) return false;
       if (priorities.length && !priorities.includes(t.priority)) return false;
       if (assignee !== 'all' && t.assignee !== assignee) return false;
+      // «Только дефекты» показывает открытые карточки-дефекты: kind=defect и status≠done.
+      // Закрытые дефекты сюда не попадают — для них есть фильтр по колонке.
+      if (defectsOnly && !isOpenDefect(t)) return false;
       if (q) {
         const hay = `${t.title} ${t.description} ${t.labels.join(' ')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [tasks, search, priorities, assignee]);
+  }, [tasks, search, priorities, assignee, defectsOnly]);
 
   const lanes = useMemo(() => boardLanes(filtered, groupBy, projectsById), [filtered, groupBy, projectsById]);
 
@@ -156,7 +161,15 @@ export function TaskBoard({
 
     // Откат drag только на реальной ошибке. При офлайне (OfflineError / выключенный
     // флаг) не откатываем — иначе карточка отлетает назад; офлайн-путь уже сохранил её.
-    void updateTask(activeTask.id, dto).catch(e => { if (!(e instanceof OfflineError)) void reloadTasks(); });
+    // Для отказа бэка (например, дефект в Done без Verification, попадание в review без
+    // Repro.steps) показываем тост с серверным текстом и перезагружаем стор — это
+    // откатит оптимистичное перемещение и вернёт карточку на место
+    void updateTask(activeTask.id, dto).catch(e => {
+      if (e instanceof OfflineError) return;
+      showToast('Не удалось переместить карточку',
+        e instanceof Error ? e.message : 'Сервер отклонил изменение', 'error');
+      void reloadTasks();
+    });
   };
 
   const grouped = groupBy !== 'none';

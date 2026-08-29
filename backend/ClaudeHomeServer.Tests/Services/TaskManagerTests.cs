@@ -539,4 +539,164 @@ public class TaskManagerTests : IDisposable
         personal.WorktreePath.Should().BeNull();
         personal.WorktreeBranch.Should().BeNull();
     }
+
+    // ─── Карточки дефектов (DefectRules через TaskManager) ────────────────────
+
+    [Fact]
+    public void Create_ДефектСОдниЗаголовком_Создаётся()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+
+        task.Kind.Should().Be(TaskKind.Defect);
+        task.Status.Should().Be(TaskItemStatus.Todo);
+    }
+
+    [Fact]
+    public void Create_ДефектСразуВDone_Отклонена()
+    {
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("баг",
+            Kind: TaskKind.Defect, Status: TaskItemStatus.Done));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*нельзя создавать сразу в Done*");
+    }
+
+    [Fact]
+    public void Create_ДефектВReviewКолонкеБезШагов_Отклонена()
+    {
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect),
+            targetIsReview: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Repro.Steps*");
+    }
+
+    [Fact]
+    public void Create_ДефектВReviewКолонкеСШагами_Проходит()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг",
+            Kind: TaskKind.Defect, Repro: new DefectRepro { Steps = "1. Открыть" }),
+            targetIsReview: true);
+
+        task.Repro!.Steps.Should().Be("1. Открыть");
+    }
+
+    [Fact]
+    public void Create_ОбычнаяЗадачаВReviewБезШагов_НеЗадета()
+    {
+        // Правило EnsureReproOnReview касается только Kind == Defect
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"), targetIsReview: true);
+
+        task.Kind.Should().Be(TaskKind.Task);
+    }
+
+    [Fact]
+    public void Update_ЗакрытиеДефектаБезВердикта_ОтклоненоНаВнешнихПутях()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*заполните Verification*ClosedWithoutCheck*");
+    }
+
+    [Fact]
+    public void Update_ЗакрытиеДефектаСВердиктом_Проходит()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { VerifiedAt = DateTime.UtcNow, Notes = "проверено" }))!;
+
+        updated.Status.Should().Be(TaskItemStatus.Done);
+        updated.Verification.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Update_ЗакрытиеДефектаСClosedWithoutCheck_Проходит()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Outcome: DefectOutcome.ClosedWithoutCheck))!;
+
+        updated.Status.Should().Be(TaskItemStatus.Done);
+        updated.Outcome.Should().Be(DefectOutcome.ClosedWithoutCheck);
+    }
+
+    [Fact]
+    public void Update_ЗакрытиеОбычнойЗадачиБезВердикта_НеЗадета()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Update_УходИзDone_СбрасываетVerificationИOutcome()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Outcome: DefectOutcome.ClosedWithoutCheck));
+
+        var reopened = _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress))!;
+
+        reopened.Verification.Should().BeNull();
+        reopened.Outcome.Should().BeNull();
+    }
+
+    [Fact]
+    public void Update_ПереходВReviewБезШагов_Отклонена()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"),
+            targetIsReview: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Repro.Steps*");
+    }
+
+    [Fact]
+    public void SpawnNext_РегулярныйДефект_ПереноситВид()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("регулярный баг",
+            DueDate: "2026-07-01", Kind: TaskKind.Defect,
+            Repro: new DefectRepro { Steps = "шаги" },
+            Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily }));
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Outcome: DefectOutcome.ClosedWithoutCheck));
+
+        var next = _sut.SpawnNextOccurrence(_sut.GetById(task.Id)!);
+
+        next.Should().NotBeNull();
+        next!.Kind.Should().Be(TaskKind.Defect);
+        next.Repro!.Steps.Should().Be("шаги");
+        // Verification/Outcome — разовый вердикт закрытого экземпляра, не переносится
+        next.Verification.Should().BeNull();
+        next.Outcome.Should().BeNull();
+    }
+
+    // Сторож: TaskItemStatus — ровно три значения (см. также DefectRulesTests, тот же контракт)
+    [Fact]
+    public void TaskItemStatus_РовноТриЗначения()
+    {
+        Enum.GetValues(typeof(TaskItemStatus)).Length.Should().Be(3);
+    }
+
+    // Сторож: инвариант закрытого дефекта — Done ⇒ Verification != null ИЛИ Outcome == ClosedWithoutCheck
+    [Fact]
+    public void ЗакрытыйДефект_БезВердиктаИБезИсхода_НевозможенЧерезUpdate()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        act.Should().Throw<InvalidOperationException>();
+        _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
+    }
 }

@@ -93,8 +93,12 @@ export async function reloadTasks(): Promise<void> {
   emit();
 }
 
-// Регистрируем store-хуки очереди один раз — до любого дренажа.
-configureOutbox({ upsert, remove, reload: reloadTasks });
+// Регистрируем store-хуки очереди лениво — внутри ensureTasksLoaded, а не на
+// верхнем уровне модуля. taskOutbox.ts (волна 2) импортирует правила из нас;
+// верхний вызов configureOutbox создаёт круг загрузки модулей и попадает в TDZ
+// по `let _hooks`. До этого вызова drainTaskOutbox работает no-op (проверяет
+// `!_hooks`), так что порядок безопасный.
+let _outboxConfigured = false;
 
 // Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
 // и последний известный список видны сразу и переживают перезагрузку страницы.
@@ -108,6 +112,10 @@ async function hydrateFromCache(): Promise<void> {
 
 // Первая загрузка (идемпотентно). Вызывается из компонентов задач при монтировании.
 export function ensureTasksLoaded(): Promise<void> {
+  if (!_outboxConfigured) {
+    configureOutbox({ upsert, remove, reload: reloadTasks });
+    _outboxConfigured = true;
+  }
   wireRealtime();
   // Членство в группе подтверждаем на каждый заход (идемпотентно): если какая-то
   // страница ранее вышла из user_{id}, страница задач переподпишется.
@@ -487,6 +495,94 @@ export function reminderLabel(minutes: number): string {
   if (minutes % 1440 === 0) return `За ${minutes / 1440} дн`;
   if (minutes % 60 === 0) return `За ${minutes / 60} ч`;
   return `За ${minutes} мин`;
+}
+
+// === Дефекты (TS-зеркало DefectRules.cs, волна 1) ===
+//
+// Задачи вида Kind == "defect" подчиняются четырём правилам. Все четыре ветки —
+// no-op для обычных Task; бросают DefectRuleError с тем же сообщением, что и бэк
+// (UI показывает его без перевода). Типы (TaskKind / DefectRepro / TaskVerification /
+// DefectOutcome) живут в types/index.ts — бэковый контракт, фронт дефектов их принёс.
+import type {
+  DefectOutcome, DefectRepro, TaskKind, TaskVerification,
+} from '../types';
+
+// Re-export, чтобы фронт дефектов импортировал всё из одного места (lib/tasks),
+// а не из lib/tasks + types/. Дефекто-правила + dто-типы живут рядом.
+export type { TaskKind, DefectOutcome, DefectRepro, TaskVerification };
+
+export const KIND_LABEL: Record<TaskKind, string> = {
+  task: 'Задача',
+  defect: 'Дефект',
+};
+
+export const OUTCOME_LABEL: Record<DefectOutcome, string> = {
+  closedWithoutCheck: 'Снято без проверки',
+};
+
+// Role == "review" у колонки доски — триггер правила «дефект в ревью без шагов = отказ».
+export const REVIEW_COLUMN_ROLE = 'review';
+
+// Отдельный класс ради одной причины: фронт (TaskBoard / DefectForm) ловит его и
+// показывает сообщение без перевода. Прочие throw'ы оптимистичной подготовки — баги.
+export class DefectRuleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DefectRuleError';
+  }
+}
+
+// Предикат открытого дефекта: Kind == "defect" И Status != "done".
+export function isOpenDefect(task: { kind?: TaskKind; status?: TaskStatus }): boolean {
+  return task.kind === 'defect' && task.status !== 'done';
+}
+
+// 1) Отказ при попытке создать дефект сразу в Done (мимо работы наблюдателя).
+export function ensureNotClosedAtCreate(task: { kind?: TaskKind; status?: TaskStatus }): void {
+  if (task.kind !== 'defect') return;
+  if (task.status === 'done') {
+    throw new DefectRuleError(
+      'Дефект нельзя создавать сразу в Done: путь прошёл проверку мимо работы.',
+    );
+  }
+}
+
+// 2) Отказ при переводе дефекта в Done без Verification (если Outcome != ClosedWithoutCheck).
+// Дизъюнкция: Status == Done ⇒ Verification != null ИЛИ Outcome == ClosedWithoutCheck.
+export function ensureVerificationOnClose(task: {
+  kind?: TaskKind;
+  status?: TaskStatus;
+  verification?: TaskVerification | null;
+  outcome?: DefectOutcome | null;
+}): void {
+  if (task.kind !== 'defect') return;
+  if (task.status !== 'done') return;
+  if (task.verification) return;
+  if (task.outcome === 'closedWithoutCheck') return;
+  throw new DefectRuleError(
+    'Дефект нельзя закрывать без Verification: либо заполните Verification, ' +
+    'либо используйте внутренний путь ClosedWithoutCheck.',
+  );
+}
+
+// 3) Отказ при попадании дефекта в колонку с Role == "review" без заполненных Repro.Steps.
+// null targetColumn или другая Role — обычное перемещение, правило не действует.
+export function ensureReproOnReview(
+  task: { kind?: TaskKind; repro?: DefectRepro | null },
+  targetColumn: { role?: string | null } | null | undefined,
+): void {
+  if (task.kind !== 'defect') return;
+  if (!targetColumn) return;
+  if (targetColumn.role !== REVIEW_COLUMN_ROLE) return;
+  if (task.repro?.steps && task.repro.steps.trim().length > 0) return;
+  throw new DefectRuleError(
+    'Дефект попадает в ревью без шагов воспроизведения: заполните Repro.Steps.',
+  );
+}
+
+// 4) Закрытие дефекта внутренним путём — единая точка для будущих ClosedWithoutCheck-исходов.
+export function computeClosedWithoutCheck(): DefectOutcome {
+  return 'closedWithoutCheck';
 }
 
 // === Kanban-доска: порядок карточек, сортировка, дорожки (swimlanes) ===

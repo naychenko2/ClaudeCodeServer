@@ -147,4 +147,30 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
         (await NoteContentAsync(id)).Should().Contain("📅 2026-08-01");
         (await GetTaskAsync(taskId)).GetProperty("dueDate").GetString().Should().Be("2026-08-01");
     }
+
+    // ─── Д-3: обычная задача, закрытая галочкой в заметке, не получает Outcome ─────
+
+    [Fact]
+    public async Task Toggle_ОбычнаяЗадачаИзЧекбокса_НеПолучаетOutcomeИClosedWithoutCheck()
+    {
+        // PromoteAsync создаёт Kind=Task (по умолчанию) — это обычная задача, а не дефект.
+        // Галочка в заметке должна её закрыть (Status=Done), но Outcome должен остаться null:
+        // пометка ClosedWithoutCheck предназначена только для дефектов, иначе обычная задача
+        // получает чужое поле исхода дефекта.
+        var id = await CreateNoteAsync("Дела", "- [ ] Обычная задача из заметки");
+        var line = (await NoteTasksAsync(id))[0].GetProperty("line").GetInt32();
+        var taskId = (await (await _client.PostAsJsonAsync($"{Url(id)}/tasks/promote", new { line }))
+            .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var resp = await _client.PostAsJsonAsync($"{Url(id)}/tasks/toggle", new { line, done = true });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var task = await GetTaskAsync(taskId);
+        task.GetProperty("status").GetString().Should().Be("done");
+        task.GetProperty("kind").GetString().Should().Be("task");
+        // Outcome — поле только дефектов; у обычной задачи должно остаться null
+        task.TryGetProperty("outcome", out var outcome).Should().BeTrue("API отдаёт outcome даже у обычных задач");
+        outcome.ValueKind.Should().Be(JsonValueKind.Null,
+            "обычная задача, закрытая галочкой в заметке, не должна получать Outcome=ClosedWithoutCheck");
+    }
 }

@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карточки дефектов — обе темы, мобильный и десктоп · макет v1</title>
+<style>
+/* ===== Токены (значения из frontend/src/lib/theme.css; семантика — C.* из design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-smoke:#B4A899;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-smoke:#7E7566;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; letter-spacing:-.01em; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg.ic { width:15px; height:15px; flex-shrink:0; }
+svg.ic-xs { width:14px; height:14px; flex-shrink:0; }
+svg.ic-sm { width:13px; height:13px; flex-shrink:0; }
+svg.ic-lg { width:22px; height:22px; flex-shrink:0; }
+svg.ic-xl { width:26px; height:26px; flex-shrink:0; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1180px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:48px 0 4px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+h2.sec:first-of-type { margin-top:8px; }
+h3.sec {
+  margin:24px 0 8px; font-size:14px; font-weight:700; color:var(--c-text-secondary);
+  text-transform:uppercase; letter-spacing:.06em;
+}
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:74ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 8px; }
+.cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+.cols > .col { flex:1; min-width:300px; }
+.stage { margin-bottom:20px; }
+table.spec { border-collapse:collapse; width:100%; font-size:12px; margin-top:8px; }
+table.spec th, table.spec td { border:1px solid var(--c-border-light); padding:6px 10px; text-align:left; vertical-align:top; }
+table.spec th { background:var(--c-bg-inset); color:var(--c-text-heading); font-weight:600; }
+table.spec code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:11px; font-family:"JetBrains Mono",monospace; }
+
+/* ===== Карточка задачи (TaskCard.tsx, паттерн) ===== */
+.tcard {
+  display:flex; gap:10px;
+  background:var(--c-bg-white);
+  border:1px solid var(--c-border-light);
+  border-radius:12px; box-shadow:var(--shadow-card);
+  padding:11px 12px;
+}
+.tcard .strip { width:3px; border-radius:2px; background:#5E8B4E; flex-shrink:0; align-self:stretch; }
+.tcard .body { flex:1; min-width:0; }
+.tcard .row1 { display:flex; align-items:flex-start; gap:7px; }
+.tcard .flag { width:14px; height:14px; margin-top:2px; flex-shrink:0; border-radius:2px; background:var(--c-accent); }
+.tcard .flag.medium { background:var(--c-warning); }
+.tcard .flag.high { background:var(--c-danger); }
+.tcard .bug {
+  margin-top:2px; display:inline-flex; align-items:center;
+  color:var(--c-text-muted); flex-shrink:0;
+}
+.tcard .title {
+  flex:1; min-width:0; font-size:13.5px; font-weight:600; line-height:1.35;
+  color:var(--c-text-primary);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.tcard .assignee {
+  flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
+  width:18px; height:18px; border-radius:50%; background:var(--c-bg-selected);
+  color:var(--c-text-secondary); font-size:9.5px; font-weight:700;
+}
+.tcard .row2 { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.tcard .due {
+  display:inline-flex; align-items:center; gap:5px;
+  font-size:11px; font-weight:600; color:var(--c-text-secondary);
+  padding:2px 7px; border-radius:6px; background:var(--c-bg-selected);
+}
+.tcard .closedwc {
+  display:inline-flex; align-items:center;
+  font-size:11px; font-weight:600;
+  color:var(--c-danger-text); background:var(--c-danger-bg);
+  border:1px solid var(--c-danger-border);
+  padding:2px 7px; border-radius:6px; white-space:nowrap;
+}
+.tcard .label {
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:11px; font-weight:600; color:var(--c-text-secondary);
+  padding:2px 7px; border-radius:6px;
+  background:var(--c-bg-selected);
+}
+
+/* ===== Диалог (Modal.tsx, шторка mobile и центр desktop) ===== */
+.dlg-back {
+  position:relative; background:var(--c-overlay); border-radius:14px; overflow:hidden;
+  display:flex; justify-content:center; padding:18px;
+}
+.dlg {
+  background:var(--c-bg-main); border-radius:20px;
+  box-shadow:var(--shadow-dropdown); display:flex; flex-direction:column;
+  overflow:hidden;
+}
+.dlg-head { padding:26px 28px 0; display:flex; flex-direction:column; gap:5px; }
+.dlg-head h2 { margin:0; font-family:"PT Serif",Georgia,serif; font-weight:500; font-size:22px; color:var(--c-text-heading); letter-spacing:-.01em; line-height:1.25; }
+.dlg-body { padding:18px 28px 20px; display:flex; flex-direction:column; gap:16px; }
+.dlg-foot { flex-shrink:0; padding:14px 28px; border-top:1px solid var(--c-border-light); display:flex; gap:10px; justify-content:flex-end; }
+
+/* ===== Сегмент (SegmentedControl) ===== */
+.seg {
+  display:flex; gap:3px; background:var(--c-bg-selected);
+  border-radius:10px; padding:3px;
+}
+.seg button {
+  flex:1; padding:8px 10px; border:none; cursor:pointer;
+  border-radius:8px; background:transparent;
+  font:inherit; font-size:13px; font-weight:600; color:var(--c-text-secondary);
+}
+.seg button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); }
+
+/* ===== Field (Field.tsx: label + hint + control) ===== */
+.field { display:flex; flex-direction:column; gap:6px; }
+.field label { font-size:11.5px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.06em; }
+.field .hint { font-size:11.5px; color:var(--c-text-muted); margin-top:-2px; line-height:1.4; }
+.field textarea {
+  width:100%; box-sizing:border-box; padding:11px 13px;
+  border:1px solid var(--c-border); border-radius:12px; background:var(--c-bg-white);
+  font:inherit; font-size:13px; color:var(--c-text-primary); line-height:1.5;
+  outline:none; resize:vertical;
+}
+.field .mono-ta { font-family:"JetBrains Mono","Courier New",monospace; font-size:13px; }
+
+/* ===== Кнопки (components/ui/Button) ===== */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
+  border-radius:12px; padding:8px 16px; font-size:13px; border:1px solid transparent;
+}
+.btn.sm { padding:5px 11px; font-size:12px; border-radius:8px; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.primary.glow { box-shadow:var(--shadow-button); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { background:transparent; color:var(--c-text-secondary); border-color:transparent; }
+.btn.ghost:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+
+/* ===== Блок Repro и Verification в деталях ===== */
+.section { margin-bottom:26px; }
+.section .label {
+  font-size:11.5px; font-weight:700; color:var(--c-text-muted);
+  text-transform:uppercase; letter-spacing:.06em; margin-bottom:10px;
+}
+.repro, .verdict {
+  background:var(--c-bg-white); border:1px solid var(--c-border-light);
+  border-radius:12px; padding:14px 18px; font-size:14px;
+}
+.repro .body { font-family:"Hanken Grotesk",sans-serif; white-space:pre-wrap; color:var(--c-text-primary); line-height:1.5; }
+.repro .divider { margin-top:12px; padding-top:12px; border-top:1px solid var(--c-border-light); }
+.repro .sublabel {
+  font-size:11px; font-weight:700; color:var(--c-text-muted);
+  text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px;
+}
+.repro .subbody { font-size:13px; color:var(--c-text-secondary); white-space:pre-wrap; line-height:1.4; }
+.verdict .head { display:flex; align-items:center; gap:10px; }
+.verdict .ava {
+  width:20px; height:20px; border-radius:50%;
+  background:var(--c-bg-panel); border:1px solid var(--c-border);
+  color:var(--c-text-secondary); font-size:10px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.verdict .who { font-size:13px; font-weight:600; color:var(--c-text-primary); }
+.verdict .when { font-size:11.5px; color:var(--c-text-muted); margin-top:1px; }
+.verdict .notes {
+  font-size:13.5px; color:var(--c-text-primary);
+  padding-top:10px; margin-top:10px; border-top:1px solid var(--c-border-light);
+  white-space:pre-wrap; line-height:1.45;
+}
+
+/* ===== Тост отказа (NotificationToasts + cc-local-toast) ===== */
+.toaststack { display:flex; flex-direction:column; gap:10px; max-width:360px; }
+.toast {
+  display:flex; gap:12px; align-items:flex-start;
+  padding:13px 15px;
+  background:var(--c-bg-card); border:1px solid var(--c-danger-border);
+  border-radius:12px; box-shadow:var(--shadow-dropdown);
+}
+.toast .tic {
+  width:36px; height:36px; border-radius:10px; flex-shrink:0;
+  background:var(--c-danger-bg); color:var(--c-danger);
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; font-weight:700;
+}
+.toast .teye {
+  font-size:11px; color:var(--c-text-muted);
+  margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.toast .ttitle {
+  font-size:13px; font-weight:700; color:var(--c-danger);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.toast .tbody {
+  font-size:12px; color:var(--c-danger-text); margin-top:2px;
+  overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+}
+.toast .x {
+  border:none; background:none; cursor:pointer; padding:2px; flex-shrink:0;
+  color:var(--c-text-muted); display:flex; align-items:center;
+}
+
+/* ===== Мобильный фрейм 390px ===== */
+.phones { display:flex; gap:20px; flex-wrap:wrap; }
+.phone {
+  width:390px; border:1px solid var(--c-border); border-radius:28px; overflow:hidden;
+  background:var(--c-bg-main); box-shadow:var(--shadow-card); flex-shrink:0;
+}
+.pbar {
+  height:52px; display:flex; align-items:center; gap:10px; padding:0 16px;
+  border-bottom:1px solid var(--c-border); font-size:14px; font-weight:600; color:var(--c-text-heading);
+}
+.pbody { padding:14px 16px; max-height:480px; overflow:auto; }
+.pbottom {
+  flex-shrink:0; padding:10px 16px;
+  border-top:1px solid var(--c-divider); background:var(--c-bg-main);
+}
+.pseg {
+  display:flex; gap:3px; background:var(--c-bg-selected);
+  border-radius:10px; padding:3px;
+}
+.pseg button {
+  flex:1; padding:9px 4px; border:none; cursor:pointer;
+  border-radius:8px; background:transparent;
+  font:inherit; font-size:12.5px; font-weight:600; color:var(--c-text-secondary);
+}
+.pseg button.on { background:var(--c-accent); color:var(--c-on-accent); }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Карточки дефектов — эталон для волны 3: иконка, плашка, диалог, блоки деталей, тост</h1>
+  <div class="toggle">
+    <button id="tl" class="on" onclick="setTheme('light')">Светлая</button>
+    <button id="td" onclick="setTheme('dark')">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="note">
+  Эталон для UI-ревью карточек дефектов (волна 3, <code>wt/otsenka-vnedreniya-bagtrekinga</code>). Все цвета —
+  существующие токены <code>C.*</code> из <code>design.ts</code> (значения обеих тем — в <code>theme.css</code>):
+  <code>C.textMuted</code> для иконки Bug, <code>C.dangerBg/dangerText/dangerBorder</code> для плашки «Закрыт без
+  проверки», <code>C.bgWhite</code> для карточек на дудл-холсте, <code>C.borderLight</code> для рамок.
+  Сегмент «Задача | Дефект» — <code>ui/SegmentedControl</code>, поля ввода — <code>ui/TextArea</code>,
+  диалог — <code>ui/Modal</code>. Никаких самодельных контролов.
+</p>
+
+<!-- ============================================================ 1 -->
+<h2 class="sec">1. Карточка дефекта в списке (TaskCard.tsx)</h2>
+<p class="note">
+  Иконка Bug (lucide, <code>ICON_SIZE.xs</code>=14) рядом с флагом приоритета. Тон — нейтральный
+  <code>C.textMuted</code>: дефект — не «ошибка» и не «просрочка», это просто тип карточки. Плашка
+  «Закрыт без проверки» появляется, когда дефект закрыт по Outcome=closedWithoutCheck (внутренний путь
+  командной реализации без отдельного Verification). На узком сайдбаре compact-режима нижняя строка
+  чипов схлопывается до одной плашки срока, дефектная метка всё равно выживает.
+</p>
+
+<div class="cols">
+  <div class="col">
+    <p class="cap">Обычный дефект (не закрыт)</p>
+    <div class="tcard">
+      <div class="strip"></div>
+      <div class="body">
+        <div class="row1">
+          <span class="flag high"></span>
+          <span class="bug" title="Дефект" aria-label="Дефект">
+            <svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>
+              <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>
+              <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/>
+              <path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/>
+              <path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/>
+              <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/>
+              <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
+            </svg>
+          </span>
+          <span class="title">Кнопка «Сохранить» не реагирует на первый клик после открытия модалки</span>
+          <span class="assignee">я</span>
+        </div>
+        <div class="row2">
+          <span class="due">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
+            сегодня
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <p class="cap">Закрыт без проверки (Outcome=closedWithoutCheck)</p>
+    <div class="tcard">
+      <div class="strip"></div>
+      <div class="body">
+        <div class="row1">
+          <span class="flag medium"></span>
+          <span class="bug" title="Дефект" aria-label="Дефект">
+            <svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>
+              <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>
+              <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/>
+              <path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/>
+              <path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/>
+              <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/>
+              <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
+            </svg>
+          </span>
+          <span class="title" style="text-decoration:line-through; color:var(--c-text-muted)">Картинка аватара не обновляется после regenerate</span>
+          <span class="assignee" style="background:var(--c-accent-light); color:var(--c-accent)">AI</span>
+        </div>
+        <div class="row2">
+          <span class="closedwc">Закрыт без проверки</span>
+          <span class="due">
+            <svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>
+            вчера
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Иконка Bug</td><td>lucide <code>bug</code>, <code>ICON_SIZE.xs</code>=14, <code>C.textMuted</code>, <code>flex-shrink:0</code>; подсказка «Дефект» на hover</td></tr>
+  <tr><td>Плашка</td><td>«Закрыт без проверки» — <code>C.dangerText</code> на <code>C.dangerBg</code>, рамка 1px <code>C.dangerBorder</code>, R=6, padding 2×7, <code>FS.xs</code>=11, weight 600, whiteSpace nowrap; на мобиле compact переносится во второй ряд благодаря <code>flexWrap:wrap</code></td></tr>
+  <tr><td>Контраст обе темы</td><td>light: text #B4452F на #FBF1EC ≈ 6.7:1, dark: text #EE8A72 на #331F1B ≈ 5.4:1 — оба AA+</td></tr>
+  <tr><td>Состояния</td><td>закрыт (зачёркнутый заголовок + серая полоса), закрыт без проверки (плашка + зачёркнутый заголовок)</td></tr>
+</table>
+
+<!-- ============================================================ 2 -->
+<h2 class="sec">2. Диалог создания с переключателем «Задача | Дефект» (NewTaskDialog.tsx)</h2>
+<p class="note">
+  Сегмент — <code>ui/SegmentedControl</code> в начале формы. По умолчанию «Задача». Переключение на
+  «Дефект» раскрывает три поля воспроизведения (Steps обязателен, Expected/Actual опциональны).
+  Steps шлётся целиком — бэк заменяет объект Repro, частичный апдейт потерял бы соседние поля.
+  Гейт кнопки «Создать» — <code>canCreate</code>: Steps пуст → кнопка заблокирована.
+</p>
+
+<div class="dlg-back">
+  <div class="dlg" style="width:520px">
+    <div class="dlg-head">
+      <h2>Новый дефект</h2>
+    </div>
+    <div class="dlg-body">
+      <div class="seg">
+        <button>Задача</button>
+        <button class="on">Дефект</button>
+      </div>
+      <div class="field">
+        <label>Название</label>
+        <textarea style="min-height:38px; height:38px; padding:9px 13px" placeholder="Что нужно сделать?">Картинка аватара не обновляется после regenerate</textarea>
+      </div>
+      <div class="field">
+        <label>Шаги воспроизведения</label>
+        <div class="hint">Обязательно. Что делали, что увидели. Бэк отвергнет дефект без шагов при попадании в ревью.</div>
+        <textarea class="mono-ta" style="min-height:92px">1. Открыть карточку персоны
+2. Нажать «Обновить аватар»
+3. Видно: аватар не меняется, ошибка 504</textarea>
+      </div>
+      <div class="field">
+        <label>Ожидаемо</label>
+        <div class="hint">Что должно было случиться. Необязательно.</div>
+        <textarea style="min-height:64px" placeholder="Какое поведение считается правильным"></textarea>
+      </div>
+      <div class="field">
+        <label>Фактически</label>
+        <div class="hint">Что случилось вместо этого. Необязательно.</div>
+        <textarea style="min-height:64px" placeholder="Чем наблюдение отличается от ожидаемого">Сервер вернул 504, аватар на UI не обновился</textarea>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary">Отмена</button>
+      <button class="btn secondary">Создать и настроить</button>
+      <button class="btn primary glow">Создать</button>
+    </div>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Сегмент</td><td><code>ui/SegmentedControl</code> с <code>value: TaskKind</code>, options <code>Задача | Дефект</code>; высота под дорожку — стандартная (control 32-36px)</td></tr>
+  <tr><td>Заголовок модалки</td><td>«Новый дефект» / «Новая задача» — переключается по <code>isDefect</code>, <code>FONT.serif</code>, 22px</td></tr>
+  <tr><td>Steps</td><td><code>ui/TextArea</code>, <code>FONT.mono</code> 13px (исходник), <code>autoGrow</code>, minHeight 92 / maxHeight 240</td></tr>
+  <tr><td>Expected/Actual</td><td><code>ui/TextArea</code>, без моноширинного, <code>autoGrow</code>, minHeight 64 / maxHeight 200</td></tr>
+  <tr><td>Гейт кнопки</td><td><code>canCreate = title.trim() && (kind === 'task' || steps.trim())</code> — у дефекта без Steps кнопка disabled</td></tr>
+  <tr><td>Ширина</td><td><code>width=520</code> (вне шкалы MODAL_W.form=440 — допустимо: 3 поля + подсказки не помещаются в 440; рекомендация: добавить токен MODAL_W.defect=520 либо вернуть на 440 и сократить hint)</td></tr>
+</table>
+
+<!-- ============================================================ 3 -->
+<h2 class="sec">3. Блок Repro и Verification в деталях (TaskDetailsPane.tsx)</h2>
+<p class="note">
+  Оба блока — белые карточки с <code>C.borderLight</code>, R=12, padding 14×18. Шаги — pre-wrap,
+  Expected/Actual отбиваются разделителем <code>C.borderLight</code> сверху, каждый со своим
+  uppercase-заголовком. Verification — аватар (персона) или кружок «я» (человек), имя, дата в
+  коротком формате, заметка ниже под разделителем. На мобильной карточке те же блоки, разметка
+  не меняется, текст переносится по словам.
+</p>
+
+<div class="cols">
+  <div class="col">
+    <p class="cap">Repro (steps + expected + actual)</p>
+    <div class="section">
+      <div class="label">Шаги воспроизведения</div>
+      <div class="repro">
+        <div class="body">1. Открыть карточку персоны
+2. Нажать «Обновить аватар»
+3. Видно: аватар не меняется, ошибка 504</div>
+        <div class="divider">
+          <div style="margin-bottom:10px">
+            <div class="sublabel">Ожидалось</div>
+            <div class="subbody">Аватар обновляется без ошибок и задержек &gt; 3 секунд</div>
+          </div>
+          <div>
+            <div class="sublabel">Получилось</div>
+            <div class="subbody">Сервер вернул 504, аватар на UI не обновился. При повторе — то же.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <p class="cap">Verification (от персоны-исполнителя)</p>
+    <div class="section">
+      <div class="label">Вердикт проверки</div>
+      <div class="verdict">
+        <div class="head">
+          <div class="ava" style="background:var(--c-accent-light); color:var(--c-accent)">К</div>
+          <div>
+            <div class="who">QA-инженер (Кира)</div>
+            <div class="when">26 авг, 14:37</div>
+          </div>
+        </div>
+        <div class="notes">Воспроизвела по шагам, после фикса аватар обновляется за &lt; 2 сек. Закрываю дефект.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Контейнер блока</td><td><code>C.bgWhite</code>, 1px <code>C.borderLight</code>, R=12, padding 14×18</td></tr>
+  <tr><td>Шаги</td><td><code>white-space:pre-wrap</code>, <code>C.textPrimary</code>, 14px, line-height 1.5</td></tr>
+  <tr><td>Sublabel</td><td><code>FONT.sans</code> 11px, weight 700, <code>C.textMuted</code>, uppercase, letter-spacing .06em</td></tr>
+  <tr><td>Subbody</td><td><code>FONT.sans</code> 13px, <code>C.textSecondary</code>, line-height 1.4</td></tr>
+  <tr><td>Аватар</td><td><code>PersonaAvatar</code> (круг) для персоны, иначе кружок «я» 20×20, R.full, <code>C.bgPanel</code> фон</td></tr>
+  <tr><td>Мобила</td><td>та же разметка, текст переносится по словам; аватар + текст не помещаются на 360 CSS при очень длинном имени — flex-shrink:1 + ellipsis на имени уже стоит</td></tr>
+</table>
+
+<!-- ============================================================ 4 -->
+<h2 class="sec">4. Тост отказа (NotificationToasts.tsx + cc-local-toast)</h2>
+<p class="note">
+  Шесть точек вызова (<code>TaskBoard</code>, <code>TaskDetailsPane</code>×3 — статус/подзадача/сохранение,
+  <code>TaskHoverCard</code>×2 — статус/подзадача) используют один формат:
+  <code>showToast('Не удалось …', e.message ?? 'Сервер отклонил изменение', 'error')</code>.
+  Контракт: <code>kind='error'</code> → рамка <code>C.dangerBorder</code>, заголовок и текст в
+  <code>C.danger/dangerText</code>. Плитка аватара: для <code>kind='error'</code> нет <code>NotificationKind</code>,
+  поэтому fallback в <code>KIND_META.info</code> и иконка «ℹ» — но цвет danger-рамки и сам заголовок
+  читаются как ошибка. Это единообразно во всех шести точках.
+</p>
+
+<div class="toaststack">
+  <div class="toast">
+    <div class="tic">✕</div>
+    <div style="flex:1; min-width:0">
+      <div class="teye">Ошибка</div>
+      <div class="ttitle">Не удалось изменить статус</div>
+      <div class="tbody">У дефекта должен быть вердикт проверки (DefectRules: закрытие дефекта требует Verification.notes).</div>
+    </div>
+    <button class="x">
+      <svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+    </button>
+  </div>
+  <div class="toast">
+    <div class="tic">✕</div>
+    <div style="flex:1; min-width:0">
+      <div class="teye">Ошибка</div>
+      <div class="ttitle">Не удалось сохранить задачу</div>
+      <div class="tbody">Шаги воспроизведения обязательны для дефекта.</div>
+    </div>
+    <button class="x">
+      <svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+    </button>
+  </div>
+  <div class="toast">
+    <div class="tic">✕</div>
+    <div style="flex:1; min-width:0">
+      <div class="teye">Ошибка</div>
+      <div class="ttitle">Не удалось переместить карточку</div>
+      <div class="tbody">Перенос дефекта в Done требует вердикта проверки.</div>
+    </div>
+    <button class="x">
+      <svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+    </button>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Рамка</td><td><code>isError ? C.dangerBorder : C.border</code></td></tr>
+  <tr><td>Заголовок</td><td><code>isError ? C.danger : C.textHeading</code>, <code>FS.base</code>=13, weight 700</td></tr>
+  <tr><td>Тело</td><td><code>isError ? C.dangerText : C.textSecondary</code>, <code>FS.sm</code>=12, до 2 строк clamp</td></tr>
+  <tr><td>Надзаголовок</td><td>«Ошибка» из <code>TOAST_META.error.label</code> — <code>C.textMuted</code>, <code>FS.xs</code>=11</td></tr>
+  <tr><td>Плитка аватара</td><td><code>avatarKind</code> возвращает <code>'info'</code> для <code>error</code>, поэтому плитка рендерит иконку ℹ; рамка danger компенсирует. Замечание для Киры: расширить <code>NOTIFICATION_KIND</code> значением <code>'error'</code> и добавить иконку ✕ в <code>KIND_META</code>, чтобы плитка показывала свой «знак» ошибки.</td></tr>
+  <tr><td>Шесть точек</td><td>TaskBoard.tsx:165, TaskDetailsPane.tsx:134/143/155, TaskHoverCard.tsx:123/179 — все <code>kind='error'</code>, все «Не удалось …» в заголовке и серверный текст в теле</td></tr>
+</table>
+
+<!-- ============================================================ 5 -->
+<h2 class="sec">5. Мобильная панель деталей (TaskDetailsPane isMobile)</h2>
+<p class="note">
+  Шапка — <code>Toolbar</code> с <code>isMobile</code>: назад + название/мета, действия «Выполнить» и
+  «Изменить» — справа. Статус-сегмент закреплён снизу с учётом <code>safe-area-inset-bottom</code>.
+  Блоки Repro/Verification живут в той же ленте, что и на десктопе, без отдельной мобильной разметки —
+  текст переносится по словам, карточки белые с лёгкой рамкой.
+</p>
+
+<div class="phones">
+  <div class="phone">
+    <div class="pbar">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Картинка аватара не обновляется</span>
+      <span style="font-size:11px; padding:3px 8px; border-radius:999px; background:var(--c-accent); color:var(--c-on-accent)">AI</span>
+    </div>
+    <div class="pbody">
+      <p class="cap">Repro</p>
+      <div class="repro" style="font-size:13px">
+        <div class="body">1. Открыть карточку персоны
+2. Нажать «Обновить аватар»
+3. Видно: 504, аватар не меняется</div>
+        <div class="divider">
+          <div class="sublabel">Ожидалось</div>
+          <div class="subbody">Аватар обновляется без ошибок &lt; 3 сек</div>
+        </div>
+      </div>
+
+      <p class="cap" style="margin-top:16px">Verification</p>
+      <div class="verdict" style="font-size:13px">
+        <div class="head">
+          <div class="ava" style="background:var(--c-accent-light); color:var(--c-accent)">К</div>
+          <div>
+            <div class="who">QA-инженер (Кира)</div>
+            <div class="when">26 авг, 14:37</div>
+          </div>
+        </div>
+        <div class="notes">Воспроизвела по шагам, после фикса аватар обновляется за &lt; 2 сек.</div>
+      </div>
+    </div>
+    <div class="pbottom">
+      <p class="cap" style="margin-bottom:6px">Статус задачи</p>
+      <div class="pseg">
+        <button>К работе</button>
+        <button class="on">В работе</button>
+        <button>Готово</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table class="spec">
+  <tr><th style="width:180px">Свойство</th><th>Значение</th></tr>
+  <tr><td>Шапка</td><td><code>Toolbar isMobile</code>: BackButton + title + действия справа; высота <code>TB.heightMobile=56</code></td></tr>
+  <tr><td>Статус</td><td>закреплён снизу, <code>safe-area-inset-bottom</code> учтён, <code>Z.border</code>=<code>C.divider</code> сверху</td></tr>
+  <tr><td>Repro/Verification</td><td>та же разметка, карточки <code>C.bgWhite</code> с <code>C.borderLight</code>; текст переносится по словам, pre-wrap для Steps</td></tr>
+  <tr><td>Нижний ориентир</td><td>360 CSS — ширина карточки: <code>padding 16px</code> с боков → 328px на контент; карточка Repro с padding 14×18 → 290px — помещается</td></tr>
+</table>
+
+</div>
+
+<script>
+function setTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('tl').classList.toggle('on', t === 'light');
+  document.getElementById('td').classList.toggle('on', t === 'dark');
+}
+</script>
+</body>
+</html>

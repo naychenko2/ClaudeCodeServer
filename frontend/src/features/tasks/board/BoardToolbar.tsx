@@ -1,9 +1,18 @@
 // Тулбар доски: группировка (дорожки), поиск, фильтры приоритета/исполнителя,
 // кнопка настройки колонок. Читает общий стор boardControls. Два layout:
 // 'inline' — горизонтально над сеткой (хаб/мобайл), 'sidebar' — вертикально (десктоп-проект).
+//
+// Фильтр «Только дефекты» (волна 2/3) хранит defectsOnly в localStorage под ключом
+// cc_board_defects_only. Хук `useDefectsOnly` экспортируется для TaskBoard.tsx — там
+// он применяется в `filtered` (оставляем только открытые дефекты через isOpenDefect:
+// kind=defect и status≠done; закрытые дефекты и обычные задачи выпадают).
+// Синхронизация между вкладками — через событие 'storage'. Локальный сторон паттерна
+// useSyncExternalStore: тот же, что у boardControls.
 
-import { SlidersHorizontal } from 'lucide-react';
+import { useSyncExternalStore } from 'react';
+import { Bug, SlidersHorizontal } from 'lucide-react';
 import { C, FONT, R } from '../../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { BOARD_GROUP_LABEL, PRIORITY_COLOR, PRIORITY_LABEL, PRIORITY_ORDER, type BoardGroupBy } from '../../../lib/tasks';
 import {
   useBoardControls, setGroupBy, setSearch, togglePriorityFilter, setAssigneeFilter,
@@ -16,12 +25,55 @@ const LABEL_STYLE = {
   textTransform: 'uppercase' as const, letterSpacing: '0.07em',
 };
 
+// === Стор фильтра «Только дефекты» ===
+// Хранилище — localStorage с ключом cc_board_defects_only (для переживания F5 и для
+// чтения соседним по волне кодом). Подписки на изменения — через window.StorageEvent
+// (изменения из другой вкладки) + внутренние emit() (из этой). SSR-безопасно:
+// useSyncExternalStore с одним snapshotter'ом не падает на сервере — нам и не надо,
+// компонент рендерится только в браузере.
+
+const DEFECTS_KEY = 'cc_board_defects_only';
+function readStorage(): boolean {
+  try { return localStorage.getItem(DEFECTS_KEY) === '1'; } catch { return false; }
+}
+let _defectsOnly = readStorage();
+const _listeners = new Set<() => void>();
+function emit() { _listeners.forEach(fn => fn()); }
+// Изменения из другой вкладки: событие 'storage' уже не стреляет в той же вкладке —
+// здесь дёргаем только внешние изменения
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== DEFECTS_KEY) return;
+    const next = e.newValue === '1';
+    if (next === _defectsOnly) return;
+    _defectsOnly = next;
+    emit();
+  });
+}
+export function setDefectsOnly(b: boolean) {
+  if (b === _defectsOnly) return;
+  _defectsOnly = b;
+  try { localStorage.setItem(DEFECTS_KEY, b ? '1' : '0'); } catch { /* лимиты квоты localStorage — тихо */ }
+  emit();
+}
+// Экспортируем хук для соседнего по волне TaskBoard.tsx — фильтр «Только дефекты»
+// применяется в `filtered` (открытые дефекты по isOpenDefect). Стор — общий синглтон
+// в этом файле, поэтому состояние тулбара и применение в доске всегда согласованы.
+export function useDefectsOnly(): boolean {
+  return useSyncExternalStore(
+    fn => { _listeners.add(fn); return () => { _listeners.delete(fn); }; },
+    () => _defectsOnly,
+    () => _defectsOnly,
+  );
+}
+
 export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
   layout: 'inline' | 'sidebar';
   groupOptions: BoardGroupBy[];
   onEditColumns?: () => void;   // только проектная доска — открыть редактор колонок
 }) {
   const { groupBy, search, priorities, assignee } = useBoardControls();
+  const defectsOnly = useDefectsOnly();
   const sidebar = layout === 'sidebar';
   const isMobile = useIsMobile();
 
@@ -102,6 +154,27 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
     </div>
   );
 
+  // Чип «Только дефекты»: тот же стиль, что у фильтров приоритета, но без точки-маркера —
+  // иконка Bug вместо неё. Семантика «дефект» сразу видна рядом с пометкой активного
+  // состояния; по сути это второй фильтр секции «Приоритет» — кладём рядом в sidebar
+  const defectsChip = (
+    <button
+      onClick={() => setDefectsOnly(!defectsOnly)}
+      title="Показывать только задачи-дефекты (Kind=defect)"
+      aria-pressed={defectsOnly}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', cursor: 'pointer',
+        border: `1px solid ${defectsOnly ? C.accent : C.border}`, borderRadius: 999,
+        background: defectsOnly ? C.bgSelected : C.bgWhite,
+        fontFamily: FONT.sans, fontSize: 12, fontWeight: defectsOnly ? 700 : 500, color: C.textPrimary,
+      }}
+    >
+      <Bug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+        color={defectsOnly ? C.accent : C.textMuted} style={{ flexShrink: 0 }} />
+      Только дефекты
+    </button>
+  );
+
   const columnsBtn = onEditColumns && (
     <button
       onClick={onEditColumns}
@@ -135,14 +208,18 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
           <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Исполнитель</span>
           {assigneeToggle}
         </div>
+        <div>
+          <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Тип</span>
+          {defectsChip}
+        </div>
         {columnsBtn}
       </div>
     );
   }
 
-  // Мобильный inline: поиск (primary) + «Фильтры» (группировка/приоритет/исполнитель/колонки — в боттом-шит).
+  // Мобильный inline: поиск (primary) + «Фильтры» (группировка/приоритет/исполнитель/дефекты/колонки — в боттом-шит).
   if (isMobile) {
-    const activeCount = (priorities.length > 0 ? 1 : 0) + (assignee !== 'all' ? 1 : 0);
+    const activeCount = (priorities.length > 0 ? 1 : 0) + (assignee !== 'all' ? 1 : 0) + (defectsOnly ? 1 : 0);
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{searchInput}</div>
@@ -191,6 +268,10 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
                 ))}
               </div>
             </div>
+            <div>
+              <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Тип</span>
+              {defectsChip}
+            </div>
             {onEditColumns && (
               <button
                 onClick={onEditColumns}
@@ -218,6 +299,7 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
       {searchInput}
       {priorityChips}
       {assigneeToggle}
+      {defectsChip}
       {columnsBtn}
     </div>
   );

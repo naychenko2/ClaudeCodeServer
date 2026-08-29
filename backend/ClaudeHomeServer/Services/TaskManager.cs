@@ -14,6 +14,12 @@ public class TaskManager
     private readonly NotificationService? _notif;
     private readonly PersonaManager? _personas;
 
+    // Заглушка «колонка ревью» для DefectRules.EnsureReproOnReview: контроллер резолвит
+    // лишь признак targetIsReview (по факту, глядя в Project.BoardColumns), а не саму
+    // колонку — DefectRules же принимает BoardColumn?, поэтому воссоздаём минимальный
+    // объект с нужным Role.
+    private static readonly BoardColumn ReviewColumnStub = new() { Role = "review" };
+
     // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
@@ -59,7 +65,8 @@ public class TaskManager
     public IReadOnlyCollection<TaskItem> GetBySourceNote(string noteId) =>
         _tasks.Values.Where(t => t.SourceNoteId == noteId).ToList();
 
-    public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req)
+    public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req,
+        bool targetIsReview = false, BoardColumn? targetColumn = null)
     {
         // Клиентский id (офлайн-создание) с идемпотентностью: повтор POST с тем же id
         // при потерянном ack возвращает существующую задачу — без дубля. Если id занят
@@ -115,12 +122,20 @@ public class TaskManager
             Order = NextOrder(ownerId),
             // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
             CompletedAt = req.Status == TaskItemStatus.Done ? DateTime.UtcNow : null,
+            Kind = req.Kind ?? TaskKind.Task,
+            Repro = req.Repro,
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
         // Инвариант: исполнитель-персона подразумевает исполнение силами Claude
         NormalizePersonaAssignee(task);
         NormalizeWorktree(task);
+        // Дефект: нельзя создать сразу в Done (по статусу или по целевой колонке),
+        // нельзя попасть в review-колонку без шагов воспроизведения (DefectRules; no-op
+        // для обычных задач). Бросает до вставки в словарь — при отказе состояние
+        // менеджера не меняется.
+        DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
+        DefectRules.EnsureReproOnReview(task, targetIsReview ? ReviewColumnStub : null);
         _tasks[task.Id] = task;
         Save();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
@@ -161,7 +176,7 @@ public class TaskManager
     private double NextOrder(string ownerId) =>
         _tasks.Values.Where(t => t.OwnerId == ownerId).Select(t => t.Order).DefaultIfEmpty(0).Max() + 1000;
 
-    public TaskItem? Update(string id, UpdateTaskRequest req)
+    public TaskItem? Update(string id, UpdateTaskRequest req, bool? targetIsReview = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
@@ -169,6 +184,21 @@ public class TaskManager
 
         // Запоминаем статус до правки — для фиксации момента завершения (CompletedAt)
         var wasDone = task.Status == TaskItemStatus.Done;
+
+        // Дефект: отказ вычисляется ДО первой мутации — этот метод правит хранимый объект
+        // по ссылке, а не копию, поэтому эффективное состояние (что БУДЕТ после применения
+        // req) собираем заранее и проверяем DefectRules на нём, не трогая task. Бросает
+        // InvalidOperationException — вызывающая сторона (контроллер) превращает её в 400.
+        var effective = new TaskItem
+        {
+            Kind = req.Kind ?? task.Kind,
+            Status = req.Status ?? task.Status,
+            Repro = req.Repro ?? task.Repro,
+            Verification = req.Verification ?? task.Verification,
+            Outcome = req.Outcome ?? task.Outcome,
+        };
+        DefectRules.EnsureVerificationOnClose(effective);
+        DefectRules.EnsureReproOnReview(effective, targetIsReview == true ? ReviewColumnStub : null);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -220,11 +250,24 @@ public class TaskManager
                 Title = s.Title,
                 IsDone = s.IsDone,
             }).ToList();
+        // Дефект: вид карточки, шаги воспроизведения и вердикт проверки — null = не менять,
+        // объект = задать целиком (частичного обновления Repro/Verification нет: клиент
+        // шлёт все поля разом, как и Labels/Subtasks)
+        if (req.Kind is not null) task.Kind = req.Kind.Value;
+        if (req.Repro is not null) task.Repro = req.Repro;
+        if (req.Verification is not null) task.Verification = req.Verification;
+        if (req.Outcome is not null) task.Outcome = req.Outcome;
 
         // Завершение/переоткрытие: фиксируем дату+время перехода в Done.
         // Первый переход в Done → CompletedAt = сейчас; уход из Done → сброс.
         if (task.Status == TaskItemStatus.Done && !wasDone) task.CompletedAt = DateTime.UtcNow;
         else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
+        // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
+        if (task.Status != TaskItemStatus.Done)
+        {
+            task.Verification = null;
+            task.Outcome = null;
+        }
 
         // Смена проекта задачи (после блока columnId — колонки старого проекта
         // в новом невалидны, сбрасываем). "" = личная, guid = проект.
@@ -291,6 +334,11 @@ public class TaskManager
             Subtasks = completed.Subtasks.Select(s => new TaskSubtask { Title = s.Title }).ToList(),
             Labels = [.. completed.Labels],
             Order = NextOrder(completed.OwnerId ?? ""),
+            // Вид карточки и шаги воспроизведения — устойчивый атрибут серии (как Title):
+            // регулярный дефект остаётся дефектом. Verification/Outcome НЕ переносим —
+            // это разовый вердикт закрытого экземпляра, новый начинается заново
+            Kind = completed.Kind,
+            Repro = completed.Repro,
         };
         _tasks[task.Id] = task;
         Save();
@@ -503,7 +551,12 @@ public record CreateTaskRequest(
     // Дерево для чата-исполнителя (см. TaskItem.WorktreePath): путь СУЩЕСТВУЮЩЕГО worktree
     // проекта и его ветка. У личной задачи игнорируются.
     string? WorktreePath = null,
-    string? WorktreeBranch = null);
+    string? WorktreeBranch = null,
+    // Вид карточки: обычная задача или дефект (правила DefectRules); не передано — Task.
+    TaskKind? Kind = null,
+    // Шаги воспроизведения дефекта (DefectRules.EnsureReproOnReview требует Repro.Steps
+    // при попадании в review-колонку); у обычной задачи игнорируется.
+    DefectRepro? Repro = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -539,6 +592,17 @@ public record UpdateTaskRequest(
     string? ModelTier = null,
     // Дерево чата-исполнителя (см. TaskItem.WorktreePath): null = не менять, "" = сбросить
     string? WorktreePath = null,
-    string? WorktreeBranch = null);
+    string? WorktreeBranch = null,
+    // Вид карточки: null = не менять, значение = сменить (dефект ⇄ задача)
+    TaskKind? Kind = null,
+    // Шаги воспроизведения дефекта: null = не менять, объект = задать целиком
+    // (частичного обновления нет — как у Labels/Subtasks)
+    DefectRepro? Repro = null,
+    // Вердикт проверки: null = не менять. Клиент шлёт только Notes — VerifiedAt/PersonaId
+    // подставляет контроллер из сессии вызова (X-Caller-Session-Id) перед вызовом TaskManager
+    TaskVerification? Verification = null,
+    // Исход дефекта: null = не менять. Единственное значение этой волны — ClosedWithoutCheck
+    // (внутренние пути закрытия без отдельной проверки)
+    DefectOutcome? Outcome = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

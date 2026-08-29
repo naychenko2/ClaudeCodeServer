@@ -350,9 +350,12 @@ public class TeamWaveService
     {
         var task = _tasks.GetById(taskId);
         if (task is null) return;
+        // Деградация дефекта: снятие волной штаба закрывает карточку без отдельной проверки —
+        // Outcome=ClosedWithoutCheck снимает гейт DefectRules.EnsureVerificationOnClose
         var updated = _tasks.Update(taskId, new UpdateTaskRequest(
             Status: TaskItemStatus.Done,
-            ResultMarkdown: reason));
+            ResultMarkdown: reason,
+            Outcome: DefectOutcome.ClosedWithoutCheck));
         if (updated is null) return;
         if (updated.OwnerId is { } ownerId) await _hub.BroadcastTaskChangedAsync(ownerId, "updated", updated);
     }

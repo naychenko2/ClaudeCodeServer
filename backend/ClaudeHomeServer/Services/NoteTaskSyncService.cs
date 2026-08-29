@@ -142,7 +142,12 @@ public sealed class NoteTaskSyncService(
         if (task.Status == newStatus) return;
 
         var wasDone = task.Status == TaskItemStatus.Done;
-        var updated = tasks.Update(task.Id, new UpdateTaskRequest(Status: newStatus));
+        // Деградация дефекта: галочка заметки закрывает карточку без отдельной проверки —
+        // Outcome=ClosedWithoutCheck снимает гейт DefectRules.EnsureVerificationOnClose
+        // (обычную задачу поле не касается — DefectRules для неё no-op)
+        var updated = tasks.Update(task.Id, new UpdateTaskRequest(
+            Status: newStatus,
+            Outcome: done ? DefectOutcome.ClosedWithoutCheck : null));
         if (updated is null) return;
         await hub.BroadcastTaskChangedAsync(userId, "updated", updated);
 

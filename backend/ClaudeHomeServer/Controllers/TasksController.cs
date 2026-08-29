@@ -47,6 +47,7 @@ public class ProjectTasksController(
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
+        var targetIsReview = BoardColumnHelper.IsReview(project, req.ColumnId);
 
         // Персона-исполнитель: своя и в правильном проекте (или есть ProjectTasks-привязка)
         if (!string.IsNullOrEmpty(req.PersonaId))
@@ -66,7 +67,15 @@ public class ProjectTasksController(
                 return BadRequest(new { error = creatorError });
         }
 
-        var task = tasks.Create(projectId, UserId, req);
+        TaskItem task;
+        try
+        {
+            task = tasks.Create(projectId, UserId, req, targetIsReview);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
         return Ok(task);
     }
@@ -79,7 +88,7 @@ public class ProjectTasksController(
 public class TasksController(
     TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync,
-    PersonaBindingsService bindings) : ControllerBase
+    PersonaBindingsService bindings, SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -191,7 +200,16 @@ public class TasksController(
             && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, taskProjectId: null) is { } creatorError)
             return BadRequest(new { error = creatorError });
 
-        var task = tasks.Create(null, UserId, req);
+        TaskItem task;
+        try
+        {
+            // Личная задача — колонок проекта нет, ревью-гейт всегда неактивен
+            task = tasks.Create(null, UserId, req);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
         return Ok(task);
     }
@@ -260,9 +278,11 @@ public class TasksController(
 
         // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски).
         // Категорию берём по целевому проекту — колонка актуальна для него, а не для прежнего.
-        var cat = BoardColumnHelper.Category(
-            targetProjectId is null ? null : projects.GetById(targetProjectId), req.ColumnId);
+        var targetProject = targetProjectId is null ? null : projects.GetById(targetProjectId);
+        var cat = BoardColumnHelper.Category(targetProject, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
+        // Дефект: карточка попадает в review-колонку → нужны шаги воспроизведения (гейт — TaskManager/DefectRules)
+        var targetIsReview = BoardColumnHelper.IsReview(targetProject, req.ColumnId);
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
         // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
@@ -275,8 +295,35 @@ public class TasksController(
                 return BadRequest(new { error = personaError });
         }
 
+        // Вердикт проверки дефекта: автора и время подставляет сервер из сессии вызова
+        // (X-Caller-Session-Id) — клиентские значения игнорируются, это гигиена атрибуции,
+        // не защита. null-сессия/персона → проверка человеком (TaskVerification.PersonaId == null)
+        if (req.Verification is not null)
+        {
+            var callerSessionId = Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+            var callerPersonaId = callerSessionId is not null ? sessions.GetById(callerSessionId)?.PersonaId : null;
+            req = req with
+            {
+                Verification = new TaskVerification
+                {
+                    Notes = req.Verification.Notes,
+                    VerifiedAt = DateTime.UtcNow,
+                    PersonaId = callerPersonaId,
+                },
+            };
+        }
+
         var wasDone = task.Status == TaskItemStatus.Done;
-        var updated = tasks.Update(taskId, req)!;
+        TaskItem updated;
+        try
+        {
+            updated = tasks.Update(taskId, req, targetIsReview)
+                ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
         await hub.BroadcastTaskChangedAsync(UserId, "updated", updated);
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
@@ -377,6 +424,16 @@ public static class BoardColumnHelper
         var custom = project?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
         if (custom is not null) return custom.Category;
         return Enum.TryParse<TaskItemStatus>(columnId, ignoreCase: true, out var cat) ? cat : null;
+    }
+
+    // Признак «карточка попадает в колонку ревью» (BoardColumn.Role == "review") для
+    // DefectRules.EnsureReproOnReview. Только кастомные колонки проекта могут иметь Role —
+    // дефолтные (todo/inProgress/done) им не бывают.
+    public static bool IsReview(Project? project, string? columnId)
+    {
+        if (string.IsNullOrEmpty(columnId)) return false;
+        var custom = project?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
+        return custom?.Role == "review";
     }
 }
 

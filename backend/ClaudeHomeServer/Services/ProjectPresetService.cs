@@ -120,7 +120,7 @@ public sealed class ProjectPresetService(FileService files, DocsIndexService doc
         else
         {
             projects.UpdateBoardColumns(project.Id,
-                [.. preset.BoardColumns.Select(c => new BoardColumn { Name = c.Name, Category = c.Category })]);
+                [.. preset.BoardColumns.Select(c => new BoardColumn { Name = c.Name, Category = c.Category, Role = c.Role })]);
             created.Add("Доска задач");
         }
 

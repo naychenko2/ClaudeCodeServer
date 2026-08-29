@@ -677,7 +677,10 @@ builder.Services.AddQuietHttpClient(
         Consequence: "Поиск по каталогу MCP-серверов недоступен — добавить сервер можно вручную."))
     .ConfigureHttpClient(c =>
     {
-        c.Timeout = TimeSpan.FromSeconds(5);
+        // Реестр публичный, но из РФ ходим через egress-прокси — общий таймаут включает
+        // DNS+коннект+тело, и 5 с не хватает в дневной нагрузке. 15 с — запас с одной
+        // попытки; повтор — отдельный шаг (rate-limit на поиск + кэш страницы).
+        c.Timeout = TimeSpan.FromSeconds(15);
         // Реестр публичный и маленький, но доверять его размеру не обязаны: бьём oversized-ответ
         c.MaxResponseContentBufferSize = 2 * 1024 * 1024;
     });

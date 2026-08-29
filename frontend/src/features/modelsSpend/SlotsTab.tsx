@@ -36,6 +36,7 @@ interface SlotsTabProps {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   savingScope: 'global' | 'owner' | 'user' | null;
   // Контекст активной записи на стороне модалки — для user-scope сверяемся с contextUserId,
   // иначе чужой user-слой блокирует правку слотов.
@@ -52,7 +53,7 @@ interface SlotsTabProps {
 }
 
 export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, models,
-  tierModels, ollamaModel, savingScope, onSaveLayer, meUserId,
+  tierModels, ollamaModel, ollamaProvider, savingScope, onSaveLayer, meUserId,
   pendingDraft, onPendingDraftConsumed }: SlotsTabProps) {
   const presets = usePresets();
   const { selectedTiers, globalTiers, globalSettings, setGlobalSettings, setOwnTiers, setUserTiers } = data;
@@ -281,6 +282,7 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, models
             models={models}
             tierModels={tierModels}
             ollamaModel={ollamaModel}
+            ollamaProvider={ollamaProvider}
             savingScope={savingScope}
             isAdmin={isAdmin}
             contextUserId={contextUserId}
@@ -375,6 +377,7 @@ interface SlotCardProps {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
   contextUserId: string | null;
@@ -391,13 +394,13 @@ interface SlotCardProps {
 }
 
 function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, totalActions,
-  presets, models, tierModels, ollamaModel, savingScope, isAdmin, contextUserId,
+  presets, models, tierModels, ollamaModel, ollamaProvider, savingScope, isAdmin, contextUserId,
   onSaveLayer, onToggle, onPickRoute, onDirtyChange }: SlotCardProps) {
   const presetId = presetIdOf(model);
   const scoped = presetId ? presets.find(p => p.id.toLowerCase() === presetId.toLowerCase()) ?? null : null;
   const preset = scoped;
   const broken = presetId !== null && !preset;
-  const labelCtx = { tierModels, ollamaModel };
+  const labelCtx = { tierModels, ollamaModel, ollamaProvider };
 
   // Подпись чипа слота: пресет — имя + сводка шагов, битая ссылка — честная пометка,
   // модель — имя + провайдер, пустой — наследование общей / «решает CLI»
@@ -497,6 +500,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
+            ollamaProvider={ollamaProvider}
           savingScope={savingScope}
           isAdmin={isAdmin}
           contextUserId={contextUserId}
@@ -510,7 +514,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
 }
 
 // === Редактор цепочки внутри слота ===
-function ChainEditor({ tier: t, model, preset, broken, presets, models, tierModels, ollamaModel,
+function ChainEditor({ tier: t, model, preset, broken, presets, models, tierModels, ollamaModel, ollamaProvider,
   savingScope, isAdmin, contextUserId, onSaveLayer, onPickRoute, onDirtyChange }: {
   tier: TierKey;
   model: string;
@@ -520,6 +524,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
   contextUserId: string | null;
@@ -618,6 +623,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
               models={models}
               tierModels={tierModels}
               ollamaModel={ollamaModel}
+            ollamaProvider={ollamaProvider}
               readOnly={!canSavePreset}
               busy={savingScope === preset.scope}
             />
@@ -653,6 +659,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
+            ollamaProvider={ollamaProvider}
           showPresets
           // Пресеты после ADR-012 живут только в общем слое — и список выбора, и слой
           // inline-созданной цепочки всегда 'global'. Прежний `undefined` у не-админа

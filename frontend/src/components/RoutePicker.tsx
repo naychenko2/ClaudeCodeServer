@@ -6,6 +6,7 @@ import { QuickOptionCard } from './QuickOptionCard';
 import { PresetOptions } from './PresetOptions';
 import { Button } from './ui';
 import { TIERS, TIER_ORDER, routeTier, tierSubtitle, type TierKey } from '../lib/modelProvidersShared';
+import { localEngineLabel } from '../lib/localEngine';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { usePresets, presetIdOf } from '../lib/presets';
 import {
@@ -27,7 +28,7 @@ const PANEL_MAX_H = 340;
 // уровня нельзя выбрать уровень (тавтология), в шаге цепочки — пресет (вложенность).
 // Два вида триггера: обычная кнопка-строка и мини-карточка (макет специальностей).
 export function RoutePicker({
-  route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
+  route, label, models, tierModels, ollamaModel, ollamaProvider, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle, title,
   showTiers = true, showPresets = false, presetCreation, presetScope, manual,
   fullWidth = false, dashed = false,
@@ -37,6 +38,7 @@ export function RoutePicker({
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   allowLocal?: boolean;
   busy?: boolean;
   readOnly?: boolean;
@@ -200,13 +202,13 @@ export function RoutePicker({
       {!presetEditing && allowLocal && (
         <QuickOptionCard
           title="Локальная модель"
-          subtitle={ollamaModel ? `Ollama · ${ollamaModel}` : 'не настроена'}
+          subtitle={ollamaModel ? `${localEngineLabel(ollamaProvider)} · ${ollamaModel}` : 'не настроена'}
           active={route === 'local'}
           onClick={() => pick('local')}
         />
       )}
       {showPresets && (
-        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }} scope={presetScope}
+        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel, ollamaProvider }} scope={presetScope}
           creation={presetCreation ? { models, ...presetCreation } : undefined}
           onEditingChange={setPresetEditing}
         />

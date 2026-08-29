@@ -1,5 +1,3 @@
-using ClaudeHomeServer.Services;
-
 namespace ClaudeHomeServer.Services.Llm;
 
 // Пресеты автоподбора исполнителя фоновых действий. Массово проставляют маршруты всех действий
@@ -31,7 +29,7 @@ namespace ClaudeHomeServer.Services.Llm;
 public enum ActionPreset { Recommended, FreeOnly, LocalFirst, Balanced, Tiers, TiersLocal }
 
 public sealed class LocalActionPresetService(
-    LocalActionOverridesStore store, LocalActionRouter router, OllamaClient ollama,
+    LocalActionOverridesStore store, LocalActionRouter router, ILocalLlmClient ollama,
     ModelCatalogService models, IConfiguration config,
     ILogger<LocalActionPresetService> log)
 {

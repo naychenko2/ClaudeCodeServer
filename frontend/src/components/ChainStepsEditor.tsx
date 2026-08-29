@@ -11,20 +11,21 @@ import type { ModelOption } from '../lib/models';
 // добавления. Один визуальный язык для двух мест правки цепочки — слота («Модели
 // по умолчанию», SlotsTab.ChainEditor) и inline-сборки нового пресета (PresetOptions).
 // Пресет в пресет не вкладывается — шаги здесь всегда без showPresets у RoutePicker.
-export function ChainStepsEditor({ steps, onChange, models, tierModels, ollamaModel,
+export function ChainStepsEditor({ steps, onChange, models, tierModels, ollamaModel, ollamaProvider,
   readOnly = false, busy = false, maxSteps = 5, addLabel }: {
   steps: string[];
   onChange: (steps: string[]) => void;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   readOnly?: boolean;
   busy?: boolean;
   maxSteps?: number;
   // Подпись кнопки добавления первого шага (пустая цепочка); по умолчанию — общая
   addLabel?: string;
 }) {
-  const labelCtx = { tierModels, ollamaModel };
+  const labelCtx = { tierModels, ollamaModel, ollamaProvider };
 
   const moveStep = (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -51,6 +52,7 @@ export function ChainStepsEditor({ steps, onChange, models, tierModels, ollamaMo
                   models={models}
                   tierModels={tierModels}
                   ollamaModel={ollamaModel}
+                  ollamaProvider={ollamaProvider}
                   allowLocal
                   readOnly={readOnly}
                   busy={busy}

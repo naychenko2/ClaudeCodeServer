@@ -29,7 +29,7 @@ type ChainScope = 'global';
 type CreateDraft = { name: string; scope: ChainScope; steps: string[] };
 
 export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
-  onReloadSettings, models, tierModels, ollamaModel }: {
+  onReloadSettings, models, tierModels, ollamaModel, ollamaProvider }: {
   isAdmin: boolean;
   // Выбранный в модалке пользователь. Для цепочек больше не значим (слой один общий) —
   // проп остался ради единой сигнатуры вкладок модалки.
@@ -44,6 +44,7 @@ export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
 }) {
   void contextUserId;
   const presets = usePresets();
@@ -184,6 +185,7 @@ export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
               models={models}
               tierModels={tierModels}
               ollamaModel={ollamaModel}
+              ollamaProvider={ollamaProvider}
               savingScope={savingScope}
               onToggleExpand={() => setExpanded(s => ({ ...s, [p.id]: !s[p.id] }))}
               onRename={() => setRenaming({ id: p.id, name: p.name })}
@@ -206,6 +208,7 @@ export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
+              ollamaProvider={ollamaProvider}
           onChange={setCreating}
           onCancel={() => setCreating(null)}
           onSubmit={() => handleCreate(creating)}
@@ -317,7 +320,7 @@ const hintStyle: CSSProperties = {
 
 // === Карточка одной цепочки (B1, B2, C2, C4) ===
 function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models, tierModels,
-  ollamaModel, savingScope, onToggleExpand, onRename, onDelete, onSaveSteps }: {
+  ollamaModel, ollamaProvider, savingScope, onToggleExpand, onRename, onDelete, onSaveSteps }: {
   preset: ScopedPreset;
   isAdmin: boolean;
   expanded: boolean;
@@ -327,6 +330,7 @@ function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models,
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   savingScope: 'global' | 'owner' | 'user' | null;
   onToggleExpand: () => void;
   onRename: () => void;
@@ -389,7 +393,8 @@ function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models,
 
       {!expanded && (
         <CompactStepPreview steps={preset.steps} dim={dim} budget={budget}
-          models={models} tierModels={tierModels} ollamaModel={ollamaModel} />
+          models={models} tierModels={tierModels} ollamaModel={ollamaModel}
+          ollamaProvider={ollamaProvider} />
       )}
 
       {expanded && canEditSteps && (
@@ -399,6 +404,7 @@ function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models,
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
+          ollamaProvider={ollamaProvider}
           busy={busy}
           maxSteps={HARD_MAX_STEPS}
         />
@@ -450,13 +456,14 @@ function ChainCard({ preset, isAdmin, expanded, dim, morgueStep, budget, models,
 }
 
 // === Свёрнутая сводка шагов: показывает все шаги, но за пределами бюджета — приглушённые ===
-function CompactStepPreview({ steps, dim, budget, models, tierModels, ollamaModel }: {
+function CompactStepPreview({ steps, dim, budget, models, tierModels, ollamaModel, ollamaProvider }: {
   steps: string[];
   dim: boolean[];
   budget: number;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
 }) {
   void models; void budget;
   return (
@@ -470,7 +477,7 @@ function CompactStepPreview({ steps, dim, budget, models, tierModels, ollamaMode
               opacity: isDim ? 0.6 : 1, fontStyle: isDim ? 'italic' : 'normal',
             }}>
               <span style={{ color: C.textMuted, marginRight: 4 }}>{i + 1}</span>
-              {stepInlineLabel(s, { tierModels, ollamaModel })}
+              {stepInlineLabel(s, { tierModels, ollamaModel, ollamaProvider })}
             </span>
             {i < steps.length - 1 && (
               <span style={{ color: isDim || dim[i + 1] ? C.textMuted : C.accent, opacity: isDim ? 0.6 : 1 }}>→</span>
@@ -482,7 +489,7 @@ function CompactStepPreview({ steps, dim, budget, models, tierModels, ollamaMode
   );
 }
 
-function stepInlineLabel(step: string, ctx: { tierModels: Record<TierKey, string>; ollamaModel?: string }): string {
+function stepInlineLabel(step: string, ctx: { tierModels: Record<TierKey, string>; ollamaModel?: string; ollamaProvider?: string }): string {
   // Короткая подпись для сводки: уровень — «Средняя»; модель — displayName или короткий id.
   // Достаточно для визуального отличия шагов в свёрнутом виде — полная подпись под ярлыком RoutePicker'а при раскрытии.
   const s = step.trim();
@@ -511,12 +518,13 @@ function ScopeBadge() {
 }
 
 // === Диалог создания цепочки (B1) ===
-function CreateChainDialog({ draft, models, tierModels, ollamaModel, onChange,
+function CreateChainDialog({ draft, models, tierModels, ollamaModel, ollamaProvider, onChange,
   onCancel, onSubmit, busy }: {
   draft: CreateDraft;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   onChange: (next: CreateDraft) => void;
   onCancel: () => void;
   onSubmit: () => void;
@@ -544,6 +552,7 @@ function CreateChainDialog({ draft, models, tierModels, ollamaModel, onChange,
             models={models}
             tierModels={tierModels}
             ollamaModel={ollamaModel}
+              ollamaProvider={ollamaProvider}
             busy={busy}
             maxSteps={HARD_MAX_STEPS}
             addLabel="Добавьте первый шаг →"

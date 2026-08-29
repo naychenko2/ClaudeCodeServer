@@ -146,6 +146,7 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
           models={creation.models}
           tierModels={ctx.tierModels}
           ollamaModel={ctx.ollamaModel}
+          ollamaProvider={ctx.ollamaProvider}
           busy={busy}
         />
         <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>

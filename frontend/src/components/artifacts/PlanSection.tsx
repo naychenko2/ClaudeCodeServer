@@ -94,6 +94,9 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
   const [map, setMap] = useState<PlanMap | null>(null);
   const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
   const [schemeError, setSchemeError] = useState<string | null>(null);
+  // Запрос «Заметка к разделу» из экрана «Блок» схемы → PlanRemarks открывает форму.
+  // token делает каждый клик новым сигналом, даже повторный по тому же разделу
+  const [remarkRequest, setRemarkRequest] = useState<{ heading: string; occurrence: number; token: number } | null>(null);
 
   // Оглавление текущего плана + поповер
   const [tocOpen, setTocOpen] = useState(false);
@@ -282,7 +285,10 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
               }}>
                 <MarkdownViewer content={curPlan.plan} />
               </div>
-              <PlanScheme map={map} planText={curPlan.plan} contentRef={planContentRef} />
+              <PlanScheme map={map} planText={curPlan.plan} contentRef={planContentRef}
+                onRequestRemark={curPlan.status === 'pending'
+                  ? a => setRemarkRequest({ ...a, token: Date.now() })
+                  : undefined} />
             </div>
           ) : schemeStatus === 'building' ? (
             <div style={{
@@ -355,6 +361,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
             planText={curPlan.plan}
             containerToken={schemeView}
             status={curPlan.status === 'pending' ? 'pending' : 'resolved'}
+            externalRequest={remarkRequest}
             onSubmit={feedback => {
               // requestId в PlanArtifact нет — отправлять в панели некуда.
               // Сборка текста всё равно полезна: копируем в буфер, дальше

@@ -5,10 +5,13 @@
 // идентичным серверному. Сможет сервер отдавать isFree в ProviderBalanceInfo —
 // переключим потребителя на серверное поле здесь же, в одном месте.
 
+import { isLocalEngineKey } from './localEngine';
+
 // Подпись бейджа для полосы «Все провайдеры» и карточки: null — бейджа нет.
-// ollama → «локально», FreeLLM/прямой адаптер (endsWith('-direct'), startsWith('freellm')) → «бесплатный».
+// локальный движок (ollama, llama-server) → «локально»,
+// FreeLLM/прямой адаптер (endsWith('-direct'), startsWith('freellm')) → «бесплатный».
 export function freeSourceLabel(key: string): string | null {
-  if (key === 'ollama') return 'локально';
+  if (isLocalEngineKey(key)) return 'локально';
   if (key.startsWith('freellm') || key.endsWith('-direct')) return 'бесплатный';
   return null;
 }

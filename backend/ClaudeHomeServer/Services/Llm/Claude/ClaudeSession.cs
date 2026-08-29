@@ -4045,6 +4045,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 // эти поля как JSON null (Anthropic — всегда число), а прямой GetInt64/GetDouble
                 // на null кидает и роняет весь цикл чтения прогона (ход виснет без ответа).
                 var durationMs = LongProp(root, "duration_ms");
+                // Время в API за ход: по нему фронт считает скорость генерации. Ноль трактуем
+                // как «поле не пришло» (сторонний поток его не шлёт) — фолбэк на duration_ms
+                var durationApiMs = LongProp(root, "duration_api_ms") is > 0 and var apiMs ? apiMs : (long?)null;
                 var numTurns = IntProp(root, "num_turns");
                 var totalCost = DoubleProp(root, "total_cost_usd");
                 var apiErr = StatusProp(root, "api_error_status");
@@ -4097,7 +4100,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root), durationApiMs));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик

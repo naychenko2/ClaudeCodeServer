@@ -981,7 +981,7 @@ export type ServerMessage = { sessionId: string } & (
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
   // на этом событии лента клеит модель постам текущего хода
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string }
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
@@ -1314,16 +1314,20 @@ export interface UsageResponse {
   // Статус опроса api/oauth/usage по ключам аккаунтов: "ok" | "unauthorized" (токен
   // не подходит — setup-токен вместо полноценного входа) | "error"
   pollStatuses?: Record<string, string>;
-  // Локальная модель (Ollama): какая модель и на какие фоновые действия она заведена
+  // Локальная модель (Ollama или llama-server): какая модель и на какие фоновые действия
+  // она заведена. Имя поля контрактное и не переименовывается вместе с движком.
   ollama?: OllamaUsageInfo;
 }
 
-// Блок «Локальная модель» на экране использования. У Ollama нет лимитов/баланса (бесплатно),
-// показываем модель и маршрут каждого фонового действия (локаль/claude).
+// Блок «Локальная модель» на экране использования. У локального движка нет лимитов/баланса
+// (бесплатно), показываем модель и маршрут каждого фонового действия (локаль/claude).
 export interface OllamaUsageInfo {
   enabled: boolean;
   model?: string | null;
   baseUrl?: string | null;
+  // Какой движок поднят на бэкенде: 'ollama' | 'llama-server' (конфиг LocalLlm:Provider).
+  // Поля может не быть — старый бэкенд его не шлёт, подпись тогда прежняя, «Ollama».
+  provider?: string;
   actions: OllamaActionInfo[];
 }
 
@@ -1777,7 +1781,10 @@ export type ChatItem =
   // только в ленте вкладки; после планировщика следом приходит карточка team_plan)
   | { kind: 'team_planning_done'; subtaskCount: number; waveCount: number; elapsedMs: number }
   | { kind: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
+  // durationApiMs — время запросов к API за ход (без инструментов и ожиданий): знаменатель
+  // скорости генерации в плашке итога. Нет поля (старая история, локальный движок) — скорость
+  // считается по durationMs
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }

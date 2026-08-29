@@ -596,7 +596,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
             items[i] = { ...it, model: msg.usageModel };
         }
       }
-      items.push({ kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens });
+      items.push({ kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens, durationApiMs: msg.durationApiMs });
       return { ...prev, isWaiting: false, items };
     }
 

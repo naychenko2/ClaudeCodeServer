@@ -584,7 +584,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    // Внешняя обёртка — flex-участник, а не height:100%. На планшете в PanelShell
+    // одиночная панель идёт с fill=false (flex: '0 1 auto'), и родитель растёт
+    // по контенту: height:100% ребёнка = высоте контента, у скролл-контейнера
+    // flex:1 нет свободного места, и overflowY:auto не срабатывает.
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChatListToolbar
         onNew={() => { void createNew(); }}
         onNewDesktop={desktopReady ? () => { void createDesktop(); } : undefined}

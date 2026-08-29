@@ -173,10 +173,6 @@ interface Props {
 // и вторая точка кнопки «Изменений» — незапушенные коммиты (рядом с основным
 // оранжевым незафиксированных файлов). Акцент приберёгаем для главного.
 // bottom — кружок в правом НИЖНЕМ углу иконки (второй индикатор стопкой под основным).
-// Кружок-счётчик рельсы — общий примитив ui/CountBadge (тот же кружок носит кнопка
-// «Архив» в шапке списка чатов). Алиас, чтобы не переписывать десяток мест вызова.
-const RailBadge = CountBadge;
-
 // Ящик рельсы: кнопка «…» и меню за ней. Держит кнопки, которые человек утащил с
 // рельсы (перетаскиванием на эту кнопку), и тумблер режима зоны — своей кнопки в
 // столбце у режима больше нет.
@@ -239,8 +235,8 @@ function RailOverflow({ side, overflow, collapse }: {
               вытесняет тихий, иначе на 17px-иконке столкнулись бы два. Пустой ящик
               не считаем — многоточие и так стоит ради режима зоны. */}
           {badge
-            ? <RailBadge value={badge} />
-            : items.length > 0 ? <RailBadge value={items.length} tone="muted" /> : null}
+            ? <CountBadge value={badge} />
+            : items.length > 0 ? <CountBadge value={items.length} tone="muted" /> : null}
         </div>
       </RailIconButton>
 
@@ -278,7 +274,7 @@ function RailOverflow({ side, overflow, collapse }: {
                       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {it.title}
                       </span>
-                      {it.badge ? <RailBadge value={it.badge} inline /> : null}
+                      {it.badge ? <CountBadge value={it.badge} inline /> : null}
                     </>
                   }
                   onClick={() => { it.onClick(); close(); }}
@@ -465,7 +461,7 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
             {/* Кружок с числом при закрывающей иконке прячем: рядом с «закрыть» счётчик
                 читается как часть действия, а не как содержимое панели */}
             {item.badge && !closing && !pinning
-              ? <RailBadge value={item.badge} tone={item.badgeTone ?? 'accent'} />
+              ? <CountBadge value={item.badge} tone={item.badgeTone ?? 'accent'} />
               : null}
             {/* Точка «идёт сейчас» — только когда числа нет: два индикатора в одном
                 углу слиплись бы в пятно */}
@@ -480,7 +476,7 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
                 при закрытии/закреплении гаснет вместе с основным, чтобы у крестика/булавки
                 не висели чужие числа. Тон — из данных (дефолт muted) */}
             {item.badgeSecondary && !closing && !pinning
-              ? <RailBadge value={item.badgeSecondary} tone={item.badgeSecondaryTone ?? 'muted'} bottom />
+              ? <CountBadge value={item.badgeSecondary} tone={item.badgeSecondaryTone ?? 'muted'} bottom />
               : null}
           </div>
         );

@@ -52,6 +52,7 @@ export const FALLBACK_BUDGET_DEFAULT = 4;
 export interface ChainLabelContext {
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
 }
 
 // Подпись шага цепочки: модель — её имя; уровень — «Сильная (модели по умолч.)»

@@ -8,6 +8,7 @@ import { EffectiveLine } from '../../components/EffectiveLine';
 import { invalidateEffectiveLines, resolvePlacePreset, stepsWord, usePresets, useSpecialtySettings } from '../../lib/presets';
 import type { LayerReducer } from '../../lib/presets';
 import { C, FS, R } from '../../lib/design';
+import { localEngineLabel } from '../../lib/localEngine';
 import { ImageGenSection } from './ImageGenSection';
 import { api } from '../../lib/api';
 import { loadModels, type ModelOption } from '../../lib/models';
@@ -124,8 +125,8 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
           active={ollamaOn} disabled={presetBusy !== null || !info.enabled} loading={presetBusy === 'tiers-local'}
           title="Бесплатно · с локальной"
           desc={info.enabled
-            ? 'Мелкие задачи — на локальной модели Ollama, сложным — облачная по уровню.'
-            : 'Пометьте провайдера «бесплатным» в конфиге или настройте Ollama — и стратегия появится.'}
+            ? `Мелкие задачи — на локальной модели ${localEngineLabel(info.provider)}, сложным — облачная по уровню.`
+            : `Пометьте провайдера «бесплатным» в конфиге или настройте ${localEngineLabel(info.provider)} — и стратегия появится.`}
           onClick={() => applyPreset('tiers-local')}
         />
       </div>
@@ -149,6 +150,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
                 busy={busy === a.key}
                 tierModels={tierModels}
                 ollamaModel={info.model ?? undefined}
+                ollamaProvider={info.provider}
                 models={models}
                 savingScope={savingScope}
                 onSaveLayer={onSaveLayer}
@@ -207,13 +209,14 @@ function StrategyCard({ active, disabled, loading, title, desc, onClick }: {
 }
 
 // === Строка места каталога ===
-function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, savingScope,
+function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProvider, models, savingScope,
   onSaveLayer, onPick, onReset, enabled, onToggleEnabled, toggleBusy }: {
   action: OllamaActionInfo;
   first: boolean;
   busy: boolean;
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
+  ollamaProvider?: string;
   models: ModelOption[];
   savingScope: 'global' | 'owner' | 'user' | null;
   // Контракт редьюсерный (см. presets.saveLayer). ActionRow напрямую не пишет — он
@@ -279,6 +282,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, sa
           models={models}
           tierModels={tierModels}
           ollamaModel={ollamaModel}
+          ollamaProvider={ollamaProvider}
           allowLocal={!a.agentic}
           showTiers
           showPresets

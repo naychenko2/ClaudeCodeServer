@@ -221,6 +221,12 @@ function brief(t) {
     personaId: t.personaId ?? null,
     projectId: t.projectId ?? null,
     columnId: t.columnId ?? null,
+    // Тип карточки: task — обычная, defect — дефект (правила DefectRules)
+    kind: t.kind ?? 'task',
+    // Признак наличия вердикта: true, если дефект закрыт через verification.
+    // Outcome == closedWithoutCheck (без verification) выдаёт false: дизъюнкция закрытого
+    // дефекта опирается на заполненный Verification ИЛИ Outcome (DefectRules).
+    hasVerification: !!t.verification,
     // Дата+время завершения (когда статус стал done); null — не завершена или неизвестно.
     // В режиме списка «Готово» задачи идут сверху вниз от свежих к старым по этому полю.
     completedAt: t.completedAt ?? null,
@@ -333,25 +339,76 @@ const LINKED_FILES_SCHEMA = {
   description: 'Пути файлов проекта (от корня проекта, через /). Заменяют список целиком.',
 };
 
+// Тип карточки задачи: task — обычная, defect — дефект (правила DefectRules).
+const KIND_SCHEMA = {
+  type: 'string',
+  enum: ['task', 'defect'],
+  description: `Тип карточки (${SEE_INSTRUCTIONS})`,
+};
+
+// Шаги воспроизведения дефекта. steps обязателен у дефекта, expected/actual — пояснения
+// наблюдателя, опциональны. Передаётся ЦЕЛИКОМ: частичное обновление стирает прежние поля.
+const REPRO_SCHEMA = {
+  type: 'object',
+  description: `Шаги воспроизведения дефекта (${SEE_INSTRUCTIONS})`,
+  properties: {
+    steps: { type: 'string', description: 'Шаги (markdown); обязательны у дефекта' },
+    expected: { type: 'string', description: 'Ожидаемое поведение (опционально)' },
+    actual: { type: 'string', description: 'Фактическое поведение (опционально)' },
+  },
+};
+
+// Подтверждение проверки дефекта. Автора (человек/персона) и отметку времени бэкенд ставит
+// сам по сессии вызова; MCP передаёт только комментарий проверяющего.
+const VERIFICATION_SCHEMA = {
+  type: 'object',
+  description: `Подтверждение проверки дефекта (${SEE_INSTRUCTIONS})`,
+  properties: {
+    notes: { type: 'string', description: 'Комментарий проверяющего (опционально)' },
+  },
+};
+
+// Исход дефекта: closedWithoutCheck — внутренний путь закрытия без отдельной проверки.
+const OUTCOME_SCHEMA = {
+  type: 'string',
+  enum: ['closedWithoutCheck'],
+  description: `Исход дефекта (${SEE_INSTRUCTIONS})`,
+};
+
+// Ссылки через свойства объектов в inputSchema линтер TS на .js не всегда видит —
+// явное использование убирает ложные ворнинги «declared but never read».
+void KIND_SCHEMA; void REPRO_SCHEMA; void VERIFICATION_SCHEMA; void OUTCOME_SCHEMA;
+
 // Справочник сервера (поле instructions ответа initialize): клиент кладёт его в контекст один
 // раз на сервер, тогда как повторённый в схемах текст оплачивается в каждой из них — правило
-// повторения, уровень модели и worktree шли ×2 (tasks_create + tasks_update).
+// повторения, уровень модели и worktree шли ×2 (tasks_create + tasks_update). Лимит ~1950 символов
+// из сторожа McpInstructionsLengthGuardTests — держим суть, подробности в описаниях схем.
 const INSTRUCTIONS = [
   'Справочники сервера «Задачи» (на них ссылаются описания инструментов).',
   '',
-  'ПОВТОРЕНИЕ (recurrence): требует dueDate; существует ОДИН экземпляр серии, следующий создаётся',
-  '  при завершении текущего. type: daily|weekly|monthly|yearly; "none" — только в tasks_update,',
-  '  «убрать повторение». interval — каждые N периодов (2 недели = weekly + interval 2).',
+  'ПОВТОРЕНИЕ (recurrence): требует dueDate; ОДИН экземпляр серии, следующий создаётся при завершении',
+  '  текущего. type: daily|weekly|monthly|yearly; "none" — только в tasks_update (снять). interval —',
+  '  каждые N периодов (2 недели = weekly + interval 2).',
   '',
-  'УРОВЕНЬ МОДЕЛИ (modelTier): strong — проектирование, архитектура, ревью, запутанный баг,',
-  '  многофайловый код; medium — реализация по плану, тесты, документация; weak — механическая',
-  '  правка, переименование, коммит. Не задан — от персоны-исполнителя и настроек системы.',
+  'УРОВЕНЬ МОДЕЛИ (modelTier): strong — архитектура/ревью/запутанный баг; medium — реализация',
+  '  по плану/тесты/доки; weak — механическая правка. Не задан — от персоны-исполнителя и системы.',
   '',
   'WORKTREE (worktreePath): дерево должно УЖЕ существовать — бэкенд сверяет путь с «git worktree',
-  '  list» проекта, чужой путь игнорируется и исполнитель стартует в корне проекта.',
+  '  list» проекта, чужой путь игнорируется.',
   '',
-  'ОЧИСТКА ПОЛЕЙ в tasks_update: "" в dueDate/dueTime убирает срок, отрицательное значение в',
-  '  reminderMinutes убирает напоминание, а в executionExpiresAfterMinutes — делает чат бессрочным.',
+  'ДЕФЕКТЫ (kind=defect): правила DefectRules — нельзя создать сразу в done, попасть в колонку',
+  '  ревью без repro.steps, закрыть без verification или outcome. kind можно менять и после',
+  '  создания (tasks_update({ id, kind: "task" })).',
+  '',
+  'REPRO: steps обязателен, expected/actual опциональны. Передаётся ЦЕЛИКОМ — для правки одного',
+  '  поля шлите весь объект, иначе прежние поля пропадут. Стереть — передайте {} целиком.',
+  '',
+  'VERIFICATION/OUTCOME в tasks_complete: один из двух для закрытия дефекта. verification.notes —',
+  '  комментарий проверяющего (автора и время бэк ставит сам по X-Caller-Session-Id). outcome=',
+  '  closedWithoutCheck — снять дефект без отдельной проверки.',
+  '',
+  'ОЧИСТКА в tasks_update: "" в dueDate/dueTime убирает срок, -1 в reminderMinutes — снимает',
+  '  напоминание, -1 в executionExpiresAfterMinutes — делает чат бессрочным.',
 ].join('\n');
 
 const TOOLS = [
@@ -420,6 +477,8 @@ const TOOLS = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
+        kind: KIND_SCHEMA,
+        repro: REPRO_SCHEMA,
         projectId: { type: 'string', description: 'Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)' },
       },
     },
@@ -451,6 +510,8 @@ const TOOLS = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
         columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + '; "" — сброс на дефолтную' },
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
+        kind: KIND_SCHEMA,
+        repro: REPRO_SCHEMA,
         projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },
       },
     },
@@ -463,7 +524,8 @@ const TOOLS = [
   {
     name: 'tasks_complete',
     description: 'Пометить задачу выполненной (status → done) и сразу прикрепить итог: ' +
-      'resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Это ТОЛЬКО смена статуса — ' +
+      'resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Для дефекта — verification ' +
+      '(кто проверил) или outcome (внутренний путь closedWithoutCheck). Это ТОЛЬКО смена статуса — ' +
       'исполнителя запускает tasks_run_executor.',
     inputSchema: {
       type: 'object',
@@ -472,6 +534,8 @@ const TOOLS = [
         id: { type: 'string', description: 'ID задачи' },
         resultMarkdown: { ...RESULT_MARKDOWN_SCHEMA, description: 'Короткий итог сделанного (markdown)' },
         linkedFiles: { ...LINKED_FILES_SCHEMA, description: 'Итоговые файлы проекта (пути от корня, через /)' },
+        verification: VERIFICATION_SCHEMA,
+        outcome: OUTCOME_SCHEMA,
       },
     },
   },
@@ -615,7 +679,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes', 'kind', 'repro'])
         if (args[k] !== undefined) body[k] = args[k];
       // Происхождение задачи из окружения хода: персона-постановщик (если ход шёл от её лица)
       // и чат-источник. Чат-источник — факт «задача рождена в этом чате», он не зависит от того,
@@ -650,6 +714,11 @@ async function callTool(name, args) {
       const body = { status: 'done' };
       if (args.resultMarkdown !== undefined) body.resultMarkdown = args.resultMarkdown;
       if (args.linkedFiles !== undefined) body.linkedFiles = args.linkedFiles;
+      // Для дефекта бэкенд требует verification или outcome (DefectRules); MCP-слой
+      // не подставляет автора вердикта — бэкенд берёт personaId из сессии вызова
+      // (X-Caller-Session-Id) сам, иначе мы бы затирали фактического автора дефолтом чата.
+      if (args.verification !== undefined) body.verification = args.verification;
+      if (args.outcome !== undefined) body.outcome = args.outcome;
       return json(await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) }));
     }
 

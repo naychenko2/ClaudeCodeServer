@@ -282,6 +282,63 @@ public class LlamaServerClientTests : IDisposable
         opts.Model.Should().Be("new");
     }
 
+    // Сторож на РЕАЛЬНЫЙ appsettings.json, а не на синтетический конфиг: ключи LocalLlm:*
+    // отгружаются пустыми строками, и пока Read строил фолбэк на голом ??, пустая строка
+    // перебивала Ollama:* — инстанс на ветке отката получал BaseUrl="" и Model="" и молча
+    // оставался без локали. Синтетика этого не ловила: там ключей LocalLlm нет вовсе.
+    [Fact]
+    public void LocalLlmOptions_РеальныйAppSettings_ПустыеКлючиНеПеребиваютOllama()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? serverDir = null;
+        for (; dir is not null; dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json")))
+            { serverDir = Path.Combine(dir.FullName, "ClaudeHomeServer"); break; }
+        serverDir.Should().NotBeNull("тест ищет отгружаемый appsettings.json от каталога сборки");
+
+        var cfg = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(serverDir!, "appsettings.json"))
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Ollama:BaseUrl"] = "http://ollama:11434",
+                ["Ollama:Model"] = "qwen3:4b",
+                ["Ollama:TimeoutMs"] = "7777",
+            })
+            .Build();
+
+        var opts = LocalLlmOptions.Read(cfg);
+        opts.Provider.Should().Be("ollama");
+        opts.BaseUrl.Should().Be("http://ollama:11434");
+        opts.Model.Should().Be("qwen3:4b");
+        opts.TextModel.Should().Be("qwen3:4b");
+        // TimeoutMs в отгружаемом файле задан ЧИСЛОМ (4000), а не пустой строкой — это
+        // настоящее значение, и оно законно перебивает Ollama:TimeoutMs. Проверяем именно
+        // это: правило «пустое = не задано» не должно превращаться в «всегда берём Ollama».
+        opts.TimeoutMs.Should().Be(4000);
+    }
+
+    // Пустая строка в самой секции LocalLlm — то же «не задано», а не настройка
+    [Fact]
+    public void LocalLlmOptions_ПустыеСтрокиЛокалки_ФолбэкНаOllama()
+    {
+        var cfg = Config(new()
+        {
+            ["LocalLlm:Provider"] = "",
+            ["LocalLlm:BaseUrl"] = "",
+            ["LocalLlm:Model"] = "",
+            ["LocalLlm:TextModel"] = "",
+            ["LocalLlm:TimeoutMs"] = "",
+            ["Ollama:BaseUrl"] = "http://ollama:11434",
+            ["Ollama:Model"] = "q",
+            ["Ollama:TimeoutMs"] = "5555",
+        });
+        var opts = LocalLlmOptions.Read(cfg);
+        opts.Provider.Should().Be("ollama");
+        opts.BaseUrl.Should().Be("http://ollama:11434");
+        opts.Model.Should().Be("q");
+        opts.TimeoutMs.Should().Be(5555);
+    }
+
     [Fact]
     public void LocalLlmOptions_НеизвестныйProvider_FallbackНаOllama()
     {

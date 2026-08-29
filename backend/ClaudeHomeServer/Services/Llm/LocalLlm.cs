@@ -77,30 +77,37 @@ public sealed record LocalLlmOptions(
     public const string Ollama = "ollama";
     public const string LlamaServer = "llama-server";
 
+    // Пустая строка в конфиге = «значение не задано». Без этого фолбэк на Ollama:* не
+    // работал: в отгружаемом appsettings.json ключи LocalLlm:* объявлены пустыми строками,
+    // а пустая строка — не null, и оператор ?? её принимал за настройку. Инстанс, где задан
+    // только Ollama:*, получал BaseUrl="" и Model="" — локаль молча выключалась.
+    private static string? Value(IConfiguration config, string key) =>
+        config[key] is { } v && !string.IsNullOrWhiteSpace(v) ? v : null;
+
     public static LocalLlmOptions Read(IConfiguration config)
     {
         // Provider — только из новой секции: Ollama:Provider не существовало, обратной
         // совместимости тут не требуется. Дефолт ollama — старая ветка.
-        var provider = (config["LocalLlm:Provider"] ?? Ollama).Trim().ToLowerInvariant();
+        var provider = (Value(config, "LocalLlm:Provider") ?? Ollama).Trim().ToLowerInvariant();
         if (provider != Ollama && provider != LlamaServer) provider = Ollama;
 
         // BaseUrl: LocalLlm → Ollama. Дефолт ollama-порта — исторический.
-        var baseUrl = (config["LocalLlm:BaseUrl"] ?? config["Ollama:BaseUrl"] ?? "http://localhost:11434")
+        var baseUrl = (Value(config, "LocalLlm:BaseUrl") ?? Value(config, "Ollama:BaseUrl") ?? "http://localhost:11434")
             .TrimEnd('/');
 
         // ApiKey — локальная модель llama-server может быть поднята с --api-key.
-        var apiKey = config["LocalLlm:ApiKey"] ?? "";
+        var apiKey = Value(config, "LocalLlm:ApiKey") ?? "";
 
-        var model = config["LocalLlm:Model"] ?? config["Ollama:Model"] ?? "";
+        var model = Value(config, "LocalLlm:Model") ?? Value(config, "Ollama:Model") ?? "";
 
         // TextModel — опциональная отдельная модель для текстовых действий; пусто → Model.
-        var textModel = config["LocalLlm:TextModel"] ?? config["Ollama:TextModel"] ?? "";
+        var textModel = Value(config, "LocalLlm:TextModel") ?? Value(config, "Ollama:TextModel") ?? "";
         if (string.IsNullOrWhiteSpace(textModel)) textModel = model;
 
         // KeepAlive — целое (секунды; -1 = вечно) либо duration-строка ("5m").
-        var keepAlive = config["LocalLlm:KeepAlive"] ?? config["Ollama:KeepAlive"] ?? "-1";
+        var keepAlive = Value(config, "LocalLlm:KeepAlive") ?? Value(config, "Ollama:KeepAlive") ?? "-1";
 
-        var timeoutMs = int.TryParse(config["LocalLlm:TimeoutMs"] ?? config["Ollama:TimeoutMs"], out var t)
+        var timeoutMs = int.TryParse(Value(config, "LocalLlm:TimeoutMs") ?? Value(config, "Ollama:TimeoutMs"), out var t)
             ? t : 4000;
 
         // DisableThinking — прокидываем в chat_template_kwargs:{enable_thinking:false} у

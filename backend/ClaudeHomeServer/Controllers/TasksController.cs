@@ -1,5 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
@@ -48,6 +50,10 @@ public class ProjectTasksController(
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
         var targetIsReview = BoardColumnHelper.IsReview(project, req.ColumnId);
+        // Полный объект колонки — для гейта DefectRules.EnsureNotClosedAtCreate:
+        // дефект в Todo с columnId="done" не должен пройти мимо правила только потому,
+        // что клиент не привёл Status в соответствие с категорией колонки.
+        var targetColumn = project?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
 
         // Персона-исполнитель: своя и в правильном проекте (или есть ProjectTasks-привязка)
         if (!string.IsNullOrEmpty(req.PersonaId))
@@ -70,7 +76,7 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            task = tasks.Create(projectId, UserId, req, targetIsReview);
+            task = tasks.Create(projectId, UserId, req, targetIsReview, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -179,16 +185,40 @@ public class TasksController(
 
     // Личная задача — без привязки к проекту
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateTaskRequest req)
+    public async Task<IActionResult> Create([FromBody] JsonElement body)
     {
+        // projectId в wire-формате CreateTaskRequest отсутствует, но клиент может прислать
+        // его в теле — нужно для резолва кастомной колонки (гейт дефекта по категории).
+        // Парсим руками, чтобы не расширять публичный record, который живёт в TaskManager.
+        string? bodyProjectId = body.TryGetProperty("projectId", out var pid)
+            && pid.ValueKind == JsonValueKind.String
+            ? pid.GetString()
+            : null;
+
+        var req = JsonSerializer.Deserialize<CreateTaskRequest>(body.GetRawText(),
+            TaskCreateJson.Options);
+        if (req is null)
+            return BadRequest(new { error = "Некорректное тело запроса" });
+
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
-        // Колонка доски → статус из категории (у личных — только дефолтные колонки)
-        var cat = BoardColumnHelper.Category(null, req.ColumnId);
+        // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект
+        // игнорируем: личный эндпоинт не должен подменять статус по чужой доске.
+        var project = bodyProjectId is not null && projects.GetById(bodyProjectId)?.OwnerId == UserId
+            ? projects.GetById(bodyProjectId)
+            : null;
+
+        // Колонка доски → статус из категории. У личных — только дефолтные колонки,
+        // а также кастомные колонки проекта из тела (если projectId свой).
+        var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
+        // Полный объект колонки — для гейта DefectRules.EnsureNotClosedAtCreate: дефект
+        // в Todo с columnId="done" не должен пройти мимо правила только потому, что
+        // клиент не привёл Status в соответствие с категорией колонки.
+        var targetColumn = project?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
 
         // Персона-исполнитель: своя; проектная персона личную задачу не берёт
         if (!string.IsNullOrEmpty(req.PersonaId)
@@ -203,8 +233,10 @@ public class TasksController(
         TaskItem task;
         try
         {
-            // Личная задача — колонок проекта нет, ревью-гейт всегда неактивен
-            task = tasks.Create(null, UserId, req);
+            // Личная задача — проект не сохраняем в TaskItem, но колонку прокидываем
+            // через TaskManager.Create для гейта DefectRules (review-гейт у личных
+            // задач не действует — пользователь сам решает, что ему делать).
+            task = tasks.Create(null, UserId, req, targetIsReview: false, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -444,4 +476,17 @@ public static class TaskHubExtensions
         this IHubContext<SessionHub> hub, string userId, string action, TaskItem task) =>
         hub.Clients.Group("user_" + userId)
             .SendAsync("message", new TaskChangedMessage(action, task));
+}
+
+// Опции десериализации CreateTaskRequest для ручного парсинга тела в TasksController.Create
+// (полю projectId нет в record, но клиент шлёт его в JSON — нужно для резолва колонки).
+// Те же настройки, что и в Program.cs для глобального MVC: enum-ы в CamelCase,
+// регистр имён свойств не важен.
+public static class TaskCreateJson
+{
+    public static readonly JsonSerializerOptions Options = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 }

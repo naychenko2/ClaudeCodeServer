@@ -152,6 +152,33 @@ public class DefectRulesTests
         act.Should().NotThrow(); // конструктор Verification без параметров задаёт дефолты, объект не null
     }
 
+    [Fact]
+    public void EnsureVerificationOnClose_ДефектСПустымNotes_Бросает()
+    {
+        // Д-1: пустой Notes — не вердикт. Verification != null, но содержимого нет,
+        // гейт закрытия должен срабатывать (как при отсутствии Verification вообще).
+        var defect = DefectIn(TaskItemStatus.Done,
+            Verification: new TaskVerification { Notes = "" });
+
+        var act = () => DefectRules.EnsureVerificationOnClose(defect);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*заполните Verification*ClosedWithoutCheck*");
+    }
+
+    [Fact]
+    public void EnsureVerificationOnClose_ДефектСПробельнымNotes_Бросает()
+    {
+        // Из одних пробелов — то же: Notes после Trim пустой, вердикта нет.
+        var defect = DefectIn(TaskItemStatus.Done,
+            Verification: new TaskVerification { Notes = "   \t\n  " });
+
+        var act = () => DefectRules.EnsureVerificationOnClose(defect);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*заполните Verification*ClosedWithoutCheck*");
+    }
+
     // ─── 3) EnsureReproOnReview ──────────────────────────────────────────────
 
     [Fact]

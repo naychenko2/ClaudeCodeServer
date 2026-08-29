@@ -65,7 +65,8 @@ public class TaskManager
     public IReadOnlyCollection<TaskItem> GetBySourceNote(string noteId) =>
         _tasks.Values.Where(t => t.SourceNoteId == noteId).ToList();
 
-    public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req, bool targetIsReview = false)
+    public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req,
+        bool targetIsReview = false, BoardColumn? targetColumn = null)
     {
         // Клиентский id (офлайн-создание) с идемпотентностью: повтор POST с тем же id
         // при потерянном ack возвращает существующую задачу — без дубля. Если id занят
@@ -129,10 +130,11 @@ public class TaskManager
         // Инвариант: исполнитель-персона подразумевает исполнение силами Claude
         NormalizePersonaAssignee(task);
         NormalizeWorktree(task);
-        // Дефект: нельзя создать сразу в Done, нельзя попасть в review-колонку без шагов
-        // воспроизведения (DefectRules; no-op для обычных задач). Бросает до вставки в
-        // словарь — при отказе состояние менеджера не меняется.
-        DefectRules.EnsureNotClosedAtCreate(task);
+        // Дефект: нельзя создать сразу в Done (по статусу или по целевой колонке),
+        // нельзя попасть в review-колонку без шагов воспроизведения (DefectRules; no-op
+        // для обычных задач). Бросает до вставки в словарь — при отказе состояние
+        // менеджера не меняется.
+        DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
         DefectRules.EnsureReproOnReview(task, targetIsReview ? ReviewColumnStub : null);
         _tasks[task.Id] = task;
         Save();

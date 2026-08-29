@@ -8950,7 +8950,7 @@ public class SessionManager : IDisposable
                     acc.SetPromptSnapshot(m.SnapshotId);
                     break;
                 case ResultMessage m:
-                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel);
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     RecordTurnSpend(entry, m);
                     break;

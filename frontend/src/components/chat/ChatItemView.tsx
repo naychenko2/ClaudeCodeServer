@@ -1460,6 +1460,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const fmtTok = (n: number) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
       const fmtCost = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
       const u = item.usage;
+      // Скорость генерации: выходные токены на время В API (durationApiMs), а не на полное
+      // время хода — durationMs включает работу инструментов и ожидание подтверждений, и у
+      // хода с тул-лупом занижает скорость кратно. Поля нет (старая история, локальный
+      // движок мимо CLI) — считаем по durationMs: там тул-лупа нет и разница невелика.
+      const speedMs = item.durationApiMs && item.durationApiMs > 0 ? item.durationApiMs : item.durationMs;
+      const speed = u && u.outputTokens > 0 && speedMs > 0 ? (u.outputTokens * 1000) / speedMs : null;
+      const fmtSpeed = (v: number) => v >= 10 ? String(Math.round(v)) : v.toFixed(1);
       const sep = <span style={{ opacity: 0.45 }}>·</span>;
 
       // Ошибочный итог хода — показываем причину и предлагаем повторить
@@ -1534,6 +1541,16 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <>
               {sep}
               <span title="входные · выходные токены">↑{fmtTok(u.inputTokens)} ↓{fmtTok(u.outputTokens)}</span>
+            </>
+          )}
+          {speed !== null && (
+            <>
+              {sep}
+              <span title={item.durationApiMs
+                ? 'Скорость генерации: выходных токенов в секунду за время запросов к API (без работы инструментов)'
+                : 'Скорость: выходных токенов в секунду за всё время хода'}>
+                {fmtSpeed(speed)} т/с
+              </span>
             </>
           )}
           {typeof item.totalCostUsd === 'number' && item.totalCostUsd > 0 && (

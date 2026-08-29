@@ -136,7 +136,11 @@ public record FileChangedMessage(string Path, int Added, int Removed, bool Exter
 // cache_creation из usage последнего assistant-сообщения основного агента). Именно он, а не
 // Usage: тот суммирует ВСЕ запросы хода (каждый шаг tool-лупа плюс сабагенты), поэтому годится
 // для стоимости, но как оценка заполнения окна завышает её кратно числу тул-вызовов.
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null)
+// DurationApiMs — суммарное время запросов к API за ход (duration_api_ms от CLI), без работы
+// инструментов и ожидания подтверждений. По нему считается скорость генерации в плашке итога:
+// DurationMs для этого не годится — у хода с тул-лупом он кратно больше и занижает скорость.
+// null — CLI поля не прислал (сторонний поток) либо ход шёл мимо CLI (локальный движок).
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null)
     : ServerMessage("result");
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:

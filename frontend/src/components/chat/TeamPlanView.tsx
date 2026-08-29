@@ -244,7 +244,7 @@ function ExecutorChip({ personaId, candidates, onPick, disabled }: {
 function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootPath }: {
   subtask: TeamPlanSubtask;
   candidates: Persona[];
-  onReassign: (subtaskId: string, personaId: string) => void;
+  onReassign?: (subtaskId: string, personaId: string) => void;
   readOnly: boolean;
   isMobile: boolean;
   rootPath?: string | null;
@@ -272,7 +272,7 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
           {title}
         </span>
         <ExecutorChip personaId={subtask.executorPersonaId} candidates={candidates}
-          disabled={readOnly} onPick={id => onReassign(subtask.id, id)} />
+          disabled={readOnly} onPick={id => onReassign?.(subtask.id, id)} />
       </div>
       {files && (
         <div title={files.title} style={{
@@ -301,7 +301,9 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
 function PlanBody({ plan, candidates, onReassign, readOnly, isMobile, rootPath, maxHeight = 330 }: {
   plan: TeamPlan;
   candidates: Persona[];
-  onReassign: (subtaskId: string, personaId: string) => void;
+  // Опционален: свёрнутая (resolved) карточка рендерит план read-only без
+  // обработчика — раньше туда протягивали no-op `() => {}` (находка ревью)
+  onReassign?: (subtaskId: string, personaId: string) => void;
   readOnly: boolean;
   isMobile: boolean;
   rootPath?: string | null;
@@ -406,7 +408,7 @@ function CollapsedPlan({ plan, isMobile, rootPath }: {
         {open ? 'Скрыть план' : 'Показать план'}
       </button>
       {open && (
-        <PlanBody plan={plan} candidates={[]} onReassign={() => {}} readOnly
+        <PlanBody plan={plan} candidates={[]} readOnly
           isMobile={isMobile} rootPath={rootPath} maxHeight={280} />
       )}
     </div>

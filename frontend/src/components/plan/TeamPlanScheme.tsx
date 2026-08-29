@@ -14,10 +14,11 @@
 //    затронутую под-задачу — отдельного адресата (раздела плана) у него нет.
 //
 // initialView/initialExpandedId существуют только для статик-тестов: vitest гоняет
-// окружение node без jsdom, клики в renderToStaticMarkup не воспроизвести. В проде
-// родитель зовёт компонент с { plan, rootPath } — состояние всегда стартует с «Сути».
+// окружение node без jsdom, клики в renderToStaticMarkup не воспроизвести. Живой
+// рендер — из TeamPlanView (карточка «Командной реализации»), без этих пропсов:
+// состояние всегда стартует с «Сути».
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronRight } from 'lucide-react';
 import type { PlanMapNumber, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FONT, R, SP, FS } from '../../lib/design';
@@ -71,8 +72,11 @@ export function TeamPlanScheme({ plan, rootPath, initialView = 'essence', initia
   // повторный вызов рядом с TeamPlanView лишней работы не делает
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
-  const scheme = useMemo(() => buildTeamScheme(plan.subtasks), [plan.subtasks]);
-  const numbers = useMemo(() => countNumbers(scheme.counts), [scheme.counts]);
+  // Дешёвые производные считаем прямо в рендере без useMemo: план в карточке
+  // меняется только с версией, а накопление вещания проекта (ревью-комментарий
+  // 24-03-06) обходится дороже пересчёта
+  const scheme = buildTeamScheme(plan.subtasks);
+  const numbers = countNumbers(scheme.counts);
 
   // Пункт внимания → «Карта» с раскрытой первой затронутой под-задачей (см. эпиграф)
   function openInMap(subtaskId: string) {

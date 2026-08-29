@@ -895,6 +895,8 @@ body {
 .cc-tools-row-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 @media (prefers-reduced-motion: reduce) {
   .cc-role-card, .cc-tools-row-btn { transition: none; }
+}
+
 /* Поля поиска размечены type="search": Chrome на Android считает обычный
    однострочный input заполняемым и вешает над клавиатурой полосу
    автозаполнения (autocomplete="off" он для неё игнорирует умышленно), а поля

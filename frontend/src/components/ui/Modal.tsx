@@ -137,8 +137,8 @@ export function Modal({
             <div style={{ width: 38, height: 4, borderRadius: 2, background: C.track }} />
             {closeButton}
           </div>
-          {/* Скроллируемый контент */}
-          <div style={{
+          {/* Скроллируемый контент. Класс — против сжатия детей (см. .cc-sheet-content в index.css) */}
+          <div className="cc-sheet-content" style={{
             padding: '8px 18px 16px', display: 'flex', flexDirection: 'column', gap: 16,
             overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch',
           }}>
@@ -179,12 +179,13 @@ export function Modal({
           ...cardStyle,
         }}
       >
-        <div style={{
+        <div className="cc-modal-content" style={{
           padding: footer ? '26px 28px 20px' : 28,
           display: 'flex', flexDirection: 'column', gap: 18,
           // flex:1 нужен модалкам с заданной высотой карточки (cardStyle.height):
           // без него контент занимает своё, и футер повисает посередине вместо низа.
           // Карточке по контенту это ничего не меняет — расти всё равно не от чего.
+          // Класс — против сжатия детей (см. .cc-modal-content в index.css).
           overflowY: 'auto', flex: 1, minHeight: 0,
         }}>
           {headerRow}

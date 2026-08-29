@@ -104,27 +104,32 @@ export function VideoPanel() {
         </IconButton>
       </PanelHeaderSlot>
 
-      <div style={{ padding: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-        <Stage
-          channel={displayed}
-          audioBusy={audioBusy}
-          visible={visible}
-          paused={player.paused}
-          slotRef={frameRef}
-          stagedHere={stagedHere}
-          stagedMode={staged?.mode}
-          onOpenPicker={centerBlocked ? undefined : () => setVideoPicker(true)}
-        />
+      {/* Кадр — во всю ширину панели, вплотную к шапке и бокам: панель узкая, и
+          каждый её пиксель нужен кадру. Скругление живёт у самого кадра — и у
+          плейсхолдера здесь, и у живого оверлея (VideoStageFrame), радиус один */}
+      <Stage
+        channel={displayed}
+        audioBusy={audioBusy}
+        visible={visible}
+        paused={player.paused}
+        slotRef={frameRef}
+        stagedHere={stagedHere}
+        stagedMode={staged?.mode}
+        onOpenPicker={centerBlocked ? undefined : () => setVideoPicker(true)}
+      />
 
-        {displayed && (
+      {/* Строка управления — обычные поля панели: кнопки не липнут к рамке.
+          Отступ сверху держит зазор до кадра (бывший gap обёртки) */}
+      {displayed && (
+        <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>
           <PlayerRow
             channel={displayed}
             stagedHere={stagedHere}
             stagedMode={staged?.mode}
             centerBlocked={centerBlocked}
           />
-        )}
-      </div>
+        </div>
+      )}
     </PanelBody>
   );
 }

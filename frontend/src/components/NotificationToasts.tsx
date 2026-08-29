@@ -43,14 +43,11 @@ function eyebrowText(t: ToastItem): string {
 }
 
 // Подпись вида для NotificationAvatar: персональный аватар (чаты) либо плитка-индикатор
-// системного вида. Локальный тост 'error' рисуется на danger-плитке, чтобы клиентский
-// отказ визуально отличался от прочих
+// системного вида. 'error' — локальный клиентский отказ, рисуется отдельной danger-плиткой
+// в NotificationAvatar, чтобы визуально отличаться от обычных info-уведомлений.
 function avatarKind(t: ToastItem): string {
   if (hasPersona(t)) return t.kind;
-  // для 'error' нет NotificationKind — fallback в KIND_META.info и пусть TOAST_META
-  // (выше) подменит подпись; сама плитка покажет info-иконку, а цвет заголовка body
-  // даст signal об ошибке через danger рамку ниже
-  return t.kind === 'error' ? 'info' : t.kind;
+  return t.kind;
 }
 
 let nextId = 1;

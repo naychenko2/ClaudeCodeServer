@@ -2,7 +2,7 @@ import { C, R, FONT } from '../../lib/design';
 import { agentDotColor } from '../../components/AgentSelector';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { getPersonaById, usePersonasVersion } from '../../lib/personas';
-import { KIND_META } from './kindMeta';
+import { KIND_META, TOAST_META } from './kindMeta';
 import type { NotificationKind } from '../../types';
 
 // Инициалы из имени: две первые буквы (по словам, иначе первые две буквы слова)
@@ -17,6 +17,8 @@ function initials(name: string): string {
 //  • персона → КРУГ (лицо): живая персона из стора рендерится полноценным PersonaAvatar
 //    (фото/инициалы); при её отсутствии (удалена) — инициалы по снапшоту уведомления.
 //  • система/напоминание → скруглённый КВАДРАТ-плитка с kind-иконкой (как раньше).
+//  • 'error' — клиентский отказ: своя danger-плитка (TOAST_META.error), чтобы
+//    визуально отличаться от info. Раньше мапилось в info и вводило в заблуждение.
 export function NotificationAvatar({ personaId, personaName, personaColor, kind, size = 40 }: {
   personaId?: string;
   personaName?: string;
@@ -42,6 +44,24 @@ export function NotificationAvatar({ personaId, personaName, personaColor, kind,
         }}
       >
         {initials(personaName)}
+      </div>
+    );
+  }
+
+  // 'error' — локальный клиентский отказ, рисуется отдельной danger-плиткой
+  if (kind === 'error') {
+    const meta = TOAST_META.error;
+    return (
+      <div
+        aria-hidden
+        style={{
+          width: size, height: size, borderRadius: R.md, flexShrink: 0,
+          background: meta.bg, color: meta.color,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: Math.round(size * 0.42), lineHeight: 1,
+        }}
+      >
+        {meta.icon}
       </div>
     );
   }

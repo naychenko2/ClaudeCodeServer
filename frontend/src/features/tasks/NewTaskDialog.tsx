@@ -73,8 +73,11 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
       ?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [projects.length]);
 
-  // Шаги обязательны только у дефекта; у обычной задачи поле дефекта не активно
-  const canCreate = title.trim().length > 0 && !saving && (kind === 'task' || steps.trim().length > 0);
+  // Шаги обязательны только у дефекта при попадании на проверку (гейт бэка), но не
+  // для самого создания карточки. Завести дефект должно быть можно мгновенно —
+  // иначе человек откладывает описание бага, пока соберёт шаги, и теряет контекст.
+  // Подсказка под полем шагов остаётся (см. Field hint у дефектного Steps).
+  const canCreate = title.trim().length > 0 && !saving;
 
   const handleCreate = async (configure: boolean) => {
     if (!canCreate) return;
@@ -148,7 +151,7 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
         <>
           <Field
             label="Шаги воспроизведения"
-            hint="Обязательно. Что делали, что увидели. Бэк отвергнет дефект без шагов при попадании в ревью."
+            hint="Необязательно при создании. Бэк попросит шаги при попадании дефекта в колонку проверки."
           >
             <TextArea
               value={steps}
@@ -185,52 +188,41 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
       {/* Проект */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <FieldLabel>Проект</FieldLabel>
-        {/* Одна горизонтальная лента: 10+ проектов не распирают форму */}
+        {/* Одна горизонтальная лента: 10+ проектов не распирают форму.
+            Чипы — через ui/Button pill-формы: цветная точка слева, активный — accent. */}
         <div
           ref={chipsRef}
           className="cc-hide-scrollbar"
           style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}
         >
           {/* «Личное» — нейтральная опция первой (задача вне проекта) */}
-          <button
+          <Button
             data-active={projectId === null}
+            variant={projectId === null ? 'ghostAccent' : 'ghostFilled'}
+            size="sm"
+            pill
             onClick={() => setProjectId(null)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-              padding: '7px 13px', cursor: 'pointer',
-              border: `1px solid ${projectId === null ? C.accent : C.border}`,
-              borderRadius: 999,
-              background: projectId === null ? C.accentLight : C.bgWhite,
-              fontFamily: FONT.sans, fontSize: 13, fontWeight: projectId === null ? 600 : 500,
-              color: C.textPrimary,
-              transition: 'border-color 0.12s, background 0.12s',
-            }}
+            style={{ flexShrink: 0 }}
+            leftIcon={<span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />}
           >
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />
             {NO_PROJECT_LABEL}
-          </button>
+          </Button>
           {orderedProjects.map((p: Project) => {
             const active = p.id === projectId;
             const color = projectColor(p.id);
             return (
-              <button
+              <Button
                 key={p.id}
                 data-active={active}
+                variant={active ? 'ghostAccent' : 'ghostFilled'}
+                size="sm"
+                pill
                 onClick={() => setProjectId(p.id)}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-                  padding: '7px 13px', cursor: 'pointer',
-                  border: `1px solid ${active ? C.accent : C.border}`,
-                  borderRadius: 999,
-                  background: active ? C.accentLight : C.bgWhite,
-                  fontFamily: FONT.sans, fontSize: 13, fontWeight: active ? 600 : 500,
-                  color: C.textPrimary,
-                  transition: 'border-color 0.12s, background 0.12s',
-                }}
+                style={{ flexShrink: 0 }}
+                leftIcon={<span style={{ width: 8, height: 8, borderRadius: '50%', background: color.main, flexShrink: 0 }} />}
               >
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: color.main, flexShrink: 0 }} />
                 {p.name}
-              </button>
+              </Button>
             );
           })}
         </div>
@@ -246,28 +238,27 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
         />
       </div>
 
-      {/* Приоритет */}
+      {/* Приоритет — четыре квадратные кнопки (контрол из ui/Button). Активный — accent */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <FieldLabel>Приоритет</FieldLabel>
         <div style={{ display: 'flex', gap: 7 }}>
           {PRIORITY_ORDER.map((p: TaskPriority) => {
             const active = p === priority;
             return (
-              <button
+              <Button
                 key={p}
-                onClick={() => setPriority(p)}
+                variant={active ? 'ghostAccent' : 'ghostFilled'}
+                size="sm"
                 title={PRIORITY_LABEL[p]}
+                onClick={() => setPriority(p)}
                 style={{
-                  width: 36, height: 36, padding: 0, cursor: 'pointer',
-                  border: `1px solid ${active ? C.accent : C.border}`,
+                  width: 36, height: 36, padding: 0, minHeight: 36,
                   borderRadius: R.lg,
-                  background: active ? C.accentLight : C.bgWhite,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'border-color 0.12s, background 0.12s',
                 }}
+                leftIcon={<PriorityFlag priority={p} size={15} />}
               >
-                <PriorityFlag priority={p} size={15} />
-              </button>
+                {''}
+              </Button>
             );
           })}
         </div>

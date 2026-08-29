@@ -7,7 +7,7 @@
 
 import type { Task } from '../../types';
 import { Bug, Repeat } from 'lucide-react';
-import { C, FONT, SHADOW } from '../../lib/design';
+import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { projectColor } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
@@ -68,7 +68,7 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
           )}
           <span style={{
             flex: 1, minWidth: 0,
-            fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600, lineHeight: 1.35,
+            fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, lineHeight: 1.35,
             color: done ? C.textMuted : C.textPrimary,
             textDecoration: done ? 'line-through' : 'none',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

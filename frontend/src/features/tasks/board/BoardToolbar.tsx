@@ -2,11 +2,12 @@
 // кнопка настройки колонок. Читает общий стор boardControls. Два layout:
 // 'inline' — горизонтально над сеткой (хаб/мобайл), 'sidebar' — вертикально (десктоп-проект).
 //
-// Фильтр «Только дефекты» (волна 2) хранит defectsOnly в localStorage под ключом
-// cc_board_defects_only. Параллельный исполнитель в TaskBoard.tsx читает тот же
-// ключ и применяет фильтр в `filtered` (одна строка `if (defectsOnly && t.kind !==
-// 'defect') return false;`). Синхронизация между вкладками — через событие 'storage'.
-// Локальный сторон паттерна useSyncExternalStore: тот же, что у boardControls.
+// Фильтр «Только дефекты» (волна 2/3) хранит defectsOnly в localStorage под ключом
+// cc_board_defects_only. Хук `useDefectsOnly` экспортируется для TaskBoard.tsx — там
+// он применяется в `filtered` (оставляем только открытые дефекты через isOpenDefect:
+// kind=defect и status≠done; закрытые дефекты и обычные задачи выпадают).
+// Синхронизация между вкладками — через событие 'storage'. Локальный сторон паттерна
+// useSyncExternalStore: тот же, что у boardControls.
 
 import { useSyncExternalStore } from 'react';
 import { Bug, SlidersHorizontal } from 'lucide-react';
@@ -55,7 +56,10 @@ export function setDefectsOnly(b: boolean) {
   try { localStorage.setItem(DEFECTS_KEY, b ? '1' : '0'); } catch { /* лимиты квоты localStorage — тихо */ }
   emit();
 }
-function useDefectsOnly(): boolean {
+// Экспортируем хук для соседнего по волне TaskBoard.tsx — фильтр «Только дефекты»
+// применяется в `filtered` (открытые дефекты по isOpenDefect). Стор — общий синглтон
+// в этом файле, поэтому состояние тулбара и применение в доске всегда согласованы.
+export function useDefectsOnly(): boolean {
   return useSyncExternalStore(
     fn => { _listeners.add(fn); return () => { _listeners.delete(fn); }; },
     () => _defectsOnly,

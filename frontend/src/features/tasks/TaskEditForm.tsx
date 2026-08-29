@@ -7,7 +7,7 @@ import type {
   DefectRepro, Project, Task, TaskAssignee, TaskKind, TaskPriority, TaskRecurrence,
   TaskRecurrenceType, TaskSubtask, TaskVerification, UpdateTaskDto,
 } from '../../types';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, FS, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Toolbar } from '../../components/Toolbar';
@@ -50,7 +50,7 @@ function EditorFallback() {
 
 function fieldLabelStyle(): React.CSSProperties {
   return {
-    fontFamily: FONT.sans, fontSize: 11.5, fontWeight: 700, color: C.textMuted,
+    fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
     textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 9,
   };
 }
@@ -373,17 +373,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
               заметка ревьюера; PersonaId бэк подставляет сам из сессии (открывший эту
               форму человек запишет проверку от своего имени, открывший персональный
               чат-исполнитель — от лица персоны). Если дефект уже в Done, форма
-              разрешает правку — она снимет/перезапишет вердикт */}
+              разрешает правку — она снимет/перезапишет вердикт.
+              Подпись «проверено …» опирается на автора вердикта (verification.personaId):
+              не-null ⇒ конкретная персона, null ⇒ человек. Раньше путали с
+              task.personaId (исполнитель задачи) — показывало не того, кто проверял. */}
           {kind === 'defect' && (
             <div style={{ marginBottom: 22 }}>
               <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>
                 Вердикт проверки
-                {task.verification?.personaId && (
+                {task.verification && (
                   <span style={{ marginLeft: 8, fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'none', letterSpacing: 'normal' }}>
-                    · {(() => {
-                      const p = task.personaId ? task.verification.personaId : null;
-                      return p ? 'проверено персоной' : 'проверено человеком';
-                    })()}
+                    · {task.verification.personaId ? 'проверено персоной' : 'проверено человеком'}
                   </span>
                 )}
               </div>
@@ -396,7 +396,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 maxHeight={240}
               />
               <div style={{
-                fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4,
+                fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, marginTop: 6, lineHeight: 1.4,
               }}>
                 Запись пойдёт от лица того, кто сейчас открыл форму (человек или персона-исполнитель).
                 Очистите поле, чтобы снять вердикт.

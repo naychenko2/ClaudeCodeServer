@@ -579,6 +579,117 @@ public class McpToolsetStabilityTests
             "паспорта — данные проекта: в чате вне проекта секции нет, даже с флагом владельца");
     }
 
+    // --- workspace-server: базовый инструмент context_list (фича chat-context) ---
+
+    // tools/list живого workspace-server с заданными env. Бэкенд не нужен: состав считается
+    // из env, в сеть сервер не ходит. null — node недоступен (тест скипается).
+    private static IReadOnlyList<string>? ListWorkspaceTools(params (string Key, string Value)[] env)
+    {
+        var serverPath = FindMcpServer("workspace-server");
+        Skip.If(serverPath is null, "mcp/workspace-server/index.js не найден");
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "node",
+            ArgumentList = { serverPath! },
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.Environment["WORKSPACE_API_URL"] = "http://127.0.0.1:1";
+        psi.Environment["WORKSPACE_API_TOKEN"] = "test";
+        foreach (var (key, value) in env) psi.Environment[key] = value;
+
+        System.Diagnostics.Process? proc;
+        try { proc = System.Diagnostics.Process.Start(psi); }
+        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); return null; }
+        Skip.If(proc is null, "не удалось запустить node");
+
+        using (proc!)
+        {
+            proc.StandardInput.WriteLine("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+            proc.StandardInput.Flush();
+
+            var line = proc.StandardOutput.ReadLine();
+            proc.StandardInput.Close();
+            if (!proc.WaitForExit(10_000)) proc.Kill(entireProcessTree: true);
+
+            line.Should().NotBeNullOrWhiteSpace("сервер обязан ответить на tools/list");
+            using var doc = System.Text.Json.JsonDocument.Parse(line!);
+            return doc.RootElement.GetProperty("result").GetProperty("tools")
+                .EnumerateArray()
+                .Select(t => t.GetProperty("name").GetString()!)
+                .ToList();
+        }
+    }
+
+    // Полный набор секций workspace-server (как у персоны со всеми привязками)
+    private const string AllWorkspaceSections =
+        "projects,files,knowledge,search,chats,git,git_write,knowledge_bases,destructive,deploy";
+
+    /// <summary>
+    /// context_list — БАЗОВЫЙ инструмент (BASE_TOOLS): он про сам чат, а не про доступ в
+    /// проекты, и от набора секций не зависит. Персона с одной секцией search и персона со
+    /// всем набором обязаны видеть его одинаково — иначе состав tools/list начал бы зависеть
+    /// от привязок так, как модель этого не ждёт.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("search")]
+    [InlineData(AllWorkspaceSections)]
+    public void ContextList_ВСоставеПриЛюбомНабореСекций(string sections)
+    {
+        var tools = ListWorkspaceTools(
+            ("WORKSPACE_SECTIONS", sections), ("WORKSPACE_CHAT_CONTEXT", "1"));
+        if (tools is null) return;
+
+        tools.Should().Contain("context_list");
+        // Секционный состав при этом остался на месте — базовый инструмент его не подменил
+        tools.Should().Contain("search_unified");
+        if (sections != "search") tools.Should().Contain("files_read");
+    }
+
+    /// <summary>
+    /// Без флага владельца chat-context инструмента нет вовсе: dark launch означает, что
+    /// схема инструмента не висит в контексте каждого хода при выключенной фиче.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("search")]
+    [InlineData(AllWorkspaceSections)]
+    public void ContextList_БезФлагаВладельца_ИнструментаНет(string sections)
+    {
+        var tools = ListWorkspaceTools(
+            ("WORKSPACE_SECTIONS", sections), ("WORKSPACE_CHAT_CONTEXT", "0"));
+        if (tools is null) return;
+
+        tools.Should().NotContain("context_list",
+            "флаг владельца chat-context выключен — инструмента быть не должно");
+        tools.Should().Contain("search_unified", "остальной состав не пострадал");
+    }
+
+    /// <summary>
+    /// Гейт context_list решается в BuildWorkspaceContext по ВЛАДЕЛЬЦУ (флаг chat-context),
+    /// а не по свойствам хода и не по непустоте контекста: значение уезжает в env
+    /// WORKSPACE_CHAT_CONTEXT и входит в отпечаток состава (shapes wsp) — мерцание между
+    /// ходами убивало бы процесс CLI.
+    /// </summary>
+    [SkippableFact]
+    public void ContextListГейт_РешаетсяФлагомВладельцаАНеХодом()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private WorkspaceMcpContext? BuildWorkspaceContext");
+
+        body.Should().Contain("ChatContext",
+            "инструмент context_list гейтится флагом владельца chat-context");
+        body.Should().NotContain(".Context",
+            "содержимое контекста чата не смеет решать состав инструментов — только флаг владельца");
+        body.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав инструментов рабочего пространства");
+    }
+
     /// <summary>
     /// Флаг секции dossier_* решается в BuildMemoryContext по ВЛАДЕЛЬЦУ (FeatureFlagService),
     /// а не по свойствам хода — значение уезжает в env MEMORY_DOSSIER_TOOLS и входит в

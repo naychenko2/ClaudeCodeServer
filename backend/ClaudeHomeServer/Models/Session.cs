@@ -271,6 +271,32 @@ public class SessionTeamImplement
     public string? LastPlanFeedback { get; set; }
 }
 
+// Материал контекста чата (фича chat-context, правая половина сплита): {тип, id} материала,
+// добавленного в контекст явной кнопкой. Type — значения SessionContextTypes (file/url/task);
+// Id у file — путь от корня проекта, у url — адрес, у task — id задачи в ЭТОМ проекте
+// (контекст живёт только в проектных чатах, отдельного projectId у записи нет).
+// Title — подпись со стороны добавившего (null — фронт/тул резолвит сам).
+public class SessionContextEntry
+{
+    public string Type { get; set; } = "";
+    public string Id { get; set; } = "";
+    public string? Title { get; set; }
+}
+
+// Значения SessionContextEntry.Type — единственная точка, магических строк "file"/"url"/"task"
+// в коде быть не должно. Те же значения — на фронте (union в types/index.ts).
+public static class SessionContextTypes
+{
+    // Файл проекта (включая проектные заметки notes/**.md): Id — путь от корня проекта
+    public const string File = "file";
+    // Ссылка ридера: Id — URL
+    public const string Url = "url";
+    // Задача текущего проекта: Id — id задачи
+    public const string Task = "task";
+
+    public static bool IsKnown(string? value) => value is File or Url or Task;
+}
+
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -317,6 +343,13 @@ public class Session
     // список: старые записи sessions.json читаются штатно, BackupSchema.Version не двигается
     // (аддитивное поле с дефолтом формат не ломает).
     public List<string> CommittedFilePaths { get; set; } = [];
+    // Контекст чата (фича chat-context): материалы, закреплённые за чатом явной кнопкой
+    // «в контекст чата». Замена состава — только целиком через SessionManager.SetContext
+    // (идемпотентный PUT). Дефолт — пустой список: старые записи sessions.json читаются
+    // штатно, BackupSchema.Version не двигается (аддитивное поле с дефолтом формат не
+    // ломает — тот же приём, что у CommittedFilePaths). Инвариант: правка контекста —
+    // настройка, UpdatedAt не двигается (см. SetContext).
+    public List<SessionContextEntry> Context { get; set; } = [];
     // Провайдер/подписка, обслуживающая сессию:
     // "claude" — основная подписка (дефолт, ~/.claude с OAuth);
     // для сторонних провайдеров — ключ из LlmProviders (deepseek, glm);

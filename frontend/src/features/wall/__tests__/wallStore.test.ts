@@ -26,7 +26,7 @@ import type { Project, Session } from '../../../types';
 import { api } from '../../../lib/api';
 import { onMessage } from '../../../lib/signalr';
 import {
-  slotCount, MAX_SLOTS, addChat, removeChat, reorderChat, moveToVisible,
+  slotCount, MAX_SLOTS, addChat, removeChat, reorderChat, moveToVisible, updateChat,
   getWallState, chatStatus, initWall, refresh, focusChat, getWallFocusProject, __resetWallForTests,
 } from '../wallStore';
 
@@ -103,6 +103,24 @@ describe('мутации состава', () => {
     moveToVisible('a', 2);
     expect(getWallState().chats.map(c => c.id)).toEqual(['a', 'b', 'c']);
     expect(getWallState().focusId).toBe('a');
+  });
+});
+
+describe('архивация снимает колонку', () => {
+  it('updateChat с archivedAt убирает чат из набора и чинит фокус', () => {
+    addChat(fakeSession('a'));
+    addChat(fakeSession('b'));
+    updateChat({ ...fakeSession('b'), isArchived: true } as unknown as Session);
+    expect(getWallState().chats.map(c => c.id)).toEqual(['a']);
+    expect(getWallState().focusId).toBe('a');
+  });
+
+  it('архивация чата ВНЕ набора состав не трогает (PUT не уходит)', async () => {
+    addChat(fakeSession('a'));
+    updateChat({ ...fakeSession('z'), isArchived: true } as unknown as Session);
+    expect(getWallState().chats.map(c => c.id)).toEqual(['a']);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(api.wall.put).toHaveBeenCalledWith(['a']);
   });
 });
 

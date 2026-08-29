@@ -83,6 +83,7 @@ export const C = {
   warning:     'var(--c-warning)',
   warningBg:   'var(--c-warning-bg)',
   warningText: 'var(--c-warning-text)',
+  onWarning:   'var(--c-on-warning)',   // текст/цифры поверх сплошного warning-фона
   danger:       'var(--c-danger)',
   dangerBg:     'var(--c-danger-bg)',
   dangerText:   'var(--c-danger-text)',
@@ -202,6 +203,10 @@ export const ISLAND = {
 
 // === Слои (z-index) ===
 export const Z = {
+  // Кадр эфира, вставленный в панель или центральный остров. Живёт оверлеем НАД
+  // раскладкой (иначе не пережил бы перемонтаж страницы при смене проекта), но
+  // ниже плавающего окна: то — отдельное окно поверх всего остального.
+  videoFrame: 39,
   // Плавающее окно с видео: висит часами, поэтому НИЖЕ меню — секундный список
   // не должен уходить под него. Выше обычной раскладки, но ниже всего временного.
   floatWindow: 40,

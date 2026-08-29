@@ -17,6 +17,7 @@ import { api } from '../api';
 import { onMessage } from '../signalr';
 import {
   __resetAgentsPresence, subscribeAgentsPresence, agentsPresenceSnapshot, bgCommandsPresenceSnapshot,
+  bgWorkPresenceSnapshot,
 } from '../agentsPresence';
 
 // Обработчик, который стор передал в onMessage при старте
@@ -83,7 +84,7 @@ describe('agentsPresence', () => {
   });
 
   it('фоновая команда учитывается отдельно от агентов', async () => {
-    // Дев-сервер в фоне — не агент: карточке положен тихий значок, а не свечение
+    // Дев-сервер в фоне — не агент: значок в строке имени свой, а вот подсветка общая
     subscribeAgentsPresence(() => {});
     await vi.waitFor(() => expect(vi.mocked(onMessage)).toHaveBeenCalled());
 
@@ -91,6 +92,46 @@ describe('agentsPresence', () => {
 
     expect(agentsPresenceSnapshot().has('a')).toBe(false);
     expect(bgCommandsPresenceSnapshot().has('a')).toBe(true);
+    expect(bgWorkPresenceSnapshot().has('a')).toBe(true);
+  });
+
+  it('объединение сводит оба вида фона и гаснет вместе с последним', async () => {
+    // Подсветка (плитка чата, точки рельсы и стены) читает именно объединение:
+    // пока живёт хоть один вид фона, чат обязан выглядеть работающим
+    subscribeAgentsPresence(() => {});
+    await vi.waitFor(() => expect(vi.mocked(onMessage)).toHaveBeenCalled());
+
+    handler()(presence('a', true, true));
+    expect(bgWorkPresenceSnapshot().has('a')).toBe(true);
+
+    handler()(presence('a', false, true)); // агент отработал, дев-сервер живёт
+    expect(bgWorkPresenceSnapshot().has('a')).toBe(true);
+
+    handler()(presence('a', false, false));
+    expect(bgWorkPresenceSnapshot().has('a')).toBe(false);
+  });
+
+  it('чат с обоими видами фона входит в объединение один раз', async () => {
+    // Пересчёт объединения сравнивает СОСТАВ: наивная сверка по сумме размеров
+    // считала бы такой чат за два и пересоздавала Set на каждом чужом событии
+    subscribeAgentsPresence(() => {});
+    await vi.waitFor(() => expect(vi.mocked(onMessage)).toHaveBeenCalled());
+    handler()(presence('a', true, true));
+
+    const first = bgWorkPresenceSnapshot();
+    expect(first.size).toBe(1);
+
+    handler()(presence('b', false, false)); // событие про чужой чат состава не меняет
+    expect(bgWorkPresenceSnapshot()).toBe(first);
+  });
+
+  it('снимок с сервера наполняет объединение обоими видами', async () => {
+    vi.mocked(api.chats.agentsPresence).mockResolvedValue({ agents: ['a'], commands: ['b'] });
+    subscribeAgentsPresence(() => {});
+
+    await vi.waitFor(() => expect(bgWorkPresenceSnapshot().size).toBe(2));
+    expect(bgWorkPresenceSnapshot().has('a')).toBe(true);
+    expect(bgWorkPresenceSnapshot().has('b')).toBe(true);
   });
 
   it('конец агента не гасит фоновую команду того же чата', async () => {
@@ -124,6 +165,7 @@ describe('agentsPresence', () => {
     handler()({ type: 'chat_deleted', sessionId: 'a' } as unknown as ServerMessage);
 
     expect(bgCommandsPresenceSnapshot().has('a')).toBe(false);
+    expect(bgWorkPresenceSnapshot().has('a')).toBe(false);
   });
 
   it('подписчик получает уведомление о смене', async () => {

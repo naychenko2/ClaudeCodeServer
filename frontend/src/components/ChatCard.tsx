@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
@@ -27,6 +27,8 @@ import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
+import { useCanHover } from '../lib/pointer';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -52,9 +54,11 @@ const TWO_LINES = 42;
 export const ROW_R = R.md;
 export const ROW_GAP = 2;
 
-// Умеет ли устройство наводить курсор. На тач-экранах hover не наступает никогда,
-// поэтому кнопки действий там показываем постоянно (приём как в MarkdownViewer)
-const CAN_HOVER = typeof window !== 'undefined' && !window.matchMedia('(hover: none)').matches;
+// Умеет ли устройство наводить курсор — берём общий useCanHover() из lib/pointer
+// (см. ниже по коду). Своя копия на matchMedia('(hover: none)') здесь и стояла, и
+// врала: медиа-запрос описывает ПЕРВИЧНЫЙ указатель, поэтому планшет со стилусом
+// отвечает «наводить умею», хотя человек тычет пальцем. Хук смотрит на реальный
+// ввод — первый же pointerdown пальцем переключает его в capture-фазе.
 
 // Подложки под кнопкой действий нет: в покое видна только иконка, фон появляется
 // под курсором — его рисует сам IconButton
@@ -139,6 +143,13 @@ interface Props {
   agentsRunning?: boolean;
   // То же для фоновой команды (Bash в фоне) — тихий значок терминала
   bgCommandRunning?: boolean;
+  // Незафиксированные в git правки (dirtySessionIds из lib/git.ts) — тихий значок в
+  // строке названия. 'own' — правил сам чат; 'descendants' — сам не правил, но правки
+  // есть у вложенных чатов (признак наследуется вверх по ветке, чтобы свёрнутая или
+  // длинная ветка не прятала работу). Оба сразу — 'own', свои правки важнее.
+  // Не задан — значка нет: признак неизвестен или не применим (чаты вне проектов,
+  // витрина UI-кита, недоступный git-статус)
+  uncommitted?: 'own' | 'descendants';
   onSelect: () => void;
   onHover: (hovered: boolean) => void;
   onDelete: () => void;
@@ -164,6 +175,10 @@ interface Props {
   // Изменение чата из меню карточки (мьют уведомлений, срок хранения) — обновлённую
   // сессию возвращает бэкенд, список обновляет ею своё состояние. Не задан — пунктов нет
   onEdited?: (s: Session) => void;
+  // Чат вернули из архива. Отдельный колбэк, а не разбор onEdited владельцем: только
+  // здесь известно, что правка была именно возвратом, — снаружи пришлось бы сравнивать
+  // archivedAt до и после. Список по нему выходит из архивного вида и открывает чат:
+  // возврат из архива — намерение продолжить в нём работу, а не переложить в стопку.
   // Доп. отступ содержимого слева (px). В дереве чатов контрол ветки садится в шов
   // на левый край карточки — под ним нужно освободить место, иначе он ляжет на
   // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
@@ -187,7 +202,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp,
+  agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onRename, onAddToWall,
   onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle,
 }: Props) {
@@ -236,7 +251,14 @@ export function ChatCard({
   const SWIPE_BTN_W = 44;
   // editing объявлен ниже; его состояние важно только в момент жеста, поэтому в
   // гейт здесь не включаем (beginLongPress уже проверяет editing на месте)
-  const swipeCanWork = isMobile && online && !!onSwipeToggle;
+  //
+  // Признака устройства в гейте НЕТ намеренно. Раньше стоял isMobile (≤600), и жест
+  // не доставался планшету: HUAWEI MatePad 11.5 S даёт 736 CSS в портрете и 1120 в
+  // ландшафте (замер — docs/design/target-devices.md), то есть «широкий» по любому
+  // порогу, а пальцем при этом остаётся пальцем. Проверять вместо ширины «умеет ли
+  // наводить» тоже нечем: жест висит на onTouch*, а эти события шлёт ТОЛЬКО палец —
+  // мышь не активирует свайп физически, сколько бы указателей ни объявило устройство.
+  const swipeCanWork = online && !!onSwipeToggle;
   const [swipeDx, setSwipeDx] = useState(0);
   const swipeActive = useRef(false);   // ось зафиксирована как горизонталь
   const swipeStartX = useRef(0);
@@ -249,7 +271,9 @@ export function ChatCard({
   const swipeMoved = useRef(false);    // был ли горизонтальный сдвиг — глушит клик
 
   const beginLongPress = (e: React.TouchEvent) => {
-    if (!isMobile || !online || editing) return;   // editing здесь уже объявлен ниже по коду, но вызов идёт по событию — безопасно
+    // Гейта по ширине нет по той же причине, что у свайпа: обработчик висит на
+    // onTouchStart, и вызвать его может только палец
+    if (!online || editing) return;   // editing здесь уже объявлен ниже по коду, но вызов идёт по событию — безопасно
     const t = e.touches[0];
     lpStart.current = { x: t.clientX, y: t.clientY };
     lpFired.current = false;
@@ -534,7 +558,15 @@ export function ChatCard({
   // Во время правки названия действий нет: кнопка «⋮» стоит вплотную к полю ввода,
   // и её меню (закрепить/теги/удалить) применялось бы к чату, имя которого ещё не
   // сохранено. Уходит вся кнопка, а не только меню — раскладку она не двигает (absolute)
-  const showActions = online && !editing && (CAN_HOVER ? hovered : isActive);
+  const canHover = useCanHover();
+  const showActions = online && !editing && (canHover ? hovered : isActive);
+
+  // Кластер быстрых кнопок — только там, где к нему реально подводят курсор. На тач
+  // те же действия приезжают свайпом, и рисовать оба набора нельзя: кнопки стоят
+  // ровно там, откуда выезжает свайп-панель, и палец попадал бы по верхнему слою
+  // вместо жеста. Мобильная раскладка с мышью (узкое окно на десктопе) остаётся как
+  // была — там кластера нет и не было
+  const quickCluster = !isMobile && canHover;
 
   // Строка общих тегов (макет chat-tags-switch): чипы идут ТРЕТЬЕЙ строкой — под
   // превью или статусом задачи, а не сразу под названием, чтобы метки не разрывали
@@ -561,18 +593,22 @@ export function ChatCard({
   // Переключаем визуал статуса на 'waiting' (медовый, slow) — он усиливает жёлтый
   // маркер, а не спорит с ним. Сам s.status не трогаем: это факт CLI, а не визуал
   const teamWait = !!s.teamImplement && teamImplementTone(s.teamImplement.stage) === 'wait';
-  // Фоновые агенты доживают уже после конца хода: статус сессии при этом Active, у него
+  // Фоновая работа доживает уже после конца хода: статус сессии при этом Active, у него
   // нулевое свечение — карточка выглядела остывшей, хотя работа идёт. Приоритет ниже
   // teamWait (там ждут ЧЕЛОВЕКА — это важнее) и выше собственного статуса сессии:
   // перебиваем только спокойные состояния, живой working подменять незачем
   const agentsRunningLive = useAgentsRunning(s.id);
   const agentsRunning = agentsRunningProp ?? agentsRunningLive;
-  // Фоновая команда статуса чата не меняет вовсе (visualStatus её не знает) — только значок
+  // Фоновая команда (дев-сервер, watch) светится наравне с агентами: чат с живым процессом
+  // не должен выглядеть остывшим, а какая именно работа идёт — говорит значок в строке имени.
+  // Своё значение visualStatus, а не 'agents': подпись «агенты работают» тут была бы враньём
   const bgCommandRunningLive = useBgCommandRunning(s.id);
   const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
   const visualStatus: VisualStatus = teamWait ? 'waiting'
-    : agentsRunning && !STATUS_GLOW[s.status].breath ? 'agents'
-      : s.status;
+    : STATUS_GLOW[s.status].breath ? s.status
+      : agentsRunning ? 'agents'
+        : bgCommandRunning ? 'command'
+          : s.status;
   const glow = STATUS_GLOW[visualStatus];
   const hasGlow = glow.alpha > 0;
   const glowClass = !hasGlow ? ''
@@ -813,6 +849,7 @@ export function ChatCard({
             // перестраивается, соседние метки не прыгают. Клики гасим — иначе
             // попытка поставить курсор открывала бы чат (onClick всей карточки)
             <input
+              {...NO_AUTOFILL}
               ref={inputRef}
               value={draft}
               disabled={saving}
@@ -865,6 +902,30 @@ export function ChatCard({
           {s.isPinned && (
             <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />
           )}
+          {/* Правки чата не зафиксированы в git. Значок-СОСТОЯНИЕ, поэтому глиф взят из
+              git-семейства и намеренно не FileDiff — тот в продукте занят кнопкой
+              «показать дифф» (GitChangesRail), и одинаковый глиф читался бы как действие.
+              Формулировка тултипа про ПРАВКИ ЧАТА, а не про состояние репозитория:
+              множество берётся из атрибуции файлов чату, а она врёт в известных случаях
+              (коммит при погашенном сервере, чужая правка «его» файла) — обещать
+              «в репозитории есть незакоммиченное» значок не вправе. На мобиле тултип по
+              тапу не всплывает — значок остаётся без пояснения осознанно, прятать его
+              там хуже, чем показать молча.
+              Унаследованный от потомков значок тем же глифом и цветом: два оттенка серого
+              на иконке 13px не различить, поэтому разводим их ТЕКСТОМ подсказки, а не
+              видом — иначе родитель молча врал бы, что правил файлы сам */}
+          {uncommitted && (
+            <span
+              title={uncommitted === 'own'
+                ? 'Правки этого чата не зафиксированы в git'
+                : 'Не зафиксированы правки во вложенных чатах'}
+              aria-label={uncommitted === 'own'
+                ? 'Правки этого чата не зафиксированы в git'
+                : 'Не зафиксированы правки во вложенных чатах'}
+              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              <GitCommitVertical size={13} strokeWidth={2.2} />
+            </span>
+          )}
           {/* Работают фоновые агенты. Это единственное, чем такой чат отличим от чата
               с идущим ходом: волна у них одна и та же (работа и там, и там реальная).
               При чипе WF значок не дублируем — workflow и есть фоновая задача */}
@@ -874,14 +935,14 @@ export function ChatCard({
               <Bot size={13} strokeWidth={2.2} />
             </span>
           )}
-          {/* Фоновая команда (дев-сервер, watch): приглушённый значок без волны и без
-              акцента — работа идёт, но это не ход и не агент, и завершения у неё может
-              не быть вовсе. Тон приглушённый намеренно: горящий часами акцент в списке
-              перестают замечать. При работающих агентах не показываем — свечение уже
-              объясняет, почему чат жив, а два значка подряд сливаются в шум */}
+          {/* Фоновая команда (дев-сервер, watch): волна по плитке у неё та же, что у агентов
+              (чат с живым процессом не выглядит остывшим), а вид работы называет этот значок.
+              Цвет акцентный — под цвет волны: серый значок на акцентной подсветке читался бы
+              как рассинхрон. При работающих агентах не показываем — свечение уже объясняет,
+              почему чат жив, а два значка подряд сливаются в шум */}
           {bgCommandRunning && !agentsRunning && !workflowRunning && (
             <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
-              style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              style={{ display: 'flex', flexShrink: 0, color: C.accent }}>
               <Terminal size={13} strokeWidth={2.2} />
             </span>
           )}
@@ -935,7 +996,7 @@ export function ChatCard({
           Ghost-класса здесь НЕТ намеренно: кластер и так появляется только по
           наведению (showActions), и приглушать уже проявленные кнопки — значит
           показывать их выключенными */}
-      {showActions && !isMobile && quickButtons.length > 0 && (
+      {showActions && quickCluster && quickButtons.length > 0 && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
           right: ACTIONS_RIGHT, zIndex: 2, display: 'flex', alignItems: 'center',
@@ -965,7 +1026,7 @@ export function ChatCard({
       {showActions && (
         <div style={{
           position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-          right: isMobile ? ACTIONS_RIGHT : ACTIONS_RIGHT + quickButtons.length * ACTION_BOX,
+          right: quickCluster ? ACTIONS_RIGHT + quickButtons.length * ACTION_BOX : ACTIONS_RIGHT,
           zIndex: 1, display: 'flex',
         }}>
           <IconButton

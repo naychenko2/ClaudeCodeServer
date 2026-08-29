@@ -1,23 +1,21 @@
 // Док «Стены» — капсула ПОД доком проектов, в обоих режимах на одном месте:
-//  • в воркспейсе: кнопка входа в режим + приёмник чатов (перетащи карточку чата
-//    из панели «Чаты» — чат встанет колонкой);
-//  • на самой стене: та же капсула, но кнопка добавляет чат (пикер) — вход уже
-//    состоялся, а приёмник перетаскивания продолжает работать.
+// номера чатов стены, лупа (пикер чатов) и приёмник перетаскивания — перетащи
+// карточку чата из панели «Чаты», и чат встанет колонкой. Кнопок входа и выхода
+// тут НЕТ: на стену уводит клик по номерку чата, обратно — пилюля «Проекты» в
+// шапке (на стене она подсвечена как активный раздел и гасит режим).
 //
 // При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
 // состава, и без загруженного снимка дроп затирал бы чужие монеты.
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Columns3, LogOut, Plus } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { useWindowWidth } from '../../lib/breakpoints';
-import { plural } from '../../lib/spend';
 import { showToast } from '../../lib/toast';
 import type { Session } from '../../types';
 import { useChatActivity, STATUS_COLOR, STATUS_PULSE, type ActivityStatus } from '../../lib/projectActivity';
 import { projectMainColor } from '../projects/projectUtil';
-import { useWallState, initWall, addChatSafe, focusChat, swapChats, startOrderDrag, slotCount, MAX_CHATS } from './wallStore';
+import { useWallState, initWall, addChatSafe, focusChat, swapChats, startOrderDrag, MAX_CHATS } from './wallStore';
 import { WallPicker } from './WallPicker';
 
 // Тип данных перетаскивания карточки чата (кладёт SessionList в плоском режиме)
@@ -30,21 +28,15 @@ const CHAT_STATUS_TITLE: Record<ActivityStatus, string> = {
   unread: 'непрочитанное',
 };
 
-export function WallDock({ onOpenWall, onExit, slots = 0 }: {
-  // Вход в режим (воркспейс). Не задан — мы уже на стене
+export function WallDock({ onOpenWall, slots = 0 }: {
+  // Признак режима: задан — мы в воркспейсе (клик по номерку уводит на стену),
+  // не задан — мы уже на стене
   onOpenWall?: () => void;
-  // Выход из режима (на стене): гасит навигационную память и уводит к проектам
-  onExit?: () => void;
   // Сколько колонок помещается на экране: чаты сверх этого числа получают кнопки
   slots?: number;
 }) {
   const { chats, projects, focusId } = useWallState();
   const activity = useChatActivity();
-  // Невлезшие колонки — той же формулой, какой их режет сама стена (WallPage):
-  // в воркспейсе колонок не видно, и это единственная сводка «сколько ещё ждёт
-  // за бортом». Знак — «+N», как у невлезших проектов на лупе дока (ProjectRail)
-  const w = useWindowWidth();
-  const hidden = Math.max(0, chats.length - slotCount(w));
   // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
   // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
   // курсор не дойдёт до неё, а знать «сюда можно» надо заранее.
@@ -72,8 +64,8 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
       document.removeEventListener('drop', onEnd);
     };
   }, []);
-  // Пикер живёт в самом доке: кнопка «+» есть в обоих режимах, и держать её
-  // состояние в двух экранах-владельцах было бы дублем
+  // Пикер живёт в самом доке: лупа есть в обоих режимах, и держать её состояние
+  // в двух экранах-владельцах было бы дублем
   const [picker, setPicker] = useState(false);
 
   useEffect(() => { initWall(undefined); }, []);
@@ -134,49 +126,6 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
       {/* Шляпка — только в покое: пока чат тащат, капсула ужимается до одной
           мишени, и ярлык рос бы ровно там, куда человек целится */}
       <RailHat side="left" label="Стена" title="Стена чатов" />
-
-      {/* Выход из режима — ПЕРВЫМ в капсуле: возврат к проектам ищут у верхней
-          кромки, как «назад» в шапке */}
-      {onWall && onExit && (
-        <RailIconButton side="left" label="Выйти со стены" onClick={onExit}>
-          <LogOut size={16} strokeWidth={ICON_STROKE} style={{ transform: 'rotate(180deg)' }} />
-        </RailIconButton>
-      )}
-
-      {/* Вход в режим — только в воркспейсе (на стене мы уже здесь) */}
-      {!onWall && (
-      <RailIconButton
-        side="left"
-        label={`Стена${chats.length > 0 ? ` (${chats.length})` : ''}`}
-        hint={hidden > 0
-          ? `на экран влезает ${slotCount(w)} — ещё ${hidden} ${plural(hidden, 'чат', 'чата', 'чатов')} не поместилось`
-          : undefined}
-        onClick={() => onOpenWall?.()}
-      >
-        <span style={{ position: 'relative', display: 'flex' }}>
-          <Columns3 size={16} strokeWidth={ICON_STROKE} />
-          {hidden > 0 && (
-            // Счётчик НЕВЛЕЗШИХ — справка, а не сигнал: акцентная заливка тут кричала бы
-            // громче колокольчика уведомлений. Нейтральная плашка в тон панелей. Знак
-            // «+N» — тот же, что у невлезших проектов на лупе дока (ProjectRail):
-            // число на рельсе везде значит «сколько ещё за бортом», а не размер списка
-            <span style={{
-              position: 'absolute', top: -6, right: -8, minWidth: 13, height: 13,
-              padding: '0 3px', borderRadius: R.full, background: C.bgPanel, color: C.textSecondary,
-              border: `1px solid ${C.border}`, boxSizing: 'border-box',
-              fontSize: 9, fontWeight: 700, lineHeight: '11px', textAlign: 'center',
-              pointerEvents: 'none',
-            }}>
-              +{hidden}
-            </span>
-          )}
-        </span>
-      </RailIconButton>
-      )}
-
-      {/* Кнопка режима, номера чатов и добавление — три разные по смыслу
-          группы, каждая отбита чертой (как группы в рельсе панелей) */}
-      <RailSep />
 
       {/* ВЕСЬ набор стены номерками — карта состава в ОБОИХ режимах: цвет номерка =
           цвет проекта (стена мульти-проектная, по цвету видно, из чего она собрана),
@@ -255,9 +204,11 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
       })}
       {chats.length > 0 && <RailSep />}
 
-      {/* Добавление чата — в ОБОИХ режимах: собрать стену можно, не покидая проект */}
-      <RailIconButton side="left" label="Добавить чат на стену" onClick={() => setPicker(true)}>
-        <Plus size={16} strokeWidth={ICON_STROKE} />
+      {/* Поиск чата для стены — в ОБОИХ режимах: собрать стену можно, не покидая
+          проект. Лупа, а не «плюс»: за кнопкой пикер с поиском по всем чатам, а
+          «плюс» в этой капсуле занят мишенью перетаскивания выше */}
+      <RailIconButton side="left" label="Найти чат для стены" onClick={() => setPicker(true)}>
+        <Search size={16} strokeWidth={ICON_STROKE} />
       </RailIconButton>
 
       </>

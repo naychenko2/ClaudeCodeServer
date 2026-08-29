@@ -1,5 +1,8 @@
 import type { Session } from '../types';
 import { api } from './api';
+import { updateChat as wallUpdateChat } from '../features/wall/wallStore';
+import { isArchivedChat } from './chatFilters';
+import { archiveApi } from '../api/chats';
 
 // Единая точка обновления полей чата.
 //
@@ -25,11 +28,22 @@ export interface ChatFieldsPatch {
   // Стиль озвучки ('talk' | 'digest'). Уходит и БЕЗ voiceMode: стиль принадлежит
   // устройству, и второе устройство выправляет его у чата с уже включённой озвучкой
   voiceStyle?: string;
-  // Архив чата: PUT /api/chats/{id}/archived
+  // Архив чата. Уходит НЕ общим апдейтом полей, а своим эндпоинтом
+  // (PUT /api/chats/{id}/archived, см. archiveApi): UpdateSessionRequest и
+  // UpdateChatRequest такого поля не имеют и молча отбросили бы его — UI показал бы
+  // успех, а чат остался бы в списке.
   archived?: boolean;
 }
 
 export function updateChatFields(session: Session, patch: ChatFieldsPatch): Promise<Session> {
+  // Архив снимает чат со «Стены»: архивный чат скрыт из списков и молчит, колонка стала бы
+  // призраком. Сервер это уже гарантирует (MyWallController не резолвит архивные), но
+  // состав живёт в модульном сторе — без этого монета висела бы до перезагрузки экрана.
+  // Точка одна на все места архивации (список чатов, шапка чата, шапка колонки стены);
+  // стор сам игнорит чат вне набора, поэтому вызов дёшев и идемпотентен.
+  if (patch.archived !== undefined)
+    return archiveApi.setArchived(session.id, patch.archived).then(s => { wallUpdateChat(s); return s; });
+
   const data = {
     ...(patch.name !== undefined && { name: patch.name }),
     ...(patch.model !== undefined && { model: patch.model }),
@@ -40,9 +54,45 @@ export function updateChatFields(session: Session, patch: ChatFieldsPatch): Prom
     ...(patch.notificationsMuted !== undefined && { notificationsMuted: patch.notificationsMuted }),
     ...(patch.voiceMode !== undefined && { voiceMode: patch.voiceMode }),
     ...(patch.voiceStyle !== undefined && { voiceStyle: patch.voiceStyle }),
-    ...(patch.archived !== undefined && { archived: patch.archived }),
   };
-  return session.projectId
+  const done = session.projectId
     ? api.sessions.update(session.projectId, session.id, data)
     : api.chats.update(session.id, data);
+  return done;
+}
+
+// Сосед архивируемого чата в списке: на кого переключить центр, когда активный чат
+// ушёл в архив. «Предыдущий» — по порядку списка (свежесть/закрепление уже учтены
+// в его сортировке), не по истории переходов: после архивации из списка пропадает
+// и сама строка, и «исторический сосед» стал бы ссылкой на чат, которого на экране нет.
+// isVisible — предикат текущих фильтров списка (matchChatFilter): сосед обязан быть
+// не только неархивным, но и ВИДИМЫМ — чаты, скрытые фильтрами (напр., выполненные
+// задачи под скрытым чипом «Готово»), в списке нет, и центр открыл бы ещё одного
+// призрака. Предикат опционален: без него выборка только по архиву (места без фильтров).
+// null — подходящих соседей нет (архивировали последний видимый) — центр уходит в пустое состояние.
+export function chatNeighborForArchive(
+  list: Session[],
+  archivedId: string,
+  isVisible?: (s: Session) => boolean,
+): Session | null {
+  // Признак архива производный (сервер отдаёт готовый bool) — читаем его единой
+  // точкой isArchivedChat: у чата с активностью после архивации archivedAt непустой,
+  // а сам чат живой и в списке есть.
+  const ok = (s: Session) => !isArchivedChat(s) && (!isVisible || isVisible(s));
+  const live = list.filter(s => s.id !== archivedId && ok(s));
+  if (live.length === 0) return null;
+  const idx = list.findIndex(s => s.id === archivedId);
+  // Чата нет в списке (архивация со стены/из другого окна) — просто первый живой
+  if (idx < 0) return live[0];
+  // Ближайший видимый сосед: сперва вверх по списку, потом вниз. Вверх — первым:
+  // список свежими сверху, и чат СВЕРХУ — тот, из которого пришли в архивируемый
+  for (let i = idx - 1; i >= 0; i--) {
+    const s = list[i];
+    if (ok(s)) return s;
+  }
+  for (let i = idx + 1; i < list.length; i++) {
+    const s = list[i];
+    if (ok(s)) return s;
+  }
+  return null;
 }

@@ -10,6 +10,7 @@ import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { ProjectIcon } from './ProjectIcon';
 import { GLYPHS } from '../../lib/projectGlyphs';
 import { invalidateProjectsCache } from './useAllProjects';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Черновик значка при создании проекта (проекта ещё нет — держим кандидата в памяти
 // вкладки и досылаем через selectIcon после create()). Источник данных — `name`
@@ -247,6 +248,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
 
         {/* Название проекта — крупный serif-ввод рядом с иконкой. */}
         <input
+          {...NO_AUTOFILL}
           value={name}
           onChange={e => onNameChange(e.target.value)}
           placeholder="Название проекта"
@@ -265,6 +267,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
         <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           <div style={{ display: 'flex', gap: 6 }}>
             <input
+              {...NO_AUTOFILL}
               value={suggInput}
               onChange={e => setSuggInput(e.target.value)}
               placeholder={PLACEHOLDER_PROMPT}

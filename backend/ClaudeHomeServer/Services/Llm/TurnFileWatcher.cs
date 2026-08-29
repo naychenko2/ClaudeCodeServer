@@ -20,18 +20,30 @@ public sealed record FileWatcherOptions(
         RespectGitignore: true);
 }
 
+// Тайминги обработки FS-события. В проде — Default; тесты укорачивают паузы и получают
+// точку синхронизации BeforeExternalRetry, чтобы гонку «заявка пришла внутри retry-окна»
+// воспроизводить событием, а не сном (на слабом CI-раннере сон уезжает и тест мигает).
+public sealed record FileWatcherTiming(
+    TimeSpan Debounce,
+    TimeSpan ExternalRetry,
+    // Вызывается ПЕРЕД паузой retry-атрибуции, аргумент — полный путь файла. В проде null.
+    Func<string, Task>? BeforeExternalRetry = null)
+{
+    // Debounce 400мс — склейка серии событий одной записи файла. ExternalRetry 1.5с — пауза
+    // перед вердиктом «правка вне чата»: заявка автора подтверждается только по успешному
+    // tool_result (ClaudeSession), который при медленном стриме приходит ПОЗЖЕ самого файла —
+    // debounce-проверки на это не хватает, и правка чужого параллельного хода уезжала в ленту
+    // этого чата как «Изменение вне чата». Один повтор после паузы закрывает окно гонки.
+    public static readonly FileWatcherTiming Default = new(
+        Debounce: TimeSpan.FromMilliseconds(400),
+        ExternalRetry: TimeSpan.FromSeconds(1.5));
+}
+
 // Следит за изменениями файлов в рабочей папке на время хода и шлёт FileChangedMessage.
 // Один экземпляр на сессию: кэш содержимого живёт между ходами, чтобы diff считался
 // от последнего известного состояния. Общий для всех адаптеров.
 public sealed class TurnFileWatcher : IDisposable
 {
-    // Пауза перед вердиктом «правка вне чата»: заявка автора правки подтверждается
-    // только по успешному tool_result (ClaudeSession), который при медленном стриме
-    // приходит ПОЗЖЕ самого файла — debounce-проверки (400мс) на это не хватает, и
-    // правка чужого параллельного хода уезжала в ленту этого чата как «Изменение
-    // вне чата». Один повтор после паузы закрывает окно гонки.
-    private static readonly TimeSpan ExternalRetryDelay = TimeSpan.FromSeconds(1.5);
-
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;
     private readonly FileWatcherOptions _options;
@@ -47,13 +59,15 @@ public sealed class TurnFileWatcher : IDisposable
     // выключена (тесты, сессия без владельца), как и раньше.
     private readonly FileChangeAttributor? _attributor;
     private readonly string? _ownerSessionId;
+    private readonly FileWatcherTiming _timing;
 
     public TurnFileWatcher(string rootPath, Func<ServerMessage, Task> onMessage, FileWatcherOptions? options = null,
-        FileChangeAttributor? attributor = null, string? ownerSessionId = null)
+        FileChangeAttributor? attributor = null, string? ownerSessionId = null, FileWatcherTiming? timing = null)
     {
         _rootPath = rootPath;
         _onMessage = onMessage;
         _options = options ?? FileWatcherOptions.Default;
+        _timing = timing ?? FileWatcherTiming.Default;
         _attributor = attributor;
         _ownerSessionId = ownerSessionId;
         _ignoreDirs = new HashSet<string>(_options.IgnoreDirs, StringComparer.OrdinalIgnoreCase);
@@ -113,7 +127,7 @@ public sealed class TurnFileWatcher : IDisposable
         var token = cts.Token;
         try
         {
-            await Task.Delay(400, token);
+            await Task.Delay(_timing.Debounce, token);
             if (!File.Exists(fullPath) && !_fileCache.ContainsKey(fullPath)) return;
             // .gitignore проверяем после debounce (реже) и до чтения файла
             if (IsGitIgnored(fullPath)) return;
@@ -138,15 +152,18 @@ public sealed class TurnFileWatcher : IDisposable
             // параллельного хода уезжала в ленту этого чата как «Изменение вне чата»
             // (а через историю — в «файлы этого чата» на панели Изменений). Поэтому
             // кандидат на «вне чата» перепроверяется после дополнительной паузы
-            // (ExternalRetryDelay = 1.5с): за суммарные ~1.9с опоздавший tool_result
-            // успевает дойти.
+            // (FileWatcherTiming.ExternalRetry): за суммарные ~1.9с опоздавший
+            // tool_result успевает дойти.
             var external = false;
             if (_attributor is not null && _ownerSessionId is not null)
             {
                 if (_attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
                 if (!_attributor.IsClaimedBySelf(_ownerSessionId, fullPath))
                 {
-                    await Task.Delay(ExternalRetryDelay, token);
+                    // Точка синхронизации для тестов (в проде null): позволяет заявке
+                    // прийти строго внутри retry-окна, без гонки со сном
+                    if (_timing.BeforeExternalRetry is { } beforeRetry) await beforeRetry(fullPath);
+                    await Task.Delay(_timing.ExternalRetry, token);
                     // За паузу автор определился: чужая заявка — гасим (карточку покажет
                     // его собственный watcher), своя заявка (опоздавший tool_result) —
                     // правка нашего хода (external=false), по-прежнему никаких заявок —

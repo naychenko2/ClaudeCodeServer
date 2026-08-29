@@ -137,7 +137,10 @@ public sealed class ProjectServiceDiscovery
         if (svc.Members is not { Length: > 0 }) return svc.SuggestedPort is > 0 ? svc.SuggestedPort : null;
 
         var byId = known.ToDictionary(s => s.Id);
+        // Последний участник, а не первый: в составном запуске сначала идут зависимости,
+        // а приложение, ради которого всё затевалось, ждёт их и стоит в конце
         return svc.Members
+            .Reverse()
             .Select(id => byId.TryGetValue(id, out var m) ? m.SuggestedPort : null)
             .FirstOrDefault(p => p is > 0);
     }
@@ -232,6 +235,7 @@ public sealed class ProjectServiceDiscovery
                     "LaunchSettings" => RiderLaunchSettings(root, projectDir, cfg, name),
                     "js.build_tools.npm" => RiderNpm(root, projectDir, cfg, name),
                     "docker-deploy" => RiderCompose(root, projectDir, cfg, name),
+                    "NodeJSConfigurationType" => RiderNodeJs(root, projectDir, cfg, name),
                     // Скриптовые типы (ShConfigurationType, PowerShellRunType) пропускаем:
                     // отличить сервер от разовой утилиты в них нечем
                     _ => null,
@@ -426,6 +430,84 @@ public sealed class ProjectServiceDiscovery
             SuggestedPort: null,   // Vite/webpack печатают URL в вывод — поймаем при старте
             AutoPort: false,
             Saved: false);
+    }
+
+    /// <summary>
+    /// Запуск node-скрипта (тип NodeJSConfigurationType): всё лежит в атрибутах —
+    /// path-to-js-file, application-parameters, working-dir.
+    ///
+    /// В отличие от npm-конфигураций порт тут часто задан ЯВНО, аргументом командной
+    /// строки, и вытащить его важно: без порта сервис не опознаётся как поднятый снаружи,
+    /// и продукт предлагает запустить его поверх уже работающего процесса.
+    /// </summary>
+    private ProjectServiceInfo? RiderNodeJs(string root, string projectDir, XElement cfg, string name)
+    {
+        var script = ResolveRiderPath(root, projectDir, cfg.Attribute("path-to-js-file")?.Value);
+        if (script is null) return null;
+
+        var appArgs = SplitArgs(cfg.Attribute("application-parameters")?.Value);
+        var nodeArgs = SplitArgs(cfg.Attribute("node-parameters")?.Value);
+        var workingDir = ResolveRiderPath(root, projectDir, cfg.Attribute("working-dir")?.Value);
+        // Путь к скрипту оставляем абсолютным только если он вне рабочей папки: иначе
+        // командная строка распухает, а запуск идёт из cwd и так найдёт файл
+        var cwd = workingDir is null ? RelCwd(root, Path.GetDirectoryName(script)!) : RelCwd(root, workingDir);
+
+        return new ProjectServiceInfo(
+            Id: Slug($"rider-{name}"),
+            Name: name,
+            Source: "rider",
+            Command: "node",
+            Args: [.. nodeArgs, script, .. appArgs],
+            Cwd: cwd,
+            SuggestedPort: PortFromArgs(appArgs),
+            AutoPort: false,
+            Saved: false);
+    }
+
+    /// <summary>Разбить строку аргументов по пробелам, уважая кавычки.</summary>
+    private static string[] SplitArgs(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return [];
+        var parts = new List<string>();
+        var current = new System.Text.StringBuilder();
+        char? quote = null;
+        foreach (var ch in raw)
+        {
+            if (quote is not null)
+            {
+                if (ch == quote) quote = null;
+                else current.Append(ch);
+            }
+            else if (ch == '\"' || ch == '\'')
+            {
+                quote = ch;
+            }
+            else if (char.IsWhiteSpace(ch))
+            {
+                if (current.Length > 0) { parts.Add(current.ToString()); current.Clear(); }
+            }
+            else current.Append(ch);
+        }
+        if (current.Length > 0) parts.Add(current.ToString());
+        return [.. parts];
+    }
+
+    /// <summary>
+    /// Порт из аргументов запуска: «--port 5590», «--port=5590», «-p 5590».
+    /// Значение вне диапазона портов игнорируем — «--port» бывает и у чужих флагов.
+    /// </summary>
+    private static int? PortFromArgs(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var a = args[i];
+            string? value = null;
+            if (a is "--port" or "-p" && i + 1 < args.Length) value = args[i + 1];
+            else if (a.StartsWith("--port=", StringComparison.Ordinal)) value = a["--port=".Length..];
+            if (value is null) continue;
+            if (int.TryParse(value, out var port) && port is > 0 and <= 65535) return port;
+        }
+        return null;
     }
 
     private ProjectServiceInfo? RiderCompose(string root, string projectDir, XElement cfg, string name)

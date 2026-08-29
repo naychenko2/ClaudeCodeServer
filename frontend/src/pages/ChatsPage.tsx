@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { archiveApi } from '../api/chats';
+import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
@@ -19,7 +20,9 @@ import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { VideoCenter } from '../features/video/VideoCenter';
-import { useVideoCenter, VIDEO_PANEL_EVENT } from '../lib/videoStage';
+import { useVideoCenter, useVideoCenterSplit, useVideoPlaying, VIDEO_PANEL_EVENT } from '../lib/videoStage';
+import { useCenterSplit } from '../hooks/useCenterSplit';
+import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
@@ -28,7 +31,7 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
-import { isArchivedChat } from '../lib/chatFilters';
+import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -202,18 +205,54 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   const activeChat = chats.find(c => c.id === activeId) ?? null;
 
+  // Открытый чат заархивировали ИЗВНЕ этого экрана (другое окно/устройство) — события
+  // архивации бэкенд не шлёт, поллинг привозит archivedAt в fresh-списке. Ловим только
+  // ПЕРЕХОД «не архивен → архивен» у ТОГО ЖЕ чата: чат, открытый из архивного вида,
+  // архивен ещё до выбора, и выкидывать его из центра нельзя
+  const activeChatArchived = !!activeChat && isArchivedChat(activeChat);
+  const prevActiveRef = useRef({ id: activeChat?.id ?? null, archived: false });
+  useEffect(() => {
+    const prev = prevActiveRef.current;
+    const cur = { id: activeChat?.id ?? null, archived: activeChatArchived };
+    prevActiveRef.current = cur;
+    if (!cur.id || !cur.archived) return;
+    if (prev.id !== cur.id || prev.archived) return; // выбор архивного — не переход
+    // Сосед — только видимый под фильтрами списка: скрытый фильтром чат в списке
+    // нет, центр открыл бы ещё одного призрака поверх только что архивированного.
+    // Фильтры живут в ChatList (scope 'global') — читаем ту же персистентную копию
+    const neighbor = chatNeighborForArchive(chats, cur.id, matchChatFilter(loadChatFilters('global')));
+    if (neighbor) {
+      setActiveId(neighbor.id);
+      localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
+      markChatRead(neighbor.id);
+      navReplace({ screen: 'chats', chatId: neighbor.id });
+    } else {
+      backToList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat?.id, activeChatArchived]);
+
   // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead. Считаем по
   // СЫРОМУ массиву (без filter()) — matchChatFilter в ChatList прячет архивные,
   // и без ручного отсечения бейдж рельсы показывал бы «1» от скрытого архивного
   // чата, пока пользователь не откроет раздел «Архив». Фильтр архивных — узкий
   // type guard isArchivedChat из chatFilters (готовый bool с сервера).
   const unreadCount = useUnreadChatCount(chats.filter(c => !isArchivedChat(c)));
+  // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
+  const videoPlaying = useVideoPlaying();
+  // Кадр в центре стоит рядом с лентой или занимает её место целиком
+  const videoSplit = useVideoCenterSplit();
+  const split = useCenterSplit();
 
   // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
   // берутся по одной сессии.
   const sessionPanels = useSessionPanels(activeChat);
   // Кто занимает центральный остров, кроме ленты: кадр или каталог каналов
   const videoCenter = useVideoCenter();
+  // Кадр рядом с лентой: только сам КАДР (каталог всегда во всю ширину — там выбирают
+  // по обложкам) и только на широком экране. На планшете центр отдан одному режиму
+  // целиком: две половины по 200px не дадут ни читаемой ленты, ни смотрибельного кадра
+  const videoSplitCenter = videoCenter === 'player' && videoSplit && !isTablet;
 
   // Эксклюзив боковых сторон на планшете: гейт флагом exclusive в сторе chatPanels —
   // зеркально DesktopWorkspace. При входе в планшет активной становится левая
@@ -273,9 +312,20 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (!isArchivedChat(updated)) return;
     const prev = chats.find(c => c.id === updated.id);
     if (!prev || isArchivedChat(prev)) return;
-    const neighbor = chats.find(c => c.id !== updated.id && !isArchivedChat(c));
-    if (neighbor) queueMicrotask(() => selectChat(neighbor));
-    else queueMicrotask(() => backToList());
+    // Центр покидает архивированный чат и встаёт на соседа: «предыдущего» по порядку
+    // списка и только ВИДИМОГО под фильтрами (скрытого фильтром чата в списке нет —
+    // центр открыл бы призрака). Нет соседа — возврат к списку.
+    const neighbor = chatNeighborForArchive(chats, updated.id, matchChatFilter(loadChatFilters('global')));
+    if (neighbor) {
+      queueMicrotask(() => {
+        setActiveId(neighbor.id);
+        localStorage.setItem(OPEN_CHAT_KEY, neighbor.id);
+        markChatRead(neighbor.id);
+        navReplace({ screen: 'chats', chatId: neighbor.id });
+      });
+    } else {
+      queueMicrotask(() => backToList());
+    }
     showArchivedToast(updated, handleChatEdited);
   };
 
@@ -352,6 +402,46 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     );
   }
 
+  // Центр раздела: лента активного чата или заставка. Функцией, а не готовым узлом,
+  // чтобы не считать её, когда центр занят видео.
+  const chatCenter = (headerIsland = true) => activeChat ? (
+    <ChatPanel
+      key={activeChat.id}
+      session={activeChat}
+      onChatDeleted={handleChatDeleted}
+      headerIsland={headerIsland}
+      skills={skills}
+      attachedFiles={attachedFiles}
+      onAttachedFilesChange={setAttachedFiles}
+      onSessionUpdated={handleChatEdited}
+      onWorkflowRunning={handleWorkflowRunning}
+    />
+  ) : (
+    <>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
+          {/* Иконка раздела */}
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+            <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
+          </div>
+          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
+            О чём поговорим?
+          </div>
+          <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
+            Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
+          </div>
+          <Button
+            variant="primary" size="md" glow loading={creating}
+            onClick={newChat} style={{ marginTop: 10 }}
+            leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+          >
+            Новый чат
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <PageCanvas>
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
@@ -373,7 +463,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 chats: sidebar,
                 video: <VideoPanel />,
               }}
-              railBadges={{ chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined } }}
+              railBadges={{
+                chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined },
+                // Точка на кнопке «Видео», пока идёт эфир: панель можно закрыть, а звук
+                // остаётся — без метки он шёл бы из ниоткуда и гасить его было бы нечем
+                video: videoPlaying ? { dot: 'accent', hint: 'эфир идёт' } : undefined,
+              }}
               sessionPanels={sessionPanels}
             />
           }
@@ -386,11 +481,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // её до ленты нельзя: на узком окне запаса не останется и заставку перекосит
 // Рядом с эфиром компенсировать нечего: центр делят два резиновых острова
           centerContentWidth={videoCenter ? undefined : (activeChat ? CHAT_COLUMN_W : SPLASH_W)}
-          center={videoCenter ? (
-            // Видео занимает центр ЦЕЛИКОМ — и кадр, и каталог. Кадр пробовали ставить
-            // вторым островом рядом с лентой, как файл в проекте: в узкой половине от
-            // него мало толку, а разворачивают его как раз тогда, когда хотят смотреть,
-            // а не переписываться. Фоновый просмотр закрывает панель рельсы, она рядом.
+          center={videoSplitCenter ? (
+            // Split чат|видео — ДВА острова, ресайз в зазоре между ними: тот же приём
+            // и тот же сплиттер, что у файла в проекте. Смотреть, не бросая разговор, —
+            // то, ради чего кадр в центр и уводят; вторым нажатием он разворачивается
+            // во всю ширину (тумблер в шапке).
+            <div ref={split.containerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
+              <Island bg={C.bgMain} style={{ flex: split.flex, minWidth: split.min }}>
+                <div style={{ flex: 1, overflow: 'hidden' }}>{chatCenter(false)}</div>
+              </Island>
+              <IslandSplitter orientation="v" active={split.dragging} onMouseDown={split.handleDrag} />
+              <Island bg={C.bgMain} style={{ flex: 1, minWidth: split.min }}><VideoCenter /></Island>
+            </div>
+          ) : videoCenter ? (
+            // Во всю ширину идут каталог (в половине от него остаётся один столбец
+            // карточек) и кадр, развёрнутый тумблером
             <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}><VideoCenter /></Island>
           ) : (activeChat ? (
             <ChatPanel

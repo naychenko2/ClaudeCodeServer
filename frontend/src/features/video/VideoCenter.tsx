@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ListVideo, MonitorPlay, PictureInPicture2, X } from 'lucide-react';
+import { Columns2, ListVideo, Maximize2, MonitorPlay, PictureInPicture2, X } from 'lucide-react';
 import { IconButton, IslandHeader } from '../../components/ui';
 import { PanelHeaderSlotContext } from '../../components/ui/panelHeaderSlotContext';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS } from '../../lib/design';
 import {
-  closeVideoCenter, setVideoPicker, setVideoStage, useVideoCenter, useVideoStage,
+  closeVideoCenter, setVideoCenterSplit, setVideoPicker, setVideoStage,
+  useVideoCenter, useVideoCenterSplit, useVideoStage,
 } from '../../lib/videoStage';
 import { VideoPicker } from './VideoPicker';
 import { VideoStage } from './VideoStage';
+import { VideoStrip } from './VideoStrip';
 
 /**
  * Центральный остров видео: шапка плюс то, что сейчас смотрят или выбирают.
@@ -26,6 +28,9 @@ import { VideoStage } from './VideoStage';
 export function VideoCenter() {
   const view = useVideoCenter();
   const stage = useVideoStage();
+  // Кадр рядом с чатом или во всю ширину. Каталог этим тумблером не управляется:
+  // он всегда идёт во всю ширину, в половине от него один столбец карточек
+  const split = useVideoCenterSplit();
 
   // Курсор на шапке: тогда иконка слева подменяется крестиком — тот же приём, что
   // у панелей рельсы (PanelShell). Шапка не тратит место на отдельную кнопку,
@@ -118,18 +123,40 @@ export function VideoCenter() {
                 {channel.nowPlaying}
               </span>
             )}
+            {/* Полоса избранного — только у кадра: в каталоге под ней и так весь список,
+                и второй переключатель тех же каналов в его шапке был бы шумом */}
+            {channel && (
+              <VideoStrip
+                activeId={channel.id}
+                // Кадр развёрнут ЗДЕСЬ — переключение остаётся здесь же, иначе канал
+                // уехал бы в панель, а центр остался бы с прежним
+                onPick={next => setVideoStage(next, 'center')}
+                onOpenCatalog={() => setVideoPicker(true)}
+              />
+            )}
             <div ref={setSlotLeftEl} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }} />
           </>
         }
         headerProps={{ ref: setHeaderEl }}
         actions={channel ? (
           <>
+            {/* Тумблер режима — иконка ЦЕЛЕВОГО состояния, как у файла: из широкого
+                кадра должен быть обратный путь к разговору рядом */}
+            <IconButton
+              size="sm"
+              title={split ? 'Кадр во всю ширину центра' : 'Кадр рядом с чатом'}
+              onClick={() => setVideoCenterSplit(!split)}
+            >
+              {split
+                ? <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                : <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            </IconButton>
             <IconButton size="sm" title="Все каналы и лента" onClick={() => setVideoPicker(true)}>
               <ListVideo size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </IconButton>
             <IconButton
               size="sm"
-              title="В плавающее окно — его двигают и тянут за угол, и оно переживает переходы"
+              title="В плавающее окно — его двигают и тянут за угол, и оно остаётся поверх любого раздела"
               onClick={() => setVideoStage(channel, 'float')}
             >
               <PictureInPicture2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

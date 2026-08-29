@@ -28,6 +28,7 @@ import { AttachPicker } from '../../components/chat/AttachPicker';
 import { Toggle, SegmentedControl, WaitingIndicator } from '../../components/ui';
 import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 interface Props {
   task: Task;
@@ -273,6 +274,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           {/* Название */}
           <div style={fieldLabelStyle()}>Название</div>
           <input
+            {...NO_AUTOFILL}
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="Что нужно сделать?"
@@ -356,6 +358,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>За</span>
                   <input
+                    {...NO_AUTOFILL}
                     value={customReminderValue}
                     onChange={e => setCustomReminderValue(e.target.value.replace(/\D/g, '').slice(0, 3))}
                     inputMode="numeric"
@@ -449,6 +452,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>Каждые</span>
                   <input
+                    {...NO_AUTOFILL}
                     value={String(recurrence.interval)}
                     onChange={e => {
                       const n = parseInt(e.target.value.replace(/\D/g, '').slice(0, 2), 10);
@@ -466,6 +470,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                     {' · до'}
                   </span>
                   <input
+                    autoComplete="off"
                     type="date"
                     value={recurrence.until ?? ''}
                     onChange={e => setRecurrence(prev => prev && ({ ...prev, until: e.target.value || undefined }))}
@@ -751,6 +756,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 border: `1.5px dashed ${C.dashed}`,
               }} />
               <input
+                {...NO_AUTOFILL}
                 value={newSubtask}
                 onChange={e => setNewSubtask(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addSubtask(); }}
@@ -801,6 +807,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             padding: '10px 14px',
           }}>
             <input
+              {...NO_AUTOFILL}
               value={newLabel}
               onChange={e => setNewLabel(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') addLabel(); }}

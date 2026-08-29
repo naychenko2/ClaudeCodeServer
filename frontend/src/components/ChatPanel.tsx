@@ -47,7 +47,7 @@ import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
-import { C, R, SHADOW, SP, FS, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
+import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { useIsTouch } from '../lib/breakpoints';
 import { projectTopWash } from '../lib/projectTone';
@@ -74,6 +74,7 @@ import { WorkflowBlockView } from './chat/WorkflowBlockView';
 import { DeployProgressCard } from './chat/DeployProgressCard';
 import { isDeployStart } from '../lib/deployProgress';
 import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
@@ -82,6 +83,12 @@ import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 // Значения сейчас совпадают, но роли разные: мобильное поле держит ширину экрана,
 // десктопное — размах колец индикатора. Сливать в одно не надо.
 const CHAT_GUTTER_MOBILE = 16;
+
+// Растворение верхнего края прокрученной ленты — им обозначена граница с шапкой
+// вместо линии, тени и стеклянной подложки: холст с рисунком под шапкой остаётся
+// чистым, а край читается по самому тексту. Чёрный и прозрачный здесь не цвета:
+// в маске значима только альфа, поэтому токенов темы тут нет и быть не может
+const FEED_FADE = 'linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.35) 14px, black 44px)';
 
 interface Props {
   session: Session;
@@ -128,6 +135,10 @@ interface Props {
   embedded?: boolean;
   // Растущий счётчик «поставь курсор в поле ввода» (колонка стены стала активной)
   composerFocusSignal?: number;
+  // Полоса контекста чата (фича chat-context) — собирается владельцем экрана: он
+  // знает и состояние центра, и пути открытия материалов. Здесь она только
+  // передаётся шапке, которая ставит её отдельной строкой под заголовком
+  contextBar?: React.ReactNode;
   // Атрибуты перетаскивания для ШАПКИ чата (колонка стены): за неё двигают саму
   // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
   // чата — самая заметная его часть.
@@ -143,6 +154,8 @@ interface Props {
 const WINDOW_FIRST = 50;
 const WINDOW_STEP = 50;
 
+// Порог показа спиннера истории: всё, что грузится быстрее, открывается сразу лентой
+const HISTORY_SPINNER_MS = 200;
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const TOO_BIG_MSG = 'Файл больше 100 МБ — такой пока не загрузим';
 const UPLOAD_FAIL_MSG = 'Не удалось загрузить файл. Попробуйте ещё раз';
@@ -203,7 +216,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -222,6 +235,34 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     if (items.length > 0) return;
     setEmptyChatFocus(n => n + 1);
   }, [session.id, isHistoryLoading, items.length, isMobile, isTouch, embedded]);
+
+
+
+  // Смена чата: лента проявляется, а не возникает щелчком. Первый кадр нового чата
+  // рисуется прозрачным (shownId ещё от прошлого), следующий отпускает его в единицу.
+  // Через key ленты этого делать нельзя: key пересоздаёт узел, а за ним следит
+  // ResizeObserver прилипания к низу — наблюдение осталось бы на выброшенном узле.
+  // Переход берём из PANEL_ANIM, новых значений в шкалы не заводим.
+  const [shownId, setShownId] = useState(session.id);
+  useEffect(() => {
+    const r = requestAnimationFrame(() => setShownId(session.id));
+    return () => cancelAnimationFrame(r);
+  }, [session.id]);
+  const chatFading = shownId !== session.id;
+
+  // Спиннер истории показываем не раньше HISTORY_SPINNER_MS. Прогретый (наведением) и
+  // просто быстрый чат открываются без промежуточного состояния вовсе, а спиннер,
+  // мигнувший на десятые доли секунды, читается как рывок, а не как загрузка.
+  const [showHistorySpinner, setShowHistorySpinner] = useState(false);
+  useEffect(() => {
+    if (!isHistoryLoading || items.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- гасим спиннер, когда лента приехала
+      setShowHistorySpinner(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShowHistorySpinner(true), HISTORY_SPINNER_MS);
+    return () => window.clearTimeout(t);
+  }, [session.id, isHistoryLoading, items.length]);
 
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -730,7 +771,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
-    showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
+    showScrollDown, scrolled, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
   // Компенсация перекоса «боковое поле слева против полосы прокрутки справа» — см.
   // lib/chatGutter. В обычном чате она держит колонку сообщений по центру окна; на
@@ -2325,6 +2366,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onSessionUpdated={onSessionUpdated}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
+      contextBar={contextBar}
     />
   );
 
@@ -2440,14 +2482,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // компенсировать некуда, поэтому остаток до CHAT_GUTTER_L добирается
         // паддингом — величину считает useChatGutter замером полосы.
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20,
+        // Верхний край ленты растворяется, когда она прокручена, — этим и обозначена
+        // граница с шапкой (ни линии, ни тени, ни подложки под шапкой нет: они мутили
+        // бы дудл-холст). В начале ленты маски нет, иначе первое сообщение всегда
+        // висело бы полупрозрачным
+        ...(scrolled ? { maskImage: FEED_FADE, WebkitMaskImage: FEED_FADE } : null),
         paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
         // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
-        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', opacity: chatFading ? 0 : 1, transition: chatFading ? 'none' : `opacity ${PANEL_ANIM}` }}>
         {/* Спиннер загрузки истории */}
-        {items.length === 0 && isHistoryLoading && (
+        {items.length === 0 && showHistorySpinner && (
           <div style={{
             position: 'absolute', inset: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2811,6 +2858,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   <span style={{ fontSize: 12, color: C.textMuted }}>Ветка</span>
                   <input
+                    {...NO_AUTOFILL}
                     value={worktreeBranchInput}
                     onChange={e => setWorktreeBranchInput(e.target.value)}
                     spellCheck={false}

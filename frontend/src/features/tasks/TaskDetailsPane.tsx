@@ -4,7 +4,7 @@
 // (мобила). Режим редактирования — инлайн, вместо деталей (TaskEditForm).
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, Trash2, X } from 'lucide-react';
+import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, R, SHADOW, SP } from '../../lib/design';
 import { Button, IconButton, Modal, BackButton } from '../../components/ui';
@@ -23,6 +23,7 @@ import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
+import { useContextButton } from '../chatContext/useContextButton';
 import { TaskEditForm } from './TaskEditForm';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 
@@ -226,6 +227,18 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id, task.assignee, task.status, claudeRunning, executing]);
+  // «В контекст чата» (фича chat-context) — перед главным действием карточки:
+  // одна и та же иконка и та же подпись, что в шапках файла и статьи
+  const chatContext = useContextButton('task', task.id, task.title);
+  const chatContextButton = chatContext.available && (
+    <IconButton
+      size="md" onClick={chatContext.toggle} title={chatContext.title}
+      color={chatContext.inContext ? C.accent : undefined}
+    >
+      <SquareStack size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </IconButton>
+  );
+
   const executeButton = task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
     <button
       onClick={handleExecute}
@@ -552,6 +565,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
             {headerTitleBlock}
           </BackButton>
+          {chatContextButton}
           {executeButton}
           {editButton}
         </Toolbar>
@@ -580,6 +594,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
+        {chatContextButton}
         {executeButton}
         {editButton}
         <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">

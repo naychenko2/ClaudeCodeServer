@@ -155,6 +155,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled, on
       <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
         <div style={{ flex: 1 }}>
           <IconField
+            type="search"
             value={query}
             onChange={setQuery}
             autoFocus={canFocus}

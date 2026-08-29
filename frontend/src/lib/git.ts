@@ -36,6 +36,20 @@ export interface GitProjectState {
   // undefined — фильтр недоступен (нет активного чата / worktree-контекст панели /
   // changed-by не загрузился); пустой Set — чат ничего не менял.
   myChangedPaths: Set<string> | undefined;
+  // Чаты проекта, за которыми числятся НЕзафиксированные в git правки — значок в списке
+  // чатов (SessionList). Тот же сырой changed-by: запрос уходит РОВНО по грязным путям
+  // git status, а сервер уже вычел Session.CommittedFilePaths, поэтому sessionId в
+  // ответе = у чата есть незакоммиченное.
+  // Записи external=true ОТБРАСЫВАЮТСЯ, как и в changedBy. Причина не косметическая:
+  // пока в чате идёт ход, файловый вотчер пишет в его историю КАЖДУЮ правку файлов репы —
+  // в том числе чужие (человек в IDE, соседний чат), и они оседают там как external.
+  // На боевых данных это давало 39 ложных совпадений из 48: чат про CSS шапки был
+  // помечен правками PreviewController/DevServerService, которых в глаза не видел.
+  // От changedBy отличие ровно одно — активный чат НЕ исключается: свой значок он носит
+  // наравне с прочими.
+  // undefined — достоверно неизвестно (не загружено / worktree-контекст / ошибка
+  // запроса); пустой Set — знание достоверно и незакоммиченного нет ни у кого.
+  dirtySessionIds: Set<string> | undefined;
 }
 
 const EMPTY: GitProjectState = {
@@ -45,6 +59,7 @@ const EMPTY: GitProjectState = {
   branches: [], stashes: [], remote: null, error: null, diverged: false, conflictFiles: [], busy: false,
   changedBy: new Map(),
   myChangedPaths: undefined,
+  dirtySessionIds: undefined,
 };
 
 const _state = new Map<string, GitProjectState>();
@@ -141,7 +156,11 @@ export async function loadGitStatus(projectId: string): Promise<void> {
     patch(projectId, { status, statusLoaded: true });
     void loadChangedBy(projectId, status);
   } catch {
-    // офлайн/ошибка — считаем «не репо», сегменты git скрыты
+    // офлайн/ошибка — считаем «не репо», сегменты git скрыты.
+    // changedBy/myChangedPaths/dirtySessionIds намеренно НЕ сбрасываем: упавший статус
+    // ничего не сообщает о фиксации правок, а гашение значков в списке чатов при каждом
+    // сетевом сбое читалось бы как «всё закоммичено». Держим последнее известное до
+    // первого удачного статуса — realtime и возврат фокуса перечитают его сами.
     patch(projectId, { statusLoaded: true });
   }
 }
@@ -169,19 +188,24 @@ export function setActiveSessionForChangedBy(projectId: string, sessionId: strin
 // - myChangedPaths (фильтр «только файлы чата»): пути активного чата, ВКЛЮЧАЯ
 //   external=true; ключи — lowercase (GitChangesRail сравнивает по lowercase).
 //   Нет активного чата — undefined (фильтр недоступен, тумблер скрыт).
+// - dirtySessionIds (значок «правки не зафиксированы» в списке чатов): чаты записей
+//   external=false — как в changedBy, но активный чат остаётся (он не «другой себе»,
+//   а такой же владелец незафиксированных правок).
 function applyChangedByFilter(projectId: string): void {
   const raw = _rawChangedBy.get(projectId);
   if (!raw) return;
   const activeSessionId = _activeSessionForChangedBy.get(projectId) ?? null;
   const changedBy = new Map<string, ChangedBySession[]>();
   const myChangedPaths = activeSessionId ? new Set<string>() : undefined;
+  const dirtySessionIds = new Set<string>();
   for (const [path, entries] of Object.entries(raw)) {
     const others = entries.filter(e => !e.external && (!activeSessionId || e.sessionId !== activeSessionId));
     if (others.length > 0) changedBy.set(path, others);
     if (myChangedPaths && entries.some(e => e.sessionId === activeSessionId))
       myChangedPaths.add(path.toLowerCase());
+    for (const e of entries) if (!e.external) dirtySessionIds.add(e.sessionId);
   }
-  patch(projectId, { changedBy, myChangedPaths });
+  patch(projectId, { changedBy, myChangedPaths, dirtySessionIds });
 }
 
 // Догружает changedBy по путям текущего git status — общей цепочкой с loadGitStatus,
@@ -193,18 +217,25 @@ function applyChangedByFilter(projectId: string): void {
 // - пустой git status → пустой Set при активном чате (чат ничего не менял из видимого),
 //   undefined без него;
 // - штатный ответ → собирает applyChangedByFilter.
+// dirtySessionIds идёт теми же ветками, но без оглядки на активный чат: пустой git
+// status — достоверное «ни у кого нет незакоммиченного» (пустой Set), а недоступность
+// данных (worktree-контекст, ошибка) — undefined, и значки в списке просто не рисуются.
 async function loadChangedBy(projectId: string, status: GitStatus): Promise<void> {
   const ctx = getGitSessionContext();
   if (ctx?.projectId === projectId) {
     _rawChangedBy.delete(projectId);
-    patch(projectId, { changedBy: new Map(), myChangedPaths: undefined });
+    patch(projectId, { changedBy: new Map(), myChangedPaths: undefined, dirtySessionIds: undefined });
     return;
   }
   const paths = [...status.staged, ...status.unstaged, ...status.untracked].map(f => f.path);
   if (paths.length === 0) {
     _rawChangedBy.delete(projectId);
     const active = _activeSessionForChangedBy.get(projectId) ?? null;
-    patch(projectId, { changedBy: new Map(), myChangedPaths: active ? new Set() : undefined });
+    patch(projectId, {
+      changedBy: new Map(),
+      myChangedPaths: active ? new Set() : undefined,
+      dirtySessionIds: new Set(),
+    });
     return;
   }
   try {
@@ -213,7 +244,7 @@ async function loadChangedBy(projectId: string, status: GitStatus): Promise<void
     applyChangedByFilter(projectId);
   } catch {
     _rawChangedBy.delete(projectId);
-    patch(projectId, { changedBy: new Map(), myChangedPaths: undefined });
+    patch(projectId, { changedBy: new Map(), myChangedPaths: undefined, dirtySessionIds: undefined });
   }
 }
 

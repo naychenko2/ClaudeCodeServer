@@ -94,8 +94,12 @@ export function verbalizeIdentifiers(text: string): string {
 // иначе не трогает вовсе, и синтезатор зачитал бы «voice» вслух.
 export const VOICE_MARKER_RE = /<voice[\s\S]*$/i;
 const VOICE_TAG = '<voice';
-// Фенсы кода — с их началом, чтобы можно было отличить открытый блок от закрытого
-const FENCE_RE = /(```|~~~)/g;
+// Фенсы кода — с их началом, чтобы можно было отличить открытый блок от закрытого.
+// Фенсом считается ТОЛЬКО тройка в НАЧАЛЕ строки (CommonMark допускает отступ до трёх
+// пробелов): тройные бэктики посреди строки — обычный текст (ответ, упомянувший
+// ```mermaid в предложении), а принятые за начало блока они уводили парсер «в код» до
+// самого конца ответа — маркер переставал стричься вовсе и уезжал в ленту сырым.
+const FENCE_RE = /^[ \t]{0,3}(```|~~~)/gm;
 
 export function stripVoiceMarker(text: string): string {
   if (!text) return '';
@@ -118,7 +122,7 @@ export function stripVoiceMarker(text: string): string {
     } else if (m[1] === fence) {
       inCode = false;
     }
-    i = m.index + m[1].length;
+    i = m.index + m[0].length;
   }
   // Хвост после последнего фенса. Незакрытый блок кода (ход ещё стримится) маркера
   // содержать не может — там код
@@ -170,6 +174,10 @@ export function sanitizeForSpeech(md: string): string {
   // Разметка: заголовки, маркеры списков, цитаты, выделения
   text = text.replace(/^#{1,6}\s*/gm, '');
   text = text.replace(/^\s{0,3}[-*+]\s+/gm, '');
+  // Пометка типа тезиса в выжимке («[+] собрал бэкенд») — разметка для плашки «Коротко»,
+  // на экране она значок. Срезается ПОСЛЕ маркера списка: в тексте она стоит за дефисом,
+  // а вслух дала бы «квадратная скобка плюс» посреди фразы
+  text = text.replace(/^\s{0,3}\[[+!>]\]\s*/gm, '');
   // Нумерация списка («1. », «2) ») — отдельный кусок «1.» после нарезки на предложения:
   // лишний запрос к синтезу и произнесённое «один» посреди фразы
   text = text.replace(/^\s{0,3}\d+[.)]\s+/gm, '');
@@ -256,6 +264,14 @@ export const PACK_LIMIT = 249;
 // и огрызок в пять символов стоит столько же, сколько полный пакет
 const MIN_TAIL = 40;
 
+// Чем склеить две фразы внутри пакета. Строка без терминального знака — тезис выжимки
+// «Коротко», пункт списка, заголовок — разделялась бы одним пробелом, и синтезатор читал
+// бы весь пакет одной фразой — без пауз между пунктами. Перевод строки здесь не поможет:
+// splitSentences отдаёт фразы уже без него, да и SpeechKit интонацию по переводам строк не строит.
+// Точка работает на ОБОИХ путях озвучки (сервер и голос браузера) и живёт только внутри
+// запроса синтеза — в текст ленты она не попадает.
+const glueAfter = (prev: string) => (/[.!?…:;,—–-]$/.test(prev) ? ' ' : '. ');
+
 // Предложения → пакеты. Синтез v3 берёт деньги ЗА ЗАПРОС, а не за символы (точка
 // безубыточности против v1 — 121 символ, разбор в docs/research/speechkit-pricing.md §4),
 // поэтому слать каждое предложение отдельно — значит платить втрое. Но первое предложение
@@ -270,8 +286,10 @@ export function packSentences(sentences: string[], limit = PACK_LIMIT): string[]
     const s = raw.trim();
     if (!s) continue;
     if (packs.length === 0 && !buf) { packs.push(s); continue; } // разгонный пакет
-    if (buf && buf.length + 1 + s.length > limit) flush();
-    buf = buf ? `${buf} ${s}` : s;
+    // Точка на стыке занимает место в пакете — без этого запрос переедет лимит
+    // на символ и вернётся 400 «Too long text»
+    if (buf && buf.length + glueAfter(buf).length + s.length > limit) flush();
+    buf = buf ? `${buf}${glueAfter(buf)}${s}` : s;
     if (buf.length >= limit) flush();
   }
   flush();
@@ -281,8 +299,8 @@ export function packSentences(sentences: string[], limit = PACK_LIMIT): string[]
   if (packs.length >= 3) {
     const last = packs[packs.length - 1];
     const prev = packs[packs.length - 2];
-    if (last.length < MIN_TAIL && prev.length + 1 + last.length <= limit) {
-      packs.splice(packs.length - 2, 2, `${prev} ${last}`);
+    if (last.length < MIN_TAIL && prev.length + glueAfter(prev).length + last.length <= limit) {
+      packs.splice(packs.length - 2, 2, `${prev}${glueAfter(prev)}${last}`);
     }
   }
   return packs;

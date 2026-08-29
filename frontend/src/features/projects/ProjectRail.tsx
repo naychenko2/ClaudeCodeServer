@@ -115,11 +115,11 @@ function ProjectDockIcon({ p, activity, active, muted, dragging, dragActive, sid
         // панелей (ArrowDownToLine / item.onTuck): стрелка ВНИЗ к черте, иконка
         // уезжает в конец столбца — под лупу. Пока иконку тащат, подписи нет вовсе —
         // значит и кнопка не мешает дропу.
-        action={onHide && !dragActive ? {
+        actions={onHide && !dragActive ? [{
           Icon: ArrowDownToLine,
           title: 'Убрать из дока',
           onClick: () => onHide(p),
-        } : undefined}
+        }] : undefined}
       >
         <ProjectIcon project={p} size={ICON_BOX} radius={R.md} muted={muted} />
       </RailIconButton>

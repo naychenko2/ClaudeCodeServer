@@ -44,6 +44,8 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
   return (
     <Modal width={560} title="Поиск по пространству" onClose={onClose}>
       <input
+        autoComplete="off"
+        type="search"
         ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
         placeholder="Заметки и задачи…"
         style={{

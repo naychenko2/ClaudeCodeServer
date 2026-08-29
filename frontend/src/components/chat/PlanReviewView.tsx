@@ -458,6 +458,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             {asstName} учтёт это и предложит новый план
           </div>
           <textarea
+            autoComplete="off"
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
             autoFocus

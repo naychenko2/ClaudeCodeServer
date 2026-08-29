@@ -1997,7 +1997,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
             <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
               style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
-            <TextField value={query} onChange={setQuery} placeholder="Поиск по документам" autoFocus
+            <TextField type="search" value={query} onChange={setQuery} placeholder="Поиск по документам" autoFocus
               style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
           </div>
           <IconButton title="Закрыть поиск (Esc)" onClick={closeSearch} size="sm">

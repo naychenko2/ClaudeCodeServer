@@ -86,6 +86,11 @@ public class User
     // владельца — привязки к проекту сознательно нет. Старые записи (список голых строк)
     // читает QuickPhraseJsonConverter.
     public List<QuickPhrase>? QuickPhrases { get; set; }
+    // Избранные каналы раздела «Видео»: ключи вида "smotrim:1" в порядке показа в полосе.
+    // null и пустой список — РАЗНОЕ: null значит «не настраивал» (полоса берёт дефолт
+    // VideoFavorites.Defaults), пустой — «снял все звёздочки» и полоса честно пуста.
+    // Мёртвые ключи (канал пропал из каталога) не каскадятся — фронт их просто не находит.
+    public List<string>? FavoriteVideoChannels { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

@@ -316,6 +316,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onColl
         {searchOpen && (
           <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
             <IconField
+              type="search"
               icon={<Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
               value={s.query}
               onChange={a.setQuery}

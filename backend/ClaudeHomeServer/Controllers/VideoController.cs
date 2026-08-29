@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Video;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,6 +19,7 @@ public class VideoController(
     VideoProviderRegistry registry,
     YouTubeOAuthService youtubeOauth,
     VideoOptions options,
+    UserStore users,
     ILogger<VideoController> log) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -88,6 +90,47 @@ public class VideoController(
                 externalUrl = i.ExternalUrl,
             }),
         });
+    }
+
+    /// <summary>
+    /// Избранные каналы владельца — то, что показывает полоса в шапке панели, центра и
+    /// плавающего окна. Живёт здесь, а не в /api/me/*, потому что смысл имеет только внутри
+    /// раздела: ключи каналов знает каталог, и фронт ходит сюда тем же модулем api.video.
+    ///
+    /// Поле <c>configured</c> отвечает на вопрос «человек уже настраивал?»: пустой список
+    /// при <c>configured: false</c> означает дефолтный набор, при <c>true</c> — осознанно
+    /// пустую полосу. Свести их в одно поле нельзя — это разные экраны.
+    /// </summary>
+    [HttpGet("favorites")]
+    public IActionResult Favorites()
+    {
+        var userId = UserId;
+        if (userId is null) return Unauthorized();
+
+        var saved = users.GetFavoriteVideoChannels(userId);
+        return Ok(new
+        {
+            configured = saved is not null,
+            keys = saved ?? VideoFavorites.Defaults,
+        });
+    }
+
+    /// <summary>
+    /// Полная замена набора. Валидация молчаливая, как у «Стены»: мусорные ключи и дубли
+    /// отбрасываются, длинный список режется по потолку — сохранение не должно падать
+    /// из-за канала, пропавшего из каталога, пока полоса была открыта.
+    /// </summary>
+    [HttpPut("favorites")]
+    public IActionResult PutFavorites([FromBody] PutFavoritesRequest req)
+    {
+        var userId = UserId;
+        if (userId is null) return Unauthorized();
+        if (req?.Keys is null) return BadRequest(new { error = "keys обязателен" });
+
+        var keys = VideoFavorites.Normalize(req.Keys.Take(200));
+        if (!users.SetFavoriteVideoChannels(userId, keys)) return Unauthorized();
+
+        return Ok(new { configured = true, keys });
     }
 
     /// <summary>Адрес согласия Google — фронт уводит на него окно.</summary>
@@ -176,3 +219,6 @@ public class VideoController(
         _ => "unreachable",
     };
 }
+
+/// <summary>Новый состав избранного целиком: PATCH-семантики нет, полоса шлёт весь список.</summary>
+public record PutFavoritesRequest(List<string>? Keys);

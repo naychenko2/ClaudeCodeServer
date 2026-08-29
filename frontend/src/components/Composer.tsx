@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
 import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -19,11 +19,13 @@ import {
 import { TeamImplementBadge } from '../features/team/TeamImplementBadge';
 import { teamImplementModeLocked, TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
+import { TOUCH_CALLOUT_GUARD } from '../lib/pointer';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { QuickPhrasesDialog, QuickPhrasesIcon, QuickPhrasesMenu } from './QuickPhrases';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
 import { IconButton, Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -327,28 +329,15 @@ function pickLayout(
   return ladder[ladder.length - 1];
 }
 
-// Гасим нативный touch-callout / контекстное меню на иконочных кнопках.
-// На планшете long-press по SVG-иконке внутри кнопки иначе вызывает меню
-// браузера «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод
-// не стартует). Подавляем callout и выделение; onContextMenu гасит и правый клик.
-const iconBtnGuard: CSSProperties = {
-  WebkitTouchCallout: 'none',
-  WebkitUserSelect: 'none',
-  userSelect: 'none',
-  touchAction: 'manipulation',
-};
+// Гасим нативный touch-callout / контекстное меню на иконочных кнопках: на планшете
+// long-press по SVG-иконке внутри кнопки иначе вызывает меню браузера
+// «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод не стартует).
+// Щит общий — им же закрыты кнопки рельс, поднимающие плашку по удержанию.
+const iconBtnGuard = TOUCH_CALLOUT_GUARD;
 
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-}
-
-// Длинное имя режем по середине, а не с конца: расширение должно остаться видно
-function middleEllipsis(name: string, max = 30): string {
-  if (name.length <= max) return name;
-  const head = Math.ceil((max - 1) / 2);
-  const tail = max - 1 - head;
-  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
 }
 
 // Иконка файла по расширению
@@ -1731,6 +1720,7 @@ export function Composer({
     // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
     <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex' }}>
       <textarea
+        autoComplete="off"
         ref={textareaRef}
         className="cc-composer-input"
         value={text}

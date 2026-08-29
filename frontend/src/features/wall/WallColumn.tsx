@@ -21,7 +21,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChatPanel } from '../../components/ChatPanel';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useCanHover } from '../../lib/pointer';
-import { useAgentsRunning } from '../../lib/agentsPresence';
+import { useAgentsRunning, useBgCommandRunning } from '../../lib/agentsPresence';
 import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
 import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
 
@@ -41,14 +41,17 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   onOpenFile?: (path: string) => void;
 }) {
   const status = chatStatus(session);
-  // Живые фоновые агенты: ход завершён, статус спокойный — без этого колонка чата,
+  // Живая фоновая работа: ход завершён, статус спокойный — без этого колонка чата,
   // где идёт работа, выглядит ровно как простаивающая. Стену держат открытой именно
-  // чтобы следить, поэтому молчать тут дороже всего
+  // чтобы следить, поэтому молчать тут дороже всего. Агенты и фоновая команда
+  // (дев-сервер, watch) держат колонку живой одинаково, различает их только подпись
   const agentsRunning = useAgentsRunning(session.id);
-  const busy = status === 'working' || status === 'waiting' || agentsRunning;
+  const bgCommandRunning = useBgCommandRunning(session.id);
+  const busy = status === 'working' || status === 'waiting' || agentsRunning || bgCommandRunning;
   const busyLabel = status === 'waiting' ? 'ждёт вас'
     : status === 'working' ? 'идёт ход'
-      : 'работают агенты';
+      : agentsRunning ? 'работают агенты'
+        : 'фоновая команда';
   // Вложения композера — per-колонка: загрузка кладёт файл в рабочую папку сессии
   // и возвращает путь сюда; заглушка-[] превращала бы скрепку в молчаливую потерю
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);

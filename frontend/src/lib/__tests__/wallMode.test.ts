@@ -3,7 +3,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   isWallActive, setWallActive, getWallReturn, setWallReturn, type WallReturn,
-  getWallEntry, setWallEntry, type WallEntry,
 } from '../wallMode';
 
 // Стаб localStorage для node-окружения vitest (jsdom в проекте не подключён)
@@ -58,30 +57,5 @@ describe('точка возврата в зону проектов', () => {
     expect(getWallReturn()).toBe('wall');
     setWallActive(false);
     expect(getWallReturn()).toBeNull();
-  });
-});
-
-describe('точка входа на стену', () => {
-  it('не задана по умолчанию и записывается/читается', () => {
-    expect(getWallEntry()).toBeNull();
-    for (const v of ['home', 'projects'] as WallEntry[]) {
-      setWallEntry(v);
-      expect(getWallEntry()).toBe(v);
-    }
-  });
-
-  it('мусорное значение ключа читается как «не задана»', () => {
-    localStorage.setItem('cc_wall_entry', 'workspace');
-    expect(getWallEntry()).toBeNull();
-  });
-
-  // Сторож порядка в App.exitWall: метку обязаны прочитать ДО гашения
-  // режима, иначе возврат на главную не сработает никогда
-  it('явный выход из режима стены стирает и точку входа', () => {
-    setWallEntry('home');
-    setWallActive(true);
-    expect(getWallEntry()).toBe('home');
-    setWallActive(false);
-    expect(getWallEntry()).toBeNull();
   });
 });

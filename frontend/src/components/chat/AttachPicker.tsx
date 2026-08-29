@@ -17,9 +17,13 @@ interface AttachPickerProps {
   // Загрузка файлов с устройства (кнопка в шапке). Не задан — кнопки нет:
   // пикер работает только по файлам проекта (так он открывается из карточки задачи)
   onUpload?: (files: File[]) => Promise<void>;
+  // Заголовок диалога. Не задан — «Прикрепить файлы» (родная роль пикера);
+  // контекст чата зовёт его для «Указать заново…», и слово «прикрепить» там
+  // означало бы вложение — другую сущность
+  title?: string;
 }
 
-export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload }: AttachPickerProps) {
+export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload, title }: AttachPickerProps) {
   const [query, setQuery] = useState('');
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,7 +48,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload 
 
   return (
     <Modal
-      title="Прикрепить файлы"
+      title={title ?? 'Прикрепить файлы'}
       width={MODAL_W.form}
       onClose={onClose}
       cardStyle={{ maxHeight: '70vh' }}
@@ -88,6 +92,8 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload 
       )}
       <div style={{ marginBottom: SP.sm }}>
         <input
+          type="search"
+          autoComplete="off"
           autoFocus={canFocus}
           value={query}
           onChange={e => setQuery(e.target.value)}

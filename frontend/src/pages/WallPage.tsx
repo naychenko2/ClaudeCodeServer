@@ -52,12 +52,9 @@ interface Props {
   auth: AuthState;
   onLogout: () => void;
   onHubTab: (t: HubTabValue) => void;
-  // Выход со стены её собственной кнопкой — возврат в проект, из которого вошли
-  // (гасит режим и восстанавливает «спящий» воркспейс; App.exitWall)
-  onExitWall: () => void;
 }
 
-export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
+export function WallPage({ auth, onLogout, onHubTab }: Props) {
   const w = useWindowWidth();
   const { loaded, chats, projects, focusId } = useWallState();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -258,7 +255,7 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
                 project={focusedProject}
                 onOpenSettings={() => { if (focusedProject) setEditProject(focusedProject); }}
               />
-              <WallDock onExit={onExitWall} slots={slots} />
+              <WallDock slots={slots} />
             </div>
           }
         />

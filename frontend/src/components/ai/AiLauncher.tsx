@@ -25,6 +25,7 @@ import { useContextPersona } from '../../lib/contextPersona';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useMe } from '../../lib/defaultPersona';
 import { IntroDot } from '../ui';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Полный размер круглешка — от него считаем налезание (см. useFabObstacleOverlap)
 const FAB_FULL = 54;
@@ -678,7 +679,7 @@ export function AiLauncher() {
                 : <span style={{ color: C.accent, display: 'flex', flex: 'none' }}><SparkleIcon size={18} /></span>}
               <input
                 ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onInputKey}
-                placeholder="Что сделать с помощью AI…" autoComplete="off" style={inputStyle}
+                placeholder="Что сделать с помощью AI…" {...NO_AUTOFILL} style={inputStyle}
               />
               {ctxLabel && <span style={ctxBadge}>{ctxLabel}</span>}
             </div>

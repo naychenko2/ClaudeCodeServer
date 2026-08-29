@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, MessageSquare, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, MessageSquare, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote, SquareStack } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -22,6 +22,7 @@ import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry, ChangedBySession } from '../types';
 import { api } from '../lib/api';
 import { basename } from '../lib/paths';
+import { useContextButton } from '../features/chatContext/useContextButton';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
 import { OfflineError, readStoredToken } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
@@ -963,6 +964,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // (Windows), как есть — relPath не нормализует то, что вне корня проекта
   const fileName = basename(filePath) || filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
+  // «В контекст чата» (фича chat-context). Хостовый файл (путь вне проекта) туда не
+  // кладём: запись контекста адресуется путём ОТ КОРНЯ ПРОЕКТА, чужой сервер её
+  // не разрешит и пометит «не найден»
+  const chatContext = useContextButton('file', isHostMode ? null : filePath, fileName);
+  const addToChatContext = () => {
+    chatContext.toggle();
+    // Из полноэкранного вида материал сворачивается к чату: контекст — про работу
+    // рядом с разговором, а полоса вкладок в fullscreen не рисуется
+    if (!chatContext.inContext && fullscreen && onToggleFullscreen) handleToggleMode();
+  };
   // Свойства документа (статус ADR и прочее по схеме типа). Загрузка одна на оба
   // представления — полосу под шапкой и сайдбар справа: иначе на каждый файл уходило бы
   // вдвое больше запросов. Для не-md и файлов вне проекта не запрашиваются вовсе
@@ -1303,6 +1314,26 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         item: {
           key: 'dossiers', icon: <Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           label: dossiersTitle, onClick: toggleDossiersPanel,
+        },
+      });
+    }
+    // «В контекст чата» — после истории решений, перед копированием (эскиз B2 §3.3).
+    // Пара node+item обязательна: на узкой ступени кнопка уезжает в «···», и без
+    // item действие исчезло бы с экрана вовсе
+    if (chatContext.available) {
+      secondary.push({
+        key: 'chat-context',
+        node: (
+          <ToolbarIconButton
+            isMobile={isMobile} onClick={addToChatContext} title={chatContext.title}
+            color={chatContext.inContext ? C.accent : undefined}
+          >
+            <SquareStack size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'chat-context', icon: <SquareStack size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: chatContext.title, onClick: addToChatContext,
         },
       });
     }

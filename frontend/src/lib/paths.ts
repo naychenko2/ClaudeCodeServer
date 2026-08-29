@@ -39,6 +39,16 @@ export function relPath(p: string, root?: string | null): string {
   return p;
 }
 
+// Длинное имя режем по СЕРЕДИНЕ, а не с конца: расширение должно остаться видно.
+// Живёт здесь, рядом с basename: одно и то же имя обрезают чипы вложений композера
+// и чипы контекста чата, и разъехавшаяся обрезка читалась бы как два разных файла.
+export function middleEllipsis(name: string, max = 30): string {
+  if (name.length <= max) return name;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = max - 1 - head;
+  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
+}
+
 // Последний сегмент пути (имя файла/папки) для Windows и posix.
 // «C:\a\b\worktree» → «worktree»; хвостовые разделители игнорируются.
 export function basename(p: string): string {

@@ -156,6 +156,7 @@ function DueChip({ due, disabled, onSet }: {
         {due ? `📅 ${due}` : '📅 срок'}
       </button>
       <input
+        autoComplete="off"
         ref={ref} type="date" value={due ?? ''} disabled={disabled}
         onChange={e => onSet(e.target.value)}
         tabIndex={-1} aria-hidden

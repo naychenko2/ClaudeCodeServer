@@ -18,6 +18,11 @@ try {
   }
 } catch { /* localStorage недоступен */ }
 
+// Последняя измеренная высота композера — стартовое значение для следующего чата.
+// Иначе лента каждый раз открывается с запасом в 96px, а через кадр композер домеряет
+// свои ~180 и область прокрутки ужимается: открытие чата даёт рывок снизу.
+let _lastComposerH = 96;
+
 // Скролл-механика ленты чата: прилипание к низу, восстановление позиции чтения
 // после перезагрузки страницы, автоскролл в конец при открытии чата, измерение
 // высоты плавающего composer и кнопка «вниз».
@@ -29,7 +34,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   const contentRef = useRef<HTMLDivElement>(null);
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
   const composerWrapRef = useRef<HTMLDivElement>(null);
-  const [composerH, setComposerH] = useState(96);
+  const [composerH, setComposerH] = useState(_lastComposerH);
   // Прилипание к низу: автоскролл при новых сообщениях, пока лента «приклеена» к концу.
   // ГЛАВНЫЙ ИНВАРИАНТ: отклеивает ленту ТОЛЬКО жест пользователя (колесо, тач, клавиши,
   // перетаскивание полосы). Программные сдвиги геометрии — composer домерил свою высоту
@@ -45,6 +50,10 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   const restoredRef = useRef(false);
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
+  // Лента сдвинута от начала — шапка приподнимается тенью над уехавшим под неё текстом.
+  // Порог в пару пикселей, а не строгий ноль: инерционная прокрутка на тач-устройствах
+  // любит замирать чуть ниже начала, и тень мигала бы на каждом касании
+  const [scrolled, setScrolled] = useState(false);
 
   // Сброс состояния при смене сессии. Layout-эффект: скролл выставляется до отрисовки
   // кадра, поэтому лента не успевает мигнуть началом.
@@ -53,6 +62,8 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     restoredRef.current = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и восстановление позиции скролла при смене сессии
     setShowScrollDown(false);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- иначе тень шапки переезжает из прошлого чата в новый
+    setScrolled(false);
     // Загружаем позицию, оставленную выгрузкой страницы (свежую — протухшую игнорируем:
     // sessionStorage переживает bfcache, а через полчаса возврата лента уже неактуальна)
     let saved: { top: number; h: number } | null = null;
@@ -103,7 +114,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   useEffect(() => {
     const el = composerWrapRef.current;
     if (!el) return;
-    const update = () => setComposerH(el.offsetHeight);
+    const update = () => { _lastComposerH = el.offsetHeight; setComposerH(el.offsetHeight); };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -119,6 +130,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     // сам довёл ленту до конца.
     if (atBottom || userGestureRef.current) atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
+    setScrolled(el.scrollTop > 2);
   }, []);
 
   // Жесты пользователя: пока идёт жест (и 400мс после) сдвиг позиции считаем его волей —
@@ -237,6 +249,6 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
 
   return {
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
-    showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
+    showScrollDown, scrolled, atBottomRef, handleMessagesScroll, scrollToBottom,
   };
 }

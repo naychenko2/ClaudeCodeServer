@@ -69,7 +69,7 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
         <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
-        <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План</span>
+        <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
         <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
           {done}/{todos.length}
         </span>

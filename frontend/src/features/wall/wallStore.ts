@@ -16,6 +16,7 @@ import { useSyncExternalStore } from 'react';
 import type { Project, Session, ServerMessage } from '../../types';
 import { api } from '../../lib/api';
 import { joinProject, joinUser, onMessage, onReconnected } from '../../lib/signalr';
+import { isArchivedChat } from '../../lib/chatFilters';
 
 // Потолок видимых колонок: дальше это видеостена, а не работа; ширина всё равно
 // раньше упрётся в MIN_COL. Сервер держит свой потолок набора (24) — это про монеты.
@@ -326,6 +327,9 @@ export function updateProject(p: Project): void {
 
 export function updateChat(s: Session): void {
   if (!_state.chats.some(c => c.id === s.id)) return;
+  // Чат ушёл в архив — колонка уходит: архивный чат скрыт из списков и молчит,
+  // колонка стала бы призраком. removeChat сам чинит фокус и сохраняет состав PUT'ом
+  if (isArchivedChat(s)) { removeChat(s.id); return; }
   setState({ chats: _state.chats.map(c => (c.id === s.id ? s : c)) });
 }
 

@@ -5,7 +5,7 @@ import { C } from './design';
 import { hasUnread, subscribeReadState } from './chatReadState';
 import { loadChatFilters, matchChatFilter } from './chatFilters';
 import { onMessage, onReconnected } from './signalr';
-import { agentsPresenceSnapshot, subscribeAgentsPresence } from './agentsPresence';
+import { bgWorkPresenceSnapshot, subscribeAgentsPresence } from './agentsPresence';
 
 // Стор активности проектов для переключателя в сайдбаре (флаг sidebar-project-switcher):
 // агрегат «в каком проекте агент работает / ждет ответа» по live-сессиям всех проектов.
@@ -120,15 +120,16 @@ function aggregate(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<st
     }
   }
 
-  // Чат с живыми ФОНОВЫМИ агентами: ход в нём завершён, статус Active — сервер отдаёт
-  // такой чат в recent, то есть «живым» он не считается нигде. Работа при этом идёт,
-  // и точка проекта обязана гореть, иначе рельса разойдётся со списком чатов, где у
-  // той же сессии светится значок агентов. Фильтр видимости здесь не применяем — он
-  // про непрочитанность (ниже), а работа идёт независимо от того, что скрыто в списке
-  const withAgents = agentsPresenceSnapshot();
-  if (withAgents.size > 0)
+  // Чат с живой ФОНОВОЙ работой (агенты или команда в фоне — дев-сервер, watch): ход в нём
+  // завершён, статус Active, сервер отдаёт такой чат в recent, то есть «живым» он не
+  // считается нигде. Работа при этом идёт, и точка проекта обязана гореть, иначе рельса
+  // разойдётся со списком чатов, где у той же сессии переливается плитка. Фильтр видимости
+  // здесь не применяем — он про непрочитанность (ниже), а работа идёт независимо от того,
+  // что скрыто в списке
+  const withBgWork = bgWorkPresenceSnapshot();
+  if (withBgWork.size > 0)
     for (const s of [...active, ...recent])
-      if (s.projectId && withAgents.has(s.id)) put(s.projectId, { status: 'working' });
+      if (s.projectId && withBgWork.has(s.id)) put(s.projectId, { status: 'working' });
 
   for (const s of [...active, ...recent]) {
     if (!s.projectId) continue;
@@ -155,11 +156,11 @@ function aggregateChats(active: HomeSessionInfo[], recent: HomeSessionInfo[]): M
     next.set(s.id, s.status === 'waiting' ? 'waiting' : 'working');
   }
   // Живой фон — та же работа: без этого номерок чата в доке стены остался бы немым
-  // (или серым «сюда не заходили»), пока агенты пашут
-  const withAgents = agentsPresenceSnapshot();
+  // (или серым «сюда не заходили»), пока агенты пашут или крутится фоновая команда
+  const withBgWork = bgWorkPresenceSnapshot();
   for (const s of recent) {
     if ((s as { archived?: unknown }).archived === true) continue;
-    if (withAgents.has(s.id)) next.set(s.id, 'working');
+    if (withBgWork.has(s.id)) next.set(s.id, 'working');
   }
   for (const s of [...active, ...recent]) {
     if ((s as { archived?: unknown }).archived === true) continue;

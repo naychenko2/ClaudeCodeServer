@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
+import { useHoverWarm } from '../hooks/useSession';
 import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions, Button } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -14,9 +15,10 @@ import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
-import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
-import { useAgentsPresence } from '../lib/agentsPresence';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
+import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse, withAncestors } from '../lib/chatTree';
+import { useBgWorkPresence } from '../lib/agentsPresence';
+import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
@@ -58,6 +60,8 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
 
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   const online = useOnline();
+  // История чата под курсором едет до клика — открытие обходится без спиннера
+  const warmHover = useHoverWarm();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
   // Подписка на стор механик — перерисовать список при запуске новой механики
@@ -82,6 +86,21 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSelectRef.current = onSelect; });
   const onClearedRef = useRef(onCleared);
   useEffect(() => { onClearedRef.current = onCleared; });
+
+  // Значок «правки чата не зафиксированы в git». Стор подключаем сами: список живёт не
+  // только в мастерской (WorkspacePage уже зовёт ensureGit), но и на Стене, где git
+  // мог не понадобиться никому. Вызов идемпотентен — повторный ничего не грузит
+  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const { dirtySessionIds } = useGitState(project.id);
+  // Признак наследуется вверх по ветке: родитель отвечает за работу потомков, иначе
+  // свёрнутая (или просто длинная) ветка прятала бы незафиксированные правки. Считаем
+  // по ПОЛНОМУ списку чатов, а не по отфильтрованному: предок, скрытый фильтром, всё
+  // равно остаётся звеном цепочки к видимому прародителю. Работает во всех режимах
+  // списка — иерархия лежит в данных и без включённого режима «Иерархия»
+  const dirtyBranchIds = useMemo(
+    () => (dirtySessionIds ? withAncestors(sessions, dirtySessionIds) : undefined),
+    [dirtySessionIds, sessions],
+  );
 
   // === Реестр общих тегов проекта ===
   // Optimistic state поверх project.tagRegistry: reorder/создание видны сразу, ответ
@@ -197,8 +216,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
         // центр показывает пустое состояние с кнопкой «Новый чат» (создание только по клику).
         // Читаем через ref-зеркала: эффект живёт на весь project.id, пропсы за это время свежие.
-        if (!activeRef.current && list.length > 0) {
-          onSelectRef.current(list[0], undefined, true);
+        // Автовыбор — только чаты, видимые под фильтрами списка: архивные (архивация
+        // не двигает UpdatedAt, и заархивированный последним стоит первым) и скрытые
+        // фильтрами (напр., выполненные задачи) в списке нет — открытым в центре
+        // такой чат висел бы призраком.
+        const isVisible = matchChatFilter(loadChatFilters(project.id));
+        const live = list.filter(s => !s.archivedAt && isVisible(s));
+        if (!activeRef.current && live.length > 0) {
+          onSelectRef.current(live[0], undefined, true);
         }
       }
     };
@@ -378,10 +403,19 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // в localStorage отдельно для каждого проекта (scope = project.id)
   const { filters, patch } = useChatFilters(project.id);
   const { groupBy, sortOrder, hierarchy } = filters;
+  
+  // Возврат чата из архива: выходим из архивного вида и открываем этот чат — достают
+  // из архива, чтобы продолжить работу, а не чтобы остаться в архивном списке
+  const leaveArchiveAndOpen = (s: Session) => {
+    if (filters.archivedOnly) patch({ archivedOnly: false });
+    setOpenSwipeId(null);
+    onSelect(s);
+  };
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
-  // Чаты с живыми фоновыми агентами — считаются работающими в счётчике свёрнутой ветки
-  const agentsRunningIds = useAgentsPresence();
+  // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
+  // в счётчике свёрнутой ветки, как и в переливе самой карточки
+  const bgWorkIds = useBgWorkPresence();
 
   // Персоны в списке (для селектора фильтра)
   const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
@@ -403,10 +437,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const activeSessionId = activeSession?.id ?? null;
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, agentsRunningIds })
+      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, agentsRunningIds],
+    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, bgWorkIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = scoped.length - filteredSessions.length;
@@ -459,8 +493,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         online={online}
         hovered={hoveredId === s.id}
         workflowRunning={workflowRunningFor === s.id}
+        uncommitted={dirtySessionIds?.has(s.id) ? 'own' : (dirtyBranchIds?.has(s.id) ? 'descendants' : undefined)}
         onSelect={() => onSelect(s)}
-        onHover={h => setHoveredId(h ? s.id : null)}
+        onHover={h => { setHoveredId(h ? s.id : null); warmHover(h && online ? s : null); }}
         onDelete={() => setDeleteTarget(s)}
         tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
         onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
@@ -470,7 +505,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         // Архив и его действия — только онлайн: офлайн-кэш отдал бы «успех» на
         // запрос, который до сервера не доехал. «Сохранить в заметки» видно лишь
         // у архивного чата (см. ChatCard), обычной карточке оно ничего не меняет
-        onArchive={online ? archived => { void handleArchive(s, archived); } : undefined}
+        onArchive={online ? archived => {
+          void handleArchive(s, archived);
+          // Возврат из архива открывает чат и выводит список из архивного вида
+          if (!archived) leaveArchiveAndOpen(s);
+        } : undefined}
         onSaveAsNote={online ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}

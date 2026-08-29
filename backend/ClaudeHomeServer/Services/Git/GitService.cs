@@ -205,6 +205,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return map;
     }
 
+
     // Парсер `--numstat -z`: записи `add\tdel\tpath\0`; для rename — `add\tdel\t\0old\0new\0`
     // (пустой path в первом токене → следующие два токена old/new, ключ — new). Бинарь: add/del = «-».
     private static void ParseNumstatZ(string stdout, Dictionary<string, (int, int, bool)> map)

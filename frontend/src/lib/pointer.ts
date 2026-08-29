@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, type CSSProperties } from 'react';
 
 // «Можно ли рассчитывать на наведение» — не по паспорту устройства, а по тому,
 // чем человек работает прямо сейчас.
@@ -37,3 +37,17 @@ export function useCanHover(): boolean {
   // Серверного рендера у нас нет, но getServerSnapshot обязателен по контракту хука
   return useSyncExternalStore(subscribe, () => canHover, () => true);
 }
+
+// Щит от нативного long-press на иконочных кнопках. Chrome на Android по удержанию
+// на кнопке с <svg> внутри поднимает СВОЁ меню («Скачать / Поделиться / Печать»),
+// а iOS — callout с выделением: чужой попап накрывает наш и перебивает нажатие.
+// Гасится парой «стиль + onContextMenu»: стиль снимает callout и выделение, а
+// preventDefault на contextmenu — само меню (Chrome шлёт это событие по удержанию).
+// Ставить обязан КАЖДЫЙ, кто вешает долгое нажатие или иконку в тач-достижимом
+// месте — иначе жест работает, но поверх него встаёт браузер.
+export const TOUCH_CALLOUT_GUARD: CSSProperties = {
+  WebkitTouchCallout: 'none',
+  WebkitUserSelect: 'none',
+  userSelect: 'none',
+  touchAction: 'manipulation',
+};

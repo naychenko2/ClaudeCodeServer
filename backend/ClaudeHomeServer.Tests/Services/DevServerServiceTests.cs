@@ -19,8 +19,12 @@ public class DevServerServiceTests
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+        // Память портов пишет в data рядом с DataPath; в тестах конфигурация пуста,
+        // поэтому файл ложится во временный каталог сборки и никому не мешает
+        var portMemory = new DevServerPortMemory(config,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DevServerPortMemory>.Instance);
         _svc = new DevServerService(null!, new Mock<IHubContext<SessionHub>>().Object,
-            new Mock<ILogger<DevServerService>>().Object, TestLauncherFactory.Instance, sandbox);
+            new Mock<ILogger<DevServerService>>().Object, TestLauncherFactory.Instance, sandbox, portMemory);
     }
 
     [Fact]

@@ -432,6 +432,36 @@ describe('moveAcrossAt / moveAcrossToNewColumn — дроп в направля�
   });
 });
 
+// Перенос панели на противоположную сторону (кнопка в плашке рельсы и спутник
+// строки ящика). Сам moveTo живёт в хуке стора, но состоит из этих трёх ветвей —
+// они и фиксируются: открытая переезжает открытой, закрытая уводит только кнопку,
+// спрятанная остаётся спрятанной, но уже в чужом ящике.
+describe('перенос панели в противоположную зону', () => {
+  it('открытая переезжает открытой и уходит из прежней зоны', () => {
+    const z = openPanelIn(zones([['chats']], [['tasks']]), 'left', 'tasks');
+    expect(zoneOf(z, 'tasks')).toBe('left');
+    expect(z.right.layout).toEqual([]);
+  });
+
+  it('закрытая уводит на другую сторону только свою кнопку', () => {
+    const base = trackHome(zones([['chats']], [['tasks']]));
+    const closed = trackHome(closePanel(base, 'tasks'));
+    const z = closePanelTo(closed, 'left', 'tasks');
+    expect(zoneOf(z, 'tasks')).toBeNull();
+    expect(homeOf(z, 'tasks')).toBe('left');
+  });
+
+  it('спрятанная остаётся спрятанной, но в ящике другой рельсы', () => {
+    const base = tuckPanel(zones([['chats']], [['tasks']]), 'right', 'tasks');
+    expect(isTucked(base, 'tasks')).toBe(true);
+    const z = tuckPanel(base, 'left', 'tasks');
+    expect(isTucked(z, 'tasks')).toBe(true);
+    expect(homeOf(z, 'tasks')).toBe('left');
+    // дубля в списке спрятанных перенос не плодит
+    expect(z.tucked.filter(k => k === 'tasks')).toHaveLength(1);
+  });
+});
+
 describe('homeOf / trackHome — иконка закрытой панели', () => {
   it('до первого открытия берётся домашняя зона из реестра', () => {
     expect(homeOf(emptyZones(), 'tasks')).toBe('right');

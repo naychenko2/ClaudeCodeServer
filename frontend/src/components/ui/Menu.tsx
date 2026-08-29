@@ -110,8 +110,11 @@ export function MenuSep() {
   return <div style={{ height: 1, background: C.borderLight, margin: '4px 6px' }} />;
 }
 
+// Кнопка-спутник строки меню: своя иконка и своё действие рядом с основным кликом.
+export interface MenuItemAction { icon: ReactNode; title: string; onClick: () => void; disabled?: boolean }
+
 // Единый пункт выпадающего меню.
-export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, action, isMobile }: {
+export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, action, actions, isMobile }: {
   icon?: ReactNode;
   label: ReactNode;
   onClick?: (e: MouseEvent) => void;
@@ -125,22 +128,29 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
   // основной клик, и побочная команда). Отдельной кнопкой, а не иконкой ВНУТРИ
   // пункта: <button> в <button> вложить нельзя, поэтому строка становится
   // flex-обёрткой, а подсветка наведения переезжает на неё.
-  action?: { icon: ReactNode; title: string; onClick: () => void; disabled?: boolean };
+  action?: MenuItemAction;
+  // Несколько кнопок-спутников в одной строке (у панели в ящике рельсы их две:
+  // вернуть кнопку на рельсу и перенести её на другую сторону). Заданы обе — action
+  // идёт первой: одиночный проп остаётся у десятков строк меню, переписывать их
+  // ради второй кнопки в одном месте незачем.
+  actions?: readonly MenuItemAction[];
   // Тач-раскладка: кнопка-спутник растёт до 40px. Меню карточки чата открывается
   // long-press'ом, строка там 44 высотой, и 24-пиксельная цель вплотную к
   // «Удалить» ловилась пальцем мимо (чек-лист гайда: тач-цель не меньше 40)
   isMobile?: boolean;
 }) {
   const [hover, setHover] = useState(false);
+  const acts: readonly MenuItemAction[] = [...(action ? [action] : []), ...(actions ?? [])];
+  const hasAction = acts.length > 0;
   const color = disabled ? C.textMuted : (danger ? C.danger : C.textPrimary);
   const hovered = hover && !disabled;
   const style: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
     // При действии-спутнике фон рисует обёртка: иначе подсветка обрывалась бы
     // ровно перед кнопкой справа
-    background: hovered && !action ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
+    background: hovered && !hasAction ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
     padding: '9px 10px', cursor: disabled ? 'default' : 'pointer', color, fontSize: 13.5, fontFamily: FONT.sans,
-    ...(action ? { flex: 1, minWidth: 0, paddingRight: 4 } : null),
+    ...(hasAction ? { flex: 1, minWidth: 0, paddingRight: 4 } : null),
   };
   const item = (
     <button
@@ -165,7 +175,7 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
       </span>
     </button>
   );
-  const row = action ? (
+  const row = hasAction ? (
     <span
       role="none"
       onMouseEnter={() => setHover(true)}
@@ -177,9 +187,11 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
       }}
     >
       {item}
-      <IconButton size={isMobile ? 'lg' : 'xs'} title={action.title} disabled={action.disabled} onClick={e => { e.stopPropagation(); if (!action.disabled) action.onClick(); }}>
-        {action.icon}
-      </IconButton>
+      {acts.map((a, i) => (
+        <IconButton key={i} size={isMobile ? 'lg' : 'xs'} title={a.title} disabled={a.disabled} onClick={e => { e.stopPropagation(); if (!a.disabled) a.onClick(); }}>
+          {a.icon}
+        </IconButton>
+      ))}
     </span>
   ) : item;
   // Обёртка только когда её просят: лишний span в разметке меню ни к чему

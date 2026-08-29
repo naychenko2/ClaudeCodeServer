@@ -169,7 +169,7 @@ export function MemoryPanel<TType extends string>({
 
       {!isEmpty && (
         <>
-          <IconField icon={<Search size={15} strokeWidth={ICON_STROKE} />} value={search} onChange={setSearch}
+          <IconField type="search" icon={<Search size={15} strokeWidth={ICON_STROKE} />} value={search} onChange={setSearch}
             placeholder="Поиск по записям…" height={38} fontSize={13} />
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

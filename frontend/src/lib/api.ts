@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry } from '../types';
 import { readStoredToken, request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -431,6 +431,13 @@ export const api = {
         + (channelId ? `&channelId=${encodeURIComponent(channelId)}` : '')
         + (refresh ? '&refresh=true' : ''),
         { live: true }),
+    // Избранные каналы полосы. live: true — как и у каналов: подставленный из офлайн-кэша
+    // набор увёл бы полосу на чужой состав и первое же нажатие звёздочки сохранило бы его.
+    favorites: () => request<VideoFavoritesResponse>('/video/favorites', { live: true }),
+    setFavorites: (keys: string[]) =>
+      request<VideoFavoritesResponse>('/video/favorites', {
+        method: 'PUT', body: JSON.stringify({ keys }), live: true,
+      }),
     youtubeAuthUrl: () => request<{ url: string }>('/video/youtube/auth-url'),
     youtubeDisconnect: () => request<{ ok: boolean }>('/video/youtube/disconnect', { method: 'POST' }),
   },
@@ -690,6 +697,12 @@ export const api = {
       }),
     // Внешний доступ: ссылка на сервис по отдельному поддомену. Порт, как и выше, выбирает
     // сервер — принимать его от клиента нельзя, эндпоинт стал бы туннелем наружу.
+    // Остановить процесс, поднятый вне продукта. 409 с needsConfirm — порт держит чужой
+    // процесс, и гасить его можно только после явного согласия человека.
+    previewStopExternal: (id: string, serviceId: string, confirm = false) =>
+      request<{ status: string; pid: number }>(`/projects/${id}/preview/stop-external`, {
+        method: 'POST', body: JSON.stringify({ serviceId, confirm }),
+      }),
     previewExternalLink: (id: string, serviceId: string) =>
       request<ExternalLinkIssued>(`/projects/${id}/preview/external-link`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
@@ -1220,13 +1233,24 @@ export const api = {
         // нельзя продолжить обычный и наоборот, поэтому в update этого поля нет
         body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, desktop }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string; archived?: boolean }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
     delete: (projectId: string, sessionId: string) =>
       request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' }),
+    // Состав контекста чата (фича chat-context) с признаками missing. live: true —
+    // обязательный: офлайн-кэш после переключения чата подставил бы чужой/старый состав
+    getContext: (projectId: string, sessionId: string) =>
+      request<SessionContextEntry[]>(`/projects/${projectId}/sessions/${sessionId}/context`, { live: true }),
+    // Идемпотентная замена состава целиком. Ответ PUT — записи БЕЗ missing (бэкенд его
+    // считает только в GET), поэтому после записи дёргаем GET — он же обновит кеш
+    putContext: async (projectId: string, sessionId: string, entries: Pick<SessionContextEntry, 'type' | 'id' | 'title'>[]) =>
+      { await request<void>(`/projects/${projectId}/sessions/${sessionId}/context`, {
+        method: 'PUT',
+        body: JSON.stringify(entries),
+      }); return api.sessions.getContext(projectId, sessionId); },
     getHistory: (projectId: string, sessionId: string) =>
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
@@ -1306,7 +1330,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
       }),
-    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string; archived?: boolean }) =>
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/chats/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),

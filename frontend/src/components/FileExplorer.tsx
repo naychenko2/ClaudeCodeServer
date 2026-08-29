@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -34,10 +34,12 @@ const isMdConvertible = (name: string) => MD_CONVERTIBLE.has((name.split('.').po
 import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
+import { useContextButton } from '../features/chatContext/useContextButton';
 import { EmptyState } from './EmptyState';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 interface Props {
   project: Project;
@@ -356,6 +358,12 @@ function MI_Attach() {
 function MI_Copy() {
   return <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
+function MI_Context() {
+  return <SquareStack size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+}
+function MI_Check() {
+  return <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+}
 function MI_BookPlus() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -590,6 +598,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
         {inlineRename ? (
           <input
+            {...NO_AUTOFILL}
             ref={inputRef}
             value={p.renameValue}
             onChange={e => p.onRenameChange(e.target.value)}
@@ -684,7 +693,10 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
             size="xs"
             tone="accent"
             onClick={e => { e.stopPropagation(); p.onAttach!(entry.path); }}
-            title="Добавить в чат"
+            // «Прикрепить» — только про вложение (уедет с ближайшим сообщением);
+            // «в контекст чата» — про постоянный материал. Прежняя подпись
+            // «Добавить в чат» годилась обоим и путала их
+            title="Прикрепить к чату"
           >
             <Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
@@ -804,6 +816,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   // === Context menu state ===
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  // «В контекст чата» для строки под курсором (фича chat-context): третьей hover-иконки
+  // в строке нет намеренно — кластер справа и так плотный, действие живёт в меню
+  const ctxEntry = contextMenu && !contextMenu.entry.isDirectory ? contextMenu.entry : null;
+  const chatContextBtn = useContextButton('file', ctxEntry?.path ?? null, ctxEntry?.name);
 
   // === Delete confirm state ===
   const [deleteConfirm, setDeleteConfirm] = useState<FileEntry | null>(null);
@@ -1664,6 +1680,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
               style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
             <TextField
+              type="search"
               value={search}
               onChange={handleSearch}
               placeholder="Поиск по файлам"
@@ -1805,6 +1822,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             }
           >
             <input
+              {...NO_AUTOFILL}
               ref={renameModalInputRef}
               value={renameValue}
               onChange={e => setRenameValue(e.target.value)}
@@ -2034,6 +2052,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
         add(entry.isDirectory && inNotesVault(entry.path),
           <MenuItem key="note" icon={<MI_NotePlus />} label="Новая заметка" onClick={() => { close(); setNoteDialog({ folder: noteFolderOf(entry.path) }); }} />);
+        // Контекст чата — первым: он про «материал живёт у чата», вложение ниже —
+        // про «уедет с ближайшим сообщением». В контексте пункт превращается
+        // в «Убрать» с галочкой (приём соседних «Убрать из офлайна»/«Удалить из знаний»)
+        add(chatContextBtn.available,
+          <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
+            label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
         add(!entry.isDirectory && onAttachToChat,
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),

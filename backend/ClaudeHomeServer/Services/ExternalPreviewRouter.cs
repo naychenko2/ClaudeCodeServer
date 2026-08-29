@@ -39,7 +39,8 @@ public sealed class ExternalPreviewRouter(
     ExternalPreviewStore store,
     ProjectManager projects,
     ProjectServiceDiscovery discovery,
-    DevServerService devServer)
+    DevServerService devServer,
+    DevServerPortMemory portMemory)
 {
     /// <summary>Путь обмена токена на куку. Общий для выдающего эндпоинта и middleware.</summary>
     public const string AuthPath = "/__preview-auth";
@@ -71,7 +72,9 @@ public sealed class ExternalPreviewRouter(
     /// 1) фактический порт ЖИВОГО процесса — конфигурация его может не знать вовсе
     ///    (автопорт, порт выловлен из вывода дев-сервера);
     /// 2) порт из конфигурации — для сервисов, поднятых вне продукта: своего процесса
-    ///    у них нет, и спросить о порте больше некого.
+    ///    у них нет, и спросить о порте больше некого;
+    /// 3) последний известный порт из памяти — после перезапуска продукта реестр процессов
+    ///    пуст, а дев-сервер жив, и это единственный способ узнать, где он слушает.
     ///
     /// У составной конфигурации своего порта нет: идём по участникам и берём первого,
     /// которому есть что показать, — тем же правилом панель считает порт группе.
@@ -82,12 +85,17 @@ public sealed class ExternalPreviewRouter(
         var svc = known.FirstOrDefault(s => s.Id == serviceId);
         if (svc is null) return null;
 
-        var ids = svc.Members is { Length: > 0 } ? svc.Members : [svc.Id];
+        // У составной конфигурации берём ПОСЛЕДНЕГО участника с портом. В multilaunch
+        // зависимости поднимаются первыми, а приложение-агрегатор ждёт их (waitPortOpened)
+        // и потому стоит в конце: смотреть надо именно его. Правило «первый с портом»
+        // показывало вместо витрины её первый модуль-панель.
+        var ids = svc.Members is { Length: > 0 } ? svc.Members.Reverse() : [svc.Id];
         var byId = known.ToDictionary(s => s.Id);
         foreach (var id in ids)
         {
             if (devServer.GetRunningPort(project.Id, id, userId) is > 0 and var running) return running;
             if (byId.TryGetValue(id, out var member) && member.SuggestedPort is > 0) return member.SuggestedPort;
+            if (portMemory.Get(project.Id, id) is > 0 and var remembered) return remembered;
         }
         return null;
     }

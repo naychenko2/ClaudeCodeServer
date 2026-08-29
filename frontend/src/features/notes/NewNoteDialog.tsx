@@ -7,6 +7,7 @@ import { C, FONT, R } from '../../lib/design';
 import { OfflineError } from '../../lib/offline';
 import { createNoteOffline } from '../../lib/notesOffline';
 import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Диалог создания заметки: заголовок, источник, папка (с автодополнением по
 // существующим — включая пустые физические папки), опционально шаблон и время жизни.
@@ -90,7 +91,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div>
           <label style={fieldLabel}>Заголовок</label>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
+          <input {...NO_AUTOFILL} autoFocus value={title} onChange={e => setTitle(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') create(); }}
             placeholder="Название заметки"
             style={fieldInput} />
@@ -110,7 +111,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
         </div>
         <div>
           <label style={fieldLabel}>Папка</label>
-          <input value={folder} onChange={e => setFolder(e.target.value)}
+          <input {...NO_AUTOFILL} value={folder} onChange={e => setFolder(e.target.value)}
             list="note-folders" placeholder="Корень (или введи новую: Идеи/Черновики)"
             style={fieldInput} />
           <datalist id="note-folders">

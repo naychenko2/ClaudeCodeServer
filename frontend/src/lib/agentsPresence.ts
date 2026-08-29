@@ -4,9 +4,13 @@ import { onMessage, onReconnected } from './signalr';
 
 // Чаты, в которых прямо сейчас идёт ФОНОВАЯ работа — двух разных видов:
 //   • агенты (Agent run_in_background / Workflow) — карточка светится и показывает робота;
-//   • фоновая команда (Bash с run_in_background: дев-сервер, watch) — тихий значок без
-//     свечения. Она живёт часами и о завершении не сообщает, так что «агенты работают» на
+//   • фоновая команда (Bash с run_in_background: дев-сервер, watch) — своя пометка значком
+//     терминала. Она живёт часами и о завершении не сообщает, так что «агенты работают» на
 //     ней врало бы, а молчание скрывало бы причину, по которой чат держит живой процесс CLI.
+//
+// Виды РАЗЛИЧАЮТСЯ только значком: подсветка (перелив плитки чата, точки рельсы проектов и
+// стены, счётчики свёрнутых веток) у обоих одна — с точки зрения человека это один вопрос
+// «идёт ли в чате работа прямо сейчас», и отвечает на него bgWork, объединение обоих видов.
 //
 // Зачем отдельный стор, а не поле статуса сессии: пока фон работает, ход чата уже завершён
 // и статус сессии — Active, у которого нет ни свечения, ни движения. Снаружи такой чат
@@ -19,6 +23,10 @@ import { onMessage, onReconnected } from './signalr';
 
 let _ids: ReadonlySet<string> = new Set();
 let _commandIds: ReadonlySet<string> = new Set();
+// Объединение обоих видов — «в чате идёт фоновая работа». Держим отдельным полем, а не
+// считаем на каждый вызов: снимок useSyncExternalStore сравнивается ПО ССЫЛКЕ, и свежий
+// Set с тем же составом ререндерил бы весь список чатов на каждом чужом событии
+let _bgWork: ReadonlySet<string> = new Set();
 const _listeners = new Set<() => void>();
 
 let _offMessage: (() => void) | null = null;
@@ -38,6 +46,17 @@ function withId(set: ReadonlySet<string>, sessionId: string, present: boolean): 
   return next;
 }
 
+// Пересобрать объединение после смены любого из двух множеств. Состав не изменился —
+// ссылку сохраняем (см. комментарий к _bgWork)
+function syncBgWork() {
+  const next = new Set(_ids);
+  for (const id of _commandIds) next.add(id);
+  // Сравнение по составу, а не по размерам исходных множеств: один чат может держать
+  // и агента, и фоновую команду разом — в объединении это ОДИН элемент
+  if (next.size === _bgWork.size && [...next].every(id => _bgWork.has(id))) return;
+  _bgWork = next;
+}
+
 // Оба вида приходят одним событием и меняются независимо: агент закончил, а дев-сервер
 // в том же чате работает дальше. Один emit на событие — иначе подписчики дёргаются дважды
 function setPresence(sessionId: string, active: boolean, command: boolean) {
@@ -46,6 +65,7 @@ function setPresence(sessionId: string, active: boolean, command: boolean) {
   if (nextIds === _ids && nextCommands === _commandIds) return;
   _ids = nextIds;
   _commandIds = nextCommands;
+  syncBgWork();
   emit();
 }
 
@@ -56,6 +76,7 @@ function applySnapshot(agents: string[], commands: string[]) {
   if (sameIds(agents, _ids) && sameIds(commands, _commandIds)) return;
   _ids = new Set(agents);
   _commandIds = new Set(commands);
+  syncBgWork();
   emit();
 }
 
@@ -96,6 +117,7 @@ function subscribe(fn: () => void): () => void {
 
 const snapshot = () => _ids;
 const commandsSnapshot = () => _commandIds;
+const bgWorkSnapshot = () => _bgWork;
 
 /** Чаты с живыми фоновыми агентами. Пустое множество — агентов нет нигде. */
 export function useAgentsPresence(): ReadonlySet<string> {
@@ -107,7 +129,7 @@ export function useAgentsRunning(sessionId: string): boolean {
   return useAgentsPresence().has(sessionId);
 }
 
-/** Чаты с живой фоновой КОМАНДОЙ (Bash в фоне) — тихая пометка, без свечения. */
+/** Чаты с живой фоновой КОМАНДОЙ (Bash в фоне) — отличаются от агентов только значком. */
 export function useBgCommandsPresence(): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, commandsSnapshot, commandsSnapshot);
 }
@@ -115,6 +137,21 @@ export function useBgCommandsPresence(): ReadonlySet<string> {
 /** Работает ли в этом чате фоновая команда прямо сейчас. */
 export function useBgCommandRunning(sessionId: string): boolean {
   return useBgCommandsPresence().has(sessionId);
+}
+
+/**
+ * Чаты с ЛЮБОЙ живой фоновой работой (агенты ∪ фоновая команда) — источник подсветки:
+ * перелив плитки чата, точки рельсы проектов и стены, счётчики свёрнутых веток. Всё, что
+ * отвечает человеку на вопрос «идёт ли тут работа», обязано смотреть сюда, а не в один
+ * из двух видов: чат с дев-сервером живой ровно так же, как чат с агентом.
+ */
+export function useBgWorkPresence(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, bgWorkSnapshot, bgWorkSnapshot);
+}
+
+/** Идёт ли в этом чате фоновая работа любого вида прямо сейчас. */
+export function useBgWorkRunning(sessionId: string): boolean {
+  return useBgWorkPresence().has(sessionId);
 }
 
 /**
@@ -130,10 +167,14 @@ export const agentsPresenceSnapshot = snapshot;
 /** Текущее множество чатов с живой фоновой командой — для не-React потребителей. */
 export const bgCommandsPresenceSnapshot = commandsSnapshot;
 
+/** Текущее множество чатов с фоновой работой любого вида — для не-React потребителей. */
+export const bgWorkPresenceSnapshot = bgWorkSnapshot;
+
 // Только для тестов: сбросить состояние между кейсами
 export function __resetAgentsPresence() {
   _ids = new Set();
   _commandIds = new Set();
+  _bgWork = new Set();
   _listeners.clear();
   stop();
 }

@@ -10,14 +10,17 @@ import { api } from '../../lib/api';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useWallState, addChat, MAX_CHATS } from './wallStore';
 import { showToast } from '../../lib/toast';
-import { useAgentsPresence } from '../../lib/agentsPresence';
+import { useAgentsPresence, useBgWorkPresence } from '../../lib/agentsPresence';
 
 export function WallPicker({ onClose }: { onClose: () => void }) {
   const { chats, projects } = useWallState();
   const [candidates, setCandidates] = useState<Session[] | null>(null);
   const [query, setQuery] = useState('');
   const [busyOnly, setBusyOnly] = useState(false);
-  // Чаты с живыми фоновыми агентами — для фильтра «активные сейчас» и бейджа строки
+  // Чаты с живой фоновой работой (агенты или команда в фоне) — для фильтра
+  // «активные сейчас» и бейджа строки
+  const bgWorkIds = useBgWorkPresence();
+  // Отдельно агенты — только чтобы подпись строки не называла дев-сервер агентами
   const agentsRunningIds = useAgentsPresence();
 
   useEffect(() => {
@@ -31,11 +34,11 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
     if (!candidates) return [];
     const q = query.trim().toLowerCase();
     const list = candidates.filter(s => {
-      // «Активные сейчас» — про идущую работу, а не про статус процесса: чат с живыми
-      // фоновыми агентами имеет спокойный active и без этого молча выпадал бы из
-      // фильтра, включённого ровно ради него
+      // «Активные сейчас» — про идущую работу, а не про статус процесса: чат с живым
+      // фоном (агенты, дев-сервер в фоне) имеет спокойный active и без этого молча
+      // выпадал бы из фильтра, включённого ровно ради него
       if (busyOnly && s.status !== 'working' && s.status !== 'waiting'
-        && !agentsRunningIds.has(s.id)) return false;
+        && !bgWorkIds.has(s.id)) return false;
       if (!q) return true;
       const project = s.projectId ? projects.get(s.projectId) : undefined;
       return (s.name ?? '').toLowerCase().includes(q) || (project?.name ?? '').toLowerCase().includes(q);
@@ -53,7 +56,7 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
       if (b === '') return -1;
       return (projects.get(a)?.name ?? '').localeCompare(projects.get(b)?.name ?? '');
     });
-  }, [candidates, query, busyOnly, projects, agentsRunningIds]);
+  }, [candidates, query, busyOnly, projects, bgWorkIds]);
 
   return (
     <Modal
@@ -66,6 +69,7 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <IconField
+          type="search"
           icon={<Search size={14} strokeWidth={ICON_STROKE} />}
           value={query}
           onChange={setQuery}
@@ -103,11 +107,11 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
               </div>
               {list.map(s => {
                 const isTaken = taken.has(s.id);
-                const agentsRunning = agentsRunningIds.has(s.id);
-                const busy = s.status === 'working' || s.status === 'waiting' || agentsRunning;
+                const busy = s.status === 'working' || s.status === 'waiting' || bgWorkIds.has(s.id);
                 const busyLabel = s.status === 'working' ? 'идёт ход'
                   : s.status === 'waiting' ? 'ждёт вас'
-                    : 'работают агенты';
+                    : agentsRunningIds.has(s.id) ? 'работают агенты'
+                      : 'фоновая команда';
                 return (
                   <button
                     key={s.id}

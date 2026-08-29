@@ -382,7 +382,7 @@ export function McpServerForm({ data, server, catalogDraft, onDone, onCancel }: 
                   label="Client ID"
                   hint="Нужен только серверам без автоматической регистрации клиента (DCR). Если сервер её поддерживает — оставьте пустым, AI Home зарегистрируется сам при первом входе."
                 >
-                  <TextField value={oauthClientId} onChange={setOauthClientId} mono placeholder="необязательно" />
+                  <TextField value={oauthClientId} onChange={setOauthClientId} mono autoComplete="on" placeholder="необязательно" />
                 </Field>
               )}
               <PairList

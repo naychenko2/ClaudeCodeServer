@@ -5,11 +5,18 @@
 // (внутренний путь без отдельной Verification). Этим путём обычно снимаются
 // дефекты волной командной реализации или авто-правилом заметок.
 
+import { useState } from 'react';
 import type { Task } from '../../types';
-import { Bug, Repeat } from 'lucide-react';
+// Иконки: Bug — дефект (волна 2 фичи карточек дефектов),
+// Check/SquareStack — контекстное меню «В контекст чата» (фича chat-context).
+// Объединяем импорты обеих веток.
+import { Bug, Check, Repeat, SquareStack } from 'lucide-react';
 import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { Menu, MenuItem } from '../../components/ui';
+import { useLongPress } from '../../hooks/useLongPress';
 import { projectColor } from '../../lib/tasks';
+import { useContextButton } from '../chatContext/useContextButton';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 
@@ -31,9 +38,21 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
   const isDefect = task.kind === 'defect';
   const closedWithoutCheck = task.outcome === 'closedWithoutCheck';
 
+  // «В контекст чата» (фича chat-context) — контекстным меню карточки: hover-иконку
+  // сюда не поставить, правый верхний угол занят значком исполнителя. Меню
+  // появляется, только когда открыт чат — в календаре и на доске его не будет
+  const [menu, setMenu] = useState<DOMRect | null>(null);
+  const chatContext = useContextButton('task', task.id, task.title);
+  const longPress = useLongPress(chatContext.available);
+
   return (
     <div
       onClick={onClick}
+      onContextMenu={chatContext.available ? e => {
+        e.preventDefault();
+        setMenu(new DOMRect(e.clientX, e.clientY, 0, 0));
+      } : undefined}
+      {...longPress.pressProps(task.id, pt => setMenu(new DOMRect(pt.x, pt.y, 0, 0)))}
       style={{
         display: 'flex', gap: 10,
         background: C.bgWhite,
@@ -127,6 +146,22 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
           </div>
         )}
       </div>
+
+      {/* Меню рисуется порталом, но React-события всплывают по ДЕРЕВУ КОМПОНЕНТОВ —
+          без гашения клик по пункту доходил бы до карточки и открывал задачу */}
+      {menu && (
+        <span onClick={e => e.stopPropagation()}>
+          <Menu anchor={menu} minWidth={200} maxHeight={120} onClose={() => setMenu(null)}>
+            <MenuItem
+              icon={chatContext.inContext
+                ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                : <SquareStack size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label={chatContext.title}
+              onClick={() => { setMenu(null); chatContext.toggle(); }}
+            />
+          </Menu>
+        </span>
+      )}
     </div>
   );
 }

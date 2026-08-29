@@ -29,6 +29,7 @@ import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 
 // Slug для @handle — общий хелпер, зеркалящий backend Slugify (см. lib/slug)
 import { slugify as slugifyHandle } from '../../lib/slug';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Императивный API формы для тулбара-родителя: сохранить / удалить.
 export interface PersonaFormHandle {
@@ -722,6 +723,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <FieldLabel>Роль *</FieldLabel>
             {/* Крупный serif-ввод продукта — как заголовок в TaskEditForm */}
             <input
+              {...NO_AUTOFILL}
               value={role}
               onChange={e => setRole(e.target.value)}
               placeholder="Дизайнер, PM, Тестировщик…"
@@ -754,6 +756,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               }}>
                 <span style={{ color: C.textSecondary, fontFamily: FONT.mono, fontSize: 13 }}>@</span>
                 <input
+                  {...NO_AUTOFILL}
                   value={handle}
                   onChange={e => { setHandle(slugifyHandle(e.target.value, true)); setHandleEdited(true); }}
                   placeholder="masha"

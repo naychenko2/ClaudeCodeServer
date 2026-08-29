@@ -56,9 +56,13 @@ public record MemoryMcpContext(string ApiUrl, Func<string> TokenFactory, string 
 // на агентных ходах секции chats/destructive срезаются). Не Claude-специфичен.
 // TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012,
 // волна 3): захваченный строкой JWT у чата старше ServiceTokenLifetime отдавал бы 401.
+// ChatContextEnabled — инструмент context_list (материалы, закреплённые за чатом): включается
+// по флагу ВЛАДЕЛЬЦА chat-context, как DossierToolsEnabled у памяти. Не по свойствам хода и
+// не по непустоте контекста — состав tools/list обязан быть постоянным в рамках сессии.
 public record WorkspaceMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
     IReadOnlyList<string> Sections, IReadOnlyList<string>? AllowedProjectIds = null,
-    string? SelfSessionId = null, int AgentDepth = 0, bool UseHttp = false);
+    string? SelfSessionId = null, int AgentDepth = 0, bool UseHttp = false,
+    bool ChatContextEnabled = false);
 
 // Контекст MCP-сервера персон: адрес API, сервисный токен владельца и проект сессии
 // (дефолтный projectId для создания проектных персон; null — глобальный контекст).
@@ -336,4 +340,11 @@ public sealed record LlmSessionContext(
     // фолбэка (ClaudeSession.EffectiveTurnChain → ModelAssignmentResolver.ResolveChain
     // с персоной) — старт и хвост хода резолвятся по одним правилам. Перечитывается каждый
     // ход — правка матриц применяется без пересоздания адаптера. null — сессия без персоны.
-    Func<Persona?>? PersonaProvider = null);
+    Func<Persona?>? PersonaProvider = null,
+    // Состав контекста чата (материалы, закреплённые кнопкой «в контекст чата»): вызывается
+    // на КАЖДЫЙ ход — материал, добавленный в идущем разговоре, попадает в подсказку
+    // следующего хода без пересоздания адаптера (обычные поля контекста мид-сессию не живут).
+    // Влияет ТОЛЬКО на промпт: состав MCP-инструментов от содержимого контекста не зависит
+    // (гейт самого инструмента — WorkspaceMcpContext.ChatContextEnabled).
+    // null — фича выключена или сессия без владельца.
+    Func<IReadOnlyList<SessionContextEntry>>? ChatContextProvider = null);

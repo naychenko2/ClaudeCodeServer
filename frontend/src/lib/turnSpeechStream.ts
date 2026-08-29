@@ -93,14 +93,21 @@ export function turnText(items: ChatItem[]): string {
 // Незакрытый блок (ход ещё стримится) выжимкой не считается — озвучка стартует на result.
 export function extractVoiceDigest(text: string): string | null {
   if (!text) return null;
-  const withoutCode = text.replace(/```[\s\S]*?```/g, ' ').replace(/~~~[\s\S]*?~~~/g, ' ');
+  // Фенсом считается ТОЛЬКО тройка в начале строки — тем же правилом, что у
+  // stripVoiceMarker: тройные бэктики посреди фразы (ответ, упомянувший ```mermaid в
+  // предложении) это обычный текст, а принятые за блок кода они разводят два парсера по
+  // разным ответам — плашка «Коротко» есть, а маркер в ленте остался сырым.
+  const withoutCode = text
+    .replace(/^[ \t]{0,3}```[\s\S]*?^[ \t]{0,3}```/gm, ' ')
+    .replace(/^[ \t]{0,3}~~~[\s\S]*?^[ \t]{0,3}~~~/gm, ' ');
   const matches = [...withoutCode.matchAll(/<voice>([\s\S]*?)<\/voice>/gi)];
   const body = matches.at(-1)?.[1]?.trim();
   return body ? body : null;
 }
 
 // Разбор выжимки на «вывод + тезисы» для плашки «Коротко»: первая строка — вывод,
-// строки с дефиса — пункты. Плашка рисует ПРОСТОЙ текст (markdown в ней намеренно нет),
+// строки с дефиса — пункты. Плашка рисует почти простой текст (из markdown в ней живёт
+// только жирный, см. splitBoldSpans),
 // а в обычном div переносы схлопываются — без разбора тезисы слиплись бы в одну строку
 // с дефисами посередине.
 //
@@ -121,6 +128,46 @@ export function splitVoiceDigest(text: string): { lead: string; bullets: string[
     else lead.push(line);
   }
   return { lead: lead.join(' '), bullets };
+}
+
+// Жирные опоры внутри строки выжимки: «**…**» → отрезки с флагом. Это единственная
+// разметка, разрешённая промптом внутри блока: плашку снимают беглым взглядом, и глазу
+// нужна зацепка — предмет и действие. Полноценный markdown-рендер сюда не тащим, он
+// оживил бы заодно ссылки, заголовки и код, то есть ровно то, чего в выжимке быть не должно.
+//
+// Речи это не касается: sanitizeForSpeech срезает «**» до синтеза, а вслух читается сырой
+// текст блока — правило разбора звёздочек у них одно и то же («**» вокруг текста без «*»),
+// поэтому показанное и произнесённое не разъезжаются.
+// Тип тезиса по пометке в его начале: «[+] сделано», «[!] риск», «[>] осталось»
+// (промпт VoicePrompts.LongAnswerSectionText). Пометка — разметка, а не текст: плашка
+// показывает её значком, а речь срезает санитайзером, поэтому из текста тезиса она
+// убирается здесь же.
+//
+// Пометки нет — kind null, и это штатный случай, а не сбой: у ответов в старой истории
+// её нет вовсе, да и модель забывает. Такой пункт рисуется точкой, как раньше.
+export type BulletKind = 'done' | 'risk' | 'next';
+
+export function splitBulletKind(text: string): { kind: BulletKind | null; text: string } {
+  const m = /^\[([+!>])\]\s*(.*)$/s.exec(text);
+  if (!m) return { kind: null, text };
+  const kind = m[1] === '+' ? 'done' : m[1] === '!' ? 'risk' : 'next';
+  // Пустой остаток («[+]» без текста) — пометку не съедаем, иначе пункт исчезнет с экрана
+  return m[2].trim() ? { kind, text: m[2].trim() } : { kind: null, text };
+}
+
+export function splitBoldSpans(text: string): { text: string; bold: boolean }[] {
+  const out: { text: string; bold: boolean }[] = [];
+  let last = 0;
+  // Непарная звёздочка остаётся обычным текстом: жадный разбор увёл бы в жирный
+  // полстроки — на глаз это выглядит как поломка плашки, а не как опечатка модели
+  for (const m of text.matchAll(/\*\*([^*]+)\*\*/g)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at), bold: false });
+    out.push({ text: m[1], bold: true });
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), bold: false });
+  return out;
 }
 
 // Какая реплика ленты сейчас звучит: индекс последней text-реплики текущего хода,

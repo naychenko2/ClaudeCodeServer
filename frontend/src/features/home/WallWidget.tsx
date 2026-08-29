@@ -13,7 +13,7 @@ import { Columns3, MessageCircle } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { C, FONT, FS, R } from '../../lib/design';
 import { hasUnread } from '../../lib/chatReadState';
-import { useAgentsRunning } from '../../lib/agentsPresence';
+import { useBgWorkRunning } from '../../lib/agentsPresence';
 import { STATUS_COLOR, STATUS_PULSE } from '../../lib/projectActivity';
 import { getPersonaById, personaLabel } from '../../lib/personas';
 import { showToast } from '../../lib/toast';
@@ -47,7 +47,7 @@ function WallRow({ chat, project, onOpen }: {
   onOpen: () => void;
 }) {
   const st = wallRowStatus(chatStatus(chat), hasUnread(chat.updatedAt, chat.id, chat.lastReadAt),
-    useAgentsRunning(chat.id));
+    useBgWorkRunning(chat.id));
   // Подпись проекта: у чата есть projectId, но проекта нет — он удалён или закрыт,
   // и назвать такой чат «вне проекта» было бы неправдой (так же честна WallColumn)
   const projectLabel = project ? project.name : (chat.projectId ? 'Проект недоступен' : null);

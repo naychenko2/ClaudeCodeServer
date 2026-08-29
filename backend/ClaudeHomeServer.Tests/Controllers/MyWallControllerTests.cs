@@ -151,6 +151,51 @@ public class MyWallControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Get_АрхивныйЧат_ВыпадаетИзНабора()
+    {
+        var a = await CreateChatAsync();
+        var b = await CreateChatAsync();
+        await _client.PutAsJsonAsync("/api/me/wall", new { chatIds = new[] { a, b } });
+
+        (await _client.PutAsJsonAsync($"/api/chats/{a}/archived", new { archived = true })).EnsureSuccessStatusCode();
+
+        // Архивный чат для стены такой же мёртвый, как удалённый: колонки ему быть не должно
+        (await GetWallIdsAsync()).Should().Equal(b);
+    }
+
+    [Fact]
+    public async Task Put_АрхивныйId_ВычищаетсяИзСтора()
+    {
+        var a = await CreateChatAsync();
+        var b = await CreateChatAsync();
+        (await _client.PutAsJsonAsync($"/api/chats/{a}/archived", new { archived = true })).EnsureSuccessStatusCode();
+
+        var put = await _client.PutAsJsonAsync("/api/me/wall", new { chatIds = new[] { a, b } });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
+        body.GetProperty("chats").EnumerateArray()
+            .Select(c => c.GetProperty("id").GetString()).Should().Equal(b);
+
+        (await GetWallIdsAsync()).Should().Equal(b);
+    }
+
+    [Fact]
+    public async Task Candidates_АрхивныеЧатыНеПредлагаются()
+    {
+        var live = await CreateChatAsync();
+        var archived = await CreateChatAsync();
+        (await _client.PutAsJsonAsync($"/api/chats/{archived}/archived", new { archived = true })).EnsureSuccessStatusCode();
+
+        var resp = await _client.GetAsync("/api/me/wall/candidates");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var ids = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .EnumerateArray().Select(c => c.GetProperty("id").GetString()).ToList();
+
+        ids.Should().Contain(live);
+        ids.Should().NotContain(archived);
+    }
+
+    [Fact]
     public async Task Candidates_ОтдаётТолькоСвоиЧаты()
     {
         var mine = await CreateChatAsync();

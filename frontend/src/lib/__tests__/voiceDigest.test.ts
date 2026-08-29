@@ -2,7 +2,7 @@
 // из текста, который идёт в синтез речи и в ленту.
 
 import { describe, it, expect } from 'vitest';
-import { extractVoiceDigest, splitVoiceDigest } from '../turnSpeechStream';
+import { extractVoiceDigest, splitVoiceDigest, splitBoldSpans, splitBulletKind } from '../turnSpeechStream';
 import { stripVoiceMarker, sanitizeForSpeech } from '../tts';
 import { normalizeVoiceStyle, isVoiceStyle, voiceStyleFor } from '../voiceStyle';
 
@@ -74,6 +74,36 @@ describe('stripVoiceMarker', () => {
   it('одиночный «<» в конце ответа не теряется', () => {
     expect(stripVoiceMarker('Сравни a <')).toBe('Сравни a <');
   });
+
+  // Живая регрессия: ответ про схемы упомянул ```mermaid прямо в строке таблицы, парсер
+  // счёл эти бэктики открытием блока кода, счёт фенсов уехал — и остаток ответа
+  // (вместе с маркером) остался «внутри кода». Маркер уехал в ленту сырым
+  it('тройные бэктики посреди строки блока кода не открывают', () => {
+    const text = [
+      '| файл | было | стало |',
+      '| --- | --- | --- |',
+      '| style.md | нельзя определить | интерфейс сам просит ```mermaid в промпте |',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A --> B',
+      '```',
+      '',
+      '<voice>Суть ответа.</voice>',
+    ].join('\n');
+    const out = stripVoiceMarker(text);
+    expect(out).toContain('flowchart TD');
+    expect(out).toContain('в промпте');
+    expect(out).not.toContain('<voice>');
+    // Второй парсер обязан видеть тот же текст: разъедься они — плашка есть, маркер сырой
+    expect(extractVoiceDigest(text)).toBe('Суть ответа.');
+  });
+
+  it('фенс с отступом до трёх пробелов (пункт списка) блоком остаётся', () => {
+    const text = '- пример:\n\n   ```\n   <voice>Не выжимка.</voice>\n   ```\n\nХвост.';
+    expect(stripVoiceMarker(text)).toBe(text);
+    expect(extractVoiceDigest(text)).toBeNull();
+  });
 });
 
 describe('sanitizeForSpeech и маркер', () => {
@@ -135,5 +165,72 @@ describe('splitVoiceDigest', () => {
     const { lead, bullets } = splitVoiceDigest('* один\n• два');
     expect(lead).toBe('');
     expect(bullets).toEqual(['один', 'два']);
+  });
+});
+
+// Жирные опоры в плашке «Коротко»: единственная разметка, разрешённая внутри блока.
+// Показ и речь разбирают звёздочки одинаково, поэтому рядом же проверяем санитайзер
+describe('splitBoldSpans', () => {
+  it('делит строку на обычные и жирные отрезки', () => {
+    expect(splitBoldSpans('**Список чатов** помечает **значком** правки')).toEqual([
+      { text: 'Список чатов', bold: true },
+      { text: ' помечает ', bold: false },
+      { text: 'значком', bold: true },
+      { text: ' правки', bold: false },
+    ]);
+  });
+
+  it('строка без выделений — один обычный отрезок', () => {
+    expect(splitBoldSpans('Обычный тезис.')).toEqual([{ text: 'Обычный тезис.', bold: false }]);
+  });
+
+  it('непарная звёздочка остаётся текстом — иначе жирным уехало бы полстроки', () => {
+    expect(splitBoldSpans('оценка 5**, а не 4')).toEqual([{ text: 'оценка 5**, а не 4', bold: false }]);
+  });
+
+  it('маркер пункта разбирается раньше жирного и его не съедает', () => {
+    const { bullets } = splitVoiceDigest('Итог.\n- **собрал** бэкенд');
+    expect(bullets).toEqual(['**собрал** бэкенд']);
+    expect(splitBoldSpans(bullets[0])[0]).toEqual({ text: 'собрал', bold: true });
+  });
+
+  it('вслух звёздочки не читаются — санитайзер их срезает', () => {
+    expect(sanitizeForSpeech('**Список чатов** помечает правки')).toContain('Список чатов помечает');
+    expect(sanitizeForSpeech('**Список чатов** помечает правки')).not.toContain('*');
+  });
+});
+
+// Пометка типа тезиса: на экране она значок, в речи её нет вовсе. Разметка, а не текст
+describe('splitBulletKind', () => {
+  it('снимает пометку и отдаёт тип', () => {
+    expect(splitBulletKind('[+] собрал бэкенд')).toEqual({ kind: 'done', text: 'собрал бэкенд' });
+    expect(splitBulletKind('[!] может сломаться')).toEqual({ kind: 'risk', text: 'может сломаться' });
+    expect(splitBulletKind('[>] осталось выкатить')).toEqual({ kind: 'next', text: 'осталось выкатить' });
+  });
+
+  it('без пометки текст не трогается — старые ответы и забывчивость модели', () => {
+    expect(splitBulletKind('обычный тезис')).toEqual({ kind: null, text: 'обычный тезис' });
+  });
+
+  it('пометка в середине строки не считается — она только в начале', () => {
+    expect(splitBulletKind('правка [+] в тексте')).toEqual({ kind: null, text: 'правка [+] в тексте' });
+  });
+
+  it('пустой пункт остаётся как есть — иначе строка исчезла бы с экрана', () => {
+    expect(splitBulletKind('[+]')).toEqual({ kind: null, text: '[+]' });
+  });
+
+  it('работает поверх разбора выжимки и не мешает жирному', () => {
+    const { bullets } = splitVoiceDigest('Итог.\n- [!] **второй акцент** смажет первый');
+    const { kind, text } = splitBulletKind(bullets[0]);
+    expect(kind).toBe('risk');
+    expect(splitBoldSpans(text)[0]).toEqual({ text: 'второй акцент', bold: true });
+  });
+
+  it('вслух пометка не звучит — санитайзер срезает её вместе с дефисом', () => {
+    const spoken = sanitizeForSpeech('Итог.\n- [+] собрал бэкенд\n- [!] может сломаться');
+    expect(spoken).toContain('собрал бэкенд');
+    expect(spoken).not.toContain('[');
+    expect(spoken).not.toContain('+');
   });
 });

@@ -139,3 +139,9 @@ tools/browser-spike/host/com.ccs.browser_spike.json
 # Chrome for Testing: сборка и лог спайка
 tools/browser-spike/cft/
 tools/browser-spike/cft.zip
+
+# Артефакты прогонов `dotnet test`: отчёты и hang-дампы процесса (гигабайтные .dmp).
+# Дело не только в весе: панель изменений считает «+N/−M» по КАЖДОМУ неотслеживаемому
+# файлу отдельным `git diff --no-index`, и на дампе в 1.5 ГБ один такой вызов занимает
+# ~9 секунд — git/status упирался в таймаут и отдавал 409 (28.08.2026).
+*.dmp

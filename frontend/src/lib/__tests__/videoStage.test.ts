@@ -6,6 +6,8 @@ import {
   getVideoCenter, getVideoPicker, getVideoStage, setVideoPicker, setVideoStage, closeVideoCenter,
   setVideoCenterBlocked, getVideoCenterBlocked, setPanelChannel, getPanelChannel,
   clampRect, FLOAT_MIN_W, FLOAT_HEADER_H,
+  setVideoSlot, getVideoSlots, videoFramePlace,
+  getVideoPlayerState, setVideoPlayerState,
 } from '../videoStage';
 import type { VideoChannel } from '../../types';
 
@@ -20,6 +22,50 @@ beforeEach(() => {
   setVideoPicker(false);
   setVideoStage(null);
   setPanelChannel(null);
+  setVideoSlot('panel', null);
+  setVideoSlot('center', null);
+  setVideoPlayerState(false, false);
+});
+
+// Плеер один на продукт (живой кадр всегда один), и его кнопки живут в сторе:
+// пауза у эфира — снятие кадра, у ролика — команда; смена канала чистит состояние,
+// иначе новый канал приезжал бы с чужой паузой.
+describe('состояние плеера', () => {
+  it('пауза и тишина читаются и пишутся', () => {
+    setVideoPlayerState(true, true);
+    expect(getVideoPlayerState()).toEqual({ paused: true, muted: true });
+
+    setVideoPlayerState(false, true);
+    expect(getVideoPlayerState()).toEqual({ paused: false, muted: true });
+  });
+
+  it('смена канала панели сбрасывает паузу и тишину', () => {
+    setPanelChannel(ch('a'));
+    setVideoPlayerState(true, true);
+    setPanelChannel(ch('b'));
+    expect(getVideoPlayerState()).toEqual({ paused: false, muted: false });
+  });
+
+  it('тот же канал в другом режиме состояние не трогает', () => {
+    setPanelChannel(ch('a'));
+    setVideoPlayerState(true, false);
+    setVideoStage(ch('a'), 'center');
+    expect(getVideoPlayerState()).toEqual({ paused: true, muted: false });
+  });
+
+  it('смена канала развёрнутого кадра тоже сбрасывает', () => {
+    setVideoStage(ch('a'), 'center');
+    setVideoPlayerState(true, true);
+    setVideoStage(ch('b'), 'center');
+    expect(getVideoPlayerState()).toEqual({ paused: false, muted: false });
+  });
+
+  it('возврат кадра в панель сохраняет состояние — канал тот же', () => {
+    setVideoStage(ch('a'), 'float');
+    setVideoPlayerState(true, false);
+    setVideoStage(null);
+    expect(getVideoPlayerState()).toEqual({ paused: true, muted: false });
+  });
 });
 
 // Центр, занятый файлом или задачей. Дыра, ради которой это тестируется: раньше
@@ -186,5 +232,58 @@ describe('геометрия плавающего окна', () => {
     // возврата: кромка обязана остаться в пределах, иначе окно нечем поймать мышью
     expect(r.x).toBeLessThan(1280);
     expect(r.y).toBeLessThan(800);
+  });
+});
+
+// Место живого кадра. Кадр рисует ОДИН оверлей над страницами (иначе эфир умирал бы
+// при смене проекта вместе со страницей), и он обязан однозначно понимать, куда
+// встать — и когда сняться совсем.
+describe('место живого кадра', () => {
+  it('канал панели держит кадр в панели', () => {
+    expect(videoFramePlace(null, ch('a'))).toBe('panel');
+  });
+
+  it('развёрнутый кадр уводит место в центр', () => {
+    expect(videoFramePlace({ channel: ch('a'), mode: 'center' }, ch('a'))).toBe('center');
+  });
+
+  it('плавающее окно рисует кадр само — оверлею места нет', () => {
+    // Иначе получилось бы два живых iframe одного эфира: окно и оверлей
+    expect(videoFramePlace({ channel: ch('a'), mode: 'float' }, ch('a'))).toBeNull();
+  });
+
+  it('без канала места нет', () => {
+    expect(videoFramePlace(null, null)).toBeNull();
+  });
+});
+
+describe('слоты под кадр', () => {
+  const slot = (x: number) => ({ frame: { x, y: 0, w: 320, h: 180 }, clip: { x, y: 0, w: 320, h: 200 } });
+
+  it('панель и центр держат свои прямоугольники независимо', () => {
+    setVideoSlot('panel', slot(10));
+    setVideoSlot('center', slot(500));
+
+    expect(getVideoSlots().panel?.frame.x).toBe(10);
+    expect(getVideoSlots().center?.frame.x).toBe(500);
+  });
+
+  it('снятие слота освобождает только своё место', () => {
+    setVideoSlot('panel', slot(10));
+    setVideoSlot('center', slot(500));
+    setVideoSlot('panel', null);
+
+    expect(getVideoSlots().panel).toBeNull();
+    expect(getVideoSlots().center).not.toBeNull();
+  });
+
+  it('равная геометрия не считается изменением', () => {
+    // Петля измерения зовёт стор на каждом кадре: публикуй он одинаковое, оверлей
+    // перерисовывался бы шестьдесят раз в секунду впустую
+    setVideoSlot('panel', slot(10));
+    const before = getVideoSlots();
+    setVideoSlot('panel', slot(10));
+
+    expect(getVideoSlots()).toBe(before);
   });
 });

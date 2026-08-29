@@ -14,9 +14,10 @@ import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
-import { useAgentsPresence } from '../lib/agentsPresence';
+import { useBgWorkPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
+import { useHoverWarm } from '../hooks/useSession';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
@@ -47,6 +48,8 @@ const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
 export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, onArchive, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
+  // История чата под курсором едет до клика — открытие обходится без спиннера
+  const warmHover = useHoverWarm();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
   // Подписка на стор механик — перерисовать список при запуске новой механики
@@ -70,8 +73,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const groupBy: ChatGroupBy = GROUP_BY_OPTIONS.includes(filters.groupBy) ? filters.groupBy : 'days';
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
-  // Чаты с живыми фоновыми агентами — считаются работающими в счётчике свёрнутой ветки
-  const agentsRunningIds = useAgentsPresence();
+  // Чаты с живой фоновой работой (агенты или команда в фоне) — считаются работающими
+  // в счётчике свёрнутой ветки, как и в переливе самой карточки
+  const bgWorkIds = useBgWorkPresence();
 
   // Список лежит в карточке с шапкой — контролы уедут туда сами (PanelHeaderSlot),
   // и собственная полоса тулбара в теле не нужна
@@ -92,10 +96,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // исходные данные покрывает зависимость filters
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, agentsRunningIds })
+      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId, sortOrder, bgWorkIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, agentsRunningIds],
+    [chats, hierarchy, sortOrder, collapsedIds, activeId, filters, bgWorkIds],
   );
   // Чаты ТЕКУЩЕЙ оси: обычный список — неархивные, режим «Архивные» — архивные.
   // Всё, что считается «скрыто фильтрами» и «чатов нет», меряется по этому
@@ -105,6 +109,15 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const scoped = chats.filter(c => isArchivedChat(c) === filters.archivedOnly);
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = scoped.length - filteredChats.length;
+
+  // Возврат чата из архива: выходим из архивного вида и открываем этот чат. Человек
+  // достаёт чат из архива, чтобы продолжить в нём работу, — оставлять его после этого
+  // в списке архива (где чат к тому же тут же исчезает из вида) было бы тупиком
+  const leaveArchiveAndOpen = (chat: Session) => {
+    if (filters.archivedOnly) patch({ archivedOnly: false });
+    setOpenSwipeId(null);
+    onSelect(chat);
+  };
 
   const togglePin = async (chat: Session) => {
     try {
@@ -144,6 +157,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     }
   };
 
+
   // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
   // groupBy уже клампнут к GROUP_BY_OPTIONS выше — ветка 'tags' сюда не доходит.
   // Сегменты дерева — как в SessionList: корень секционируется по maxActivity поддерева.
@@ -179,12 +193,17 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       hovered={hoveredId === chat.id}
       workflowRunning={workflowRunningFor === chat.id}
       onSelect={() => { setOpenSwipeId(null); onSelect(chat); }}
-      onHover={h => setHoveredId(h ? chat.id : null)}
+      onHover={h => { setHoveredId(h ? chat.id : null); warmHover(h && online ? chat : null); }}
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
       onEdited={onEdited}
-      onArchive={online ? (archived) => onArchive(chat, archived) : undefined}
+      onArchive={online ? (archived) => {
+        onArchive(chat, archived);
+        // Возврат из архива: выходим из архивного вида и открываем чат — он для того
+        // и достаётся. Сеть при этом остаётся у владельца списка (onArchive выше).
+        if (!archived) leaveArchiveAndOpen(chat);
+      } : undefined}
       onSaveAsNote={online ? () => handleSaveAsNote(chat) : undefined}
       swipeOpen={openSwipeId === chat.id}
       onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}

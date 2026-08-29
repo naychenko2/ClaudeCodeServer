@@ -101,6 +101,7 @@ public sealed class DevServerService : IDisposable
     // projectId → сервис, запущенный ВНЕ продукта (Rider, терминал), выбранный для превью.
     // Процесс не наш: остановить его нельзя и логов у него нет — только проксируем порт.
     private readonly ConcurrentDictionary<string, (string ServiceId, int Port)> _externalPreview = new();
+    private readonly DevServerPortMemory _portMemory;
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ILogger<DevServerService> _log;
@@ -118,8 +119,9 @@ public sealed class DevServerService : IDisposable
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public DevServerService(ProjectManager projects, IHubContext<SessionHub> hub, ILogger<DevServerService> log,
-        Execution.ILauncherFactory launchers, Execution.SandboxManager sandbox)
+        Execution.ILauncherFactory launchers, Execution.SandboxManager sandbox, DevServerPortMemory portMemory)
     {
+        _portMemory = portMemory;
         _projects = projects;
         _hub = hub;
         _log = log;
@@ -247,6 +249,13 @@ public sealed class DevServerService : IDisposable
             if (instance.Port != 0 && await LoopbackResolver.IsListeningAsync(instance.Port))
             {
                 instance.Status = "started";
+                // Порт запоминаем именно здесь: он уже проверен соединением, и это
+                // единственный момент, когда мы точно знаем, где сервис слушает. После
+                // перезапуска продукта реестр процессов пуст, и опознать живой сервис
+                // можно будет только по этой записи (см. DevServerPortMemory)
+                // PID нужен, чтобы после перезапуска продукта отличить свой осиротевший
+                // процесс от постороннего, занявшего тот же порт
+                _portMemory.Remember(projectId, serviceId, instance.Port, SafePid(process));
                 SetActivePreview(projectId, serviceId);
                 await BroadcastStatus(projectId, serviceId, "started", instance.Port);
                 return new DevServerStartResult(true, instance.Port, "started");
@@ -308,6 +317,13 @@ public sealed class DevServerService : IDisposable
     ///
     /// Для вызывающего освобождённый процесс неотличим от завершённого — отвечаем true.
     /// </summary>
+    /// <summary>PID процесса, либо 0 — объект мог быть уже освобождён.</summary>
+    private static int SafePid(System.Diagnostics.Process p)
+    {
+        try { return p.Id; }
+        catch (InvalidOperationException) { return 0; }
+    }
+
     private static bool SafeHasExited(Process p)
     {
         // ObjectDisposedException наследует InvalidOperationException — одного catch хватает
@@ -319,6 +335,9 @@ public sealed class DevServerService : IDisposable
     /// <summary>Остановить сервис.</summary>
     public async Task StopAsync(string projectId, string userId, string serviceId)
     {
+        // Погасили сами — значит порт свободен, и помнить его опасно: место мог занять
+        // посторонний процесс, и сервис показался бы «поднятым снаружи» по чужому серверу
+        _portMemory.Forget(projectId, serviceId);
         if (_servers.TryGetValue(Key(projectId, serviceId), out var instance))
         {
             if (instance.UserId != userId)

@@ -122,6 +122,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         <div style={{ marginBottom: 12, borderRadius: R.xxl, boxShadow: SHADOW.island }}>
           <IconField
             type="text"
+            autoComplete="username"
             value={username}
             onChange={setUsername}
             placeholder="Имя пользователя"
@@ -140,6 +141,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         <div style={{ marginBottom: 18, borderRadius: R.xxl, boxShadow: SHADOW.island }}>
           <IconField
             type="password"
+            autoComplete="current-password"
             value={password}
             onChange={setPassword}
             placeholder="Пароль"

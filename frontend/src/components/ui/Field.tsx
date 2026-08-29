@@ -67,6 +67,10 @@ interface TextFieldProps {
   onFocus?: () => void;
   onBlur?: () => void;
   onEscape?: () => void;
+  // Автозаполнение. Дефолт «off»: иначе Android над клавиатурой выкидывает системную
+  // плашку автозаполнения (пароли/карты/адреса) на любом поле, которое его эвристика
+  // сочла формой. Настоящим полям логина и пароля значение передают явно
+  autoComplete?: string;
   // Подсказка при наведении: нужна там, где под полем нет места для строки-пояснения
   // (поле в ряду чипов — вторая строка растянула бы ряд)
   title?: string;
@@ -76,16 +80,30 @@ interface TextFieldProps {
   style?: CSSProperties;
 }
 
+// Разметка поля, которому автозаполнение выключено. Chrome на Android вешает полосу
+// автозаполнения (пароли, карты, адреса) над клавиатурой на ЛЮБОЙ однострочный input, а
+// autocomplete="off" игнорирует умышленно — так решили в самом Chrome ещё в 2014-м. Единственный
+// рычаг, который он слушает, — классификация поля: поля поиска автозаполнением не трогаются,
+// это проверено на планшете. Отсюда подмена типа для полей с autoComplete="off".
+// Роль возвращаем явно: без неё скринридер объявил бы «поле поиска» там, где вводят название
+// заметки. Формально ARIA для type="search" роль textbox не разрешает — осознанный размен:
+// живому человеку с озвучкой важнее правда о поле, чем чистота по букве спецификации.
+function noFillProps(type: string, autoComplete: string) {
+  const swap = type === 'text' && autoComplete === 'off';
+  return { type: swap ? 'search' : type, role: swap ? 'textbox' : undefined };
+}
+
 // === Однострочное поле ввода с focus-ring ===
-export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, style }: TextFieldProps) {
+export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, autoComplete = 'off', style }: TextFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
     <input
-      type={type}
+      {...noFillProps(type, autoComplete)}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       title={title}
+      autoComplete={autoComplete}
       autoFocus={autoFocus}
       disabled={disabled}
       onFocus={() => { setFocused(true); onFocus?.(); }}
@@ -109,13 +127,14 @@ interface TextAreaProps {
   // (иначе очень длинный текст разносит форму по высоте)
   maxHeight?: number;
   disabled?: boolean;
+  autoComplete?: string;
   autoFocus?: boolean;
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   style?: CSSProperties;
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, style }: TextAreaProps) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, autoComplete = 'off', style }: TextAreaProps) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -136,6 +155,7 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
       placeholder={placeholder}
       disabled={disabled}
       autoFocus={autoFocus}
+      autoComplete={autoComplete}
       onKeyDown={onKeyDown}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
@@ -162,6 +182,9 @@ interface IconFieldProps {
   radius?: number;
   fontSize?: number;
   style?: CSSProperties;
+  // Дефолт «off» — см. комментарий у TextFieldProps: системная плашка автозаполнения
+  // Android иначе лезет и на поля поиска
+  autoComplete?: string;
   autoFocus?: boolean;
   onEnter?: () => void;
   inputRef?: Ref<HTMLInputElement>;
@@ -171,7 +194,7 @@ interface IconFieldProps {
 export function IconField({
   icon, value, onChange, placeholder, type = 'text', mono, disabled,
   letterSpacing, height = 50, radius = R.xxl, fontSize = 15, style,
-  autoFocus, onEnter, inputRef,
+  autoFocus, onEnter, inputRef, autoComplete = 'off',
 }: IconFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
@@ -190,11 +213,12 @@ export function IconField({
       )}
       <input
         ref={inputRef}
-        type={type}
+        {...noFillProps(type, autoComplete)}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
+        autoComplete={autoComplete}
         autoFocus={autoFocus}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}

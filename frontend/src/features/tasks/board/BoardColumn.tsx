@@ -50,6 +50,7 @@ function WipEditor({ wip, onWip }: { wip?: number; onWip: (v?: number) => void }
   if (editing) {
     return (
       <input
+        autoComplete="off"
         type="number"
         min={1}
         autoFocus
@@ -136,6 +137,7 @@ export function BoardCell({ cellId, cards, projectNameOf, onOpen, onQuickAdd, mi
       {onQuickAdd && (
         adding ? (
           <textarea
+            autoComplete="off"
             autoFocus
             value={title}
             onChange={e => setTitle(e.target.value)}

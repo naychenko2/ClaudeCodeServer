@@ -25,6 +25,7 @@ export const FLAGS = {
   // формы из черновика записи. Флаг — на вход в раздел; ручной путь «Добавить» работает
   // всегда.
   mcpCatalog: 'mcp-catalog',
+  chatContext: 'chat-context',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

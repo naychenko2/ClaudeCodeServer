@@ -13,6 +13,7 @@ import { startChatFromPanel } from '../../lib/ai/startChat';
 import { docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from '../../lib/ai/annotationsPrompt';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», маркеры якорных
@@ -598,6 +599,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                   ))}
                   <div style={{ display: 'flex', gap: 6 }}>
                     <input
+                      {...NO_AUTOFILL}
                       value={replyDraft[a.noteId] ?? ''}
                       onChange={e => setReplyDraft(d => ({ ...d, [a.noteId]: e.target.value }))}
                       onKeyDown={e => { if (e.key === 'Enter') void sendReply(a); }}
@@ -728,6 +730,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
               «{selection.text.length > 140 ? selection.text.slice(0, 140) + '…' : selection.text}»
             </div>
             <textarea
+              autoComplete="off"
               value={comment} onChange={e => setComment(e.target.value)} autoFocus
               placeholder="Комментарий… (например: уточнить, поправить, обсудить)"
               style={{
@@ -749,6 +752,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                 );
               })}
               <input
+                {...NO_AUTOFILL}
                 value={customTag} onChange={e => setCustomTag(e.target.value)}
                 onKeyDown={e => {
                   if (e.key !== 'Enter') return;

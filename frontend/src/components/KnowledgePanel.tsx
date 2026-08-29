@@ -8,6 +8,7 @@ import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { EmptyState, IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { useListAutoFocus } from '../lib/listAutoFocus';
+import { NO_AUTOFILL } from '../lib/noAutofill';
 
 interface Props {
   project: Project;
@@ -161,6 +162,7 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
 
           {/* Ввод нового тега */}
           <input
+            {...NO_AUTOFILL}
             ref={inputRef}
             value={input}
             onChange={e => { setInput(e.target.value); setSuggestionsExpanded(false); }}
@@ -537,6 +539,8 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </span>
         <input
+          type="search"
+          autoComplete="off"
           value={searchQuery}
           autoFocus={searchShouldFocus}
           onChange={e => setSearchQuery(e.target.value)}

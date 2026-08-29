@@ -67,9 +67,36 @@ let panelChannel: VideoChannel | null = null;
 // и эфир пропадал целиком, без единого сообщения о том, куда он делся.
 let blocked = false;
 let rect: FloatRect = loadRect();
+// Состояние плеера. Плеер в продукте ОДИН (живой кадр всегда один), поэтому и
+// состояние глобальное, а не per-место-показа: кнопка в панели глушит тот же
+// кадр, что развёрнут в центре, — иначе два источника правды разъехались бы.
+// Пауза у эфира — снятие кадра (плеер команд не слушает), у ролика — команда.
+let playerPaused = false;
+let playerMuted = false;
 const listeners = new Set<() => void>();
 
 function emit() { for (const cb of listeners) cb(); }
+
+// Смена играющего канала обнуляет паузу/тишину: состояние — атрибут канала.
+// «Игравшим» считается и развёрнутый кадр, и канал панели: кадр панели, уехавший
+// в центр тем же каналом, — это НЕ смена, и пауза обязана уехать вместе с ним.
+function playingChannel(): VideoChannel | null {
+  return state?.channel ?? panelChannel;
+}
+
+// Единая точка записи плеерного состояния: прямые присваивания полей мимо неё
+// разъехались бы со снапшотом (см. getVideoPlayerState) — подписчики видели бы
+// прежние значения, пока кто-нибудь не позовёт setVideoPlayerState.
+function writePlayerState(paused: boolean, muted: boolean): void {
+  playerPaused = paused;
+  playerMuted = muted;
+  playerSnapshot = { paused, muted };
+}
+
+function resetPlayerOnChannelChange(next: VideoChannel | null, cur: VideoChannel | null): void {
+  if (next && cur && next.id === cur.id && next.provider === cur.provider) return;
+  writePlayerState(false, false);
+}
 
 function loadRect(): FloatRect {
   // Правый нижний угол — место, где окно меньше всего мешает: там нет ни рельсы, ни композера
@@ -107,8 +134,104 @@ export function clampRect(r: FloatRect): FloatRect {
   return { x, y, w, h };
 }
 
+/**
+ * ГЕОМЕТРИЯ МЕСТА ПОД КАДР («слот»).
+ *
+ * Живой кадр рисует не панель и не остров, а один оверлей в App — иначе эфир
+ * обрывался бы на каждом переходе между проектами: страница перемонтируется, а
+ * вместе с ней умирает iframe. Панель и центр вместо кадра держат ПУСТОЕ место и
+ * сообщают сюда его прямоугольник, оверлей же кладётся поверх.
+ *
+ * frame — куда встаёт кадр, clip — чем его обрезать: тело панели ниже кадра быть
+ * не обязано, узкая панель режет его своим краем, и fixed-оверлей без клипа вылез
+ * бы поверх соседей.
+ */
+export type VideoSlotKind = 'panel' | 'center';
+
+export interface SlotBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface VideoSlot {
+  frame: SlotBox;
+  clip: SlotBox;
+}
+
+let slots: Record<VideoSlotKind, VideoSlot | null> = { panel: null, center: null };
+
+function sameBox(a: SlotBox, b: SlotBox): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
+function sameSlot(a: VideoSlot | null, b: VideoSlot | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return sameBox(a.frame, b.frame) && sameBox(a.clip, b.clip);
+}
+
+/**
+ * Сообщить (или снять) прямоугольник места. Зовётся из петли измерения на каждом
+ * кадре, поэтому равные значения не публикуются: иначе оверлей перерисовывался бы
+ * шестьдесят раз в секунду впустую.
+ */
+export function setVideoSlot(kind: VideoSlotKind, slot: VideoSlot | null): void {
+  if (sameSlot(slots[kind], slot)) return;
+  slots = { ...slots, [kind]: slot };
+  emit();
+}
+
+export function getVideoSlots(): Record<VideoSlotKind, VideoSlot | null> {
+  return slots;
+}
+
+/**
+ * Где сейчас место живого кадра: панель, центральный остров — или нигде.
+ *
+ * null означает две разные вещи, и для оверлея они одинаковы: канала нет вовсе либо
+ * кадр показывают в плавающем окне (у того свой кадр — он и так переживает переходы).
+ * Оверлей в этом случае снимается НЕМЕДЛЕННО, без отсрочки: два живых iframe одного
+ * эфира дают два звука внахлёст.
+ */
+export function videoFramePlace(
+  stage: VideoStageState | null,
+  panel: VideoChannel | null,
+): VideoSlotKind | null {
+  if (stage) return stage.mode === 'center' ? 'center' : null;
+  return panel ? 'panel' : null;
+}
+
 export function getVideoStage(): VideoStageState | null {
   return state;
+}
+
+/** Пауза: кадр снят по команде человека (кнопкой), а не занятым звуком продукта. */
+export function isVideoPaused(): boolean {
+  return playerPaused;
+}
+
+/** Тишина: звук выключен кнопкой. Команде подвластен только ролик YouTube. */
+export function isVideoMuted(): boolean {
+  return playerMuted;
+}
+
+/** Пауза/тишина — атрибут КАНАЛА, а не плеера: сменили канал — состояние чистое. */
+export function setVideoPlayerState(paused: boolean, muted: boolean): void {
+  if (playerPaused === paused && playerMuted === muted) return;
+  writePlayerState(paused, muted);
+  emit();
+}
+
+// Снапшот для useSyncExternalStore держим ОДИН и пересобираем только при записи:
+// геттер, возвращающий свежий объект-литерал, для него смерти подобен — React
+// сверяет снапшоты через Object.is, «новый» объект каждый раз читается как
+// изменение во время рендера и загоняет компонент в бесконечный перерендер.
+let playerSnapshot: { paused: boolean; muted: boolean } = { paused: false, muted: false };
+
+export function getVideoPlayerState(): { paused: boolean; muted: boolean } {
+  return playerSnapshot;
 }
 
 export function getFloatRect(): FloatRect {
@@ -132,6 +255,7 @@ export function setVideoStage(channel: VideoChannel | null, mode: VideoStageMode
   } else {
     if (state?.channel.id === channel.id && state.channel.provider === channel.provider
       && state.mode === mode) return;
+    resetPlayerOnChannelChange(channel, playingChannel());
     state = { channel, mode };
   }
   emit();
@@ -196,6 +320,7 @@ export function getPanelChannel(): VideoChannel | null {
  * ровно один, и оставить оба значило бы дать два звука внахлёст.
  */
 export function setPanelChannel(c: VideoChannel | null): void {
+  resetPlayerOnChannelChange(c, panelChannel);
   panelChannel = c;
   if (c && state?.mode === 'center') state = null;
   emit();
@@ -268,3 +393,64 @@ export function useVideoCenterBlocked(): boolean {
 export function useFloatRect(): FloatRect {
   return useSyncExternalStore(subscribe, getFloatRect, getFloatRect);
 }
+
+/** Прямоугольники мест под кадр: их публикуют панель и центральный остров. */
+export function useVideoSlots(): Record<VideoSlotKind, VideoSlot | null> {
+  return useSyncExternalStore(subscribe, getVideoSlots, getVideoSlots);
+}
+
+/** Состояние плеера (пауза/тишина) для кнопок под кадром. */
+// Как кадр стоит в ЦЕНТРЕ: рядом с чатом (split) или во всю ширину. Персистим —
+// это привычка, а не состояние сеанса; тот же смысл у тумблера режима у файла.
+const CENTER_SPLIT_KEY = 'cc_video_center_split';
+
+// По умолчанию кадр занимает центр ЦЕЛИКОМ: в центр его уводят, чтобы смотреть
+// крупно, а сплит — осознанный выбор «смотрю и переписываюсь». Сделанный однажды,
+// он запоминается и дальше применяется сам.
+let centerSplit = readCenterSplit();
+
+function readCenterSplit(): boolean {
+  try {
+    return localStorage.getItem(CENTER_SPLIT_KEY) === '1';
+  } catch { return false; }
+}
+
+/** Кадр в центре стоит рядом с чатом (true) или занимает центр целиком (false). */
+export function getVideoCenterSplit(): boolean { return centerSplit; }
+
+export function setVideoCenterSplit(split: boolean): void {
+  if (centerSplit === split) return;
+  centerSplit = split;
+  try { localStorage.setItem(CENTER_SPLIT_KEY, split ? '1' : '0'); } catch { /* приватный режим */ }
+  emit();
+}
+
+/**
+ * Режим центра для КАДРА. Каталог сюда не попадает: там выбирают по обложкам, и в
+ * половине ширины остаётся один столбец карточек — он всегда идёт во всю ширину
+ * (см. VideoCenter).
+ */
+export function useVideoCenterSplit(): boolean {
+  return useSyncExternalStore(subscribe, getVideoCenterSplit, getVideoCenterSplit);
+}
+
+/**
+ * Идёт ли сейчас эфир (или ролик) — независимо от того, ВИДНО ли кадр.
+ *
+ * Именно «идёт», а не «есть канал»: закрытая панель звук не выключает (кадр живёт
+ * невидимым), и по этому признаку рельса рисует точку на кнопке «Видео» — иначе
+ * звук шёл бы из ниоткуда, а погасить его было бы нечем. Пауза — единственное,
+ * что его останавливает; занятый звук продукта (озвучка, разговор) сюда не входит:
+ * это короткая отлучка, а не выключение, и мигать точкой на каждую реплику незачем.
+ */
+export function useVideoPlaying(): boolean {
+  const stage = useVideoStage();
+  const panel = usePanelChannel();
+  const { paused } = useVideoPlayerState();
+  return !!(stage?.channel ?? panel) && !paused;
+}
+
+export function useVideoPlayerState(): { paused: boolean; muted: boolean } {
+  return useSyncExternalStore(subscribe, getVideoPlayerState, getVideoPlayerState);
+}
+

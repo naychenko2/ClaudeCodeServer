@@ -292,3 +292,104 @@ describe('lib/git — myChangedPaths (фильтр «только файлы ч�
     expect(getGitState(projectId).myChangedPaths).toEqual(new Set(['src/b.ts']));
   });
 });
+
+// --- dirtySessionIds: значок «правки чата не зафиксированы в git» в списке чатов ---
+// Третья поверхность того же серверного changed-by. external=true отбрасывается, как и
+// в changedBy: пока идёт ход, вотчер пишет в историю чата ЧУЖИЕ правки репы (человек в
+// IDE, соседний чат) — на боевых данных это давало вчетверо больше помеченных чатов, чем
+// правда. Отличие от changedBy ровно одно: активный чат не исключается. Трёхзначность —
+// как у myChangedPaths, но опорой служит не наличие активного чата, а достоверность
+// данных: пустой git status = знаем точно «незакоммиченного нет», недоступные данные
+// (worktree-контекст, ошибка запроса) = undefined, значки не рисуются.
+describe('lib/git — dirtySessionIds (значок «не зафиксировано» в списке чатов)', () => {
+  beforeEach(() => {
+    statusMock.mockReset();
+    changedByMock.mockReset();
+    gitSessionCtxMock.mockReset();
+    gitSessionCtxMock.mockReturnValue(null);
+  });
+
+  it('external=true не помечает чат: вотчер пишет ему чужие правки репы за время хода', async () => {
+    const projectId = freshProjectId();
+    statusMock.mockResolvedValue(status(['src/a.ts', 'src/b.ts']));
+    changedByMock.mockResolvedValue({
+      files: {
+        'src/a.ts': [entry('chat-a', 'Чат A')],
+        'src/b.ts': [entry('chat-b', 'Чат B', true)],
+      },
+    });
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).dirtySessionIds).toEqual(new Set(['chat-a']));
+  });
+
+  it('чат с обеими записями на файл (external и своя) помечается — false побеждает', async () => {
+    const projectId = freshProjectId();
+    statusMock.mockResolvedValue(status(['src/a.ts', 'src/b.ts']));
+    changedByMock.mockResolvedValue({
+      files: {
+        'src/a.ts': [entry('chat-a', 'Чат A', true)],
+        'src/b.ts': [entry('chat-a', 'Чат A')],
+      },
+    });
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).dirtySessionIds).toEqual(new Set(['chat-a']));
+  });
+
+  it('активный чат попадает в dirtySessionIds — в отличие от changedBy, откуда он исключён', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockResolvedValue({ files: { 'src/a.ts': [entry('active-chat', 'Этот чат')] } });
+
+    await loadGitStatus(projectId);
+
+    const st = getGitState(projectId);
+    expect(st.dirtySessionIds).toEqual(new Set(['active-chat']));
+    expect(st.changedBy.has('src/a.ts')).toBe(false);
+  });
+
+  it('чистый git status — пустой Set (достоверное «ни у кого»), а не undefined', async () => {
+    const projectId = freshProjectId();
+    statusMock.mockResolvedValue(status([]));
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).dirtySessionIds).toEqual(new Set());
+  });
+
+  it('worktree-контекст активного чата — undefined: пути чужого дерева индексу не знакомы', async () => {
+    const projectId = freshProjectId();
+    gitSessionCtxMock.mockReturnValue({ projectId, sessionId: 'wt-chat' });
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).dirtySessionIds).toBeUndefined();
+  });
+
+  it('ошибка запроса changed-by — undefined, значки не рисуем по недостоверным данным', async () => {
+    const projectId = freshProjectId();
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockRejectedValue(new Error('network'));
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).dirtySessionIds).toBeUndefined();
+  });
+
+  it('падение самого git status не гасит значки — держим последнее известное', async () => {
+    const projectId = freshProjectId();
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockResolvedValue({ files: { 'src/a.ts': [entry('chat-a', 'Чат A')] } });
+    await loadGitStatus(projectId);
+
+    statusMock.mockRejectedValue(new Error('offline'));
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).dirtySessionIds).toEqual(new Set(['chat-a']));
+  });
+});

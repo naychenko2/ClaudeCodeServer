@@ -735,6 +735,22 @@ export interface Session {
   summaryNoteId?: string | null;
 }
 
+// Тип материала контекста чата — те же значения, что SessionContextTypes на бэке
+// (file/url/task); union, чтобы магические строки не расползались по UI
+export type SessionContextType = 'file' | 'url' | 'task';
+
+// Запись контекста чата (фича chat-context): материал, приложенный к чату явной
+// кнопкой. id — путь от корня проекта (file) | URL (url) | id задачи (task).
+// title — подпись со стороны добавившего; missing приходит только из GET
+// {sessionId}/context (единственная точка расчёта — SessionContextResolver
+// на бэке), в событии context_updated и ответе PUT его нет
+export interface SessionContextEntry {
+  type: SessionContextType;
+  id: string;
+  title?: string | null;
+  missing?: boolean;
+}
+
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта
 export interface HomeSessionInfo {
   id: string;
@@ -986,6 +1002,10 @@ export type ServerMessage = { sessionId: string } & (
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
+  // Состав контекста чата заменён (фича chat-context): полный состав после PUT.
+  // entries — записи БЕЗ признака missing (бэкенд его в broadcast не кладёт);
+  // нужен missing — читай кеш (GET {sessionId}/context), событие его обновит
+  | { type: 'context_updated'; entries: SessionContextEntry[] }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
@@ -3423,6 +3443,14 @@ export interface VideoItem {
 export interface VideoChannelsResponse {
   error: VideoError | null;
   channels: VideoChannel[];
+}
+
+export interface VideoFavoritesResponse {
+  // Настраивал ли человек набор сам. false — keys это дефолт сервера, и пустым он не
+  // бывает; true с пустым keys — осознанно снятые звёздочки, полоса честно пуста.
+  configured: boolean;
+  // Ключи каналов вида "smotrim:1" (провайдер + id).
+  keys: string[];
 }
 
 export interface VideoFeedResponse {

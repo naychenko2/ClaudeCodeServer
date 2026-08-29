@@ -10,6 +10,7 @@ import { moduleIdOf } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
 import { loadModules } from './lib/modules'
 import { VideoFloat } from './features/video/VideoFloat'
+import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
@@ -36,7 +37,7 @@ import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
-import { getWallEntry, getWallReturn, isWallActive, setWallActive, setWallEntry, setWallReturn } from './lib/wallMode'
+import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
@@ -761,27 +762,6 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
-  // Выход со стены её собственной кнопкой (рельса стены, заглушка на узком экране):
-  // возвращает В ПРОЕКТ, из которого на стену вошли, — он всё это время «спал» в
-  // state и восстанавливается как при возврате из любого другого раздела. К СПИСКУ
-  // проектов уводит другой жест — клик по подсвеченной пилюле «Проекты» (switchHubTab).
-  // Проекта нет (пришли по диплинку #/wall) — остаётся список.
-  const exitWall = () => {
-    // Метку входа читаем ДО setWallActive(false): он её и стирает
-    const entry = getWallEntry()
-    setWallActive(false)
-    // Вошли с дашборда — туда и возвращаемся: зона проектов тут ни при чём,
-    // человек в ней не был
-    if (entry === 'home') {
-      localStorage.setItem(HUB_TAB_KEY, 'home')
-      setHubTab('home')
-      navPush({ screen: 'home' })
-      return
-    }
-    localStorage.setItem(HUB_TAB_KEY, 'projects')
-    setHubTab('projects')
-    navPush(project ? { screen: 'project', project, view: 'sidebar', file: null } : { screen: 'projects' })
-  }
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
@@ -792,17 +772,11 @@ export default function App() {
     if (t !== 'projects' && (hubTab === 'projects' || hubTab === 'wall')) {
       setWallReturn(hubTab === 'wall' ? 'wall' : project ? 'workspace' : 'list')
     }
-    // Вход НА стену: запоминаем раздел-источник, чтобы «Выйти со стены» вернуло
-    // именно туда (exitWall). Пишем здесь, а не в точке входа, — так покрыты все
-    // пути разом: виджет дашборда, док воркспейса, AI-хаб.
-    if (t === 'wall' && hubTab !== 'wall') {
-      setWallEntry(hubTab === 'home' ? 'home' : 'projects')
-      // Вход с дашборда оставил бы wallReturn пустым, а ветка «Проекты при активной
-      // стене» ниже трактует пустоту как «вернуть на стену» — и пилюля уводила бы
-      // туда человека, который в зоне проектов вообще не был. Пишем то же, что
-      // записал бы уход с дашборда в любой другой раздел.
-      if (hubTab === 'home') setWallReturn(project ? 'workspace' : 'list')
-    }
+    // Вход НА стену с дашборда оставил бы wallReturn пустым, а ветка «Проекты при активной
+    // стене» ниже трактует пустоту как «вернуть на стену» — и пилюля уводила бы
+    // туда человека, который в зоне проектов вообще не был. Пишем то же, что
+    // записал бы уход с дашборда в любой другой раздел.
+    if (t === 'wall' && hubTab === 'home') setWallReturn(project ? 'workspace' : 'list')
     // Покидаем «Аналитику токенов» — чистим контекст открытия, чтобы следующий
     // вход через меню/таб открыл чистый обзор (виджет/бейдж выставят свежий ctx)
     if (hubTab === 'spend' && t !== 'spend') setSpendCtx({})
@@ -1187,6 +1161,10 @@ export default function App() {
           переход между проектами и разделами — панель и центр этого не умеют,
           они часть страницы и размонтируются вместе с ней. */}
       {auth && floatingVideo?.mode === 'float' && <VideoFloat stage={floatingVideo} />}
+      {/* Кадр панели и центрального острова — тоже НАД страницами: сами панель и
+          остров отдают ему только место, а iframe живёт здесь и переживает
+          перемонтаж страницы при смене проекта. */}
+      {auth && <VideoStageFrame />}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth
@@ -1196,7 +1174,7 @@ export default function App() {
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
           : effectiveHubTab === 'wall'
-            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onExitWall={exitWall} />
+            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'

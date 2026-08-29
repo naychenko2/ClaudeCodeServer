@@ -9,6 +9,7 @@ import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { addDaysIso, todayIso, toIsoDate } from '../../lib/tasks';
 import { CalendarIcon } from './bits';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 interface Props {
   dueDate: string | null;   // YYYY-MM-DD
@@ -207,6 +208,7 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
               }}>
                 <Clock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={customActive ? C.accent : C.textMuted} style={{ flexShrink: 0 }} />
                 <input
+                  {...NO_AUTOFILL}
                   value={timeDraft}
                   onChange={e => setTimeDraft(maskTime(e.target.value))}
                   onBlur={() => {

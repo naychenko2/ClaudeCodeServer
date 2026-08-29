@@ -1319,6 +1319,7 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
         <>
           <div style={{ marginTop: 12 }}>
             <IconField
+              type="search"
               value={query}
               onChange={setQuery}
               placeholder="Найти…"
@@ -1417,6 +1418,7 @@ function PersonasSubPicker({ panel, onChange }: {
       </div>
       <div style={{ marginTop: 10 }}>
         <IconField
+          type="search"
           value={query}
           onChange={setQuery}
           placeholder="Или найти персону…"
@@ -1541,6 +1543,7 @@ function CondTextArea({ value, onChange, onBlur }: {
   }, [value]);
   return (
     <textarea
+      autoComplete="off"
       ref={ref}
       value={value}
       rows={2}

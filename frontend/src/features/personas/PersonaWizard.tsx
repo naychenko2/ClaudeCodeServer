@@ -41,6 +41,7 @@ import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { fetchBindingTargets } from './bindingMeta';
 import { Stepper } from './stepperUi';
 import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
+import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
 
@@ -608,6 +609,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
               )}
               <Field label="Роль">
                 <input
+                  {...NO_AUTOFILL}
                   value={role} onChange={e => setRole(e.target.value)}
                   placeholder="Дизайнер, PM, Тестировщик…" autoFocus
                   style={{

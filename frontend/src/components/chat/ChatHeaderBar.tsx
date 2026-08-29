@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
-import { archiveApi } from '../../api/chats';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { HandsBadge } from '../../features/desktop/HandsBadge';
 import { TagAssignMenu } from '../TagChip';
@@ -24,7 +23,7 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
+import { C, FONT, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
@@ -43,6 +42,7 @@ import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
+import { chatFilterScope, leaveChatArchiveView } from '../../lib/chatFilters';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -823,6 +823,9 @@ interface ChatHeaderBarProps {
   island?: boolean;
   // Узкая колонка «Стены»: прячем кнопку настроек чата (её диалог шире колонки)
   compact?: boolean;
+  // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
+  // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
+  contextBar?: ReactNode;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -957,7 +960,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar }: ChatHeaderBarProps) {
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1459,9 +1462,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
       case 'archive':
-        void archiveApi.setArchived(session.id, !isArchivedChat(session))
-          .then(s => onSessionUpdated?.(s))
-          .catch((e) => showToast('Архив чата', e instanceof Error ? e.message : 'Не удалось изменить архив', 'info'));
+        // Архивация из шапки: владелец экрана реагирует на onSessionUpdated сам — центр
+        // воркспейса/«Чатов» уходит на соседа по списку, колонка стены убирается.
+        // Здесь только запрос и тост.
+        // Направление и итог читаем через isArchivedChat, а НЕ через archivedAt: признак
+        // архива производный (IsArchived = ArchivedAt != null && UpdatedAt <= ArchivedAt),
+        // и у чата с активностью после архивации archivedAt непустой, а чат — живой.
+        void updateChatFields(session, { archived: !isArchivedChat(session) })
+          .then(s => {
+            onSessionUpdated?.(s);
+            showToast('Архив', isArchivedChat(s) ? 'Чат убран в архив' : 'Чат вернулся в список', 'info');
+            // Вернули из архива: список своей области выходит из архивного вида. Чат
+            // и так открыт — переключать нечего, но оставлять список показывать архив,
+            // где этого чата уже нет, значит прятать его от человека второй раз
+            if (isArchivedChat(session) && !isArchivedChat(s)) leaveChatArchiveView(chatFilterScope(s));
+          })
+          .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
         break;
       case 'delete': setDeleteAsk(true); break;
     }
@@ -1858,7 +1874,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // БЕЗ overflow:hidden — поповеры бейджей (контекст, стоимость, участники)
       // выпадают ниже шапки и не должны обрезаться её границей.
       // openBtn обязателен: без него свёрнутый сайдбар не вернуть при открытом чате
-      <div style={{ position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box', borderBottom: `1px solid ${C.border}` }}>
+      // Ни подложки, ни линии, ни тени: границу шапки к ленте держит САМА ЛЕНТА —
+      // её верхний край растворяется при прокрутке (ChatPanel, FEED_FADE). Подложка
+      // мутила бы дудл-холст, а линия поверх растворения читалась бы вторым
+      // разделителем подряд
+      <div style={{ position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box' }}>
         {/* flexWrap: при узком окне правый кластер уходит второй строкой — остров подрастает */}
         <div
           onContextMenu={e => {
@@ -1870,6 +1890,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
+        {/* Контекст чата — своей строкой под заголовком, в том же острове: материалы
+            стоят над лентой, а не сбоку от неё */}
+        {contextBar && <div style={{ padding: '0 18px 10px' }}>{contextBar}</div>}
         {tagMenuEl}
         {ctxMenuEl}
         {ctxExpiryMenuEl}
@@ -1878,10 +1901,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     );
   }
 
-  return (
+  const toolbarEl = (
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
-    <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
+    <Toolbar isMobile={isCompact} noBorder={island || compact} bg={island || compact ? 'transparent' : undefined}
       // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
       onContextMenu={isCompact ? undefined : e => {
         e.preventDefault();
@@ -1898,5 +1921,20 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {ctxExpiryMenuEl}
       {actionDialogsEl}
     </Toolbar>
+  );
+  if (!contextBar) return toolbarEl;
+  // Контекст чата — строкой под тулбаром, до ленты: фон свой не нужен (шапка уже
+  // отделена), линия снизу отбивает материалы от переписки
+  return (
+    <>
+      {toolbarEl}
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center',
+        padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
+        borderBottom: `1px solid ${C.border}`,
+      }}>
+        {contextBar}
+      </div>
+    </>
   );
 }

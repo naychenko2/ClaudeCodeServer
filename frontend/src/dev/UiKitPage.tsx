@@ -26,7 +26,7 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -1786,7 +1786,7 @@ const DEMO_SESSIONS: Session[] = [
 // следом спокойные. Подписи и цвета не дублируем — берём боевые таблицы
 // STATUS_CONFIG / STATUS_GLOW, чтобы витрина не разъезжалась с карточкой.
 const GLOW_STATES: VisualStatus[] = [
-  'starting', 'working', 'agents', 'waiting', 'error', 'active', 'orphaned', 'finished',
+  'starting', 'working', 'agents', 'command', 'waiting', 'error', 'active', 'orphaned', 'finished',
 ];
 
 // Чем состояние себя ведёт — подпись под демо-карточкой
@@ -2287,6 +2287,11 @@ function PanelsSection() {
                     online={true}
                     hovered={false}
                     workflowRunning={false}
+                    // Второй карточке — значок «правки не зафиксированы в git». Состояние
+                    // живёт ТОЛЬКО в списке чатов проекта: в разделе «Чаты» чаты вне
+                    // проектов, там значка нет, поэтому эталон ему здесь. Вид у 'own' и
+                    // 'descendants' общий, разводятся они текстом подсказки
+                    uncommitted={i === 1 ? 'own' : undefined}
                     onSelect={() => {}}
                     onHover={() => {}}
                     onDelete={() => {}}
@@ -2678,10 +2683,11 @@ function PanelsSection() {
               {GLOW_STATES.map(st => (
                 <div key={st}>
                   <ChatCard
-                    // 'agents' — не статус CLI, а вид: сессия при живом фоне Active
+                    // 'agents' и 'command' — не статусы CLI, а виды: сессия при живом фоне Active
                     session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`,
-                      status: st === 'agents' ? 'active' : st, isPinned: false }}
+                      status: st === 'agents' || st === 'command' ? 'active' : st, isPinned: false }}
                     agentsRunning={st === 'agents'}
+                    bgCommandRunning={st === 'command'}
                     isActive={false}
                     isMobile={false}
                     fallbackName="Новый чат"
@@ -2712,11 +2718,11 @@ function PanelsSection() {
           </p>
         </SubBlock>
 
-        {/* Фоновая команда — единственная фоновая работа БЕЗ ореола: Bash с
-            run_in_background (дев-сервер, watch) живёт часами и о завершении не
-            сообщает, поэтому светиться ей нельзя, а молчать — значит скрывать
-            причину, по которой чат держит живой процесс CLI. */}
-        <SubBlock label="ChatCard — в фоне работает команда (без ореола)">
+        {/* Фоновая команда (Bash с run_in_background: дев-сервер, watch) держит чат живым
+            так же, как агенты, — и светится так же. Отличает её значок терминала: работа
+            эта не ход и не агент, о завершении она не сообщает, и без пометки было бы
+            непонятно, почему чат держит живой процесс CLI. */}
+        <SubBlock label="ChatCard — в фоне работает команда">
           <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
             <div style={{ padding: SP.md, maxWidth: 320 }}>
               <ChatCard
@@ -2736,11 +2742,13 @@ function PanelsSection() {
           </Island>
 
           <p style={{ margin: `${SP.sm}px 0 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
-            Значок терминала на <code>C.textMuted</code> — приглушённый намеренно: акцент,
-            горящий часами, перестают замечать. Робота (<code>C.accent</code>) и ореол
-            «агенты работают» команда не получает, статус карточки остаётся «активна».
-            При живых агентах значок команды не показываем — свечение уже объясняет,
-            почему чат жив, а два значка подряд сливаются в шум.
+            Значок терминала на <code>C.accent</code> — под цвет волны: чат с живой фоновой
+            командой светится так же, как с агентами (вид <code>command</code> в
+            <code>STATUS_GLOW</code>), и серый значок читался бы как рассинхрон. Робота
+            команда не получает — по значку и отличают, что именно работает; статус самой
+            сессии при этом остаётся «активна». При живых агентах значок команды не
+            показываем — свечение уже объясняет, почему чат жив, а два значка подряд
+            сливаются в шум.
           </p>
         </SubBlock>
 
@@ -2846,8 +2854,9 @@ function PanelsSection() {
 // ProjectRail (док проектов второй левой рельсой воркспейса) и
 // IslandHeader как атомарный паттерн шапки острова/панели рельсы.
 // Живая демонстрация RailFlyout: кнопка рельсы с подписью сбоку, при action —
-// ещё и с кнопкой в подписи (у дока проектов так открываются настройки).
-function RailFlyoutDemo({ label, action }: { label: string; action?: boolean }) {
+// ещё и с кнопками в подписи (у дока проектов так открываются настройки, у кнопки
+// панели — «убрать в ящик» и «перенести на другую сторону»).
+function RailFlyoutDemo({ label, action, twoActions }: { label: string; action?: boolean; twoActions?: boolean }) {
   const [hover, setHover] = useState(false);
   return (
     <span
@@ -2860,7 +2869,12 @@ function RailFlyoutDemo({ label, action }: { label: string; action?: boolean }) 
         label={label}
         open={hover}
         railWidth={0}
-        action={action ? { Icon: Settings, title: 'Настройки проекта', onClick: () => {} } : undefined}
+        actions={action
+          ? [
+            { Icon: Settings, title: 'Настройки проекта', onClick: () => {} },
+            ...(twoActions ? [{ Icon: ArrowRightToLine, title: 'Перенести панель вправо', onClick: () => {} }] : []),
+          ]
+          : undefined}
       >
         <IconButton size="md" ariaLabel={label}>
           {action
@@ -3114,6 +3128,7 @@ function HeadersSection() {
           }}>
             <RailFlyoutDemo label="Задачи" />
             <RailFlyoutDemo label="ClaudeCodeServer" action />
+            <RailFlyoutDemo label="Изменения" action twoActions />
           </div>
           <p style={{
             margin: 0, marginTop: SP.sm,
@@ -3125,7 +3140,10 @@ function HeadersSection() {
             продолжение кнопки: та же высота, тот же тон, что у кнопки под курсором,
             примыкает вплотную, а кнопка на стыке теряет скругление и раскрывается в
             неё. Курсор доходит до действия, не теряя подсказку; у кнопок БЕЗ действия
-            она гаснет сразу.
+            она гаснет сразу. Действий может быть несколько (третья кнопка) — у правой
+            рельсы их порядок зеркалится, чтобы они одинаково отстояли от иконки.
+            На таче наведения нет вовсе: там ту же плашку поднимает ДОЛГОЕ НАЖАТИЕ
+            (~500мс), кнопки в ней вырастают до тач-цели 40px, а гасит её тап мимо.
           </p>
         </SubBlock>
 

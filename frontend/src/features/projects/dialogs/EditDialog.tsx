@@ -23,6 +23,7 @@ import { AccordionSection, type AccordionSummaryTone } from './AccordionSection'
 import { ArchiveSettings } from '../../../components/ArchiveSettings';
 import { archiveRuleApi } from '../../../api/chats';
 import { invalidateProjectsCache } from '../useAllProjects';
+import { NO_AUTOFILL } from '../../../lib/noAutofill';
 
 // Строка «Руководитель проекта не назначен» (фича default-personas-onboarding, п.5.3):
 // главная кнопка — «Познакомиться с проектом» (интервью работает всегда, «Назначить
@@ -449,6 +450,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
               {r.action === 'deny' ? 'Запретить' : 'Разрешить'}
             </button>
             <input
+              {...NO_AUTOFILL}
               value={r.pattern}
               onChange={e => updateRule(i, { pattern: e.target.value })}
               placeholder="Bash(npm run *)"

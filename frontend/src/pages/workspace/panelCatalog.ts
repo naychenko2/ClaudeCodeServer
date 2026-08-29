@@ -20,6 +20,7 @@ import {
   TableOfContents, Lightbulb,
   type LucideIcon,
 } from 'lucide-react';
+import type { BadgeTone } from '../../components/ui/CountBadge';
 
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
@@ -54,11 +55,11 @@ export type PanelKey = typeof PANEL_KEYS[number];
 //
 // hint — либо строка (одно значение, рисуется с оранжевой точкой как primary),
 // либо список линий: каждая со своим тоном под соответствующий кружок на иконке
-// (accent — оранжевый/primary, muted — серый/secondary). Так в тултипе «Изменений»
-// две строки: ●(оранж) N незафиксированных и ●(сер) N неопубликованных.
+// (accent — оранжевый/primary, muted — серый/secondary, warning — жёлтый). Так в
+// тултипе «Изменений» две строки: ●(оранж) N незафиксированных и ●(сер) N неопубликованных.
 export interface HintLine {
   text: string;
-  tone?: 'accent' | 'muted';   // дефолт 'accent'
+  tone?: BadgeTone;   // дефолт 'accent'
 }
 export type RailHint = string | readonly HintLine[];
 
@@ -68,8 +69,11 @@ export interface RailBadgeInfo {
   // Тон каждого кружка (дефолт: primary=accent/оранжевый, secondary=muted/серый).
   // «Изменения» инвертирует: незафиксированные файлы — серые (норма, рабочее состояние),
   // неопубликованные коммиты — оранжевые (требуют пуша)
-  primaryTone?: 'accent' | 'muted';
-  secondaryTone?: 'accent' | 'muted';
+  primaryTone?: BadgeTone;
+  secondaryTone?: BadgeTone;
+  // Точка без числа: не «сколько чего-то», а «что-то ИДЁТ прямо сейчас» (эфир в
+  // «Видео»). Числовой кружок здесь врал бы — считать нечего, а «1» читается как счётчик.
+  dot?: BadgeTone;
   hint?: RailHint;
 }
 

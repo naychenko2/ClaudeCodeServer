@@ -354,8 +354,8 @@ function AddUserDialog({ onClose, onCreated }: {
       }
     >
       {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
-      <TextField value={username} onChange={setUsername} placeholder="Имя пользователя" autoFocus />
-      <TextField type="password" value={password} onChange={setPassword} placeholder="Пароль (не менее 8 символов)" />
+      <TextField value={username} onChange={setUsername} autoComplete="username" placeholder="Имя пользователя" autoFocus />
+      <TextField type="password" value={password} onChange={setPassword} autoComplete="new-password" placeholder="Пароль (не менее 8 символов)" />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           Роль
@@ -477,6 +477,7 @@ function ResetPasswordDialog({ user, onClose }: {
       <TextField
         type="password"
         value={newPassword}
+        autoComplete="new-password"
         onChange={setNewPassword}
         placeholder="Новый пароль (не менее 8 символов)"
         autoFocus

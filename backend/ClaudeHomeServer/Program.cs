@@ -277,16 +277,35 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsServ
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore>();
 AddHosted<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
-// AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
+// AI-хаб: локальная LLM (Ollama или llama-server, выбор по LocalLlm:Provider) для
+// бесплатного ранжирования действий мимо claude CLI. Обе реализации регистрируются
+// как конкретные синглтоны (тестам и прямому прогреву они нужны под своим типом), а
+// ILocalLlmClient — тот, кого держат потребители (CheapTextRunner, LocalActionRouter,
+// SessionManager и т.д.). Тихие HTTP-логгеры на оба имени: каждая реализация пишет в
+// свою категорию, и одна мёртвая зависимость не глушит жалобы другой.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
-// Локальная модель опциональна: погашенная Ollama — штатная ситуация, а не авария
-// (OllamaClient ловит её сам и уходит в фолбэк). Тихий логгер вместо дефолтного, иначе
-// каждый вызов даёт Error со стектрейсом на весь экран.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlamaServerClient>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILocalLlmClient>(sp =>
+{
+    var options = ClaudeHomeServer.Services.Llm.LocalLlmOptions.Read(sp.GetRequiredService<IConfiguration>());
+    return options.Provider == ClaudeHomeServer.Services.Llm.LocalLlmOptions.LlamaServer
+        ? sp.GetRequiredService<ClaudeHomeServer.Services.Llm.LlamaServerClient>()
+        : sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>();
+});
+// Локальная модель опциональна: погашенная локаль — штатная ситуация, а не авария
+// (каждая реализация ловит её сама и уходит в фолбэк). Тихий логгер вместо дефолтного,
+// иначе каждый вызов даёт Error со стектрейсом на весь экран.
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Services.Llm.OllamaClient.HttpClientName,
     new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
         Category: "ClaudeHomeServer.Llm.Ollama",
         Subject: "локальной моделью Ollama",
+        Consequence: "Фоновые действия уйдут облачной модели."));
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Llm.LlamaServerClient.HttpClientName,
+    new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Llm.LlamaServer",
+        Subject: "локальной моделью llama-server",
         Consequence: "Фоновые действия уйдут облачной модели."));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
 // Прямой HTTP-адаптер бесплатных моделей OpenRouter для фоновых one-shot задач
@@ -932,8 +951,9 @@ if (!inspectionMode)
     // В копии пропускаем: запуск claude зарегистрировал бы процесс в pid-файле БОЕВОГО
     // сервера (реестр живёт рядом с exe, а не в DataPath).
     _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
-    // Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
-    _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
+    // Фоновый прогрев активной локальной LLM (грузим веса в память заранее; best-effort).
+    // Резолвится через интерфейс — выбор движка уже сделан по LocalLlm:Provider.
+    _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.ILocalLlmClient>().WarmUpAsync());
     // Регистрация языковых провайдеров CodeGraph (C# для .cs; TS/React для .ts/.tsx)
     try
     {

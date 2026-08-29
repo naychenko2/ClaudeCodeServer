@@ -20,7 +20,8 @@
 
 Рантайм один — CLI [Claude Code](https://claude.com/claude-code), но модель за ним не
 обязана быть от Anthropic: GLM и DeepSeek подключаются оверрайдами окружения на каждый ход,
-а фоновая мелочь (заголовки чатов, теги, сводки) уходит на локальную Ollama или OpenRouter.
+а фоновая мелочь (заголовки чатов, теги, сводки) уходит на локальный LLM-движок
+(Ollama или llama-server, выбор по `LocalLlm:Provider`) или OpenRouter.
 Какой моделью идёт каждое место — решает админ в настройках, см.
 [architecture/llm-providers.md](docs/architecture/llm-providers.md).
 
@@ -98,7 +99,7 @@ claude CLI  (--print --output-format stream-json --input-format stream-json …)
 | Frontend | React 18, TypeScript, Vite, SignalR-client, react-markdown, mermaid, dnd-kit |
 | Backend | ASP.NET Core 10, SignalR, Kestrel (TLS), YARP |
 | CLI | Claude Code (`@anthropic-ai/claude-code`) |
-| Модели | Claude по подписке; GLM и DeepSeek env-оверрайдами; Ollama и OpenRouter для фоновых задач |
+| Модели | Claude по подписке; GLM и DeepSeek env-оверрайдами; Ollama/llama-server и OpenRouter для фоновых задач |
 | Интеграции | Dify (RAG), fal.ai (медиа), OnlyOffice Document Server |
 | Телеметрия | OpenTelemetry, Aspire Dashboard (dev), SigNoz (production) |
 | Деплой | Docker (multi-stage), Tailscale + HTTPS |

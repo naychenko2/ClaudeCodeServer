@@ -54,7 +54,7 @@ public interface ICheapTextRunner
 }
 
 public sealed class CheapTextRunner(
-    LocalActionRouter router, OllamaClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
+    LocalActionRouter router, ILocalLlmClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
     ILogger<CheapTextRunner> log, AppSettingsService? appSettings = null,
     UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null)
     : ICheapTextRunner
@@ -257,7 +257,7 @@ public sealed class CheapTextRunner(
                 prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
                 numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey, ct)
             : ollama.ChatJsonAsync(
-                systemPrompt: "", userPrompt: prompt, formatSchema: jsonFormat, ct,
+                systemPrompt: "", userPrompt: prompt, jsonFormat: jsonFormat, ct,
                 model: ollama.TextModel, timeoutMs: spec.TimeoutMs,
                 numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey);
     }

@@ -8,7 +8,10 @@ namespace ClaudeHomeServer.Services.Llm;
 // Прямой HTTP мимо claude CLI: Ollama не Anthropic-совместим, а старт CLI (~15с)
 // убил бы смысл «быстро и часто». Без непустых BaseUrl/Model — Enabled=false
 // (фича молча уходит в rule-based фолбэк).
-public sealed class OllamaClient
+//
+// Раньше этот класс жил один — теперь он реализация ILocalLlmClient рядом с
+// LlamaServerClient. Логика запросов не трогалась (ветка отката).
+public sealed class OllamaClient : ILocalLlmClient
 {
     // Именованный клиент, а не безымянный: под этим именем в Program.cs зарегистрирован
     // тихий логгер (Services/Http/QuietHttpLogger). Иначе непогашенная Ollama печатала
@@ -20,18 +23,19 @@ public sealed class OllamaClient
     private readonly ILogger<OllamaClient> _logger;
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
-
-    public string BaseUrl { get; }
-    public string Model { get; }
-    // Отдельная модель для текстовых действий (Ollama:TextModel); пусто → та же Model.
-    // Позволяет держать одну модель на ранжир и на генерацию, либо развести при желании.
-    public string TextModel { get; }
+    private readonly LocalLlmOptions _options;
     // keep_alive для Ollama: число (секунды; -1 = держать вечно) ЛИБО duration-строка ("5m").
     // Строку "-1" API отвергает ("missing unit in duration") — поэтому целое отдаём числом.
     private readonly object _keepAlive;
-    public int TimeoutMs { get; }
 
+    public string BaseUrl => _options.BaseUrl;
+    public string Model => _options.Model;
+    // Отдельная модель для текстовых действий; пусто → та же Model. Позволяет держать
+    // одну модель на ранжир и на генерацию, либо развести при желании.
+    public string TextModel => _options.TextModel;
+    public int TimeoutMs => _options.TimeoutMs;
     public bool Enabled => !string.IsNullOrWhiteSpace(BaseUrl) && !string.IsNullOrWhiteSpace(Model);
+    public string ProviderKey => LocalLlmOptions.Ollama;
 
     public OllamaClient(IHttpClientFactory http, IConfiguration config, ILogger<OllamaClient> logger,
         Spend.ISpendCollector? spend = null)
@@ -39,12 +43,9 @@ public sealed class OllamaClient
         _http = http;
         _logger = logger;
         _spend = spend;
-        BaseUrl = (config["Ollama:BaseUrl"] ?? "http://localhost:11434").TrimEnd('/');
-        Model = config["Ollama:Model"] ?? "";
-        TextModel = config["Ollama:TextModel"] is { Length: > 0 } tm ? tm : Model;
-        var keepAlive = config["Ollama:KeepAlive"] ?? "-1"; // держим модель в памяти между вызовами
+        _options = LocalLlmOptions.Read(config);
+        var keepAlive = _options.KeepAlive;
         _keepAlive = int.TryParse(keepAlive, out var ka) ? ka : keepAlive;
-        TimeoutMs = int.TryParse(config["Ollama:TimeoutMs"], out var t) ? t : 4000;
     }
 
     // Один синхронный чат-ход со структурированным JSON-выводом. Возвращает строку
@@ -55,7 +56,7 @@ public sealed class OllamaClient
     // прежнее поведение ранжира AI-хаба. numCtx особенно важен для длинных промптов —
     // дефолт Ollama (~4k) МОЛЧА срезает хвост входа, и модель отвечает по обрубку.
     public async Task<string?> ChatJsonAsync(
-        string systemPrompt, string userPrompt, object formatSchema, CancellationToken ct = default,
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
         string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
         string? ownerId = null, string? label = null)
     {
@@ -78,7 +79,7 @@ public sealed class OllamaClient
                 stream = false,
                 think = false,
                 keep_alive = _keepAlive,
-                format = formatSchema,
+                format = jsonFormat,
                 options = numCtx is { } nc
                     ? new { temperature = 0, num_predict = numPredict ?? 120, num_ctx = nc }
                     : (object)new { temperature = 0, num_predict = numPredict ?? 120 },
@@ -118,7 +119,7 @@ public sealed class OllamaClient
             _spend.Record(new Models.SpendRecord
             {
                 OwnerId = ownerId ?? "",
-                Provider = "ollama",
+                Provider = ProviderKey,
                 Model = model,
                 Source = Models.SpendSources.Free,
                 Label = label,
@@ -179,17 +180,6 @@ public sealed class OllamaClient
         }
     }
 
-    // Реплика диалога для метода ChatTurnAsync: role = system|user|assistant.
-    public sealed record ChatMsg(string Role, string Content);
-
-    // Результат разговорного хода: текст ответа (null — пустой/сбойный вызов) и usage
-    // для ResultMessage ленты (токены из счётчиков Ollama; может быть null при их отсутствии).
-    public sealed record ChatTurnResult(string? Text, Protocol.UsageInfo? Usage);
-
-    // Порог принудительного флаша потоковых кусков: копить до конца предложения дёшево,
-    // но модель, пишущая длинный период без точки, держала бы ленту и озвучку в тишине.
-    private const int StreamFlushChars = 40;
-
     // Один разговорный ход голосового режима (Session.VoiceMode + место chat-voice на
     // «Локальная»): полный messages[] (system + история + реплика) → короткий ответ.
     // Отличия от GenerateTextAsync: диалоговая история, temperature 0.7 (разговор, а не
@@ -198,9 +188,9 @@ public sealed class OllamaClient
     //
     // onDelta != null — ПОТОКОВЫЙ режим (Ollama отдаёт NDJSON): куски текста уходят
     // вызывающему по мере генерации, и озвучка первого предложения начинается, не дожидаясь
-    // конца ответа. Куски копятся до границы предложения (или StreamFlushChars) — фронт
-    // всё равно режет речь по предложениям, а слать каждый токен отдельным SignalR-событием
-    // незачем. Без onDelta поведение прежнее: один ответ целиком.
+    // конца ответа. Куски копятся общим StreamSentenceBuffer (та же логика у llama-server) —
+    // фронт всё равно режет речь по предложениям, а слать каждый токен отдельным
+    // SignalR-событием незачем. Без onDelta поведение прежнее: один ответ целиком.
     public async Task<ChatTurnResult> ChatTurnAsync(
         IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
         int numPredict, int numCtx, string? ownerId,
@@ -279,16 +269,13 @@ public sealed class OllamaClient
         HttpResponseMessage resp, string model, string? ownerId,
         Func<string, Task> onDelta, CancellationToken hardCt, CancellationToken token)
     {
-        var full = new System.Text.StringBuilder();
-        var pending = new System.Text.StringBuilder();
+        var buffer = new StreamSentenceBuffer();
         Protocol.UsageInfo? usage = null;
 
         async Task FlushAsync()
         {
-            if (pending.Length == 0) return;
-            var chunk = pending.ToString();
-            pending.Clear();
-            await onDelta(chunk);
+            var chunk = buffer.Flush();
+            if (chunk.Length > 0) await onDelta(chunk);
         }
 
         try
@@ -306,10 +293,7 @@ public sealed class OllamaClient
                     && msg.TryGetProperty("content", out var c)
                     && c.GetString() is { Length: > 0 } piece)
                 {
-                    full.Append(piece);
-                    pending.Append(piece);
-                    if (pending.Length >= StreamFlushChars || EndsSentence(pending))
-                        await FlushAsync();
+                    if (buffer.Append(piece)) await FlushAsync();
                 }
 
                 if (root.TryGetProperty("done", out var d) && d.ValueKind == JsonValueKind.True)
@@ -334,7 +318,7 @@ public sealed class OllamaClient
         }
 
         await FlushAsync();
-        var text = full.ToString();
+        var text = buffer.FullText;
         return new ChatTurnResult(string.IsNullOrWhiteSpace(text) ? null : text, usage);
     }
 
@@ -343,18 +327,6 @@ public sealed class OllamaClient
     {
         try { return JsonDocument.Parse(line); }
         catch (JsonException) { return null; }
-    }
-
-    // Конец предложения по последнему непробельному символу накопленного куска
-    private static bool EndsSentence(System.Text.StringBuilder sb)
-    {
-        for (var i = sb.Length - 1; i >= 0; i--)
-        {
-            var ch = sb[i];
-            if (char.IsWhiteSpace(ch)) continue;
-            return ch is '.' or '!' or '?' or '…';
-        }
-        return false;
     }
 
     // Токены для result ленты: input = prompt_eval_count, output = eval_count.

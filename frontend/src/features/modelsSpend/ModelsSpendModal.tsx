@@ -83,6 +83,7 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   }), [data]);
 
   const ollamaModel = data.info?.model ?? undefined;
+  const ollamaProvider = data.info?.provider;
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'quotas', label: 'Расход' },
@@ -133,6 +134,7 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               models={models}
               tierModels={tierModels}
               ollamaModel={ollamaModel}
+              ollamaProvider={ollamaProvider}
               savingScope={savingScope}
               savingUserId={savingUserId}
               onSaveLayer={onSaveLayer}
@@ -160,6 +162,7 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               models={models}
               tierModels={tierModels}
               ollamaModel={ollamaModel}
+              ollamaProvider={ollamaProvider}
             />
           )}
         </div>

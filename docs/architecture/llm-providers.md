@@ -4,6 +4,54 @@
 > раздел «LLM-провайдеры». Читать перед правками в `Services/Llm/`, конфиге `LlmProviders`,
 > фоновых one-shot действиях и всём, что касается запуска claude CLI.
 
+## Локальный LLM-движок (Ollama / llama-server)
+
+Для бесплатных фоновых one-shot задач и голосового режима «Локальная» используется
+локальный движок. Два бэкенда под единым интерфейсом `ILocalLlmClient`
+(`Services/Llm/LocalLlm.cs`):
+
+- **Ollama** (`OllamaClient`) — диалект `POST /api/chat`, NDJSON-стрим, схема через
+  `format: <schema>`, `think:false`, `keep_alive`, `options.num_ctx/num_predict`.
+  Ветка отката: конфиг читается из `Ollama:*` (прежние ключи) или `LocalLlm:*`
+  (новая секция).
+- **llama-server** (`LlamaServerClient`) — диалект `POST /v1/chat/completions`,
+  SSE-стрим (`data: …`, терминатор `[DONE]`), `response_format: json_schema` (либо
+  `json_object` для строки `"json"`), `chat_template_kwargs: {enable_thinking:false}`
+  для подавления размышлений + страховка `ThinkingStripper` срезает `<think>…</think>`
+  из ответа. `numCtx` НЕ передаётся — контекст фиксируется ключом `-c` при старте
+  сервера; `Ollama:Profiles:*:NumCtx` игнорируется (один warning при старте).
+
+**Инвариант: `reasoning_format:"none"` несовместим с грамматикой `json_schema`.**
+Вместе они роняют llama-server ещё ДО генерации — 400 «Failed to initialize samplers:
+Unexpected empty grammar stack after accepting piece: `<think>`»: грамматика схемы не
+допускает токен `<think>`, который Qwen3 всё равно эмитит при `reasoning_format:none`.
+Симптом был бы незаметным и дорогим — каждое фоновое действие со строгой схемой
+(`OllamaActionRankService` и все места с `jsonFormat`) молча уходило бы в платный
+фолбэк на claude. Поэтому ключ шлётся ТОЛЬКО когда грамматики нет: свободный текст,
+`json_object`, разговорный ход. Подавление размышлений при этом не теряется —
+`enable_thinking:false` справляется сам. Проверено на живом сервере (b10666, Qwen3 14B,
+29.08), сторож — `LlamaServerClientTests.ChatJsonAsync_СоСхемой_НеШлётReasoningFormat`.
+
+Выбор движка — `LocalLlm:Provider`: `ollama` (по умолчанию) или `llama-server`.
+`LocalLlmOptions.Read(IConfiguration)` — единственная точка чтения транспорта с
+приоритетом `LocalLlm:*` → `Ollama:*` → дефолт. Потребители (`CheapTextRunner`,
+`LocalActionRouter`, `LocalActionPresetService`, `OllamaActionRankService`,
+`SessionManager`, `UsageController`) держат `ILocalLlmClient` — смена движка для
+них бесплатна.
+
+Регистрация — `Program.cs`: обе реализации как singleton, `ILocalLlmClient` —
+фабрика, выбирающая по `LocalLlmOptions.Provider`. Тихие HTTP-логгеры на оба
+имени (`QuietHttpClient`); прогрев `WarmUpAsync` идёт через интерфейс. Учёт расхода
+— `SpendRecord.Provider = "llama-server"` (добавлено в `SpendSources.IsFree`),
+стоимость 0; UI получает активный движок через `OllamaUsageInfo.Provider`
+(имя DTO не переименовано, контракт публичный).
+
+Маршрутизация действий (`Ollama:Actions`, `Ollama:Profiles`, `LocalActionOverridesStore`,
+пресеты) — НЕ зависит от движка: это «куда идёт действие», а не «как разговаривать
+с локалью».
+
+## Сторонние облачные LLM-провайдеры
+
 Единственный рантайм — claude CLI (`Llm/Claude/ClaudeSession`). Сторонние провайдеры
 с Anthropic-совместимым эндпоинтом (DeepSeek, GLM) подключаются env-оверрайдами
 процесса на каждый ход: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,

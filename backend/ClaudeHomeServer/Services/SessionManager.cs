@@ -260,8 +260,9 @@ public class SessionManager : IDisposable
     // Маршруты мест каталога (локаль/слот/модель) и параметры профилей — для ветки
     // локального голосового хода (chat-voice). null — в тестах без локали.
     private readonly Llm.LocalActionRouter? _router;
-    // Прямой HTTP-клиент Ollama для локальных голосовых ходов; null — в тестах.
-    private readonly Llm.OllamaClient? _ollama;
+    // Прямой HTTP-клиент локальной LLM (Ollama или llama-server) для локальных голосовых
+    // ходов; null — в тестах.
+    private readonly Llm.ILocalLlmClient? _ollama;
     // Планировщик режима «Командная реализация» (Э2); null — режим без планирования
     private readonly TeamPlanningService? _teamPlanning;
     // Платформа внешних модулей: реестр манифестов + выпуск модульных токенов (R7)
@@ -496,7 +497,7 @@ public class SessionManager : IDisposable
         // модели — ветка локального голосового хода (chat-voice). Без них разговор
         // идёт через claude CLI как раньше.
         Llm.LocalActionRouter? router = null,
-        Llm.OllamaClient? ollama = null,
+        Llm.ILocalLlmClient? ollama = null,
         // Опционально (в тестах не передаётся): резолвер секций промпта специальности
         // (план «Секции промптов») — без него секция prompt-sections не собирается
         SpecialtySettingsStore? specialtySettings = null)
@@ -3785,7 +3786,7 @@ public class SessionManager : IDisposable
     // и привязки локальному ходу всё равно недоступны) + хвост истории. Текущая реплика
     // уже лежит в аккумуляторе (OnUserMessage общего хвоста SendDirectAsync) — отдельно
     // не добавляется, иначе продублировалась бы. GetAll() сам берёт лок аккумулятора.
-    private List<Llm.OllamaClient.ChatMsg> BuildVoiceMessages(SessionEntry entry, TurnAccumulator acc)
+    private List<Llm.ChatMsg> BuildVoiceMessages(SessionEntry entry, TurnAccumulator acc)
     {
         var system = Prompts.VoicePrompts.LocalCompanionSection;
         if (entry.Info.PersonaId is { } pid
@@ -3805,15 +3806,15 @@ public class SessionManager : IDisposable
             .TakeLast(VoiceHistoryMessages)
             .Select(m => m switch
             {
-                StoredUserMessage u => new Llm.OllamaClient.ChatMsg("user", TrimVoiceMessage(u.Text!)),
-                StoredTextMessage t => new Llm.OllamaClient.ChatMsg("assistant", TrimVoiceMessage(t.Text!)),
+                StoredUserMessage u => new Llm.ChatMsg("user", TrimVoiceMessage(u.Text!)),
+                StoredTextMessage t => new Llm.ChatMsg("assistant", TrimVoiceMessage(t.Text!)),
                 _ => null,
             })
             .Where(m => m is not null)
-            .Cast<Llm.OllamaClient.ChatMsg>()
+            .Cast<Llm.ChatMsg>()
             .ToList();
 
-        var result = new List<Llm.OllamaClient.ChatMsg>(history.Count + 1) { new("system", system) };
+        var result = new List<Llm.ChatMsg>(history.Count + 1) { new("system", system) };
         result.AddRange(history);
         return result;
     }
@@ -3850,7 +3851,7 @@ public class SessionManager : IDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         using var cts = new CancellationTokenSource();
         entry.LocalVoiceCts = cts;
-        Llm.OllamaClient.ChatTurnResult? turn = null;
+        Llm.ChatTurnResult? turn = null;
         var cancelled = false;
         // Сколько текста уже ушло в ленту потоком: по нему решается, слать ли ответ
         // целиком в конце (страховка на случай, если поток не дал ни куска)

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/usage")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
-    LlmProviderRegistry providers, LocalActionRouter localRouter, OllamaClient ollama,
+    LlmProviderRegistry providers, LocalActionRouter localRouter, ILocalLlmClient ollama,
     SubscriptionOAuthUsageService oauthUsage,
     LocalActionOverridesStore localActions, SpecialtySettingsStore specialty) : ControllerBase
 {
@@ -96,6 +96,6 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             })
             .ToList();
         return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,
-            ollama.Enabled ? ollama.BaseUrl : null, actions);
+            ollama.Enabled ? ollama.BaseUrl : null, actions, Provider: ollama.ProviderKey);
     }
 }

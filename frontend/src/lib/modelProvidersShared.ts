@@ -5,6 +5,7 @@ import { C, FONT, FS } from './design';
 import { modelLabel, providerLabel, modelProvider,
   type ProviderCapabilities, type ModelOption } from './models';
 import { effectiveTierModel as tierModelOf } from './modelTiers';
+import { localEngineLabel } from './localEngine';
 import type { OllamaUsageInfo, AppSettings, UserProfile } from '../types';
 
 // Общие константы, типы и хелперы раздела «Модели и расход» — без компонентов
@@ -194,7 +195,7 @@ export function buildProviderTiles(providers: { key: string; caps: ProviderCapab
     count: models.filter(m => (m.provider ?? modelProvider(m.value)) === p.key).length || undefined,
   }));
   const ollamaTile: ProviderTile | null = info ? {
-    name: 'Ollama',
+    name: localEngineLabel(info.provider),
     status: (info.enabled ? 'active' : 'offline') as ProviderTile['status'],
     statusLabel: info.enabled ? (info.model ? `Локальная · ${info.model}` : 'Активен') : 'Офлайн',
     count: undefined,

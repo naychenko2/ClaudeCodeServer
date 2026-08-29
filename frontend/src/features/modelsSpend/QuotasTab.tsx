@@ -18,6 +18,7 @@ import { rotationBadgeState } from '../../lib/rotation';
 import type { RotationBadgeState } from '../../lib/rotation';
 import { addDaysUtc, openSpend, plural, spendQuery, todayUtc } from '../../lib/spend';
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
+import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
@@ -642,7 +643,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
       if (key === 'claude') {
         const n = usage?.subscriptions ? Object.keys(usage.subscriptions).length : 0;
         count = n > 0 ? plural(n, 'подписка', 'подписки', 'подписок') : undefined;
-      } else if (key === 'ollama') {
+      } else if (isLocalEngineKey(key)) {
         count = 'каталог';
       } else {
         const n = models.filter(m => m.provider === key).length;

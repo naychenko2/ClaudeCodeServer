@@ -43,7 +43,10 @@ public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Pl
 // Enabled=false → раздел показывает «не настроена». Actions — весь каталог фоновых действий
 // с флагом RoutedToOllama (идёт на локаль сейчас) — прозрачно, что бесплатно, а что на claude.
 public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
-    IReadOnlyList<OllamaActionInfo> Actions);
+    IReadOnlyList<OllamaActionInfo> Actions,
+    // "ollama" | "llama-server" — какой движок сейчас активен. Имя DTO не переименовываем:
+    // контракт публичный, фронт под него правят отдельно (Kira).
+    string Provider = "ollama");
 
 // Route — исполнитель первого шага: "local", "tier:strong|medium|weak" (слот тира),
 // легаси "claude"/"default" (≙ tier:medium) или id конкретной модели провайдера (дальше

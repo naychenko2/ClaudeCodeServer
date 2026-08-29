@@ -28,14 +28,14 @@ public sealed record ActionRoute(RouteKind Kind, string? Model, RouteSource Sour
 // переключение тумблера действует сразу, без рестарта.
 public sealed class LocalActionRouter
 {
-    private readonly OllamaClient _ollama;
+    private readonly ILocalLlmClient _ollama;
     private readonly LocalActionOverridesStore _store;
     private readonly SpecialtySettingsStore? _specialty;
     private readonly Dictionary<string, bool> _overrides;
     private readonly Dictionary<CheapProfile, CheapProfileSpec> _profiles;
     private readonly ILogger<LocalActionRouter> _log;
 
-    public LocalActionRouter(OllamaClient ollama, LocalActionOverridesStore store,
+    public LocalActionRouter(ILocalLlmClient ollama, LocalActionOverridesStore store,
         IConfiguration config, ILogger<LocalActionRouter> log,
         SpecialtySettingsStore? specialty = null)
     {

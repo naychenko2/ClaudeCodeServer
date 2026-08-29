@@ -18,10 +18,11 @@ public static class SpendSources
     // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
     public static bool IsTokenless(string source) => source is Fal or Glif or Tts;
 
-    // Бесплатный исполнитель: локальная Ollama, прямой адаптер любого OpenAI-совместимого
-    // источника (провайдер заканчивается на "-direct") или модель ":free" через CLI.
+    // Бесплатный исполнитель: локальная модель (Ollama или llama-server), прямой
+    // адаптер любого OpenAI-совместимого источника (провайдер заканчивается на "-direct")
+    // или модель ":free" через CLI.
     public static bool IsFree(string provider, string? model) =>
-        provider is "ollama"
+        provider is "ollama" or "llama-server"
         || provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
         || (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase));
 

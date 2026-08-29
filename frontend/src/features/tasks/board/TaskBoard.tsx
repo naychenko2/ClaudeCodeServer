@@ -16,6 +16,7 @@ import {
   boardCardSort, boardLanes, columnColor, computeOrder, createTask, reloadTasks,
   taskColumnKey, updateTask, upsertTaskLocal, type BoardGroupBy,
 } from '../../../lib/tasks';
+import { showToast } from '../../../lib/toast';
 import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
 import { OfflineError } from '../../../lib/offline';
@@ -156,7 +157,15 @@ export function TaskBoard({
 
     // Откат drag только на реальной ошибке. При офлайне (OfflineError / выключенный
     // флаг) не откатываем — иначе карточка отлетает назад; офлайн-путь уже сохранил её.
-    void updateTask(activeTask.id, dto).catch(e => { if (!(e instanceof OfflineError)) void reloadTasks(); });
+    // Для отказа бэка (например, дефект в Done без Verification, попадание в review без
+    // Repro.steps) показываем тост с серверным текстом и перезагружаем стор — это
+    // откатит оптимистичное перемещение и вернёт карточку на место
+    void updateTask(activeTask.id, dto).catch(e => {
+      if (e instanceof OfflineError) return;
+      showToast('Не удалось переместить карточку',
+        e instanceof Error ? e.message : 'Сервер отклонил изменение', 'error');
+      void reloadTasks();
+    });
   };
 
   const grouped = groupBy !== 'none';

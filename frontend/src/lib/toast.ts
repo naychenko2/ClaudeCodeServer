@@ -1,7 +1,7 @@
 // Локальный тост (без сервера): показать краткое уведомление в том же стеке, что и
 // SignalR-уведомления. NotificationToasts слушает событие 'cc-local-toast'.
 
-export type ToastKind = 'reminder' | 'claude' | 'info';
+export type ToastKind = 'reminder' | 'claude' | 'info' | 'error';
 
 // Действие внутри тоста: одна кнопка справа от текста («Отменить», «Открыть»…).
 // Задан — NotificationToasts рендерит её отдельной строкой под body; не задан —

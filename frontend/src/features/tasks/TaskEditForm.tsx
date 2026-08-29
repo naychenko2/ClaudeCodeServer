@@ -3,7 +3,10 @@
 
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Check, FilePlus2, Plus, SquarePen, Trash2, X } from 'lucide-react';
-import type { Project, Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
+import type {
+  DefectRepro, Project, Task, TaskAssignee, TaskKind, TaskPriority, TaskRecurrence,
+  TaskRecurrenceType, TaskSubtask, TaskVerification, UpdateTaskDto,
+} from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -25,7 +28,7 @@ import { personaLabel } from '../../lib/personas';
 // модуль в основной чанк, если хоть один потребитель просит его статически.
 const NoteEditor = lazy(() => import('../notes/NoteEditor').then(m => ({ default: m.NoteEditor })));
 import { AttachPicker } from '../../components/chat/AttachPicker';
-import { Toggle, SegmentedControl, WaitingIndicator } from '../../components/ui';
+import { Toggle, SegmentedControl, TextArea, WaitingIndicator } from '../../components/ui';
 import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 
@@ -89,6 +92,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [ttlMinutes, setTtlMinutes] = useState(task.executionExpiresAfterMinutes ?? DEFAULT_EXPIRY);
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
+  // Вид карточки (волна 2 — багтрекер): обычная задача или дефект. У дефекта добавляются
+  // три поля воспроизведения (Steps обязателен, Expected/Actual опциональны). Переключение
+  // на обычную задачу прячет блоки в UI, данные Repro/Verification на бэке остаются
+  const [kind, setKind] = useState<TaskKind>(task.kind ?? 'task');
+  const [reproSteps, setReproSteps] = useState(task.repro?.steps ?? '');
+  const [reproExpected, setReproExpected] = useState(task.repro?.expected ?? '');
+  const [reproActual, setReproActual] = useState(task.repro?.actual ?? '');
+  // Текст вердикта проверки (заметка ревьюера). PersonaId бэк подставляет сам из сессии
+  // (X-Caller-Session-Id), клиент его НЕ шлёт. Храним локально, чтобы при правке
+  // остальных полей не терять ввод
+  const [verificationNotes, setVerificationNotes] = useState(task.verification?.notes ?? '');
   // Markdown-итог выполнения (прикрепляет исполнитель; тут — ручная правка пользователем)
   const [result, setResult] = useState(task.resultMarkdown ?? '');
   const [resultEditing, setResultEditing] = useState(false);
@@ -192,6 +206,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
     setAiError(null);
     try {
       const projectChanged = (task.projectId ?? null) !== projectId;
+      // Дефект: шлём весь объект Repro (три поля разом) — бэк заменяет целиком,
+      // частичный апдейт потерял бы соседние поля. Verification — только Notes
+      // (PersonaId подставляет сервер из сессии). Шлём verification всегда, если
+      // дефект — пользователь мог заполнить вердикт после починки; null не отправляем,
+      // иначе бэк очистил бы ранее выставленный вердикт при правке других полей
+      const repro: DefectRepro | null = kind === 'defect'
+        ? { steps: reproSteps, expected: reproExpected || undefined, actual: reproActual || undefined }
+        : null;
+      const verification: TaskVerification | null = kind === 'defect' && verificationNotes
+        ? { verifiedAt: new Date().toISOString(), notes: verificationNotes }
+        : null;
       await onSave({
         title: title.trim(),
         priority,
@@ -216,8 +241,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         ...(projectId ? { linkedFiles: files } : {}),
         subtasks: subtasks.filter(s => s.title.trim()),
         labels,
+        // Вид карточки: дефект или обычная задача
+        kind,
+        // Repro/Verification: только у дефекта. kind==='task' → null означает
+        // «очистить», но переключение дефекта в обычную задачу оставляет данные
+        // на бэке (см. CreateTaskDto/UpdateTaskDto — не шлём эти поля вообще при task)
+        ...(kind === 'defect' ? { repro, verification } : {}),
       });
     } catch (e) {
+      // Сообщение пробрасывается наверх — TaskDetailsPane показывает тост с серверным
+      // текстом и НЕ закрывает форму. Здесь оставляем короткую плашку-ошибку у самой
+      // формы на случай если родитель молча проглотит ошибку
       setAiError(e instanceof Error ? e.message : 'Не удалось сохранить задачу');
     } finally {
       setSaving(false);
@@ -277,12 +311,98 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             onChange={e => setTitle(e.target.value)}
             placeholder="Что нужно сделать?"
             style={{
-              width: '100%', boxSizing: 'border-box', marginBottom: 22,
+              width: '100%', boxSizing: 'border-box', marginBottom: 18,
               border: 'none', outline: 'none', background: 'transparent',
               fontFamily: FONT.serif, fontSize: isMobile ? 21 : 24, fontWeight: 500,
               color: C.textHeading, padding: 0, lineHeight: 1.3,
             }}
           />
+
+          {/* Вид карточки (задача / дефект). Переключение в «дефект» открывает блоки
+              Repro и Verification ниже; обратно в «задачу» — прячет их, данные на
+              бэке остаются. Логика та же, что у других сегментов в форме */}
+          <div style={{ marginBottom: 22 }}>
+            <SegmentedControl<TaskKind>
+              value={kind}
+              options={[
+                { value: 'task', label: 'Задача' },
+                { value: 'defect', label: 'Дефект' },
+              ]}
+              onChange={setKind}
+            />
+          </div>
+
+          {/* Шаги воспроизведения — только у дефекта. Steps обязателен по правилам
+              DefectRules (попадание в колонку Role=review), Expected/Actual — пояснения
+              автора и наблюдателя. Форма шлёт ВСЕ ТРИ поля разом (см. handleSave) */}
+          {kind === 'defect' && (
+            <div style={{ marginBottom: 22 }}>
+              <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>Шаги воспроизведения</div>
+              <TextArea
+                value={reproSteps}
+                onChange={setReproSteps}
+                placeholder={'1. Открыть раздел X\n2. Нажать Y\n3. Увидеть Z'}
+                autoGrow
+                minHeight={120}
+                maxHeight={400}
+                style={{ fontFamily: FONT.mono, fontSize: 13, marginBottom: 10 }}
+              />
+              <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>Ожидалось</div>
+              <TextArea
+                value={reproExpected}
+                onChange={setReproExpected}
+                placeholder="Что должно было произойти"
+                autoGrow
+                minHeight={64}
+                maxHeight={200}
+                style={{ marginBottom: 10 }}
+              />
+              <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>Получилось</div>
+              <TextArea
+                value={reproActual}
+                onChange={setReproActual}
+                placeholder="Что произошло на самом деле"
+                autoGrow
+                minHeight={64}
+                maxHeight={200}
+              />
+            </div>
+          )}
+
+          {/* Подтверждение проверки — только у дефекта. Здесь редактируется ТОЛЬКО
+              заметка ревьюера; PersonaId бэк подставляет сам из сессии (открывший эту
+              форму человек запишет проверку от своего имени, открывший персональный
+              чат-исполнитель — от лица персоны). Если дефект уже в Done, форма
+              разрешает правку — она снимет/перезапишет вердикт */}
+          {kind === 'defect' && (
+            <div style={{ marginBottom: 22 }}>
+              <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>
+                Вердикт проверки
+                {task.verification?.personaId && (
+                  <span style={{ marginLeft: 8, fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'none', letterSpacing: 'normal' }}>
+                    · {(() => {
+                      const p = task.personaId ? task.verification.personaId : null;
+                      return p ? 'проверено персоной' : 'проверено человеком';
+                    })()}
+                  </span>
+                )}
+              </div>
+              <TextArea
+                value={verificationNotes}
+                onChange={setVerificationNotes}
+                placeholder="Заметка ревьюера: что проверили, чем подтверждается починка"
+                autoGrow
+                minHeight={80}
+                maxHeight={240}
+              />
+              <div style={{
+                fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4,
+              }}>
+                Запись пойдёт от лица того, кто сейчас открыл форму (человек или персона-исполнитель).
+                Очистите поле, чтобы снять вердикт.
+              </div>
+            </div>
+          )}
 
           {/* Приоритет */}
           <div style={fieldLabelStyle()}>Приоритет</div>

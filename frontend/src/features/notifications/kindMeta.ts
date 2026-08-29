@@ -12,6 +12,16 @@ export const KIND_META: Record<NotificationKind, { icon: string; color: string; 
   alert: { icon: '⚠', color: C.danger, bg: C.dangerBg },
 };
 
+// Меты для локальных тостов (toast.ts). Расширены относительно NotificationKind:
+// 'error' — клиентский отказ операции (тост с текстом сервера из 400/409); рисуется
+// в той же плитке, что и системные, но с danger-цветом, чтобы оператор видел отказ
+export const TOAST_META: Record<string, { icon: string; color: string; bg: string; label: string }> = {
+  reminder: { icon: '⏰', color: C.warning, bg: C.warningBg, label: 'Напоминание' },
+  claude: { icon: '●', color: C.accent, bg: C.accentLight, label: 'AI' },
+  info: { icon: 'ℹ', color: C.info, bg: C.infoBg, label: 'Системное' },
+  error: { icon: '✕', color: C.danger, bg: C.dangerBg, label: 'Ошибка' },
+};
+
 export const KIND_LABELS: Record<string, string> = {
   reminder: 'Напоминание',
   claude: 'AI',

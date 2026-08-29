@@ -12,6 +12,7 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 import {
   PRIORITY_LABEL, STATUS_LABEL, updateTask, useTasks,
 } from '../../lib/tasks';
+import { showToast } from '../../lib/toast';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { useUserScrollGate } from '../../lib/userScrollGate';
 
@@ -114,7 +115,15 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
           return (
             <button
               key={s}
-              onClick={e => { e.stopPropagation(); void updateTask(task.id, { status: s }); }}
+              onClick={e => {
+                e.stopPropagation();
+                // Отказ бэка (например, дефект в Done без Verification) теперь не
+                // уходит молча — тост с серверным текстом, сегмент остаётся на старом статусе
+                void updateTask(task.id, { status: s }).catch(err => {
+                  showToast('Не удалось изменить статус',
+                    err instanceof Error ? err.message : 'Сервер отклонил изменение', 'error');
+                });
+              }}
               style={{
                 flex: 1, padding: '7px 2px', border: 'none', cursor: 'pointer',
                 borderRadius: R.lg - 2,
@@ -166,6 +175,9 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
                 e.stopPropagation();
                 void updateTask(task.id, {
                   subtasks: task.subtasks.map(x => x.id === s.id ? { ...x, isDone: !x.isDone } : x),
+                }).catch(err => {
+                  showToast('Не удалось изменить подзадачу',
+                    err instanceof Error ? err.message : 'Сервер отклонил изменение', 'error');
                 });
               }}
               style={{

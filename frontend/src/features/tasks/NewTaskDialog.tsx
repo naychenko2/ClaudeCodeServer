@@ -1,10 +1,14 @@
 // Диалог быстрого создания задачи: название, проект, срок, приоритет, исполнитель.
 // Остальные поля задаются позже в редактировании.
+//
+// Дефекты (волна 2): сегмент «Задача | Дефект» в шапке формы и три поля воспроизведения
+// (Steps обязателен у дефекта; Expected/Actual опциональны). Steps шлётся целиком —
+// бэк заменяет объект Repro, частичный апдейт потерял бы соседние поля (см. CreateTaskDto).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Project, Task, TaskAssignee, TaskPriority } from '../../types';
+import type { DefectRepro, Project, Task, TaskAssignee, TaskKind, TaskPriority } from '../../types';
 import { C, FONT, R } from '../../lib/design';
-import { Button, FieldLabel, Modal, TextField } from '../../components/ui';
+import { Button, Field, FieldLabel, Modal, SegmentedControl, TextArea, TextField } from '../../components/ui';
 import { api } from '../../lib/api';
 import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, createTask, projectColor } from '../../lib/tasks';
 import { PriorityFlag } from './bits';
@@ -43,6 +47,12 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
   // Какая из кнопок создаёт: 'plain' — просто создать, 'configure' — создать и настроить
   const [saving, setSaving] = useState<null | 'plain' | 'configure'>(null);
   const [error, setError] = useState<string | null>(null);
+  // Вид карточки: обычная задача или дефект. У дефекта добавляются три поля
+  // воспроизведения (Steps обязателен, Expected/Actual опциональны).
+  const [kind, setKind] = useState<TaskKind>('task');
+  const [steps, setSteps] = useState('');
+  const [expected, setExpected] = useState('');
+  const [actual, setActual] = useState('');
 
   useEffect(() => {
     api.projects.list().then(setProjects).catch(() => {});
@@ -53,8 +63,8 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
   const chipsRef = useRef<HTMLDivElement>(null);
   const orderedProjects = useMemo(() => {
     if (!defaultProjectId) return projects;
-    const def = projects.find(p => p.id === defaultProjectId);
-    return def ? [def, ...projects.filter(p => p.id !== defaultProjectId)] : projects;
+    const def = projects.find((p: Project) => p.id === defaultProjectId);
+    return def ? [def, ...projects.filter((p: Project) => p.id !== defaultProjectId)] : projects;
   }, [projects, defaultProjectId]);
 
   useEffect(() => {
@@ -63,18 +73,29 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
       ?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [projects.length]);
 
-  const canCreate = title.trim().length > 0 && !saving;
+  // Шаги обязательны только у дефекта; у обычной задачи поле дефекта не активно
+  const canCreate = title.trim().length > 0 && !saving && (kind === 'task' || steps.trim().length > 0);
 
   const handleCreate = async (configure: boolean) => {
     if (!canCreate) return;
     setSaving(configure ? 'configure' : 'plain');
     setError(null);
     try {
+      // Repro собираем только у дефекта: пустые строки в expected/actual не шлём,
+      // чтобы бэк не хранил мусорные пробелы рядом с шагами
+      const repro: DefectRepro | undefined = kind === 'defect'
+        ? {
+            steps: steps.trim(),
+            ...(expected.trim() ? { expected: expected.trim() } : {}),
+            ...(actual.trim() ? { actual: actual.trim() } : {}),
+          }
+        : undefined;
       const task = await createTask(projectId, {
         title: title.trim(), priority, assignee,
         // Персона-исполнитель имеет смысл только у Claude
         personaId: assignee === 'claude' && personaId ? personaId : undefined,
         dueDate: dueDate ?? undefined, dueTime: dueTime ?? undefined,
+        ...(kind === 'defect' ? { kind, repro } : {}),
       });
       onCreated(task, configure);
     } catch (e) {
@@ -83,11 +104,14 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
     }
   };
 
+  // Шапка модалки сразу даёт понять, открыт расширенный диалог для дефекта
+  const isDefect = kind === 'defect';
+
   return (
     <Modal
-      title="Новая задача"
+      title={isDefect ? 'Новый дефект' : 'Новая задача'}
       onClose={onClose}
-      width={480}
+      width={520}
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Отмена</Button>
@@ -100,11 +124,63 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
         </>
       }
     >
+      {/* Тип карточки: задача/дефект. Дефолт — задача, переключение раскрывает три поля ниже */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <SegmentedControl<TaskKind>
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: 'task', label: 'Задача' },
+            { value: 'defect', label: 'Дефект' },
+          ]}
+        />
+      </div>
+
       {/* Название */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <FieldLabel>Название</FieldLabel>
         <TextField value={title} onChange={setTitle} placeholder="Что нужно сделать?" autoFocus onEnter={() => handleCreate(false)} />
       </div>
+
+      {/* Поля дефекта. Steps обязателен — бэк отвергнет дефект без него в ревью-колонке,
+          UI гейтит кнопку через canCreate. Expected/Actual — пояснения автора/наблюдателя */}
+      {isDefect && (
+        <>
+          <Field
+            label="Шаги воспроизведения"
+            hint="Обязательно. Что делали, что увидели. Бэк отвергнет дефект без шагов при попадании в ревью."
+          >
+            <TextArea
+              value={steps}
+              onChange={setSteps}
+              placeholder="1. Открыть…&#10;2. Нажать…&#10;3. Видно:…"
+              autoGrow minHeight={92} maxHeight={240}
+            />
+          </Field>
+          <Field
+            label="Ожидаемо"
+            hint="Что должно было случиться. Необязательно."
+          >
+            <TextArea
+              value={expected}
+              onChange={setExpected}
+              placeholder="Какое поведение считается правильным"
+              autoGrow minHeight={64} maxHeight={200}
+            />
+          </Field>
+          <Field
+            label="Фактически"
+            hint="Что случилось вместо этого. Необязательно."
+          >
+            <TextArea
+              value={actual}
+              onChange={setActual}
+              placeholder="Чем наблюдение отличается от ожидаемого"
+              autoGrow minHeight={64} maxHeight={200}
+            />
+          </Field>
+        </>
+      )}
 
       {/* Проект */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -133,7 +209,7 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />
             {NO_PROJECT_LABEL}
           </button>
-          {orderedProjects.map(p => {
+          {orderedProjects.map((p: Project) => {
             const active = p.id === projectId;
             const color = projectColor(p.id);
             return (
@@ -174,7 +250,7 @@ export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <FieldLabel>Приоритет</FieldLabel>
         <div style={{ display: 'flex', gap: 7 }}>
-          {PRIORITY_ORDER.map(p => {
+          {PRIORITY_ORDER.map((p: TaskPriority) => {
             const active = p === priority;
             return (
               <button

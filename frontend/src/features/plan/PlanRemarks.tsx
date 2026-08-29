@@ -72,6 +72,13 @@ interface Props {
   // а не флаг — родителю нужно показать цифру в подписи (например,
   // «замечания (N) не отправятся» под второстепенной кнопкой одобрения).
   onCountChange?: (count: number) => void;
+  // Внешний запрос открыть форму замечания (кнопка «Заметка к разделу» в экране
+  // «Блок» схемы). Единственная точка создания замечания из режима «Схемой» —
+  // на мобильном Chrome долгий тап отдаёт системе контекстное меню, и ни
+  // выделение, ни маркеры у заголовков скрытого markdown-слоя там недоступны.
+  // token — монотонный маркер клика: повторный запрос к тому же разделу обязан
+  // открыть форму ещё раз, поэтому сравнивать по ссылке на объект нельзя.
+  externalRequest?: { heading: string; occurrence: number; token: number } | null;
 }
 
 const REMARK_STYLE_ID = 'cc-plan-remark-styles';
@@ -170,7 +177,7 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max);
 }
 
-export function PlanRemarks({ contentRef, planText, containerToken, status, onSubmit, onCountChange }: Props) {
+export function PlanRemarks({ contentRef, planText, containerToken, status, onSubmit, onCountChange, externalRequest }: Props) {
   const [remarks, setRemarks] = useState<PlanRemark[]>([]);
   const [form, setForm] = useState<FormAnchor | null>(null);
   const [draft, setDraft] = useState('');
@@ -292,6 +299,23 @@ export function PlanRemarks({ contentRef, planText, containerToken, status, onSu
     }
     return () => { cleanups.forEach(fn => fn()); };
   }, [headings, contentRef, status]);
+
+  // Открытие формы по внешнему запросу (схема, экран «Блок»). Позиция —
+  // условный центр: у программного якоря нет экранных координат, а на мобильном
+  // попап всё равно уходит в нижнюю простыню (см. разметку formPopup).
+  useEffect(() => {
+    if (!externalRequest || status !== 'pending') return;
+    openForm({
+      heading: externalRequest.heading,
+      occurrence: externalRequest.occurrence,
+      x: Math.round(window.innerWidth / 2),
+      y: Math.round(window.innerHeight * 0.3),
+      placement: 'center',
+    });
+    // openForm — function declaration, хоистится; token гарантирует срабатывание
+    // на каждый клик, остальные поля запроса — данные, а не сигнал
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalRequest, status]);
 
   function openForm(anchor: FormAnchor) {
     setForm(anchor);

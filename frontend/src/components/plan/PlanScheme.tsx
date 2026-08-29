@@ -23,12 +23,13 @@
 // — в schemeLogic.ts, чтобы её можно было прогнать юнит-тестами без браузера.
 
 import { useMemo, useState, type RefObject } from 'react';
-import { AlertTriangle, ArrowLeft, ArrowRight, ChevronRight, ShieldOff } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, ChevronRight, MessageSquarePlus, ShieldOff } from 'lucide-react';
 import type { PlanMap, PlanMapBlock, PlanMapGenre, PlanMapBlockType } from '../../types';
 import { useHeadings, type Heading } from '../../hooks/useHeadings';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { C, FONT, R, SP, FS } from '../../lib/design';
 import { resolveHeading, headingHasDuplicates, sliceSection } from './schemeLogic';
+import { PLAN_GENERAL_HEADING } from '../../features/plan/PlanRemarks';
 import { Button } from '../ui/Button';
 
 interface Props {
@@ -41,6 +42,12 @@ interface Props {
   // PlanRemarks у текста). Нужен для useHeadings — заголовки берём с реального DOM,
   // иначе scrollToHeading/sectionOf работали бы со «своими» узлами и промахивались.
   contentRef: RefObject<HTMLElement | null>;
+  // Запрос «оставить замечание к разделу» из экрана «Блок» — родитель передаёт в
+  // PlanRemarks (там форма). Единственная точка создания замечания из схемы: на
+  // мобильном Chrome долгий тап перехватывается системным контекстным меню, а
+  // маркеры у заголовков лежат в скрытом markdown-слое. Опционально: без обработчика
+  // кнопка не рисуется (демо в витрине UI-кита).
+  onRequestRemark?: (anchor: { heading: string; occurrence: number }) => void;
 }
 
 // Жанр → человекочитаемая подпись на «Сути»
@@ -86,7 +93,7 @@ function flagWord(n: number): string {
 
 type View = 'essence' | 'map' | 'block';
 
-export function PlanScheme({ map, planText, contentRef }: Props) {
+export function PlanScheme({ map, planText, contentRef, onRequestRemark }: Props) {
   const [view, setView] = useState<View>('essence');
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const headings = useHeadings(contentRef, planText);
@@ -165,6 +172,7 @@ export function PlanScheme({ map, planText, contentRef }: Props) {
           headings={headings}
           onBackToEssence={backToEssence}
           onBackToMap={backToMap}
+          onRequestRemark={onRequestRemark}
         />
       )}
     </div>
@@ -421,11 +429,12 @@ function MapView({ blocks, resolved, onOpenBlock }: {
 }
 
 // === Экран «Блок» ===
-function BlockView({ block, heading, section, headings, onBackToEssence, onBackToMap }: {
+function BlockView({ block, heading, section, headings, onBackToEssence, onBackToMap, onRequestRemark }: {
   block: PlanMapBlock;
   heading: Heading | null;
   section: string | null;
   headings: Heading[];
+  onRequestRemark?: (anchor: { heading: string; occurrence: number }) => void;
   onBackToEssence: () => void;
   onBackToMap: () => void;
 }) {
@@ -477,6 +486,28 @@ function BlockView({ block, heading, section, headings, onBackToEssence, onBackT
         ) : (
           <div style={{ fontSize: FS.sm, color: C.dangerText, fontFamily: FONT.sans }}>
             Раздел плана не найден — текст ниже от ближайшего совпадения по тексту заголовка.
+          </div>
+        )}
+        {/* Точка создания замечания из схемы (мобильный Chrome: долгий тап
+            отдаёт системе контекстное меню, маркеры заголовков — в скрытом
+            markdown-слое). Якорь — живой заголовок из DOM, тот же источник,
+            что у маркеров PlanRemarks, поэтому адреса замечаний не расходятся */}
+        {/* Без живого заголовка (резолв якоря не нашёл раздел в DOM) замечание
+            уходит в «Общее по плану» — то же правило, что у замечания по
+            выделению выше первого заголовка в PlanRemarks: молчаливого отказа
+            быть не должно, у шапки плана тоже есть адресат */}
+        {onRequestRemark && (
+          <div>
+            <Button
+              variant="ghostFilled"
+              size="xs"
+              leftIcon={<MessageSquarePlus size={12} strokeWidth={2.2} />}
+              onClick={() => onRequestRemark(heading
+                ? { heading: heading.text, occurrence: heading.occurrence }
+                : { heading: PLAN_GENERAL_HEADING, occurrence: 0 })}
+            >
+              Заметка к разделу
+            </Button>
           </div>
         )}
       </div>

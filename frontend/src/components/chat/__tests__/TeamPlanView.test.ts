@@ -1,12 +1,14 @@
-// Карточка плана «Командной реализации»: блок «Замысел» и ссылка на файл полного плана
-// (решение владельца 2026-08-02, docs/architecture/team-implement-mode.md).
-// Рендерим статикой через react-dom/server — как соседние TeamEscalationView.test/ToolUseView.test.
-import { describe, it, expect } from 'vitest';
+// Карточка плана «Командной реализации»: блок «Замысел», ссылка на файл полного плана
+// (решение владельца 2026-08-02, docs/architecture/team-implement-mode.md) и переключатель
+// «Текстом/Схемой» под флагом visual-plan. Рендерим статикой через react-dom/server —
+// как соседние TeamEscalationView.test/ToolUseView.test.
+import { describe, it, expect, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem, TeamPlan } from '../../../types';
 import { TeamPlanView } from '../TeamPlanView';
 import { ChatOpenFileContext } from '../contexts';
+import { setAllFlags } from '../../../lib/featureFlags';
 
 type PlanItem = Extract<ChatItem, { kind: 'team_plan' }>;
 
@@ -28,10 +30,11 @@ function card(over: Partial<TeamPlan> = {}, extra: Partial<PlanItem> = {}): Plan
   return { kind: 'team_plan', planId: 'plan1', plan: plan(over), resolved: false, approved: null, ...extra };
 }
 
-const render = (item: PlanItem, onOpenFile: ((path: string) => void) | null = () => {}) =>
+const render = (item: PlanItem, onOpenFile: ((path: string) => void) | null = () => {},
+  props: { initialSchemeView?: 'text' | 'scheme' } = {}) =>
   renderToStaticMarkup(
     createElement(ChatOpenFileContext.Provider, { value: onOpenFile },
-      createElement(TeamPlanView, { item, online: true })));
+      createElement(TeamPlanView, { item, online: true, ...props })));
 
 describe('TeamPlanView — блок «Замысел» и ссылка на полный план', () => {
   it('без intent и planFilePath — ни блока, ни ссылки нет', () => {
@@ -107,5 +110,49 @@ describe('TeamPlanView — блок «Замысел» и ссылка на по
   it('resolved/approved=false без supersededBy — по-прежнему «план отменён»', () => {
     const html = render(card({}, { resolved: true, approved: false }));
     expect(html).toContain('План отменён');
+  });
+});
+
+// Переключатель «Текстом/Схемой» (флаг visual-plan): схема детерминированная,
+// без модели и без кнопки «Собрать схему» — вид доступен сразу. Клик в статик-рендере
+// не воспроизвести, поэтому стартовый вид задаётся initialSchemeView (тот же приём,
+// что initialView у TeamPlanScheme).
+describe('TeamPlanView — переключатель «Текстом/Схемой» (флаг visual-plan)', () => {
+  afterEach(() => setAllFlags({}));
+
+  it('флаг выключен — сегмента нет, тело плана рендерится текстом', () => {
+    const html = render(card());
+    expect(html).not.toContain('Текстом');
+    expect(html).not.toContain('Схемой');
+    expect(html).toContain('Волна 1');
+  });
+
+  it('флаг включён — сегмент есть, дефолтный вид «Текстом»', () => {
+    setAllFlags({ 'visual-plan': true });
+    const html = render(card());
+    expect(html).toContain('Текстом');
+    expect(html).toContain('Схемой');
+    // Дефолт — текст: под-задачи списком по волнам, «суть» схемы не рендерится
+    expect(html).toContain('Волна 1');
+    expect(html).toContain('Эндпоинт экспорта');
+    expect(html).not.toContain('командная реализация');
+  });
+
+  it('вид «Схемой» — детерминированная схема вместо текстового тела', () => {
+    setAllFlags({ 'visual-plan': true });
+    const html = render(card(), () => {}, { initialSchemeView: 'scheme' });
+    // Крошка «Суть», жанр-пилюля и сводка планировщика — каркас схемы на месте…
+    expect(html).toContain('Суть');
+    expect(html).toContain('командная реализация');
+    expect(html).toContain('Экспорт трат в XLSX');
+    // …а текстовое тело (под-задачи списком по волнам) не рендерится
+    expect(html).not.toContain('Волна 1');
+  });
+
+  it('resolved-карточка (план запущен) — сегмента нет даже с флагом', () => {
+    setAllFlags({ 'visual-plan': true });
+    const html = render(card({}, { resolved: true, approved: true }));
+    expect(html).not.toContain('Текстом');
+    expect(html).not.toContain('Схемой');
   });
 });

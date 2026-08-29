@@ -126,6 +126,9 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   const [map, setMap] = useState<PlanMap | null>(null);
   const [schemeStatus, setSchemeStatus] = useState<'idle' | 'building' | 'ready' | 'failed'>('idle');
   const [schemeError, setSchemeError] = useState<string | null>(null);
+  // Запрос «Заметка к разделу» из экрана «Блок» схемы → PlanRemarks открывает форму.
+  // token делает каждый клик новым сигналом, даже повторный по тому же разделу
+  const [remarkRequest, setRemarkRequest] = useState<{ heading: string; occurrence: number; token: number } | null>(null);
 
   // Сброс карты при смене версии/текста плана: старая карта привязана к старому тексту
   useEffect(() => {
@@ -330,7 +333,8 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
                 }}>
                   <MarkdownContent text={plan || '_(пустой план)_'} />
                 </div>
-                <PlanScheme map={map} planText={plan} contentRef={planBodyRef} />
+                <PlanScheme map={map} planText={plan} contentRef={planBodyRef}
+                  onRequestRemark={a => setRemarkRequest({ ...a, token: Date.now() })} />
               </div>
               {overflowing && (
                 <div style={{
@@ -517,6 +521,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           status="pending"
           onSubmit={feedback => onRespond(item.requestId, false, feedback || undefined)}
           onCountChange={setRemarksCount}
+          externalRequest={remarkRequest}
         />
       )}
     </div>

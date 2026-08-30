@@ -377,6 +377,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
             onChange={setDraftPrompt}
             placeholder="Контекст проекта, правила, предпочтения…"
             minHeight={160}
+            voice
             style={{ maxHeight: 320 }}
           />
         </div>

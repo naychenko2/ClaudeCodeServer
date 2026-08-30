@@ -160,6 +160,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled, on
             onChange={setQuery}
             autoFocus={canFocus}
             placeholder={canContextSuggest ? 'Найти навык или описать задачу…' : 'Найти навык…'}
+            voice
             height={40}
             radius={R.lg}
             fontSize={13.5}

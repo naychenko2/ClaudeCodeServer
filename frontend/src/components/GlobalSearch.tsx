@@ -3,6 +3,7 @@ import type { SearchHit } from '../types';
 import { api } from '../lib/api';
 import { openNoteById } from '../features/notes/saveToNote';
 import { Modal } from './ui';
+import { VoiceMicButton } from './chat/VoiceMicButton';
 import { C, FONT, R } from '../lib/design';
 import { useListAutoFocus } from '../lib/listAutoFocus';
 
@@ -43,17 +44,20 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal width={560} title="Поиск по пространству" onClose={onClose}>
-      <input
-        autoComplete="off"
-        type="search"
-        ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-        placeholder="Заметки и задачи…"
-        style={{
-          width: '100%', boxSizing: 'border-box', padding: '10px 12px', fontSize: 15,
-          fontFamily: FONT.sans, color: C.textPrimary, background: C.bgInset,
-          border: `1px solid ${C.border}`, borderRadius: R.md, outline: 'none',
-        }}
-      />
+      <div style={{ position: 'relative' }}>
+        <input
+          autoComplete="off"
+          type="search"
+          ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+          placeholder="Заметки и задачи…"
+          style={{
+            width: '100%', boxSizing: 'border-box', padding: '10px 36px 10px 12px', fontSize: 15,
+            fontFamily: FONT.sans, color: C.textPrimary, background: C.bgInset,
+            border: `1px solid ${C.border}`, borderRadius: R.md, outline: 'none',
+          }}
+        />
+        <VoiceMicButton inputRef={inputRef} variant="suffix" />
+      </div>
       <div style={{ marginTop: 12, height: 'min(60vh, 420px)', overflowY: 'auto' }}>
         {loading && <div style={hintStyle}>Ищу…</div>}
         {empty && <div style={hintStyle}>Ничего не найдено</div>}

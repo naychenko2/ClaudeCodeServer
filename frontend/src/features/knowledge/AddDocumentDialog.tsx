@@ -70,10 +70,10 @@ export function AddDocumentDialog({ kb, onClose, onAdded }: {
       {tab === 'text' ? (
         <>
           <Field label="Название документа">
-            <TextField value={name} onChange={setName} placeholder="напр. метод-ретроспективы.md" mono autoFocus onEnter={add} />
+            <TextField value={name} onChange={setName} placeholder="напр. метод-ретроспективы.md" mono autoFocus onEnter={add} voice />
           </Field>
           <Field label="Содержимое">
-            <TextArea value={text} onChange={setText} placeholder="Вставьте текст — он проиндексируется и будет доступен поиску…" minHeight={140} />
+            <TextArea value={text} onChange={setText} placeholder="Вставьте текст — он проиндексируется и будет доступен поиску…" minHeight={140} voice />
           </Field>
         </>
       ) : (
@@ -90,7 +90,7 @@ export function AddDocumentDialog({ kb, onClose, onAdded }: {
             <input type="file" style={{ display: 'none' }} onChange={e => setFile(e.target.files?.[0] ?? null)} />
           </label>
           {file && (
-            <TextField style={{ marginTop: 8 }} value={name} onChange={setName} placeholder="Имя документа (необязательно) — по умолчанию имя файла" />
+            <TextField style={{ marginTop: 8 }} value={name} onChange={setName} placeholder="Имя документа (необязательно) — по умолчанию имя файла" voice />
           )}
         </Field>
       )}

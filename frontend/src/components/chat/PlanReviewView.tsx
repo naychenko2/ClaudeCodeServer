@@ -8,6 +8,7 @@ import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
+import { VoiceMicButton } from './VoiceMicButton';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
@@ -103,6 +104,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const feedbackRef = useRef<HTMLTextAreaElement>(null);
   // Количество неотправленных замечаний в PlanRemarks. При > 0 акцент
   // кнопок карточки меняется: согласование становится второстепенным с
   // честной подписью про потерю замечаний (задача про молча теряемые
@@ -457,20 +459,24 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs }}>
             {asstName} учтёт это и предложит новый план
           </div>
-          <textarea
-            autoComplete="off"
-            value={feedback}
-            onChange={e => setFeedback(e.target.value)}
-            autoFocus
-            placeholder="Что поправить в плане? (необязательно)"
-            rows={3}
-            style={{
-              width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
-              border: `1px solid ${C.border}`, background: C.bgWhite,
-              padding: '8px 10px', fontSize: FS.sm, color: C.textHeading,
-              fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: SP.xs,
-            }}
-          />
+          <div style={{ position: 'relative', marginBottom: SP.xs }}>
+            <textarea
+              autoComplete="off"
+              value={feedback}
+              onChange={e => setFeedback(e.target.value)}
+              autoFocus
+              placeholder="Что поправить в плане? (необязательно)"
+              rows={3}
+              ref={feedbackRef}
+              style={{
+                width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
+                border: `1px solid ${C.border}`, background: C.bgWhite,
+                padding: '8px 36px 8px 10px', fontSize: FS.sm, color: C.textHeading,
+                fontFamily: 'inherit', resize: 'none', outline: 'none',
+              }}
+            />
+            <VoiceMicButton inputRef={feedbackRef} variant="suffix" />
+          </div>
           <div style={{ display: 'flex', gap: SP.xs }}>
             <Button
               fullWidth

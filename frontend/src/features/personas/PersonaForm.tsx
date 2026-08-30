@@ -739,12 +739,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <div style={{ display: 'flex', gap: 12, flexDirection: isMobile ? 'column' : 'row' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Field label="Имя">
-                <TextField value={name} onChange={setName} placeholder="Например, Ассистент" />
+                <TextField value={name} onChange={setName} placeholder="Например, Ассистент" voice />
               </Field>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Field label="Описание" hint="Короткая подпись под именем в списке">
-                <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" />
+                <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" voice />
               </Field>
             </div>
           </div>
@@ -805,7 +805,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             ) : (
               <>
                 <TextField value={avatarPrompt} onChange={setAvatarPrompt}
-                  placeholder="Опишите внешность (необязательно): рыжий кот в очках" />
+                  placeholder="Опишите внешность (необязательно): рыжий кот в очках" voice />
                 <div>
                   <Button variant="ghostAccent" size="sm" loading={generating} disabled={generating} onClick={generateAvatar}>
                     {generating ? 'Генерирую 4 варианта…' : '✨ Сгенерировать 4 варианта'}
@@ -945,6 +945,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   placeholder={aiPopover === 'generate'
                     ? 'Например: ироничный наставник, любит метафоры'
                     : 'Например: добавить строгости'}
+                  voice
                   onEnter={() => runAiCharacter(aiPopover)} />
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <Button variant="primary" size="sm" loading={characterBusy} disabled={characterBusy}
@@ -967,6 +968,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <TextArea value={character} onChange={setCharacter}
           autoGrow
           minHeight={isMobile ? 160 : 200}
+          voice
           style={{ fontSize: 14.5, lineHeight: 1.6 }} />
         {!character && (
           <div style={{
@@ -1012,17 +1014,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             );
           })}
         </div>
-        <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" />
+        <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" voice />
       </div>
 
       {/* Слоты «Всегда»/«Никогда»: textarea «строка = пункт» */}
       <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         <Field label="Всегда" hint="Каждая строка — отдельное правило">
-          <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={88}
+          <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={88} voice
             placeholder={'Выноси вывод первым\nУточняй при неясности'} />
         </Field>
         <Field label="Никогда" hint="Каждая строка — отдельное правило">
-          <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={88}
+          <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={88} voice
             placeholder={'Не отвечай наугад\nНе хвали из вежливости'} />
         </Field>
       </div>
@@ -1030,7 +1032,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       {/* Слот «Формат ответов» */}
       <div style={{ marginTop: 18 }}>
         <Field label="Формат ответов" hint="Структура и объём типового ответа">
-          <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56}
+          <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56} voice
             placeholder="Краткий вывод, затем аргументы; списки — только где они уместны" />
         </Field>
       </div>
@@ -1045,6 +1047,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 value={example}
                 onChange={v => setSpeechExamples(prev => prev.map((p, j) => (j === i ? v : p)))}
                 placeholder="Реплика от лица персоны"
+                voice
               />
             </div>
             <button
@@ -1076,7 +1079,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <div style={{ marginTop: 18 }}>
         {instructions.trim() || instructionsOpen ? (
           <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных уровней">
-            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360}
+            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360} voice
               placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
           </Field>
         ) : (

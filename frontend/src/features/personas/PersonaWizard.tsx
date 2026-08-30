@@ -565,7 +565,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <FieldLabel>Описание</FieldLabel>
                   <TextArea
-                    value={aiPrompt} onChange={setAiPrompt} autoGrow minHeight={110}
+                    value={aiPrompt} onChange={setAiPrompt} autoGrow minHeight={110} voice
                     placeholder={'Опишите, кто это и чем будет заниматься… Например: «Личный тренер по бегу: мотивирует, составляет планы тренировок»'}
                   />
                 </div>
@@ -620,11 +620,11 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
               </Field>
               <div style={{ display: 'flex', gap: 12, flexDirection: isMobile ? 'column' : 'row' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <Field label="Имя *"><TextField value={name} onChange={setName} placeholder="Например, Ассистент" /></Field>
+                  <Field label="Имя *"><TextField value={name} onChange={setName} placeholder="Например, Ассистент" voice /></Field>
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <Field label="Описание" hint="Короткая подпись под именем в списке">
-                    <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" />
+                    <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" voice />
                   </Field>
                 </div>
               </div>
@@ -647,7 +647,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 )}
               </div>
               <TextArea value={character} onChange={setCharacter} autoGrow minHeight={isMobile ? 140 : 180}
-                placeholder={'Ты — …\nОбщаешься …'} style={{ fontSize: 14.5, lineHeight: 1.6 }} />
+                placeholder={'Ты — …\nОбщаешься …'} voice style={{ fontSize: 14.5, lineHeight: 1.6 }} />
               {aiCharError && <span style={{ fontSize: 12, color: C.dangerText }}>{aiCharError}</span>}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -663,7 +663,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     );
                   })}
                 </div>
-                <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" />
+                <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" voice />
               </div>
 
               <div>
@@ -675,21 +675,21 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 16 }}>
                     <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
                       <Field label="Всегда" hint="Каждая строка — отдельное правило">
-                        <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={80} placeholder={'Выноси вывод первым\nУточняй при неясности'} />
+                        <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={80} placeholder={'Выноси вывод первым\nУточняй при неясности'} voice />
                       </Field>
                       <Field label="Никогда" hint="Каждая строка — отдельное правило">
-                        <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={80} placeholder={'Не отвечай наугад\nНе хвали из вежливости'} />
+                        <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={80} placeholder={'Не отвечай наугад\nНе хвали из вежливости'} voice />
                       </Field>
                     </div>
                     <Field label="Формат ответов" hint="Структура и объём типового ответа">
-                      <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56} placeholder="Краткий вывод, затем аргументы" />
+                      <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56} placeholder="Краткий вывод, затем аргументы" voice />
                     </Field>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <FieldLabel>Примеры реплик</FieldLabel>
                       {speechExamples.map((ex, i) => (
                         <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <TextField value={ex} onChange={v => setSpeechExamples(prev => prev.map((p, j) => j === i ? v : p))} placeholder="Реплика от лица персоны" />
+                            <TextField value={ex} onChange={v => setSpeechExamples(prev => prev.map((p, j) => j === i ? v : p))} placeholder="Реплика от лица персоны" voice />
                           </div>
                           <button type="button" onClick={() => setSpeechExamples(prev => prev.filter((_, j) => j !== i))} aria-label="Убрать пример" style={exampleRemoveBtn}>×</button>
                         </div>
@@ -699,7 +699,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                       )}
                     </div>
                     <Field label="Инструкция" hint="Полный регламент роли (markdown) — для «тяжёлых» ролей вроде пантеона OmO">
-                      <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={100} maxHeight={320}
+                      <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={100} maxHeight={320} voice
                         placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
                     </Field>
                   </div>
@@ -759,7 +759,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
                   <Field label="Приветствие" hint="С чего персона начинает разговор">
-                    <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
+                    <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" voice />
                   </Field>
                   <Field label="Специальность" hint="Необязательно. От специальности поля моделей наследуют значения — выбрать можно и позже.">
                     <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
@@ -827,7 +827,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 )}
                 {access === 'custom' && (
                   <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
-                    <TextArea value={disallowedText} onChange={v => { setDisallowedText(v); setRightsTouched(true); }} autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
+                    <TextArea value={disallowedText} onChange={v => { setDisallowedText(v); setRightsTouched(true); }} autoGrow minHeight={56} placeholder="Bash, Edit, Write" voice />
                   </Field>
                 )}
               </div>
@@ -883,7 +883,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   <FieldLabel>Фото-аватар</FieldLabel>
                   {!canGenerateAvatar && <ImageGenNote kind="avatar" disabled />}
                   {canGenerateAvatar && <>
-                  <TextField value={avatarPrompt} onChange={setAvatarPrompt} placeholder="Опишите внешность (необязательно): рыжий кот в очках" />
+                  <TextField value={avatarPrompt} onChange={setAvatarPrompt} placeholder="Опишите внешность (необязательно): рыжий кот в очках" voice />
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <Button variant="ghostAccent" size="sm" loading={avatarGenerating} disabled={avatarGenerating} onClick={() => void generateAvatarCandidates()}>
                       {avatarGenerating ? 'Генерирую 4 варианта…' : '✨ Сгенерировать 4 варианта'}

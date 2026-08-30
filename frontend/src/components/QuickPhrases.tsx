@@ -343,6 +343,7 @@ export function QuickPhrasesDialog({ onClose }: { onClose: () => void }) {
         onChange={v => setRowText(s.id, row.id, v.slice(0, QUICK_PHRASE_MAX_LENGTH))}
         placeholder="Например: продолжай"
         autoFocus={row.id === focusRowId}
+        voice
         // Enter в списке добавляет СЛЕДУЮЩУЮ строку, а не сохраняет набор:
         // отправлять форму из любого из двух десятков полей — ловушка
         onEnter={() => addRow(s.id)}
@@ -385,6 +386,7 @@ export function QuickPhrasesDialog({ onClose }: { onClose: () => void }) {
                   onChange={v => renameSection(s.id, v.slice(0, QUICK_PHRASE_MAX_GROUP_LENGTH))}
                   placeholder="Название группы"
                   autoFocus
+                  voice
                   onEnter={() => finishRename(s.id)}
                   onBlur={() => finishRename(s.id)}
                   onEscape={() => finishRename(s.id)}

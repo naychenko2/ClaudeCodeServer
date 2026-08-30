@@ -80,6 +80,7 @@ export function CommitPromptDialog({ project, onClose }: { project: Project; onC
             ? 'Пусто — для этого проекта используется общий промпт'
             : 'Пусто — сообщения в стиле по умолчанию (Conventional Commits на русском). Опишите свои правила стиля…'}
           minHeight={180}
+          voice
           maxHeight={340}
           autoGrow
         />

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, CircleHelp, Clock, ListPlus, MessageCircleQuestion, Pause } from 'lucide-react';
 import type { ChatItem, TeamEscalationAction, TeamEscalationKind } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
@@ -8,6 +8,7 @@ import {
   TEAM_ESCALATION_REPLY_PLACEHOLDER, TEAM_ESCALATION_REPLY_HINT_DECISION,
 } from '../../lib/teamImplement';
 import { MarkdownContent } from './MarkdownContent';
+import { VoiceMicButton } from './VoiceMicButton';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Button } from '../ui/Button';
@@ -62,25 +63,30 @@ function ReplyBox({ hint, onSend, onCancel, sendLabel = 'Отправить' }: 
   sendLabel?: string;
 }) {
   const [text, setText] = useState('');
+  const textRef = useRef<HTMLTextAreaElement>(null);
   return (
     <div style={{
       borderTop: `1px dashed ${C.divider}`, paddingTop: SP.sm,
       display: 'flex', flexDirection: 'column', gap: SP.sm,
     }}>
       {hint && <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>{hint}</div>}
-      <textarea
-        autoComplete="off"
-        value={text}
-        onChange={e => setText(e.target.value)}
-        autoFocus={!!onCancel}
-        rows={2}
-        placeholder={TEAM_ESCALATION_REPLY_PLACEHOLDER}
-        style={{
-          width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
-          border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px',
-          fontSize: FS.base, color: C.textHeading, fontFamily: FONT.sans, resize: 'none', outline: 'none',
-        }}
-      />
+      <div style={{ position: 'relative' }}>
+        <textarea
+          autoComplete="off"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          autoFocus={!!onCancel}
+          rows={2}
+          ref={textRef}
+          placeholder={TEAM_ESCALATION_REPLY_PLACEHOLDER}
+          style={{
+            width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
+            border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px',
+            fontSize: FS.base, color: C.textHeading, fontFamily: FONT.sans, resize: 'none', outline: 'none',
+          }}
+        />
+        <VoiceMicButton inputRef={textRef} variant="suffix" />
+      </div>
       <div style={{ display: 'flex', gap: SP.sm }}>
         <Button size="sm" leftIcon={<Check size={14} strokeWidth={2.6} />}
           disabled={!text.trim()} onClick={() => onSend(text.trim())} style={{ flex: 1 }}>

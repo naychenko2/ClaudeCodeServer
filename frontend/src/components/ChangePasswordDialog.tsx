@@ -62,18 +62,21 @@ export function ChangePasswordDialog({ onClose }: Props) {
         onChange={setCurrent}
         placeholder="Текущий пароль"
         autoFocus
+        voice
       />
       <TextField
         type="password"
         value={next}
         onChange={setNext}
         placeholder="Новый пароль (не менее 8 символов)"
+        voice
       />
       <TextField
         type="password"
         value={confirm}
         onChange={setConfirm}
         placeholder="Подтвердите новый пароль"
+        voice
         onEnter={handleSave}
       />
     </Modal>

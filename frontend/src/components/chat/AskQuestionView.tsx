@@ -1,4 +1,4 @@
-import { useState, useContext } from 'react';
+import { useState, useContext, useRef } from 'react';
 import { Check, SquarePen, MessageCircle } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT, FS, R } from '../../lib/design';
@@ -7,6 +7,7 @@ import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { useIsMobile } from '../../lib/breakpoints';
+import { VoiceMicButton } from './VoiceMicButton';
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -42,6 +43,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   })();
   const [selected, setSelected] = useState<Record<number, string[]>>({});
   const [customText, setCustomText] = useState<Record<number, string>>({});
+  const customTextRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
   const [customOpen, setCustomOpen] = useState<Record<number, boolean>>({});
   const [activeTab, setActiveTab] = useState(0);
   if (questions.length === 0) return null;
@@ -175,18 +177,22 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               </div>
               {open && (
                 <div style={{ padding: '0 10px 10px' }}>
-                  <textarea
-                    autoComplete="off"
-                    autoFocus
-                    value={customText[qi] ?? ''}
-                    onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
-                    onKeyDown={onCustomKeyDown(qi)}
-                    onClick={e => e.stopPropagation()}
-                    disabled={disabled}
-                    placeholder="Введите свой ответ…"
-                    rows={2}
-                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
-                  />
+                  <div style={{ position: 'relative' }}>
+                    <textarea
+                      autoComplete="off"
+                      autoFocus
+                      value={customText[qi] ?? ''}
+                      onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
+                      onKeyDown={onCustomKeyDown(qi)}
+                      onClick={e => e.stopPropagation()}
+                      disabled={disabled}
+                      placeholder="Введите свой ответ…"
+                      rows={2}
+                      ref={el => { customTextRefs.current[qi] = el; }}
+                      style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
+                    />
+                    <VoiceMicButton inputRef={customTextRefs as unknown as React.RefObject<HTMLTextAreaElement | null>} variant="suffix" />
+                  </div>
                   {!isMobile && (
                     <div style={{ marginTop: 4, fontSize: FS.xs, color: C.textMuted }}>
                       Enter — {!multiQ || allAnswered ? 'ответить' : 'к следующему вопросу'}, Shift+Enter — перенос строки

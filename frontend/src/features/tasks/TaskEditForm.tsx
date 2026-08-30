@@ -347,6 +347,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 autoGrow
                 minHeight={120}
                 maxHeight={400}
+                voice
                 style={{ fontFamily: FONT.mono, fontSize: 13, marginBottom: 10 }}
               />
               <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>Ожидалось</div>
@@ -357,6 +358,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 autoGrow
                 minHeight={64}
                 maxHeight={200}
+                voice
                 style={{ marginBottom: 10 }}
               />
               <div style={{ ...fieldLabelStyle(), marginBottom: 6 }}>Получилось</div>
@@ -367,6 +369,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 autoGrow
                 minHeight={64}
                 maxHeight={200}
+                voice
               />
             </div>
           )}
@@ -396,6 +399,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 autoGrow
                 minHeight={80}
                 maxHeight={240}
+                voice
               />
               <div style={{
                 fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, marginTop: 6, lineHeight: 1.4,

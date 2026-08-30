@@ -844,10 +844,51 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         var pool = new ClaudeSubscriptionPool(config, usage);
 
         pool.WeeklyUtilization("claude-2").Should().Be(0.99);
+        // EffectiveUtilization обязана остаться ПЯТИЧАСОВОЙ (35%): именно это значение
+        // уходит наружу в UsageController и в карточку выбора фолбэка. Если кто-то позже
+        // «улучшит» её до максимума окон, бейдж «цель роутинга» начнёт мигать на 99%.
+        pool.EffectiveUtilization("claude-2").Should().Be(0.35);
         pool.IsInRotation("claude-2").Should().BeFalse();
         pool.IsInRotation("claude-3").Should().BeTrue();
         for (var i = 0; i < 20; i++)
             pool.Pick().Should().Be("claude-3");
+        // При одинаковых условиях Pick и PickForDisplay должны сходиться — иначе бейдж
+        // «цель роутинга» на экране usage противоречил бы фактической ротации чатов.
+        pool.PickForDisplay().Should().Be("claude-3");
+    }
+
+    // Семантика «значение РОВНО на пороге выводит из ротации» (сравнение >=) заявлена
+    // в шапке ClaudeSubscriptionPool и в docs/architecture/llm-providers.md. Эти Theory
+    // запирают её в коде: ниже порога → в ротации, на пороге и выше → не в ротации.
+    // Если кто-то поменяет >= на > или сдвинет дефолт — набор упадёт.
+    [Theory]
+    [InlineData(0.7999, true)]   // ниже порога 0.8 → аккаунт остаётся в ротации
+    [InlineData(0.8, false)]     // ровно на пороге → уже выведен (сравнение >=)
+    [InlineData(0.8001, false)]  // выше порога → выведен
+    public void ГраницаПятичасовогоПорога_ОпределяетВращение(double util, bool expectedInRotation)
+    {
+        var config = Config("only");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "only", util);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsInRotation("only").Should().Be(expectedInRotation);
+    }
+
+    [Theory]
+    [InlineData(0.9499, true)]   // ниже порога 0.95 → аккаунт остаётся в ротации
+    [InlineData(0.95, false)]    // ровно на пороге → уже выведен (сравнение >=)
+    [InlineData(0.9501, false)]  // выше порога → выведен
+    public void ГраницаНедельногоПорога_ОпределяетВращение(double util, bool expectedInRotation)
+    {
+        var config = Config("only");
+        var usage = new UsageService(config);
+        RecordWeekly(usage, "only", util);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsInRotation("only").Should().Be(expectedInRotation);
     }
 
     [Fact]

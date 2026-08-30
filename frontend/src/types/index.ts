@@ -1305,6 +1305,9 @@ export interface UsageResponse {
   subscriptions?: Record<string, SubscriptionUsage>;
   // Порог утилизации 5h-окна, выше которого аккаунт выведен из ротации новых чатов
   rotationThreshold?: number;
+  // Порог утилизации недельного окна (дефолт бэка 0.95) — вторая причина вывода из ротации:
+  // без него бейдж объяснял бы недельную перегрузку фразой «5ч 35% ≥ порога 80%»
+  weeklyThreshold?: number;
   // Ключ аккаунта, куда фактически ушёл бы новый чат сейчас (детерминированный выбор):
   // при отсутствии свободных пул спиллит на перегруженный — бейдж показывает это честно
   routingTarget?: string;
@@ -1382,6 +1385,9 @@ export interface SubscriptionUsage {
   // совместимость data/usage.json), пилюлю не рисуем, дефолт true неинформативен.
   supportsOpus?: boolean | null;
   supports1M?: boolean | null;
+  // Эффективная утилизация недельного окна (0..1) — вторая ось вывода из ротации наравне
+  // с utilization: аккаунт с 5ч 35% и 7д 99% пул уже не берёт (ClaudeSubscriptionPool.IsOverloaded)
+  weeklyUtilization?: number;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

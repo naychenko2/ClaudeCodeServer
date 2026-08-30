@@ -258,11 +258,26 @@ function subFreshness(sub: SubscriptionUsage, pollStatus: string | undefined, la
 
 interface SubCtx {
   rotationThreshold: number;
+  weeklyThreshold: number;
   routingTarget?: string;
   pollStatuses: Record<string, string>;
   freeAvailable: boolean;
   subs: Record<string, SubscriptionUsage>;
   usageError: boolean;
+}
+
+// Ранг тарифа по ярлыку с бэка ("Max 20×", "Max 5×", "Max", "Pro") — копия
+// ClaudeSubscriptionTier.Rank: пул срезает всё, кроме высшего тарифа набора (TopTier),
+// и без ранга карточка не может отличить резерв от рабочего аккаунта. 0 — тариф не
+// пришёл или не распознан.
+function tierRank(tier: string | null | undefined): number {
+  const t = (tier ?? '').toLowerCase().replace(/[^a-zа-я0-9]/gi, '');
+  if (!t) return 0;
+  if (t.includes('20')) return 4;
+  if (t.includes('max') && t.includes('5')) return 3;
+  if (t.includes('max')) return 2;
+  if (t.includes('pro')) return 1;
+  return 0;
 }
 
 // Пилюли шапки карточки подписки: тариф + ограничения. Третья ось наблюдаемости рядом
@@ -346,18 +361,27 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   const fresh = subFreshness(sub, pollStatus, lastSnap);
 
   const isTarget = ctx.routingTarget === key;
+  const targetSub = ctx.routingTarget ? ctx.subs[ctx.routingTarget] : undefined;
+  // Тариф ниже цели — Pick сюда не придёт (TopTier). Считаем только при ДВУХ известных
+  // тарифах: нераспознанный ярлык (rank 0) — незнание, а не «ниже», врать бейджем нельзя.
+  const ownRank = tierRank(sub.tier);
+  const targetRank = tierRank(targetSub?.tier);
+  const tierBelowTarget = !isTarget && ownRank > 0 && targetRank > 0 && ownRank < targetRank;
   const rot = rotationBadgeState({
     inRotation: sub.inRotation,
     utilization: sub.utilization,
     threshold: ctx.rotationThreshold,
+    weeklyUtilization: sub.weeklyUtilization,
+    weeklyThreshold: ctx.weeklyThreshold,
     exhausted: sub.exhausted,
     isTarget,
-    targetName: ctx.routingTarget ? (ctx.subs[ctx.routingTarget]?.name ?? ctx.routingTarget) : undefined,
+    targetName: ctx.routingTarget ? (targetSub?.name ?? ctx.routingTarget) : undefined,
     freeAvailable: ctx.freeAvailable,
     // Ограничения тарифа — третья ось: не ломают бейдж, но подмешиваются в reason
     // («, кроме ходов Opus и 1M»). Подробнее — lib/rotation.ts.
     supportsOpus: sub.supportsOpus ?? undefined,
     supports1M: sub.supports1M ?? undefined,
+    tierBelowTarget,
   });
   const series = seriesByWindow(sub.snapshots);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
@@ -373,7 +397,10 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
     hasExhausted,
     expandable: true,
     tier: sub.tier ?? null,
-    thresholdNote: `Из ротации выводит нагрузка 5-часового окна выше ${Math.round((ctx.rotationThreshold || 0.8) * 100)}%`,
+    // Оба окна: пул выводит аккаунт по любому из них (IsOverloaded), и подпись про одно
+    // только 5ч противоречила бы причине в бейдже («нагрузка 7д 99% ≥ порога 95%»)
+    thresholdNote: `Из ротации выводит нагрузка 5-часового окна выше ${Math.round((ctx.rotationThreshold || 0.8) * 100)}%`
+      + ` или недельного выше ${Math.round((ctx.weeklyThreshold || 0.95) * 100)}%`,
     freshnessDetail: fresh.detail,
     // Команда входа доступна всегда, а не только при сломанном опросе: перелогинить
     // аккаунт бывает нужно и с живым токеном (протух OAuth, сменили профиль). При
@@ -578,6 +605,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
     const subs = usage?.subscriptions ?? {};
     const subCtx: SubCtx = {
       rotationThreshold: usage?.rotationThreshold ?? 0.8,
+      weeklyThreshold: usage?.weeklyThreshold ?? 0.95,
       routingTarget: usage?.routingTarget,
       pollStatuses: usage?.pollStatuses ?? {},
       freeAvailable: Object.values(subs).some(s => s.inRotation !== false),

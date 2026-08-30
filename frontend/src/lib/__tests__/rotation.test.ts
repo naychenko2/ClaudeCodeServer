@@ -124,4 +124,92 @@ describe('rotationBadgeState', () => {
     const warn = rotationBadgeState({ inRotation: false, isTarget: false, exhausted: true, freeAvailable: true });
     expect(warn.reason).toBe('лимит исчерпан — новые чаты идут на свободные аккаунты');
   });
+
+  // Недельное окно — вторая причина вывода из ротации (ClaudeSubscriptionPool.IsOverloaded).
+  // Сценарий прода 2026-08-30: claude-2 с 5ч 35% и 7д 99% — старый бейдж объяснял вывод
+  // фразой «нагрузка 5ч 35% ≥ порога 80%», то есть прямой неправдой.
+  it('вне ротации по недельному окну — причина называет 7д, а не 5ч', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, utilization: 0.35, threshold: 0.8,
+      weeklyUtilization: 0.99, weeklyThreshold: 0.95, freeAvailable: true,
+    });
+    expect(s.tone).toBe('warn');
+    expect(s.label).toBe('Выведен из ротации');
+    expect(s.reason).toBe('нагрузка 7д 99% ≥ порога 95% — новые чаты идут на свободные аккаунты');
+  });
+
+  it('оба окна выше своих порогов — причина называет оба через «·»', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: true, utilization: 0.9, threshold: 0.8,
+      weeklyUtilization: 0.97, weeklyThreshold: 0.95,
+    });
+    expect(s.reason).toBe('свободных аккаунтов нет — нагрузка 5ч 90% ≥ порога 80% · нагрузка 7д 97% ≥ порога 95%');
+  });
+
+  it('недельное поле не пришло — причина прежняя, по пятичасовому окну', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, utilization: 0.91, threshold: 0.8, freeAvailable: true,
+    });
+    expect(s.reason).toBe('нагрузка 5ч 91% ≥ порога 80% — новые чаты идут на свободные аккаунты');
+  });
+
+  // Ни одно окно не перешло порог (расхождение снимка и предиката бэка, или аккаунт
+  // вне ротации по другой причине — протухший OAuth) — НЕ выдумываем сравнение, а
+  // говорим нейтрально. Сценарий прода 2026-08-13: аккаунт мёртв по auth, бейдж
+  // показывал «нагрузка 5ч 3% ≥ порога 80%» — оператор читал «перегруз, само пройдёт»
+  // и не шёл перелогиниваться. Честную причину (отдельный флаг authDead с бэка) сюда
+  // НЕ тащим — это отдельная задача.
+  it('вне ротации, но оба окна ниже порогов — фолбэк без выдуманных чисел', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, utilization: 0.2, threshold: 0.8,
+      weeklyUtilization: 0.3, weeklyThreshold: 0.95, freeAvailable: true,
+    });
+    expect(s.reason).toBe('аккаунт недоступен для новых чатов — новые чаты идут на свободные аккаунты');
+  });
+
+  // Сырые дроби на границе: 0.796 < 0.8 — бэк аккаунт НЕ выводит, фронт НЕ должен
+  // выдумывать «5ч 80% ≥ порога 80%». Сравнение идёт по сырым долям.
+  it('сырая доля 0.796 при пороге 0.8 — НЕ считается перегрузом по 5ч', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, utilization: 0.796, threshold: 0.8, freeAvailable: true,
+    });
+    expect(s.reason).toBe('аккаунт недоступен для новых чатов — новые чаты идут на свободные аккаунты');
+  });
+
+  // Симметрично для недельного: 0.947 < 0.95 — сравнение по сырой доле.
+  it('сырая доля 0.947 при недельном пороге 0.95 — НЕ считается перегрузом по 7д', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, weeklyUtilization: 0.947, weeklyThreshold: 0.95, freeAvailable: true,
+    });
+    expect(s.reason).toBe('аккаунт недоступен для новых чатов — новые чаты идут на свободные аккаунты');
+  });
+
+  // Ранг тарифа — четвёртая ось: TopTier срезает всё, кроме высшего тарифа набора,
+  // поэтому свободный Max 5× при живом Max 20× не получает ни одного нового чата.
+  // Тон и label не двигаем — аккаунт не выключен, он резерв.
+  it('в ротации, но тариф ниже цели — зелёный «резерв», а не «может принимать»', () => {
+    const s = rotationBadgeState({
+      inRotation: true, isTarget: false, utilization: 0.1, threshold: 0.8, tierBelowTarget: true,
+    });
+    expect(s.tone).toBe('ok');
+    expect(s.label).toBe('В ротации');
+    expect(s.reason).toBe('резерв — новые чаты идут на аккаунты старшего тарифа');
+  });
+
+  it('резерв по тарифу + без Opus — суффикс ограничений сохраняется', () => {
+    const s = rotationBadgeState({
+      inRotation: true, isTarget: false, utilization: 0.1, threshold: 0.8,
+      tierBelowTarget: true, supportsOpus: false,
+    });
+    expect(s.reason).toBe('резерв — новые чаты идут на аккаунты старшего тарифа, кроме ходов Opus');
+  });
+
+  it('тариф ниже цели, но аккаунт вне ротации — причина прежняя, про нагрузку', () => {
+    const s = rotationBadgeState({
+      inRotation: false, isTarget: false, utilization: 0.91, threshold: 0.8,
+      tierBelowTarget: true, freeAvailable: true,
+    });
+    expect(s.label).toBe('Выведен из ротации');
+    expect(s.reason).toBe('нагрузка 5ч 91% ≥ порога 80% — новые чаты идут на свободные аккаунты');
+  });
 });

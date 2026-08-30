@@ -87,8 +87,11 @@ describe('subscriptionExpandedPills', () => {
 describe('buildSubscriptionCard → expandedPills', () => {
   // Минимальный SubCtx, которого хватает buildSubscriptionCard для обеих веток
   // (с lastSnap и без). Ничего не дёргает API и не запускает хуки — чистая функция.
+  // weeklyThreshold обязателен по типу SubCtx — без него IDE краснеет (CI не ловит,
+  // tsc -b исключает __tests__). Берём дефолт бэка, как в QuotasTab.tsx.
   const ctx = {
     rotationThreshold: 0.8,
+    weeklyThreshold: 0.95,
     routingTarget: undefined,
     pollStatuses: {},
     freeAvailable: true,

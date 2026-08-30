@@ -12,6 +12,7 @@ import { QuotasTab } from './QuotasTab';
 import { SlotsTab } from './SlotsTab';
 import { ApplyTab } from './ApplyTab';
 import { ChainsTab } from './ChainsTab';
+import type { BalanceChipData } from './BalanceChip';
 
 // Раздел «Модели и расход» (редизайн v4): одна модалка с четырьмя вкладками —
 // Расход / Модели / Применение / Цепочки. Названия короткие: полоса вкладок
@@ -28,7 +29,7 @@ import { ChainsTab } from './ChainsTab';
 type TabKey = 'quotas' | 'slots' | 'apply' | 'chains';
 type Scope = 'global' | 'owner' | 'user';
 
-export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
+export function ModelsSpendModal({ balances, onClose }: { balances?: BalanceChipData[]; onClose: () => void }) {
   // Стартовая вкладка — «Расход»: с ним приходят чаще, чем с настройкой моделей.
   // Диплинки (эффект ниже) перекрывают этот дефолт после маунта.
   const [tab, setTab] = useState<TabKey>('quotas');
@@ -123,7 +124,7 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
 
         {/* Тело активной вкладки */}
         <div style={{ paddingTop: 12 }}>
-          {tab === 'quotas' && <QuotasTab onClose={onClose} />}
+          {tab === 'quotas' && <QuotasTab balances={balances} onClose={onClose} />}
           {tab === 'slots' && (
             <SlotsTab
               isAdmin={isAdmin}

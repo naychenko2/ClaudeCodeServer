@@ -24,6 +24,7 @@ import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { FreshnessSpec, PillSpec, ProviderCardData } from './ProviderCard';
 import { parseQuotaWindow, type QuotaWindowView } from './QuotaWindow';
+import { BalanceChip, type BalanceChipData } from './BalanceChip';
 
 // === Локальные хелперы (не вынесены в lib — повторяем) ===
 
@@ -432,7 +433,7 @@ function providerReadyCard(
   };
 }
 
-export function QuotasTab({ onClose }: { onClose: () => void }) {
+export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[]; onClose: () => void }) {
   const isMobile = useIsMobile();
   useModels();   // ре-рендер, когда каталог моделей догрузится (для pgrid-счётчика)
 
@@ -736,6 +737,19 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
           <Lane title="Деньги" />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
             {moneyTiles.map(d => <MoneyTile key={d.key} d={d} stale={isStale(d.asOf)} />)}
+          </div>
+        </>
+      )}
+
+      {/* Внешние сервисы — fal/glif/Yandex. Чипы приходят из виджета «Использование»
+          (там же идёт единый фетч с таймером), отдельный запрос из модалки дал бы
+          stale-данные и расхождение с главной. Если модалка открыта не из виджета,
+          блок просто не рисуется */}
+      {balances && balances.length > 0 && (
+        <>
+          <Lane title="Внешние сервисы" />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {balances.map(b => <BalanceChip key={b.key} b={b} />)}
           </div>
         </>
       )}

@@ -5,15 +5,12 @@ import { api } from '../../lib/api';
 import { C, FONT } from '../../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, worstWindow } from '../../lib/rateLimit';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../../lib/models';
+import { BalanceChip, type BalanceChipData } from '../modelsSpend/BalanceChip';
 import { ModelsSpendModal } from '../modelsSpend/ModelsSpendModal';
 import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 
 // Балансы инертны — раз в 5 минут достаточно
 const POLL_MS = 5 * 60_000;
-const LOW_BALANCE = 5;
-// Тот же «мало осталось», но в рублях: доллар и рубль на одной шкале сравнивать нельзя —
-// 5 ₽ это не «мало», это уже почти ноль
-const LOW_BALANCE_RUB = 300;
 
 // Строка окна лимита: название, время сброса, «израсходовано N%» (или «в пределах
 // нормы») + шкала. Доля всегда подписана словом расхода — голый процент рядом со
@@ -65,9 +62,7 @@ function WindowRow({ w }: { w: RateWindow }) {
 // Компактная выжимка раздела «Модели и расход»; «Подробнее» открывает полную модалку.
 export function UsageWidget() {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
-  const [balances, setBalances] = useState<Array<{
-    key: string; label: string; value: number; credits?: boolean; rub?: boolean;
-  }>>([]);
+  const [balances, setBalances] = useState<BalanceChipData[]>([]);
   const [showUsage, setShowUsage] = useState(false);
 
   useEffect(() => {
@@ -166,24 +161,7 @@ export function UsageWidget() {
       )}
       {(balances.length > 0 || limitChips.length > 0) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {balances.map(b => (
-            <div key={b.key} style={{
-              display: 'flex', alignItems: 'baseline', gap: 6, borderRadius: 10,
-              padding: '7px 11px', background: C.bgCard, border: `1px solid ${C.borderLight}`,
-            }}>
-              <span style={{
-                fontFamily: FONT.mono, fontSize: 15, fontWeight: 700,
-                color: b.value < (b.rub ? LOW_BALANCE_RUB : LOW_BALANCE) ? C.dangerText : C.textHeading,
-              }}>
-                {b.credits
-                  ? `${(Number.isInteger(b.value) ? b.value.toLocaleString('ru-RU') : b.value.toFixed(2))} кр.`
-                  : b.rub
-                    ? `${b.value.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`
-                    : `$${b.value < 1 ? b.value.toFixed(3) : b.value.toFixed(2)}`}
-              </span>
-              <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>{b.label}</span>
-            </div>
-          ))}
+          {balances.map(b => <BalanceChip key={b.key} b={b} />)}
           {limitChips.map(({ key, worst: w }) => (
             <div key={key} style={{
               display: 'flex', alignItems: 'baseline', gap: 6, borderRadius: 10,
@@ -206,7 +184,7 @@ export function UsageWidget() {
           ))}
         </div>
       )}
-      {showUsage && <ModelsSpendModal onClose={() => setShowUsage(false)} />}
+      {showUsage && <ModelsSpendModal balances={balances} onClose={() => setShowUsage(false)} />}
     </WidgetCard>
   );
 }

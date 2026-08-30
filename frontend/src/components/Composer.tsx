@@ -731,11 +731,26 @@ export function Composer({
   const hasTP = !!teamMech;
   const hasKR = !!teamImplement && !!onToggleTeamImplementAuto && !!onDisableTeamImplement;
   const hasLoop = !!workLoop?.active && !!onToggleWorkLoop;
+
   // Ширина полосы раскладки: форма правой группы + свёрнутые формы бейджей по бюджету.
   // До первого замера (stripWidth === 0) возвращаем «середину» (B / C-m), чтобы первый
   // кадр не мигнул «слова → иконки» после ResizeObserver — промах на ступень тут
   // незаметен, а двойной ререндер A→C бросается в глаза
-  const layout = pickLayout(stripWidth, hasTP, hasKR, hasLoop, !!isMobile);
+  // leftBudget — сумма ширин видимых левых кнопок + зазоры. Приоритет «сначала правые
+  // сжимаются»: пока левая держится, правая учитывает её в бюджете и сжимается раньше,
+  // чем выбросила бы левые в «⋯» (useToolbarOverflow держит их формой forceAllVisible).
+  // Лёгкий массив ключей ниже не зависит от button-нод (те создаются в JSX позже по
+  // условиям) и нужен только для счёта видимых элементов через useActionVisibility
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- стабильный порядок: до useToolbarOverflow и других условных хуков
+  const composerVis = useActionVisibility('composer', ['slash', 'loop', 'worktree']);
+  const collapsibleKeyCount = (['attach', 'slash', 'loop', 'worktree', 'discuss'] as const)
+    .filter(k => composerVis.isVisible(k)).length;
+  const leftButtonW = STRIP_BUTTON_NOMINAL[isMobile ? 'm' : 'd'];
+  const stripGap = isMobile ? 6 : 4;
+  const leftBudget = collapsibleKeyCount > 0
+    ? collapsibleKeyCount * (leftButtonW + stripGap) - stripGap
+    : 0;
+  const layout = pickLayout(stripWidth, hasTP, hasKR, hasLoop, !!isMobile, leftBudget);
   const rightForm: StripForm = layout.rightForm;
   // Подписи правой группы теряются по лестнице: усилие (с формы B), собеседник (с B2),
   // модель (только в C). Усилие компактно начиная с B — на ступень раньше собеседника
@@ -2013,6 +2028,7 @@ export function Composer({
     worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: worktreeToggleDisabled ? (worktreeActive ? `Включено · ${worktreeBranch} · идёт ход…` : 'Пока идёт ход, недоступно') : (worktreeActive ? `Включено · ${worktreeBranch}` : 'Чат в изолированном git worktree'), toggle: worktreeActive, disabled: worktreeToggleDisabled, onClick: () => { if (!worktreeToggleDisabled) void onToggleWorktree?.(); } } },
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
+  const shownCollapsible = collapsible.filter(c => composerVis.isVisible(c.key));
 
   // Пилюли активных режимов — сумма номиналов в ФАКТИЧЕСКОЙ форме (этап 2). Бейджи,
   // ушедшие в «⋯», дают 0 — кнопка «⋯» отдельно учитывается ниже (useToolbarOverflow
@@ -2027,9 +2043,9 @@ export function Composer({
   // Скрытые пользователем в ряд не встают и в подсчёте ширины не участвуют — они
   // живут пунктами меню; показанные сворачиваются по ширине, как раньше.
   // По умолчанию снаружи — «Прикрепить» и «Обсудить с командой»; скилл, цикл и
-  // отдельное дерево живут в «⋯» (у режимов и так есть пилюли состояния)
-  const composerVis = useActionVisibility('composer', ['slash', 'loop', 'worktree']);
-  const shownCollapsible = collapsible.filter(c => composerVis.isVisible(c.key));
+  // отдельное дерево живут в «⋯» (у режимов и так есть пилюли состояния).
+  // composerVis и shownCollapsible объявлены выше (перед pickLayout): они нужны
+  // бюджету правой группы, чтобы правая сжималась первой
 
   const visibleCount = useToolbarOverflow({
     stripRef,

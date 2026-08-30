@@ -59,12 +59,14 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     Tier: subscriptionPool.TierLabel(key),
                     LoginCommand: oauthUsage.LoginCommandFor(key),
                     SupportsOpus: sub.SupportsOpus,
-                    Supports1M: sub.Supports1M);
+                    Supports1M: sub.Supports1M,
+                    WeeklyUtilization: subscriptionPool.WeeklyUtilization(key));
             }
             // Фактическая цель роутинга (куда ушёл бы новый чат) — детерминированный выбор,
             // чтобы бейдж не мигал между равными аккаунтами при обновлении экрана
             return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps, ollamaInfo, pollStatuses,
-                RoutingTarget: subscriptionPool.PickForDisplay()));
+                RoutingTarget: subscriptionPool.PickForDisplay(),
+                WeeklyThreshold: subscriptionPool.WeeklyThreshold));
         }
 
         return Ok(new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo, pollStatuses));

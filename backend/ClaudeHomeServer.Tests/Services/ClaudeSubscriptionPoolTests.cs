@@ -821,4 +821,92 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.IsAuthDead("acc-a").Should().BeFalse();
         pool.IsInRotation("acc-a").Should().BeTrue("подписка вернулась в ротацию");
     }
+
+    // --- Недельное окно (seven_day) как вторая ось вывода из ротации ---
+
+    // Снимок недельного окна (allowed: сам по себе исчерпанием не считается).
+    private static void RecordWeekly(UsageService usage, string subKey, double util, string? resetsAt = null) =>
+        usage.Record("seven_day", util, "allowed", isUsingOverage: false,
+            resetsAt: resetsAt ?? DateTime.UtcNow.AddDays(2).ToString("o"), subscriptionKey: subKey);
+
+    [Fact]
+    public void НедельноеОкноВышеПорога_ВыводитИзРотации_ЧатУходитСоседу()
+    {
+        // Прод 30.08: claude-2 — five_hour 35%, но seven_day 99% → до бана рукой подать,
+        // новые чаты обязаны уходить на свободный claude-3.
+        var config = ConfigWithTiers(null, ("claude-2", "max20"), ("claude-3", "max20"));
+        var usage = new UsageService(config);
+        RecordUtil(usage, "claude-2", 0.35);
+        RecordWeekly(usage, "claude-2", 0.99);
+        RecordUtil(usage, "claude-3", 0.1);
+        RecordWeekly(usage, "claude-3", 0.2);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.WeeklyUtilization("claude-2").Should().Be(0.99);
+        pool.IsInRotation("claude-2").Should().BeFalse();
+        pool.IsInRotation("claude-3").Should().BeTrue();
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("claude-3");
+    }
+
+    [Fact]
+    public void ОбаОкнаНижеПорогов_ПоведениеПрежнее()
+    {
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "pro"));
+        var usage = new UsageService(config);
+        RecordUtil(usage, "big", 0.6);
+        RecordWeekly(usage, "big", 0.7);
+        RecordUtil(usage, "small", 0.1);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsInRotation("big").Should().BeTrue();
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("big", "тарифный приоритет не тронут");
+    }
+
+    [Fact]
+    public void ВсеВышеПорогов_ШтатныйСпилл_СТарифнымПриоритетом()
+    {
+        // healthy пуст → выбор среди всех кандидатов, высший тариф по-прежнему выигрывает.
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "pro"));
+        var usage = new UsageService(config);
+        RecordWeekly(usage, "big", 0.99);
+        RecordWeekly(usage, "small", 0.99);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsInRotation("big").Should().BeFalse();
+        pool.IsInRotation("small").Should().BeFalse();
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("big");
+    }
+
+    [Fact]
+    public void НедельноеОкно_ИстёкшийResetsAt_СчитаетсяЗаНоль()
+    {
+        var config = Config("second");
+        var usage = new UsageService(config);
+        RecordWeekly(usage, "second", 0.99, DateTime.UtcNow.AddMinutes(-5).ToString("o"));
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.WeeklyUtilization("second").Should().Be(0);
+        pool.IsInRotation("second").Should().BeTrue();
+    }
+
+    [Fact]
+    public void WeeklyThreshold_ДефолтИКонфиг()
+    {
+        new ClaudeSubscriptionPool(Config()).WeeklyThreshold.Should().Be(0.95);
+
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:WeeklyThreshold"] = "0.5",
+        };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        new ClaudeSubscriptionPool(config).WeeklyThreshold.Should().Be(0.5);
+    }
 }

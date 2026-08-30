@@ -36,7 +36,10 @@ public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Pl
     Dictionary<string, IReadOnlyList<UsageSnapshot>>? Providers = null,
     OllamaUsageInfo? Ollama = null,
     IReadOnlyDictionary<string, string>? PollStatuses = null,
-    string? RoutingTarget = null);
+    string? RoutingTarget = null,
+    // Порог утилизации недельного окна: аккаунт выводится из ротации и по нему тоже,
+    // иначе бейдж соврёт («5ч 35% ниже порога 80%», хотя сработало недельное).
+    double? WeeklyThreshold = null);
 
 // Блок «Локальная модель (Ollama)» для экрана использования. У Ollama нет лимитов/баланса
 // (локальная, бесплатная) — показываем только модель и на какие действия она заведена.
@@ -78,4 +81,7 @@ public record OllamaActionInfo(string Key, string Title, string Group, bool Rout
 // снимков (data/usage.json), где этих полей ещё не было.
 public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
     bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null,
-    string? LoginCommand = null, bool? SupportsOpus = null, bool? Supports1M = null);
+    string? LoginCommand = null, bool? SupportsOpus = null, bool? Supports1M = null,
+    // Эффективная утилизация недельного окна (истёкшее окно/нет данных = 0) — вторая ось
+    // вывода из ротации наравне с Utilization.
+    double WeeklyUtilization = 0);

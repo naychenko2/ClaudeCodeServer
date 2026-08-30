@@ -20,7 +20,12 @@ public class ClaudeSubscriptionPool
 
     // Окно лимита, по которому роутим новые чаты (короткое, самое частое ограничение).
     private const string RoutingLimitType = "five_hour";
+    // Недельное окно: копится медленно, но упёршись в него, аккаунт банится на сутки-двое.
+    private const string WeeklyLimitType = "seven_day";
     private const double DefaultSoftThreshold = 0.8;
+    // Порог недельного окна выше пятичасового: 0.8 выводил бы аккаунт из ротации почти
+    // за трое суток до сброса — недельная утилизация растёт медленно.
+    private const double DefaultWeeklyThreshold = 0.95;
 
     // Без известного времени сброса помечаем на полчаса: пятичасовое окно всё равно
     // не сбросится быстрее, а редкие пробные чаты сами продлят пометку при новом rejected.
@@ -53,6 +58,8 @@ public class ClaudeSubscriptionPool
     private readonly UsageService? _usage;
     // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
     private readonly double _softThreshold;
+    // Аккаунт с утилизацией недельного окна >= порога тоже выводится из ротации.
+    private readonly double _weeklyThreshold;
     // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / DefaultExhaustion)
     private readonly ConcurrentDictionary<string, DateTime?> _exhausted = new();
 
@@ -82,6 +89,7 @@ public class ClaudeSubscriptionPool
         _subscriptions = list.AsReadOnly();
         _usage = usage;
         _softThreshold = config.GetValue($"{Section}:SoftThreshold", DefaultSoftThreshold);
+        _weeklyThreshold = config.GetValue($"{Section}:WeeklyThreshold", DefaultWeeklyThreshold);
 
         if (usage is not null)
             RestoreFromSnapshots(usage);
@@ -148,7 +156,7 @@ public class ClaudeSubscriptionPool
         {
             // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
             // свободному мелкому; если свободных нет — выбираем среди всех кандидатов.
-            var healthy = candidates.Where(k => EffectiveUtilization(k) < _softThreshold).ToList();
+            var healthy = candidates.Where(k => !IsOverloaded(k)).ToList();
             return PickTopTier(healthy.Count > 0 ? healthy : candidates, deterministic);
         }
 
@@ -242,22 +250,39 @@ public class ClaudeSubscriptionPool
 
     /// <summary>Аккаунт «в ротации» для новых чатов.</summary>
     /// Выведен, если исчерпан (rejected/100% — жёсткое состояние, `utilization` при rejected
-    /// CLI может не прислать), помечен негодным по auth ИЛИ утилизация 5h-окна выше мягкого порога.
-    /// Зеркалит логику Pick, который исключает таких до сравнения утилизаций.
+    /// CLI может не прислать), помечен негодным по auth ИЛИ перегружен по одному из окон
+    /// (5ч выше мягкого порога либо недельное выше своего). Зеркалит логику Pick, который
+    /// исключает таких до сравнения утилизаций.
     public bool IsInRotation(string key)
-        => !IsExhausted(key) && !IsAuthDead(key) && EffectiveUtilization(key) < _softThreshold;
+        => !IsExhausted(key) && !IsAuthDead(key) && !IsOverloaded(key);
+
+    // Аккаунт перегружен хотя бы по одному окну — из ротации выводим (если есть кто свободнее).
+    // Недельное окно учитываем наравне с пятичасовым: 99% недельного означает скорый бан,
+    // хотя 5ч-окно при этом выглядит свежим.
+    private bool IsOverloaded(string key)
+        => EffectiveUtilization(key) >= _softThreshold || WeeklyUtilization(key) >= _weeklyThreshold;
 
     /// <summary>Порог утилизации 5h-окна, выше которого аккаунт считается выведенным из ротации.</summary>
     public double SoftThreshold => _softThreshold;
 
+    /// <summary>Порог утилизации недельного окна, выше которого аккаунт выводится из ротации.</summary>
+    public double WeeklyThreshold => _weeklyThreshold;
+
     /// <summary>Утилизация 5-часового окна аккаунта (0..1) по последнему снимку usage.</summary>
     /// Окно с истёкшим ResetsAt считаем сброшенным (0%), нет данных — тоже 0% (свежий аккаунт).
-    public double EffectiveUtilization(string key)
+    public double EffectiveUtilization(string key) => UtilizationOf(key, RoutingLimitType);
+
+    /// <summary>Утилизация недельного окна аккаунта (0..1) по последнему снимку usage.</summary>
+    public double WeeklyUtilization(string key) => UtilizationOf(key, WeeklyLimitType);
+
+    // Общая часть чтения снимка по конкретному окну: последний снимок, истёкший ResetsAt → 0,
+    // отсутствие данных/утилизации → 0.
+    private double UtilizationOf(string key, string limitType)
     {
         if (_usage is null) return 0;
         if (!_usage.GetAllBySubscription().TryGetValue(key, out var snapshots)) return 0;
 
-        var last = snapshots.LastOrDefault(s => s.LimitType == RoutingLimitType);
+        var last = snapshots.LastOrDefault(s => s.LimitType == limitType);
         if (last is null) return 0;
 
         if (DateTime.TryParse(last.ResetsAt, CultureInfo.InvariantCulture,

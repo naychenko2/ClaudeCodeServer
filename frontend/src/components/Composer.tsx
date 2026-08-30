@@ -7,6 +7,10 @@ import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
+import {
+  pickLayout, STRIP_BUTTON_NOMINAL, STRIP_LEFT_NOMINAL, STRIP_MENU_NOMINAL,
+  STRIP_PILL_NOMINAL, STRIP_RIGHT_MAX, type StripForm,
+} from '../lib/composerStrip';
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { ComposerModelPicker } from './ComposerModelPicker';
 import { USAGE } from '../lib/models';
@@ -171,163 +175,10 @@ export interface ComposerProps {
   auroraColorHex?: string;
 }
 
-// Номиналы блоков полосы (десктоп / мобила, px, «с учётом зазора»). Этап 1
-// composer-strip-priority: правый блок и бейджи больше не измеряются через offsetWidth,
-// useToolbarOverflow получает готовые числа. Источник — docs/mockups/composer-strip-priority.html.
-// Этап 2 composer-strip-priority: форма правой группы и форма каждого бейджа выбираются
-// по бюджету лестницы ступеней — здесь лежат все варианты, pickLayout выбирает нужные по
-// ширине полосы. Изменение внешнего вида пилюль или формы правой группы правит ТАМ и
-// здесь парой, иначе бюджет разойдётся с фактом.
-const STRIP_LEFT_NOMINAL = { d: 112, m: 48 } as const;
-const STRIP_MENU_NOMINAL = { d: 38, m: 46 } as const;
-const STRIP_BUTTON_NOMINAL = { d: 36, m: 42 } as const;
-// Горизонтальный padding полосы (используется в бюджете). Десктоп берёт gap через
-// фиксированные `gap`, мобил — `2px` padding с обеих сторон по макету
-const STRIP_PADX = { d: 16, m: 4 } as const;
-const STRIP_GAP = { d: 4, m: 6 } as const;
-// Форма правой группы. «B» теперь реальный промежуточный шаг (собеседник иконкой при
-// полных подписях модели и усилия), не «резерв на будущее».
-//
-// Номиналы подняты до реалистичных потолков (таблица в docs/mockups/composer-strip-priority.md,
-// строки 61–66) — старые значения были занижены (524/364/244 vs реалистичные 534/384/293),
-// и длинное имя модели или роли персоны при старых номиналах выпирало бы за край полосы
-// после снятия overflow:hidden. C уже был верен.
-//
-// Параллельный объект STRIP_RIGHT_MAX задаёт MAX-ширины каждого ребёнка правой группы по
-// форме — пикеры и собеседник получают их пропами (ComposerMenu.maxTriggerWidth и
-// CompanionSelector.maxLabelWidth). Замок заморозки модели (16 px) и зазоры внутри
-// правой группы ВКЛЮЧЕНЫ в номинал — иначе сумма разъехалась бы с фактом и вернулась
-// старая петля, на этот раз с правой группой.
-const STRIP_RIGHT_NOMINAL = {
-  'A-wide': 534,           // всё словами, собеседник до 270 px (реалистичный потолок длинной роли + замок)
-  'A': 384,                // всё словами, собеседник короткий (≤140 px)
-  'B': 293,                // собеседник иконкой, модель+усилие словами
-  'C': { d: 160, m: 164 }, // всё иконками (мобильный номинал чуть больше за тач-цели)
-} as const;
-// MAX-ширины по форме. Источник — арифметика из той же таблицы:
-//   A-wide: модель 120 + усилие 120 + собеседник 270 + зазор 3×4 + замок 16 = 538 →
-//     номинал 534 удерживаем сужением зазора между собеседником и замком до ~0
-//     (marginLeft:auto прижимает группу к правому краю, зазора там нет).
-//   A: модель 110 + усилие 110 + собеседник 140 + зазор 2×4 + замок 16 = 384.
-//   B: модель 110 + усилие 110 + собеседник compact 49 + зазор 2×4 + замок 16 = 293.
-//   C: без maxWidth — пикеры и собеседник уже compact, их ширины фиксированы
-//     номиналами STRIP_PILL_NOMINAL через ModePill и собственный compactStyle.
-// Здесь лежит ТОЛЬКО правая группа — чтобы pickLayout выше не дублировал арифметику.
-// Изменил число — обнови Spec.таблицу и эту константу парой, иначе расчёт разойдётся с фактом.
-const STRIP_RIGHT_MAX = {
-  'A-wide': { model: 120, effort: 120, companionLabel: 270 },
-  'A':      { model: 110, effort: 110, companionLabel: 140 },
-  'B':      { model: 110, effort: 110, companionLabel: null /* собеседник compact */ },
-  'C':      { model: null, effort: null, companionLabel: null /* всё compact */ },
-} as const;
-// Ширины пилюль состояния. teamPill теперь имеет «полную» и «компактную» формы (компактная
-// — пилюля без имени, этап 2), teamImplementBadge — «полную» и «без чипа Авто»,
-// loopPill — только полную (в компактную не сворачивается, она уезжает сразу в «⋯»).
-// Алгоритм бюджета считает от максимума active-форм.
-const STRIP_PILL_NOMINAL = {
-  teamPill:           { full: { d: 150, m: 54 }, compact: { d: 130, m: 72 } },
-  teamImplementBadge: { full: { d: 180, m: 118 }, noauto: { d: 160, m: 118 } },
-  loopPill:           { d: 155, m: 62 },
-} as const;
-
-// Лестница ступеней полосы контролов (этап 2 composer-strip-priority). Единственный вход —
-// `stripWidth` плюс три дискретных флага активных бейджей; DOM не измеряется нигде, чтобы
-// ширина правой группы не зависела от собственного результата (иначе вернётся петля из
-// этапа 1). Шаг 1: перебираем форму правой группы A-wide → A → B → C, берём первую, при
-// которой все активные бейджи в полной форме + левый блок + «⋯» (если в нём что-то есть)
-// влезают. Шаг 2: если при C всё равно не влезает — понижаем бейджи по рангу снизу вверх
-// (имя пилюли механики → чип «Авто» → цикл в «⋯» → КР в «⋯»), форма C остаётся.
-// Пилюля механики остаётся всегда — ниже ранга 1 деградации нет
-type StripLayout = {
-  rightForm: 'A-wide' | 'A' | 'B' | 'C';
-  rightWidth: number;
-  compactTeamPill: boolean;
-  autoChipVisible: boolean;
-  loopInMenu: boolean;
-  krInMenu: boolean;
-};
-function pickLayout(
-  stripWidth: number,
-  hasTP: boolean,
-  hasKR: boolean,
-  hasLoop: boolean,
-  isMobile: boolean,
-): StripLayout {
-  const dKey = isMobile ? 'm' : 'd';
-  // Номинал правой группы в текущей форме (для C — мобильный или десктопный отдельно)
-  const rightW = (form: 'A-wide' | 'A' | 'B' | 'C') =>
-    form === 'C' ? STRIP_RIGHT_NOMINAL.C[dKey] : STRIP_RIGHT_NOMINAL[form];
-  // Бейдж в текущей форме. Активный бейдж, для которого не указана форма, даёт максимум
-  // («полную»), чтобы вписать худший случай — короткие имена (КС) не вылезали бы
-  // неожиданно за бюджет
-  const tpW = (compact: boolean) => STRIP_PILL_NOMINAL.teamPill[compact ? 'compact' : 'full'][dKey];
-  const krW = (noAuto: boolean) => STRIP_PILL_NOMINAL.teamImplementBadge[noAuto ? 'noauto' : 'full'][dKey];
-  const lpW = () => STRIP_PILL_NOMINAL.loopPill[dKey];
-  // Левый блок + зазоры по обе стороны + правый блок = «несжимаемый бюджет» полосы без
-  // учёта бейджей. Меню и его зазор добавляются только если в «⋯» реально что-то уехало
-  const baseW = STRIP_LEFT_NOMINAL[dKey] + STRIP_PADX[dKey] + STRIP_GAP[dKey] * 2;
-  const menuW = STRIP_MENU_NOMINAL[dKey] + STRIP_GAP[dKey];
-  // Шаг 1 — выбор формы правой группы. До замера (0) сразу даём «середину»: B на
-  // десктопе, C на мобиле. Промах на ступень незаметен, мигание A→C бросается в глаза
-  if (stripWidth === 0) {
-    return isMobile
-      ? { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: hasTP, autoChipVisible: hasKR,
-          loopInMenu: hasLoop, krInMenu: hasKR }
-      : { rightForm: 'B', rightWidth: rightW('B'), compactTeamPill: false, autoChipVisible: true,
-          loopInMenu: false, krInMenu: false };
-  }
-  // На ступенях жертв правая группа остаётся C, а бейджи теряют по одному рангу снизу.
-  // Самый «толстый» сценарий — все три бейджа в полной форме без меню, он задаёт верхнюю
-  // границу для выбора правой группы
-  const candidates: Array<'A-wide' | 'A' | 'B' | 'C'> = isMobile
-    ? ['C']
-    : ['A-wide', 'A', 'B', 'C'];
-  for (const f of candidates) {
-    // Меню нужно, только если в нём уже сейчас будет хотя бы один бейдж. На шаге 1 это
-    // означает «найдётся форма, в которой один из ушедших бейджей не нужен» — но мы ещё
-    // не знаем, какой. Считаем «полную», как если бы всё влезло в полосу: меню не
-    // резервируем, потому что первый кадр оно не нужно, иначе пустая кнопка «⋯»
-    // съедала бы себе драгоценное место
-    const w = baseW + rightW(f) + (hasTP ? tpW(false) : 0) + (hasKR ? krW(false) : 0) + (hasLoop ? lpW() : 0);
-    if (w <= stripWidth) return { rightForm: f, rightWidth: rightW(f),
-      compactTeamPill: false, autoChipVisible: true, loopInMenu: false, krInMenu: false };
-  }
-  // Шаг 2 — ни одна форма правой группы не вместила всё в полной форме. Понижаем бейджи
-  // по рангу снизу вверх. На каждой ступени считаем, помещается ли её бюджет: так
-  // получаем ОДНУ первую «самую щедрую» ступень, которая влезает
-  const ladder: Array<StripLayout> = [
-    // 1) имя в пилюле механики → компактная
-    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: true, loopInMenu: false, krInMenu: false },
-    // 2) чип «Авто» уезжает (переключатель переезжает в поповер)
-    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: false, loopInMenu: false, krInMenu: false },
-    // 3) пилюля цикла → в «⋯» (появляется кнопка «⋯» — резервируем её ширину)
-    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: false, loopInMenu: true, krInMenu: false },
-    // 4) бейдж КР → в «⋯» (предел; пилюля механики остаётся всегда)
-    { rightForm: 'C', rightWidth: rightW('C'), compactTeamPill: true, autoChipVisible: false, loopInMenu: true, krInMenu: true },
-  ];
-  for (const step of ladder) {
-    // Только те ступени, которые реально что-то меняют для активных бейджей, имеют смысл
-    // (например, autoChipVisible=false ничего не даёт, если hasKR=false)
-    if (!hasTP && step.compactTeamPill) continue;
-    if (!hasKR && !step.autoChipVisible) continue;
-    if (!hasKR && step.krInMenu) continue;
-    if (!hasLoop && step.loopInMenu) continue;
-    // На ступенях с ушедшими бейджами «⋯» появляется → учитываем menuW. Ступень 2 (без
-    // авто) — бейдж КР ещё на полосе, меню не нужно. Ступени 3-4 — нужен «⋯»
-    const needMenu = step.loopInMenu || step.krInMenu;
-    const w = baseW + step.rightWidth + menuW * (needMenu ? 1 : 0)
-      + (hasTP ? tpW(step.compactTeamPill) : 0)
-      + (hasKR && !step.krInMenu ? krW(!step.autoChipVisible) : 0)
-      + (hasLoop && !step.loopInMenu ? lpW() : 0);
-    // Может, полоса настолько узкая, что и предельная ступень не влезает — на мобильных
-    // номиналах ниже 360 не проектируем, оставляем как есть (визуальный оверфлоу
-    // невозможен, см. таблицу проверки в спеке)
-    if (w <= stripWidth || step === ladder[ladder.length - 1]) return step;
-  }
-  // Если hasTP+hasKR+hasLoop === false, лестница даст предельную ступень выше; в этом
-  // месте код недостижим, но TS требует возврат
-  return ladder[ladder.length - 1];
-}
+// Раскладка полосы контролов — номиналы блоков и лестница ступеней живут в
+// lib/composerStrip (чистый модуль под юнит-тестом). Порядок деградации подписей
+// правой группы: усилие → собеседник → модель. Изменение внешнего вида пилюль или
+// формы правой группы правится ТАМ и в макете парой (см. lib/composerStrip).
 
 // Гасим нативный touch-callout / контекстное меню на иконочных кнопках: на планшете
 // long-press по SVG-иконке внутри кнопки иначе вызывает меню браузера
@@ -885,7 +736,10 @@ export function Composer({
   // кадр не мигнул «слова → иконки» после ResizeObserver — промах на ступень тут
   // незаметен, а двойной ререндер A→C бросается в глаза
   const layout = pickLayout(stripWidth, hasTP, hasKR, hasLoop, !!isMobile);
-  const rightForm: 'A-wide' | 'A' | 'B' | 'C' = layout.rightForm;
+  const rightForm: StripForm = layout.rightForm;
+  // Подписи правой группы теряются по лестнице: усилие (с формы B), собеседник (с B2),
+  // модель (только в C). Усилие компактно начиная с B — на ступень раньше собеседника
+  const effortCompact = rightForm === 'B' || rightForm === 'B2' || rightForm === 'C';
   const compactStrip = rightForm === 'C';
   const widePickers = rightForm === 'A-wide';
   const rightWidth = layout.rightWidth;
@@ -894,7 +748,7 @@ export function Composer({
   const loopInMenu = layout.loopInMenu;
   const krInMenu = layout.krInMenu;
   // Модель и усилие получают maxTriggerWidth по форме правой группы (выводится из таблицы
-  // номиналов — STRIP_RIGHT_MAX, см. комментарий выше). B/C-форма у собеседника — компактная,
+  // номиналов — STRIP_RIGHT_MAX, см. lib/composerStrip). B2/C-форма у собеседника — компактная,
   // companionLabel=null передаём чтобы CompanionSelector не пытался выставить maxWidth на
   // короткой форме (там собственный compactStyle)
   const rightMax = STRIP_RIGHT_MAX[rightForm];
@@ -2136,13 +1990,13 @@ export function Composer({
       isMobile={isMobile}
       wide={widePickers}
       compact={compactStrip}
-      // Этап 2 форма B: модель+усилие с подписями, собеседник иконкой. compact=false —
-      // обычный стиль без подписи у собеседника, compactCompanion=true — схлопнуть
-      // только триггер собеседника. Используется при промежуточной форме B (нет в
-      // широкой, есть при узкой — собеседник иконкой экономит место)
-      compactCompanion={rightForm === 'B'}
+      // Лестница деградации: собеседник теряет подпись вторым — после усилия.
+      // B: усилие уже иконкой, собеседник ещё с подписью; с B2 собеседник тоже
+      // иконкой. compact=false — обычный стиль без подписи у собеседника,
+      // compactCompanion=true — схлопнуть только триггер собеседника
+      compactCompanion={rightForm === 'B2'}
       // Потолок ширины подписи собеседника по форме (выводится из STRIP_RIGHT_MAX):
-      // A-wide=270, A=140, B/C=null (собеседник компактный, отдельный compactStyle)
+      // A-wide=270, A/B=140, B2/C=null (собеседник компактный, отдельный compactStyle)
       maxLabelWidth={rightMax.companionLabel ?? undefined}
       onCreateGroup={onCreateGroup}
     />
@@ -2568,7 +2422,7 @@ export function Composer({
             />
           )}
           {onEffortChange && (
-            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={compactStrip} maxTriggerWidth={rightMax.effort ?? undefined} />
+            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={effortCompact} maxTriggerWidth={rightMax.effort ?? undefined} />
           )}
           {companionSelector}
         </div>

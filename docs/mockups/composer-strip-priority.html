@@ -326,7 +326,7 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
   <p class="note">
     Ползунок меняет ширину полосы (320…1100 px). Ступень считается по бюджету:
     <code>free = ширина − padX − левый блок − «⋯» − зазоры</code>; перебираем форму правой группы
-    <code>A-wide → A → B → C</code>, берём первую, при которой активные бейджи влезают целиком;
+    <code>A-wide → A → B → B2 → C</code>, берём первую, при которой активные бейджи влезают целиком;
     если и при <code>C</code> не влезают — понижаем бейджи по рангу снизу вверх
     (имя пилюли механики → чип «Авто» → цикл в «⋯» → бейдж КР в «⋯»). Пилюля механики остаётся всегда.
     Порядок бейджей исправлен: <code>[пилюля механики][бейдж КР][цикл]</code> — обрезка справа больше не съедает самое важное.
@@ -347,9 +347,11 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
 
   <h2 class="sec">Ступени правой группы</h2>
   <p class="note">
-    Форма правой группы выбирается по бюджету, а не по порогам 640/900. Порядок жертв внутри неё:
-    подпись собеседника → подписи модели и усилия (парой — на дефолте «Усилие» это имя контрола,
-    ноль информации за 100 px). Номиналы: A-wide 524 · A 364 · B 244 · C 160.
+    Форма правой группы выбирается по бюджету, а не по порогам 640/900. Порядок жертв подписей
+    внутри неё — по важности для человека: усилие первым (на дефолте «Усилие» — имя контрола,
+    ноль информации за 100 px), собеседник вторым (кто ведёт чат важнее уровня рассуждения),
+    модель последней (имя модели держится до предела). Номиналы: A-wide 534 · A 384 · B 313 ·
+    B2 222 · C 160.
   </p>
   <div id="formsGrid"></div>
 
@@ -610,15 +612,17 @@ function loopHTML(form) { // пилюля цикла: full | null (в меню)
 function rightHTML(form) {
   const modelFull = `<button class="pick" title="Модель">${ICON('cpu',12)}Sonnet 4.5${ICON('chev',11)}</button>`;
   const effortFull = `<button class="pick" title="Усилие">${ICON('gauge',12)}Усилие${ICON('chev',11)}</button>`;
-  const compWide = `<button class="pick" title="Собеседник" style="max-width:360px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">UI/UX-дизайнер и исследователь (Майя)</span>${ICON('chev',11)}</button>`;
-  const compA = `<button class="pick" title="Собеседник" style="max-width:200px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">Дизайнер (Майя)</span>${ICON('chev',11)}</button>`;
+  const compWide = `<button class="pick" title="Собеседник" style="max-width:270px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">UI/UX-дизайнер и исследователь (Майя)</span>${ICON('chev',11)}</button>`;
+  const compA = `<button class="pick" title="Собеседник" style="max-width:140px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">Дизайнер (Майя)</span>${ICON('chev',11)}</button>`;
   const compIcon = `<button class="pick icononly" title="Собеседник: Дизайнер (Майя)"><span class="avatar" style="margin:0">М</span></button>`;
   const modelIcon = `<button class="pick icononly" title="Модель: Sonnet 4.5">${ICON('cpu')}</button>`;
   const effortIcon = `<button class="pick icononly" title="Усилие: среднее">${ICON('gauge')}</button>`;
+  // Жертвы подписей: усилие первым (B), собеседник вторым (B2), модель последней (C)
   switch (form) {
     case 'A-wide': return `<div class="s-right">${modelFull}${effortFull}${compWide}</div>`;
     case 'A':      return `<div class="s-right">${modelFull}${effortFull}${compA}</div>`;
-    case 'B':      return `<div class="s-right">${modelFull}${effortFull}${compIcon}</div>`;
+    case 'B':      return `<div class="s-right">${modelFull}${effortIcon}${compA}</div>`;
+    case 'B2':     return `<div class="s-right">${modelFull}${effortIcon}${compIcon}</div>`;
     default:       return `<div class="s-right">${modelIcon}${effortIcon}${compIcon}</div>`;
   }
 }
@@ -637,7 +641,7 @@ function stripHTML(step, active) {
 
 // ===== Алгоритм ступеней (номиналы «с зазором», десктоп) =====
 const PADX = 16, LEFT = 112, MENU = 38, GAPS = 12;
-const RW = { 'A-wide': 524, 'A': 364, 'B': 244, 'C': 160 };
+const RW = { 'A-wide': 534, 'A': 384, 'B': 313, 'B2': 222, 'C': 160 };
 const TPW = { full: 150, compact: 130 };
 const KRW = { full: 180, noauto: 160, menu: 0 };
 const LPW = { full: 155, menu: 0 };
@@ -646,12 +650,13 @@ const LPW = { full: 155, menu: 0 };
 const STEPS = [
   { right: 'A-wide', tp: 'full',    kr: 'full',   loop: 'full', lost: [] },
   { right: 'A',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['длинная подпись собеседника'] },
-  { right: 'B',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись собеседника'] },
-  { right: 'C',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись собеседника', 'подписи модели и усилия'] },
-  { right: 'C',      tp: 'compact', kr: 'full',   loop: 'full', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики'] },
-  { right: 'C',      tp: 'compact', kr: 'noauto', loop: 'full', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики', 'чип «Авто»'] },
-  { right: 'C',      tp: 'compact', kr: 'noauto', loop: 'menu', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики', 'чип «Авто»', 'пилюля цикла → «⋯»'] },
-  { right: 'C',      tp: 'compact', kr: 'menu',   loop: 'menu', lost: ['подпись собеседника', 'подписи модели и усилия', 'имя в пилюле механики', 'чип «Авто»', 'пилюля цикла → «⋯»', 'бейдж КР → «⋯»'] },
+  { right: 'B',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись усилия'] },
+  { right: 'B2',     tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись усилия', 'подпись собеседника'] },
+  { right: 'C',      tp: 'full',    kr: 'full',   loop: 'full', lost: ['подпись усилия', 'подпись собеседника', 'подпись модели'] },
+  { right: 'C',      tp: 'compact', kr: 'full',   loop: 'full', lost: ['подпись усилия', 'подпись собеседника', 'подпись модели', 'имя в пилюле механики'] },
+  { right: 'C',      tp: 'compact', kr: 'noauto', loop: 'full', lost: ['подпись усилия', 'подпись собеседника', 'подпись модели', 'имя в пилюле механики', 'чип «Авто»'] },
+  { right: 'C',      tp: 'compact', kr: 'noauto', loop: 'menu', lost: ['подпись усилия', 'подпись собеседника', 'подпись модели', 'имя в пилюле механики', 'чип «Авто»', 'пилюля цикла → «⋯»'] },
+  { right: 'C',      tp: 'compact', kr: 'menu',   loop: 'menu', lost: ['подпись усилия', 'подпись собеседника', 'подпись модели', 'имя в пилюле механики', 'чип «Авто»', 'пилюля цикла → «⋯»', 'бейдж КР → «⋯»'] },
 ];
 
 function stepWidth(step, active) {
@@ -705,10 +710,11 @@ function renderLive() {
 // ===== Статичные секции =====
 function renderForms() {
   const forms = [
-    ['A-wide', 'Всё словами, собеседник до 360 px — 524', 'Ничего не свёрнуто'],
-    ['A', 'Собеседник с короткой подписью (до 200 px) — 364', 'Свёрнуто: длинная подпись собеседника'],
-    ['B', 'Собеседник иконкой — 244', 'Свёрнуто: подпись собеседника'],
-    ['C', 'Всё иконками — 160/164', 'Свёрнуто: подпись собеседника, подписи модели и усилия'],
+    ['A-wide', 'Всё словами, собеседник до 270 px — 534', 'Ничего не свёрнуто'],
+    ['A', 'Собеседник с короткой подписью (до 140 px) — 384', 'Свёрнуто: длинная подпись собеседника'],
+    ['B', 'Усилие иконкой, модель и собеседник словами — 313', 'Свёрнуто: подпись усилия'],
+    ['B2', 'Усилие и собеседник иконками, модель словом — 222', 'Свёрнуто: подписи усилия и собеседника'],
+    ['C', 'Всё иконками — 160/164', 'Свёрнуто: подписи усилия, собеседника и модели'],
   ];
   document.getElementById('formsGrid').innerHTML = forms.map(([f, sub, lost]) => `
     <div class="card">
@@ -725,7 +731,7 @@ function renderLadder() {
     '3. Пилюля цикла уехала в «⋯»',
     '4. Бейдж КР уехал в «⋯» — предел',
   ];
-  const steps = [STEPS[3], STEPS[4], STEPS[5], STEPS[6], STEPS[7]];
+  const steps = [STEPS[4], STEPS[5], STEPS[6], STEPS[7], STEPS[8]];
   const all = { tp: true, kr: true, loop: true };
   let html = steps.map((s, i) => `
     <div class="card">

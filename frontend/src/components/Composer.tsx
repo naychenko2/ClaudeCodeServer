@@ -2045,6 +2045,11 @@ export function Composer({
     itemWidth: STRIP_BUTTON_NOMINAL[isMobile ? 'm' : 'd'],
     gap: isMobile ? 6 : 4,
     menuWidth: STRIP_MENU_NOMINAL[isMobile ? 'm' : 'd'],
+    // Приоритет «сначала сжатие правых»: пока правая группа ещё держит подписи (форма
+    // A-wide/A/B/B2) — левая полоса остаётся в ряду целиком, а правая группа сама
+    // сжимается по собственной лестнице. Только когда правая ушла в полностью иконочную
+    // форму C — левые начинают уезжать в «⋯» по обычному бюджету
+    forceAllVisible: rightForm !== 'C',
   });
   // Запасной клапан переполнения badgesRef отключён (этап 2): раньше он ловил обрезку
   // через overflow:hidden на самом блоке (scrollWidth > clientWidth). После снятия

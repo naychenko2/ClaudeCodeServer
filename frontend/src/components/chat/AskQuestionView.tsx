@@ -191,7 +191,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                       ref={el => { customTextRefs.current[qi] = el; }}
                       style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
                     />
-                    <VoiceMicButton inputRef={customTextRefs as unknown as React.RefObject<HTMLTextAreaElement | null>} variant="suffix" />
+                    <VoiceMicButton inputGetter={() => customTextRefs.current[qi]} variant="suffix" />
                   </div>
                   {!isMobile && (
                     <div style={{ marginTop: 4, fontSize: FS.xs, color: C.textMuted }}>

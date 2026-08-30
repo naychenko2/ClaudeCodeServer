@@ -67,36 +67,17 @@ export function isTeamWavePulseStale(
   return now - ts > staleMs;
 }
 
-// Сколько минут прошло с момента активности штаба (по серверным секундам тишины).
-// Сервер даёт секунды — на фронте считать не надо: пересчёт часов клиента даёт
-// расхождение в минуты при долгом простое, и бейдж перестаёт совпадать с сервером
-function minutesFromSeconds(s: number): number {
-  return Math.max(0, Math.floor(s / 60));
-}
-
-// Короткая подпись активности штаба для бейджа: «активность N мин назад» при alive,
-// «тихо N мин» при quiet, «похоже, зависло» при stalled, «процесс остановлен» при dead.
-// Считает по server-given quietSeconds — иначе клиентские часы расходились бы с бэком
+// Подпись активности штаба для бейджа: одна-две строки по liveness, без времени —
+// «работает» / «тихо» / «зависло» / «процесс остановлен». Время не добавляем
+// намеренно: в узкой ширине «N мин назад» отнимает много пикселей от боевой сводки
+// («2/5»), а само «зависло» уже сигнализирует о проблеме без количества
 export function teamPulseActivityLabel(pulse: TeamWavePulse): string {
-  const mins = minutesFromSeconds(pulse.quietSeconds);
   switch (pulse.liveness) {
-    case 'alive': return `активность ${pluralMinutesShort(mins)} назад`;
-    case 'quiet': return `тихо ${pluralMinutesShort(mins)}`;
-    case 'stalled': return `похоже, зависло · ${pluralMinutesShort(mins)} тишины`;
+    case 'alive': return 'работает';
+    case 'quiet': return 'тихо';
+    case 'stalled': return 'зависло';
     case 'dead': return 'процесс остановлен';
   }
-}
-
-// Короткий текст с числом минут в именительном: «4 мин», «1 мин», «25 мин».
-// У «active N min ago» это «N мин назад» — та же форма, что в остальных метриках
-// («уже 2 мин» у плашки планирования). Своя копия из pluralRu, чтобы не таскать тяжёлую
-// функцию наружу и не плодить кейсы в одном общем склонении
-function pluralMinutesShort(n: number): string {
-  const m10 = n % 10, m100 = n % 100;
-  const word = (m10 === 1 && m100 !== 11) ? 'минуту'
-    : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) ? 'минуты'
-      : 'минут';
-  return `${n} ${word}`;
 }
 
 // «Что это значит» в поповере: одна-две строки на состояние. Тон продукта — не «stalled»,
@@ -130,16 +111,14 @@ export function teamPulseBadgeText(_state: SessionTeamImplement, pulse: TeamWave
   return `${teamMechanicShort} · ${stage} · ${pulse.tasksActive}/${pulse.tasksTotal} · ${teamPulseActivityLabel(pulse)}`;
 }
 
-// Короткая форма для узкой ширины/мобилы: «КР · 2/5 · 4 мин».
-// Сохраняем главное — сколько задач идёт и тон активности, без номера волны и
-// приставки «волна» — на 320px строка должна умещаться целиком. На проверке формат
-// тот же, что и на волне (счётчик задач/тон — основная информация)
+// Короткая форма для узкой ширины/мобилы: «КР · 2/5 · работает» — без «волна N/M»
+// (его нет места) и без времени (N мин) — на 320px строка должна умещаться целиком.
+// На проверке формат тот же, что и на волне (счётчик задач/тон — основная информация)
 export function teamPulseBadgeShort(pulse: TeamWavePulse): string {
-  const mins = minutesFromSeconds(pulse.quietSeconds);
   switch (pulse.liveness) {
-    case 'alive': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · ${pluralMinutesShort(mins)} назад`;
-    case 'quiet': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · тихо ${pluralMinutesShort(mins)}`;
-    case 'stalled': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · похоже, зависло`;
+    case 'alive': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · работает`;
+    case 'quiet': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · тихо`;
+    case 'stalled': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · зависло`;
     case 'dead': return `${teamMechanicShort} · ${pulse.tasksActive}/${pulse.tasksTotal} · процесс остановлен`;
   }
 }
@@ -162,15 +141,14 @@ export function teamWaveTaskStatusLabel(status: TeamWaveTaskStatus): string {
   }
 }
 
-// Сколько минут задача в работе — от startedAt до now (мс). Нет startedAt — «ещё не стартовала».
-// Серверных секунд тут нет, считаем по Date.now(): время старта задачи стабильнее, чем
-// пульс штаба, и дрейф часов на ±секунду не искажает «N мин в работе»
-export function teamWaveTaskRunningLabel(task: TeamWaveTask, now: number): string {
+// Подпись времени в работе для строки задачи в поповере. Раньше возвращало «N минут в
+// работе», но в поповере статус задачи уже показывает «в работе» отдельной колонкой,
+// и время лишь шумит. Оставили только сигнал «ещё не стартовала» — у задачи без
+// startedAt это видно по статусу «в очереди», но выделить стартовавшие-неактивные
+// от неначинавшихся полезно. now оставлен в сигнатуре — единая точка для будущих полей
+export function teamWaveTaskRunningLabel(task: TeamWaveTask, _now: number): string {
   if (!task.startedAt) return 'ещё не стартовала';
-  const start = Date.parse(task.startedAt);
-  if (!Number.isFinite(start)) return '';
-  const mins = Math.max(0, Math.floor((now - start) / 60000));
-  return mins < 1 ? 'меньше минуты в работе' : `${pluralMinutesShort(mins)} в работе`;
+  return '';
 }
 
 // Признак «задача прямо сейчас работает» — для сортировки и подсветки. Отдельная
@@ -204,11 +182,12 @@ export function teamWaveTasksSorted(tasks: TeamWaveTask[]): TeamWaveTask[] {
   });
 }
 
-// «Волна N из M»: M — плановое число волн итерации (plannedWaves из карточки плана),
-// а НЕ потолок бюджета: тот про расход и при плане в 2 волны врал бы «из 4».
-// 0 — план ещё не запускался, показываем просто «волна N».
-function waveText(waveNumber: number, plannedWaves?: number): string {
-  return plannedWaves && plannedWaves > 0 ? `волна ${waveNumber} из ${plannedWaves}` : `волна ${waveNumber}`;
+// Подпись текущей волны. M (плановое число волн итерации) опущено — для бейджа
+// хватает номера волны, а «из M» утяжеляет префикс и съедает место у боевой сводки
+// «2/5». plannedWaves оставлен в сигнатуре для обратной совместимости и на случай,
+// если длинная форма понадобится снова
+function waveText(waveNumber: number, _plannedWaves?: number): string {
+  return `волна ${waveNumber}`;
 }
 
 // Полная подпись стадии для бейджа в композере (и тултипа маркера)
@@ -239,18 +218,18 @@ export function teamImplementStageShort(stage: TeamImplementStage, waveNumber: n
 
 // Полная строка бейджа: «Командная реализация · <стадия>»
 export function teamImplementBadgeText(stage: TeamImplementStage, waveNumber: number, plannedWaves?: number): string {
-  return `Командная реализация · ${teamImplementStageLabel(stage, waveNumber, plannedWaves)}`;
+  return `${TEAM_IMPLEMENT_SHORT_NAME} · ${teamImplementStageLabel(stage, waveNumber, plannedWaves)}`;
 }
 
-// Описание режима — тултип бейджа и текст поповера
-export const TEAM_IMPLEMENT_DESCRIPTION =
-  'Чат работает как штаб: задачи ставятся исполнителям, их чаты видны под этим в списке. ' +
-  'Напишите, что ещё нужно сделать — команда возьмёт в работу';
+// Описание режима — тултип бейджа и текст поповера. Короткая формулировка: ключевая
+// идея «штаб ставит задачи исполнителям», без деталей интерфейса (про чаты исполнителей
+// узнают из их карточек в ленте, а не из тултипа бейджа)
+export const TEAM_IMPLEMENT_DESCRIPTION = 'Чат в режиме штаба — задачи ставятся исполнителям';
 
 // Тултип чипа «Авто» (текст тумблера + подпись из плана, дословно из спеки)
+// Коротко: «не спрашиваем → команда сама → пока есть бюджет»
 export const TEAM_IMPLEMENT_AUTO_TITLE =
-  'Авто-волны — не спрашивать после каждой волны. ' +
-  'План согласуете один раз. Дальше команда работает сама, пока хватает бюджета';
+  'Не спрашивать перед стартом. Команда работает сама, пока хватает бюджета';
 
 // Подпись свёрнутой карточки запущенного плана. «Идёт волна N из M» — только когда
 // волна реально идёт (waveNumber > 0: на стадии idle бэкенд обнуляет номер) И карточка —
@@ -314,18 +293,18 @@ export const TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP = 'Штаб планирует. 
 // Подтверждение выключения режима
 export const TEAM_IMPLEMENT_DISABLE_TITLE = 'Выключить командную реализацию?';
 export const TEAM_IMPLEMENT_DISABLE_TEXT =
-  'Текущие исполнители доработают свои задачи, новые волны не стартуют. ' +
-  'Чат станет обычным разговором — включить режим обратно можно в любой момент.';
+  'Идущее завершится, новое не стартует. ' +
+  'Чат снова станет обычным разговором — включить можно в любой момент.';
 
 // Подтверждение остановки прогона (кнопка «Остановить» в поповере бейджа).
 // Текст — из таблицы «Эскалация и остановки»: пользователь нажал «Остановить»
 export const TEAM_IMPLEMENT_STOP_TITLE = 'Остановить практику?';
 export const TEAM_IMPLEMENT_STOP_TEXT =
-  'Текущие исполнители дорабатывают, новые не стартуют. ' +
-  'Карточка остановки появится в ленте — по ней команду можно продолжить или завершить итерацию.';
+  'Идущее завершится, новое не стартует. ' +
+  'Продолжить — по карточке в ленте.';
 // Состояние «уже остановлено»: кнопки нет, продолжение — по карточке в ленте
 export const TEAM_IMPLEMENT_STOPPED_HINT =
-  'Практика остановлена: новые волны не стартуют. Продолжить — по карточке остановки в ленте';
+  'Остановлено: новое не стартует. Продолжить — по карточке в ленте';
 
 // Подпись бейджа в композере при остановленной практике. Главное, что человек
 // должен увидеть — практика стоит и ждёт его решения: ни номер волны, ни
@@ -335,7 +314,7 @@ export const TEAM_IMPLEMENT_STOPPED_HINT =
 // Полная форма уходит в тултип и в широкий бейдж; короткая — в узкую полосу
 // композера и мобилу. Тексты живут здесь же, рядом с TEAM_IMPLEMENT_STOPPED_HINT,
 // — других точек истины для них нет
-export const TEAM_IMPLEMENT_STOPPED_BADGE_FULL = 'Командная реализация · остановлено';
+export const TEAM_IMPLEMENT_STOPPED_BADGE_FULL = `${TEAM_IMPLEMENT_SHORT_NAME} · остановлено`;
 export const TEAM_IMPLEMENT_STOPPED_BADGE_SHORT = `${TEAM_IMPLEMENT_SHORT_NAME} · остановлено`;
 
 // Резолв бейджа композера одной формулой: подпись (полная/короткая) и тон —

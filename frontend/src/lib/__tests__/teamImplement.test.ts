@@ -50,28 +50,28 @@ describe('предупреждение о смене режима прав ча�
 });
 
 describe('подписи бейджа командной реализации', () => {
-  it('план в две волны показывает «волна 1 из 2»', () => {
-    expect(teamImplementBadgeText('wave', 1, 2)).toBe('Командная реализация · волна 1 из 2');
+  it('план в две волны показывает «волна 1» — без «из 2» (компактнее)', () => {
+    expect(teamImplementBadgeText('wave', 1, 2)).toBe('КР · волна 1');
     expect(teamImplementStageShort('wave', 1, 2)).toBe('волна 1/2');
   });
 
   it('до запуска плана (plannedWaves = 0) число волн не выдумывается', () => {
-    expect(teamImplementBadgeText('wave', 1, 0)).toBe('Командная реализация · волна 1');
+    expect(teamImplementBadgeText('wave', 1, 0)).toBe('КР · волна 1');
     expect(teamImplementStageShort('wave', 1, 0)).toBe('волна 1');
   });
 
   it('остальные стадии подписаны текстами продуктового плана', () => {
-    expect(teamImplementBadgeText('planning', 0, 0)).toBe('Командная реализация · планирование');
-    expect(teamImplementBadgeText('awaitingDecision', 2, 3)).toBe('Командная реализация · нужно решение');
-    expect(teamImplementBadgeText('idle', 2, 3)).toBe('Командная реализация · ждёт задачу');
+    expect(teamImplementBadgeText('planning', 0, 0)).toBe('КР · планирование');
+    expect(teamImplementBadgeText('awaitingDecision', 2, 3)).toBe('КР · нужно решение');
+    expect(teamImplementBadgeText('idle', 2, 3)).toBe('КР · ждёт задачу');
   });
 
   // Интервью и проверка — стадии непрерывного контура (Э8/Э6): бейдж обязан их
   // показывать дословно, пока штаб спрашивает человека и пока идёт проверка волны
   it('стадии interview и checking подписаны и имеют короткие формы маркера', () => {
-    expect(teamImplementBadgeText('interview', 0, 0)).toBe('Командная реализация · интервью');
+    expect(teamImplementBadgeText('interview', 0, 0)).toBe('КР · интервью');
     expect(teamImplementStageShort('interview', 0, 0)).toBe('вопросы');
-    expect(teamImplementBadgeText('checking', 1, 2)).toBe('Командная реализация · проверка');
+    expect(teamImplementBadgeText('checking', 1, 2)).toBe('КР · проверка');
     expect(teamImplementStageShort('checking', 1, 2)).toBe('проверка');
   });
 
@@ -114,19 +114,19 @@ describe('бейдж при остановленной практике', () => 
   };
 
   it('полная подпись бейджа — дословно из спеки, без wire-токенов', () => {
-    expect(TEAM_IMPLEMENT_STOPPED_BADGE_FULL).toBe('Командная реализация · остановлено');
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_FULL).toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · остановлено`);
     expect(TEAM_IMPLEMENT_STOPPED_BADGE_SHORT).toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · остановлено`);
     // Продуктовый язык, без stopped/bool-токенов в тексте — та же договорённость,
     // что для teamPulseMeaning: «похоже, зависло», а не «stalled»
     expect(TEAM_IMPLEMENT_STOPPED_BADGE_FULL).not.toMatch(/\bstopped\b/i);
     expect(TEAM_IMPLEMENT_STOPPED_BADGE_SHORT).not.toMatch(/\bstopped\b/i);
-    // Короткая форма начинается с КР — тот же префикс, что у пульсовой короткой
-    expect(TEAM_IMPLEMENT_STOPPED_BADGE_SHORT.startsWith(`${TEAM_IMPLEMENT_SHORT_NAME} · `)).toBe(true);
+    // Полная и короткая формы стартуют одинаково — обе сокращаются до «КР · …»
+    expect(TEAM_IMPLEMENT_STOPPED_BADGE_FULL.startsWith(`${TEAM_IMPLEMENT_SHORT_NAME} · `)).toBe(true);
   });
 
   it('stopped без livePulse: бейдж показывает «остановлено» и спокойный тон', () => {
     const r = teamImplementBadgeAt(waveState({ stopped: true }), null);
-    expect(r.full).toBe('Командная реализация · остановлено');
+    expect(r.full).toBe('КР · остановлено');
     expect(r.short).toBe('КР · остановлено');
     expect(r.tone).toBe('wait');
   });
@@ -136,7 +136,7 @@ describe('бейдж при остановленной практике', () => 
   // что человек должен увидеть, а не «волна 1 из 2 · 2/5 · активность»
   it('stopped + живой пульс: подпись и тон остаются про остановку, пульс не перебивает', () => {
     const r = teamImplementBadgeAt(waveState({ stopped: true }), alivePulse);
-    expect(r.full).toBe('Командная реализация · остановлено');
+    expect(r.full).toBe('КР · остановлено');
     expect(r.short).toBe('КР · остановлено');
     expect(r.tone).toBe('wait');
     // Никаких следов пульса — иначе «волна 1 из 2» и «2/5» просочились бы в бейдж
@@ -158,15 +158,15 @@ describe('бейдж при остановленной практике', () => 
   // teamImplementBadgeAt не должен сломать пульсовую ветку
   it('без stopped + живой пульс: подпись и тон по livePulse, как раньше', () => {
     const r = teamImplementBadgeAt(waveState(), alivePulse);
-    expect(r.full).toContain('волна 1 из 2');
+    expect(r.full).toContain('волна 1');
     expect(r.full).toContain('2/5');
-    expect(r.short).toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · 1 минуту назад`);
+    expect(r.short).toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · работает`);
     expect(r.tone).toBe('work');
   });
 
   it('без stopped + без livePulse: подпись и тон по стадии режима', () => {
     const r = teamImplementBadgeAt(waveState({ stage: 'confirming', waveNumber: 0 }), null);
-    expect(r.full).toBe('Командная реализация · ждёт подтверждения');
+    expect(r.full).toBe('КР · ждёт подтверждения');
     expect(r.tone).toBe('wait');
   });
 });
@@ -272,9 +272,10 @@ describe('подпись свёрнутой карточки запущенно�
 
 describe('тексты по спеке', () => {
   // Пунктуация тултипа чипа «Авто» — дословно из team-implement-mode.md:
-  // «План согласуете один раз. Дальше команда работает сама…» (два предложения)
-  it('тултип чипа «Авто» не склеивает два предложения запятой', () => {
-    expect(TEAM_IMPLEMENT_AUTO_TITLE).toContain('один раз. Дальше команда работает сама');
+  // Два предложения разделены точкой, а не склеены запятой: «Не спрашивать перед стартом.
+// Команда работает сама, пока хватает бюджета»
+  it('тултип чипа «Авто» разделяет предложения точкой', () => {
+    expect(TEAM_IMPLEMENT_AUTO_TITLE).toContain('стартом. Команда работает сама');
   });
 });
 
@@ -494,51 +495,39 @@ describe('пульс волны: тон и пояснения', () => {
 // считать по Date.now() на клиенте нельзя — дрейф часов расходился бы с бэком,
 // и «N мин назад» перестало бы совпадать с реальной тишиной на сервере
 describe('пульс волны: подпись активности по серверным quietSeconds', () => {
-  const pulse = (liveness: TeamWaveLiveness, quietSeconds: number): TeamWavePulse => ({
+  // Время из бейджа убрали намеренно — в узкой ширине «N мин назад» съедало
+  // пиксели у боевой сводки «2/5», а состояние само по себе уже сигнализирует
+  // (зависло vs работает). Считаем соответствие liveness → строке.
+  const pulse = (liveness: TeamWaveLiveness, _quietSeconds: number): TeamWavePulse => ({
     stage: 'wave', waveNumber: 1, plannedWaves: 2,
     tasksActive: 2, tasksTotal: 5,
-    lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds, liveness,
+    lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds: _quietSeconds, liveness,
   });
 
-  it('alive — «активность N мин назад»', () => {
-    expect(teamPulseActivityLabel(pulse('alive', 240))).toBe('активность 4 минуты назад');
-    expect(teamPulseActivityLabel(pulse('alive', 60))).toBe('активность 1 минуту назад');
-    expect(teamPulseActivityLabel(pulse('alive', 0))).toBe('активность 0 минут назад');
+  it('alive → «работает» (без чисел минут)', () => {
+    expect(teamPulseActivityLabel(pulse('alive', 240))).toBe('работает');
+    expect(teamPulseActivityLabel(pulse('alive', 0))).toBe('работает');
   });
 
-  it('quiet — «тихо N мин» (долгая задача — норма)', () => {
-    expect(teamPulseActivityLabel(pulse('quiet', 900))).toBe('тихо 15 минут');
-    expect(teamPulseActivityLabel(pulse('quiet', 60))).toBe('тихо 1 минуту');
+  it('quiet → «тихо» (без «N мин»)', () => {
+    expect(teamPulseActivityLabel(pulse('quiet', 900))).toBe('тихо');
+    expect(teamPulseActivityLabel(pulse('quiet', 60))).toBe('тихо');
   });
 
-  it('stalled — «похоже, зависло · N мин тишины»', () => {
-    expect(teamPulseActivityLabel(pulse('stalled', 2100))).toBe('похоже, зависло · 35 минут тишины');
+  it('stalled → «зависло» (без «N мин тишины»)', () => {
+    expect(teamPulseActivityLabel(pulse('stalled', 2100))).toBe('зависло');
   });
 
-  it('dead — без чисел, «процесс остановлен»', () => {
+  it('dead → «процесс остановлен»', () => {
     // dead значит «штаб-процесс мёртв», секунды тишины тут уже не информативны
     expect(teamPulseActivityLabel(pulse('dead', 9999))).toBe('процесс остановлен');
   });
-
-  // Округление вниз до минуты: 119с → 1 мин, 121с → 2 мин. Иначе подпись прыгала бы
-  // каждую секунду, и человек не мог бы увидеть стабильную «4 мин назад»
-  it('quietSeconds округляются вниз до минуты', () => {
-    expect(teamPulseActivityLabel(pulse('alive', 119))).toBe('активность 1 минуту назад');
-    expect(teamPulseActivityLabel(pulse('alive', 121))).toBe('активность 2 минуты назад');
-  });
-
-  // Склонение «минуту/минуты/минут» — единая форма, чтобы «1 минуту», «2 минуты»,
-  // «25 минут» шли без опечаток
-  it('склонение числительного по русскому', () => {
-    expect(teamPulseActivityLabel(pulse('alive', 21 * 60))).toBe('активность 21 минуту назад');
-    expect(teamPulseActivityLabel(pulse('alive', 22 * 60))).toBe('активность 22 минуты назад');
-    expect(teamPulseActivityLabel(pulse('alive', 25 * 60))).toBe('активность 25 минут назад');
-    expect(teamPulseActivityLabel(pulse('alive', 11 * 60))).toBe('активность 11 минут назад');
-  });
 });
 
-// Полная подпись бейджа: «КР · волна 1 · 2/5 · активность 4 мин назад» — plannedWaves=0
-// даёт просто «волна 1» (план ещё не запускался), как в teamImplementStageLabel
+// Полная подпись бейджа: «КР · волна N · 2/5 · работает|тихо|зависло|процесс …».
+// plannedWaves=0 даёт просто «волна 1» (план ещё не запускался), как в
+// teamImplementStageLabel. «из M» убрали — компактнее, plannedWaves остаётся
+// в короткой форме teamImplementStageShort как «волна N/M»
 describe('пульс волны: подпись бейджа — полная и короткая формы', () => {
   const state = {
     stage: 'wave' as const, waveNumber: 1, plannedWaves: 2, autoWaves: true, stopped: false,
@@ -554,32 +543,32 @@ describe('пульс волны: подпись бейджа — полная и
     lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds, liveness,
   });
 
-  it('полная форма содержит волну, прогресс и активность', () => {
+  it('полная форма: «КР · волна N · 2/5 · работает|тихо|…»', () => {
     expect(teamPulseBadgeText(state, pulse('alive', 240)))
-      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · волна 1 из 2 · 2/5 · активность 4 минуты назад`);
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · волна 1 · 2/5 · работает`);
   });
 
-  it('plannedWaves=0 → просто «волна 1», без «из N»', () => {
+  it('plannedWaves=0 → просто «волна 1» (без «из N»)', () => {
     const s0 = { ...state, plannedWaves: 0 };
     const p0 = { ...pulse('alive', 240), plannedWaves: 0 };
     expect(teamPulseBadgeText(s0, p0))
-      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · волна 1 · 2/5 · активность 4 минуты назад`);
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · волна 1 · 2/5 · работает`);
   });
 
-  it('dead: «процесс остановлен» вместо «активности» в полной форме', () => {
+  it('dead: «процесс остановлен» вместо активности в полной форме', () => {
     expect(teamPulseBadgeText(state, pulse('dead', 9999)))
       .toContain('процесс остановлен');
   });
 
-  // Короткая форма для узкой ширины: без «волна N из M», чтобы строка уместилась
-  // на 320px. Главное — прогресс и активность, без номера волны и приставки
-  it('короткая форма для узкой ширины', () => {
+  // Короткая форма для узкой ширины/мобилы: «КР · 2/5 · работает|тихо|зависло|процесс …» —
+  // без номера волны и без времени, чтобы строка уместилась на 320px
+  it('короткая форма для узкой ширины — только активность и счётчик', () => {
     expect(teamPulseBadgeShort(pulse('alive', 240)))
-      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · 4 минуты назад`);
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · работает`);
     expect(teamPulseBadgeShort(pulse('quiet', 900)))
-      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · тихо 15 минут`);
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · тихо`);
     expect(teamPulseBadgeShort(pulse('stalled', 2100)))
-      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · похоже, зависло`);
+      .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · зависло`);
     expect(teamPulseBadgeShort(pulse('dead', 9999)))
       .toBe(`${TEAM_IMPLEMENT_SHORT_NAME} · 2/5 · процесс остановлен`);
   });
@@ -596,19 +585,20 @@ describe('пульс волны: список задач в поповере', (
     }
   });
 
-  // Время в работе считается от startedAt, не от пульса — время старта задачи
-  // стабильнее, чем серверные секунды тишины. «N мин в работе» — отдельный счётчик,
-  // чтобы совпадал с задачами в диспетчерской
-  it('время в работе — от startedAt до now', () => {
+  // Время в работе с бейджа сняли — статус «в работе» уже показывается в отдельной
+  // колонке, а «N мин в работе» лишь шумит. Остался только сигнал «ещё не стартовала»:
+  // он отличает «в очереди и запланирована» от «в очереди, но старт уже был» (тогда
+  // startedAt не null), что полезно при разборе пропущенных задач
+  it('только «ещё не стартовала» — время с бейджа снято', () => {
     const t0 = Date.parse('2026-08-23T11:00:00Z');
     expect(teamWaveTaskRunningLabel(
       { id: 't1', title: '', executorPersonaId: null, status: 'inProgress', updatedAt: '', startedAt: '2026-08-23T11:00:00Z' },
       t0 + 240_000,
-    )).toBe('4 минуты в работе');
+    )).toBe('');
     expect(teamWaveTaskRunningLabel(
       { id: 't1', title: '', executorPersonaId: null, status: 'inProgress', updatedAt: '', startedAt: '2026-08-23T11:00:00Z' },
       t0 + 30_000,
-    )).toBe('меньше минуты в работе');
+    )).toBe('');
     expect(teamWaveTaskRunningLabel(
       { id: 't1', title: '', executorPersonaId: null, status: 'todo', updatedAt: '', startedAt: null },
       t0,
@@ -692,8 +682,12 @@ describe('teamPulseBadgeText под стадию', () => {
     lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds: 240, liveness: 'alive' as TeamWaveLiveness,
   };
 
-  it('на волне подпись включает номер волны', () => {
-    expect(teamPulseBadgeText(state, basePulse)).toContain('волна 1 из 2');
+  it('на волне подпись включает номер волны (без «из M»)', () => {
+    // Номер волны остаётся, «из M» убрали — компактнее; plannedWaves сохраняется
+    // в короткой форме «волна N/M» через teamImplementStageShort
+    expect(teamPulseBadgeText(state, basePulse)).toContain('волна 1 ');
+    expect(teamPulseBadgeText(state, basePulse)).not.toContain('из 2');
+    expect(teamImplementStageShort('wave', 1, 2)).toBe('волна 1/2');
   });
 
   it('на проверке подпись — «проверка», номера волны нет', () => {

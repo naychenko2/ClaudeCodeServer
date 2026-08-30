@@ -59,6 +59,37 @@ export function ModelsSpendModal({ balances, onClose }: { balances?: BalanceChip
     if (consumeDraftRequest()) { setTab('slots'); setPendingDraft(true); }
   }, []);
 
+  // Балансы внешних сервисов (fal/glif/Yandex). Открыли из UsageWidget — prop
+  // `balances` приходит уже с таймером POLL_MS, свой фетч дал бы stale-данные и
+  // двойную нагрузку. Открыли из HubHeader/WorkspacePage без prop — добываем
+  // сами при маунте (та же логика, что в UsageWidget).
+  const [selfBalances, setSelfBalances] = useState<BalanceChipData[]>([]);
+  useEffect(() => {
+    if (balances !== undefined) return;
+    let cancelled = false;
+    api.fal.account(7)
+      .then(d => {
+        if (cancelled || !d.enabled || typeof d.balance !== 'number') return;
+        setSelfBalances(prev => [...prev.filter(b => b.key !== 'fal'), { key: 'fal', label: 'fal.ai', value: d.balance! }]);
+      })
+      .catch(() => {});
+    api.yandex.account(30)
+      .then(d => {
+        const v = d.account?.balance ? parseFloat(d.account.balance) : NaN;
+        if (cancelled || !d.enabled || isNaN(v)) return;
+        setSelfBalances(prev => [...prev.filter(b => b.key !== 'yandex'),
+          { key: 'yandex', label: 'Yandex Cloud', value: v, rub: (d.account?.currency ?? 'RUB') === 'RUB' }]);
+      })
+      .catch(() => {});
+    api.glif.account()
+      .then(d => {
+        if (cancelled || !d.enabled || typeof d.balance !== 'number') return;
+        setSelfBalances(prev => [...prev.filter(b => b.key !== 'glif'), { key: 'glif', label: 'glif', value: d.balance!, credits: true }]);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [balances]);
+
   // Слои настроек специальностей и пресетов — из модульного стора presets.ts.
   // Снимок settings вкладки читают сами (useSpecialtySettings в точках записи —
   // структурный запрет, чтобы ни одна точка записи не получала слой снаружи).
@@ -124,7 +155,7 @@ export function ModelsSpendModal({ balances, onClose }: { balances?: BalanceChip
 
         {/* Тело активной вкладки */}
         <div style={{ paddingTop: 12 }}>
-          {tab === 'quotas' && <QuotasTab balances={balances} onClose={onClose} />}
+          {tab === 'quotas' && <QuotasTab balances={balances ?? selfBalances} onClose={onClose} />}
           {tab === 'slots' && (
             <SlotsTab
               isAdmin={isAdmin}

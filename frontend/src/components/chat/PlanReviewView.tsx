@@ -105,6 +105,8 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
+  // Идёт запись голоса — поле замещается рядом индикации (ряд рисует VoiceMicButton)
+  const [recording, setRecording] = useState(false);
   // Количество неотправленных замечаний в PlanRemarks. При > 0 акцент
   // кнопок карточки меняется: согласование становится второстепенным с
   // честной подписью про потерю замечаний (задача про молча теряемые
@@ -459,6 +461,8 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs }}>
             {asstName} учтёт это и предложит новый план
           </div>
+          {/* Запись голоса: поле прячется (но остаётся в DOM — по ref в него приезжает
+              распознанное), на его месте — ряд индикации от VoiceMicButton */}
           <div style={{ position: 'relative', marginBottom: SP.xs }}>
             <textarea
               autoComplete="off"
@@ -469,13 +473,14 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
               rows={3}
               ref={feedbackRef}
               style={{
+                display: recording ? 'none' : undefined,
                 width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
                 border: `1px solid ${C.border}`, background: C.bgWhite,
                 padding: '8px 36px 8px 10px', fontSize: FS.sm, color: C.textHeading,
                 fontFamily: 'inherit', resize: 'none', outline: 'none',
               }}
             />
-            <VoiceMicButton inputRef={feedbackRef} variant="suffix" />
+            <VoiceMicButton inputRef={feedbackRef} variant="suffix" recordingRow onListeningChange={setRecording} />
           </div>
           <div style={{ display: 'flex', gap: SP.xs }}>
             <Button

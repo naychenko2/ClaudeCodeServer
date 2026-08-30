@@ -64,12 +64,16 @@ function ReplyBox({ hint, onSend, onCancel, sendLabel = 'Отправить' }: 
 }) {
   const [text, setText] = useState('');
   const textRef = useRef<HTMLTextAreaElement>(null);
+  // Идёт запись голоса — поле замещается рядом индикации (ряд рисует VoiceMicButton)
+  const [recording, setRecording] = useState(false);
   return (
     <div style={{
       borderTop: `1px dashed ${C.divider}`, paddingTop: SP.sm,
       display: 'flex', flexDirection: 'column', gap: SP.sm,
     }}>
       {hint && <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>{hint}</div>}
+      {/* Запись голоса: поле прячется (но остаётся в DOM — по ref в него приезжает
+          распознанное), на его месте — ряд индикации от VoiceMicButton */}
       <div style={{ position: 'relative' }}>
         <textarea
           autoComplete="off"
@@ -80,12 +84,13 @@ function ReplyBox({ hint, onSend, onCancel, sendLabel = 'Отправить' }: 
           ref={textRef}
           placeholder={TEAM_ESCALATION_REPLY_PLACEHOLDER}
           style={{
+            display: recording ? 'none' : undefined,
             width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
             border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px',
             fontSize: FS.base, color: C.textHeading, fontFamily: FONT.sans, resize: 'none', outline: 'none',
           }}
         />
-        <VoiceMicButton inputRef={textRef} variant="suffix" />
+        <VoiceMicButton inputRef={textRef} variant="suffix" recordingRow onListeningChange={setRecording} />
       </div>
       <div style={{ display: 'flex', gap: SP.sm }}>
         <Button size="sm" leftIcon={<Check size={14} strokeWidth={2.6} />}

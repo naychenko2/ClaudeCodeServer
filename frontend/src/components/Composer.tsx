@@ -28,6 +28,7 @@ import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/mode
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { QuickPhrasesDialog, QuickPhrasesIcon, QuickPhrasesMenu } from './QuickPhrases';
 import { useAssistantName } from './chat/contexts';
+import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
@@ -221,18 +222,6 @@ function StopIcon() {
   );
 }
 
-// Дорожка-«волна» при записи (псевдо: SpeechRecognition не даёт амплитуду — анимируем полоски)
-function Waveform() {
-  const delays = [0.0, 0.12, 0.28, 0.45, 0.6, 0.32, 0.15, 0.5, 0.05, 0.36, 0.18, 0.42];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, height: 22, overflow: 'hidden' }}>
-      {delays.map((d, i) => (
-        <span key={i} className="cc-wave-bar" style={{ height: 22, animationDelay: `${d}s` }} />
-      ))}
-    </div>
-  );
-}
-
 // Aurora-сияние — свет над верхней кромкой карточки композера (режим разговора):
 // три полупрозрачные ленты градиента дрейфуют каждая в своём ритме (keyframes —
 // index.css, .cc-aurora*), слой лежит ЗА непрозрачной карточкой и ограничен её
@@ -264,10 +253,6 @@ function withAuroraAlpha(hex: string, alpha: number): string {
   if (!m) return hex;
   const n = parseInt(m[1], 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-}
-
-function fmtRecTime(s: number): string {
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 // Сегментированная пилюля активного режима — «склейка» кнопки-тумблера с её значением

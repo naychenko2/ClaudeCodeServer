@@ -1,5 +1,5 @@
-import { useState, useContext, useEffect, useRef } from 'react';
-import { Check, SquarePen, MessageCircle, X } from 'lucide-react';
+import { useState, useContext, useCallback, useEffect, useRef } from 'react';
+import { Check, SquarePen, MessageCircle } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT, FS, R } from '../../lib/design';
 import { useAssistantName, PersonaContext } from './contexts';
@@ -8,16 +8,6 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { useIsMobile } from '../../lib/breakpoints';
 import { VoiceMicButton } from './VoiceMicButton';
-
-// Задержки для 12 столбиков «волны» (как в композере, чтобы анимация выглядела
-// естественно и не в фазу)
-const WAVE_DELAYS = [0.0, 0.12, 0.28, 0.45, 0.6, 0.32, 0.15, 0.5, 0.05, 0.36, 0.18, 0.42];
-// mm:ss с ведущими нулями — как у секундомера в композере
-function fmtRecTime(s: number): string {
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${mm}:${ss < 10 ? '0' : ''}${ss}`;
-}
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -54,21 +44,27 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   const [selected, setSelected] = useState<Record<number, string[]>>({});
   const [customText, setCustomText] = useState<Record<number, string>>({});
   const customTextRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
-  // Идёт запись голоса в кастом-ответе «Другое» — индекс вопроса или -1, если не записываем
+  // Уходим со страницы — отпускаем ссылки на исчезнувшие поля
+  useEffect(() => () => { customTextRefs.current = []; }, []);
+  // Идёт запись голоса в кастом-ответе «Другое» — индекс вопроса или -1, если не записываем.
+  // Таймер и ряд индикации ведёт сам VoiceMicButton (recordingRow), здесь состояние нужно
+  // ровно для того, чтобы спрятать textarea и подсказку про Enter
   const [recordingFor, setRecordingFor] = useState(-1);
-  const [recSeconds, setRecSeconds] = useState(0);
   const [customOpen, setCustomOpen] = useState<Record<number, boolean>>({});
   const [activeTab, setActiveTab] = useState(0);
-  // Тик таймера записи — отдельный эффект, чтобы ререндер формы не прыгал каждую секунду
-  useEffect(() => {
-    if (recordingFor < 0) return;
-    const t = setInterval(() => setRecSeconds(s => s + 1), 1000);
-    return () => clearInterval(t);
-  }, [recordingFor]);
-  // При входе в режим записи сбрасываем таймер
-  useEffect(() => {
-    if (recordingFor >= 0) setRecSeconds(0);
-  }, [recordingFor]);
+  // Индекс вопроса, чей «свой вариант» сейчас на экране: у формы одна активная вкладка
+  const shownQi = questions.length > 1 ? activeTab : 0;
+  // Колбэк стабилен — иначе эффект в VoiceMicButton дёргался бы на каждый ререндер формы
+  const onVoiceListening = useCallback((listening: boolean) => {
+    setRecordingFor(prev => listening ? shownQi : (prev === shownQi ? -1 : prev));
+  }, [shownQi]);
+  // Уход на другой вопрос размонтирует кнопку микрофона (движок гаснет вместе с ней),
+  // и «слушаю → нет» она сообщить уже не успеет. Снимаем признак записи сами, иначе на
+  // соседней вкладке поле осталось бы спрятанным без всякой индикации
+  const goToTab = useCallback((next: number | ((t: number) => number)) => {
+    setRecordingFor(-1);
+    setActiveTab(next);
+  }, []);
   if (questions.length === 0) return null;
 
   const disabled = item.resolved || !online;
@@ -154,7 +150,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
     if (allAnswered) { submit(); return; }
     // остались неотвеченные вопросы — уводим на ближайший
     const next = questions.findIndex((_, i) => i !== qi && !isAnswered(i));
-    if (next >= 0) setActiveTab(next);
+    if (next >= 0) goToTab(next);
   };
 
   const renderQuestion = (q: QuestionDef, qi: number) => (
@@ -200,72 +196,31 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               </div>
               {open && (
                 <div style={{ padding: '0 10px 10px' }}>
-                  {recordingFor === qi ? (
-                    // === Режим записи голоса: textarea прячется, на её месте
-                    // ряд из [dot, mm:ss, Waveform, ✕] — ровно как в композере ===
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      minHeight: 44, padding: '8px 10px',
-                      borderRadius: R.md, border: `1px solid ${C.border}`,
-                      background: C.bgWhite,
-                    }}>
-                      <span style={{
-                        width: 9, height: 9, borderRadius: '50%',
-                        background: C.danger,
-                        animation: 'pulsedot 1s ease-in-out infinite',
-                        flexShrink: 0,
-                      }} />
-                      <span style={{
-                        fontSize: 13, color: C.dangerText, fontWeight: 600,
-                        fontFamily: FONT.mono, flexShrink: 0, minWidth: 34,
-                      }}>
-                        {fmtRecTime(recSeconds)}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, height: 22, overflow: 'hidden' }}>
-                        {WAVE_DELAYS.map((d, i) => (
-                          <span key={i} className="cc-wave-bar" style={{ height: 22, animationDelay: `${d}s` }} />
-                        ))}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setRecordingFor(-1)}
-                        title="Остановить запись"
-                        style={{
-                          width: 28, height: 28, borderRadius: '50%',
-                          border: 'none', background: C.dangerBg, color: C.danger,
-                          cursor: 'pointer', display: 'flex',
-                          alignItems: 'center', justifyContent: 'center',
-                          flexShrink: 0,
-                        }}
-                      >
-                        <X size={14} strokeWidth={2.4} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ position: 'relative' }}>
-                      <textarea
-                        autoComplete="off"
-                        autoFocus
-                        value={customText[qi] ?? ''}
-                        onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
-                        onKeyDown={onCustomKeyDown(qi)}
-                        onClick={e => e.stopPropagation()}
-                        disabled={disabled}
-                        placeholder="Введите свой ответ…"
-                        rows={2}
-                        ref={el => { customTextRefs.current[qi] = el; }}
-                        style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
-                      />
-                      <VoiceMicButton
-                        inputGetter={() => customTextRefs.current[qi]}
-                        variant="suffix"
-                        onListeningChange={listening => {
-                          if (listening) setRecordingFor(qi);
-                          else if (recordingFor === qi) setRecordingFor(-1);
-                        }}
-                      />
-                    </div>
-                  )}
+                  {/* Запись голоса: textarea ПРЯЧЕТСЯ (display: none, но остаётся в DOM —
+                      иначе ref обнулится и распознанному тексту некуда приезжать), а на
+                      её месте VoiceMicButton рисует ряд [dot, mm:ss, волна, ✕] — как в композере */}
+                  <div style={{ position: 'relative' }}>
+                    <textarea
+                      autoComplete="off"
+                      autoFocus
+                      value={customText[qi] ?? ''}
+                      onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
+                      onKeyDown={onCustomKeyDown(qi)}
+                      onClick={e => e.stopPropagation()}
+                      disabled={disabled}
+                      placeholder="Введите свой ответ…"
+                      rows={2}
+                      ref={el => { customTextRefs.current[qi] = el; }}
+                      style={{ display: recordingFor === qi ? 'none' : undefined, width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
+                    />
+                    <VoiceMicButton
+                      inputGetter={() => customTextRefs.current[qi]}
+                      variant="suffix"
+                      recordingRow
+                      isMobile={isMobile}
+                      onListeningChange={onVoiceListening}
+                    />
+                  </div>
                   {!isMobile && recordingFor !== qi && (
                     <div style={{ marginTop: 4, fontSize: FS.xs, color: C.textMuted }}>
                       Enter — {!multiQ || allAnswered ? 'ответить' : 'к следующему вопросу'}, Shift+Enter — перенос строки
@@ -314,7 +269,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
             const ans = isAnswered(qi);
             const active = qi === activeTab;
             return (
-              <button key={qi} disabled={disabled} onClick={() => setActiveTab(qi)}
+              <button key={qi} disabled={disabled} onClick={() => goToTab(qi)}
                 style={{
                   flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, padding: '0 11px', height: 28, boxSizing: 'border-box',
                   borderRadius: R.xxl, cursor: disabled ? 'default' : 'pointer', fontSize: FS.sm, fontWeight: 600, whiteSpace: 'nowrap', lineHeight: 1,
@@ -341,11 +296,11 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
         <div style={{ fontSize: FS.sm, color: C.textMuted }}>Недоступно офлайн</div>
       ) : multiQ ? (
         <div style={{ display: 'flex', gap: 8 }}>
-          {activeTab > 0 && secBtn('‹ Назад', () => setActiveTab(t => t - 1))}
+          {activeTab > 0 && secBtn('‹ Назад', () => goToTab(t => t - 1))}
           {allAnswered
             ? answerBtn(false)
             : activeTab < questions.length - 1
-              ? secBtn('Далее ›', () => setActiveTab(t => t + 1))
+              ? secBtn('Далее ›', () => goToTab(t => t + 1))
               : answerBtn(false)}
           {interruptBtn()}
         </div>

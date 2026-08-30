@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ReactNode, CSSProperties, KeyboardEvent, Ref, RefObject } from 'react';
 import { VoiceMicButton } from '../chat/VoiceMicButton';
+import { VoiceRecordingRow } from '../chat/VoiceRecordingRow';
 import { C, R, FONT, FIELD, SHADOW } from '../../lib/design';
 
 // === Подпись поля (uppercase-лейбл формы) ===
@@ -94,38 +95,68 @@ function noFillProps(type: string, autoComplete: string) {
   return { type: swap ? 'search' : type, role: swap ? 'textbox' : undefined };
 }
 
+// Voice-state для TextField/TextArea/IconField: когда voice=true, поле во
+// время записи прячется, на его месте появляется VoiceRecordingRow (как в композере)
+// — точка + mm:ss + волна + ✕. Таймер свой: useEffect с setInterval(1000), чистится
+// при unmount и при смене isListening (React cleanup deps гарантирует).
+function useVoiceFieldState() {
+  const [isListening, setIsListening] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+  useEffect(() => {
+    if (!isListening) return;
+    const t = setInterval(() => setRecSeconds(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [isListening]);
+  useEffect(() => {
+    if (isListening) setRecSeconds(0);
+  }, [isListening]);
+  return { isListening, setIsListening, recSeconds };
+}
+
 // === Однострочное поле ввода с focus-ring ===
-export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, autoComplete = 'off', style, voice }: TextFieldProps & { voice?: boolean }) {
+export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, invalid, autoComplete = 'off', style, voice, isMobile }: TextFieldProps & { voice?: boolean; isMobile?: boolean }) {
   const [focused, setFocused] = useState(false);
   const elRef = useRef<HTMLInputElement>(null);
-  // При включённом voice контейнер — relative, чтобы VoiceMicButton (variant='suffix')
-  // мог позиционироваться абсолютно справа внутри поля. input получает правое
-  // паддинг-место под иконку 22px + 8px справа
+  const voiceState = useVoiceFieldState();
+  // При включённом voice контейнер — relative, чтобы VoiceMicButton (variant='suffix',
+  // размер 22×22, сидит на right:8) мог позиционироваться абсолютно справа внутри
+  // поля. input получает правый паддинг 36 = 22px иконка + 8px right-offset + 6px запас
   const wrapperStyle: CSSProperties | undefined = voice ? { position: 'relative' } : undefined;
   const inputStyle: CSSProperties = voice
     ? controlStyle(focused, mono, invalid, { letterSpacing, paddingRight: 36, ...style })
     : controlStyle(focused, mono, invalid, { letterSpacing, ...style });
   return (
     <div style={wrapperStyle}>
-      <input
-        ref={elRef}
-        {...noFillProps(type, autoComplete)}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        title={title}
-        autoComplete={autoComplete}
-        autoFocus={autoFocus}
-        disabled={disabled}
-        onFocus={() => { setFocused(true); onFocus?.(); }}
-        onBlur={() => { setFocused(false); onBlur?.(); }}
-        onKeyDown={onEnter || onEscape ? (e: KeyboardEvent) => {
-          if (e.key === 'Enter') onEnter?.();
-          if (e.key === 'Escape') onEscape?.();
-        } : undefined}
-        style={inputStyle}
-      />
-      {voice && <VoiceMicButton inputRef={elRef as RefObject<HTMLInputElement | HTMLTextAreaElement | null>} variant="suffix" />}
+      {voice && voiceState.isListening ? (
+        <VoiceRecordingRow seconds={voiceState.recSeconds} onStop={() => voiceState.setIsListening(false)} isMobile={isMobile} />
+      ) : (
+        <input
+          ref={elRef}
+          {...noFillProps(type, autoComplete)}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          title={title}
+          autoComplete={autoComplete}
+          autoFocus={autoFocus}
+          disabled={disabled}
+          onFocus={() => { setFocused(true); onFocus?.(); }}
+          onBlur={() => { setFocused(false); onBlur?.(); }}
+          onKeyDown={onEnter || onEscape ? (e: KeyboardEvent) => {
+            if (e.key === 'Enter') onEnter?.();
+            if (e.key === 'Escape') onEscape?.();
+          } : undefined}
+          style={inputStyle}
+        />
+      )}
+      {voice && !voiceState.isListening && (
+        <VoiceMicButton
+          inputRef={elRef as RefObject<HTMLInputElement | HTMLTextAreaElement | null>}
+          variant="suffix"
+          isMobile={isMobile}
+          onListeningChange={voiceState.setIsListening}
+        />
+      )}
     </div>
   );
 }
@@ -147,9 +178,10 @@ interface TextAreaProps {
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, autoComplete = 'off', style, voice }: TextAreaProps & { voice?: boolean }) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, autoComplete = 'off', style, voice, isMobile }: TextAreaProps & { voice?: boolean; isMobile?: boolean }) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const voiceState = useVoiceFieldState();
 
   useEffect(() => {
     if (!autoGrow) return;
@@ -179,20 +211,31 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
 
   return (
     <div style={wrapperStyle}>
-      <textarea
-        ref={ref}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        autoFocus={autoFocus}
-        autoComplete={autoComplete}
-        onKeyDown={onKeyDown}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        style={areaStyle}
-      />
-      {voice && <VoiceMicButton inputRef={ref as RefObject<HTMLInputElement | HTMLTextAreaElement | null>} variant="suffix" />}
+      {voice && voiceState.isListening ? (
+        <VoiceRecordingRow seconds={voiceState.recSeconds} onStop={() => voiceState.setIsListening(false)} isMobile={isMobile} />
+      ) : (
+        <textarea
+          ref={ref}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoFocus={autoFocus}
+          autoComplete={autoComplete}
+          onKeyDown={onKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={areaStyle}
+        />
+      )}
+      {voice && !voiceState.isListening && (
+        <VoiceMicButton
+          inputRef={ref as RefObject<HTMLInputElement | HTMLTextAreaElement | null>}
+          variant="suffix"
+          isMobile={isMobile}
+          onListeningChange={voiceState.setIsListening}
+        />
+      )}
     </div>
   );
 }
@@ -222,12 +265,13 @@ interface IconFieldProps {
 export function IconField({
   icon, value, onChange, placeholder, type = 'text', mono, disabled,
   letterSpacing, height = 50, radius = R.xxl, fontSize = 15, style,
-  autoFocus, onEnter, inputRef, autoComplete = 'off', voice,
-}: IconFieldProps & { voice?: boolean }) {
+  autoFocus, onEnter, inputRef, autoComplete = 'off', voice, isMobile,
+}: IconFieldProps & { voice?: boolean; isMobile?: boolean }) {
   const [focused, setFocused] = useState(false);
   // Для voice нужен локальный ref (родительский inputRef мог быть не передан)
   const localRef = useRef<HTMLInputElement>(null);
   const wireRef = (inputRef ?? localRef) as RefObject<HTMLInputElement | null>;
+  const voiceState = useVoiceFieldState();
   return (
     <div style={{
       position: 'relative',
@@ -238,31 +282,49 @@ export function IconField({
       transition: 'border-color 0.15s, box-shadow 0.15s',
       boxSizing: 'border-box', ...style,
     }}>
-      {icon && (
-        <span style={{ color: focused ? C.accent : C.textMuted, marginRight: 9, display: 'flex', flexShrink: 0, transition: 'color 0.15s' }}>
-          {icon}
-        </span>
+      {voice && voiceState.isListening ? (
+        // Иконка слева/справа при записи не нужны — ряд сам показывает суть. Но обёртка
+        // остаётся flex, и чтобы не схлопывалось, вешаем пустой боковой spacer
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+          <VoiceRecordingRow seconds={voiceState.recSeconds} onStop={() => voiceState.setIsListening(false)} isMobile={isMobile} />
+        </div>
+      ) : (
+        <>
+          {icon && (
+            <span style={{ color: focused ? C.accent : C.textMuted, marginRight: 9, display: 'flex', flexShrink: 0, transition: 'color 0.15s' }}>
+              {icon}
+            </span>
+          )}
+          <input
+            ref={wireRef}
+            {...noFillProps(type, autoComplete)}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            disabled={disabled}
+            autoComplete={autoComplete}
+            autoFocus={autoFocus}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onKeyDown={onEnter ? (e: KeyboardEvent) => { if (e.key === 'Enter') onEnter(); } : undefined}
+            style={{
+              border: 'none', background: 'none', flex: 1, fontSize,
+              color: C.textHeading, fontFamily: mono ? FONT.mono : 'inherit',
+              letterSpacing, outline: 'none', opacity: disabled ? 0.6 : 1, minWidth: 0,
+              // 22px-иконка суффикса + 8px её right-offset + 6px запас = 36 (как в TextField/TextArea)
+              paddingRight: voice ? 36 : undefined,
+            }}
+          />
+        </>
       )}
-      <input
-        ref={wireRef}
-        {...noFillProps(type, autoComplete)}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        autoComplete={autoComplete}
-        autoFocus={autoFocus}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        onKeyDown={onEnter ? (e: KeyboardEvent) => { if (e.key === 'Enter') onEnter(); } : undefined}
-        style={{
-          border: 'none', background: 'none', flex: 1, fontSize,
-          color: C.textHeading, fontFamily: mono ? FONT.mono : 'inherit',
-          letterSpacing, outline: 'none', opacity: disabled ? 0.6 : 1, minWidth: 0,
-          paddingRight: voice ? 28 : undefined,
-        }}
-      />
-      {voice && <VoiceMicButton inputRef={wireRef as RefObject<HTMLInputElement | HTMLTextAreaElement | null>} variant="suffix" />}
+      {voice && !voiceState.isListening && (
+        <VoiceMicButton
+          inputRef={wireRef as RefObject<HTMLInputElement | HTMLTextAreaElement | null>}
+          variant="suffix"
+          isMobile={isMobile}
+          onListeningChange={voiceState.setIsListening}
+        />
+      )}
     </div>
   );
 }

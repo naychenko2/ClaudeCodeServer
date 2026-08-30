@@ -1,5 +1,5 @@
-import { useState, useContext, useRef } from 'react';
-import { Check, SquarePen, MessageCircle } from 'lucide-react';
+import { useState, useContext, useEffect, useRef } from 'react';
+import { Check, SquarePen, MessageCircle, X } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT, FS, R } from '../../lib/design';
 import { useAssistantName, PersonaContext } from './contexts';
@@ -8,6 +8,16 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { markdownToPlain } from '../../lib/markdownPlain';
 import { useIsMobile } from '../../lib/breakpoints';
 import { VoiceMicButton } from './VoiceMicButton';
+
+// Задержки для 12 столбиков «волны» (как в композере, чтобы анимация выглядела
+// естественно и не в фазу)
+const WAVE_DELAYS = [0.0, 0.12, 0.28, 0.45, 0.6, 0.32, 0.15, 0.5, 0.05, 0.36, 0.18, 0.42];
+// mm:ss с ведущими нулями — как у секундомера в композере
+function fmtRecTime(s: number): string {
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${mm}:${ss < 10 ? '0' : ''}${ss}`;
+}
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -44,8 +54,21 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   const [selected, setSelected] = useState<Record<number, string[]>>({});
   const [customText, setCustomText] = useState<Record<number, string>>({});
   const customTextRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
+  // Идёт запись голоса в кастом-ответе «Другое» — индекс вопроса или -1, если не записываем
+  const [recordingFor, setRecordingFor] = useState(-1);
+  const [recSeconds, setRecSeconds] = useState(0);
   const [customOpen, setCustomOpen] = useState<Record<number, boolean>>({});
   const [activeTab, setActiveTab] = useState(0);
+  // Тик таймера записи — отдельный эффект, чтобы ререндер формы не прыгал каждую секунду
+  useEffect(() => {
+    if (recordingFor < 0) return;
+    const t = setInterval(() => setRecSeconds(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [recordingFor]);
+  // При входе в режим записи сбрасываем таймер
+  useEffect(() => {
+    if (recordingFor >= 0) setRecSeconds(0);
+  }, [recordingFor]);
   if (questions.length === 0) return null;
 
   const disabled = item.resolved || !online;
@@ -177,23 +200,73 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               </div>
               {open && (
                 <div style={{ padding: '0 10px 10px' }}>
-                  <div style={{ position: 'relative' }}>
-                    <textarea
-                      autoComplete="off"
-                      autoFocus
-                      value={customText[qi] ?? ''}
-                      onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
-                      onKeyDown={onCustomKeyDown(qi)}
-                      onClick={e => e.stopPropagation()}
-                      disabled={disabled}
-                      placeholder="Введите свой ответ…"
-                      rows={2}
-                      ref={el => { customTextRefs.current[qi] = el; }}
-                      style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
-                    />
-                    <VoiceMicButton inputGetter={() => customTextRefs.current[qi]} variant="suffix" />
-                  </div>
-                  {!isMobile && (
+                  {recordingFor === qi ? (
+                    // === Режим записи голоса: textarea прячется, на её месте
+                    // ряд из [dot, mm:ss, Waveform, ✕] — ровно как в композере ===
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      minHeight: 44, padding: '8px 10px',
+                      borderRadius: R.md, border: `1px solid ${C.border}`,
+                      background: C.bgWhite,
+                    }}>
+                      <span style={{
+                        width: 9, height: 9, borderRadius: '50%',
+                        background: C.danger,
+                        animation: 'pulsedot 1s ease-in-out infinite',
+                        flexShrink: 0,
+                      }} />
+                      <span style={{
+                        fontSize: 13, color: C.dangerText, fontWeight: 600,
+                        fontFamily: FONT.mono, flexShrink: 0, minWidth: 34,
+                      }}>
+                        {fmtRecTime(recSeconds)}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, height: 22, overflow: 'hidden' }}>
+                        {WAVE_DELAYS.map((d, i) => (
+                          <span key={i} className="cc-wave-bar" style={{ height: 22, animationDelay: `${d}s` }} />
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRecordingFor(-1)}
+                        title="Остановить запись"
+                        style={{
+                          width: 28, height: 28, borderRadius: '50%',
+                          border: 'none', background: C.dangerBg, color: C.danger,
+                          cursor: 'pointer', display: 'flex',
+                          alignItems: 'center', justifyContent: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <X size={14} strokeWidth={2.4} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ position: 'relative' }}>
+                      <textarea
+                        autoComplete="off"
+                        autoFocus
+                        value={customText[qi] ?? ''}
+                        onChange={e => setCustomText(p => ({ ...p, [qi]: e.target.value }))}
+                        onKeyDown={onCustomKeyDown(qi)}
+                        onClick={e => e.stopPropagation()}
+                        disabled={disabled}
+                        placeholder="Введите свой ответ…"
+                        rows={2}
+                        ref={el => { customTextRefs.current[qi] = el; }}
+                        style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 36px 8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
+                      />
+                      <VoiceMicButton
+                        inputGetter={() => customTextRefs.current[qi]}
+                        variant="suffix"
+                        onListeningChange={listening => {
+                          if (listening) setRecordingFor(qi);
+                          else if (recordingFor === qi) setRecordingFor(-1);
+                        }}
+                      />
+                    </div>
+                  )}
+                  {!isMobile && recordingFor !== qi && (
                     <div style={{ marginTop: 4, fontSize: FS.xs, color: C.textMuted }}>
                       Enter — {!multiQ || allAnswered ? 'ответить' : 'к следующему вопросу'}, Shift+Enter — перенос строки
                     </div>

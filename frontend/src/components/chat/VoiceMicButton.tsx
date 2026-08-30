@@ -1,4 +1,4 @@
-import { type RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
 import { Mic, X } from 'lucide-react';
 import { C, R } from '../../lib/design';
 import { useVoiceInput } from '../../hooks/useVoiceInput';
@@ -31,19 +31,14 @@ interface Props {
   // Стиль для absolute-позиционирования в variant='suffix'
   style?: React.CSSProperties;
   isMobile?: boolean;
+  // Колбэк: «слушаю или нет». Форма вызывает это, чтобы спрятать свой textarea
+  // и показать ряд индикации (точь-в-точь как в композере — на месте textarea
+  // появляется [dot, mm:ss, Waveform])
+  onListeningChange?: (listening: boolean) => void;
 }
 
-const WAVE_DELAYS = [0.0, 0.12, 0.28, 0.45, 0.6, 0.32, 0.15, 0.5, 0.05, 0.36, 0.18, 0.42];
-
-// mm:ss с ведущими нулями — как у секундомера в композере
-function fmtRecTime(s: number): string {
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${mm}:${ss < 10 ? '0' : ''}${ss}`;
-}
-
-export function VoiceMicButton({ inputRef, inputGetter, variant = 'circle', style, isMobile }: Props) {
-  const { hasSpeech, isListening, recSeconds, startMic, stopMic } = useVoiceInput({
+export function VoiceMicButton({ inputRef, inputGetter, variant = 'circle', style, isMobile, onListeningChange }: Props) {
+  const { hasSpeech, isListening, startMic, stopMic } = useVoiceInput({
     onResult: (chunk) => {
       const el = (inputGetter ?? (() => inputRef?.current ?? null))();
       if (!el) return;
@@ -60,74 +55,42 @@ export function VoiceMicButton({ inputRef, inputGetter, variant = 'circle', styl
     },
   });
 
+  // Эмитим состояние «слушаю/нет» форме — та прячет свой инпут и показывает
+  // ряд [dot, mm:ss, Waveform] в его месте (точь-в-точь композер). Колбэк зовём
+  // только на смене состояния, чтобы не палить лишних ререндеров
+  useEffect(() => {
+    onListeningChange?.(isListening);
+  }, [isListening, onListeningChange]);
+
   if (!hasSpeech) return null;
 
   const isSuffix = variant === 'suffix';
   const btnSize = isSuffix ? 22 : (isMobile ? 36 : 32);
 
-  // === Индикация записи: пульсирующая точка + таймер + Waveform ===
-  // Стиль матчит композер (dot/pulse + fmtRecTime + cc-wave-bar). Появляется ТОЛЬКО
-  // когда мы реально слушаем — иначе кнопка мигает «я слушаю» до первого клика
-  const indicator = isListening ? (
-    <div
+  return (
+    <button
+      type="button"
+      onClick={isListening ? () => stopMic(true) : startMic}
+      onContextMenu={(e) => e.preventDefault()}
+      // Состояние «слушает» — красная заливка как в композере (C.danger)
+      title={isListening ? 'Голосовой ввод идёт · остановить' : 'Голосовой ввод'}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        // suffix-вариант: уезжаем вверх и налево от кнопки, чтобы не наезжать
-        // на текст поля; circle-вариант: справа от кнопки
-        ...(isSuffix
-          ? { position: 'absolute', right: 0, bottom: 'calc(100% + 4px)' }
-          : { marginLeft: 8 }),
-        padding: '3px 8px', borderRadius: 999,
-        background: C.accentLight,
-        fontFamily: 'var(--cc-font-mono, monospace)',
-        fontSize: 11.5, fontWeight: 600, color: C.accent,
-        whiteSpace: 'nowrap',
+        width: btnSize, height: btnSize,
+        borderRadius: R.pill,
+        border: 'none',
+        background: isListening ? C.dangerBg : 'transparent',
+        color: isListening ? C.danger : C.textMuted,
+        cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+        transition: 'color 0.15s, background 0.15s',
+        zIndex: 1,
+        ...style,
       }}
     >
-      <span style={{
-        width: 8, height: 8, borderRadius: '50%', background: C.accent,
-        animation: 'pulsedot 1s ease-in-out infinite',
-      }} />
-      <span>{fmtRecTime(recSeconds)}</span>
-      <span style={{ display: 'inline-flex', gap: 1.5, alignItems: 'center', height: 14 }}>
-        {WAVE_DELAYS.map((d, i) => (
-          <span key={i} className="cc-wave-bar" style={{ height: 14, animationDelay: `${d}s` }} />
-        ))}
-      </span>
-    </div>
-  ) : null;
-
-  return (
-    <>
-      {indicator}
-      <button
-        type="button"
-        onClick={isListening ? () => stopMic(true) : startMic}
-        onContextMenu={(e) => e.preventDefault()}
-        // Состояние «слушает» — красная заливка как в композере (C.danger)
-        title={isListening ? 'Голосовой ввод идёт · остановить' : 'Голосовой ввод'}
-        style={{
-          position: isSuffix ? 'static' : 'static',
-          top: isSuffix ? undefined : undefined,
-          right: isSuffix ? undefined : undefined,
-          transform: isSuffix ? undefined : undefined,
-          width: btnSize, height: btnSize,
-          borderRadius: R.pill,
-          border: 'none',
-          background: isListening ? C.dangerBg : 'transparent',
-          color: isListening ? C.danger : C.textMuted,
-          cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'color 0.15s, background 0.15s',
-          zIndex: 1,
-          ...style,
-        }}
-      >
-        {isListening
-          ? <X size={isSuffix ? 12 : ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          : <Mic size={isSuffix ? 12 : ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-      </button>
-    </>
+      {isListening
+        ? <X size={isSuffix ? 12 : ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        : <Mic size={isSuffix ? 12 : ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+    </button>
   );
 }

@@ -1088,6 +1088,14 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
+  // Подпись под профилем доступа: у «Полного» пояснять нечего (это состояние по умолчанию),
+  // у «Своего» подсказка описывает формат поля запретов под контролом
+  const accessHint = access === 'readOnly'
+    ? 'Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок'
+    : access === 'custom'
+      ? 'Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete'
+      : undefined;
+
   // === Секция 3 — Поведение и контекст (сетка 2×2) ===
   const behaviorSection = (
     <div style={section}>
@@ -1221,6 +1229,30 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             </span>
           )}
         </Field>
+
+        {/* Профиль доступа — тот же контрол, что на шаге «Доступ и память» мастера. Форма
+            возила access и disallowedTools с самого начала, но менять их можно было только
+            при создании: у существующей персоны профиль оставался тем, с каким её завели.
+            Стоит рядом со «Специальностью» намеренно — её шаблон подставляет ровно эти поля,
+            и подмена прав должна быть видна на том же экране. */}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <Field label="Профиль доступа" hint={accessHint}>
+            <SegmentedControl<PersonaAccess>
+              value={access}
+              onChange={setAccess}
+              columns={3}
+              options={[
+                { value: 'full', label: 'Полный' },
+                { value: 'readOnly', label: 'Только чтение' },
+                { value: 'custom', label: 'Свой' },
+              ]}
+            />
+            {access === 'custom' && (
+              <TextArea value={disallowedText} onChange={setDisallowedText}
+                autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
+            )}
+          </Field>
+        </div>
       </div>
 
       {pendingSpecialty && (

@@ -46,9 +46,12 @@ interface Props {
   // размонтировалась бы, а вместе с ней — и распознавание (useVoiceInput гасит движок
   // при уходе компонента).
   recordingRow?: boolean;
+  // Стиль ряда индикации. Нужен, когда родитель — flex-строка (IconField): ряд иначе
+  // сжимается по содержимому. К кнопке отношения не имеет — у неё свой style
+  rowStyle?: React.CSSProperties;
 }
 
-export function VoiceMicButton({ inputRef, inputGetter, variant = 'circle', style, isMobile, onListeningChange, recordingRow }: Props) {
+export function VoiceMicButton({ inputRef, inputGetter, variant = 'circle', style, isMobile, onListeningChange, recordingRow, rowStyle }: Props) {
   const { hasSpeech, isListening, recSeconds, startMic, stopMic } = useVoiceInput({
     onResult: (chunk) => {
       const el = (inputGetter ?? (() => inputRef?.current ?? null))();
@@ -97,7 +100,7 @@ export function VoiceMicButton({ inputRef, inputGetter, variant = 'circle', styl
   if (!hasSpeech) return null;
 
   if (recordingRow && isListening) {
-    return <VoiceRecordingRow seconds={recSeconds} onStop={handleStop} isMobile={isMobile} />;
+    return <VoiceRecordingRow seconds={recSeconds} onStop={handleStop} isMobile={isMobile} style={rowStyle} />;
   }
 
   const isSuffix = variant === 'suffix';

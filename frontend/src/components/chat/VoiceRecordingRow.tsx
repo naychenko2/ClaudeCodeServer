@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { X } from 'lucide-react';
 import { C, FONT, FS, R, WAVE_BAR_DELAYS } from '../../lib/design';
 import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
@@ -29,10 +30,13 @@ export function Waveform() {
 // VoiceMicButton дописывает каждый распознанный кусок в поле сразу, «отменить» уже
 // нечего — остаётся одно действие, «остановить». Вид кнопки при этом эталонный
 // (cancelRecBtn композера), чтобы одно и то же действие выглядело одинаково.
-export function VoiceRecordingRow({ seconds, onStop, isMobile }: {
+export function VoiceRecordingRow({ seconds, onStop, isMobile, style }: {
   seconds: number;
   onStop: () => void;
   isMobile?: boolean;
+  // Место, куда ряд встаёт, бывает разным (блок формы, ячейка flex-строки) —
+  // раскладку задаёт хозяин места, вид ряда остаётся его собственным
+  style?: CSSProperties;
 }) {
   return (
     <div style={{
@@ -40,6 +44,7 @@ export function VoiceRecordingRow({ seconds, onStop, isMobile }: {
       minHeight: 44, padding: '8px 10px',
       borderRadius: R.md, border: `1px solid ${C.border}`,
       background: C.bgWhite,
+      ...style,
     }}>
       <span style={{
         width: 9, height: 9, borderRadius: R.full,

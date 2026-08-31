@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Book, CheckSquare, ChevronRight, Layers, MessageSquare, PowerOff, Zap } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Book, CheckSquare, ChevronRight, Layers, MessageSquare, PowerOff, Volume2, Zap } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaBinding, PersonaMemoryEntry, Session } from '../../types';
+import { IconButton } from '../../components/ui';
+import type { Persona, PersonaBinding, PersonaMemoryEntry, Session, TtsVoiceInfo } from '../../types';
 import { api } from '../../lib/api';
+import { previewVoice, isSpeaking, VoicePreviewError } from '../../lib/tts';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
@@ -12,6 +14,7 @@ import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
+import { PlayingBars } from './PersonaVoicePicker';
 import { bindingsCounter } from './bindingMeta';
 import { useBindingLabels } from './useBindingLabels';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
@@ -130,6 +133,48 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
     return () => { alive = false; };
   }, [persona.id, persona.memoryEnabled]);
 
+  // === Голос персоны: подпись из каталога + прослушивание без захода в профиль ===
+  // Каталог нужен только за human-подписью (ключ вроде madi_ru человеку не говорит ничего)
+  // и флагом «синтез настроен»; тихий fail оставляет подпись сырым ключом.
+  const [voiceCatalog, setVoiceCatalog] = useState<TtsVoiceInfo[] | null>(null);
+  const [ttsConfigured, setTtsConfigured] = useState(true);
+  const [voicePlaying, setVoicePlaying] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    // Флаг — на каждом монтировании: в dev React прогоняет эффекты дважды, и второй
+    // экземпляр без этого считал бы себя мёртвым и выбрасывал полученный каталог
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await api.tts.voices();
+        if (!alive.current) return;
+        setVoiceCatalog(res.voices);
+        setTtsConfigured(res.configured);
+      } catch { /* подпись останется ключом — не повод ронять карточку */ }
+    })();
+  }, []);
+
+  // Тот же путь примерки, что в пикере голоса: без фолбэка на голос браузера (он был бы
+  // ложью — человек решил бы, что персона так и звучит) и с гейтом на идущую озвучку хода
+  const listenVoice = async () => {
+    if (voicePlaying) return; // нажатие — оплаченный запрос, очередь тут ни к чему
+    if (isSpeaking()) { setVoiceError('Идёт озвучка ответа — дождитесь конца или остановите её'); return; }
+    setVoiceError(null);
+    setVoicePlaying(true);
+    try {
+      const v = persona.voice;
+      await previewVoice(v?.voice ?? '', v?.role, v?.voice ? v.speed ?? undefined : undefined);
+    } catch (e) {
+      if (alive.current) setVoiceError(e instanceof VoicePreviewError ? e.message : 'Не удалось послушать голос');
+    } finally {
+      if (alive.current) setVoicePlaying(false);
+    }
+  };
+
   // Раскрытие длинного характера
   const [expanded, setExpanded] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс раскрытия характера при смене персоны
@@ -214,31 +259,69 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
       ? `Свой список${persona.disallowedTools?.length ? ` (${persona.disallowedTools.length})` : ''}`
       : 'Полный';
 
-  // === Настройки: четыре факта, у которых нет своей вкладки (остальное — в навигаторе) ===
+  // === Настройки: факты, у которых нет своей вкладки (остальное — в навигаторе) ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
     { label: 'Доступ', value: accessText },
     { label: 'Возможности', value: toolsText },
     { label: 'Зона', value: zoneLabel ?? (persona.scope === 'project' ? 'Проект' : 'Глобальная') },
   ];
+  // Подпись голоса: label из каталога, «…» пока он едет, сырой ключ — если голос выпал
+  // из белого списка. Нестандартная скорость — рядом, как «Модель · усилие» выше
+  const voiceKey = persona.voice?.voice;
+  const voiceSpeed = persona.voice?.speed;
+  const voiceSpeedNote = voiceSpeed == null ? ''
+    : voiceSpeed < 0.95 ? ' · медленно'
+    : voiceSpeed > 1.05 ? ' · быстро' : '';
+  const voiceLabel = !voiceKey
+    ? 'По умолчанию'
+    : voiceCatalog === null ? '…'
+    : voiceCatalog.find(v => v.voice === voiceKey)?.label ?? voiceKey;
+  const voiceValue = voiceKey ? `${voiceLabel}${voiceSpeedNote}` : voiceLabel;
+
   const factsRow = (
     <div style={section}>
       <SectionLabel style={{ marginBottom: 12 }}>Настройки</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
         {facts.map(f => (
           <div key={f.label} title={f.title ?? f.value} style={factChip}>
-            <span style={{ fontSize: FS.xs, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.textMuted }}>
-              {f.label}
-            </span>
-            <span style={{
-              fontSize: FS.base, fontWeight: 600, color: C.textHeading,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {f.value}
-            </span>
+            <span style={factLabel}>{f.label}</span>
+            <span style={factValue}>{f.value}</span>
           </div>
         ))}
+        {/* Голос — ещё один факт, но с ушами: послушать можно прямо из карточки, не
+            заходя в «Профиль». Кнопка — АБСОЛЮТОМ внутри чипа: в потоке 28px делали бы
+            чип выше соседних (у тех один текст), а грид фактов вытягивает ряд по самому
+            высокому. На мобиле чип разворачивается во всю ширину — кнопка тач-размера
+            (lg) иначе съедала бы подпись, и берёт paddingRight у значения */}
+        <div
+          style={{
+            ...factChip, position: 'relative',
+            ...(isMobile ? { gridColumn: '1 / -1' } : null),
+          }}
+          title={voiceValue}
+        >
+          <span style={factLabel}>Голос</span>
+          <span style={{ ...factValue, paddingRight: isMobile ? 48 : 36 }}>
+            {voiceValue}
+          </span>
+          <IconButton
+            title={ttsConfigured ? 'Послушать голос' : 'Озвучка не настроена'}
+            ariaLabel={voiceKey ? `Послушать голос: ${voiceLabel}` : 'Послушать голос по умолчанию'}
+            size={isMobile ? 'lg' : 'sm'}
+            disabled={voicePlaying || !ttsConfigured}
+            onClick={() => void listenVoice()}
+            style={{ position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)' }}
+          >
+            {voicePlaying
+              ? <PlayingBars height={ICON_SIZE.xs} />
+              : <Volume2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          </IconButton>
+        </div>
       </div>
+      {voiceError && (
+        <div style={{ marginTop: 8, fontSize: FS.xs, color: C.danger }}>{voiceError}</div>
+      )}
     </div>
   );
 
@@ -626,6 +709,16 @@ const factChip: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 3,
   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
   padding: '8px 13px', fontFamily: FONT.sans, minWidth: 0,
+};
+
+// Подпись и значение чипа факта — общие для текстовых фактов и чипа «Голос»
+const factLabel: React.CSSProperties = {
+  fontSize: FS.xs, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
+  color: C.textMuted,
+};
+const factValue: React.CSSProperties = {
+  fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };
 
 const linkBtn: React.CSSProperties = {

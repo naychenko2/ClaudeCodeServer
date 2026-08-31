@@ -47,7 +47,7 @@ const LIST_MAX_HEIGHT = 320;
 // знак в продукте уже знакомый, и он влезает в кнопку. WaitingIndicator сюда не годится
 // вовсе — это индикатор ЛЕНТЫ, с логотипом, аватаром персоны и печатающимся текстом:
 // внутри кнопки-иконки он раскрывался в целый блок не на своём месте.
-function PlayingBars({ height }: { height: number }) {
+export function PlayingBars({ height }: { height: number }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, height }} aria-hidden>
       {[0, 0.15, 0.3].map(delay => (

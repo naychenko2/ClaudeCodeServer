@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -13,9 +12,11 @@ namespace ClaudeHomeServer.Services.Llm;
 // с OllamaClient: null/пусто при любой беде → вызывающий идёт дальше по цепочке; логи
 // в Debug, не Error; регистрация через AddQuietHttpClient (Program.cs).
 //
-// numCtx НЕ передаётся: у llama-server контекст фиксируется ключом -c при старте.
-// Ollama:Profiles:*:NumCtx продолжает читаться маршрутизатором, но игнорируется —
-// предупреждение печатается один раз при создании (см. ctor).
+// numCtx в запрос НЕ передаётся (контекст фиксируется ключом -c при старте сервера),
+// но ИСПОЛЬЗУЕТСЯ для обрезки длинного промпта по бюджету: иначе llama-server отвечает
+// жёстким HTTP 400 «exceed_context_size_error», ход уходит в null → цепочка → платный
+// claude. Ollama раньше обрезала хвост молча (num_ctx ехал в запрос); здесь —
+// эквивалент руками до отправки. Факт обрезки логируется на уровне Information.
 public sealed class LlamaServerClient : ILocalLlmClient
 {
     // Именованный клиент — под этим именем в Program.cs зарегистрирован тихий
@@ -46,9 +47,10 @@ public sealed class LlamaServerClient : ILocalLlmClient
         // задаёт num_ctx для Ollama, у llama-server контекст фиксируется ключом -c при
         // старте сервера и в запросе не передаётся. Печатаем ОДИН раз, чтобы оператор
         // не искал, почему длинный промпт обрезается (если контекст сервера короче).
-        if (Enabled && config["Ollama:Profiles:small:NumCtx"] is not null
-            || config["Ollama:Profiles:text:NumCtx"] is not null
-            || config["Ollama:Profiles:large:NumCtx"] is not null)
+        if (Enabled
+            && (config["Ollama:Profiles:small:NumCtx"] is not null
+                || config["Ollama:Profiles:text:NumCtx"] is not null
+                || config["Ollama:Profiles:large:NumCtx"] is not null))
         {
             _logger.LogWarning(
                 "llama-server: Ollama:Profiles:*:NumCtx игнорируется, контекст фиксируется ключом -c при старте сервера");
@@ -57,22 +59,140 @@ public sealed class LlamaServerClient : ILocalLlmClient
 
     // Свободнотекстовая генерация: единый prompt → строка ответа. Для фоновых one-shot
     // действий, которые сами разбирают ответ своими устойчивыми парсерами.
-    // numCtx принимается в сигнатуре для совместимости с ILocalLlmClient, но в запрос
-    // не уходит — см. комментарий к классу.
+    // numCtx используется для обрезки промпта под контекст llama-server (см. комментарий
+    // к классу); в самом запросе не передаётся.
+    // Оценка «символ → токены» для обрезки промпта под контекст: 3 символа ≈ 1 токен.
+    // Замер на живом токенизаторе qwen35-9b (vocab 248320):
+    //   кириллица 3.25–3.51 симв/токен, английский ~5.5, код C# ~4.2.
+    // Все фоновые действия у нас русские, и при «средних» 4 симв/токен кириллический
+    // промпт длиной в бюджет (numCtx - numPredict) × 4 всё равно лезет за numCtx →
+    // llama-server отвечает 400 «exceed_context_size_error», ход уходит в цепочку на
+    // платный claude. 3 держит запас на чистой кириллице; недобор на английском
+    // дешевле отказа — обрезка и так срабатывает только на переполнении.
+    // Точнее — через /tokenize llama-server, но +HTTP на каждый ход ради редкого случая
+    // не оправдан.
+    private const int CharsPerToken = 3;
+    // Запас на chat template (роли + служебные теги): у распространённых шаблонов
+    // (chatml/mistral/llama3) это 50–100 символов, берём с двойным запасом.
+    private const int TemplateReserveChars = 256;
+
+    // Бюджет символов под вход: (numCtx - numPredict) токенов под промпт, минус запас
+    // на шаблон. numCtx<=0 — обрезка не заказана (вызывающий не знает контекст).
+    private static int InputBudgetChars(int numCtx, int numPredict) =>
+        numCtx > numPredict
+            ? Math.Max(0, (numCtx - numPredict) * CharsPerToken - TemplateReserveChars)
+            : 0;
+
+    // Обрезать строку с хвоста до бюджета. Возвращает (текст, originalLen, newLen, truncated).
+    private static string TrimToBudget(string text, int budget, out int originalLen, out int newLen)
+    {
+        originalLen = text.Length;
+        if (budget <= 0 || text.Length <= budget)
+        {
+            newLen = text.Length;
+            return text;
+        }
+        newLen = budget;
+        return text[..budget];
+    }
+
+    // Обрезать массив сообщений до суммарного бюджета символов, сохраняя system (голову)
+    // и ПОСЛЕДНЕЕ сообщение (текущая реплика пользователя в голосовом разговоре) —
+    // середину выбрасываем целиком, при нехватке укорачиваем с хвоста только последнее.
+    // Для голосового хода это критично: при обрезке «с головы» текущая реплика
+    // превращалась в пустую строку, а старая история доезжала целиком — модель отвечала
+    // на позапрошлый вопрос, и со стороны пользователя это выглядело как сбой без
+    // диагностики.
+    private static (IReadOnlyList<ChatMsg> messages, int origLen, int newLen) TrimMessagesToBudget(
+        IReadOnlyList<ChatMsg> messages, int budget)
+    {
+        var origLen = 0;
+        for (var i = 0; i < messages.Count; i++) origLen += messages[i].Content.Length;
+        if (budget <= 0 || origLen <= budget || messages.Count == 0)
+            return (messages, origLen, origLen);
+
+        // Декомпозиция: system = messages[0] (если он реально system), хвост = messages[1..].
+        var hasSystem = messages[0].Role == "system";
+        var systemIdx = hasSystem ? 0 : -1;
+        var tailStart = hasSystem ? 1 : 0;
+        var tailCount = messages.Count - tailStart;
+
+        var result = new ChatMsg[messages.Count];
+
+        // Заголовок system режем с хвоста только в крайнем случае (не влезает даже
+        // system+last): контракт ронять нельзя, поэтому берём сколько влезло.
+        if (hasSystem)
+        {
+            var sysBudget = Math.Min(messages[0].Content.Length, budget);
+            result[0] = new ChatMsg(messages[0].Role, messages[0].Content[..sysBudget]);
+            budget -= sysBudget;
+        }
+
+        // Один хвостовой участник в разговоре — это и есть «текущая реплика».
+        if (tailCount == 0) return (result, origLen, hasSystem ? result[0].Content.Length : 0);
+
+        var lastIdx = messages.Count - 1;
+        if (tailCount == 1)
+        {
+            // Только последнее сообщение — обрезаем его до остатка бюджета.
+            var c = messages[lastIdx].Content;
+            var keep = Math.Min(c.Length, Math.Max(0, budget));
+            result[lastIdx] = new ChatMsg(messages[lastIdx].Role, c[..keep]);
+            return (result, origLen, ComputeNewLen(result));
+        }
+
+        // Несколько сообщений: сначала резерв под последнее (оно должно дойти непустым),
+        // затем середину наполняем от конца к началу, пока влезает.
+        var lastContent = messages[lastIdx].Content;
+        var lastKeep = Math.Min(lastContent.Length, Math.Max(0, budget));
+        result[lastIdx] = new ChatMsg(messages[lastIdx].Role, lastContent[..lastKeep]);
+        var middleBudget = Math.Max(0, budget - lastKeep);
+
+        var used = 0;
+        // Идём по messages[tailStart..lastIdx-1] от конца к началу, копим целиком, пока есть место.
+        for (var i = lastIdx - 1; i >= tailStart; i--)
+        {
+            var len = messages[i].Content.Length;
+            if (used + len > middleBudget) break;
+            result[i] = messages[i];
+            used += len;
+        }
+        // Остаток середины (старая история) — пустые сообщения с теми же ролями.
+        for (var i = tailStart; i < lastIdx; i++)
+        {
+            if (result[i] is null)
+                result[i] = new ChatMsg(messages[i].Role, "");
+        }
+
+        return (result, origLen, ComputeNewLen(result));
+    }
+
+    private static int ComputeNewLen(IReadOnlyList<ChatMsg> msgs)
+    {
+        var n = 0;
+        for (var i = 0; i < msgs.Count; i++) n += msgs[i].Content.Length;
+        return n;
+    }
+
     public async Task<string?> GenerateTextAsync(
         string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
         string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
-        _ = numCtx; // у llama-server контекст фиксируется ключом -c при старте
         var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
+        var budget = InputBudgetChars(numCtx, numPredict);
+        var trimmed = TrimToBudget(prompt, budget, out var origLen, out var newLen);
+        if (newLen < origLen)
+            _logger.LogInformation(
+                "llama-server (text): обрезка промпта под контекст {NumCtx}: {Orig}→{New} символов ({Label})",
+                numCtx, origLen, newLen, label ?? "-");
         try
         {
             var client = _http.CreateClient(HttpClientName);
             client.Timeout = timeout;
 
             using var resp = await client.PostAsJsonAsync($"{BaseUrl}/v1/chat/completions",
-                BuildRequestBody(used, BuildMessages(null, prompt), numPredict, jsonFormat: null), ct);
+                BuildRequestBody(used, BuildMessages(null, trimmed), numPredict, jsonFormat: null), ct);
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -105,9 +225,37 @@ public sealed class LlamaServerClient : ILocalLlmClient
         string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
         string? ownerId = null, string? label = null)
     {
-        _ = numCtx; // у llama-server контекст фиксируется ключом -c при старте
         var used = string.IsNullOrWhiteSpace(model) ? Model : model!;
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
+        var ctx = numCtx ?? 0;
+        var pred = numPredict ?? 120;
+        // Суммарный бюджет: при нехватке режем с хвоста user-промпта, системный не трогаем.
+        var budget = InputBudgetChars(ctx, pred);
+        var totalLen = (string.IsNullOrEmpty(systemPrompt) ? 0 : systemPrompt.Length) + userPrompt.Length;
+        string trimmedSystem = systemPrompt;
+        string trimmedUser = userPrompt;
+        if (budget > 0 && totalLen > budget)
+        {
+            var sysLen = string.IsNullOrEmpty(systemPrompt) ? 0 : systemPrompt.Length;
+            if (sysLen > budget)
+            {
+                // systemPrompt один длиннее бюджета: userBudget схлопнется в 0, user уйдёт
+                // пустым, system всё равно переполнит контекст. У фоновых действий system
+                // пустой, но если кто-то прислал — лучше увидеть в логе, чем гадать.
+                _logger.LogWarning(
+                    "llama-server (json): systemPrompt ({SysLen}) длиннее бюджета ({Budget}) для контекста {NumCtx}, метка {Label}",
+                    sysLen, budget, ctx, label ?? "-");
+            }
+            var userBudget = Math.Max(0, budget - sysLen);
+            // userBudget=0 здесь означает «явно обрезать до нуля» (systemPrompt один
+            // длиннее бюджета). TrimToBudget трактует budget<=0 как «обрезка не
+            // заказана» — здесь это другая семантика, делаем пустую строку руками.
+            trimmedUser = userBudget == 0 ? "" : TrimToBudget(userPrompt, userBudget, out var _, out _);
+            if (trimmedUser.Length < userPrompt.Length)
+                _logger.LogInformation(
+                    "llama-server (json): обрезка промпта под контекст {NumCtx}: {Orig}→{New} символов ({Label})",
+                    ctx, totalLen, sysLen + trimmedUser.Length, label ?? "-");
+        }
         try
         {
             var client = _http.CreateClient(HttpClientName);
@@ -128,7 +276,7 @@ public sealed class LlamaServerClient : ILocalLlmClient
             }
 
             using var resp = await client.PostAsJsonAsync($"{BaseUrl}/v1/chat/completions",
-                BuildRequestBody(used, BuildMessages(systemPrompt, userPrompt), numPredict ?? 120, responseFormat, schemaGrammar), ct);
+                BuildRequestBody(used, BuildMessages(trimmedSystem, trimmedUser), pred, responseFormat, schemaGrammar), ct);
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -163,10 +311,15 @@ public sealed class LlamaServerClient : ILocalLlmClient
         int numPredict, int numCtx, string? ownerId,
         Func<string, Task>? onDelta = null, CancellationToken ct = default)
     {
-        _ = numCtx; // у llama-server контекст фиксируется ключом -c при старте
         var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used))
             return new ChatTurnResult(null, null);
+        var budget = InputBudgetChars(numCtx, numPredict);
+        var (trimmedMessages, origLen, newLen) = TrimMessagesToBudget(messages, budget);
+        if (newLen < origLen)
+            _logger.LogInformation(
+                "llama-server (voice): обрезка промпта под контекст {NumCtx}: {Orig}→{New} символов (voice-turn)",
+                numCtx, origLen, newLen);
         var streaming = onDelta is not null;
         try
         {
@@ -183,7 +336,7 @@ public sealed class LlamaServerClient : ILocalLlmClient
             var body = new Dictionary<string, object?>
             {
                 ["model"] = used,
-                ["messages"] = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+                ["messages"] = trimmedMessages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
                 ["max_tokens"] = numPredict,
                 ["temperature"] = 0.7,
             };

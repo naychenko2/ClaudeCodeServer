@@ -6,8 +6,8 @@ using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -221,6 +221,36 @@ public class LlamaServerClientTests : IDisposable
         raw.Should().BeNull();
     }
 
+    // Сторож задачи 833354c3: если systemPrompt один длиннее бюджета, метод должен
+    // работать без падения (userBudget=0 → trimmedUser="", system уходит целиком —
+    // это и так приведёт к 400 на сервере, но клиент вернёт null по контракту, а не
+    // эксепшн). И заодно проверим, что warning пишется — без этого дефект был бы невидим.
+    [Fact]
+    public async Task ChatJsonAsync_SystemДлиннееБюджета_ЛогируетWarningИНеПадает()
+    {
+        string? seenBody = null;
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}]}""",
+            req => seenBody = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult());
+        var sink = new RecordingLogger<LlamaServerClient>();
+        var client = new LlamaServerClient(new FakeHttpFactory(handler), EnabledConfig(), sink);
+
+        // budget = (128-32)*3 - 256 = 8; system 200 символов один длиннее.
+        var hugeSystem = new string('S', 200);
+        var raw = await client.ChatJsonAsync(hugeSystem, "user", "json",
+            numPredict: 32, numCtx: 128, label: "test.oversized");
+
+        // Метод не упал, отдал null (тело ответа в обработчике — happy path, но клиент
+        // всё равно пройдёт обрезку и увидит успех; в реальности сервер бы ответил 400
+        // и метод вернул null). Здесь — happy path.
+        raw.Should().Be("ok");
+        sink.HasWarningContaining("systemPrompt").Should().BeTrue(
+            "при sysLen > budget должен логироваться warning, иначе дефект невидим");
+        // user-budget=0, user ушёл пустой.
+        seenBody.Should().NotBeNull();
+        seenBody!.Should().Contain("\"content\":\"\"");
+    }
+
     [Fact]
     public async Task GenerateTextAsync_500_ВозвращаетNull()
     {
@@ -230,6 +260,202 @@ public class LlamaServerClientTests : IDisposable
         var raw = await client.GenerateTextAsync("p", null, TimeSpan.FromSeconds(5), 100, 4096);
 
         raw.Should().BeNull();
+    }
+
+    // Сторож регрессии: длинный промпт обрезается под бюджет контекста профиля ДО отправки,
+    // иначе llama-server отвечает 400 «exceed_context_size_error» (см. задачу
+    // d9f75c24-ae6b-4ab2-9149-ef52ef05b4d2). numCtx=512, numPredict=10 →
+    // бюджет (512-10)*3 - 256 = 1250 символов (константа CharsPerToken=3 — замер на
+    // qwen35-9b показал 3.25–3.51 симв/токен для кириллицы, 4 завышало бюджет и
+    // русский промпт всё равно лез за контекст). Промпт 3000 обрежется с хвоста.
+    [Fact]
+    public async Task GenerateTextAsync_ДлинныйПромпт_ОбрезаетсяПодКонтекст()
+    {
+        var sentPromptLength = -1;
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}]}""",
+            req => sentPromptLength = ExtractUserContentLength(req));
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        var bigPrompt = new string('x', 3000);
+        var text = await client.GenerateTextAsync(bigPrompt, null, TimeSpan.FromSeconds(5),
+            numPredict: 10, numCtx: 512, label: "test.action");
+
+        text.Should().Be("ok");
+        sentPromptLength.Should().Be(1250,
+            "промпт обрезан под бюджет (numCtx - numPredict) × 3 - 256 символов");
+    }
+
+    // Сторож задачи 833354c3: кириллический промпт длиной в бюджет должен пройти
+    // обрезку и поместиться в контекст на реальном сервере. Константа 3 держит запас
+    // даже на чистой кириллице (3.25–3.51 симв/токен), а константа 4 — нет.
+    // Здесь проверяем именно число: budget = (4096-256) × 3 - 256 = 11 264 символа кириллицы.
+    [Fact]
+    public async Task GenerateTextAsync_КириллическийПромпт_БюджетПоКонстанте3()
+    {
+        var sentPromptLength = -1;
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}]}""",
+            req => sentPromptLength = ExtractUserContentLength(req));
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        // Кириллица. Длина ровно в бюджет (numCtx=4096, numPredict=256).
+        // (4096-256)*3 - 256 = 11 264 символа.
+        var bigPrompt = new string('ы', 11_264);
+        var text = await client.GenerateTextAsync(bigPrompt, null, TimeSpan.FromSeconds(5),
+            numPredict: 256, numCtx: 4096);
+
+        text.Should().Be("ok");
+        sentPromptLength.Should().Be(11_264, "промпт в рамках бюджета не обрезается");
+    }
+
+    // Короткий промпт в рамках бюджета — обрезки нет, в запросе исходный текст.
+    [Fact]
+    public async Task GenerateTextAsync_КороткийПромпт_НеОбрезается()
+    {
+        var sentPromptLength = -1;
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}]}""",
+            req => sentPromptLength = ExtractUserContentLength(req));
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        var prompt = new string('y', 100);
+        await client.GenerateTextAsync(prompt, null, TimeSpan.FromSeconds(5),
+            numPredict: 10, numCtx: 512);
+
+        sentPromptLength.Should().Be(100);
+    }
+
+    // ChatTurnAsync: массив сообщений обрезается до суммарного бюджета. System (голова)
+    // и последнее сообщение (текущая реплика) сохраняются, середина выбрасывается.
+    // Без стрима — клиент ждёт JSON-ответ, а не SSE.
+    [Fact]
+    public async Task ChatTurnAsync_ДлинныеСообщения_ОбрезаютсяСХвоста()
+    {
+        int sentSystemLen = -1, sentUserLen = -1;
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}""",
+            req =>
+            {
+                var (sysLen, userLen) = ExtractTurnMessageLengths(req);
+                sentSystemLen = sysLen;
+                sentUserLen = userLen;
+            });
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        var msgs = new List<ChatMsg>
+        {
+            new("system", new string('s', 50)),
+            new("user", new string('u', 2500)),
+        };
+        var result = await client.ChatTurnAsync(msgs, null, TimeSpan.FromSeconds(5),
+            numPredict: 10, numCtx: 512, ownerId: null, onDelta: null);
+
+        result.Text.Should().Be("ok");
+        // budget = (512-10)*3 - 256 = 1250; system=50, last=user обрезан до 1200
+        sentSystemLen.Should().Be(50, "system-промпт сохраняется целиком");
+        sentUserLen.Should().Be(1200, "user обрезан до суммарного бюджета минус system");
+    }
+
+    // Сторож задачи 833354c3: при обрезке НЕ должна теряться последняя реплика — это
+    // текущий вопрос пользователя в голосовом разговоре. Раньше код шёл с головы и
+    // обнулял хвост, в итоге модель отвечала на позапрошлый вопрос.
+    // Проверяем именно последнее сообщение: в бюджет влезает только оно и system,
+    // а две средние (user + assistant) обязаны быть пустыми.
+    [Fact]
+    public async Task ChatTurnAsync_ПоследняяРеплика_НеТеряется()
+    {
+        // Захватываем длины всех сообщений, чтобы убедиться: последнее (i=3) непустое,
+        // средние (i=1, i=2) — пустые, system (i=0) — целиком.
+        int[] sentLens = { -1, -1, -1, -1 };
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}""",
+            req => sentLens = ExtractAllMessageLengths(req));
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        // budget = (512-10)*3 - 256 = 1250; system=50+last=2000 не влезает, last обрезан до 1200.
+        // Середина (1000 + 500) в остаток 0 не влезает — обнулена.
+        var msgs = new List<ChatMsg>
+        {
+            new("system", new string('s', 50)),
+            new("user", new string('u', 1000)),
+            new("assistant", new string('a', 500)),
+            new("user", new string('q', 2000)),
+        };
+        var result = await client.ChatTurnAsync(msgs, null, TimeSpan.FromSeconds(5),
+            numPredict: 10, numCtx: 512, ownerId: null, onDelta: null);
+
+        result.Text.Should().Be("ok");
+        sentLens[0].Should().Be(50, "system-промпт сохранён целиком");
+        sentLens[1].Should().Be(0, "[старая user-реплика выброшена]");
+        sentLens[2].Should().Be(0, "[старый assistant выброшен]");
+        sentLens[3].Should().Be(1200, "текущая реплика пользователя дошла непустой (не может быть 0)");
+    }
+
+    // Середина обрезается только если НЕ влезает целиком. Если system+last+assistant
+    // умещаются, последний assistant тоже должен доехать (а старые user — нет).
+    [Fact]
+    public async Task ChatTurnAsync_СерединаВлезает_СтарыеСообщенияНеТрогаются()
+    {
+        int[] sentLens = { -1, -1, -1, -1 };
+        var handler = new CaptureHandler(
+            """{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}""",
+            req => sentLens = ExtractAllMessageLengths(req));
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        // budget = (512-10)*3 - 256 = 1250. system(50)+assistant(500)+user(200)=750, всё влезает.
+        // Первый user(1000) вылезает — обнуляется.
+        var msgs = new List<ChatMsg>
+        {
+            new("system", new string('s', 50)),
+            new("user", new string('u', 1000)),
+            new("assistant", new string('a', 500)),
+            new("user", new string('q', 200)),
+        };
+        var result = await client.ChatTurnAsync(msgs, null, TimeSpan.FromSeconds(5),
+            numPredict: 10, numCtx: 512, ownerId: null, onDelta: null);
+
+        result.Text.Should().Be("ok");
+        sentLens[0].Should().Be(50);
+        sentLens[1].Should().Be(0, "старая user-реплика выброшена — она не влезает");
+        sentLens[2].Should().Be(500, "свежий assistant сохранён");
+        sentLens[3].Should().Be(200, "текущая реплика сохранена");
+    }
+
+    // Достать длины ВСЕХ сообщений из потокового тела (ChatTurnAsync).
+    private static int[] ExtractAllMessageLengths(HttpRequestMessage req)
+    {
+        var body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+        body.Should().NotBeNull();
+        using var doc = System.Text.Json.JsonDocument.Parse(body!);
+        var messages = doc.RootElement.GetProperty("messages");
+        var n = messages.GetArrayLength();
+        var lens = new int[n];
+        for (var i = 0; i < n; i++)
+            lens[i] = messages[i].GetProperty("content").GetString()!.Length;
+        return lens;
+    }
+
+    // Достать длину content у user-сообщения из не-потокового тела (GenerateTextAsync).
+    private static int ExtractUserContentLength(HttpRequestMessage req)
+    {
+        var body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+        body.Should().NotBeNull();
+        using var doc = System.Text.Json.JsonDocument.Parse(body!);
+        var messages = doc.RootElement.GetProperty("messages");
+        return messages[0].GetProperty("content").GetString()!.Length;
+    }
+
+    // Достать длины system и user у двух сообщений из потокового тела (ChatTurnAsync).
+    private static (int systemLen, int userLen) ExtractTurnMessageLengths(HttpRequestMessage req)
+    {
+        var body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+        body.Should().NotBeNull();
+        using var doc = System.Text.Json.JsonDocument.Parse(body!);
+        var messages = doc.RootElement.GetProperty("messages");
+        var sys = messages[0].GetProperty("content").GetString()!.Length;
+        var user = messages[1].GetProperty("content").GetString()!.Length;
+        return (sys, user);
     }
 
     // --- LocalLlmOptions.Read: фолбэк LocalLlm:* → Ollama:* ---
@@ -411,6 +637,31 @@ public class LlamaServerClientTests : IDisposable
             {
                 Content = new StringContent(body, Encoding.UTF8, contentType),
             });
+        }
+    }
+
+    // Простой логгер-ловушка: пишет всё в список строк, чтобы тесты могли проверить
+    // наличие конкретного warning. Используется там, где FakeHandler не даёт увидеть
+    // поведение логирования.
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add((logLevel, formatter(state, exception)));
+        }
+
+        public bool HasWarningContaining(string fragment) =>
+            Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains(fragment));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
         }
     }
 }

@@ -1,0 +1,62 @@
+namespace ClaudeHomeServer.Services.Composition;
+
+// Внутренние границы продукта: каждая подсистема инкапсулирует свой раздел
+// (video/backup/telemetry/...) и регистрирует нужные ей сервисы и hosted-сервисы.
+//
+// Не путать с внешними модулями YARP за `Services/Modules` (манифест `module.json`):
+// внешний модуль — отдельный процесс за реверс-прокси, у него свой контракт и
+// свой реестр (`ModuleRegistry`/`IModule`). Этот интерфейс — про РЕГИСТРАЦИЮ
+// ВНУТРИ Microsoft DI, без выгрузки, без hot-plug.
+public interface IAppSubsystem
+{
+    // Латиница, нижний регистр, уникально в рамках процесса. Используется как ключ
+    // настроек (например, "Telemetry:Backends"), лог-префикс и якорь в логах/диагностике.
+    string Key { get; }
+
+    // Человекочитаемое имя подсистемы (для логов и диагностических дампов).
+    string Title { get; }
+
+    // Зарегистрировать свои сервисы. Вызывается один раз при сборке контейнера,
+    // в порядке, заданном вызовом `AddSubsystems`.
+    void Register(IServiceCollection services, IConfiguration config);
+}
+
+// Регистрация подсистем: одна точка входа, через которую Program.cs подключает
+// все внутренние разделы. Защита от дублей `Key` — контрактная гарантия, что
+// `Telemetry:Backends` и `Telemetry:Alerts` не окажутся конкурентами за одну секцию.
+public static class SubsystemRegistration
+{
+    public static IServiceCollection AddSubsystems(
+        this IServiceCollection services, IConfiguration config, params IAppSubsystem[] subsystems)
+    {
+        if (subsystems is null) throw new ArgumentNullException(nameof(subsystems));
+
+        // Порядок важен: подсистемы более низкого слоя идут первыми, верхние — позже.
+        // Дубликат `Key` — ошибка конфигурации: тихо проглатывать её нельзя, иначе
+        // одинаковые секции настроек перетрут друг друга непредсказуемо.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var subsystem in subsystems)
+        {
+            if (subsystem is null) throw new ArgumentException(
+                "Подсистема в списке null — вероятно, пропущена регистрация.", nameof(subsystems));
+
+            // Пустой или null Key пробрасываем явно: `HashSet.Add(null)` упадёт
+            // с неинформативным NRE изнутри таблицы, а две подсистемы с пустым
+            // ключом дадут тот же "дубликат Key=''", не отличая смысловой конфликт
+            // от банальной недозаполненности.
+            if (string.IsNullOrWhiteSpace(subsystem.Key))
+                throw new ArgumentException(
+                    $"IAppSubsystem '{subsystem.Title}' имеет пустой или null Key — регистрация отклонена.",
+                    nameof(subsystems));
+
+            if (!seen.Add(subsystem.Key))
+                throw new ArgumentException(
+                    $"Дубликат IAppSubsystem.Key='{subsystem.Key}' — ключ должен быть уникальным.",
+                    nameof(subsystems));
+
+            subsystem.Register(services, config);
+        }
+
+        return services;
+    }
+}

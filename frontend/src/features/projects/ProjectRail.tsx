@@ -11,6 +11,7 @@ import { ProjectPalette } from './ProjectPalette';
 import { useAllProjects, openProjectViaEvent } from './useAllProjects';
 import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore, removeFromDock } from '../../lib/pinnedProjects';
 import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } from '../../lib/projectActivity';
+import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
 
 // Вертикальный док проектов — ВТОРАЯ левая рельса, под рельсой панелей. Раньше те же
 // иконки лежали горизонтальной строкой внутри панели «Проекты»: ряд в колонке шириной
@@ -94,7 +95,12 @@ function ProjectDockIcon({ p, activity, active, muted, dragging, dragActive, sid
       style={{
         display: 'flex', flexShrink: 0, position: 'relative',
         opacity: dragging ? 0.35 : 1,
-        transition: 'opacity 0.12s', touchAction: 'none',
+        // Щит обязателен каждому, кто ловит долгое нажатие (guidelines): обёртка
+        // держит свой таймер жеста, и без щита удержание поднимало ещё и коллаут
+        // браузера поверх нашей плашки и меню. touchAction перекрывает щитовой
+        // 'manipulation' на 'none' — зоне нужен drag без скролла.
+        ...TOUCH_CALLOUT_GUARD, touchAction: 'none',
+        transition: 'opacity 0.12s',
       }}
     >
       {/* Кнопка-картинка: иконка проекта занимает бокс ЦЕЛИКОМ (штриховым иконкам

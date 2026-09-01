@@ -4,16 +4,18 @@ import { ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, R } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
 import { PillSwitch } from '../../components/Toolbar';
-import { Button } from '../../components/ui';
+import { Button, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { PersonaAvatar } from './PersonaAvatar';
 
 // Что показывать в разделе: только глобальных или вообще всех (с проектными)
 export type PersonaListMode = 'global' | 'all';
 
-// Сайдбар раздела «Персоны»: компактная кнопка создания в хедере тулбара (по аналогии
-// с TasksPanel: «+ Задача» через PanelHeaderSlot pinned — accent primary, size="xs"),
-// ниже — список персон. «Командный центр» рисуется первым пунктом списка (опция
-// teamCenter) — это часть контента, а не тулбара.
+// Сайдбар раздела «Персоны» и панели «Команда» проекта: кнопка создания живёт
+// в ЗАКРЕПЛЁННОМ слоте шапки карточки (PanelHeaderSlot pinned, как «+ Задача»
+// у TasksPanel — accent primary, size="xs"): видна всегда, без наведения.
+// Без шапки (мобильный стек, одноколоночная вкладка) — fallback той же кнопкой
+// в полосе над списком. «Командный центр» рисуется первым пунктом списка
+// (опция teamCenter) — это часть контента, а не тулбара.
 export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onModeChange, projects, teamCenter }: {
   personas: Persona[];
   selectedId: string | null;
@@ -28,27 +30,41 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
   // что и персоны, но с иконкой команды. active — открыт ли центр (персона не выбрана).
   teamCenter?: { active: boolean; onClick: () => void };
 }) {
+  // Панель в карточке с шапкой — кнопка создания уезжает в закреплённый слот шапки;
+  // без шапки (мобила) остаётся в полосе над списком
+  const inHeader = useHasPanelHeader();
+
+  // Кнопка создания персоны — компактная accent (аналог TasksPanel:
+  // variant="primary" size="xs" + Plus + короткая подпись). Подпись «Персона»
+  // (а не «Новая персона») — место действия понятно из шапки и иконки плюс;
+  // полное название остаётся в title для тултипа и доступности.
+  const newBtn = (
+    <Button variant="primary" size="xs" title="Новая персона"
+      leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
+      onClick={onNew}>
+      Персона
+    </Button>
+  );
+
+  // Полоса над списком остаётся только с содержимым: без шапки — кнопка (+ тумблер),
+  // в карточке с шапкой — один тумблер зоны (кнопка уже в шапке). Пустой полосы
+  // с бордером быть не должно — панель «Команда» проекта осталась бы с лишней чертой.
+  const hasToolbar = !inHeader || !!onModeChange;
+
   return (
     <>
-      <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {/* Кнопка создания персоны — компактная accent в хедере тулбара (аналог
-            TasksPanel: variant="primary" size="xs" + Plus + короткая подпись). Подпись
-            «Персона» (а не «Новая персона») — место действия понятно из хедера и
-            иконки плюс; полное название остаётся в title для тултипа и доступности. */}
-        <div>
-          <Button variant="primary" size="xs" title="Новая персона"
-            leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
-            onClick={onNew}>
-            Персона
-          </Button>
+      {inHeader && <PanelHeaderSlot pinned>{newBtn}</PanelHeaderSlot>}
+      {hasToolbar && (
+        <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {!inHeader && <div>{newBtn}</div>}
+          {onModeChange && (
+            <PillSwitch<PersonaListMode>
+              value={mode ?? 'global'} onChange={onModeChange} fill
+              options={[{ value: 'global', label: 'Глобальные' }, { value: 'all', label: 'Все' }]}
+            />
+          )}
         </div>
-        {onModeChange && (
-          <PillSwitch<PersonaListMode>
-            value={mode ?? 'global'} onChange={onModeChange} fill
-            options={[{ value: 'global', label: 'Глобальные' }, { value: 'all', label: 'Все' }]}
-          />
-        )}
-      </div>
+      )}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6 }}>
         {teamCenter && (
           <>

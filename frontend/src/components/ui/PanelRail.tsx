@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
-import { ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ChevronsLeft, ChevronsRight, Columns2, Ellipsis, Pin, Square, X, type LucideIcon } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, ChevronsLeft, ChevronsRight, Columns2, Ellipsis, Eye, EyeOff, Pin, Square, X, type LucideIcon } from 'lucide-react';
 import { C, FONT, FS, ISLAND, R, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { Menu, MenuItem } from './Menu';
@@ -190,11 +190,10 @@ function RailOverflow({ side, overflow, collapse }: {
   collapse?: { collapsed: boolean; onToggle: () => void };
 }) {
   const { items, modeToggle, badge, dragActive, drop, onRestore } = overflow;
-  // Стрелка возврата смотрит В СТОРОНУ своей рельсы (она у края окна, меню — от неё
-  // внутрь экрана): «кнопка уедет обратно туда»
-  const RestoreIcon = side === 'left' ? ArrowLeftToLine : ArrowRightToLine;
-  // Перенос — стрелка в ПРОТИВОПОЛОЖНУЮ сторону от возврата: та ведёт кнопку к своей
-  // рельсе, эта уводит панель к чужой.
+  // Возврат — открытый глаз: пара к EyeOff плашки кнопки (убрать/вернуть = скрыть
+  // из столбца/показать снова). Глазу сторона безразлична, поэтому и side-зависимой
+  // переменной, как у стрелок, здесь больше нет.
+  // Перенос — стрелка в ПРОТИВОПОЛОЖНУЮ кромку окна, та же, что в плашке кнопки.
   const FlipIcon = flipIcon(side);
   const hostRef = useRef<HTMLDivElement>(null);
   // rect кнопки — якорь меню. Держим сам rect, а не флаг: меню живёт порталом и
@@ -278,16 +277,17 @@ function RailOverflow({ side, overflow, collapse }: {
                     </>
                   }
                   onClick={() => { it.onClick(); close(); }}
-                  // Кнопки-спутники справа. Первая — вернуть иконку в столбец, не
-                  // открывая панель: меню держим открытым (кнопки обычно возвращают
-                  // пачкой) и закрываем, только когда ящик опустел. Вторая —
-                  // перенести панель на другую сторону: спрятанная кнопка не стоит в
-                  // столбце, и плашки с этим действием у неё нет вовсе — в ящике это
-                  // единственный вход. Меню после переноса закрываем всегда: строка
-                  // уезжает в чужой ящик, и список под пальцем меняется.
+                  // Кнопки-спутники справа. Первая — вернуть иконку в столбец (глаз:
+                  // пара к перечёркнутому глазу «убрать в «Ещё»»), не открывая панель:
+                  // меню держим открытым (кнопки обычно возвращают пачкой) и закрываем,
+                  // только когда ящик опустел. Вторая — перенести панель на другую
+                  // сторону: спрятанная кнопка не стоит в столбце, и плашки с этим
+                  // действием у неё нет вовсе — в ящике это единственный вход. Меню
+                  // после переноса закрываем всегда: строка уезжает в чужой ящик, и
+                  // список под пальцем меняется.
                   actions={[
                     ...(onRestore ? [{
-                      icon: <RestoreIcon size={14} strokeWidth={ICON_STROKE} />,
+                      icon: <Eye size={14} strokeWidth={ICON_STROKE} />,
                       title: 'Вернуть кнопку на рельсу',
                       onClick: () => { onRestore(it.key); if (items.length <= 1) close(); },
                     }] : []),
@@ -375,10 +375,12 @@ const FLIP_TITLE = { left: 'Перенести панель вправо', right
 
 // Кнопки в плашке подписи кнопки панели. Порядок постоянный: сперва «убрать в
 // ящик» (частое), потом «перенести» — иначе кнопки прыгали бы местами у панелей,
-// которым доступно только одно из двух.
+// которым доступно только одно из двух. Знаки разводим по силуэтам: видимость
+// кнопки — глаз (EyeOff в плашке, Eye в строках ящика), движение панели —
+// единственная стрелка, всегда к ПРОТИВОПОЛОЖНОЙ кромке окна.
 function railActions(item: RailItem, side: 'left' | 'right'): RailFlyoutAction[] | undefined {
   const acts: RailFlyoutAction[] = [];
-  if (item.onTuck) acts.push({ Icon: ArrowDownToLine, title: 'Убрать кнопку в «Ещё»', onClick: item.onTuck });
+  if (item.onTuck) acts.push({ Icon: EyeOff, title: 'Убрать кнопку в «Ещё»', onClick: item.onTuck });
   if (item.onFlip) acts.push({ Icon: flipIcon(side), title: FLIP_TITLE[side], onClick: item.onFlip });
   return acts.length > 0 ? acts : undefined;
 }
@@ -427,12 +429,12 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
       active={item.active}
       onClick={item.onClick}
       // Кнопки в плашке подписи. Первая — «убрать в ящик»: тот же жест, что дроп
-      // иконки на «…», только кликом. Знак — стрелка ВНИЗ к черте: ящик стоит
-      // последней кнопкой столбца, туда иконка и уезжает. Парная ей стрелка вбок в
-      // строках ящика возвращает кнопку обратно. Вторая — «перенести на другую
-      // сторону»: стрелка к ПРОТИВОПОЛОЖНОЙ кромке окна, то есть туда, куда уедет
-      // панель. Пока кнопку тащат, плашки нет вовсе (hoverSuppressed), так что
-      // действия жесту не мешают.
+      // иконки на «…», только кликом. Знак — перечёркнутый глаз: кнопка исчезает
+      // из столбца (а открытый глаз в строках ящика возвращает её обратно).
+      // Вторая — «перенести на другую сторону»: стрелка к ПРОТИВОПОЛОЖНОЙ кромке
+      // окна, то есть туда, куда уедет панель — единственная стрелка в этих
+      // действиях, с глазом не спутать. Пока кнопку тащат, плашки нет вовсе
+      // (hoverSuppressed), так что действия жесту не мешают.
       actions={railActions(item, side)}
       // Пока кнопку тащат, подпись не нужна: она вылезала бы поверх места вставки
       hoverSuppressed={dragging}

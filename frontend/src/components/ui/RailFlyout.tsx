@@ -229,7 +229,10 @@ export function RailFlyout({ side, label, hint, open, actions, railWidth, hostSt
             // иконки — первая в списке всегда ближе к тексту.
             const ordered = actionFirst ? [...acts].reverse() : acts;
             const btns = ordered.map((a, i) => (
-              <IconButton key={i} size={touch ? 'lg' : 'xs'} title={a.title} onClick={() => { a.onClick(); onDismiss?.(); }}>
+              // ariaLabel, а не title: планшетный браузер показывает нативный title
+              // по долгому нажатию — тем же жестом, каким открылась сама плашка, и
+              // палец, лежащий на кнопке, получал браузерный тултип поверх нашей
+              <IconButton key={i} size={touch ? 'lg' : 'xs'} ariaLabel={a.title} onClick={() => { a.onClick(); onDismiss?.(); }}>
                 <a.Icon size={touch ? 18 : 14} strokeWidth={ICON_STROKE} />
               </IconButton>
             ));

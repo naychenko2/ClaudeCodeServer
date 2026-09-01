@@ -69,6 +69,76 @@ public class BgAgentLifecycleTests : IDisposable
             .Should().BeTrue();
     }
 
+    // --- Маркер блокера цикла «до готово» (асимметрия к промису: причина и пустой тег) ---
+
+    [Fact]
+    public void TryExtractBlockedMarker_НаходитМаркерВОбычномТексте_ОтдаётПричину()
+    {
+        var ok = SessionManager.TryExtractBlockedMarker(
+            "Встал.\n<blocked>нужен доступ к прод-логам</blocked>", out var reason);
+        ok.Should().BeTrue();
+        reason.Should().Be("нужен доступ к прод-логам");
+    }
+
+    [Fact]
+    public void TryExtractBlockedMarker_ИгнорируетЦитатуВИнлайн_Коде()
+    {
+        // Симметрично правилу для промиса: модель цитирует протокол в начале хода — бэктики
+        // не считаются реальной остановкой.
+        var ok = SessionManager.TryExtractBlockedMarker(
+            "Когда застряну — выведу `<blocked>причина</blocked>`, а пока продолжаю.",
+            out var reason);
+        ok.Should().BeFalse();
+        reason.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryExtractBlockedMarker_ИгнорируетМаркерВКодБлоке()
+    {
+        var ok = SessionManager.TryExtractBlockedMarker(
+            "Пример протокола:\n```\n<blocked>причина</blocked>\n```\nЕщё работаю.",
+            out var reason);
+        ok.Should().BeFalse();
+        reason.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryExtractBlockedMarker_ПустойТег_ВалиднаяОстановкаБезПричины()
+    {
+        var ok = SessionManager.TryExtractBlockedMarker("Встал.\n<blocked></blocked>", out var reason);
+        ok.Should().BeTrue();
+        reason.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryExtractBlockedMarker_ПричинаДлиннее300Символов_Обрезается()
+    {
+        var longReason = new string('x', 500);
+        var ok = SessionManager.TryExtractBlockedMarker(
+            $"<blocked>{longReason}</blocked>", out var reason);
+        ok.Should().BeTrue();
+        reason.Should().NotBeNull();
+        reason!.Length.Should().Be(300);
+    }
+
+    [Fact]
+    public void TryExtractBlockedMarker_МногострочнаяПричина_СхлопываетсяВОднуСтроку()
+    {
+        var ok = SessionManager.TryExtractBlockedMarker(
+            "Встал.\n<blocked>первая строка\nвторая строка\n\tтретья</blocked>", out var reason);
+        ok.Should().BeTrue();
+        reason.Should().Be("первая строка вторая строка третья");
+    }
+
+    [Fact]
+    public void TryExtractBlockedMarker_ЧувствителенКРегистру()
+    {
+        var ok = SessionManager.TryExtractBlockedMarker(
+            "<Blocked>причина</Blocked>", out var reason);
+        ok.Should().BeFalse();
+        reason.Should().BeNull();
+    }
+
     // --- Завершение фоновой задачи через опрос TaskOutput (модели вроде Kimi) ---
 
     [Fact]

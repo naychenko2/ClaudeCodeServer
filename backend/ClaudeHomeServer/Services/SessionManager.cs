@@ -8513,7 +8513,25 @@ public class SessionManager : IDisposable
             {
                 // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
                 // окончание, свидетельства уже в самом верификационном посте — отдельное
-                // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа)
+                // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа).
+                // Блокер тут НЕ проверяем намеренно: верификация уже отвечает «да/нет», и
+                // второй слой семантики поверх неё не нужен.
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
+
+            // ПОРЯДОК ВАЖЕН: блокер проверяем раньше промиса. Если модель вывела оба, это
+            // противоречие («готово, но встал») — дешевле встать сразу по блокеру, чем
+            // гонять верификационный ход по сомнительному «готово» и плодить ещё одну
+            // итерацию до лимита. Не переставляй местами «как более логичный» порядок.
+            if (TryExtractBlockedMarker(turnText, out var blockedReason))
+            {
+                var notice = blockedReason is null
+                    ? "Цикл остановлен: работа встала на блокере."
+                    : $"Цикл остановлен: работа встала на блокере — {blockedReason}";
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "blocked", notice);
+                // SetWorkLoopAsync(false) сама сбрасывает LoopTurnInFlight и размораживает
+                // очередь — своей уборки рядом не добавляем, иначе отстаём от инварианта.
                 await SetWorkLoopAsync(sessionId, false);
                 return;
             }
@@ -8562,9 +8580,41 @@ public class SessionManager : IDisposable
     // и ``` не считаются исполнением обещания
     internal static bool ContainsPromiseMarker(string text, string promise)
     {
+        var stripped = StripCodeBlocks(text);
+        return stripped.Contains($"<promise>{promise}</promise>", StringComparison.Ordinal);
+    }
+
+    // Маркер блокера ищем по тем же правилам, что и промис (вне код-блоков и инлайн-кода,
+    // регистр тега точный): модель цитирует протокол в начале хода — бэктики/``` не считаются
+    // реальной остановкой. Причину возвращаем в первом вхождении (после схлопывания \r\n и
+    // обрезки до 300 символов — она едет в ленту текстом уведомления). Пустой тег
+    // `<blocked></blocked>` — валидная остановка без причины: TryExtract вернёт true и
+    // reason == null.
+    internal static bool TryExtractBlockedMarker(string text, out string? reason)
+    {
+        reason = null;
+        var stripped = StripCodeBlocks(text);
+        var match = System.Text.RegularExpressions.Regex.Match(
+            stripped, "<blocked>([\\s\\S]*?)</blocked>");
+        if (!match.Success) return false;
+
+        var raw = match.Groups[1].Value ?? string.Empty;
+        // Схлопываем переводы строк (в т.ч. \r\n) в пробел и подрезаем края.
+        var collapsed = System.Text.RegularExpressions.Regex.Replace(raw, "\\s+", " ").Trim();
+        if (collapsed.Length == 0) return true;
+        if (collapsed.Length > 300) collapsed = collapsed[..300];
+        reason = collapsed;
+        return true;
+    }
+
+    // Общая чистка код-блоков и инлайн-кода — используется детекторами маркеров протокола
+    // цикла «до готово». Бэктики и ``` не считаются исполнением обещания/блокера: модель
+    // часто цитирует протокол в начале хода («выведу `<promise>…</promise>` когда закончу»).
+    private static string StripCodeBlocks(string text)
+    {
         var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
         stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
-        return stripped.Contains($"<promise>{promise}</promise>", StringComparison.Ordinal);
+        return stripped;
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)

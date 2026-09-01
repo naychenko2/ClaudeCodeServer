@@ -672,6 +672,15 @@ ArchivedAt`, без `UnarchivedAt` и без мутатора «снять ар�
 Подробности — раздел «Контекстные замечания к плану и разворот схемой» в
 [features.md](docs/architecture/features.md).
 
+**Серверные сторожа чатов** (флаг `chat-watchdogs`): `watch_start` декларирует «дождись
+условия и разбуди этот чат» — цикл опроса (тик 5 с, стор `data/watchdogs.json`) живёт в
+бэкенде и переживает ходы, рестарты и смерть процесса CLI, тогда как Monitor и
+`run_in_background` харнесса умирают вместе с процессом. Терминальное событие будит чат
+одним системным ходом (`preempt: false` — встаёт в очередь), промежуточных нет. Тулсет
+`watch` — http-only, stdio-ветки отката нет; фактура смертей мониторов и решение —
+[ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md), раздел «Серверные сторожа чатов» в
+[features.md](docs/architecture/features.md).
+
 Детали каждой фичи — [docs/architecture/features.md](docs/architecture/features.md).
 
 ## Фич-флаги (feature toggles)
@@ -681,7 +690,7 @@ Dark launch: фича коммитится выключенной и включ�
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
 хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге **восемь флагов**: `workspace-destructive` (постоянный предохранитель от
+(2026-08); в каталоге **девять флагов**: `workspace-destructive` (постоянный предохранитель от
 необратимого удаления), `change-dossiers-recall` (история решений по коду — подсказки
 персонам и выгрузка отдельной веткой, [ADR-004](docs/adr/ADR-004-change-dossiers.md)),
 `desktop-agent` (руки на машине пользователя: тип чата «Десктопный», тумблер грани в
@@ -694,7 +703,9 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 (контекстные замечания к плану и разворот схемой) и `chat-context` (материалы —
 файл/ссылка/задача — закрепляются за чатом явной кнопкой: полоса вкладок у чата плюс
 тул `context_list`; инварианты — раздел «Контекст чата» в
-[features.md](docs/architecture/features.md)).
+[features.md](docs/architecture/features.md)) и `chat-watchdogs` (серверные сторожа чатов:
+`watch_start` — долгое ожидание живёт на сервере и будит чат — см. раздел
+«Серверные сторожа чатов» и [ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md)).
 Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
 
 Работают безусловно, без тумблера (флаги сняты 2026-08-21): **ассистент по умолчанию и

@@ -621,6 +621,12 @@ public class SessionManager : IDisposable
     internal bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
         session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
 
+    // Сторожа чатов доступны по флагу ВЛАДЕЛЬЦА (chat-watchdogs, dark launch): свойство
+    // владельца, а не хода — составу tools/list зависеть от хода нельзя (ADR-012).
+    // internal — ту же формулу резолвит WatchToolset на каждый tools/list и tools/call
+    internal bool WatchMcpEnabled(string? ownerId) =>
+        ownerId is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatWatchdogs);
+
     // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
     // per-owner JWT с перевыпуском за сутки до истечения (сервер может жить дольше срока токена).
     private string GetServiceToken(string ownerId) =>
@@ -673,6 +679,15 @@ public class SessionManager : IDisposable
         return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
     }
 
+    // Контекст MCP-сервера сторожей чатов (флаг chat-watchdogs): null — флаг выключен
+    // или нет владельца. Сессия-вызыватель едет хвостом URL — как у tasks/notes волны 2.
+    private WatchMcpContext? BuildWatchContext(string? ownerId)
+    {
+        if (!WatchMcpEnabled(ownerId)) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new WatchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -710,11 +725,13 @@ public class SessionManager : IDisposable
     private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
-        CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null) =>
+        CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
+        WatchMcpContext? watch = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
-        || codeGraph is { UseHttp: true } || dify is { UseHttp: true };
+        || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
+        || watch is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -3361,6 +3378,7 @@ public class SessionManager : IDisposable
         var runId = Interlocked.Increment(ref _runSeq);
 
         var widgetsMcp = BuildWidgetsContext(ownerId, persona.Persona);
+        var watchMcp = BuildWatchContext(ownerId);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -3405,11 +3423,12 @@ public class SessionManager : IDisposable
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp),
+                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
-            ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null));
+            ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
+            WatchMcp: watchMcp));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4721,6 +4740,7 @@ public class SessionManager : IDisposable
             var persona = BuildPersonaLayer(entry.Info, entry.Info.OwnerId);
             var workspace = BuildWorkspaceContext(entry.Info.OwnerId, null, entry.Info.Id, persona.Persona);
             var widgetsMcp = BuildWidgetsContext(entry.Info.OwnerId, persona.Persona);
+            var watchMcp = BuildWatchContext(entry.Info.OwnerId);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -4762,8 +4782,9 @@ public class SessionManager : IDisposable
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, dify: difyMcp),
-                HttpMcpEnabledProvider: HttpMcpEnabled);
+                    workspace, notificationsMcp, dify: difyMcp, watch: watchMcp),
+                HttpMcpEnabledProvider: HttpMcpEnabled,
+                WatchMcp: watchMcp);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4774,6 +4795,7 @@ public class SessionManager : IDisposable
             var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
             var rootPath = EffectiveRoot(entry.Info, project.RootPath);
             var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
+            var watchMcp = BuildWatchContext(project.OwnerId);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -4819,9 +4841,10 @@ public class SessionManager : IDisposable
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp),
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
-                ChatContextProvider: BuildChatContextProvider(sessionId));
+                ChatContextProvider: BuildChatContextProvider(sessionId),
+                WatchMcp: watchMcp);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

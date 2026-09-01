@@ -9,6 +9,13 @@ public sealed record ProcessSpec
 {
     public required string FileName { get; init; }
     public IReadOnlyList<string> Args { get; init; } = [];
+    // Сырая командная строка ВМЕСТО Args (только local-раннер): кладётся в
+    // ProcessStartInfo.Arguments напрямую, без экранирования ArgumentList. Нужна для
+    // cmd /s /c "…", где внутренние кавычки обязаны дойти до целевой команды как есть:
+    // ArgumentList экранирует каждую " как \", а cmd живёт не по правилам
+    // CommandLineToArgvW и ломает вызов с вложенными кавычками (ложный fired сторожей,
+    // инцидент 01.09). Песочница всегда Linux — туда поле не доезжает (guard в докер-раннере).
+    public string? RawArguments { get; init; }
     public string? WorkingDirectory { get; init; }
     public IReadOnlyDictionary<string, string>? Env { get; init; }
     // Ключи, которые надо УБРАТЬ из унаследованного окружения (не выставить пустыми:

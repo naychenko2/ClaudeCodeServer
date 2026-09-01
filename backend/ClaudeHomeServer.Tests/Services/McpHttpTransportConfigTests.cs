@@ -40,7 +40,8 @@ public class McpHttpTransportConfigTests : IDisposable
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
-        string? difyDatasetId = null, string? mcpConfigPath = null, Func<bool>? httpEnabled = null)
+        string? difyDatasetId = null, string? mcpConfigPath = null, Func<bool>? httpEnabled = null,
+        WatchMcpContext? watch = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -57,7 +58,8 @@ public class McpHttpTransportConfigTests : IDisposable
             CodeGraphMcp: codeGraph,
             DifyMcp: dify,
             PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents,
-            HttpMcpEnabledProvider: httpEnabled);
+            HttpMcpEnabledProvider: httpEnabled,
+            WatchMcp: watch);
         var session = new ClaudeSession(new Session(), context, mcpConfigPath);
         return BuildFor(session, difyDatasetId, personaAgents);
     }
@@ -153,6 +155,63 @@ public class McpHttpTransportConfigTests : IDisposable
         // Вне дерева репозитория вторая сигнатура вырождается в пустую — она всё равно другая,
         // то есть переключение рубильника обязано убить живой процесс доживания
         otherKeys.Should().NotBe(httpKeys, "смена транспорта меняет сигнатуру прогона");
+    }
+
+    /// <summary>
+    /// Сервер сторожей чатов (флаг chat-watchdogs): при включённом контексте ход объявляет
+    /// http-узел watch с сессией-вызывателем в хвосте URL и токеном владельца. Флаг выключен
+    /// (контекста нет) — узла в конфиге нет вовсе: инструмент у модели не появляется.
+    /// </summary>
+    [Fact]
+    public void СторожаЧатов_ОбъявленыHttpУзломССессиейВХвосте()
+    {
+        var session = new Session { Id = "sess-watch-1" };
+        var context = new LlmSessionContext(
+            RootPath: _root,
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, PermissionRules: null,
+            TasksMcp: null,
+            WatchMcp: new WatchMcpContext("http://localhost:5000", () => "tok-W", UseHttp: true));
+        var adapter = new ClaudeSession(session, context);
+        var (servers, keys) = BuildFor(adapter);
+
+        var watch = servers["watch"]!.AsObject();
+        watch["type"]!.GetValue<string>().Should().Be("http");
+        watch["url"]!.GetValue<string>().Should()
+            .Be($"http://localhost:5000/mcp/watch/{session.Id}", "хвост — сессия-вызыватель");
+        watch["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+        watch.ContainsKey("command").Should().BeFalse("у watch нет stdio-ветки — узла command быть не может");
+
+        var headers = watch["headers"]!.AsObject();
+        headers["Authorization"]!.GetValue<string>().Should().Be("Bearer tok-W");
+        headers.ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+        keys.Should().Contain("watch:t:http");
+    }
+
+    /// <summary>
+    /// Флаг выключен — контекста нет, узла нет (dark launch). Рубильник Mcp:HttpTransport
+    /// снят при живом контексте — узла тоже нет, и stdio-замену НЕ подставляем: ветки отката
+    /// у watch нет (node-сервера не существовало, план «chat-watchdogs»).
+    /// </summary>
+    [Fact]
+    public void СторожаЧатов_БезФлагаилиРубильникаУзлаНетИStdioПодстановкиНет()
+    {
+        var (servers, keys) = BuildConfig();
+        servers.ContainsKey("watch").Should().BeFalse("флаг выключен — тулсет ходу не объявляется");
+        keys.Should().NotContain("watch:t:http");
+
+        var (offServers, offKeys) = BuildConfig(
+            watch: new WatchMcpContext("http://localhost:5000", () => "tok-W", UseHttp: true),
+            httpEnabled: () => false);
+        offServers.ContainsKey("watch").Should().BeFalse(
+            "рубильник снят — узла нет вовсе, stdio-подмены watch не подставляет");
+        offKeys.Should().NotContain("watch:t:http");
+
+        // Негодная схема адреса (https): контекст есть, узла нет вовсе — без stdio-подмены
+        var (noServers, noKeys) = BuildConfig(
+            watch: new WatchMcpContext("https://naychenko.me", () => "tok-W", UseHttp: false));
+        noServers.ContainsKey("watch").Should().BeFalse("stdio-ветки у watch нет: негодный адрес = без инструмента");
+        noKeys.Should().NotContain("watch:");
     }
 
     /// <summary>

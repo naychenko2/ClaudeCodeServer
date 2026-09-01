@@ -631,6 +631,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ModulesMcpContext? _modulesMcp;
     // MCP-сервер виджетов чата (widget_show): null — сессия без владельца
     private readonly WidgetsMcpContext? _widgetsMcp;
+    // MCP-сервер сторожей чатов (watch_*, флаг chat-watchdogs): null — флаг выключен/нет владельца
+    private readonly WatchMcpContext? _watchMcp;
     // Сводный признак «в сессии есть продуктовые MCP-серверы, чей адрес допускает http»:
     // решён SessionManager на едином гейте СХЕМЫ адреса, сюда приезжает готовым
     // (pmem-консультанты уточняют на ходу). Рубильник в нём НЕ сидит — он живой, ниже.
@@ -641,6 +643,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // (тесты без SessionManager).
     private readonly Func<bool>? _httpMcpEnabled;
     private bool HttpMcpOnNow() => _httpMcpEnabled?.Invoke() ?? true;
+    // Сторожа чатов: единое условие подключения тулсета хода — схема адреса допускает
+    // http И рубильник включён. stdio-ветки отката нет, поэтому ровно это же условие
+    // решает, клеить ли секцию промпта mcp-watch: рассинхрон обучал бы модель вызывать
+    // watch_start при отсутствующем туле — «No such tool available» (блокер ревью)
+    private bool WatchHttpOn() => _watchMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -728,6 +735,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _notificationsMcp = context.NotificationsMcp;
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
+        _watchMcp = context.WatchMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -794,6 +802,10 @@ public class ClaudeSession : ILlmSessionAdapter
         var widgetsHttp = _widgetsMcp is { UseHttp: true } && httpOn;
         var codeGraphHttp = _codeGraphMcp is { UseHttp: true } && httpOn;
         var difyHttp = _difyMcp is { UseHttp: true } && httpOn;
+        // Сторожа чатов: stdio-ветки отката НЕТ (node-сервера не существовало, план
+        // «chat-watchdogs») — при негодном для http адресе или выключенном рубильнике
+        // тулсет ходу не объявляется вовсе
+        var hasWatch = WatchHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -863,7 +875,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasExternal = externalMcp is { Servers.Count: > 0 };
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
-            && !hasExternal
+            && !hasExternal && !hasWatch
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1161,6 +1173,29 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Транспорт — в сигнатуру запуска: переключение рубильника обязано пробить
                 // живой процесс доживания, иначе применится «когда-нибудь потом»
                 shapes["widgets"] = widgetsHttp ? "t:http" : "t:stdio";
+            }
+
+            if (hasWatch)
+            {
+                // Сервер сторожей чатов (флаг chat-watchdogs): единственная ветка — http
+                // (stdio-отката нет, node-сервера не существовало — план «chat-watchdogs»).
+                // Сессия-вызыватель едет хвостом URL (/mcp/watch/{sessionId}) — по ней
+                // тулсет резолвит владельца, проект и будимый чат. alwaysLoad — по той же
+                // причине, что у tasks/notes: ленивое подключение роняет первый вызов.
+                // Токен — фабрикой на каждую сборку конфига (как у widgets, урок фазы 1).
+                servers["watch"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = Services.Mcp.Http.WatchToolset.EndpointFor(_watchMcp!.ApiUrl, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_watchMcp.TokenFactory()}",
+                        [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (3 инструмента), вариативен только транспорт
+                shapes["watch"] = "t:http";
             }
 
             if (hasMemory)
@@ -2552,6 +2587,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Задача пользователя — только mcp__tasks__*." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
                 Add("mcp-tasks", "Как работать с задачами", tasksHint, group: "mcp");
             }
+
+            // Серверные сторожа чатов (флаг chat-watchdogs): «долгое ожидание → watch_start».
+            // Условие то же, что у узла servers["watch"] (WatchHttpOn): stdio-ветки нет, и при
+            // негодном адресе или выключенном рубильнике секция обучала бы тула, которого
+            // в ходу нет — «No such tool available»
+            if (WatchHttpOn())
+                Add("mcp-watch", "Как ждать долгие события", Prompts.WatchPrompts.SectionText, group: "mcp");
 
             // Трейлер истории решений (ADR-004) — рядом с конвенцией Co-Authored-By: одной
             // строкой, только для проектных чатов владельца

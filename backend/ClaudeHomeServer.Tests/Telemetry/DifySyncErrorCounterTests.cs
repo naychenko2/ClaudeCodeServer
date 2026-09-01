@@ -54,13 +54,26 @@ public class DifySyncErrorCounterTests
     }
 
     [Fact]
-    public void Categorize_HttpRequestException500_ReturnsOther()
+    public void Categorize_HttpRequestException500_ReturnsRawCode()
     {
+        // Root cause прод-инцидента: с .NET 5+ EnsureSuccessStatusCode кладёт реальный код
+        // ответа в StatusCode для ЛЮБОГО неуспешного статуса, не только для трёх явных case —
+        // выбрасывать его в "other" значит терять уже известную причину отказа.
         var ex = new HttpRequestException("Internal Server Error", null, HttpStatusCode.InternalServerError);
 
         var reason = DifyErrorCategorizer.Categorize(ex);
 
-        reason.Should().Be("other");
+        reason.Should().Be("500");
+    }
+
+    [Fact]
+    public void Categorize_HttpRequestException502_ReturnsRawCode()
+    {
+        var ex = new HttpRequestException("Bad Gateway", null, HttpStatusCode.BadGateway);
+
+        var reason = DifyErrorCategorizer.Categorize(ex);
+
+        reason.Should().Be("502");
     }
 
     // ── Categorizer: timeout ────────────────────────────────────────────────

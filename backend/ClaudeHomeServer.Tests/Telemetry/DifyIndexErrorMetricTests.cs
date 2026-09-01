@@ -28,11 +28,12 @@ namespace ClaudeHomeServer.Tests.Telemetry;
 /// </summary>
 public class DifyIndexErrorMetricTests : IDisposable
 {
-    // Фейковый Dify: индексация документа, чьё имя содержит FailFor, отвечает 429;
-    // остальные — 200 с новым doc-id. DELETE всегда 204.
+    // Фейковый Dify: индексация документа, чьё имя содержит FailFor, отвечает кодом FailWith
+    // (по умолчанию 429); остальные — 200 с новым doc-id. DELETE всегда 204.
     private sealed class FlakyDifyHandler : HttpMessageHandler
     {
         public string FailFor = "";
+        public HttpStatusCode FailWith = HttpStatusCode.TooManyRequests;
         private int _seq;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -44,7 +45,7 @@ public class DifyIndexErrorMetricTests : IDisposable
             {
                 var name = JsonDocument.Parse(body).RootElement.GetProperty("name").GetString() ?? "";
                 if (FailFor.Length > 0 && name.Contains(FailFor, StringComparison.Ordinal))
-                    return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+                    return new HttpResponseMessage(FailWith);
 
                 return Json($"{{\"document\":{{\"id\":\"doc-{++_seq}\"," +
                             $"\"name\":{JsonSerializer.Serialize(name)},\"indexing_status\":\"completed\"}}}}");
@@ -146,6 +147,34 @@ public class DifyIndexErrorMetricTests : IDisposable
 
         // 3. Хеш упавшей записи не сохранён — следующий синк попробует её снова
         docs.Should().NotContainKey("bad");
+    }
+
+    [Fact]
+    public async Task IndexFailure_WithCodeOutsideExplicitCases_ReportsRawCode()
+    {
+        // Root cause прод-инцидента ccs.dify.sync.errors: код вне трёх явных case
+        // (401/404/429) выбрасывался в "other", хотя реальный код уже долетал до catch-блока
+        // через HttpRequestException.StatusCode. Проверяем весь путь — от HTTP-ответа Dify
+        // через KnowledgeService.EnsureSuccessStatusCode до тега метрики.
+        _dify.FailFor = "плохая";
+        _dify.FailWith = HttpStatusCode.InternalServerError;
+
+        var items = new List<MemorySyncItem>
+        {
+            new("bad", "hash-source-1", "заметка-плохая", "текст 1", null),
+        };
+
+        var reasons = await CaptureReasonsAsync(async () =>
+        {
+            await MemoryDify.DiffSyncAsync(
+                _knowledge, "ds-1", items, new Dictionary<string, MemoryDocRef>(),
+                (id, doc) => { }, id => { }, NullLogger.Instance);
+        });
+
+        // NotContain("other") здесь не проверяем: слушатель общий на процесс, и параллельные
+        // тесты вполне легитимно шлют "other" своими путями (см. комментарий в
+        // SuccessfulSync_DoesNotTouchErrorCounter) — важен факт, что НАШ код дал "500".
+        reasons.Should().Contain("500", "500 вне явных case обязан приходить своим кодом, а не 'other'");
     }
 
     [Fact]

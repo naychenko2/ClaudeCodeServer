@@ -32,6 +32,8 @@ import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useWatchdogPresence } from '../lib/watchdogPresence';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -238,6 +240,19 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // чата, пока пользователь не откроет раздел «Архив». Фильтр архивных — узкий
   // type guard isArchivedChat из chatFilters (готовый bool с сервера).
   const unreadCount = useUnreadChatCount(chats.filter(c => !isArchivedChat(c)));
+  // Сторожа чатов (флаг chat-watchdogs): пересечение множества ждущих чатов со
+  // списком раздела — /chats отдаёт только чаты вне проекта, фильтровать нечего.
+  // Архивные не считаем: в списке их не видно, и точка от скрытого чата вела бы
+  // в пустоту. Числовой кружок занят непрочитанными — сторожа живут точкой и hint
+  const wdEnabled = useFeature(FLAGS.chatWatchdogs);
+  const watchdogs = useWatchdogPresence();
+  const watchdogCount = wdEnabled
+    ? [...watchdogs.sessions].filter(id => chats.some(c => c.id === id && !isArchivedChat(c))).length
+    : 0;
+  const chatsHint: { text: string }[] = [
+    ...(unreadCount > 0 ? [{ text: `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` }] : []),
+    ...(watchdogCount > 0 ? [{ text: `${watchdogCount} ${plural(watchdogCount, 'сторож ждёт', 'сторожа ждут', 'сторожей ждут')}` }] : []),
+  ];
   // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
   const videoPlaying = useVideoPlaying();
   // Кадр в центре стоит рядом с лентой или занимает её место целиком
@@ -464,7 +479,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 video: <VideoPanel />,
               }}
               railBadges={{
-                chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined },
+                // Непрочитанные — числовой кружок; сторожа (флаг chat-watchdogs) —
+                // точка и строка hint рядом: тот же знак, что у «эфир идёт»
+                chats: {
+                  primary: unreadCount || undefined,
+                  dot: watchdogCount > 0 ? 'accent' : undefined,
+                  hint: chatsHint.length > 0 ? chatsHint : undefined,
+                },
                 // Точка на кнопке «Видео», пока идёт эфир: панель можно закрыть, а звук
                 // остаётся — без метки он шёл бы из ниоткуда и гасить его было бы нечем
                 video: videoPlaying ? { dot: 'accent', hint: 'эфир идёт' } : undefined,

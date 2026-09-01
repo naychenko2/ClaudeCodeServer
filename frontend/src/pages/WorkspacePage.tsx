@@ -24,6 +24,7 @@ import { useFeature, FLAGS } from '../lib/featureFlags';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
+import { useWatchdogPresence } from '../lib/watchdogPresence';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
@@ -547,6 +548,23 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
   // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
   const videoPlaying = useVideoPlaying();
+  // Сторожа чатов (флаг chat-watchdogs): пока у чата проекта на сервере жив сторож,
+  // сам чат спит (ход давно завершён) — без метки ожидание было бы невидимым до
+  // открытия списка. Точка без числа: «сколько ждут» расшифровывает hint
+  const wdEnabled = useFeature(FLAGS.chatWatchdogs);
+  const watchdogs = useWatchdogPresence();
+  const [watchdogChats, setWatchdogChats] = useState<string[]>([]);
+  useEffect(() => {
+    if (!wdEnabled || !watchdogs.projects.has(project.id)) { setWatchdogChats([]); return; }
+    let cancelled = false;
+    // Своего списка чатов у воркспейса нет (его держит SessionList), а стор знает
+    // только id — пересечение добирает запросом и лишь пока в проекте есть сторожа
+    api.sessions.list(project.id).then(list => {
+      if (!cancelled) setWatchdogChats(list.map(s => s.id).filter(id => watchdogs.sessions.has(id)));
+    }).catch(() => { /* офлайн — рельса живёт на событиях watchdogs_changed */ });
+    return () => { cancelled = true; };
+  }, [wdEnabled, watchdogs, project.id]);
+  const watchdogCount = watchdogChats.length;
   const railBadges = useMemo<Partial<Record<PanelKey, RailBadgeInfo>>>(() => {
     // «Изменения»: основной кружок — незафиксированные файлы (дедуп по пути), второй
     // (серый) — незапушенные коммиты. hint расшифровывает оба в тултипе кнопки
@@ -597,11 +615,16 @@ const windowWidth = useWindowWidth();
         secondaryTone: 'warning',
         hint: previewHint.length > 0 ? previewHint : undefined,
       },
+      // Точка на кнопке «Чаты», пока у чатов проекта ждут сторожа: тот же знак, что
+      // у эфира — «что-то идёт прямо сейчас», считать нечего, расшифровка в hint
+      chats: watchdogCount > 0
+        ? { dot: 'accent', hint: `${watchdogCount} ${plural(watchdogCount, 'сторож ждёт', 'сторожа ждут', 'сторожей ждут')}` }
+        : undefined,
       // Точка на кнопке «Видео», пока идёт эфир: панель можно закрыть, а звук остаётся —
       // без метки он шёл бы из ниоткуда и гасить его было бы нечем
       video: videoPlaying ? { dot: 'accent', hint: 'эфир идёт' } : undefined,
     };
-  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices, extLinks, videoPlaying]);
+  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices, extLinks, videoPlaying, watchdogCount]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);

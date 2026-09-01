@@ -297,6 +297,21 @@ public class SessionManager : IDisposable
     /// </summary>
     private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
+    // Тик ожидания по маркеру `<waiting>` (фаза waiting И WaitingReason != null). Тикает
+    // ТОЛЬКО ожидание модели — ожидание по живой делегированной задаче НЕ трогаем
+    // (доклад придёт сам, смерть исполнителя ловит алерт молчания). Отдельный таймер
+    // вместо встраивания в _autoSaveTimer — у них разные требования к гейтам и к
+    // зависимости от живого хода: автосейв просто сбрасывает стор, тик шлёт директивы.
+    private Timer? _waitingTickTimer;
+    // Интервал тика ожидания по маркеру. Дефолт 5 минут (Loop:WaitingTickSeconds). Тестам
+    // и особым окружениям позволяют уменьшить (для скорости прогонов). <=0 — таймер не
+    // заводится, как у автосейва.
+    private readonly TimeSpan _waitingTickInterval;
+    // Потолок тиков ожидания по маркеру. По достижении цикл встаёт с reason="waiting_timeout"
+    // и причиной из маркера. Дефолт 20 (Loop:MaxWaitingTicks). При 5-минутном интервале это
+    // ~1.5 часа чистого ожидания — дольше редко нужно; раньше цикл честно признаёт, что
+    // событие не пришло.
+    private readonly int _maxWaitingTicks;
     // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий
     private readonly SemaphoreSlim _falPersistLock = new(1, 1);
 
@@ -590,7 +605,28 @@ public class SessionManager : IDisposable
             : DefaultAutoSaveInterval;
         if (autoSave > TimeSpan.Zero)
             _autoSaveTimer = new Timer(_ => SaveSessions(), null, autoSave, autoSave);
+
+        // Тик ожидания по маркеру `<waiting>`. Тот же гейт `autoSave > Zero` — чтобы тесты
+        // с `Session:AutoSaveSeconds = 0` не оставляли тик работающим: фоновые таймеры
+        // выполняют произвольный код в произвольный момент и между ассертами теста гонят
+        // директиву и сбрасывают счётчики (та же причина, что у _autoSaveTimer). Дефолты
+        // подхватываются из Loop:* если ключ не задан или мусор — см. ParsePositiveSeconds/
+        // ParsePositiveInt (Loop:MaxIterations/MaxTaskExecutions ходят через LoopLimitOrDefault
+        // со своей семантикой «<=0 = дефолт 20», не трогаем).
+        _waitingTickInterval = ParsePositiveSeconds(config["Loop:WaitingTickSeconds"], 300);
+        _maxWaitingTicks = ParsePositiveInt(config["Loop:MaxWaitingTicks"], 20);
+        if (autoSave > TimeSpan.Zero && _waitingTickInterval > TimeSpan.Zero)
+            _waitingTickTimer = new Timer(_ => FireAndForget(TickWaitingLoopsAsync(), "тик ожидания work-loop"),
+                null, _waitingTickInterval, _waitingTickInterval);
     }
+
+    // Положительный интервал (секунды) из конфига с дефолтом: <=0 и мусор → defaultValue.
+    private static TimeSpan ParsePositiveSeconds(string? raw, int defaultSeconds) =>
+        int.TryParse(raw, out var v) && v > 0 ? TimeSpan.FromSeconds(v) : TimeSpan.FromSeconds(defaultSeconds);
+
+    // Положительное целое из конфига с дефолтом: <=0 и мусор → defaultValue.
+    private static int ParsePositiveInt(string? raw, int defaultValue) =>
+        int.TryParse(raw, out var v) && v > 0 ? v : defaultValue;
 
     // --- MCP tasks-server ---
 
@@ -5706,7 +5742,8 @@ public class SessionManager : IDisposable
     {
         var loop = entry.Info.WorkLoop;
         return BroadcastAsync(sessionId, new WorkLoopMessage(
-            loop is not null, loop?.Iteration ?? 0, loop?.MaxIterations ?? 0, loop?.Phase));
+            loop is not null, loop?.Iteration ?? 0, loop?.MaxIterations ?? 0, loop?.Phase,
+            loop?.WaitingReason, loop?.WaitingTicks ?? 0));
     }
 
     // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении задаётся
@@ -8508,9 +8545,14 @@ public class SessionManager : IDisposable
         // Возврат из waiting: предыдущая итерация ушла в ожидание исполнителя, и теперь
         // (доставлен доклад, человек вмешался, либо пришёл алерт молчания) цикл реально
         // продолжает работу. Снимаем фазу ДО гейтов, чтобы фаза не «застряла» при уступке.
+        // Заодно обнуляем счётчик тиков и причину: новая фаза waiting (если будет) стартует
+        // с чистого счётчика, а старая причина в логе/бейдже «ожидание» уже неактуальна.
         if (loop.Phase == "waiting")
         {
             loop.Phase = "working";
+            loop.WaitingTicks = 0;
+            loop.WaitingReason = null;
+            loop.WaitingSince = null;
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
         }
@@ -8590,22 +8632,46 @@ public class SessionManager : IDisposable
                 return;
             }
 
+            // ПОРЯДОК ВАЖЕН: маркер `<waiting>` проверяем ПОСЛЕ `<promise>`. Если модель вывела
+            // оба, это противоречие («готово» и одновременно «жду»), и верификационный ход
+            // разрешит его дешевле, чем лишний круг ожидания. Симметрично блокеру выше.
+            //
             // ФАЗА ОЖИДАНИЯ: у чата есть живые делегированные задачи (координатор запустил
-            // исполнителя и не получил доклада). Пока ждём — итерации не тратим, директиву
+            // исполнителя и не получил доклада) ИЛИ координатор сам вывел `<waiting>`
+            // (ждёт внешнего события, о котором система знать не может — ответ на chats_send,
+            // чужой процесс, человек вне чата). Пока ждём — итерации не тратим, директиву
             // продолжения НЕ шлём. ВАЖНО: LoopTurnInFlight снимаем под PendingLock — иначе
             // drain (DrainNextPendingAsync) вечно уступает на гейте, и доклад не доедет
             // НИКОГДА. Цикл повиснет намертво. Возврат — на приходе Report/user-сообщения
             // (DrainNextPendingAsync) и в начале самого ContinueWorkLoopAsync: фаза
             // «waiting» переключается обратно в «working» ДО гейтов выше.
-            if (HasLiveDelegatedTasks?.Invoke(sessionId) == true)
+            var waitingReason = TryExtractWaitingMarker(turnText, out var waitingFromMarker);
+            var liveDelegated = HasLiveDelegatedTasks?.Invoke(sessionId) == true;
+            if (waitingFromMarker != null || liveDelegated)
             {
+                var reason = waitingFromMarker; // null → ожидание по живой задаче (доклад придёт сам)
+                // Переустанавливаем счётчик ТОЛЬКО при смене причины ожидания: маркер
+                // пришёл впервые (или сменился текст) — стартуем с чистого счётчика;
+                // тот же маркер в повторной итерации (модель тика не вывела, вернулась
+                // с тем же текстом) — продолжаем счёт. Иначе координатор, который
+                // каждые 5 минут выводит ОДНО И ТО ЖЕ, тикал бы вечно без шанса дойти
+                // до лимита.
+                var newWaiting = waitingFromMarker != null && waitingFromMarker != loop.WaitingReason;
+                if (newWaiting)
+                {
+                    loop.WaitingReason = waitingFromMarker;
+                    loop.WaitingSince = DateTime.UtcNow;
+                    loop.WaitingTicks = 0;
+                }
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
                 loop.Phase = "waiting";
                 SaveSessions();
                 await BroadcastWorkLoopAsync(sessionId, entry);
                 if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — без хода
-                _log.LogInformation("Цикл {Session} ушёл в фазу ожидания исполнителя (итераций {Iter}/{Max})",
-                    sessionId, loop.Iteration, loop.MaxIterations);
+                _log.LogInformation("Цикл {Session} ушёл в фазу ожидания (причина: {Reason}, итераций {Iter}/{Max})",
+                    sessionId,
+                    liveDelegated ? "живая делегированная задача" : (waitingFromMarker ?? "не указана"),
+                    loop.Iteration, loop.MaxIterations);
                 return;
             }
 
@@ -8668,6 +8734,96 @@ public class SessionManager : IDisposable
         if (collapsed.Length > 300) collapsed = collapsed[..300];
         reason = collapsed;
         return true;
+    }
+
+    // Маркер ожидания — симметричен блокеру: вне код-блоков, точный регистр, пустой тег
+    // валиден. Это второй источник ухода в фазу waiting (первый — живая делегированная задача,
+    // HasLiveDelegatedTasks): модель ждёт внешнего события, о котором система знать не может
+    // (ответ на chats_send, чужой процесс, человек вне чата). Без этого координатор либо
+    // жжёт итерации, либо выводит `<blocked>` и валит цикл — оба варианта врут про состояние.
+    internal static bool TryExtractWaitingMarker(string text, out string? reason)
+    {
+        reason = null;
+        var stripped = StripCodeBlocks(text);
+        var match = System.Text.RegularExpressions.Regex.Match(
+            stripped, "<waiting>([\\s\\S]*?)</waiting>");
+        if (!match.Success) return false;
+
+        var raw = match.Groups[1].Value ?? string.Empty;
+        var collapsed = System.Text.RegularExpressions.Regex.Replace(raw, "\\s+", " ").Trim();
+        if (collapsed.Length == 0) return true;
+        if (collapsed.Length > 300) collapsed = collapsed[..300];
+        reason = collapsed;
+        return true;
+    }
+
+    // Тик ожидания по маркеру `<waiting>`. Обходит все активные сессии раз в
+    // Loop:WaitingTickSeconds и шлёт координатору системную директиву-тик, если:
+    //   - цикл включён И фаза == "waiting" И WaitingReason != null (по маркеру, не по задаче);
+    //   - цикл включён И фаза == "waiting" И WaitingReason != null (по маркеру, не по задаче);
+    //   - с момента входа в фазу прошло ≥ интервала (первый тик — через полный интервал);
+    //   - чат СВОБОДЕН: нет живого прогона (HasLiveTurn=false), нет маркера хода-итерации
+    //     (LoopTurnInFlight=false), статус не Working/Waiting (нет текущего хода).
+    // Тикаем ТОЛЬКО ожидание по маркеру: ожидание по живой делегированной задаче
+    // (HasLiveDelegatedTasks=true, WaitingReason=null) тикать НЕ надо — доклад придёт сам,
+    // а смерть исполнителя ловит алерт молчания. Разводим явно: ветка `WaitingReason != null`.
+    // На потолке (WaitingTicks >= _maxWaitingTicks) — стоп с reason="waiting_timeout" и
+    // причиной ожидания в тексте уведомления.
+    // internal: тесты SessionManagerTests зовут напрямую (через рефлексию для подмены
+    // _waitingTickInterval). В боевом коде вызывается только фоновым таймером _waitingTickTimer.
+    internal async Task TickWaitingLoopsAsync()
+    {
+        // Копия id под перебор: тик может уводить цикл в стоп и чистить entry —
+        // _sessions меняется «под нами», итерировать оригинал нельзя.
+        var sessionIds = _sessions.Keys.ToArray();
+        foreach (var sessionId in sessionIds)
+        {
+            if (!_sessions.TryGetValue(sessionId, out var entry)) continue;
+            if (entry.Info.WorkLoop is not { } loop) continue;
+            if (loop.Phase != "waiting") continue;
+            if (loop.WaitingReason is null) continue; // ожидание по задаче — не тикаем
+
+            // Чат занят — пропускаем. Следующий тик через интервал догонит.
+            if (entry.LoopTurnInFlight) continue;
+            if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting) continue;
+            if (HasLiveTurnProcess(sessionId)) continue;
+
+            // С момента входа в фазу прошло ≥ интервала? WaitingSince ставится на входе
+            // и не сбрасывается на тиках — отсюда и первый тик через полный интервал, и
+            // все последующие через интервал (таймер сам по себе периодичен).
+            var sinceUtc = (loop.WaitingSince ?? DateTime.UtcNow).ToUniversalTime();
+            if (DateTime.UtcNow - sinceUtc < _waitingTickInterval) continue;
+
+            loop.WaitingTicks++;
+            if (loop.WaitingTicks >= _maxWaitingTicks)
+            {
+                var notice = $"Цикл остановлен: ожидание по маркеру «{loop.WaitingReason}» " +
+                             $"не завершилось за {loop.WaitingTicks * (int)_waitingTickInterval.TotalSeconds / 60} минут " +
+                             $"({loop.WaitingTicks} из {_maxWaitingTicks} тиков).";
+                _log.LogWarning("Цикл {Session}: исчерпан потолок тиков ожидания ({Ticks}/{Max})",
+                    sessionId, loop.WaitingTicks, _maxWaitingTicks);
+                // AddWorkLoopStoppedNoticeAsync сам персистит и рассылает; стоп идёт
+                // через SetWorkLoopAsync, которая сбрасывает LoopTurnInFlight и фазу.
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "waiting_timeout", notice);
+                await SetWorkLoopAsync(sessionId, false);
+                continue;
+            }
+
+            // Тик НЕ тратит Iteration — только WaitingTicks. Директива уходит системной:
+            // координатор увидит подсказку и сам решит, выводить ли `<waiting>` снова.
+            // BuildCliTurnText взводит LoopTurnInFlight (под LoopTurnLock), а ContinueWorkLoopAsync
+            // по result хода-тика проверит, остался ли маркер, и вернёт фазу.
+            _log.LogInformation("Цикл {Session}: тик ожидания {Ticks}/{Max} (причина: {Reason})",
+                sessionId, loop.WaitingTicks, _maxWaitingTicks, loop.WaitingReason);
+            SaveSessions();
+            await BroadcastWorkLoopAsync(sessionId, entry);
+            if (entry.Info.WorkLoop is null) continue; // стоп успел снять цикл
+            await SendMessageAsync(sessionId,
+                OmoPrompts.WorkLoopWaitingTick(loop.WaitingReason,
+                    loop.WaitingTicks, _maxWaitingTicks,
+                    (int)_waitingTickInterval.TotalSeconds),
+                [], systemDirective: true);
+        }
     }
 
     // Общая чистка код-блоков и инлайн-кода — используется детекторами маркеров протокола
@@ -9747,8 +9903,11 @@ public class SessionManager : IDisposable
     {
         // Таймер не должен пытаться писать одновременно с убийством процессов:
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
-        // claude не диспозятся → процессы зависают в памяти (боролись ранее).
+        // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же
+        // сценарий — для тика ожидания: в окне shutdown он бы мог послать директиву
+        // в умирающий адаптер, и SendMessageAsync не нашёл бы Process.
         _autoSaveTimer?.Dispose();
+        _waitingTickTimer?.Dispose();
 
         var tasks = _sessions.Values
             .Select(e => e.Process)
@@ -9763,11 +9922,12 @@ public class SessionManager : IDisposable
         }
     }
 
-    // IDisposable — только для _autoSaveTimer. Адаптеры (процессы claude) убивает
+    // IDisposable — для фоновых таймеров. Адаптеры (процессы claude) убивает
     // KillAllProcesses() из ApplicationStopping. Не дублируем — иначе два cleanup-пути.
     public void Dispose()
     {
         _autoSaveTimer?.Dispose();
+        _waitingTickTimer?.Dispose();
         GC.SuppressFinalize(this);
     }
 

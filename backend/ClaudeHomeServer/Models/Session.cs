@@ -54,8 +54,9 @@ public class SessionWorkLoop
     // Потолок итераций — защита от бесконечного цикла (дефолт из конфига Loop:MaxIterations)
     public int MaxIterations { get; set; } = 20;
     // working — рабочие итерации; waiting — координатор ждёт доклада исполнителя по делегированной
-    // задаче (цикл не шлёт директиву продолжения, итерации не тратятся, LoopTurnInFlight снят
-    // — иначе drain вечно уступает); verifying — финальный верификационный ход после маркера
+    // задаче ИЛИ ответил `<waiting>` (ждёт внешнего события, о котором система знать не может);
+    // цикл не шлёт директиву продолжения, итерации не тратятся, LoopTurnInFlight снят — иначе
+    // drain вечно уступает. verifying — финальный верификационный ход после маркера.
     public string Phase { get; set; } = "working";
     // Сколько раз в цикле уже запущены задачи на исполнение: счёт ведёт бэкенд в точке
     // запуска (гейт DenyOnDelegatedTurn), а не модель — как у TeamImplementBudget. Квота
@@ -63,6 +64,19 @@ public class SessionWorkLoop
     public int ExecutionsStarted { get; set; }
     // Потолок запусков задач за цикл (дефолт из конфига Loop:MaxTaskExecutions)
     public int MaxExecutions { get; set; } = 20;
+    // Счётчик тиков ожидания по маркеру `<waiting>` (задача придёт сама докладом — её НЕ тикаем).
+    // WaitingTicks++ в фоне (TickWaitingLoopsAsync) раз в Loop:WaitingTickSeconds, до лимита
+    // Loop:MaxWaitingTicks. На потолке — стоп с reason="waiting_timeout". Сбрасывается
+    // на каждом возврате в working.
+    public int WaitingTicks { get; set; }
+    // Момент входа в фазу waiting по маркеру (UTC). null — ожидания по маркеру ещё не было.
+    // Персистится через Session в data/sessions.json: тики обязаны переживать рестарт сервера
+    // (без этого ход-итерация убит, result не придёт, цикл зависнет навечно).
+    public DateTime? WaitingSince { get; set; }
+    // Причина ожидания из маркера `<waiting>…</waiting>` (схлопнутая и обрезанная до 300 символов).
+    // null — ожидание по живой делегированной задаче (причина не нужна — доклад придёт сам).
+    // Хранится на стейте цикла для лога и будущего бейджа.
+    public string? WaitingReason { get; set; }
 }
 
 // Стадии режима «Командная реализация» — непрерывный контур.

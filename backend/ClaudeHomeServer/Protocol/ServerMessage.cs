@@ -316,8 +316,12 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
     : ServerMessage("speaker_changed");
 
 // Состояние цикла «до готово» (флаг work-loop): активность, номер итерации, лимит,
-// фаза (working/verifying) — для тумблера в композере и счётчика в шапке чата.
-public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
+// фаза (working/verifying/waiting) — для тумблера в композере и счётчика в шапке чата.
+// WaitingReason и WaitingTicks заполняются только при ожидании по маркеру `<waiting>`
+// (не по живой делегированной задаче): счётчик тиков и причина нужны для бейджа и лога.
+// В текущем фронте оба поля игнорируются (бейдж waiting уже есть, показ причины/тиков — отдельная задача).
+public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase,
+    string? WaitingReason = null, int WaitingTicks = 0)
     : ServerMessage("work_loop");
 
 // Явная остановка цикла «до готово» в ленту (B5, см. StoredWorkLoopStoppedMessage) — WorkLoopMessage

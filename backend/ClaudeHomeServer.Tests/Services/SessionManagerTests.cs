@@ -3193,6 +3193,319 @@ public class SessionManagerTests : IDisposable
         loop.Iteration.Should().BeGreaterThan(iterBefore, "итерация продвинулась");
     }
 
+    // --- Детектор маркера <waiting>: симметрично блокеру. Покрывает парсер в изоляции,
+    // без поднятия сессии и адаптера — это «чистый» юнит, как у блокера (последний покрыт
+    // ровно так же в общем тесте TryExtractBlockedMarker_* — если он добавлен позже).
+    [Theory]
+    [InlineData("жду ответа\n<waiting>ответа chats_send</waiting>\n", "ответа chats_send")]
+    [InlineData("просто текст без маркера", null)]
+    [InlineData("внутри ```\n<waiting>в коде</waiting>\n``` не считается", null)]
+    [InlineData("инлайн `<waiting>в инлайне</waiting>` тоже нет", null)]
+    [InlineData("<waiting></waiting>", "EMPTY_OK")] // пустой тег — валиден, reason=null
+    [InlineData("<WAITING>верхний регистр не считается</WAITING>", null)] // регистр точный
+    [InlineData("<waiting лишний пробел>нет</waiting>", null)] // симметрия с блокером
+    public void TryExtractWaitingMarker_РазличныеТексты(string text, string? expectedReason)
+    {
+        var ok = SessionManager.TryExtractWaitingMarker(text, out var reason);
+        if (expectedReason is null)
+            ok.Should().BeFalse($"маркер не должен опознаться: {text}");
+        else if (expectedReason == "EMPTY_OK")
+        {
+            // Пустой тег валиден: true + reason == null (симметрия с блокером).
+            ok.Should().BeTrue();
+            reason.Should().BeNull("пустой тег — валидный waiting без уточнения причины");
+        }
+        else
+        {
+            ok.Should().BeTrue();
+            reason.Should().Be(expectedReason);
+        }
+    }
+
+    // Обрезка до 300 символов — отдельным кейсом, чтобы не возиться с подсчётом длины в теории.
+    // Внутри маркера кладём 400 'a', после схлопывания \s+ — те же 400 (пробелов нет),
+    // обрезка до 300, начало — "аааа…".
+    [Fact]
+    public void TryExtractWaitingMarker_ОбрезкаДо300Символов()
+    {
+        var text = "<waiting>" + new string('а', 400) + "</waiting>";
+        var ok = SessionManager.TryExtractWaitingMarker(text, out var reason);
+        ok.Should().BeTrue();
+        reason.Should().NotBeNull().And.HaveLength(300);
+        reason!.Should().Be(new string('а', 300));
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_НайденWaitingМаркер_УходитВWaiting()
+    {
+        // Координатор сам сказал «жду» через маркер `<waiting>` — цикл уходит в фазу waiting
+        // с сохранённой причиной, без расхода итерации, снимая LoopTurnInFlight (иначе drain
+        // вечно уступает). Причина и момент входа сохраняются — тик ожидания ими будет жить.
+        var session = await MkBusySessionAsync("loop-waiting-marker", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+        var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
+
+        lock (entry.GetType().GetField("LoopTurnLock")!.GetValue(entry)!)
+        {
+            var buf = (System.Text.StringBuilder)entry.GetType().GetField("LoopTurnText")!.GetValue(entry)!;
+            buf.Append("жду ответа <waiting>ответа chats_send с сессии X</waiting>");
+        }
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)?.WorkLoop?.Phase == "waiting",
+            TimeSpan.FromSeconds(2));
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.Phase.Should().Be("waiting");
+        loop.Iteration.Should().Be(iterBefore, "итерация не растёт в фазе waiting");
+        loop.WaitingReason.Should().Be("ответа chats_send с сессии X",
+            "причина из маркера сохраняется — она нужна тикам и логу");
+        loop.WaitingSince.Should().NotBeNull("момент входа в фазу нужен тикам и персистентности");
+        loop.WaitingTicks.Should().Be(0, "на входе счётчик стартует с нуля");
+        GetLoopTurnInFlight(entry).Should().BeFalse("LoopTurnInFlight снят — иначе drain вечно уступает");
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+            "директива продолжения не должна уйти — её заменил уход в ожидание");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_WaitingИPromise_VerifyingВыигрывает()
+    {
+        // ПОРЯДОК ВАЖЕН (см. комментарий в ContinueWorkLoopAsync): вывести оба — противоречие,
+        // и верификационный ход разрешит его дешевле, чем лишний круг ожидания.
+        var session = await MkBusySessionAsync("loop-waiting-promise", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        lock (entry.GetType().GetField("LoopTurnLock")!.GetValue(entry)!)
+        {
+            var buf = (System.Text.StringBuilder)entry.GetType().GetField("LoopTurnText")!.GetValue(entry)!;
+            buf.Append($"готово <promise>{loop.Promise}</promise> <waiting>заодно</waiting>");
+        }
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)?.WorkLoop?.Phase == "verifying",
+            TimeSpan.FromSeconds(2));
+
+        var after = _sut.GetById(session.Id)!.WorkLoop!;
+        after.Phase.Should().Be("verifying", "промис проверяется раньше маркера waiting");
+        after.WaitingReason.Should().BeNull("при ожидании не зашли — промис выиграл");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_WaitingИBlocked_BlockedВыигрывает()
+    {
+        // Симметрично: блокер раньше промиса, блокер раньше waiting. Противоречие
+        // («жду» + «не могу без человека») — стоп, человек разберёт.
+        var session = await MkBusySessionAsync("loop-waiting-blocked", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        lock (entry.GetType().GetField("LoopTurnLock")!.GetValue(entry)!)
+        {
+            var buf = (System.Text.StringBuilder)entry.GetType().GetField("LoopTurnText")!.GetValue(entry)!;
+            buf.Append("<blocked>нужен человек</blocked> <waiting>вдобавок жду</waiting>");
+        }
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null,
+            TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull("блокер стопит цикл раньше waiting");
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("blocked");
+        msg.Text.Should().Contain("нужен человек");
+    }
+
+    // Помощник: подменяет _waitingTickInterval на тестовое значение, чтобы тик проходил
+    // немедленно (без ожидания реальных 5 минут). Через рефлексию — поле приватное.
+    private void SetWaitingTickInterval(TimeSpan value)
+    {
+        var f = typeof(SessionManager).GetField("_waitingTickInterval",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        f.SetValue(_sut, value);
+    }
+
+    // Помощник: подменяет _maxWaitingTicks на тестовое значение (чтобы не гонять 20 тиков).
+    private void SetMaxWaitingTicks(int value)
+    {
+        var f = typeof(SessionManager).GetField("_maxWaitingTicks",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        f.SetValue(_sut, value);
+    }
+
+    // Помощник: ставит WaitingSince в прошлое, чтобы тик увидел «прошло достаточно».
+    private void BackdateWaitingSince(string sessionId, TimeSpan ago)
+    {
+        var loop = _sut.GetById(sessionId)!.WorkLoop!;
+        loop.WaitingSince = DateTime.UtcNow - ago;
+    }
+
+    [Fact]
+    public async Task TickWaitingLoops_СвободныйЧат_ШлётДирективуИРаститСчётчик()
+    {
+        // Тик — это фоновая системная директива-тик, отправленная координатору; Iteration
+        // НЕ растёт (тик не тратит итерации), WaitingTicks — растёт. Чат между итерациями
+        // (Active), без живого прогона, без LoopTurnInFlight — тик проходит.
+        var session = await MkBusySessionAsync("loop-tick-send", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        // StubAdapter по умолчанию HasLiveTurn=true (изображает идущий ход) — для тика
+        // нужен СВОБОДНЫЙ чат. Сбрасываем явно, иначе HasLiveTurnProcess заблокирует тик.
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        SetProcess(entry, adapter.Object);
+        // Вручную переводим фазу в waiting по маркеру (имитация уже отработавшего ухода)
+        var loop0 = _sut.GetById(session.Id)!.WorkLoop!;
+        loop0.Phase = "waiting";
+        loop0.WaitingReason = "ответа с чужой сессии";
+        loop0.WaitingSince = DateTime.UtcNow;
+        loop0.WaitingTicks = 0;
+        // Чат между итерациями (не Working/Waiting), чтобы тик прошёл
+        session.Status = SessionStatus.Active;
+        SetLoopTurnInFlight(entry, false);
+        SetWaitingTickInterval(TimeSpan.Zero);
+        SetMaxWaitingTicks(5);
+        BackdateWaitingSince(session.Id, TimeSpan.FromMinutes(10));
+
+        ClearSent();
+        await _sut.TickWaitingLoopsAsync();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.Iteration.Should().Be(loop0.Iteration, "тик НЕ тратит итерацию");
+        loop.WaitingTicks.Should().Be(1, "первый тик увеличивает счётчик на 1");
+        loop.WaitingReason.Should().Be("ответа с чужой сессии", "причина сохраняется между тиками");
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("ТИК ОЖИДАНИЯ") && t.Contains("1/5")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task TickWaitingLoops_ПотолокТиков_СтопСWaitingTimeout()
+    {
+        // На потолке WaitingTicks >= MaxWaitingTicks цикл встаёт с reason="waiting_timeout"
+        // и причиной из маркера в тексте уведомления. Без тика чат бы висел вечно.
+        var session = await MkBusySessionAsync("loop-tick-timeout", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // свободный чат — иначе тик не пройдёт
+        SetProcess(entry, adapter.Object);
+        var loop0 = _sut.GetById(session.Id)!.WorkLoop!;
+        loop0.Phase = "waiting";
+        loop0.WaitingReason = "ответа с чужой сессии";
+        loop0.WaitingSince = DateTime.UtcNow;
+        loop0.WaitingTicks = 4; // один шаг до потолка (после ++ → 5 ≥ 5 → стоп)
+        session.Status = SessionStatus.Active;
+        SetLoopTurnInFlight(entry, false);
+        SetWaitingTickInterval(TimeSpan.Zero);
+        SetMaxWaitingTicks(5);
+        BackdateWaitingSince(session.Id, TimeSpan.FromMinutes(10));
+
+        await _sut.TickWaitingLoopsAsync();
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null,
+            TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull("на потолке тиков цикл остановлен");
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("waiting_timeout");
+        msg.Text.Should().Contain("ответа с чужой сессии", "причина маркера едет в текст уведомления");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_НетМаркераВWaiting_ВозвратВWorkingИОбнуление()
+    {
+        // Возврат из waiting (например, по result хода-тика, где модель НЕ вывела
+        // `<waiting>` снова): фаза становится working, счётчик тиков и причина обнуляются.
+        // Это симметрия с ContinueWorkLoop_ВозвратИзWaitingВНачалеПродолжаетЦикл, но с
+        // проверкой сброса полей тиков.
+        var session = await MkBusySessionAsync("loop-tick-resume", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var loop0 = _sut.GetById(session.Id)!.WorkLoop!;
+        loop0.Phase = "waiting";
+        loop0.WaitingReason = "ответа";
+        loop0.WaitingSince = DateTime.UtcNow;
+        loop0.WaitingTicks = 3;
+        var iterBefore = loop0.Iteration;
+
+        // Ход-тик без маркера waiting (модель молчит) — триггерит ContinueWorkLoopAsync
+        SetLoopTurnInFlight(entry, true);
+        lock (entry.GetType().GetField("LoopTurnLock")!.GetValue(entry)!)
+        {
+            var buf = (System.Text.StringBuilder)entry.GetType().GetField("LoopTurnText")!.GetValue(entry)!;
+            buf.Clear(); // пустой ответ: ни маркера, ни промиса, ни блокера
+        }
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.Phase.Should().Be("working", "нет маркера → возврат в working");
+        loop.WaitingTicks.Should().Be(0, "счётчик обнулён на возврате");
+        loop.WaitingReason.Should().BeNull("причина обнулена на возврате");
+        loop.WaitingSince.Should().BeNull("момент входа обнулён на возврате");
+        loop.Iteration.Should().BeGreaterThan(iterBefore, "итерация продвинулась — это уже не тик");
+    }
+
+    [Fact]
+    public async Task TickWaitingLoops_ОжиданиеПоЖивойЗадаче_НеТикает()
+    {
+        // Регресс: ожидание по HasLiveDelegatedTasks (причина WaitingReason=null) — НЕ
+        // тикается. Доклад придёт сам через Report; смерть исполнителя ловит алерт молчания.
+        // Тик там не нужен и был бы вреден: разбудил бы координатора посреди чужой задачи.
+        var session = await MkBusySessionAsync("loop-tick-delegated", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        // Чат свободен (иначе тик не пройдёт по другой причине), но ожидание по задаче
+        // всё равно должно игнорироваться — WaitingReason=null. Это и проверяем.
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        var loop0 = _sut.GetById(session.Id)!.WorkLoop!;
+        loop0.Phase = "waiting";
+        loop0.WaitingReason = null; // ожидание по живой задаче, не по маркеру
+        loop0.WaitingSince = DateTime.UtcNow;
+        loop0.WaitingTicks = 0;
+        session.Status = SessionStatus.Active;
+        SetLoopTurnInFlight(entry, false);
+        SetWaitingTickInterval(TimeSpan.Zero);
+        BackdateWaitingSince(session.Id, TimeSpan.FromMinutes(10));
+
+        ClearSent();
+        await _sut.TickWaitingLoopsAsync();
+        // Даём фоновым задачам отработать, чтобы SendMessageAsync (если бы он был) доехал
+        await Task.Delay(200);
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.WaitingTicks.Should().Be(0, "ожидание по задаче не тикается — счётчик не растёт");
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("ТИК ОЖИДАНИЯ")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+            "директива-тик не должна уйти — ожидание по задаче");
+    }
+
     [Fact]
     public async Task DrainNextPending_ДокладВОчередиПриАктивномЦикле_Подхватывается()
     {

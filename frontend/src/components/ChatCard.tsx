@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useChatWatchdogs } from '../lib/watchdogPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
 import { isArchivedChat } from '../lib/chatFilters';
@@ -604,11 +606,18 @@ export function ChatCard({
   // Своё значение visualStatus, а не 'agents': подпись «агенты работают» тут была бы враньём
   const bgCommandRunningLive = useBgCommandRunning(s.id);
   const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
+  // Сторож ждёт (флаг chat-watchdogs): чат жив — у него стоит серверный сторож, ждущий
+  // своё условие. Хуки раздельно: связка useFeature(...) && useChatWatchdogs(...) в одну
+  // строку пропускала бы второй хук при выключенном флаге — нарушение порядка хуков.
+  // Волна та же, что у фоновой команды ('command'): работа реальная, просто тихая
+  const watchdogsFlag = useFeature(FLAGS.chatWatchdogs);
+  const watchdogsActive = watchdogsFlag && useChatWatchdogs(s.id);
   const visualStatus: VisualStatus = teamWait ? 'waiting'
     : STATUS_GLOW[s.status].breath ? s.status
       : agentsRunning ? 'agents'
         : bgCommandRunning ? 'command'
-          : s.status;
+          : watchdogsActive ? 'command'
+            : s.status;
   const glow = STATUS_GLOW[visualStatus];
   const hasGlow = glow.alpha > 0;
   const glowClass = !hasGlow ? ''
@@ -944,6 +953,15 @@ export function ChatCard({
             <span title="В фоне выполняется команда" aria-label="В фоне выполняется команда"
               style={{ display: 'flex', flexShrink: 0, color: C.accent }}>
               <Terminal size={13} strokeWidth={2.2} />
+            </span>
+          )}
+          {/* Сторож ждёт: тихая работа с той же волной, что у команды, — волна говорит
+              «чат жив», значок называет причину. При живом Terminal не дублируем — значки
+              подряд на одной волне сливаются в шум */}
+          {watchdogsActive && !bgCommandRunning && !agentsRunning && !workflowRunning && (
+            <span title="Сторож ждёт" aria-label="Сторож ждёт"
+              style={{ display: 'flex', flexShrink: 0, color: C.accent }}>
+              <AlarmClock size={13} strokeWidth={2.2} />
             </span>
           )}
           {workflowRunning && (

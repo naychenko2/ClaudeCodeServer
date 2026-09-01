@@ -1002,7 +1002,7 @@ export type ServerMessage = { sessionId: string } & (
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
-  // Сторожа чатов (chat-watchdogs): ПОЛНЫЙ состав id чатов и проектов владельца с активными
+  // Сторожа чатов: ПОЛНЫЙ состав id чатов и проектов владельца с активными
   // сторожами. Событие глобальное (не про один чат) и заменяет состояние стора целиком —
   // диффы потребитель не считает
   | { type: 'watchdogs_changed'; sessions: string[]; projects: string[] }

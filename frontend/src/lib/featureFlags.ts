@@ -26,10 +26,6 @@ export const FLAGS = {
   // всегда.
   mcpCatalog: 'mcp-catalog',
   chatContext: 'chat-context',
-  // Серверные сторожа чатов (план «chat-watchdogs»): watch_start/list/cancel в ходе —
-  // цикл опроса живёт на сервере и будит чат при выполнении условия. Серверная фича:
-  // фронт ключ пока не рисует, ключ здесь для симметрии каталога (тумблер — из каталога).
-  chatWatchdogs: 'chat-watchdogs',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

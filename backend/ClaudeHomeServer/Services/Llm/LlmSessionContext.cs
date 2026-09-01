@@ -139,12 +139,12 @@ public sealed record DifyMcpContext(string ApiUrl, string DifyUrl, string DifyKe
 // молча. Рубильник Mcp:HttpTransport НЕ входит — живой, на каждый ход (HttpMcpEnabledProvider).
 public sealed record WidgetsMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
-// Контекст MCP-сервера сторожей чатов (флаг chat-watchdogs, план «chat-watchdogs»):
-// адрес API и фабрика сервисного токена владельца; сессия-вызыватель едет хвостом URL
-// (/mcp/watch/{sessionId}) — по ней тулсет резолвит владельца, проект и будимый чат.
-// TokenFactory/UseHttp — тот же идиом доставки токена и гейта схемы, что у widgets.
-// stdio-ветки отката НЕТ (node-сервера не существовало): при UseHttp=false или выключенном
-// рубильнике Mcp:HttpTransport тулсет ходу не объявляется вовсе.
+// Контекст MCP-сервера сторожей чатов (ADR-013): адрес API и фабрика сервисного токена
+// владельца; сессия-вызыватель едет хвостом URL (/mcp/watch/{sessionId}) — по ней тулсет
+// резолвит владельца, проект и будимый чат. TokenFactory/UseHttp — тот же идиом доставки
+// токена и гейта схемы, что у widgets. stdio-ветки отката НЕТ (node-сервера не
+// существовало): при UseHttp=false или выключенном рубильнике Mcp:HttpTransport тулсет
+// ходу не объявляется вовсе.
 public sealed record WatchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
@@ -356,6 +356,6 @@ public sealed record LlmSessionContext(
     // (гейт самого инструмента — WorkspaceMcpContext.ChatContextEnabled).
     // null — фича выключена или сессия без владельца.
     Func<IReadOnlyList<SessionContextEntry>>? ChatContextProvider = null,
-    // MCP-сервер сторожей чатов (watch_*): null — флаг chat-watchdogs выключен или нет
-    // владельца. Гейт по флагу — свойство владельца (инвариант стабильности состава ADR-012).
+    // MCP-сервер сторожей чатов (watch_*): null — чат без владельца. Наличие контекста —
+    // свойство владельца (инвариант стабильности состава ADR-012).
     WatchMcpContext? WatchMcp = null);

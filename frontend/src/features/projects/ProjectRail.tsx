@@ -2,7 +2,6 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom';
 import { AlarmClock, ArrowDownToLine, Pin, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import type { Project } from '../../types';
 import { RailCapsule, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
@@ -60,8 +59,8 @@ const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
 function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragActive, side, onPointerDown, onClick, onContextMenu, onHide }: {
   p: Project;
   activity?: ProjectActivity;
-  // В чатах проекта жив сторож (флаг chat-watchdogs): чат спит (ход завершён), но
-  // сервер сам ждёт условие — без значка проект выглядел бы простаивающим
+  // В чатах проекта жив сторож: чат спит (ход завершён), но сервер сам ждёт
+  // условие — без значка проект выглядел бы простаивающим
   watchdog?: boolean;
   active: boolean;
   // Приглушить иконку (спящая рельса, НЕ выбранный проект): обесцветить картинку
@@ -184,10 +183,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   const pinnedIds = usePinnedIds();
   const switcherOrder = useSwitcherOrder();
   const activity = useProjectActivity();
-  // Сторожа чатов (флаг chat-watchdogs): множество проектов со ждущими сторожами —
-  // источник значка на иконке. Хук зовётся безусловно (правила хуков), флаг гасит
-  // только сам значок
-  const wdEnabled = useFeature(FLAGS.chatWatchdogs);
+  // Сторожа чатов: множество проектов со ждущими сторожами — источник значка на иконке
   const watchdogs = useWatchdogPresence();
 
   useEffect(() => { if (project) recordSwitcherProject(project.id); }, [project]);
@@ -435,7 +431,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
                   // кнопки. Поэтому muted достаётся только неактивным в спящей рельсе.
                   muted={!railHover && !dragView && p.id !== project?.id}
                   activity={activity.get(p.id)}
-                  watchdog={wdEnabled && watchdogs.projects.has(p.id)}
+                  watchdog={watchdogs.projects.has(p.id)}
                   dragging={dragView?.id === p.id}
                   dragActive={!!dragView}
                   // У открытого проекта кнопки нет: его иконка возвращается в док

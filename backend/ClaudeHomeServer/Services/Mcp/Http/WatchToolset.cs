@@ -7,10 +7,9 @@ using ClaudeHomeServer.Services.Watchdog;
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
 /// <summary>
-/// Серверные сторожа чатов (watch_*) поверх HTTP-транспорта — флаг chat-watchdogs
-/// (план «chat-watchdogs», ADR-012 волна 2 по форме). Модель декларирует «дожидайся
-/// условия и разбуди этот чат»: цикл опроса живёт в WatchdogService и переживает ходы,
-/// рестарты и смерть процесса CLI.
+/// Серверные сторожа чатов (watch_*) поверх HTTP-транспорта (ADR-013, по форме —
+/// ADR-012 волна 2). Модель декларирует «дожидайся условия и разбуди этот чат»: цикл
+/// опроса живёт в WatchdogService и переживает ходы, рестарты и смерть процесса CLI.
 ///
 /// Маршрут — <c>POST /mcp/watch/{sessionId}</c>: хвост несёт СЕССИЮ-ВЫЗЫВАТЕЛЬ, по ней
 /// тулсет знает владельца, проект (WorkingDirectory опроса) и будимый чат. Сторож будит
@@ -22,8 +21,8 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// тул, ЗАПУСКАЮЩИЙ ход (tasks_run_executor); watch_start ход не запускает, а гейт отрезал
 /// бы полезный кейс «агент-исполнитель сторожит своё условие».
 ///
-/// ИНВАРИАНТ состава (IMcpToolset): tools/list зависит только от сессии-вызывателя и
-/// флага ВЛАДЕЛЬЦА (свойство сессии — разрешено ADR-012), от свойств хода не зависит.
+/// ИНВАРИАНТ состава (IMcpToolset): tools/list зависит только от сессии-вызывателя
+/// (свойство сессии — разрешено ADR-012), от свойств хода не зависит.
 /// stdio-ветки отката НЕТ (node-сервера никогда не существовало): при
 /// Mcp:HttpTransport=false тулсет недоступен — осознанное упрощение.
 /// </summary>
@@ -51,8 +50,8 @@ public sealed class WatchToolset(
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
-        // Проверка флага — внутри TryResolve: и на tools/list, и на вызов владелец без
-        // включённого chat-watchdogs получает отказ (между ними флаг мог выключиться)
+        // Право на чат — внутри TryResolve, на каждый вызов: чужая сессия не видит
+        // ни состава, ни инструментов
         if (!TryResolve(context, out var session, out var error))
             return Deny(error!);
 
@@ -129,13 +128,9 @@ public sealed class WatchToolset(
         return true;
     }
 
-    private const string WatchOffText =
-        "Сторожа чатов выключены у этого пользователя (флаг chat-watchdogs). "
-        + "Попросите включить их в «Экспериментальных функциях».";
-
-    // Резолв хвоста в сессию ВЛАДЕЛЬЦА токена + включённый флаг chat-watchdogs (свойство
-    // сессии/владельца — составу tools/list зависеть от хода нельзя, ADR-012). Любой
-    // отказ — текстом: право на чат и флаг проверяются на КАЖДЫЙ вызов и tools/list.
+    // Резолв хвоста в сессию ВЛАДЕЛЬЦА токена (свойство сессии — составу tools/list
+    // зависеть от хода нельзя, ADR-012). Любой отказ — текстом: право на чат проверяется
+    // на КАЖДЫЙ вызов и tools/list.
     private bool TryResolve(McpToolCallContext context,
         out Session session, [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? error)
     {
@@ -153,11 +148,6 @@ public sealed class WatchToolset(
             return false;
         }
         session = owned;
-        if (!sessions.WatchMcpEnabled(context.OwnerId))
-        {
-            error = WatchOffText;
-            return false;
-        }
         return true;
     }
 

@@ -548,14 +548,13 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
   // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
   const videoPlaying = useVideoPlaying();
-  // Сторожа чатов (флаг chat-watchdogs): пока у чата проекта на сервере жив сторож,
-  // сам чат спит (ход давно завершён) — без метки ожидание было бы невидимым до
-  // открытия списка. Точка без числа: «сколько ждут» расшифровывает hint
-  const wdEnabled = useFeature(FLAGS.chatWatchdogs);
+  // Сторожа чатов: пока у чата проекта на сервере жив сторож, сам чат спит (ход
+  // давно завершён) — без метки ожидание было бы невидимым до открытия списка.
+  // Точка без числа: «сколько ждут» расшифровывает hint
   const watchdogs = useWatchdogPresence();
   const [watchdogChats, setWatchdogChats] = useState<string[]>([]);
   useEffect(() => {
-    if (!wdEnabled || !watchdogs.projects.has(project.id)) { setWatchdogChats([]); return; }
+    if (!watchdogs.projects.has(project.id)) { setWatchdogChats([]); return; }
     let cancelled = false;
     // Своего списка чатов у воркспейса нет (его держит SessionList), а стор знает
     // только id — пересечение добирает запросом и лишь пока в проекте есть сторожа
@@ -563,7 +562,7 @@ const windowWidth = useWindowWidth();
       if (!cancelled) setWatchdogChats(list.map(s => s.id).filter(id => watchdogs.sessions.has(id)));
     }).catch(() => { /* офлайн — рельса живёт на событиях watchdogs_changed */ });
     return () => { cancelled = true; };
-  }, [wdEnabled, watchdogs, project.id]);
+  }, [watchdogs, project.id]);
   const watchdogCount = watchdogChats.length;
   const railBadges = useMemo<Partial<Record<PanelKey, RailBadgeInfo>>>(() => {
     // «Изменения»: основной кружок — незафиксированные файлы (дедуп по пути), второй

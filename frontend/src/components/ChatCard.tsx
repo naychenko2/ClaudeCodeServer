@@ -6,7 +6,6 @@ import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator';
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { useChatWatchdogs } from '../lib/watchdogPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
@@ -606,12 +605,9 @@ export function ChatCard({
   // Своё значение visualStatus, а не 'agents': подпись «агенты работают» тут была бы враньём
   const bgCommandRunningLive = useBgCommandRunning(s.id);
   const bgCommandRunning = bgCommandRunningProp ?? bgCommandRunningLive;
-  // Сторож ждёт (флаг chat-watchdogs): чат жив — у него стоит серверный сторож, ждущий
-  // своё условие. Хуки раздельно: связка useFeature(...) && useChatWatchdogs(...) в одну
-  // строку пропускала бы второй хук при выключенном флаге — нарушение порядка хуков.
+  // Сторож ждёт: чат жив — у него стоит серверный сторож, ждущий своё условие.
   // Волна та же, что у фоновой команды ('command'): работа реальная, просто тихая
-  const watchdogsFlag = useFeature(FLAGS.chatWatchdogs);
-  const watchdogsActive = watchdogsFlag && useChatWatchdogs(s.id);
+  const watchdogsActive = useChatWatchdogs(s.id);
   const visualStatus: VisualStatus = teamWait ? 'waiting'
     : STATUS_GLOW[s.status].breath ? s.status
       : agentsRunning ? 'agents'

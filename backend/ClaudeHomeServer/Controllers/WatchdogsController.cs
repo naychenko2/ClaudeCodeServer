@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
-// Снапшот активных сторожей владельца (визуализация chat-watchdogs): фронт рисует значки
+// Снапшот активных сторожей владельца (визуализация сторожей): фронт рисует значки
 // сторожа по нему при загрузке, дальше живёт на событии watchdogs_changed — без поллинга.
 [ApiController, Authorize, Route("api/watchdogs")]
 public class WatchdogsController(WatchdogNotifier notifier) : ControllerBase
@@ -16,7 +16,7 @@ public class WatchdogsController(WatchdogNotifier notifier) : ControllerBase
 
     /// <summary>GET /api/watchdogs — чаты и проекты владельца с активными сторожами.
     /// Проекция в { sessions, projects }: унаследованный ServerMessage.SessionId в REST
-    /// ответ не отдаём. Флаг chat-watchdogs выключен → пустой снимок (не 403).</summary>
+    /// ответ не отдаём.</summary>
     [HttpGet]
     public ActionResult<object> GetSnapshot()
     {

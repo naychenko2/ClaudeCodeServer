@@ -36,7 +36,7 @@ public sealed class WatchdogAlarm(SessionMessagingService messaging) : IWatchdog
 }
 
 /// <summary>
-/// Цикл серверных сторожей чатов (план «chat-watchdogs», шаг 2). Опрос ПОСЛЕДОВАТЕЛЬНЫЙ:
+/// Цикл серверных сторожей чатов (ADR-013). Опрос ПОСЛЕДОВАТЕЛЬНЫЙ:
 /// один зависший poll не тормозит остальных дольше собственного PollTimeoutSeconds
 /// (per-poll таймаут с kill). Семантика исходов — по плану:
 /// exit 0 → fired; exit != 0 → «ещё нет» (штатно); запуск не состоялся 3 подряд →

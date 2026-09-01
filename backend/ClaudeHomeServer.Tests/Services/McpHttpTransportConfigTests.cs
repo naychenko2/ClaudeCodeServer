@@ -158,9 +158,8 @@ public class McpHttpTransportConfigTests : IDisposable
     }
 
     /// <summary>
-    /// Сервер сторожей чатов (флаг chat-watchdogs): при включённом контексте ход объявляет
-    /// http-узел watch с сессией-вызывателем в хвосте URL и токеном владельца. Флаг выключен
-    /// (контекста нет) — узла в конфиге нет вовсе: инструмент у модели не появляется.
+    /// Сервер сторожей чатов: при наличии контекста ход объявляет http-узел watch
+    /// с сессией-вызывателем в хвосте URL и токеном владельца.
     /// </summary>
     [Fact]
     public void СторожаЧатов_ОбъявленыHttpУзломССессиейВХвосте()
@@ -189,15 +188,15 @@ public class McpHttpTransportConfigTests : IDisposable
     }
 
     /// <summary>
-    /// Флаг выключен — контекста нет, узла нет (dark launch). Рубильник Mcp:HttpTransport
-    /// снят при живом контексте — узла тоже нет, и stdio-замену НЕ подставляем: ветки отката
-    /// у watch нет (node-сервера не существовало, план «chat-watchdogs»).
+    /// Контекста нет (чат без владельца) — узла нет. Рубильник Mcp:HttpTransport снят при
+    /// живом контексте — узла тоже нет, и stdio-замену НЕ подставляем: ветки отката у watch
+    /// нет (node-сервера не существовало).
     /// </summary>
     [Fact]
-    public void СторожаЧатов_БезФлагаилиРубильникаУзлаНетИStdioПодстановкиНет()
+    public void СторожаЧатов_БезКонтекстаилиРубильникаУзлаНетИStdioПодстановкиНет()
     {
         var (servers, keys) = BuildConfig();
-        servers.ContainsKey("watch").Should().BeFalse("флаг выключен — тулсет ходу не объявляется");
+        servers.ContainsKey("watch").Should().BeFalse("контекста нет — тулсет ходу не объявляется");
         keys.Should().NotContain("watch:t:http");
 
         var (offServers, offKeys) = BuildConfig(

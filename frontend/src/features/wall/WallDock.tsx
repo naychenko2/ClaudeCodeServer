@@ -11,7 +11,6 @@ import { AlarmClock, Plus, Search } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import { showToast } from '../../lib/toast';
 import type { Session } from '../../types';
@@ -39,10 +38,8 @@ export function WallDock({ onOpenWall, slots = 0 }: {
 }) {
   const { chats, projects, focusId } = useWallState();
   const activity = useChatActivity();
-  // Сторожа чатов (флаг chat-watchdogs): у номерка чата с живым сторожем — будильник
-  // в нижнем углу (верхний занят точкой статуса). Хук зовётся безусловно (правила
-  // хуков), флаг гасит только сам значок
-  const wdEnabled = useFeature(FLAGS.chatWatchdogs);
+  // Сторожа чатов: у номерка чата с живым сторожем — будильник в нижнем углу
+  // (верхний занят точкой статуса)
   const watchdogs = useWatchdogPresence();
   // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
   // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
@@ -160,7 +157,7 @@ export function WallDock({ onOpenWall, slots = 0 }: {
         const st = activity.get(s.id);
         const visible = onWall && idx < slots;
         // У чата на стене живой сторож: значок в нижнем углу номерка, подпись в плашке
-        const watchdog = wdEnabled && watchdogs.sessions.has(s.id);
+        const watchdog = watchdogs.sessions.has(s.id);
         return (
           // Обёртка — якорь точки статуса: точка живёт НАД кнопкой (как в доке
           // проектов), внутри кнопки её съедало бы приглушение невлезших

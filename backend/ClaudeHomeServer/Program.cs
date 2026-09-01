@@ -441,16 +441,16 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Dify напрямую через KnowledgeService, ключ не покидает бэкенд; хвост — сессия-вызыватель
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.DifyToolset>();
-// Сторожа чатов (флаг chat-watchdogs): хвост /mcp/watch/{sessionId} — сессия-вызыватель;
-// гейт по флагу владельца — на каждый tools/list и вызов (WatchToolset.TryResolve)
+// Сторожа чатов: хвост /mcp/watch/{sessionId} — сессия-вызыватель; право на чат
+// проверяется на каждый tools/list и вызов (WatchToolset.TryResolve)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WatchToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
-// Серверные сторожа чатов (флаг chat-watchdogs, dark launch): стор + цикл опроса.
-// Запуск poll-команд — через ILauncherFactory (среда владельца); цикл — hosted, в
-// Testing-среде не поднимается (см. AddHosted), юниты гоняют TickAsync напрямую
+// Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
+// ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
+// (см. AddHosted), юниты гоняют TickAsync напрямую
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.IWatchdogEnvironment,
     ClaudeHomeServer.Services.Watchdog.WatchdogEnvironment>();

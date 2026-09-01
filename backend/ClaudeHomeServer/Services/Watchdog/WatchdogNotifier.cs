@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace ClaudeHomeServer.Services.Watchdog;
 
 /// <summary>
-/// Живые данные по активным сторожам владельца (визуализация chat-watchdogs): снимок
+/// Живые данные по активным сторожам владельца (визуализация сторожей): снимок
 /// {sessions, projects} для GET /api/watchdogs и его же рассылка событием watchdogs_changed —
 /// значки сторожа в списках чатов/проектов живут без поллинга. Слушатель Changed стора
 /// встаёт в конструкторе — синглтон обязан быть создан к первым постановкам (прогрев в
@@ -16,21 +16,13 @@ namespace ClaudeHomeServer.Services.Watchdog;
 public sealed class WatchdogNotifier : IDisposable
 {
     private readonly WatchdogStore _store;
-    private readonly Func<string, bool> _watchEnabled;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ILogger<WatchdogNotifier>? _log;
 
-    public WatchdogNotifier(WatchdogStore store, SessionManager sessions,
-        IHubContext<SessionHub> hub, ILogger<WatchdogNotifier>? log = null)
-        : this(store, sessions.WatchMcpEnabled, hub, log) { }
-
-    // Шов под юнит-тесты: SessionManager в тест не собирают (тяжёлая сборка) — флаг
-    // подаётся делегатом; прод-конструктор выше берёт его из SessionManager.WatchMcpEnabled
-    internal WatchdogNotifier(WatchdogStore store, Func<string, bool> watchEnabled,
+    public WatchdogNotifier(WatchdogStore store,
         IHubContext<SessionHub> hub, ILogger<WatchdogNotifier>? log = null)
     {
         _store = store;
-        _watchEnabled = watchEnabled;
         _hub = hub;
         _log = log;
         store.Changed += OnChanged;
@@ -57,12 +49,9 @@ public sealed class WatchdogNotifier : IDisposable
     /// <summary>
     /// Снимок активных сторожей владельца: id чатов с хотя бы одним активным (Status==Active)
     /// сторожем и id проектов, где такие чаты есть; чаты вне проектов — только в Sessions.
-    /// Флаг chat-watchdogs выключен → пустой снимок (REST тоже: 200 с пустыми списками,
-    /// не 403 — стор остаётся рабочим при выключении).
     /// </summary>
     internal WatchdogsChangedMessage Snapshot(string ownerId)
     {
-        if (!_watchEnabled(ownerId)) return new WatchdogsChangedMessage([], []);
         var active = _store.GetByOwner(ownerId).Where(w => w.Status == WatchdogStatus.Active).ToList();
         return new WatchdogsChangedMessage(
             [.. active.Select(w => w.SessionId).Distinct()],

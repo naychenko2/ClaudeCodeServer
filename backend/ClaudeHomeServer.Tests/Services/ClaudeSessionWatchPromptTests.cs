@@ -9,9 +9,9 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Обе ветки флага chat-watchdogs для промпта хода (шаг 4 плана): флаг выключен —
-// контекста нет, секции «долгое ожидание → watch_start» в --append-system-prompt нет;
-// включён (контекст приезжает) — секция клеится. Паттерн — как у
+// Обе ветки контекста watch для промпта хода: контекста нет (чат без владельца) —
+// секции «долгое ожидание → watch_start» в --append-system-prompt нет; есть (контекст
+// приезжает) — секция клеится. Паттерн — как у
 // ClaudeSessionPromptSectionsOrderTests: настоящий ClaudeSession с fake-CLI launcher,
 // читаем фактический аргумент, ушедший бы модели.
 public class ClaudeSessionWatchPromptTests : IDisposable
@@ -92,21 +92,21 @@ public class ClaudeSessionWatchPromptTests : IDisposable
     }
 
     [Fact]
-    public async Task ФлагВключен_СекцияСторожейКлеитсяВПромпт()
+    public async Task КонтекстЕсть_СекцияСторожейКлеитсяВПромпт()
     {
         var prompt = await PromptOfTurnAsync(
             new WatchMcpContext("http://localhost:5000", () => "tok-W", UseHttp: true));
         prompt.Should().Contain(ClaudeHomeServer.Services.Prompts.WatchPrompts.SectionText,
-            "включённый флаг доставляет контекст — секция обязана доехать до модели");
+            "контекст доставлен — секция обязана доехать до модели");
     }
 
     [Fact]
-    public async Task ФлагВыключен_СекцииСторожейНет()
+    public async Task КонтекстаНет_СекцииСторожейНет()
     {
-        // Флаг выключен = SessionManager не строит контекст вовсе (BuildWatchContext → null)
+        // Чат без владельца = SessionManager не строит контекст вовсе (BuildWatchContext → null)
         var prompt = await PromptOfTurnAsync(watch: null);
         prompt.Should().NotContainAny(["watch_start", "Серверные сторожа"],
-            "флаг выключен — секции и намёков на watch-инструменты быть не должно");
+            "контекста нет — секции и намёков на watch-инструменты быть не должно");
     }
 
     [Fact]

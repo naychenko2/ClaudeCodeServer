@@ -621,12 +621,6 @@ public class SessionManager : IDisposable
     internal bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
         session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
 
-    // Сторожа чатов доступны по флагу ВЛАДЕЛЬЦА (chat-watchdogs, dark launch): свойство
-    // владельца, а не хода — составу tools/list зависеть от хода нельзя (ADR-012).
-    // internal — ту же формулу резолвит WatchToolset на каждый tools/list и tools/call
-    internal bool WatchMcpEnabled(string? ownerId) =>
-        ownerId is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatWatchdogs);
-
     // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
     // per-owner JWT с перевыпуском за сутки до истечения (сервер может жить дольше срока токена).
     private string GetServiceToken(string ownerId) =>
@@ -679,11 +673,11 @@ public class SessionManager : IDisposable
         return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
     }
 
-    // Контекст MCP-сервера сторожей чатов (флаг chat-watchdogs): null — флаг выключен
-    // или нет владельца. Сессия-вызыватель едет хвостом URL — как у tasks/notes волны 2.
+    // Контекст MCP-сервера сторожей чатов: null — только для чата без владельца.
+    // Сессия-вызыватель едет хвостом URL — как у tasks/notes волны 2.
     private WatchMcpContext? BuildWatchContext(string? ownerId)
     {
-        if (!WatchMcpEnabled(ownerId)) return null;
+        if (ownerId is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new WatchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }

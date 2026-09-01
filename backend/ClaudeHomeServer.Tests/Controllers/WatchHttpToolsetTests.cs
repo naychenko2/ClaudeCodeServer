@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
@@ -11,9 +10,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
-/// Интеграционный путь http-тулсета сторожей чатов (флаг chat-watchdogs): обе ветки флага
-/// (выключен — ни состава, ни вызова; включён — полный цикл watch_start → watch_list →
-/// watch_cancel), изоляция чужого токена и видимость тулсета в реестре/журнале вызовов.
+/// Интеграционный путь http-тулсета сторожей чатов: полный цикл watch_start → watch_list →
+/// watch_cancel, изоляция чужого токена и видимость тулсета в реестре/журнале вызовов.
 /// Форма теста — по образцу DifyHttpOwnerIsolationTests (ADR-012, волна 2).
 /// </summary>
 public class WatchHttpToolsetTests : IDisposable
@@ -65,33 +63,11 @@ public class WatchHttpToolsetTests : IDisposable
     private static string ResultText(JsonElement call) =>
         call.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
 
-    private void SetFlag(string ownerId, bool on)
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        if (users.GetById(ownerId) is { } user) users.SetFeatureFlag(user.Id, FeatureFlagKeys.ChatWatchdogs, on);
-    }
-
-    /// <summary>Флаг выключен (дефолт): пустой состав и отказ вызова — dark launch.</summary>
+    /// <summary>Живой цикл: start → list → cancel → cancelled в list.</summary>
     [Fact]
-    public async Task ФлагВыключен_НиСоставаНиВызова()
+    public async Task СтартСписокСнятие()
     {
-        var (_, sessionId, ownerId) = await CreateProjectWithSessionAsync(Client);
-        SetFlag(ownerId, false);
-
-        (await ListToolsAsync(Client, sessionId)).Should().BeEmpty("флаг выключен — состав не отдаётся");
-
-        var call = await CallToolAsync(Client, sessionId, "watch_start",
-            new { name = "Билд", poll_command = "true" });
-        call.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
-        ResultText(call).Should().Contain("выключены");
-    }
-
-    /// <summary>Живой цикл при включённом флаге: start → list → cancel → cancelled в list.</summary>
-    [Fact]
-    public async Task ФлагВключен_СтартСписокСнятие()
-    {
-        var (_, sessionId, ownerId) = await CreateProjectWithSessionAsync(Client);
-        SetFlag(ownerId, true);
+        var (_, sessionId, _) = await CreateProjectWithSessionAsync(Client);
 
         var tools = await ListToolsAsync(Client, sessionId);
         tools.Should().BeEquivalentTo(["watch_start", "watch_list", "watch_cancel"]);
@@ -135,8 +111,7 @@ public class WatchHttpToolsetTests : IDisposable
     [Fact]
     public async Task ЧужойТокен_НиСоставаНиВызова()
     {
-        var (_, sessionIdA, ownerA) = await CreateProjectWithSessionAsync(Client);
-        SetFlag(ownerA, true);
+        var (_, sessionIdA, _) = await CreateProjectWithSessionAsync(Client);
         using var clientB = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
 
@@ -156,8 +131,7 @@ public class WatchHttpToolsetTests : IDisposable
         var registry = _factory.Services.GetRequiredService<McpToolsetRegistry>();
         registry.Find(WatchToolset.ServerName).Should().BeOfType<WatchToolset>();
 
-        var (_, sessionId, ownerId) = await CreateProjectWithSessionAsync(Client);
-        SetFlag(ownerId, true);
+        var (_, sessionId, _) = await CreateProjectWithSessionAsync(Client);
         // Журнал пишет только запросы хода: X-Caller-Session-Id лежит в конфиге хода
         using var caller = _factory.CreateAuthenticatedClient();
         caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", sessionId);

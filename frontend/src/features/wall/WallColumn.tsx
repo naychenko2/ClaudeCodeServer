@@ -22,7 +22,6 @@ import { ChatPanel } from '../../components/ChatPanel';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useCanHover } from '../../lib/pointer';
 import { useAgentsRunning, useBgCommandRunning } from '../../lib/agentsPresence';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useChatWatchdogs } from '../../lib/watchdogPresence';
 import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
 import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
@@ -47,13 +46,11 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   // где идёт работа, выглядит ровно как простаивающая. Стену держат открытой именно
   // чтобы следить, поэтому молчать тут дороже всего. Агенты и фоновая команда
   // (дев-сервер, watch) держат колонку живой одинаково, различает их только подпись.
-  // Туда же сторож (флаг chat-watchdogs): ход давно завершён, но сервер сам ждёт
-  // условие — колонка обязана выглядеть живой, пока ожидание не кончилось
+  // Туда же сторож: ход давно завершён, но сервер сам ждёт условие — колонка
+  // обязана выглядеть живой, пока ожидание не кончилось
   const agentsRunning = useAgentsRunning(session.id);
   const bgCommandRunning = useBgCommandRunning(session.id);
-  // Хук зовётся безусловно (правила хуков), флаг гасит только признак
-  const watchdogWaiting = useChatWatchdogs(session.id);
-  const watchdogBusy = useFeature(FLAGS.chatWatchdogs) && watchdogWaiting;
+  const watchdogBusy = useChatWatchdogs(session.id);
   const busy = status === 'working' || status === 'waiting' || agentsRunning || bgCommandRunning || watchdogBusy;
   const busyLabel = status === 'waiting' ? 'ждёт вас'
     : status === 'working' ? 'идёт ход'

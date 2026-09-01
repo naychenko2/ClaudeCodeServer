@@ -10,11 +10,10 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services.Watchdog;
 
-// Присутствие сторожей для фронта (визуализация chat-watchdogs): снимок {sessions, projects},
-// событие Changed стора на Create/Cancel/CancelBySession и адресация рассылки watchdogs_changed.
-// SessionManager в тест не собирают (тяжёлая сборка) — флаг подаётся делегатом (internal-шов
-// нотификатора, InternalsVisibleTo), хаб — моком с записью пар (группа, сообщение); sends мока
-// синхронны, поэтому fire-and-forget рассылка успевает до ассертов без ожиданий (CI Linux).
+// Присутствие сторожей для фронта: снимок {sessions, projects}, событие Changed стора
+// на Create/Cancel/CancelBySession и адресация рассылки watchdogs_changed. Хаб — моком
+// с записью пар (группа, сообщение); sends мока синхронны, поэтому fire-and-forget
+// рассылка успевает до ассертов без ожиданий (CI Linux).
 public class WatchdogPresenceTests : IDisposable
 {
     private readonly string _tempDir;
@@ -31,11 +30,8 @@ public class WatchdogPresenceTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json")
             }).Build());
-        _notifier = NewNotifier(flagEnabled: true);
+        _notifier = new WatchdogNotifier(_store, TestHub(), NullLogger<WatchdogNotifier>.Instance);
     }
-
-    private WatchdogNotifier NewNotifier(bool flagEnabled) =>
-        new(_store, _ => flagEnabled, TestHub(), NullLogger<WatchdogNotifier>.Instance);
 
     // Мок хаба с записью (группа, сообщение) — образец ChatArchivedEventTests
     private IHubContext<SessionHub> TestHub()
@@ -83,18 +79,6 @@ public class WatchdogPresenceTests : IDisposable
             "терминальный сторож присутствия не создаёт");
         snap.Projects.Should().BeEquivalentTo(["proj-1"],
             "проекты считаются по активным сторожам и без дублей");
-    }
-
-    [Fact]
-    public void Snapshot_FlagOff_IsEmpty()
-    {
-        Create("chat-1", "proj-1");
-        var off = NewNotifier(flagEnabled: false);
-
-        var snap = off.Snapshot("owner-1");
-
-        snap.Sessions.Should().BeEmpty("выключенный флаг — пустой снимок, а не 403");
-        snap.Projects.Should().BeEmpty();
     }
 
     [Fact]

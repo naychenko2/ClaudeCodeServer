@@ -15,6 +15,7 @@ using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.Reader;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
+using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -453,20 +454,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
 // per-session условиям — без него регрессия golden-фикстуры 4) и BuildAsync (исключения
 // гасятся внутри). Подключаются к шине фильтром prompt/assembling через
 // PromptSectionContributorsRegistration.RegisterAll в SessionManager.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.DossierTrailerContributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.NotesRecallContributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.PersonaRecallContributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.PromptSectionsContributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.PersonaBindingsContributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.CodeGraphContributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
-    ClaudeHomeServer.Services.Turn.PersonaLayerContributor>();
+// Новый контрибьютор — одна строка в PromptSectionContributorsDi.AddPromptSectionContributors().
+builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();

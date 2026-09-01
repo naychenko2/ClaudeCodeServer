@@ -281,6 +281,43 @@ egress-прокси едут только метаданные. Инвариан
 схема ходов, белый список и форма хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md);
 тексты интерфейса — [docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
+## Внутренние подсистемы (Services/Composition)
+
+Внутренние границы продукта — **подсистемы**, контракт
+[`IAppSubsystem.cs`](backend/ClaudeHomeServer/Services/Composition/IAppSubsystem.cs)
+с `Key`/`Title`/`Register` и `AddSubsystems`. Не путать с **внешними модулями**
+YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в отдельном
+процессе за реверс-прокси, эти — внутри Microsoft DI, без выгрузки и hot-plug.
+
+**Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`,
+`Models`, `Services.Http`/`Security`) и от явных швов (например,
+`IDesktopChatDirectory`), но НИКОГДА от другой вертикали напрямую.
+Нужна связь — два пути: событие `TurnEventBus` ([ADR-013](docs/adr/ADR-013-turn-event-bus.md))
+или явный интерфейс-шов. Удерживается тестом `SubsystemBoundaryTests`
+(рефлексия по сборке, источник правды — сборка, не текст).
+
+**Разведка по кандидатам** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md)):
+**Video — пилот** ✅ (`VideoSubsystem`, 1 контроллер, 0 hosted, 1 исходящая
+на `McpSecretStore`, 1 входящая мягкая на `Models/User.FavoriteVideoChannels`),
+**Desktop — отложен, но это настоящая цель** ⏳ (4 контроллера, ~3378 строк,
+три god-объекта: `SessionManager.cs:564` сам делает `new DesktopCapabilityTokenService`,
+`JwtService.cs:251,266` знает про `DesktopCaller`, `ClaudeSession.cs:1498`
+инъектит MCP-сервер `desktop`; готовые швы `IDesktopChatDirectory`/
+`IDesktopDeviceDirectory`/`IDesktopHandsNotifier`/`IDesktopCallCanceller` —
+за них и тянуть), **Backup — вычеркнут** ❌ (инфраструктурный срез поперёк
+всех, `BackupValidation` десериализует 6 чужих моделей, `BackupSchema.Version`
+— глобальный счётчик формата всех сторов, `BackupCli.TryHandle` работает
+в `Program.cs:40` ДО построения DI). Сборки и `AssemblyLoadContext` отвергнуты:
+Microsoft DI не выгружает контейнер по конструкции, отдельные сборки ломают
+`InternalsVisibleTo` (на нём стоят все тесты), в .NET сборка — не бесплатная
+папка как в pnpm-монорепе.
+
+**Метрика успеха:** `Program.cs` уменьшился с 1616 строк / 246 регистраций
+до 1605 / 221 после пилота Video (Δ −11 / −25); цель — уход под 1000 / 150
+по мере выделения следующих вертикалей. Вторая метрика — среднее число
+файлов, которое трогает новая фича: с подсистемами фича = 0 правок в
+`Program.cs` + 1 файл подсистемы + файлы раздела, цель — устойчиво ниже 3.
+
 ## Claude Code CLI subprocess
 
 `ClaudeSession` запускает: `claude --print --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio [--resume <id>]`

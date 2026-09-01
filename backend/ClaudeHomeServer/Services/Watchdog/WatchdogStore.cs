@@ -29,6 +29,15 @@ public class WatchdogStore
     /// </summary>
     public event Action<string>? ActiveCancelled;
 
+    /// <summary>
+    /// Состав активных сторожей владельца изменился (Create/Cancel/CancelBySession) —
+    /// ownerId для слушателей (нотификатор watchdogs_changed). Терминалы fired/timed_out/
+    /// launch_failed сюда НЕ входят: их ставит цикл сервиса прямой мутацией записи мимо
+    /// методов стора — там нотификатор дёргается сам (WatchdogService.TerminateAsync).
+    /// Стреляет после Save: слушатель читает стор в консистентном состоянии.
+    /// </summary>
+    public event Action<string>? Changed;
+
     public WatchdogRecord? GetById(string id) => _items.GetValueOrDefault(id);
 
     public IReadOnlyList<WatchdogRecord> GetBySession(string sessionId) =>
@@ -69,6 +78,7 @@ public class WatchdogStore
         item.PollTimeoutSeconds = WatchdogLimits.PollTimeoutFor(item.IntervalSeconds);
         _items[item.Id] = item;
         Save();
+        Changed?.Invoke(ownerId);
         return item;
     }
 
@@ -114,6 +124,7 @@ public class WatchdogStore
         item.Status = WatchdogStatus.Cancelled;
         Save();
         ActiveCancelled?.Invoke(id);
+        Changed?.Invoke(item.OwnerId);
         return item;
     }
 
@@ -131,6 +142,9 @@ public class WatchdogStore
         {
             Save();
             foreach (var id in doomed) ActiveCancelled?.Invoke(id);
+            // Все погашенные сторожа одного чата — владелец один
+            foreach (var owner in doomed.Select(id => _items[id].OwnerId).Distinct())
+                Changed?.Invoke(owner);
         }
         return doomed.Count;
     }

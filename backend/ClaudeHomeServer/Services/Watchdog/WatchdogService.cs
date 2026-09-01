@@ -55,6 +55,10 @@ public class WatchdogService : BackgroundService
     private readonly IWatchdogCommandRunner _runner;
     private readonly IWatchdogAlarm _alarm;
     private readonly ILogger<WatchdogService>? _log;
+    // Нотификатор присутствия сторожей (визуализация): терминалы ставятся этим сервисом
+    // мимо методов стора, поэтому Changed стора терминалы не покрывает — дёргаем сами.
+    // Optional: юнит-тесты цикла собирают сервис без него
+    private readonly WatchdogNotifier? _notifier;
 
     // Токены идущих опросов per-сторож: снятие (watch_cancel/гашение чата) отменяет свой
     // токен, раннер по отмене Kill'ит процесс — тот же путь, что и остановка хоста.
@@ -63,13 +67,14 @@ public class WatchdogService : BackgroundService
 
     public WatchdogService(WatchdogStore store, IWatchdogEnvironment env,
         IWatchdogCommandRunner runner, IWatchdogAlarm alarm,
-        ILogger<WatchdogService>? log = null)
+        ILogger<WatchdogService>? log = null, WatchdogNotifier? notifier = null)
     {
         _store = store;
         _env = env;
         _runner = runner;
         _alarm = alarm;
         _log = log;
+        _notifier = notifier;
         // Стор — единая точка всех снятий (Cancel и CancelBySession): слушаем его, а не
         // каждый вызыватель гасит токены сам. Подписка в конструкторе: TickAsync тестируется
         // без StartAsync, событие должно работать и без запущенного цикла
@@ -144,6 +149,9 @@ public class WatchdogService : BackgroundService
         if (chat is null || chat.IsArchived)
         {
             w.Status = WatchdogStatus.Cancelled;
+            // Гашение мимо Cancel стора: присутствие сторожа сообщаем нотификатору сами
+            // (персист — общим Save тика ниже)
+            _notifier?.NotifyChanged(w.OwnerId);
             _log?.LogInformation("Сторож «{Name}» погашен: чат {SessionId} недоступен (удалён или в архиве)",
                 w.Name, w.SessionId);
             return;
@@ -271,6 +279,9 @@ public class WatchdogService : BackgroundService
         w.Status = status;
         w.FiredAt = nowUtc;
         _store.Save();
+        // Терминал мимо методов стора: Changed не стреляет — присутствие сторожа
+        // (значки UI снимаются с чата/проекта) сообщаем нотификатору после Save
+        _notifier?.NotifyChanged(w.OwnerId);
         _log?.LogInformation("Сторож «{Name}» чата {SessionId}: терминал {Status}", w.Name, w.SessionId, status);
         await TryDeliverAsync(w, nowUtc);
     }

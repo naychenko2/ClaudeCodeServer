@@ -459,6 +459,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.IWatchdogComman
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.IWatchdogAlarm,
     ClaudeHomeServer.Services.Watchdog.WatchdogAlarm>();
 AddHosted<ClaudeHomeServer.Services.Watchdog.WatchdogService>();
+// Снапшот сторожей + событие watchdogs_changed (визуализация для фронта): подписка на
+// Changed стора живёт в конструкторе — слушатель обязан существовать к первым постановкам;
+// прогрев ниже делает подписку независимой от hosted-цикла
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
 // Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути (Session.CommittedFilePaths),
@@ -1003,6 +1007,8 @@ if (!inspectionMode)
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
 app.Services.GetRequiredService<TeamWaveService>();
+// Слушатель событий стора сторожей (watchdogs_changed): подписка встаёт в конструкторе
+app.Services.GetRequiredService<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
 // до первых запросов (иначе ранние правки персон не долетят до .md-файлов).
 // В копии НЕ поднимаем: синк пишет .claude/agents/*.md в реальные папки проектов

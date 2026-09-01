@@ -114,6 +114,17 @@ public record BgAgentDoneMessage(IReadOnlyList<string> ToolUseIds, bool Aborted 
 public record BgAgentsPresenceMessage(bool Active, bool Command)
     : ServerMessage("bg_agents_presence");
 
+// Состав активных сторожей владельца изменился (постановка, терминал, снятие) — снимок
+// для значков сторожа в списках чатов/проектов живёт без поллинга. Sessions — id чатов
+// с хотя бы одним активным сторожем; Projects — id проектов, где такие чаты есть; чаты
+// вне проектов попадают только в Sessions. Полный снимок, а не дельта: клиент может
+// подключиться в любой момент, а списки короткие (лимиты постановки). Рассылка — группы
+// session-чата каждого затронутого чата (с заполненным SessionId) + project_{id} +
+// user_{ownerId}; у копий для project/user-групп SessionId пуст. Эфемерное: в history
+// не пишется, UpdatedAt не двигает.
+public record WatchdogsChangedMessage(IReadOnlyList<string> Sessions, IReadOnlyList<string> Projects)
+    : ServerMessage("watchdogs_changed");
+
 public record PermissionRequestMessage(string RequestId, string ToolName, object ToolInput)
     : ServerMessage("permission_request");
 

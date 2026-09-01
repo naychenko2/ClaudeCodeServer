@@ -79,7 +79,11 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // Каталожный http-URL проходит настоящий SSRF-резолв (SsrfGuard.CheckAsync в Create):
+    // на машине с Proxifier резолв внешнего имени может прийти loopback-адресом (127.x.x.x),
+    // и гейт честно режет его как приватный — среда, не регрессия. На CI (ubuntu) это NXDOMAIN → DnsFailed.
     [Fact]
+    [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     public async Task Create_http_сCatalogRef_импортированныйUrlСовпадаетСЗаписью()
     {
         SetFlag(factory, enabled: true);

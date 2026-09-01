@@ -137,6 +137,37 @@ public class IncidentQueriesTests
         logs.Should().ContainSingle();
         logs[0].Severity.Should().Be("Error");
         logs[0].Message.Should().Be("Ход упал");
+        logs[0].ExceptionType.Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseLogs_ReadsExceptionType()
+    {
+        // exception.type кладёт PiiSanitizingLogProcessor напрямую в атрибуты записи
+        // (message/stacktrace стёрты как потенциальный PII) — карточка обязана его показывать.
+        const string json = """
+        {"data":{"data":{"results":[{"rows":[
+          {"timestamp":"2026-08-19T10:31:05Z","data":{"severity_text":"Error","body":"429 от провайдера",
+           "exception.type":"System.Net.Http.HttpRequestException"}}
+        ]}]}}}
+        """;
+
+        var logs = IncidentQueries.ParseLogs(json);
+
+        logs.Should().ContainSingle();
+        logs[0].ExceptionType.Should().Be("System.Net.Http.HttpRequestException");
+    }
+
+    [Fact]
+    public void Logs_SelectsExceptionType()
+    {
+        var body = IncidentQueries.Logs("dev", From, To);
+
+        using var doc = JsonDocument.Parse(body);
+        var spec = doc.RootElement.GetProperty("compositeQuery").GetProperty("queries")[0].GetProperty("spec");
+        var names = spec.GetProperty("selectFields").EnumerateArray()
+            .Select(f => f.GetProperty("name").GetString()).ToList();
+        names.Should().Contain("exception.type");
     }
 
     [Theory]

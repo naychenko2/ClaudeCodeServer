@@ -91,8 +91,12 @@ public static class IncidentDossierText
         {
             sb.AppendLine("### Логи окна");
             foreach (var line in dossier.Logs)
-                sb.Append("- ").Append(Time(line.At)).Append(" [").Append(line.Severity).Append("] ")
-                  .AppendLine(line.Message);
+            {
+                sb.Append("- ").Append(Time(line.At)).Append(" [").Append(line.Severity).Append("] ");
+                if (!string.IsNullOrWhiteSpace(line.ExceptionType))
+                    sb.Append(line.ExceptionType).Append(": ");
+                sb.AppendLine(line.Message);
+            }
             if (dossier.LogsTotal > dossier.Logs.Count)
                 sb.Append("- показаны ").Append(dossier.Logs.Count).Append(" из ")
                   .Append(dossier.LogsTotal).AppendLine();

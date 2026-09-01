@@ -6,6 +6,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Turn;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
@@ -273,6 +274,14 @@ public class SessionManager : IDisposable
     private readonly PromptSnapshotStore? _promptSnapshots;
     // Паспорта прогонов сабагентов (диагностика обрывов + сигнал для автодобивания); null — в тестах
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
+    // Паспорта ходов (исход/попытки/подмены), единственный источник записи — шина
+    // turn/completed (CLAUDE.md, раздел LLM-провайдеры). null — в тестах.
+    private readonly Llm.TurnRunLog? _turnRuns;
+    // Шина событий хода (ADR-013): уезжает в LlmSessionContext.Events каждой сессии.
+    // null — в тестах без DI: лениво создаётся в TurnEvents, чтобы подписчики могли
+    // звать шину и без явной передачи (тесты SessionManagerTests опираются на это).
+    private Turn.ITurnEventBus? _turnEvents;
+    private Turn.ITurnEventBus TurnEvents => _turnEvents ??= new Turn.TurnEventBus();
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
     // Автосохранение сессий каждые 30с
@@ -493,6 +502,10 @@ public class SessionManager : IDisposable
         // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
         // диагностики обрывов нет и автодобивание молчит — ходы идут как раньше.
         Llm.Claude.SubagentRunLog? subagentRuns = null,
+        // Опционально (в тестах не передаётся): паспорта ходов. Без него стор не ведётся,
+        // но и контракт «ровно один источник записи» соблюдён — без стора запись не идёт
+        // ни в finally фолбэк-адаптера, ни в шинный подписчик (нет подписчика → нет события).
+        Llm.TurnRunLog? turnRuns = null,
         // Опционально (в тестах не передаётся): маршрутизатор мест и клиент локальной
         // модели — ветка локального голосового хода (chat-voice). Без них разговор
         // идёт через claude CLI как раньше.
@@ -500,9 +513,17 @@ public class SessionManager : IDisposable
         Llm.ILocalLlmClient? ollama = null,
         // Опционально (в тестах не передаётся): резолвер секций промпта специальности
         // (план «Секции промптов») — без него секция prompt-sections не собирается
-        SpecialtySettingsStore? specialtySettings = null)
+        SpecialtySettingsStore? specialtySettings = null,
+        // Опционально (в тестах не передаётся): реестр контрибьюторов секций промпта
+        // (этап 2 плана «Шина событий хода»). Без DI бак пуст, шина работает как раньше.
+        IEnumerable<Turn.IPromptSectionContributor>? promptSectionContributors = null,
+        // Опционально (в тестах не передаётся): шина событий хода (ADR-013). Подписчики
+        // SessionManager ведут паспорта ходов/сабагентов и снимки промпта (этап 1).
+        Turn.ITurnEventBus? turnEvents = null)
     {
+        _turnEvents = turnEvents;
         _subagentRuns = subagentRuns;
+        _turnRuns = turnRuns;
         _router = router;
         _ollama = ollama;
         _specialtySettings = specialtySettings;
@@ -574,6 +595,27 @@ public class SessionManager : IDisposable
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
+
+        // Подписки на шину событий хода (ADR-013, этап 1): снимок промпта → PromptSnapshotStore,
+        // паспорт сабагента → SubagentRunLog + side-effects, паспорт хода → TurnRunLog.
+        // Шина регистрируется через DI как singleton; в тестах без DI лениво создаётся
+        // свой экземпляр на SessionManager (TurnEvents), чтобы подписчики могли работать.
+        {
+            var bus = TurnEvents;
+            bus.OnNotification<PromptAssembled>(HandlePromptAssembled,
+                "SessionManager.PromptSnapshotStore");
+            bus.OnNotification<SubagentRunCompleted>(HandleSubagentRunCompleted,
+                "SessionManager.SubagentRunLog");
+            bus.OnNotification<TurnCompleted>(HandleTurnCompleted,
+                "SessionManager.TurnRunLog");
+            // Этап 2: реестр IPromptSectionContributor (6 провайдеров + DossierTrailerHint)
+            // подключается к шине Filter-событием prompt/assembling. В тестах без DI бак
+            // пуст — сборка секций остаётся на инлайне (он закрыт гейтами IsEnabled).
+            if (promptSectionContributors is not null)
+            {
+                Turn.PromptSectionContributorsRegistration.RegisterAll(bus, promptSectionContributors);
+            }
+        }
 
         LoadSessions();
 
@@ -1730,71 +1772,153 @@ public class SessionManager : IDisposable
         return launcher.IsSandboxed ? launcher.Paths.ToRuntime(hostCwd) : hostCwd;
     }
 
-    // Приёмник снимков промпта для сессии: замыкает её id — адаптер ключа хранилища не знает.
-    // null — стор не подключён (тесты): ходы идут как раньше, просто без снимков.
-    private Func<PromptSnapshotDraft, string?>? PromptSinkFor(string sessionId) =>
-        _promptSnapshots is null ? null : draft => _promptSnapshots.Save(sessionId, draft);
+    // Подписчики шины событий хода (ADR-013, этап 1): вместо прямых полей sinks в
+// LlmSessionContext каждый наблюдатель подписан на событие своего типа. Контракт тот же
+// (запись в стор + side-effects на сессии), но заводится ОДИН раз на инстанс SessionManager
+// — без привязки к конкретной сессии, потому что id сессии едет В СОБЫТИИ (TurnContext).
+//
+// Состав:
+//
+//   PromptAssembled     → PromptSnapshotStore (запись черновика / дозапись tools/mcp)
+//                         + McpStatusStore (статусы MCP из system/init, попутно с AttachCliLayer).
+//   SubagentRunCompleted → SubagentRunLog (запись паспорта) + side-effects на сессии
+//                         (TruncatedSubagent/TruncatedBgNote, сброс счётчика добиваний).
+//
+//   TurnCompleted       → TurnRunLog (запись паспорта хода; в finally фолбэк-цикла больше
+//                         НЕТ прямого вызова Record — это и есть тот самый «ровно один
+//                         источник», который задача фиксирует как инвариант).
 
-    // Дозапись состава инструментов в снимок: приходит из system/init, уже после его записи.
-    // Тем же приёмником — единственная точка записи статуса MCP-серверов: CLI перечисляет в
-    // init все поднятые серверы (и встроенные продуктовые, и записи личного реестра), так что
-    // наблюдение достаётся бесплатно, без фонового поллинга и правок в ClaudeSession.
-    private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor(string sessionId) =>
-        _promptSnapshots is null && _mcpStatus is null
-            ? null
-            : (snapshotId, tools, servers) =>
-            {
-                _promptSnapshots?.AttachCliLayer(sessionId, snapshotId, tools, servers);
-                if (_mcpStatus is null || servers.Count == 0) return;
-                // Владелец — по сессии (у проектной это владелец проекта): статусы per-user,
-                // как и сам реестр. Сессии уже нет / владелец не резолвится — наблюдение некуда класть
-                if (_sessions.TryGetValue(sessionId, out var entry)
-                    && ResolveOwnerId(entry.Info) is { } ownerId)
-                    _mcpStatus.RecordFromInit(ownerId, sessionId, servers);
-            };
+// Приёмник паспортов сабагента через шину: сюда стекается тестовый код через рефлексию
+// (раньше этим путём ходил настоящий sink для ватчера сабагентов; сейчас ватчер публикует
+// subagent/completed сам, а этот метод — синхронный мост через шину для unit-тестов,
+// которые проверяют side-effects на сессии непосредственно после emit). Синхронный мост
+// здесь ОК: подписчик шины пишет в стор и взводит флаги, оба эти действия идемпотентны
+// и не могут зациклиться. null — шины нет (тесты без SessionManager), ватчер сам бы
+// отказался публиковать.
+internal Action<Llm.Claude.SubagentRunPassport>? SubagentRunSinkFor(string sessionId)
+{
+    return passport =>
+    {
+        // Синхронный мост: тесты берут делегат через рефлексию и зовут его из тестового
+        // метода, который потом немедленно проверяет side-effects на entry. В проде никто
+        // этим методом не пользуется — ватчер публикует subagent/completed в свой ITurnEventBus.
+        TurnEvents.PublishAsync(new SubagentRunCompleted(
+            Turn: new TurnContext(SessionId: sessionId, OwnerId: null, TurnSeq: 0,
+                AgentDepth: 0, ProjectId: null),
+            Passport: passport)).GetAwaiter().GetResult();
+    };
+}
 
-    // Приёмник паспортов прогонов сабагентов: пишет диагностику и, если агент оборвался на
-    // середине (последнее его сообщение — tool_use, отчёта нет), взводит отметку на сессии —
-    // добивание уходит по концу хода (см. NudgeTruncatedSubagentAsync).
-    // null — стор не подключён (тесты): ходы идут как раньше, просто без паспортов.
-    private Action<Llm.Claude.SubagentRunPassport>? SubagentRunSinkFor(string sessionId) =>
-        _subagentRuns is null ? null : passport =>
+// Ошибочные ветки возвращают Task.CompletedTask: подписчик Notification не должен
+//   TurnCompleted       → TurnRunLog (запись паспорта хода; в finally фолбэк-цикла больше
+//                         НЕТ прямого вызова Record — это и есть тот самый «ровно один
+//                         источник», который задача фиксирует как инвариант).
+
+private Task HandlePromptAssembled(PromptAssembled e)
+{
+    var snap = e.Snapshot;
+    if (snap is null) return Task.CompletedTask; // событие не наш — большинство подписчиков его не носят
+    switch (snap.Phase)
+    {
+        case PromptSnapshotPhase.Draft:
+            if (_promptSnapshots is null || snap.Draft is null) return Task.CompletedTask;
+            // ЧЕРНОВИК идёт в стор с id, который ClaudeSession уже сгенерировал и положил
+            // в payload — тот же id едет в UI-кнопку «какой промпт ушёл» через _onMessage.
+            // Счётчик общий с PromptSnapshotStore.NewPublicId, и без записи в стор id
+            // всё равно бесполезен.
+            SafePromptSnapshotDraft(e.Turn.SessionId, snap.SnapshotId, snap.Draft);
+            break;
+        case PromptSnapshotPhase.Tools:
+            if ((_promptSnapshots is null && _mcpStatus is null) || snap.SnapshotId is null) return Task.CompletedTask;
+            SafePromptSnapshotAttach(e.Turn.SessionId, snap.SnapshotId,
+                snap.ToolNames ?? [], snap.McpServers ?? []);
+            break;
+    }
+    return Task.CompletedTask;
+}
+
+// Все ошибочные ветки возвращают Task.CompletedTask: подписчик Notification не должен
+// бросать наружу — шина гасит исключения, но мы и сами не плодим трейс ради диагностики.
+private void SafePromptSnapshotDraft(string sessionId, string? snapshotId, PromptSnapshotDraft draft)
+{
+    if (snapshotId is null) { _promptSnapshots?.Save(sessionId, draft); return; }
+    try { _promptSnapshots?.Save(sessionId, snapshotId, draft); }
+    catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Снимок промпта не записан: {ex.Message}"); }
+}
+
+private void SafePromptSnapshotAttach(string sessionId, string snapshotId,
+    IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)
+{
+    try
+    {
+        _promptSnapshots?.AttachCliLayer(sessionId, snapshotId, tools, servers);
+        if (_mcpStatus is null || servers.Count == 0) return;
+        if (_sessions.TryGetValue(sessionId, out var entry)
+            && ResolveOwnerId(entry.Info) is { } ownerId)
+            _mcpStatus.RecordFromInit(ownerId, sessionId, servers);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[SessionManager] Дозапись снимка промпта не удалась: {ex.Message}");
+    }
+}
+
+private Task HandleSubagentRunCompleted(SubagentRunCompleted e)
+{
+    var sessionId = e.Turn.SessionId;
+    var passport = e.Passport;
+    if (_subagentRuns is not null) _subagentRuns.Record(passport);
+    if (!_sessions.TryGetValue(sessionId, out var entry)) return Task.CompletedTask;
+    if (passport.Truncated && passport.FinishedBy != "interrupted")
+    {
+        entry.TruncatedSubagent = passport;
+        // Фоновый агент: продукт ТОЛЬКО ЧТО объявил его результат готовым посреди хода
+        // координатора (bg_agent_done), и координатор принял обрывок последней реплики
+        // за итог. Ждать result здесь нельзя: ход координатора не заканчивается, а сам
+        // фоновый агент часто дозавершается уже ПОСЛЕ конца хода — тогда отметку не
+        // разбирает никто и чат стоит до сообщения человека (ровно то, что видно в логе:
+        // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
+        if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
+    }
+    else
+    {
+        // Опровержение обрыва: сигнал bg_agent_done обгоняет дозапись финального отчёта
+        // в транскрипт, и пометка могла взвеститься по хвосту tool_use агента, который
+        // на деле дописал end_turn. Штатный отчёт гасит ТОЛЬКО СВОЮ пометку — иначе
+        // в чат уходит ложная директива добивания давно завершившегося агента, а чужая
+        // пометка (другой AgentId) ждёт отчёта своего агента.
+        if (RefutesTruncation(entry.TruncatedSubagent?.AgentId, passport.AgentId))
+            entry.TruncatedSubagent = null;
+        if (RefutesTruncation(entry.TruncatedBgNote?.AgentId, passport.AgentId))
+            entry.TruncatedBgNote = null;
+        // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
+        // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
+        // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
+        // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
+        if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
         {
-            _subagentRuns.Record(passport);
-            if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-            if (passport.Truncated && passport.FinishedBy != "interrupted")
-            {
-                entry.TruncatedSubagent = passport;
-                // Фоновый агент: продукт ТОЛЬКО ЧТО объявил его результат готовым посреди хода
-                // координатора (bg_agent_done), и координатор принял обрывок последней реплики
-                // за итог. Ждать result здесь нельзя: ход координатора не заканчивается, а сам
-                // фоновый агент часто дозавершается уже ПОСЛЕ конца хода — тогда отметку не
-                // разбирает никто и чат стоит до сообщения человека (ровно то, что видно в логе:
-                // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
-                if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
-            }
-            else
-            {
-                // Опровержение обрыва: сигнал bg_agent_done обгоняет дозапись финального отчёта
-                // в транскрипт, и пометка могла взвестись по хвосту tool_use агента, который
-                // на деле дописал end_turn. Штатный отчёт гасит ТОЛЬКО СВОЮ пометку — иначе
-                // в чат уходит ложная директива добивания давно завершившегося агента, а чужая
-                // пометка (другой AgentId) ждёт отчёта своего агента.
-                if (RefutesTruncation(entry.TruncatedSubagent?.AgentId, passport.AgentId))
-                    entry.TruncatedSubagent = null;
-                if (RefutesTruncation(entry.TruncatedBgNote?.AgentId, passport.AgentId))
-                    entry.TruncatedBgNote = null;
-                // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
-                // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
-                // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
-                // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
-                if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
-                {
-                    entry.SubagentNudges = 0;
-                    entry.NudgeAgentId = null;
-                }
-            }
-        };
+            entry.SubagentNudges = 0;
+            entry.NudgeAgentId = null;
+        }
+    }
+    return Task.CompletedTask;
+}
+
+private Task HandleTurnCompleted(TurnCompleted e)
+{
+    // Запись TurnRunLog — РОВНО ОДИН источник (CLAUDE.md, раздел LLM-провайдеры). До
+    // переезда на шину источником был finally-блок FallbackLlmSessionAdapter; теперь
+    // подписчик здесь, а finally публикует событие. Подписчик шины не должен бросать,
+    // но try всё равно — запись НЕ бросает даже при сбое файла (см. TurnRunLog), try тут
+    // для понятного журнала, если в сторе что-то поломается.
+    if (e.Passport is null) return Task.CompletedTask;
+    try { _turnRuns?.Record(e.Passport); }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[SessionManager] Паспорт хода не записан ({e.Turn.SessionId}): {ex.Message}");
+    }
+    return Task.CompletedTask;
+}
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
@@ -3375,18 +3499,12 @@ public class SessionManager : IDisposable
             rawSystemPrompt, permissionRules,
             TasksMcp: tasksMcp,
             NotesMcp: notesMcp,
-            RecallProvider: BuildRecallProvider(ownerId),
-            PersonaPromptProvider: persona.Prompt,
             PersonaProvider: BuildPersonaProvider(session, ownerId),
             MemoryMcp: memoryMcp,
-            PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
             PersonasMcp: personasMcp,
             NotificationsMcp: notificationsMcp,
             WorkspaceMcp: workspace,
-            BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
-            CodeGraphProvider: BuildCodeGraphProvider(ownerId, persona.Persona, rootPath, projectRoot),
-            PromptSectionsProvider: BuildPromptSectionsProvider(ownerId, session, persona.Persona),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
@@ -3395,12 +3513,8 @@ public class SessionManager : IDisposable
             DifyMcp: difyMcp,
             DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
-            PromptSnapshotSink: PromptSinkFor(session.Id),
-            PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
-            SubagentRunSink: SubagentRunSinkFor(session.Id),
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
-            DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
             PersistSessions: SaveSessions,
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
@@ -3409,7 +3523,8 @@ public class SessionManager : IDisposable
             HttpMcpEnabledProvider: HttpMcpEnabled,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
-            ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null));
+            ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
+            Events: _turnEvents));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4733,18 +4848,12 @@ public class SessionManager : IDisposable
                 RawSystemPrompt: null, PermissionRules: null,
                 TasksMcp: tasksMcp,
                 NotesMcp: notesMcp,
-                RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
-                PersonaPromptProvider: persona.Prompt,
                 PersonaProvider: BuildPersonaProvider(entry.Info, entry.Info.OwnerId),
                 MemoryMcp: persona.Memory,
-                PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: personasMcp,
                 NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
-                BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                CodeGraphProvider: BuildCodeGraphProvider(entry.Info.OwnerId, persona.Persona, rootPath),
-                PromptSectionsProvider: BuildPromptSectionsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
@@ -4753,17 +4862,15 @@ public class SessionManager : IDisposable
                 CodeGraphMcp: null,
                 DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
-                PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
-                PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp),
-                HttpMcpEnabledProvider: HttpMcpEnabled);
+                HttpMcpEnabledProvider: HttpMcpEnabled,
+                Events: _turnEvents);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -4789,18 +4896,12 @@ public class SessionManager : IDisposable
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 TasksMcp: tasksMcp,
                 NotesMcp: notesMcp,
-                RecallProvider: BuildRecallProvider(project.OwnerId),
-                PersonaPromptProvider: persona.Prompt,
                 PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
                 MemoryMcp: memoryMcp,
-                PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: personasMcp,
                 NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
-                BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                CodeGraphProvider: BuildCodeGraphProvider(project.OwnerId, persona.Persona, rootPath, project.RootPath),
-                PromptSectionsProvider: BuildPromptSectionsProvider(project.OwnerId, entry.Info, persona.Persona),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
@@ -4809,19 +4910,16 @@ public class SessionManager : IDisposable
                 DifyMcp: difyMcp,
                 DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
-                PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
-                PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
-                DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info),
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
-                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
-                ChatContextProvider: BuildChatContextProvider(sessionId));
+                ChatContextProvider: BuildChatContextProvider(sessionId),
+                Events: _turnEvents);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -83,8 +84,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // «эндпоинт вендора недоступен» (лечится сменой пары) от «канал наружу лёг» (сменой пары не
     // лечится — соседняя модель пойдёт тем же путём). null (тесты/без DI) — прежнее поведение.
     private readonly IEgressProbe? _egress;
-    // Паспорта ходов: чем кончился ход и какой ценой. null (тесты) — не пишем.
-    private readonly TurnRunLog? _turnRuns;
+    // Шина событий хода (ADR-013, этап 1): публикация turn/completed с TurnRunPassport
+    // отсюда, запись в TurnRunLog — у подписчика SessionManager.HandleTurnCompleted.
+    // null (тесты) — паспорт просто не публикуется, поведение прежнее.
+    private readonly Turn.ITurnEventBus? _events;
     // Пауза перед повтором хода при лежащем канале наружу (тесты сокращают её до миллисекунд).
     private readonly TimeSpan _egressRetryDelay;
     // Корень профиля CLI на момент старта сессии (хостовый путь): источник для
@@ -126,7 +129,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Action<string>? orchestrationDone = null,
         Func<string>? contextSource = null,
         IEgressProbe? egress = null,
-        TurnRunLog? turnRuns = null,
+        Turn.ITurnEventBus? events = null,
         TimeSpan? egressRetryDelay = null)
     {
         _inner = inner;
@@ -148,7 +151,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _enqueueBypass = enqueueBypass;
         _orchestrationDone = orchestrationDone;
         _egress = egress;
-        _turnRuns = turnRuns;
+        _events = events;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
@@ -909,17 +912,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (Interlocked.Exchange(ref _bypassRequeued, 0) == 1)
                 _orchestrationDone?.Invoke(Info.Id);
 
-            // Паспорт хода (TurnRunLog) — ровно здесь, в finally: веток выхода из цикла восемь,
-            // и писать в каждой значило бы гарантированно забыть одну. Модель/провайдер берём
-            // ДО restore (appliedModel/appliedProvider — фактическая последняя пара), иначе
-            // паспорт покажет исходную пару и потеряет самое интересное — куда ход дошёл.
-            // Диагностика не имеет права ронять ход, поэтому под try.
-            if (_turnRuns is not null)
+            // Паспорт хода идёт на шину turn/completed — единственный источник записи (CLAUDE.md,
+// раздел LLM-провайдеры). В finally цикла собрать паспорт обязан: веток выхода из цикла
+// восемь, и публиковать в каждой значило бы гарантированно забыть одну. Модель/провайдер
+// берём ДО restore (appliedModel/appliedProvider — фактическая последняя пара), иначе
+// паспорт покажет исходную пару и потеряет самое интересное — куда ход дошёл. Диагностика
+// не имеет права ронять ход: вся публикация под try, шина сама гасит исключения подписчиков.
+            if (_events is not null)
             {
                 try
                 {
                     var endedAt = DateTime.UtcNow;
-                    _turnRuns.Record(new TurnRunPassport(
+                    var errorClass = lastClass is { } lc ? TurnErrorClassifier.WireName(lc) : null;
+                    var passport = new TurnRunPassport(
                         SessionId: Info.Id,
                         StartedAt: startedAt,
                         EndedAt: endedAt,
@@ -933,10 +938,22 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         Substitutions: substitutions,
                         EgressRetries: egressRetries,
                         Chain: [.. chain],
-                        LastErrorClass: lastClass is { } c ? TurnErrorClassifier.WireName(c) : null,
+                        LastErrorClass: errorClass,
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
-                        RecordedAt: endedAt));
+                        RecordedAt: endedAt);
+                    // Fire-and-forget: подписчик SessionManager.HandleTurnCompleted пишет
+                    // в TurnRunLog (единственный источник), PublishAsync не бросает.
+                    _ = _events.PublishAsync(new TurnCompleted(
+                        Turn: new TurnContext(
+                            SessionId: Info.Id,
+                            OwnerId: Info.OwnerId,
+                            TurnSeq: (int)SubmittedTurnSeq,
+                            AgentDepth: 0,
+                            ProjectId: Info.ProjectId),
+                        Outcome: turnOutcome,
+                        ErrorClass: errorClass,
+                        Passport: passport));
                 }
                 catch (Exception ex)
                 {

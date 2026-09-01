@@ -5,6 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Xunit;
 
@@ -80,14 +81,34 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
     {
         var messages = new List<ServerMessage>();
         var info = new Session();
+        // Этап 2: CodeGraphProvider заменён контрибьютором, его кладём на шину как
+        // подписчик prompt/assembling и прокидываем шину через LlmSessionContext.Events.
+        var bus = new TurnEventBus();
+        // Имитируем CodeGraphContributor: гейт «есть провайдер» живёт в подписчике —
+        // null = нет фильтра, нет секций. Прежний ClaudeSession гейтил это через
+        // `if (_codeGraphProvider is not null)`.
+        if (codeGraphProvider is not null)
+        {
+            bus.OnFilter<PromptAssembling>(600, async (e, next) =>
+            {
+                // Имитируем CodeGraphContributor: зовём провайдер с текстом хода и кладём
+                // секции code-graph + code-navigation (статичная подсказка — рядом).
+                var block = await codeGraphProvider(e.TurnText);
+                if (!string.IsNullOrWhiteSpace(block))
+                    e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-graph", block!));
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-navigation",
+                    ClaudeHomeServer.Services.Prompts.CodeNavigationPrompts.SectionText));
+                await next();
+            }, "Test.CodeGraphProvider");
+        }
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: m => { lock (messages) messages.Add(m); return Task.CompletedTask; },
             RawSystemPrompt: null,
             PermissionRules: null,
             TasksMcp: null,
-            CodeGraphProvider: codeGraphProvider,
-            Launcher: new CapturingLauncher(_clis, _argsCaptured));
+            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            Events: bus);
 
         var session = new ClaudeSession(info, context);
         await using var _ = session;

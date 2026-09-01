@@ -6,6 +6,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
@@ -588,34 +589,21 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
     private readonly NotesMcpContext? _notesMcp;
-    // Auto-recall заметок: по тексту хода возвращает блок для системного промпта + манифест (F3)
-    private readonly Func<string, Task<RecallBlock?>>? _recallProvider;
-    // Провайдер системного промпта персоны — вызывается на каждый ход
-    // (свежие контракт/модель/PersonaSwitched без пересоздания адаптера)
-    private readonly Func<string?>? _personaPromptProvider;
     // Живая персона чата — для цепочки фолбэка (EffectiveTurnChain зовёт ResolveChain
     // с матрицами персоны). Перечитывается на каждый ход: правка матриц персоны/специальности
     // применяется со следующего хода без пересоздания адаптера (как у _personaPromptProvider).
     private readonly Func<Persona?>? _personaProvider;
     // MCP-сервер долгой памяти персоны + auto-recall её памяти (текст промпта + манифест F3)
     private readonly MemoryMcpContext? _memoryMcp;
-    private readonly Func<string, Task<RecallBlock?>>? _personaRecallProvider;
-    // Блок «Привязанные знания и правила» персоны (флаг persona-bindings)
-    private readonly Func<string, Task<string?>>? _bindingsProvider;
-    // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
-    private readonly Func<string?, Task<string?>>? _codeGraphProvider;
-    // Секции промпта специальности персоны (план «Секции промптов», флаг specialty-prompt-sections)
-    private readonly Func<string?, Task<string?>>? _promptSectionsProvider;
     // Состав контекста чата (фича chat-context) — вызывается на каждый ход: материал,
     // добавленный в идущем разговоре, попадает в подсказку следующего хода. Только промпт,
     // состав MCP-инструментов от него не зависит.
     private readonly Func<IReadOnlyList<SessionContextEntry>>? _chatContextProvider;
-    // Снимок промпта хода: черновик → id записанного снимка. null — снимки не ведутся.
-    private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
-    // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
-    private readonly Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? _promptSnapshotToolsSink;
-    // Паспорт прогона сабагента на его завершении (диагностика обрывов). null — не ведутся.
-    private readonly Action<SubagentRunPassport>? _subagentRunSink;
+    // Шина событий хода (этап 0 «Шина событий хода», ADR-013): через неё публикуются
+    // PromptAssembled (для подписчика PromptSnapshotStore) и SubagentRunCompleted (для
+    // подписчика SubagentRunLog в SessionManager). null — тесты, шина не подана, события
+    // просто не публикуются и поведение остаётся прежним.
+    private readonly Turn.ITurnEventBus? _events;
     // Корень профиля CLI этого хода (CLAUDE_CONFIG_DIR) — для блока «слой CLI»
     private readonly string? _cliConfigRoot;
     // Id снимка текущего хода: пишет поток хода (RunTurnAsync), читает поток stdout-ридера,
@@ -648,8 +636,6 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly DifyMcpContext? _difyMcp;
     // MCP-сервер десктопной грани (ADR-008): null — грань чату не доставляется
     private readonly DesktopMcpContext? _desktopMcp;
-    // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004): null — флаг выключен/вне проекта
-    private readonly string? _dossierTrailerHint;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
@@ -710,18 +696,10 @@ public class ClaudeSession : ILlmSessionAdapter
         _permissionRules = context.PermissionRules;
         _tasksMcp = context.TasksMcp;
         _notesMcp = context.NotesMcp;
-        _recallProvider = context.RecallProvider;
-        _personaPromptProvider = context.PersonaPromptProvider;
         _personaProvider = context.PersonaProvider;
         _memoryMcp = context.MemoryMcp;
-        _personaRecallProvider = context.PersonaRecallProvider;
-        _bindingsProvider = context.BindingsProvider;
-        _codeGraphProvider = context.CodeGraphProvider;
-        _promptSectionsProvider = context.PromptSectionsProvider;
         _chatContextProvider = context.ChatContextProvider;
-        _promptSnapshotSink = context.PromptSnapshotSink;
-        _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
-        _subagentRunSink = context.SubagentRunSink;
+        _events = context.Events;
         _cliConfigRoot = context.CliConfigRoot;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
@@ -733,7 +711,6 @@ public class ClaudeSession : ILlmSessionAdapter
         _codeGraphMcp = context.CodeGraphMcp;
         _difyMcp = context.DifyMcp;
         _desktopMcp = context.DesktopMcp;
-        _dossierTrailerHint = context.DossierTrailerHint;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
@@ -2459,6 +2436,54 @@ public class ClaudeSession : ILlmSessionAdapter
                     sections.Add(new PromptSectionDto(key, title, text, Stable: stable, Group: group));
             }
 
+            // Шина событий хода: реестр IPromptSectionContributor собирает свои секции
+            // (dossier-trailer / recall-notes / recall-memory + dossier-recall /
+            // prompt-sections / persona-bindings / code-graph + code-navigation /
+            // persona-layer) — Filter-событием prompt/assembling. Контракт ADR-013,
+            // этап 2 плана «Шина событий хода»: 6 провайдеров LlmSessionContext и
+            // DossierTrailerHint перенесены в контрибьюторы, гейты «контекст подключён»
+            // живут в IsEnabled. Без шины (тесты без DI) контрибьюторы не дёргаются —
+            // golden-тесты клёпают свою шину через Events.
+            //
+            // Манифест F3 (что персона подтянула в этот ход — заметки/память/досье/команда)
+            // собираем параллельно из вкладов контрибьюторов; отдельно от Sections, потому
+            // что RecallManifestMessage уходит клиенту, а не в промпт.
+            Dictionary<string, PromptSection> contributorSections = new(StringComparer.Ordinal);
+            List<RecallItem> manifestItems = new();
+            if (_events is not null)
+            {
+                var promptContext = new Turn.PromptSessionContext(
+                    Session: Info,
+                    OwnerId: Info.OwnerId,
+                    Persona: _personaProvider?.Invoke(),
+                    RootPath: _rootPath,
+                    HasNotesMcp: _notesMcp is not null,
+                    HasMemoryMcp: _memoryMcp is not null,
+                    HasWorkspaceMcp: _workspaceMcp is not null,
+                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>());
+                var assembling = new Turn.PromptAssembling(
+                    turn: CurrentTurnContext(), session: promptContext, turnText: text);
+                try
+                {
+                    await _events.ApplyAsync(assembling);
+                }
+                catch
+                {
+                    // Filter — в пути хода; провал контрибьютора должен прокидываться наверх,
+                    // но если подписчик упал — секции контрибьюторов пусты, инлайн-сборка
+                    // продолжится. ApplyAsync сам бросает внятную ошибку; на этом этапе
+                    // шинный контракт уже зафиксирован, проглатывать нельзя.
+                    throw;
+                }
+                foreach (var s in assembling.Sections)
+                {
+                    if (!string.IsNullOrWhiteSpace(s.Text))
+                        contributorSections[s.Key] = s;
+                }
+                // Манифест F3: айтемы recall-секций собираются параллельно Sections.
+                manifestItems.AddRange(assembling.ManifestItems);
+            }
+
             // Системный промпт проекта — теми же частями, что показывает карточка проекта
             // (/effective-prompt): встроенная константа, промпт проекта, автодополнения Dify.
             // Индекс в ключе разводит две auto-части (блок Dify и инструкция по тегам).
@@ -2554,8 +2579,10 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
             // Трейлер истории решений (ADR-004) — рядом с конвенцией Co-Authored-By: одной
-            // строкой, только для проектных чатов владельца
-            Add("dossier-trailer", "Трейлер истории решений", _dossierTrailerHint, group: "project");
+            // строкой, только для проектных чатов владельца. Текст даёт DossierTrailerContributor
+            // через Filter-событие prompt/assembling.
+            if (contributorSections.TryGetValue("dossier-trailer", out var dossierTrailer))
+                Add("dossier-trailer", "Трейлер истории решений", dossierTrailer.Text, group: "project");
 
             // Подсказка про базу заметок — только когда notes-server подключён
             if (_notesMcp is not null)
@@ -2624,23 +2651,14 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
             // Манифест recall (F3): что персона подтянула в этот ход — заметки + память.
-            List<RecallItem>? manifestItems = null;
+// Список уже собран выше (Filter prompt/assembling), здесь только засекаем пустой
+// случай для отправки RecallManifestMessage (раньше manifestItems заводился
+// ленивым new List<…>() прямо здесь).
 
-            // Auto-recall: релевантные заметки по тексту хода. Имеет смысл только когда
-            // notes-server подключён (в блоке фигурирует notes_read по id). Провайдер сам
-            // гейтит по флагу и failsafe-таймауту; исключения не должны ронять ход.
-            if (_recallProvider is not null && _notesMcp is not null)
-            {
-                RecallBlock? recallBlock = null;
-                try { recallBlock = await _recallProvider(text); }
-                catch { /* recall не должен ронять ход */ }
-                Add("recall-notes", "Заметки, подходящие к вопросу", recallBlock?.Text, stable: false, group: "recall");
-                if (recallBlock?.Items.Count > 0)
-                {
-                    manifestItems ??= new List<RecallItem>();
-                    manifestItems.AddRange(recallBlock.Items);
-                }
-            }
+            // Auto-recall заметок (этап 2): контрибьютор NotesRecallContributor. Гейт
+            // NotesMcp != null живёт в IsEnabled — golden-фикстура 5 ловит потерю.
+            if (contributorSections.TryGetValue("recall-notes", out var recallNotes))
+                Add("recall-notes", "Заметки, подходящие к вопросу", recallNotes.Text, stable: false, group: "recall");
 
             // Подсказка про раздел «Персоны» — только когда personas-server подключён
             if (_personasMcp is not null)
@@ -2791,80 +2809,54 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("workflow-subagents", "Кого можно подключить к работе", workflowHint, group: "persona");
             }
 
-            // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
-            // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
-            // Заодно собираем манифест (что подтянулось) для «использовано сейчас» (F3).
-            RecallBlock? memRecall = null;
-            if (_personaRecallProvider is not null && _memoryMcp is not null)
-            {
-                try { memRecall = await _personaRecallProvider(text); }
-                catch { /* recall памяти не должен ронять ход */ }
-                Add("recall-memory", "Что персона помнит по теме", memRecall?.Text, stable: false, group: "persona");
-                if (memRecall?.Items.Count > 0)
-                {
-                    manifestItems ??= new List<RecallItem>();
-                    manifestItems.AddRange(memRecall.Items);
-                }
-            }
+            // Auto-recall долгой памяти персоны (этап 2): контрибьютор PersonaRecallContributor.
+            // Гейт MemoryMcp != null живёт в IsEnabled — golden-фикстура 6 ловит потерю.
+            // Та же секция контрибьютора даёт dossier-recall (только при включённом флаге
+            // specialty-prompt-sections, как до фичи — см. комментарий в PersonaRecallContributor).
+            if (contributorSections.TryGetValue("recall-memory", out var memRecall))
+                Add("recall-memory", "Что персона помнит по теме", memRecall.Text, stable: false, group: "persona");
 
-            // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
-            // specialty-prompt-sections): сценарные инструкции «когда и как» по роли — история,
-            // граф кода, процессы, правила. Позиция — между recall-memory и блоком досье
-            // (контракт плана: «призыв и данные рядом»), провайдер сам гейтит по флагу/
-            // специальности/групповому чату, ошибки не роняют ход.
-            if (_promptSectionsProvider is not null)
-            {
-                string? promptSectionsBlock = null;
-                try { promptSectionsBlock = await _promptSectionsProvider(text); }
-                catch { /* секции специальности не должны ронять ход */ }
-                Add("prompt-sections", "Инструкции по специальности", promptSectionsBlock, group: "persona");
-            }
+            // Секции промпта специальности персоны (этап 2): контрибьютор PromptSectionsContributor.
+            if (contributorSections.TryGetValue("prompt-sections", out var promptSections))
+                Add("prompt-sections", "Инструкции по специальности", promptSections.Text, group: "persona");
 
-            // Блок досье (план «Секции промптов» этап 3, флаг specialty-prompt-sections): при
-            // включённом флаге PersonaMemoryService отдаёт его ОТДЕЛЬНО от recall-memory (см.
-            // RecallBlock.DossierText) — своей секцией, сразу после prompt-sections (призыв и
-            // данные рядом); при выключенном флаге DossierText всегда null (досье уже внутри
-            // recall-memory выше, как до фичи).
-            Add("dossier-recall", "История решений по коду хода", memRecall?.DossierText,
-                stable: false, group: "persona");
+            // Блок досье — едет ОТДЕЛЬНОЙ секцией рядом с recall-memory (контракт плана
+            // «Секции промптов» этап 3). Контрибьютор PersonaRecallContributor добавляет
+            // её, только если выделение включено (splitDossier=true при
+            // specialty-prompt-sections); иначе досье остаётся внутри recall-memory.
+            if (contributorSections.TryGetValue("dossier-recall", out var dossierRecall))
+                Add("dossier-recall", "История решений по коду хода", dossierRecall.Text,
+                    stable: false, group: "persona");
 
-            // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
-            // «когда → откуда» + выжимки режима «всегда». Только у персонных сессий;
-            // провайдер сам гейтит по флагу, ошибки не роняют ход.
-            if (_bindingsProvider is not null && _personaPromptProvider is not null)
-            {
-                string? bindingsBlock = null;
-                try { bindingsBlock = await _bindingsProvider(text); }
-                catch { /* блок привязок не должен ронять ход */ }
-                Add("persona-bindings", "Знания и правила, привязанные к персоне", bindingsBlock, stable: false, group: "persona");
-            }
+            // Привязанные знания и правила персоны (этап 2): контрибьютор PersonaBindingsContributor.
+            // Гейт «персона есть» в IsEnabled; секция не появится у пустой персоны.
+            if (contributorSections.TryGetValue("persona-bindings", out var personaBindings))
+                Add("persona-bindings", "Знания и правила, привязанные к персоне",
+                    personaBindings.Text, stable: false, group: "persona");
 
-            // Slice top-10 god-nodes Code Graph: хабы по связности для холодного старта
-            // понимания кода (граф иначе невидим Claude CLI). Текст хода игнорируется —
-            // god-узлы структурны; провайдер кэширует slice по builtAt, ошибки → null.
-            if (_codeGraphProvider is not null)
-            {
-                string? codeGraphBlock = null;
-                try { codeGraphBlock = await _codeGraphProvider(text); }
-                catch { /* блок графа не должен ронять ход */ }
-                // Граф меняется при пересборке, а не под текст хода, но и стабильным
-                // его не назовёшь: правки кода прилетают в промпт следующего же хода
-                Add("code-graph", "Главные узлы кода проекта", codeGraphBlock, stable: false, group: "project");
+            // Slice top-10 god-nodes Code Graph (этап 2): контрибьютор CodeGraphContributor.
+            // Граф меняется при пересборке, не под текст хода, но и стабильным не назовёшь:
+            // правки кода прилетают в промпт следующего же хода.
+            if (contributorSections.TryGetValue("code-graph", out var codeGraph))
+                Add("code-graph", "Главные узлы кода проекта", codeGraph.Text, stable: false, group: "project");
 
-                // Сценарное правило выбора codegraph / LSP / Grep (ADR-011 шаг 3): slice выше —
-                // данные и может отсутствовать (граф не построен), правило же статично и доезжает
-                // до каждого хода проектного чата. Тот же гейт, что у slice: провайдер не null
-                // (проектный чат с включённым codegraph) — правило не советует инструменты,
-                // которых в этом ходе нет.
+            // Сценарное правило выбора codegraph / LSP / Grep (ADR-011 шаг 3): slice выше —
+            // данные и могут отсутствовать (граф не построен), правило же статично и доезжает
+            // до каждого хода проектного чата. Тот же гейт, что у slice: провайдер не null
+            // (проектный чат с включённым codegraph) — правило не советует инструменты,
+            // которых в этом ходе нет.
+            if (contributorSections.ContainsKey("code-navigation"))
                 Add("code-navigation", "Какой инструмент навигации по коду звать",
                     Prompts.CodeNavigationPrompts.SectionText, group: "project");
-            }
 
-            // Персональный слой: промпт персоны имеет приоритет
-            // над .md-агентом — чат ведётся от её лица, характер задаёт именно персона.
-            string? agentPrompt = _personaPromptProvider?.Invoke();
-            if (agentPrompt is null && !string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
-                agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
+            // Персональный слой (этап 2): контрибьютор PersonaLayerContributor добавляет секцию
+            // Key="persona-layer" в filter.Sections. Combine находит её по ключу и клеит
+            // через PersonaSeparator после тела. Без шины — fallback на skills agent prompt.
+            string? agentPrompt = contributorSections.TryGetValue("persona-layer", out var personaSection)
+                ? personaSection.Text
+                : (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null
+                    ? _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName)
+                    : null);
             personaLayerPrompt = agentPrompt;
 
             var combinedPrompt = TurnPromptAssembler.Combine(sections, agentPrompt);
@@ -3634,32 +3626,58 @@ public class ClaudeSession : ILlmSessionAdapter
     /// Записать снимок промпта хода и сообщить клиенту его id (кнопка «какой промпт ушёл»).
     /// applied=false — ход доигрывается в живом процессе: собранный сейчас промпт модели НЕ
     /// уходил, она работает с промптом старта прогона (inheritedFromId).
+    /// Публикация через шину events → подписчик PromptSnapshotStore; сбой подписчика
+    /// шиной гасится и в ход не уходит (снимок — диагностика). id генерируем ЗДЕСЬ
+    /// (общий счётчик с PromptSnapshotStore.NewPublicId — без коллизий) и кладём в
+    /// payload — иначе UI-кнопка «какой промпт ушёл» остаётся без id (шина — Notification,
+    /// возврата не даёт). PromptSnapshotMessage отправляется через _onMessage параллельно
+    /// с шиной: та же пара «id + applied + inheritedFromId» живёт в двух каналах, но это
+    /// шинный контракт: UI-нотификация остаётся прежней (ServerMessage/OnMessage, по
+    /// CLAUDE.md шина в UI не ходит).
     /// Возвращает id снимка либо null (снимки не ведутся / запись не удалась).
     /// </summary>
     private string? PublishPromptSnapshot(IReadOnlyList<PromptSectionDto> sections,
         IReadOnlyList<string> args, IReadOnlyList<string> mcpServerNames,
         bool applied, string? inheritedFromId)
     {
-        if (_promptSnapshotSink is null) return null;
+        if (_events is null) return null;
 
-        string? id = null;
+        // id генерируем ДО шины: UI-кнопке нужен синхронный id, а Notification через
+        // шину его не вернёт. Счётчик общий с PromptSnapshotStore — id не конфликтует.
+        var id = PromptSnapshotStore.NewPublicId();
+        // Черновик нужен подписчику: собираем до шины, чтобы не зависеть от формы его файлов.
+        var draft = new PromptSnapshotDraft(
+            applied, inheritedFromId, sections, MaskArgs(args), mcpServerNames,
+            EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles());
+        // PublishAsync не бросает, но для понятного журнала под try.
         try
         {
-            id = _promptSnapshotSink(new PromptSnapshotDraft(
-                applied, inheritedFromId, sections, MaskArgs(args), mcpServerNames,
-                EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles()));
+            _ = _events.PublishAsync(new PromptAssembled(
+                Turn: CurrentTurnContext(),
+                Prompt: string.Empty,
+                SectionKeys: [],
+                Snapshot: new PromptSnapshotPayload(
+                    PromptSnapshotPhase.Draft, Draft: draft, SnapshotId: id)));
         }
         catch (Exception ex)
         {
             // Снимок диагностический — его сбой не имеет права ронять ход
-            Console.Error.WriteLine($"[ClaudeSession] Снимок промпта не записан: {ex.Message}");
+            Console.Error.WriteLine($"[ClaudeSession] Снимок промпта не опубликован: {ex.Message}");
         }
 
         _currentSnapshotId = id;
-        if (id is not null)
-            _ = _onMessage(new PromptSnapshotMessage(id, applied, inheritedFromId));
+        // UI-нотификация по прежнему контракту: ServerMessage/OnMessage, в обход шины.
+        // Шинный контракт запрещает событиям идти в UI — см. CLAUDE.md, раздел MCP-серверы.
+        _ = _onMessage(new PromptSnapshotMessage(id, applied, inheritedFromId));
         return id;
     }
+
+    // Текущий TurnContext шины — единая точка склейки ClaudeSession с подписчиками:
+    // SessionId/OwnerId/ProjectId берём из сессии, TurnSeq — счётчик ходов прогона,
+    // AgentDepth пока 0 (этап 0: глубина делегирования не прокинута на шину).
+    private Turn.TurnContext CurrentTurnContext() =>
+        new(Info.Id, Info.OwnerId, (int)Interlocked.Read(ref _turnSeq),
+            AgentDepth: 0, ProjectId: Info.ProjectId);
 
     /// <summary>
     /// Файловая часть слоя CLI: оба CLAUDE.md с раскрытыми импортами, каталог скиллов и вес
@@ -3896,9 +3914,20 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Дописываем состав инструментов в снимок текущего хода. init повторяется
                     // и на same-process ходах, и на ходах-продолжениях CLI — перезапись тем же
                     // составом безвредна. Снимок мог уехать по ретеншну: стор молча выйдет.
-                    if (_currentSnapshotId is { } snapshotId && _promptSnapshotToolsSink is not null)
+                    if (_currentSnapshotId is { } snapshotId && _events is not null)
                     {
-                        try { _promptSnapshotToolsSink(snapshotId, toolNames, mcp ?? []); }
+                        try
+                        {
+                            _ = _events.PublishAsync(new PromptAssembled(
+                                Turn: CurrentTurnContext(),
+                                Prompt: string.Empty,
+                                SectionKeys: [],
+                                Snapshot: new PromptSnapshotPayload(
+                                    PromptSnapshotPhase.Tools,
+                                    SnapshotId: snapshotId,
+                                    ToolNames: toolNames,
+                                    McpServers: mcp)));
+                        }
                         catch (Exception ex)
                         {
                             Console.Error.WriteLine($"[ClaudeSession] Состав инструментов в снимок не дописан: {ex.Message}");
@@ -3930,7 +3959,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             _subagentWatcher.Dispose();
                         }
                         _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage,
-                            Info.Id, _subagentRunSink, _turnContextWindow, preferredConfigRoot: _turnConfigRoot);
+                            Info.Id, _events, _turnContextWindow, preferredConfigRoot: _turnConfigRoot);
                         _subagentWatcher.Start();
                     }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 
@@ -31,7 +32,11 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly string _claudeSessionId;
     private readonly Func<ServerMessage, Task> _onMessage;
     private readonly string? _sessionId;
-    private readonly Action<SubagentRunPassport>? _runSink;
+    // Шина событий хода (ADR-013): эмиссия паспорта идёт через subagent/completed,
+    // подписчик SessionManager.SubagentRunSinkFor пишет в SubagentRunLog и взводит
+    // side-effects (TruncatedSubagent/TruncatedBgNote). null — тесты, шины нет.
+    private readonly ITurnEventBus? _events;
+    private readonly TurnContext _turnContext;
     // Окно контекста, объявленное CLI на запуске прогона (0 — не объявляли): env наследуют
     // и сабагенты, поэтому оно относится к ним так же, как к основному ходу
     private readonly int _cliContextWindow;
@@ -84,14 +89,22 @@ internal sealed class SubagentStreamWatcher : IDisposable
         && string.Equals(_preferredConfigRoot, preferredConfigRoot, StringComparison.OrdinalIgnoreCase);
 
     public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage,
-        string? sessionId = null, Action<SubagentRunPassport>? runSink = null, int cliContextWindow = 0,
+        string? sessionId = null, ITurnEventBus? events = null, int cliContextWindow = 0,
         string? profilesRoot = null, string? preferredConfigRoot = null)
     {
         _cwd = cwd;
         _claudeSessionId = claudeSessionId;
         _onMessage = onMessage;
         _sessionId = sessionId;
-        _runSink = runSink;
+        _events = events;
+        // TurnContext шины для событий: id/seq берём из сессии и текущего хода. AgentDepth
+        // пока 0 — на шине пока никто его не читает (этап 1).
+        _turnContext = new TurnContext(
+            SessionId: sessionId ?? string.Empty,
+            OwnerId: null,
+            TurnSeq: 0,
+            AgentDepth: 0,
+            ProjectId: null);
         _cliContextWindow = cliContextWindow;
         _preferredConfigRoot = string.IsNullOrWhiteSpace(preferredConfigRoot) ? null : preferredConfigRoot;
         // Снимок на момент создания ватчера: статик WorkflowAgentParser.ProfilesRoot —
@@ -170,7 +183,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
         // Дренаж — безусловный: текст сабагента обязан лечь в ленту раньше индикатора
         // завершения, даже когда паспорта не ведутся (тесты/сессии без стора)
         await DrainAsync();
-        if (_runSink is null || toolUseIds.Count == 0) return;
+        if (_events is null || toolUseIds.Count == 0) return;
         // Под тем же локом, что и скан: словари файлов пишет поток поллинга
         await _scanLock.WaitAsync();
         try
@@ -234,16 +247,23 @@ internal sealed class SubagentStreamWatcher : IDisposable
     // завершается ещё раз тем же транскриптом.
     private void Emit(string file, string finishedBy)
     {
-        if (_runSink is null || !_tallies.TryGetValue(file, out var tally)) return;
+        if (_events is null || !_tallies.TryGetValue(file, out var tally)) return;
         if (_reported.TryGetValue(file, out var last) && last.At == tally.LastActivityAt) return;
         _reported[file] = (tally.LastActivityAt, tally.Truncated, finishedBy);
 
         long size = 0;
         try { size = new FileInfo(file).Length; } catch (Exception) { /* файл мог исчезнуть */ }
-        try { _runSink(tally.Build(_sessionId, finishedBy, size, _cliContextWindow)); }
+        try
+        {
+            // Шина не бросает (Notification — падение подписчика гасится), но вокруг try
+            // для единого журнала ошибок.
+            _ = _events.PublishAsync(new SubagentRunCompleted(
+                Turn: _turnContext,
+                Passport: tally.Build(_sessionId, finishedBy, size, _cliContextWindow)));
+        }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[SubagentWatcher] Паспорт прогона не записан: {ex.Message}");
+            Console.Error.WriteLine($"[SubagentWatcher] Паспорт прогона не опубликован: {ex.Message}");
         }
     }
 

@@ -2,6 +2,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
@@ -97,11 +98,23 @@ public class FallbackEgressDownTests
 
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, IEgressProbe egress,
-        ProviderHealthRegistry? health = null, TurnRunLog? turnRuns = null,
+        out TurnRunLog? runs,
+        ProviderHealthRegistry? health = null,
         string[]? chain = null, TimeSpan? retryDelay = null)
     {
         var session = new Session { Model = "sonnet", Provider = "acc-a" };
         var inner = new FakeInnerAdapter(session);
+        // Шина событий хода + подписчик на turn/completed пишет в TurnRunLog — это тот
+        // самый «ровно один источник» из CLAUDE.md: адаптер только публикует, запись —
+        // у подписчика. Тест собирает обе стороны и передаёт адаптеру шину.
+        var bus = new TurnEventBus();
+        var log = new TurnRunLog();
+        runs = log;
+        bus.OnNotification<TurnCompleted>(e =>
+        {
+            if (e.Passport is not null) log.Record(e.Passport);
+            return Task.CompletedTask;
+        });
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
@@ -109,7 +122,7 @@ public class FallbackEgressDownTests
             effectiveChain: chain is null ? null : () => chain,
             health: health,
             egress: egress,
-            turnRuns: turnRuns,
+            events: bus,
             // Продовые 5 с в тесте ждать нельзя — важна логика повтора, а не длина паузы.
             // Тесту про «Стоп» нужна пауза подлиннее: он проверяет попадание ИМЕННО в неё.
             egressRetryDelay: retryDelay ?? TimeSpan.FromMilliseconds(10));
@@ -140,7 +153,7 @@ public class FallbackEgressDownTests
     {
         var pool = BuildPool("acc-a", "acc-b");
         var egress = new FakeEgress(down: true);
-        var (sut, inner) = BuildSut(pool, egress);
+        var (sut, inner) = BuildSut(pool, egress, out _);
         // Первая попытка: процесс умер без result — Unreachable
         inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
         // Вторая (повтор) — канал поднялся, ход прошёл
@@ -168,7 +181,7 @@ public class FallbackEgressDownTests
         var health = new ProviderHealthRegistry();
         var egress = new FakeEgress(down: true);
         // Цепочка есть и она длинная — но перебирать её через мёртвый канал бессмысленно
-        var (sut, inner) = BuildSut(pool, egress, health, chain: ["sonnet", "m1"]);
+        var (sut, inner) = BuildSut(pool, egress, out _, health, chain: ["sonnet", "m1"]);
         for (var i = 0; i < 5; i++)
             inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
@@ -192,7 +205,7 @@ public class FallbackEgressDownTests
         // Контрольный тест: проба говорит «канал жив» — значит Unreachable настоящий,
         // и фолбэк обязан работать ровно как до правки
         var pool = BuildPool("acc-a", "acc-b");
-        var (sut, inner) = BuildSut(pool, new FakeEgress(down: false));
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: false), out _);
         inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
         inner.Scripts.Enqueue(() => inner.Emit(new ResultMessage("success", 10, 1, null, null)));
 
@@ -210,7 +223,7 @@ public class FallbackEgressDownTests
         // класс ошибки к каналу отношения не имеет
         var pool = BuildPool("acc-a", "acc-b");
         var egress = new FakeEgress(down: true);
-        var (sut, inner) = BuildSut(pool, egress);
+        var (sut, inner) = BuildSut(pool, egress, out _);
         inner.Scripts.Enqueue(() =>
         {
             inner.Emit(new ErrorMessage("API Error: 429 rate limit", ExpectResultFollows: true));
@@ -235,7 +248,7 @@ public class FallbackEgressDownTests
         var pool = BuildPool("acc-a");
         // Пауза заведомо длиннее, чем время реакции теста: «Стоп» обязан попасть ИМЕННО в неё,
         // иначе проверялось бы другое окно (и под нагрузкой тест плавал бы)
-        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true),
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true), out _,
             retryDelay: TimeSpan.FromSeconds(30));
         // Убийство процесса по «Стоп» досылает терминал — как настоящий ClaudeSession
         inner.OnInterrupt = () => inner.Emit(new ExitedMessage());
@@ -261,7 +274,7 @@ public class FallbackEgressDownTests
         // Usage/стоимость реального result попытки при этом теряться не должны: отказной запрос
         // мог потратить токены (тот же довод, что в FailClosedAsync).
         var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true));
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true), out _);
         for (var i = 0; i < 3; i++)
             inner.Scripts.Enqueue(() =>
             {
@@ -289,15 +302,14 @@ public class FallbackEgressDownTests
     public async Task ПаспортХода_ОтличаетОтказКаналаОтОтказаВендора()
     {
         var pool = BuildPool("acc-a");
-        var runs = new TurnRunLog();
-        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true), turnRuns: runs);
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: true), out var runs);
         for (var i = 0; i < 3; i++)
             inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => runs.Recent(1).Count > 0, "паспорт хода");
+        await WaitForAsync(() => runs!.Recent(1).Count > 0, "паспорт хода");
 
-        var passport = runs.Recent(1)[0];
+        var passport = runs!.Recent(1)[0];
         passport.Outcome.Should().Be("egress_down");
         passport.Failed.Should().BeTrue();
         passport.EgressRetries.Should().Be(FallbackLlmSessionAdapter.MaxEgressRetries);
@@ -310,14 +322,13 @@ public class FallbackEgressDownTests
     {
         // Журнал нужен не только для сбоев: без знаменателя доля отказов не считается
         var pool = BuildPool("acc-a");
-        var runs = new TurnRunLog();
-        var (sut, inner) = BuildSut(pool, new FakeEgress(down: false), turnRuns: runs);
+        var (sut, inner) = BuildSut(pool, new FakeEgress(down: false), out var runs);
         inner.Scripts.Enqueue(() => inner.Emit(new ResultMessage("success", 10, 1, null, null)));
 
         await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => runs.Recent(1).Count > 0, "паспорт хода");
+        await WaitForAsync(() => runs!.Recent(1).Count > 0, "паспорт хода");
 
-        var passport = runs.Recent(1)[0];
+        var passport = runs!.Recent(1)[0];
         passport.Outcome.Should().Be("success");
         passport.Failed.Should().BeFalse();
         passport.Attempts.Should().Be(1);

@@ -443,6 +443,30 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.DifyToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
+// Шина событий хода (ADR-013): один экземпляр на инстанс, изоляция владельцев — через
+// TurnContext события. На этапе 0 подписчиков нет; этап 2 — реестр секций промпта
+// (6 провайдеров + DossierTrailerHint) подключается к шине через SessionManager.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
+    ClaudeHomeServer.Services.Turn.TurnEventBus>();
+// Этап 2: контрибьюторы секций системного промпта (этап 2 плана «Шина событий хода»).
+// Каждый контрибьютор несёт Order/Key/Group и два метода: IsEnabled (гейт по
+// per-session условиям — без него регрессия golden-фикстуры 4) и BuildAsync (исключения
+// гасятся внутри). Подключаются к шине фильтром prompt/assembling через
+// PromptSectionContributorsRegistration.RegisterAll в SessionManager.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.DossierTrailerContributor>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.NotesRecallContributor>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.PersonaRecallContributor>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.PromptSectionsContributor>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.PersonaBindingsContributor>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.CodeGraphContributor>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPromptSectionContributor,
+    ClaudeHomeServer.Services.Turn.PersonaLayerContributor>();
 builder.Services.AddSingleton<SessionManager>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();

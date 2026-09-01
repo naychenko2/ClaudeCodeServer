@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Xunit;
 
@@ -86,22 +87,70 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var messages = new List<ServerMessage>();
         var info = new Session { VoiceMode = true };
 
+        // Этап 2: 6 провайдеров + DossierTrailerHint заменены реестром IPromptSectionContributor
+        // через Filter-событие prompt/assembling. Тест эмулирует контрибьюторов на шине:
+        // каждый подписчик добавляет свою секцию (или две — recall-memory + dossier-recall).
+        var bus = new TurnEventBus();
+        bus.OnFilter<PromptAssembling>(100, (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "dossier-trailer", "МАРКЕР_DOSSIER_TRAILER"));
+            return next();
+        }, "Test.DossierTrailer");
+        bus.OnFilter<PromptAssembling>(200, async (e, next) =>
+        {
+            // Эмулируем NotesRecallContributor: гейт notesMcp != null живёт в IsEnabled,
+            // здесь он true (см. BuildBaseContext: notes подключён).
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "recall-notes", "МАРКЕР_RECALL_NOTES"));
+            await next();
+        }, "Test.NotesRecall");
+        bus.OnFilter<PromptAssembling>(300, async (e, next) =>
+        {
+            // PersonaRecallContributor эмитит recall-memory + (при splitDossier) dossier-recall
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "recall-memory", "МАРКЕР_RECALL_MEMORY текст памяти"));
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "dossier-recall", "МАРКЕР_DOSSIER_RECALL текст досье"));
+            await next();
+        }, "Test.PersonaRecall");
+        bus.OnFilter<PromptAssembling>(400, async (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "prompt-sections", "МАРКЕР_PROMPT_SECTIONS текст секций"));
+            await next();
+        }, "Test.PromptSections");
+        bus.OnFilter<PromptAssembling>(500, async (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "persona-bindings", "МАРКЕР_PERSONA_BINDINGS текст привязок"));
+            await next();
+        }, "Test.PersonaBindings");
+        bus.OnFilter<PromptAssembling>(600, async (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "code-graph", "МАРКЕР_CODE_GRAPH текст графа"));
+            await next();
+        }, "Test.CodeGraph");
+        bus.OnFilter<PromptAssembling>(900, async (e, next) =>
+        {
+            // Эмулируем PersonaLayerContributor: эмуляция PersonaPromptBuilder.Build,
+            // дописывающего оговорку voice-mode в конец слоя персоны при voiceMode=true.
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "persona-layer",
+                "МАРКЕР_ПЕРСОНЫ Ты — Тестовая Персона.\n\n" + VoicePrompts.PersonaOverride));
+            await next();
+        }, "Test.PersonaLayer");
+
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: m => { lock (messages) messages.Add(m); return Task.CompletedTask; },
             RawSystemPrompt: null,
             PermissionRules: null,
             TasksMcp: null,
-            // Эмулирует SessionManager.BuildPersonaLayer: PersonaPromptBuilder дописывает
-            // оговорку voice-mode последним куском текста персоны при voiceMode=true
-            PersonaPromptProvider: () => "МАРКЕР_ПЕРСОНЫ Ты — Тестовая Персона.\n\n" + VoicePrompts.PersonaOverride,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
-            PersonaRecallProvider: _ => Task.FromResult<RecallBlock?>(
-                new RecallBlock("МАРКЕР_RECALL_MEMORY текст памяти", [], "МАРКЕР_DOSSIER_RECALL текст досье")),
-            BindingsProvider: _ => Task.FromResult<string?>("МАРКЕР_PERSONA_BINDINGS текст привязок"),
-            CodeGraphProvider: _ => Task.FromResult<string?>("МАРКЕР_CODE_GRAPH текст графа"),
-            PromptSectionsProvider: _ => Task.FromResult<string?>("МАРКЕР_PROMPT_SECTIONS текст секций"),
-            Launcher: new CapturingLauncher(_clis, _argsCaptured));
+            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            Events: bus);
 
         var session = new ClaudeSession(info, context);
         await using var _ = session;

@@ -4,11 +4,25 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
-/// Сторож границ вертикалей: типы из <c>Services/Video</c> не должны ссылаться на типы
-/// других сервисных вертикалей (<c>Desktop</c>, <c>Backup</c>, <c>Knowledge</c>,
-/// <c>Personas</c>). Без такого сторожа границы папок расползаются за месяц: «один
-/// usings» тянет за собой «один using» в обратную сторону, и видео оказывается
-/// в зависимости от десктопа.
+/// Сторож границ вертикалей: типы из <c>Services/Video</c> не должны ссылаться на
+/// типы других сервисных вертикалей. Правило — default-deny: разрешено ссылаться
+/// только на «спинку» (BCL, ASP.NET, модели) и явно перечисленные служебные
+/// вертикали, остальные <c>ClaudeHomeServer.Services.*</c> считаются чужой территорией.
+///
+/// Под «спинкой» понимается минимальный шов, через который любая вертикаль
+/// пользуется платформой и общими сервисами:
+/// <c>System.*</c>, <c>Microsoft.*</c>, <c>ClaudeHomeServer.Models</c>,
+/// <c>ClaudeHomeServer.Services.Http</c> (общие HTTP-утилиты),
+/// <c>ClaudeHomeServer.Services.Security</c> (общие защитные примитивы),
+/// <c>ClaudeHomeServer.Services.Composition</c> (контракт <c>IAppSubsystem</c>),
+/// <c>ClaudeHomeServer.Services.Mcp</c> (сознательная граница для
+/// <c>McpSecretStore</c>) и сам <c>ClaudeHomeServer.Services.Video</c>.
+///
+/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Desktop, Backup, Llm,
+/// Images, Tts, Deploy, Memory, Turn, Docs, Git и т.п.) — нарушение. Список
+/// не дописывается под каждую новую вертикаль: появилась новая — тест автоматом
+/// ловит любую ссылку на неё, и повод обсудить шов. Подход — как в <c>PiiRules</c>
+/// (default-deny с явным allow-list).
 ///
 /// Тест работает через рефлексию типов, а не через чтение исходного файла:
 /// один из существующих стражей (<c>McpToolsetStabilityTests</c> через <c>FindSource</c>
@@ -21,17 +35,23 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class SubsystemBoundaryTests
 {
-    /// <summary>Вертикали, на которые Video не должен ссылаться. Совпадение по неймспейсу
-    /// или по префиксу «X.» (на случай поднеймспейсов). Допустимыми считаются любые
-    /// другие неймспейсы: «ClaudeHomeServer.Services» и его поднеймспейсы (кроме
-    /// перечисленных — McpSecretStore живёт в Services.Mcp), «ClaudeHomeServer.Models»,
-    /// «Microsoft.*», «System.*».</summary>
-    private static readonly string[] ForbiddenVerticalPrefixes =
+    /// <summary>Неймспейсы, на которые Video ИМЕТ ПРАВО ссылаться. Совпадение по
+    /// неймспейсу или по префиксу «X.» (на случай поднеймспейсов).</summary>
+    private static readonly string[] AllowedNamespacePrefixes =
     {
-        "ClaudeHomeServer.Services.Desktop",
-        "ClaudeHomeServer.Services.Backup",
-        "ClaudeHomeServer.Services.Knowledge",
-        "ClaudeHomeServer.Services.Personas",
+        // BCL и платформа — спинка для всех.
+        "System",
+        "Microsoft",
+        // Доменные модели — разделяемые POCO, не сервисная логика.
+        "ClaudeHomeServer.Models",
+        // Спинка из общего кода сервисов: HTTP-утилиты, защитные примитивы,
+        // контракт подсистем и MCP-секреты (сознательная граница, см. ADR-014).
+        "ClaudeHomeServer.Services.Http",
+        "ClaudeHomeServer.Services.Security",
+        "ClaudeHomeServer.Services.Composition",
+        "ClaudeHomeServer.Services.Mcp",
+        // Сам проверяемый — внутри вертикали ссылаться на себя можно.
+        "ClaudeHomeServer.Services.Video",
     };
 
     [Fact]
@@ -56,7 +76,7 @@ public class SubsystemBoundaryTests
 
             foreach (var referenced in CollectReferencedTypes(type))
             {
-                if (IsForbidden(referenced))
+                if (!IsAllowed(referenced))
                 {
                     seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
                 }
@@ -65,13 +85,17 @@ public class SubsystemBoundaryTests
             foreach (var (owner, forbidden) in seen)
             {
                 violations.Add(
-                    $"{owner} ссылается на {forbidden} из запрещённой вертикали");
+                    $"{owner} ссылается на {forbidden} из чужой вертикали " +
+                    "(нет в AllowedNamespacePrefixes)");
             }
         }
 
         violations.Should().BeEmpty(
-            "типы из Services/Video не должны ссылаться на типы других сервисных " +
-            "вертикалей (Desktop/Backup/Knowledge/Personas). Найденные нарушения:\n" +
+            "типы из Services/Video должны ссылаться только на спинку (System.*, " +
+            "Microsoft.*, Models) и явно разрешённые служебные вертикали " +
+            "(Services.Http/Security/Composition/Mcp) либо на самих себя. " +
+            "Любая ссылка на прочие Services.* — нарушение архитектурного правила " +
+            "(см. CLAUDE.md/ADR-014). Найденные нарушения:\n" +
             string.Join("\n", violations));
     }
 
@@ -137,7 +161,7 @@ public class SubsystemBoundaryTests
         if (type is null) yield break;
 
         // Byref (ref/out/in SomeType) — ParameterType вернёт SomeType&, у которого
-        // Namespace = null и IsForbidden безусловно пропустит. Снимаем обёртку сразу.
+        // Namespace = null и IsAllowed безусловно пропустит (не Services.*). Снимаем обёртку сразу.
         if (type.IsByRef)
         {
             foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
@@ -153,8 +177,8 @@ public class SubsystemBoundaryTests
             yield break;
         }
 
-        // Сам тип (например, List<DesktopFoo> сам по себе не из запрещённой вертикали,
-        // но мы его всё равно отдаём — IsForbidden отфильтрует).
+        // Сам тип (например, List<DesktopFoo> сам по себе не из разрешённого неймспейса,
+        // но мы его всё равно отдаём — IsAllowed отфильтрует).
         yield return type;
 
         if (type.IsGenericType)
@@ -179,15 +203,15 @@ public class SubsystemBoundaryTests
         }
     }
 
-    private static bool IsForbidden(Type type)
+    private static bool IsAllowed(Type type)
     {
         var ns = type.Namespace;
-        if (ns is null) return false;
+        if (ns is null) return true; // Безымянный namespace — не Services.*, разрешаем.
 
-        foreach (var forbidden in ForbiddenVerticalPrefixes)
+        foreach (var allowed in AllowedNamespacePrefixes)
         {
-            if (ns == forbidden
-                || ns.StartsWith(forbidden + ".", StringComparison.Ordinal))
+            if (ns == allowed
+                || ns.StartsWith(allowed + ".", StringComparison.Ordinal))
             {
                 return true;
             }

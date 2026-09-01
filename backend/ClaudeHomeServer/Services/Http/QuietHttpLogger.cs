@@ -43,11 +43,21 @@ public sealed class QuietHttpLogger : IHttpClientLogger
     /// <summary>Не чаще одной жалобы за этот интервал (на весь профиль сразу).</summary>
     internal static readonly TimeSpan ReportInterval = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Потолок длины тела 4xx в логе. Типичный JSON-ответ с диагнозом укладывается в 200–300
+    /// символов; 500 хватает с запасом для многословных сообщений от локальных моделей.
+    /// </summary>
+    internal const int MaxBodyChars = 500;
+
     private readonly ILogger _log;
     private readonly QuietHttpClientProfile _profile;
     private readonly Func<DateTimeOffset> _now;
     private readonly object _gate = new();
     private DateTimeOffset? _lastReport;
+    // Тело последнего 4xx в нормализованном виде — повтор того же тела в течение сессии
+    // не повторяем (диагноз уже сказан), но другая 4xx (другой статус/тело) логируется всегда:
+    // иначе новый вид отказа теряется за тишиной интервала и приходится ловить его глазами.
+    private string? _lastClientErrorBody;
 
     public QuietHttpLogger(ILoggerFactory factory, QuietHttpClientProfile profile, Func<DateTimeOffset>? now = null)
     {
@@ -64,14 +74,41 @@ public sealed class QuietHttpLogger : IHttpClientLogger
         if (response.IsSuccessStatusCode)
         {
             // Зависимость снова отвечает — снимаем троттлинг.
-            lock (_gate) _lastReport = null;
+            lock (_gate)
+            {
+                _lastReport = null;
+                _lastClientErrorBody = null;
+            }
             return;
         }
 
-        // Хост жив, но отказал (503 при перезапуске SigNoz, 500 от модели) — тот же класс проблемы.
+        var statusCode = (int)response.StatusCode;
+        var host = Endpoint(request);
+
+        if (statusCode is >= 400 and < 500)
+        {
+            // 4xx — сервер жив и отверг именно наш запрос. Это наш баг: устаревший формат,
+            // слишком длинный промпт, протухший токен. 5xx-формулировка здесь не подходит:
+            // «на стороне зависимости» намекает на её поломку, а зависимость работает штатно.
+            // Тело почти всегда содержит готовый диагноз — печатаем усечённо.
+            var body = TryReadBody(response);
+            lock (_gate)
+            {
+                if (_lastClientErrorBody == body) return;
+                _lastClientErrorBody = body;
+            }
+            _log.LogWarning(
+                "Запрос отвергнут {Subject} ({Host}): HTTP {Status}. Тело: {Body}. {Consequence}",
+                _profile.Subject, host, statusCode, body, _profile.Consequence);
+            return;
+        }
+
+        // 5xx и прочие не-2xx — хост жив, но отказал (503 при перезапуске SigNoz, 500 от
+        // модели). Тело обычно бесполезно (HTML/пусто), а вычитывать его на каждом сбое
+        // лежащего сервиса накладно; обходимся статусом.
         if (ShouldReport())
             _log.LogWarning("Ошибка на стороне {Subject} ({Host}): HTTP {Status}. {Consequence}",
-                _profile.Subject, Endpoint(request), (int)response.StatusCode, _profile.Consequence);
+                _profile.Subject, host, statusCode, _profile.Consequence);
     }
 
     public void LogRequestFailed(
@@ -108,6 +145,39 @@ public sealed class QuietHttpLogger : IHttpClientLogger
             _lastReport = now;
             return true;
         }
+    }
+
+    /// <summary>
+    /// Дочитывает тело 4xx в строку, пригодную для лога. Делает это так, чтобы вызывающий
+    /// (например, <c>ChatTurnAsync</c> с <c>HttpCompletionOption.ResponseHeadersRead</c> и
+    /// потоковым SSE) мог прочитать тело сам: сначала <see cref="HttpContent.LoadIntoBufferAsync"/>
+    /// — внутри HttpContent он перекладывает поток в <c>MemoryStream</c> и оставляет
+    /// <see cref="HttpContent"/> читаемым; для уже буферизованного <c>ResponseContentRead</c>
+    /// это повторная (безвредная) копия. Без этого шага <see cref="HttpContent.ReadAsStringAsync"/>
+    /// съел бы сетевой поток, и стрим вызывающего получил бы EOF.
+    /// </summary>
+    private static string TryReadBody(HttpResponseMessage response)
+    {
+        try
+        {
+            response.Content.LoadIntoBufferAsync().GetAwaiter().GetResult();
+            var text = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return NormalizeBody(text);
+        }
+        catch
+        {
+            return "<тело не прочиталось>";
+        }
+    }
+
+    private static string NormalizeBody(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "<пусто>";
+        // Схлопываем переводы строк: иначе многострочный JSON рвёт строку лога, и читать
+        // приходится склейкой через голову. Соседние пробелы тоже давим, чтобы усечённый
+        // хвост не превратился в «                       …».
+        var flat = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        return flat.Length <= MaxBodyChars ? flat : flat[..MaxBodyChars] + "…";
     }
 }
 

@@ -688,7 +688,7 @@ export interface Session {
   // Выбор принадлежит УСТРОЙСТВУ (localStorage), здесь — последнее выставленное значение
   voiceStyle?: string | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
-  workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'waiting' | 'verifying' } | null;
   // Режим «Командная реализация»; null/отсутствует — режим выключен
   teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
@@ -1502,7 +1502,7 @@ export interface WorkLoopState {
   active: boolean;
   iteration: number;
   maxIterations: number;
-  phase: string | null;
+  phase: 'working' | 'waiting' | 'verifying' | null;
 }
 
 // === Режим «Командная реализация» ===

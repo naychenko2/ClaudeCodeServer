@@ -182,9 +182,11 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Статус MCP-серверов пишется из ОДНОЙ точки — приёмника состава инструментов, который
-    /// уже получает system/init хода. Заводить ради статуса второй канал (правку ClaudeSession,
-    /// новое поле протокола, фоновый поллинг) не нужно: init перечисляет все поднятые серверы.
+    /// Статус MCP-серверов пишется из ОДНОЙ точки — обработчика шины для фазы Tools
+    /// (приёмник system/init хода). После переезда на шину событий хода роль приёмника
+    /// выполняет SafePromptSnapshotAttach, вызываемый подписчиком PromptSnapshotPhase.Tools.
+    /// Заводить ради статуса второй канал (правку ClaudeSession, новое поле протокола,
+    /// фоновый поллинг) не нужно: init перечисляет все поднятые серверы.
     /// </summary>
     [SkippableFact]
     public void СтатусСерверов_ПишетсяИзПриёмникаSystemInit()
@@ -193,7 +195,7 @@ public class McpToolsetStabilityTests
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor");
+            "private void SafePromptSnapshotAttach(string sessionId, string snapshotId,\r\n    IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)");
 
         body.Should().Contain("RecordFromInit(",
             "наблюдение из system/init обязано попадать в McpStatusStore");

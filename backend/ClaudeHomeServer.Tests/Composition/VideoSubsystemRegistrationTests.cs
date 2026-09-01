@@ -1,9 +1,10 @@
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Video;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Tests.Composition;
 
@@ -58,27 +59,87 @@ public class VideoSubsystemRegistrationTests
             .Should().Contain(["SmotrimProvider", "YouTubeProvider"]);
     }
 
+    // Сторож прокси-инварианта (см. CLAUDE.md, раздел «Раздел „Видео“»): СМОТРИМ —
+    // российский сервис, идёт БЕЗ egress-прокси; YouTube — за DPI, идёт ЧЕРЕЗ прокси.
+    // Разные `Category` логгера ровно ничего о прокси не говорят, поэтому резолвим
+    // `IOptionsMonitor<HttpClientFactoryOptions>`, прогоняем `HttpMessageHandlerBuilderActions`
+    // на тестовом builder-е и смотрим на `PrimaryHandler.UseProxy` физически.
     [Fact]
-    public void Register_RegistersBothHttpClientsWithDistinctCategories()
+    public void Register_SmotrimHttpClient_DisablesSystemProxy()
+    {
+        using var sp = BuildServiceProvider();
+        var monitor = sp.GetRequiredService<IOptionsMonitor<HttpClientFactoryOptions>>();
+
+        var builder = ApplyActions(monitor.Get(SmotrimProvider.HttpClientName), sp);
+        var primary = builder.PrimaryHandler.Should().BeOfType<HttpClientHandler>().Subject;
+
+        primary.UseProxy.Should().BeFalse(
+            "СМОТРИМ — российский сервис: egress-прокси ему противопоказан, WithoutEgressProxy обязателен");
+    }
+
+    [Fact]
+    public void Register_YouTubeHttpClient_KeepsSystemProxy()
+    {
+        using var sp = BuildServiceProvider();
+        var monitor = sp.GetRequiredService<IOptionsMonitor<HttpClientFactoryOptions>>();
+
+        var builder = ApplyActions(monitor.Get(YouTubeOAuthService.HttpClientName), sp);
+        var primary = builder.PrimaryHandler.Should().BeOfType<HttpClientHandler>().Subject;
+
+        primary.UseProxy.Should().BeTrue(
+            "YouTube за DPI: через egress-прокси идут метаданные, WithoutEgressProxy тут НЕ звать");
+    }
+
+    private static ServiceProvider BuildServiceProvider()
     {
         var services = new ServiceCollection();
-        var config = BuildConfig();
+        services.AddLogging();
+        services.AddSubsystems(BuildConfig(), new VideoSubsystem());
+        return services.BuildServiceProvider();
+    }
 
-        services.AddSubsystems(config, new VideoSubsystem());
+    private static TestHandlerBuilder ApplyActions(
+        HttpClientFactoryOptions options, IServiceProvider sp)
+    {
+        var builder = new TestHandlerBuilder(sp);
+        foreach (var action in options.HttpMessageHandlerBuilderActions)
+            action(builder);
+        return builder;
+    }
 
-        // Тихого клиента отличаем по keyed-синглтону логгера (см. ObservabilityRegistrationTests):
-        // на каждый профиль свой Category, и по нему же AddQuietHttpClient кладёт свой
-        // QuietHttpLogger. Два разных Category = два разных профиля = две регистрации
-        // клиентов. Сам факт вызова `WithoutEgressProxy()` на нужном профиле тест
-        // НЕ проверяет — это остаётся за ревью и отдельной задачей на «физическую»
-        // проверку инварианта (см. ADR-014).
-        services.Should().Contain(s =>
-            s.ServiceType == typeof(QuietHttpLogger) &&
-            s.IsKeyedService &&
-            s.ServiceKey as string == "ClaudeHomeServer.Video.Smotrim");
-        services.Should().Contain(s =>
-            s.ServiceType == typeof(QuietHttpLogger) &&
-            s.IsKeyedService &&
-            s.ServiceKey as string == "ClaudeHomeServer.Video.YouTube");
+    // `HttpMessageHandlerBuilder` — абстрактный. `DefaultHttpMessageHandlerBuilder` из
+    // `Microsoft.Extensions.Http` помечен internal, поэтому строим минимальный наследник:
+    // подменяем Name/Services/PrimaryHandler/AdditionalHandlers, а `Build()` копируем
+    // из дефолтной реализации — в самом тесте не зовём, но override обязателен.
+    // `Services` пробрасываем в тест-билдер тот же, что у service provider-а, чтобы
+    // `AddLogger` смог достать свой `IHttpClientLoggerFactory` и наш `QuietHttpLogger`
+    // keyed-синглтон через `b.Services.GetRequiredKeyedService`.
+    private sealed class TestHandlerBuilder : HttpMessageHandlerBuilder
+    {
+        public TestHandlerBuilder(IServiceProvider services)
+        {
+            Services = services;
+        }
+
+        public override string Name { get; set; } = string.Empty;
+
+        public override IServiceProvider Services { get; }
+
+        public override HttpMessageHandler PrimaryHandler { get; set; } = new HttpClientHandler();
+
+        public override IList<DelegatingHandler> AdditionalHandlers { get; } =
+            new List<DelegatingHandler>();
+
+        public override HttpMessageHandler Build()
+        {
+            var handler = PrimaryHandler;
+            foreach (var next in AdditionalHandlers)
+            {
+                if (next is null) continue;
+                next.InnerHandler = handler;
+                handler = next;
+            }
+            return handler;
+        }
     }
 }

@@ -198,9 +198,12 @@ public class SessionManager : IDisposable
 
     // Ожидающее доставки сообщение. Kind: User — сообщение человека из «честной очереди»
     // (доставляется со своими вложениями и режимом, как при обычной отправке); Agent —
-    // chats_send/серверные отправки. SenderOrigin заполняется, только если отправитель из
-    // ДРУГОГО места (иной проект / вне проектов) — получателю показываем чип-источник,
-    // чтобы было видно, откуда прилетело.
+    // chats_send/серверные отправки; Report — доклад о завершении делегированной задачи
+    // (TaskExecutionService.ReportToDelegatorAsync): ход-реакция постановщика. Report ждёт
+    // конца хода, как Agent, НО при активном цикле «до готово» гейт разбора очереди пропускает
+    // его СРАЗУ (наравне с User) — иначе цикл жжёт итерации, не видя доклада. SenderOrigin
+    // заполняется, только если отправитель из ДРУГОГО места (иной проект / вне проектов) —
+    // получателю показываем чип-источник, чтобы было видно, откуда прилетело.
     //
     // Silent — ход-реакция, чей текст уже виден в ленте отдельной репликой (доклад
     // исполнителя): призрак дублировал бы её служебным промптом.
@@ -216,7 +219,11 @@ public class SessionManager : IDisposable
         string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
         IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null);
 
-    public enum PendingKind { Agent, User }
+    // Вид ожидающего сообщения. Report отделён от Agent: при активном цикле «до готово» Report
+    // будит ждущий цикл (как User), а обычные Agent-сообщения посторонних агентов продолжают
+    // ждать конца ВСЕГО цикла — иначе координатор сбивался бы посреди итерации. Решение
+    // владельца 2026-09-01: посторонний агент не должен сбивать координатора.
+    public enum PendingKind { Agent, User, Report }
 
     // Атрибуция доставленного хода для лога «Доставка хода» (инцидент 2026-08-10 П3): кто
     // инициировал авто-доставку, когда src=auto/origin пустой. Различает точки, прежде бывшие
@@ -4075,11 +4082,13 @@ public class SessionManager : IDisposable
             // чтобы конкурентные постановки не стимулировали несколько drain'ов. Условия НЕ срабатывания:
             // замороженная «Стоп» очередь (возобновляет только новое пользовательское сообщение) и активный
             // цикл «до готово» — между итерациями чат на мгновение свободен, но агентское сообщение должно
-            // ждать конца ВСЕГО цикла (пользовательское — наоборот, продолжается цикл как следующая
-            // итерация, поэтому при живом цикле dispatchNow форсируется).
+            // ждать конца ВСЕГО цикла (посторонний агент не сбивает координатора, решение владельца
+            // 2026-09-01). User и Report — наоборот, продолжают цикл как следующая итерация / ход-реакция
+            // постановщика, поэтому при живом цикле dispatchNow форсируется.
             dispatchNow = position == 1
                 && !entry.QueueFrozen
-                && (entry.Info.WorkLoop is null || kind == PendingKind.User)
+                && (entry.Info.WorkLoop is null
+                    || kind is PendingKind.User or PendingKind.Report)
                 && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting)
                 // Адаптер ведёт оркестрацию хода (фолбэк) — НЕ форсируем разбор очереди: ход,
                 // вернувшийся из-под оркестрации через EnqueueBypass, должен дождаться её конца
@@ -4129,9 +4138,16 @@ public class SessionManager : IDisposable
     // для серверных отправок (доклад исполнителя). Раньше такие ходы полагались на неявную
     // очередь семафора в адаптере: она невидима, безразмерна и молча теряет ходы при
     // Interrupt. Возвращает true, если сообщение отложено.
+    //
+    // kind — вид сообщения для гейта разбора очереди при активном цикле «до готово». Дефолт
+    // Agent: подавляющее большинство серверных отправок — посторонние агенты, и они по-
+    // прежнему ждут конца ВСЕГО цикла. Report — доклад исполнителя (TaskExecutionService.
+    // ReportToDelegatorAsync): должен будить ждущий цикл, иначе координатор и исполнитель
+    // зависают во взаимном ожидании. User отсюда не шлётся.
     public async Task<bool> SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId = null, string? senderOrigin = null,
-        bool silent = false, bool suppressTasksExecute = false, string? staffNote = null)
+        bool silent = false, bool suppressTasksExecute = false, string? staffNote = null,
+        PendingKind kind = PendingKind.Agent)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4139,7 +4155,8 @@ public class SessionManager : IDisposable
         if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
         {
             await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                agentDepth: 0, silent, suppressTasksExecute, staffNote: staffNote);
+                agentDepth: 0, silent, suppressTasksExecute, senderChatName: null, kind: kind,
+                staffNote: staffNote);
             return true;
         }
 
@@ -4413,7 +4430,11 @@ public class SessionManager : IDisposable
                 // LoopTurnInFlight выставляем атомарно с извлечением — тогда параллельный
                 // ContinueWorkLoopAsync по result увидит его и уступит, не дублируя директиву.
                 if (entry.LoopTurnInFlight) return;
-                next = entry.Pending.FirstOrDefault(p => p.Kind == PendingKind.User);
+                // При активном цикле подхватываем не только User, но и Report (доклад исполнителя):
+                // иначе доклад пролежит до конца ВСЕГО цикла, а цикл тем временем жжёт итерации в
+                // фазе waiting. Посторонние Agent-сообщения по-прежнему ждут (решение владельца
+                // 2026-09-01: посторонний агент не сбивает координатора).
+                next = entry.Pending.FirstOrDefault(p => p.Kind is PendingKind.User or PendingKind.Report);
                 if (next is null)
                 {
                     // Minor 6: при активном цикле, свободном маркере и пустой user-очереди
@@ -4603,13 +4624,16 @@ public class SessionManager : IDisposable
                 p.AttachedPaths, p.Kind == PendingKind.User ? p.Mode : null))];
     }
 
-    // Есть ли в очереди пользовательское сообщение. При активном цикле именно оно продолжает
-    // работу следующей итерацией — разбор очереди по концу хода опирается на эту проверку,
-    // чтобы доставить такое сообщение (агентские при цикле по-прежнему ждут его конца).
-    private static bool HasUserPending(SessionEntry entry)
+    // Есть ли в очереди сообщение, продолжающее цикл. User — следующая итерация цикла;
+    // Report — доклад исполнителя, требующий хода-реакции постановщика (тоже будит цикл,
+    // иначе цикл висит в фазе waiting без движения). Посторонние Agent-сообщения не в счёт:
+    // при активном цикле они ждут его конца (решение владельца 2026-09-01). Опирается на
+    // гейт drain по result в OnMessageAsync — без такого сообщения цикл сам поднимет
+    // ContinueWorkLoopAsync по своему LoopTurnInFlight-маркеру.
+    private static bool HasContinuingPending(SessionEntry entry)
     {
         lock (entry.PendingLock)
-            return entry.Pending.Any(p => p.Kind == PendingKind.User);
+            return entry.Pending.Any(p => p.Kind is PendingKind.User or PendingKind.Report);
     }
 
     private static bool HasPending(SessionEntry entry)
@@ -7138,6 +7162,14 @@ public class SessionManager : IDisposable
     // SessionManager по построению не знает). null — эскалация деградирует до карточки.
     public Func<Session, TeamEscalation, Task>? TeamEscalationRaiser { get; set; }
 
+    // Признак «у чата sessionId есть живая делегированная задача, по которой ждём доклада
+    // исполнителя». Вешает сторона задач при регистрации (TaskManager.GetById и проверка
+    // полей SourceSessionId/Status/CompletionDelivered/ClaudeStartedAt/ExecutorStoppedAt) —
+    // тот же приём разрыва зависимостей, что у TeamEscalationRaiser, иначе SessionManager
+    // пришлось бы знать TaskManager, а это цикл в DI (см. комментарий у TeamWaveStarter).
+    // null — признак не задан (тесты, либо стора задач нет): ждать нечего, поведение прежнее.
+    public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
+
     // Хук уведомления о вопросе интервью (Э8): вешает TeamWaveService — он шлёт уведомление
     // «ждёт ответов» и push, когда человека нет в чате. Тот же приём разрыва зависимостей,
     // что у TeamEscalationRaiser: NotificationService SessionManager по построению не знает.
@@ -8466,25 +8498,37 @@ public class SessionManager : IDisposable
     }
 
     // Автопродолжение цикла «до готово»: вызывается по result хода, нёсшего протокол цикла.
-    // Маркер найден → верификационный ход, затем стоп; нет → продолжение до лимита итераций.
+    // Маркер найден → верификационный ход, затем стоп; нет → продолжение до лимита итераций
+    // либо уход в фазу waiting, если у чата есть живые делегированные задачи.
     private async Task ContinueWorkLoopAsync(string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.WorkLoop is not { } loop) return;
 
+        // Возврат из waiting: предыдущая итерация ушла в ожидание исполнителя, и теперь
+        // (доставлен доклад, человек вмешался, либо пришёл алерт молчания) цикл реально
+        // продолжает работу. Снимаем фазу ДО гейтов, чтобы фаза не «застряла» при уступке.
+        if (loop.Phase == "waiting")
+        {
+            loop.Phase = "working";
+            SaveSessions();
+            await BroadcastWorkLoopAsync(sessionId, entry);
+        }
+
         // Без двойной отправки (гонка «result → директива продолжения» vs «очередь доставляет
         // сообщение пользователя»): если пользователь успел прислать сообщение в этом ходе или
         // между итерациями, оно само продолжит цикл как следующая итерация (доставку выполнит
-        // drain). Системную директиву продолжения/верификации в этом случае не шлём — иначе
-        // два хода подряд ушли бы в один процесс. Проверка атомарна с извлечением drain'а:
-        // LoopTurnInFlight=true означает, что drain уже вытащил пользовательское сообщение и
-        // запуска итерацию. Маркер взводим ПОД ТЕМ ЖЕ PendingLock, что и гейт (Major 3): иначе
-        // в окне до BuildCliTurnText (SaveSessions/Broadcast/EnsureProcess, сотни мс) параллельный
-        // drain успевал вытащить пользовательское сообщение и пустить второй ход в тот же процесс.
+        // drain). Доклад исполнителя (Report) — аналогично: drain его вытащит, и ход-реакция
+        // вернёт цикл к работе. Системную директиву продолжения/верификации в этом случае не
+        // шлём — иначе два хода подряд ушли бы в один процесс. Проверка атомарна с извлечением
+        // drain'а: LoopTurnInFlight=true означает, что drain уже вытащил сообщение и запускает
+        // итерацию. Маркер взводим ПОД ТЕМ ЖЕ PendingLock, что и гейт (Major 3): иначе в окне до
+        // BuildCliTurnText (SaveSessions/Broadcast/EnsureProcess, сотни мс) параллельный drain
+        // успевал вытащить пользовательское сообщение и пустить второй ход в тот же процесс.
         // До всей логики цикла (phase/iteration) — чтобы не оставлять изменённое состояние при уступке.
         lock (entry.PendingLock)
         {
-            if (entry.Pending.Any(p => p.Kind == PendingKind.User)) return;
+            if (entry.Pending.Any(p => p.Kind is PendingKind.User or PendingKind.Report)) return;
             if (entry.LoopTurnInFlight) return;
             entry.LoopTurnInFlight = true;
         }
@@ -8513,7 +8557,7 @@ public class SessionManager : IDisposable
             {
                 // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
                 // окончание, свидетельства уже в самом верификационном посте — отдельное
-                // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа).
+                // сообщение-остановка тут не нужно, в отличие от лимита/ошибки/ручного стопа).
                 // Блокер тут НЕ проверяем намеренно: верификация уже отвечает «да/нет», и
                 // второй слой семантики поверх неё не нужен.
                 await SetWorkLoopAsync(sessionId, false);
@@ -8543,6 +8587,25 @@ public class SessionManager : IDisposable
                 await BroadcastWorkLoopAsync(sessionId, entry);
                 if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
                 await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
+                return;
+            }
+
+            // ФАЗА ОЖИДАНИЯ: у чата есть живые делегированные задачи (координатор запустил
+            // исполнителя и не получил доклада). Пока ждём — итерации не тратим, директиву
+            // продолжения НЕ шлём. ВАЖНО: LoopTurnInFlight снимаем под PendingLock — иначе
+            // drain (DrainNextPendingAsync) вечно уступает на гейте, и доклад не доедет
+            // НИКОГДА. Цикл повиснет намертво. Возврат — на приходе Report/user-сообщения
+            // (DrainNextPendingAsync) и в начале самого ContinueWorkLoopAsync: фаза
+            // «waiting» переключается обратно в «working» ДО гейтов выше.
+            if (HasLiveDelegatedTasks?.Invoke(sessionId) == true)
+            {
+                lock (entry.PendingLock) entry.LoopTurnInFlight = false;
+                loop.Phase = "waiting";
+                SaveSessions();
+                await BroadcastWorkLoopAsync(sessionId, entry);
+                if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — без хода
+                _log.LogInformation("Цикл {Session} ушёл в фазу ожидания исполнителя (итераций {Iter}/{Max})",
+                    sessionId, loop.Iteration, loop.MaxIterations);
                 return;
             }
 
@@ -9342,7 +9405,7 @@ public class SessionManager : IDisposable
                 && !entry.QueueFrozen && entry.Process is not { HasLiveTurn: true } && HasPending(entry);
             if (drainOnExited || drainOnDeadRun
                 || (msg is ResultMessage or ErrorMessage && !entry.LoopTurnInFlight
-                    && (entry.Info.WorkLoop is null || HasUserPending(entry))))
+                    && (entry.Info.WorkLoop is null || HasContinuingPending(entry))))
             {
                 _ = Task.Run(async () =>
                 {

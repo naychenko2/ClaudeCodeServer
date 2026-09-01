@@ -53,6 +53,15 @@ public class TaskManager
     public TaskItem? GetBySession(string sessionId) =>
         _tasks.Values.FirstOrDefault(t => t.LinkedSessionId == sessionId);
 
+    // Задачи, делегированные из указанного чата-постановщика и ещё ждущие своего исполнителя:
+    // координатор в цикле «до готово» уходит в фазу waiting, пока такие задачи не закроются.
+    // Условия «живая» — без терминальных состояний, без уже доставленного доклада и без
+    // остановки исполнителя: см. комментарий у TaskExecutionService.HasLiveDelegatedTask,
+    // который фильтрует по тому же набору. Здесь отдаём ВСЕ задачи чата — фильтр на стороне
+    // вызывающего, чтобы один линейный проход по стору остался здесь.
+    public IReadOnlyCollection<TaskItem> GetBySourceSession(string sourceSessionId) =>
+        _tasks.Values.Where(t => t.SourceSessionId == sourceSessionId).ToList();
+
     public IReadOnlyCollection<TaskItem> GetByOwner(string userId) =>
         _tasks.Values.Where(t => t.OwnerId == userId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();

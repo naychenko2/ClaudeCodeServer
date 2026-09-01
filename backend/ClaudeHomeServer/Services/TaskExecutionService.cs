@@ -123,6 +123,13 @@ public class TaskExecutionService
         _log = log;
         _notif = notif;
         _sessions.OnSessionMessage += OnSessionMessageAsync;
+        // Признак «у чата есть живая делегированная задача» (цикл «до готово» уходит в фазу
+        // waiting, пока такие задачи не закроются). Один и тот же предикат использует и
+        // SessionManager.ContinueWorkLoopAsync (точка ухода в waiting), и диагностика. Делегат,
+        // а не прямая зависимость SessionManager→TaskManager, по тому же приёму, что
+        // TeamEscalationRaiser/TeamWaveStarter (SessionManager по построению не знает TaskManager,
+        // иначе цикл в DI).
+        _sessions.HasLiveDelegatedTasks = HasLiveDelegatedTask;
         // Чат-исполнитель удалён/протух по TTL, не дождавшись result — снимаем накопленный
         // текст ошибки, чтобы буфер не жил дольше самой сессии
         _sessions.OnSessionDeleted += s =>
@@ -134,6 +141,26 @@ public class TaskExecutionService
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
         // единственный путь в Done, поднимает событие ровно на переходе
         _tasks.TaskCompleted += OnTaskCompleted;
+    }
+
+    // Предусловие ухода цикла в фазу waiting. Задача «живая делегированная» = поставлена
+    // из этого чата (SourceSessionId), исполнитель запущен (LinkedSessionId/ClaudeStartedAt),
+    // статус не терминальный (не Done, нет терминальной остановки ExecutorStoppedAt), и доклад
+    // ещё не доставлен (!CompletionDelivered). Без !CompletionDelivered цикл висел бы после
+    // доклада (CAS-флаг уже занят, и в ленте лежит гостевая реплика — ждать нечего, координатор
+    // уже в курсе). ExecutorStoppedAt снимает задачу, по которой ждать нечего (своё уведомление
+    // с причиной уже ушло через HandleExecutorStoppedAsync).
+    private bool HasLiveDelegatedTask(string sourceSessionId)
+    {
+        foreach (var task in _tasks.GetBySourceSession(sourceSessionId))
+        {
+            if (task.Status == TaskItemStatus.Done) continue;
+            if (task.CompletionDelivered) continue;
+            if (task.ExecutorStoppedAt is not null) continue;
+            if (task.ClaudeStartedAt is null) continue;
+            return true;
+        }
+        return false;
     }
 
     // Хук провала хода исполнителя для режима «Командная реализация» (Э4): вешает
@@ -891,12 +918,40 @@ public class TaskExecutionService
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
         await NotifyAsync(updated, BuildStaleNotification(updated, persona));
+
+        // Будим координатора, если он ждал этого исполнителя в цикле «до готово» (фаза waiting):
+        // без пробуждения цикл повис бы в ожидании уже мёртвого исполнителя, и тумблер горел
+        // бы до ручного вмешательства. Сообщение идёт как Report — гейт разбора очереди при
+        // активном цикле пропустит его наравне с User и ход-реакция вернёт цикл к работе.
+        // Без активного цикла — обычная отправка в чат (auto), без шума в ленте.
+        if (updated.SourceSessionId is { } sourceId)
+        {
+            try
+            {
+                var minutes = _staleAfter.TotalMinutes;
+                var text = $"⚠️ Исполнитель задачи «{updated.Title}» молчит {minutes:0} мин: " +
+                           "перезапусти, переиграй или встань по блокеру.";
+                await _sessions.SendOrEnqueueAsync(sourceId, text,
+                    senderOrigin: "task-stall-alert", silent: true, suppressTasksExecute: true,
+                    staffNote: StaleAlertStaffNote, kind: SessionManager.PendingKind.Report);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Не удалось разбудить координатора сессии {SessionId} по молчанию исполнителя задачи {TaskId}",
+                    sourceId, updated.Id);
+            }
+        }
+
         _log.LogWarning("Задача {TaskId} «{Title}» осталась в работе после конца хода — " +
             "напоминание исполнителю не помогло, зову человека", updated.Id, updated.Title);
     }
 
     // Подпись плашки оклика: единственное, что человек видит от служебного промпта
     internal const string StaleNudgeStaffNote = "Напоминание исполнителю: задача не закрыта";
+
+    // Подпись плашки пробуждения координатора: то же поведение, что у DelegatorReactionStaffNote —
+    // ход-реакция в ленте рисуется разделителем, а не пузырём с сырым служебным промптом.
+    internal const string StaleAlertStaffNote = "Исполнитель молчит — задача ждёт решения";
 
     // Промпт оклика: ровно два выхода — закрыть задачу либо эскалировать. Третьего («доделаю
     // как-нибудь потом») быть не должно, иначе оклик превращается в новый бесконечный ход.
@@ -1163,10 +1218,16 @@ public class TaskExecutionService
         // одном факте снова было бы два сообщения. staffNote переводит запись в плашку-
         // разделитель (как у ходов штаба — «Ответ на карточку передан координатору»): она
         // едет и в live-бродкаст, и в history.json, и переживает доставку из очереди.
+        //
+        // kind: PendingKind.Report — доклад будит ждущий цикл «до готово» (а не ждёт его
+        // конца, как обычный Agent). Без этого координатор в цикле не увидит доклада до
+        // ручного вмешательства: гейт разбора очереди при активном цикле пропускает только
+        // User и Report, всё остальное ждёт конца ВСЕГО цикла.
         var deferred = await _sessions.SendOrEnqueueAsync(targetSessionId,
             BuildDelegatorReactionPrompt(task, executor),
             senderPersonaId: delegator?.Id, silent: true, suppressTasksExecute: true,
-            staffNote: DelegatorReactionStaffNote);
+            staffNote: DelegatorReactionStaffNote,
+            kind: SessionManager.PendingKind.Report);
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }

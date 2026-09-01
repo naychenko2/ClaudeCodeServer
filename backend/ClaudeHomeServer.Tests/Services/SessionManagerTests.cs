@@ -2981,6 +2981,291 @@ public class SessionManagerTests : IDisposable
             "Minor 6: drain продолжает цикл директивой при пустой user-очереди");
     }
 
+    // --- Цикл «до готово» + делегирование: фаза ожидания и PendingKind.Report ---
+
+    // Хелпер: имитация живой делегированной задачи через делегат HasLiveDelegatedTasks.
+    // Вызывающий ставит его перед сценарием и сбрасывает в null в finally, чтобы не
+    // утекал в соседние тесты — глобальное свойство экземпляра SessionManager.
+    private bool _liveDelegated;
+    private void WithLiveDelegated()
+    {
+        _liveDelegated = true;
+        _sut.HasLiveDelegatedTasks = _ => _liveDelegated;
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ЕстьЖиваяДелегированнаяЗадача_УходитВWaiting()
+    {
+        // Координатор запустил исполнителя и ждёт доклада: цикл НЕ жжёт итерации, а уходит
+        // в фазу waiting. LoopTurnInFlight обязан быть снят под PendingLock — иначе drain
+        // вечно уступает на гейте, и доклад не доедет НИКОГДА. ГРАБЛЯ, отдельный тест.
+        var session = await MkBusySessionAsync("loop-waiting-1", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        WithLiveDelegated();
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true); // ход-итерация в полёте
+        var loopBefore = _sut.GetById(session.Id)!.WorkLoop!;
+        var iterBefore = loopBefore.Iteration;
+        var phaseBefore = loopBefore.Phase;
+
+        try
+        {
+            await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+                new ResultMessage("success", 10, 1, null, null), TestRunId);
+            // Даём фоновой ContinueWorkLoopAsync дойти до ухода в waiting
+            await WaitForConditionAsync(() => _sut.GetById(session.Id)?.WorkLoop?.Phase == "waiting",
+                TimeSpan.FromSeconds(2));
+
+            var loop = _sut.GetById(session.Id)!.WorkLoop!;
+            loop.Phase.Should().Be("waiting", "фаза переключается на ожидание исполнителя");
+            loop.Iteration.Should().Be(iterBefore, "итерация не выросла в фазе waiting");
+            GetLoopTurnInFlight(entry).Should().BeFalse("LoopTurnInFlight снят — иначе drain вечно уступает");
+            // Директива продолжения НЕ ушла — её заменил уход в ожидание
+            adapter.Verify(a => a.SendMessageAsync(
+                It.Is<string>(t => t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")),
+                It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+            phaseBefore.Should().Be("working", "санити: до теста фаза была working");
+        }
+        finally
+        {
+            _liveDelegated = false;
+            _sut.HasLiveDelegatedTasks = null;
+        }
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ДелегатНеЗадан_ПоведениеПрежнее()
+    {
+        // Без делегата HasLiveDelegatedTasks (тесты без DI к TaskManager) ждать нечего —
+        // цикл не уходит в waiting, итерация растёт как раньше. Покрывает явный null-контракт.
+        var session = await MkBusySessionAsync("loop-waiting-nodelegate", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        _sut.HasLiveDelegatedTasks.Should().BeNull("санити: делегат не задан");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+        var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается");
+        _sut.GetById(session.Id)!.WorkLoop!.Phase.Should().Be("working");
+        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(iterBefore + 1);
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ПриходДоклада_ВозвращаетWorkingИПродолжаетЦикл()
+    {
+        // Сквозной путь: координатор ушёл в waiting → пришёл Report (TaskExecutionService.
+        // ReportToDelegatorAsync) → drain подхватил его, доставил ход-реакцию → по result
+        // ContinueWorkLoopAsync переключает фазу обратно в working и шлёт директиву.
+        var session = await MkBusySessionAsync("loop-waiting-resume", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        WithLiveDelegated();
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        try
+        {
+            // Шаг 1: result хода-итерации → ContinueWorkLoopAsync уходит в waiting
+            await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+                new ResultMessage("success", 10, 1, null, null), TestRunId);
+            await WaitForConditionAsync(() => _sut.GetById(session.Id)?.WorkLoop?.Phase == "waiting",
+                TimeSpan.FromSeconds(2));
+            var loopAfterWaiting = _sut.GetById(session.Id)!.WorkLoop!;
+            var iterInWaiting = loopAfterWaiting.Iteration;
+            // Эмитируем «доклад пришёл»: выключаем делегат (задача закрыта), и кладём Report
+            // в очередь через SendOrEnqueueAsync (тот же канал, что у TaskExecutionService).
+            _liveDelegated = false;
+            // Чат между итерациями (Active) — SendOrEnqueueAsync идёт прямой отправкой
+            session.Status = SessionStatus.Active;
+            ClearSent();
+            await _sut.SendOrEnqueueAsync(session.Id, "[доклад] исполнитель закончил",
+                silent: true, suppressTasksExecute: true,
+                staffNote: "доклад", kind: SessionManager.PendingKind.Report);
+            // Доклад ушёл в ленту, реакция поставщика поднимает следующий ход-реакцию.
+            // Ход-реакция идёт через SendMessageAsync(auto=true) — адаптер получит её.
+            await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+            // Эмулируем result хода-реакции: триггерит ContinueWorkLoopAsync,
+            // который должен вернуть фазу в working и поднять следующую итерацию.
+            SetLoopTurnInFlight(entry, true);
+            await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+                new ResultMessage("success", 10, 1, null, null), TestRunId);
+            // Ждём именно директиву продолжения — иначе гонка: Phase переключается в начале
+            // ContinueWorkLoopAsync, а Iteration++ — после; ранний assert увидит «working, 0».
+            await WaitForConditionAsync(() => adapter.Invocations.Any(i =>
+                    i.Method.Name == nameof(ILlmSessionAdapter.SendMessageAsync)
+                    && i.Arguments.Count > 0
+                    && i.Arguments[0] is string s
+                    && s.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")),
+                TimeSpan.FromSeconds(2));
+            var loopResumed = _sut.GetById(session.Id)!.WorkLoop!;
+            loopResumed.Phase.Should().Be("working", "возврат из ожидания");
+            loopResumed.Iteration.Should().BeGreaterThan(iterInWaiting, "итерация продвинулась");
+        }
+        finally
+        {
+            _liveDelegated = false;
+            _sut.HasLiveDelegatedTasks = null;
+        }
+    }
+
+    [Fact]
+    public async Task SendOrEnqueue_ДокладВСвободныйЧатПриАктивномЦикле_ДоставляетсяСразу()
+    {
+        // Между итерациями (статус Active) координаторский цикл «до готово» ещё активен.
+        // Доклад (Report) должен идти СРАЗУ, а не ждать конца ВСЕГО цикла — иначе
+        // цикл жжёт итерации, не видя доклада. Это и есть «сломанный замок» из задачи.
+        var session = await MkBusySessionAsync("loop-report-direct", SessionStatus.Active);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        ClearSent();
+
+        // Чат между итерациями — SendOrEnqueueAsync идёт прямой отправкой.
+        var deferred = await _sut.SendOrEnqueueAsync(session.Id, "реакция на доклад",
+            silent: true, suppressTasksExecute: true,
+            staffNote: "Доклад по задаче передан постановщику",
+            kind: SessionManager.PendingKind.Report);
+
+        deferred.Should().BeFalse("чат свободен — отправка прямая, не в очередь");
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("реакция на доклад")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task SendOrEnqueue_ОбычноеАгентскоеВСвободныйЧатПриАктивномЦикле_ТожеСразу()
+    {
+        // Контраст: посторонний агент при свободном чате (между итерациями) идёт сразу,
+        // как и раньше — гейт «WorkLoop is null || kind is User or Report» пропускает.
+        // Сюда важно положить «обычное» — чат НЕ в waiting, делегат пуст, цикл просто работает.
+        var session = await MkBusySessionAsync("loop-agent-direct", SessionStatus.Active);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        ClearSent();
+
+        var deferred = await _sut.SendOrEnqueueAsync(session.Id, "посторонний агент пишет",
+            silent: true, suppressTasksExecute: true, kind: SessionManager.PendingKind.Agent);
+
+        deferred.Should().BeFalse();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("посторонний агент пишет")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ВозвратИзWaitingВНачалеПродолжаетЦикл()
+    {
+        // Упрощённый сценарий без имитации SendOrEnqueue: имитируем возврат через прямой
+        // вызов ContinueWorkLoopAsync после того, как фаза уже была переключена в waiting.
+        // Цикл сам на старте переключает фазу обратно в working и шлёт директиву.
+        var session = await MkBusySessionAsync("loop-waiting-resume-2", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        // Принудительно ставим фазу waiting (имитация уже отработавшего ухода)
+        _sut.GetById(session.Id)!.WorkLoop!.Phase = "waiting";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+        var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.Phase.Should().Be("working", "вход в ContinueWorkLoopAsync возвращает фазу в working");
+        loop.Iteration.Should().BeGreaterThan(iterBefore, "итерация продвинулась");
+    }
+
+    [Fact]
+    public async Task DrainNextPending_ДокладВОчередиПриАктивномЦикле_Подхватывается()
+    {
+        // Симметрия гейта разбора очереди: при активном цикле Report подхватывается
+        // (а не только User), иначе доклад пролежит в очереди до конца ВСЕГО цикла.
+        // Чат в Working (идёт ход-итерация) — доклад ставится через EnqueuePendingAsync.
+        var session = await MkBusySessionAsync("loop-drain-report", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        // Эмулируем постановку Report через тот же EnqueuePendingAsync, что зовёт SendOrEnqueue.
+        // Внутри гейт на 4082 пропустит только User/Report при активном цикле, и dispatchNow=false
+        // (статус Working) — сообщение встаёт в очередь, drain подхватит его по result хода.
+        var method = typeof(SessionManager).GetMethod("EnqueuePendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var enq = (Task)method.Invoke(_sut, new object?[]
+        {
+            session.Id, entry, "реакция постановщика",
+            null, "task-report", 0, true, true, null, SessionManager.PendingKind.Report,
+            null, null, null
+        })!;
+        await enq;
+
+        _sut.GetPending(session.Id).Should().ContainSingle()
+            .Which.Kind.Should().Be(SessionManager.PendingKind.Report);
+
+        // По result хода-итерации ContinueWorkLoopAsync триггерится; он УСТУПАЕТ, если
+        // в очереди лежит Report (тот же гейт, что и для User) — иначе директива обгонит
+        // лежащий доклад. Снимаем LoopTurnInFlight и смотрим: по result drain подхватит Report.
+        // В тесте мы НЕ дожидаемся конца хода-реакции — достаточно увидеть, что в очереди
+        // ничего не осталось (drain изъял Report).
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        // Ждём, пока drain унесёт Report
+        await WaitForConditionAsync(() => _sut.GetPending(session.Id).Count == 0,
+            TimeSpan.FromSeconds(2));
+        _sut.GetPending(session.Id).Should().BeEmpty("доклад подхвачен drain'ом, не ждёт конца цикла");
+    }
+
+    [Fact]
+    public async Task DrainNextPending_ОбычноеАгентскоеВОчередиПриАктивномЦикле_ЖдётКонцаЦикла()
+    {
+        // Контраст: посторонний агент (kind=Agent) по-прежнему ждёт конца ВСЕГО цикла —
+        // решение владельца 2026-09-01: посторонний агент не сбивает координатора.
+        var session = await MkBusySessionAsync("loop-drain-agent", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        var method = typeof(SessionManager).GetMethod("EnqueuePendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var enq = (Task)method.Invoke(_sut, new object?[]
+        {
+            session.Id, entry, "постороннее сообщение",
+            null, "external-agent", 0, true, false, null, SessionManager.PendingKind.Agent,
+            null, null, null
+        })!;
+        await enq;
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        // Очередь не разобрана (LoopTurnInFlight+нет User/Report в очереди → ContinueWorkLoopAsync
+        // шлёт директиву, по result директивы — drain, а до этого момента обычное Agent висит)
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        _sut.GetPending(session.Id).Should().ContainSingle("обычное агентское ждёт конца ВСЕГО цикла")
+            .Which.Kind.Should().Be(SessionManager.PendingKind.Agent);
+    }
+
     // --- Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате ---
 
     [Fact]

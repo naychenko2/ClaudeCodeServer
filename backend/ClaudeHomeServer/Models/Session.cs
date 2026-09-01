@@ -53,7 +53,9 @@ public class SessionWorkLoop
     public int Iteration { get; set; }
     // Потолок итераций — защита от бесконечного цикла (дефолт из конфига Loop:MaxIterations)
     public int MaxIterations { get; set; } = 20;
-    // working — рабочие итерации; verifying — финальный верификационный ход после маркера
+    // working — рабочие итерации; waiting — координатор ждёт доклада исполнителя по делегированной
+    // задаче (цикл не шлёт директиву продолжения, итерации не тратятся, LoopTurnInFlight снят
+    // — иначе drain вечно уступает); verifying — финальный верификационный ход после маркера
     public string Phase { get; set; } = "working";
     // Сколько раз в цикле уже запущены задачи на исполнение: счёт ведёт бэкенд в точке
     // запуска (гейт DenyOnDelegatedTurn), а не модель — как у TeamImplementBudget. Квота

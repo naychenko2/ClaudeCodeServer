@@ -1002,6 +1002,10 @@ export type ServerMessage = { sessionId: string } & (
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
+  // Сторожа чатов (chat-watchdogs): ПОЛНЫЙ состав id чатов и проектов владельца с активными
+  // сторожами. Событие глобальное (не про один чат) и заменяет состояние стора целиком —
+  // диффы потребитель не считает
+  | { type: 'watchdogs_changed'; sessions: string[]; projects: string[] }
   // Состав контекста чата заменён (фича chat-context): полный состав после PUT.
   // entries — записи БЕЗ признака missing (бэкенд его в broadcast не кладёт);
   // нужен missing — читай кеш (GET {sessionId}/context), событие его обновит

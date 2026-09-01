@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -20,12 +21,22 @@ public class SubagentStreamWatcherTests : IDisposable
     private readonly string _profilesRoot;
     private readonly string _sessionId = "sess-" + Guid.NewGuid().ToString("N");
     private readonly List<SubagentRunPassport> _passports = new();
+    // Шина событий хода: подписка на subagent/completed собирает паспорта в _passports
+    // (тот же сценарий, что раньше через runSink).
+    private readonly TurnEventBus _events = new();
     private int _messageCount;
 
     public SubagentStreamWatcherTests()
     {
         _profilesRoot = Path.Combine(Path.GetTempPath(), "claude-profiles-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_profilesRoot);
+        // subagent/completed → собираем паспорта в _passports. Подписка одна на класс —
+        // ватчер публикует через шину, тест проверяет накопитель.
+        _events.OnNotification<SubagentRunCompleted>(e =>
+        {
+            lock (_passports) _passports.Add(e.Passport);
+            return Task.CompletedTask;
+        });
     }
 
     public void Dispose()
@@ -106,7 +117,7 @@ public class SubagentStreamWatcherTests : IDisposable
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 msg => { _messageCount++; return Task.CompletedTask; },
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
             watcher.Start();
 
             // Создаём структуру под ProfilesRoot ПОСЛЕ старта ватчера
@@ -151,7 +162,7 @@ public class SubagentStreamWatcherTests : IDisposable
             // Act: запускаем ватчер, но новых строк нет
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 msg => Task.CompletedTask,
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
             watcher.Start();
             Thread.Sleep(2000); // пара тиков поллинга, новых строк нет
             watcher.Dispose();
@@ -180,7 +191,7 @@ public class SubagentStreamWatcherTests : IDisposable
             // Act: стартуем ватчер, затем дописываем строки
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 msg => { _messageCount++; return Task.CompletedTask; },
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
             watcher.Start();
             Thread.Sleep(200);
 
@@ -224,9 +235,8 @@ public class SubagentStreamWatcherTests : IDisposable
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
-            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+                events: _events, profilesRoot: _profilesRoot)
             {
                 BgDoneRecheckDelay = TimeSpan.FromSeconds(1.5),
             };
@@ -242,8 +252,8 @@ public class SubagentStreamWatcherTests : IDisposable
             // Финальный отчёт доезжает до транскрипта после сигнала — как в проде
             File.AppendAllText(agentFile, Report("2026-08-22T10:00:20.000Z") + "\n");
 
-            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15))))
-                .Should().Be(got.Task, "перепроверка обязана эмитить паспорт");
+            // Перепроверка публикует паспорт через шину — ждём по факту наличия паспорта
+            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
             _passports.Should().HaveCount(1);
             _passports[0].Truncated.Should().BeFalse("end_turn доехал — обрыв опровергнут");
             _passports[0].LastStopReason.Should().Be("end_turn");
@@ -263,9 +273,8 @@ public class SubagentStreamWatcherTests : IDisposable
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
-            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+                events: _events, profilesRoot: _profilesRoot)
             {
                 BgDoneRecheckDelay = TimeSpan.FromMilliseconds(100),
             };
@@ -276,8 +285,7 @@ public class SubagentStreamWatcherTests : IDisposable
             await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
             _passports.Should().BeEmpty();
 
-            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15))))
-                .Should().Be(got.Task, "перепроверка обязана эмитить паспорт и при реальном обрыве");
+            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
             _passports.Should().HaveCount(1, "паспорт с bg_done и обрывом эмитится один раз");
             _passports[0].Truncated.Should().BeTrue("end_turn не появился — обрыв настоящий");
             _passports[0].FinishedBy.Should().Be("bg_done");
@@ -295,9 +303,8 @@ public class SubagentStreamWatcherTests : IDisposable
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
-            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+                events: _events, profilesRoot: _profilesRoot)
             {
                 BgDoneRecheckDelay = TimeSpan.FromMilliseconds(100),
             };
@@ -306,7 +313,7 @@ public class SubagentStreamWatcherTests : IDisposable
                 ToolCall("2026-08-22T10:00:10.000Z", "Bash"));
 
             await watcher.FinalizeAsync([ToolUseIdOf(agentFile)], "bg_done");
-            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15)))).Should().Be(got.Task);
+            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
             _passports.Should().ContainSingle().Which.Truncated.Should().BeTrue();
 
             // Хвост дозаписи длиннее окна перепроверки: финал доехал уже после оборванного
@@ -332,7 +339,7 @@ public class SubagentStreamWatcherTests : IDisposable
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
             // BgDoneRecheckDelay остаётся дефолтным (10 с) — перепроверка заведомо не успевает
             var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-dispose", cwd,
                 Prompt("2026-08-22T10:00:00.000Z", "Задача"),
@@ -374,7 +381,7 @@ public class SubagentStreamWatcherTests : IDisposable
             var seen = 0;
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 _ => { seen++; return Task.CompletedTask; },
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
             watcher.Start();
             SetupProfileSubagent("sub-test", _sessionId, "agent-end", cwd,
                 Prompt("2026-08-22T10:00:00.000Z", "Задача"),
@@ -402,7 +409,7 @@ public class SubagentStreamWatcherTests : IDisposable
             var seen = 0;
             var watcher = new SubagentStreamWatcher(cwd, _sessionId,
                 _ => { seen++; return Task.CompletedTask; },
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
             watcher.Start();
             SetupProfileSubagent("sub-test", _sessionId, "agent-killed", cwd,
                 Prompt("2026-08-22T10:00:00.000Z", "Задача"),
@@ -434,9 +441,8 @@ public class SubagentStreamWatcherTests : IDisposable
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
-            var got = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => { _passports.Add(p); got.TrySetResult(); }, profilesRoot: _profilesRoot)
+                events: _events, profilesRoot: _profilesRoot)
             {
                 BgDoneRecheckDelay = TimeSpan.FromMilliseconds(100),
             };
@@ -448,8 +454,7 @@ public class SubagentStreamWatcherTests : IDisposable
             // Симулируем: пока шла перепроверка, координатор был убит — MarkRunInterrupted
             // дёргается ДО Dispose, но bg_done перебивает его в эмиссии
             watcher.MarkRunInterrupted();
-            (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(15))))
-                .Should().Be(got.Task, "перепроверка обязана эмитить паспорт");
+            WaitUntil(() => _passports.Count > 0, timeoutMs: 15000);
             watcher.Dispose();
 
             _passports.Should().HaveCount(1);
@@ -482,7 +487,7 @@ public class SubagentStreamWatcherTests : IDisposable
             Directory.CreateDirectory(ownDir);
 
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot, preferredConfigRoot: ownRoot);
+                events: _events, profilesRoot: _profilesRoot, preferredConfigRoot: ownRoot);
             watcher.Start();
 
             // Агент текущего прогона пишет в свой профиль
@@ -516,7 +521,7 @@ public class SubagentStreamWatcherTests : IDisposable
             Directory.CreateDirectory(Path.Combine(emptyProfile, "projects"));
 
             var watcher = new SubagentStreamWatcher(cwd, _sessionId, _ => Task.CompletedTask,
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot, preferredConfigRoot: emptyProfile);
+                events: _events, profilesRoot: _profilesRoot, preferredConfigRoot: emptyProfile);
             watcher.Start();
 
             var (_, agentFile) = SetupProfileSubagent("sub-test", _sessionId, "agent-swept", cwd,
@@ -564,6 +569,14 @@ public class SubagentStreamWatcherTests : IDisposable
             // ровно в одном проекте, а фолбэк-поиск папки идёт по id сессии без учёта
             // cwd — с общим id второй ватчер нашёл бы папку первого
             var extraPassports = new List<SubagentRunPassport>();
+            // Вторая шина только для второго ватчера: паспорта с cwd2 попадают в extraPassports,
+            // основной _events хранит паспорта с cwd1.
+            var extraEvents = new TurnEventBus();
+            extraEvents.OnNotification<SubagentRunCompleted>(e =>
+            {
+                lock (extraPassports) extraPassports.Add(e.Passport);
+                return Task.CompletedTask;
+            });
             var seen1 = 0;
             var seen2 = 0;
             var sessionId2 = "sess-" + Guid.NewGuid().ToString("N");
@@ -571,12 +584,12 @@ public class SubagentStreamWatcherTests : IDisposable
             var cwd1 = Path.Combine(Path.GetTempPath(), "Ccs W test1 " + Guid.NewGuid().ToString("N"));
             using var watcher1 = new SubagentStreamWatcher(cwd1, _sessionId,
                 _ => { seen1++; return Task.CompletedTask; },
-                runSink: p => _passports.Add(p), profilesRoot: _profilesRoot);
+                events: _events, profilesRoot: _profilesRoot);
 
             var cwd2 = Path.Combine(Path.GetTempPath(), "Ccs W test2 " + Guid.NewGuid().ToString("N"));
             using var watcher2 = new SubagentStreamWatcher(cwd2, sessionId2,
                 _ => { seen2++; return Task.CompletedTask; },
-                runSink: p => extraPassports.Add(p), profilesRoot: _profilesRoot);
+                events: extraEvents, profilesRoot: _profilesRoot);
 
             watcher1.Start();
             watcher2.Start();

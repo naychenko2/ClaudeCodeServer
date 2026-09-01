@@ -58,12 +58,19 @@ public sealed class PromptSnapshotStore
 
     /// <summary>Записать снимок хода. Возвращает id (он же имя файла) либо null при сбое.</summary>
     public string? Save(string sessionId, PromptSnapshotDraft draft)
+        => Save(sessionId, NewId(), draft);
+
+    /// <summary>
+    /// Записать снимок хода С ЗАДАННЫМ id: путь вызова из ClaudeSession, которому id нужен
+    /// ДО отправки события (UI-кнопка «какой промпт ушёл» требует его синхронно, а шина
+    /// событий хода возврата не даёт). Контракт id тот же, что у NewId(): {unixMs}-{seq}.
+    /// </summary>
+    public string? Save(string sessionId, string id, PromptSnapshotDraft draft)
     {
-        if (!SafeId.IsMatch(sessionId)) return null;
+        if (!SafeId.IsMatch(sessionId) || !SafeId.IsMatch(id)) return null;
 
         try
         {
-            var id = NewId();
             var snapshot = new PromptSnapshotDto(
                 id, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 draft.Applied, draft.InheritedFromId,
@@ -180,6 +187,14 @@ public sealed class PromptSnapshotStore
     // {unixMs}-{seq}: лексикографически сортируемо по времени. После рестарта счётчик
     // начинается заново, но старшая часть (миллисекунды) уже больше — порядок сохраняется.
     private static string NewId() =>
+        $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Interlocked.Increment(ref _seq) & 0xFFFFF:x5}";
+
+    /// <summary>
+    /// Генератор id для ClaudeSession: ему нужен id ДО шинной публикации, чтобы отправить
+    /// PromptSnapshotMessage в UI синхронно (шина — Notification, возврата не даёт).
+    /// Контракт совпадает с NewId(), и счётчик общий — без коллизий.
+    /// </summary>
+    public static string NewPublicId() =>
         $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Interlocked.Increment(ref _seq) & 0xFFFFF:x5}";
 
     private static void WriteFile(string path, PromptSnapshotDto snapshot)

@@ -204,7 +204,7 @@ public class FallbackLlmSessionAdapterTests
             orchestrationDone: orchestrationDone,
             contextSource: contextSource,
             egress: egress,
-            turnRuns: turnRuns,
+            events: null,
             // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
             egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;

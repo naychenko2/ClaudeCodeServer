@@ -213,18 +213,8 @@ public sealed record LlmSessionContext(
     Func<IReadOnlyList<PermissionRule>>? PermissionRules,
     TasksMcpContext? TasksMcp,
     NotesMcpContext? NotesMcp = null,
-    // Auto-recall заметок: по тексту хода возвращает блок релевантных заметок
-    // (текст для промпта + айтемы манифеста «использовано сейчас», F3). Ошибки → null.
-    Func<string, Task<RecallBlock?>>? RecallProvider = null,
-    // Провайдер системного промпта персоны (имя, роль, контракт характера, дисциплина):
-    // вызывается на КАЖДЫЙ ход — правки персоны и смена модели применяются без пересоздания
-    // адаптера. null — обычная сессия; вызов может вернуть null (персону удалили).
-    Func<string?>? PersonaPromptProvider = null,
     // MCP-сервер долгой памяти персоны (null — сессия без памяти персоны).
     MemoryMcpContext? MemoryMcp = null,
-    // Auto-recall долгой памяти персоны: по тексту хода возвращает блок релевантных записей
-    // памяти (текст для промпта + айтемы манифеста «использовано сейчас», F3). Ошибки → null.
-    Func<string, Task<RecallBlock?>>? PersonaRecallProvider = null,
     // Дополнительные запрещённые инструменты сессии (поверх конфига Claude:DisallowedTools) —
     // например, WebSearch/WebFetch у персоны с выключенной возможностью «web».
     IReadOnlyList<string>? ExtraDisallowedTools = null,
@@ -237,22 +227,6 @@ public sealed record LlmSessionContext(
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
     // (null — флаг workspace-tools выключен или нет владельца).
     WorkspaceMcpContext? WorkspaceMcp = null,
-    // Блок «Привязанные знания и правила» персоны (флаг persona-bindings): по тексту хода
-    // возвращает индекс привязанных источников + выжимки режима «всегда» для системного
-    // промпта (null — фича выключена или сессия без персоны). Вычисляется каждый ход;
-    // флаг проверяется внутри, ошибки — тихо в null (ход идёт без блока).
-    Func<string, Task<string?>>? BindingsProvider = null,
-    // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A): компактный
-    // список хабов по связности + (при isStale) пометка устаревания. Принимает текст хода
-    // (не используется — god-узлы структурны), null — фича выключена или сессия без rootPath;
-    // ошибки внутри → null (ход идёт без блока).
-    Func<string?, Task<string?>>? CodeGraphProvider = null,
-    // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
-    // specialty-prompt-sections): сценарные инструкции «когда и как» по роли (история,
-    // граф кода, процессы, правила роли) — текст хода не используется (секции статичны для
-    // owner+специальности), null — фича выключена, персона без специальности, групповой
-    // чат или сессия без владельца/персоны. Гейт по флагу — внутри, на каждый ход.
-    Func<string?, Task<string?>>? PromptSectionsProvider = null,
     // Файловые сабагенты-персоны: вычисляется на КАЖДЫЙ ход
     // (актуальные персоны/модель сессии), внутри — троттлёный reconcile файлов.
     // null — фича выключена или нет владельца; вызов может вернуть null.
@@ -276,14 +250,6 @@ public sealed record LlmSessionContext(
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
     // чат без персоны и все прочие пути ничего не теряют.
     bool BrowserEnabled = true,
-    // Приёмник снимков промпта хода: принимает черновик, возвращает id записанного снимка
-    // (null — записать не удалось; снимок диагностический и ход не роняет). Замыкает
-    // Session.Id на стороне SessionManager — адаптер ключа хранилища не знает.
-    Func<PromptSnapshotDraft, string?>? PromptSnapshotSink = null,
-    // Дописать в уже записанный снимок состав инструментов и статусы MCP-серверов: они
-    // известны только из system/init, который приходит после старта процесса.
-    // Аргументы: id снимка, имена инструментов, серверы.
-    Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptSnapshotToolsSink = null,
     // Корень профиля claude CLI (CLAUDE_CONFIG_DIR) этого хода: оттуда берутся глобальный
     // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
     // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;
@@ -294,10 +260,6 @@ public sealed record LlmSessionContext(
     // принимается только по owner/project/persona — от свойств хода состав не зависит.
     // null — фича выключена, нет владельца или реестр пуст.
     Func<ExternalMcpContext?>? ExternalMcpProvider = null,
-    // Подсказка про трейлер CCS-Session/CCS-Task в системный промпт (ADR-004, «Паспорта
-    // изменений»): null — чат вне проекта. Вычисляется при построении контекста (не Func —
-    // как WorkspaceMcp/NotificationsMcp, тоже не живёт мид-сессию без пересоздания адаптера).
-    string? DossierTrailerHint = null,
     // Персист сессий (SessionManager.SaveSessions): фолбэк-адаптер вызывает его после restore
     // модели в finally, чтобы переписать sessions.json восстановленными значениями — иначе
     // финальный result успевает сохранить подменённую модель (Major 1 ревью). null (тесты) —
@@ -314,9 +276,6 @@ public sealed record LlmSessionContext(
     // запускает разбор Pending-очереди — ходы, накопленные через EnqueueBypass во время
     // оркестрации, доставляются штатно (теперь уже в свободный адаптер). null (тесты) — no-op.
     Action<string>? OrchestrationDone = null,
-    // Приёмник паспортов прогонов сабагентов (диагностика обрывов, SubagentRunLog): вызывается
-    // на завершении каждого агента хода. null (тесты, сессия без стора) — паспорта не ведутся.
-    Action<Claude.SubagentRunPassport>? SubagentRunSink = null,
     // MCP-сервер десктопной грани (ADR-008): руки на машине пользователя.
     // null — грань чату не положена (не десктопный чат, выключена в проекте, нет флага,
     // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
@@ -347,4 +306,10 @@ public sealed record LlmSessionContext(
     // Влияет ТОЛЬКО на промпт: состав MCP-инструментов от содержимого контекста не зависит
     // (гейт самого инструмента — WorkspaceMcpContext.ChatContextEnabled).
     // null — фича выключена или сессия без владельца.
-    Func<IReadOnlyList<SessionContextEntry>>? ChatContextProvider = null);
+    Func<IReadOnlyList<SessionContextEntry>>? ChatContextProvider = null,
+    // Шина событий хода (этап 0 плана «Шина событий хода», ADR-013): единая точка, через
+    // которую оба адаптера отдают факты хода и пропускают его через Filter-цепочку.
+    // Подписчиков на этапе 0 нет — место готово, поведение не меняется. Владелец берётся
+    // из TurnContext события, а не из «текущего пользователя» (per-owner изоляция).
+    // null — шина не подана (тесты); адаптер работает как раньше.
+    Turn.ITurnEventBus? Events = null);

@@ -68,8 +68,10 @@ public class VideoSubsystemRegistrationTests
 
         // Тихого клиента отличаем по keyed-синглтону логгера (см. ObservabilityRegistrationTests):
         // на каждый профиль свой Category, и по нему же AddQuietHttpClient кладёт свой
-        // QuietHttpLogger. Два разных Category = два разных клиента = прокси-инвариант
-        // физически проверится в проде.
+        // QuietHttpLogger. Два разных Category = два разных профиля = две регистрации
+        // клиентов. Сам факт вызова `WithoutEgressProxy()` на нужном профиле тест
+        // НЕ проверяет — это остаётся за ревью и отдельной задачей на «физическую»
+        // проверку инварианта (см. ADR-014).
         services.Should().Contain(s =>
             s.ServiceType == typeof(QuietHttpLogger) &&
             s.IsKeyedService &&

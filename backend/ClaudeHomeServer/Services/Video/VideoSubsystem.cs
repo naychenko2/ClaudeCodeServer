@@ -22,6 +22,13 @@ public sealed class VideoSubsystem : IAppSubsystem
 
     public void Register(IServiceCollection services, IConfiguration config)
     {
+        // Платформенный IMemoryCache нужен только провайдерам Video: сроки жизни у ответов
+        // разные (минута у программы передач, полчаса у ленты), а вытеснение по TTL из
+        // коробки дешевле своего велосипеда. `AddMemoryCache` идемпотентен (TryAdd под
+        // капотом), так что лишних регистраций не появится, даже если кто-то повторно
+        // дёрнет `AddSubsystems` для той же подсистемы.
+        services.AddMemoryCache();
+
         services.AddSingleton(VideoOptions.FromConfig(config));
         services.AddSingleton<YouTubeOAuthService>();
         services.AddSingleton<IVideoProvider, SmotrimProvider>();

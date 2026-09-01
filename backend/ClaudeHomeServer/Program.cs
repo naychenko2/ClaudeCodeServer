@@ -587,9 +587,9 @@ builder.Services.AddHttpClient(ReaderService.HttpClientName, client =>
 builder.Services.AddSingleton<ReaderQuotaService>();
 builder.Services.AddSingleton<ReaderService>();
 // Раздел «Видео» — пилот подсистемы (см. `Services/Video/VideoSubsystem.cs`).
-// Кеш — платформенный MemoryCache: сроки жизни у ответов разные (минута у программы
-// передач, полчаса у ленты), а вытеснение по TTL из коробки дешевле своего велосипеда.
-builder.Services.AddMemoryCache();
+// Сам `VideoSubsystem.Register` подключает и платформенный `IMemoryCache` для своих
+// провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
+// больше не держим.
 builder.Services.AddSubsystems(builder.Configuration, new VideoSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает

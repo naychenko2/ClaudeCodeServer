@@ -11,6 +11,7 @@ public interface IAppSubsystem
 {
     // Латиница, нижний регистр, уникально в рамках процесса. Используется как ключ
     // настроек (например, "Telemetry:Backends"), лог-префикс и якорь в логах/диагностике.
+    // Сравнение `Key` на дубли — без учёта регистра (см. `AddSubsystems`).
     string Key { get; }
 
     // Человекочитаемое имя подсистемы (для логов и диагностических дампов).
@@ -34,7 +35,9 @@ public static class SubsystemRegistration
         // Порядок важен: подсистемы более низкого слоя идут первыми, верхние — позже.
         // Дубликат `Key` — ошибка конфигурации: тихо проглатывать её нельзя, иначе
         // одинаковые секции настроек перетрут друг друга непредсказуемо.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Сравнение без учёта регистра: `Key` — ключ секции конфигурации (`Telemetry:Backends`),
+        // а `IConfiguration` регистронезависим, и `Video` vs `video` для него одно и то же.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var subsystem in subsystems)
         {
             if (subsystem is null) throw new ArgumentException(

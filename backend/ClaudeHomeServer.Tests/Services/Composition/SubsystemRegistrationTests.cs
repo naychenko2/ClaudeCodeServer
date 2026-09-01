@@ -55,6 +55,21 @@ public class SubsystemRegistrationTests
         Assert.Equal(0, b.RegisterCalls);
     }
 
+    // Дубликат `Key` ловится без учёта регистра: `Key` — ключ секции конфигурации,
+    // а `IConfiguration` регистронезависим, и `Video` vs `video` для него одно и то же.
+    // Ординальное сравнение пропустило бы такую пару — две подсистемы легли бы в одну
+    // секцию и затёрли друг друга непредсказуемо.
+    [Fact]
+    public void AddSubsystems_Throws_OnDuplicateKey_DifferentCase()
+    {
+        var (services, config) = NewHost();
+        var a = new FakeSubsystem("video");
+        var b = new FakeSubsystem("Video");
+
+        Assert.Throws<ArgumentException>(() =>
+            services.AddSubsystems(config, a, b));
+    }
+
     // null/пустой Key ловим явно: иначе `HashSet.Add(null)` падает с NRE внутри
     // таблицы, а две подсистемы с пустым ключом дают ту же ошибку "дубликат Key=''"
     // без отличия смыслового конфликта от недозаполненности.

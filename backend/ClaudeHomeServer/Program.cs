@@ -11,7 +11,6 @@ using ClaudeHomeServer.Services.Deploy;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
-using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
@@ -221,10 +220,10 @@ builder.Services.AddSingleton<SubscriptionOAuthUsageService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
-// Генерация картинок (иконка проекта, аватар персоны): драйверы fal/glif, настройка по
-// местам, роутер и догоняющая генерация. FalImageService регистрируется внутри как драйвер —
+// Генерация картинок (иконка проекта, аватар персоны, фон проекта) — подключается
+// подсистемой ImagesSubsystem вместе с прочими внутренними разделами ниже
+// (`AddSubsystems(...)`). FalImageService регистрируется внутри как драйвер —
 // отдельный AddSingleton дал бы второй экземпляр того же типа.
-builder.Services.AddImageGeneration();
 // Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
@@ -569,7 +568,8 @@ builder.Services.AddHttpClient("safe-download")
 builder.Services.AddSubsystems(builder.Configuration,
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
-    new ClaudeHomeServer.Services.Reader.ReaderSubsystem());
+    new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
+    new ClaudeHomeServer.Services.Images.ImagesSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

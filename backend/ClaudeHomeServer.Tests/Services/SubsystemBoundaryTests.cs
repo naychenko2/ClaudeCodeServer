@@ -104,6 +104,36 @@ public class SubsystemBoundaryTests
                     })
                     .ToArray()),
         },
+        // Images — вертикаль генерации картинок. Граница расширена под корень
+        // `ClaudeHomeServer.Services` ради трёх осознанных исключений (как и Reader):
+        // 1) `PersonaManager` (Services/ корень) — догоняющая генерация аватара
+        //    триггерится из карточки персоны; это сознательная зависимость от
+        //    «спинки» (доменная модель пользователей и персон);
+        // 2) `ImageAssetHelper` (Services/ корень) — общая инфраструктура работы
+        //    с ассетами картинок, используется и другими разделами; в подсистему
+        //    не переезжает;
+        // 3) `FalImageService` (Services/ корень) — драйвер, который не переезжает
+        //    из корня, чтобы не ломать namespace у существующих вызывающих.
+        // Префикс `ClaudeHomeServer.Services` покрывает все три.
+        // `ClaudeHomeServer.Hubs` — нужен `IHubContext<SessionHub>` (событие
+        // `image_backfilled` едет в ленту персоны).
+        // `ClaudeHomeServer.Protocol` — тип сообщения `ImageBackfilledMessage`
+        // наследует `ServerMessage` из общего протокола WS-событий.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Images",
+                "ClaudeHomeServer.Services.Images",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Images",
+                        "ClaudeHomeServer.Services",
+                        "ClaudeHomeServer.Hubs",
+                        "ClaudeHomeServer.Protocol",
+                    })
+                    .ToArray()),
+        },
     };
 
     [Theory]

@@ -564,8 +564,9 @@ public class TaskManagerTests : IDisposable
     [Fact]
     public void Create_ДефектВReviewКолонкеБезШагов_Отклонена()
     {
+        var reviewCol = new BoardColumn { Role = "review" };
         var act = () => _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect),
-            targetIsReview: true);
+            targetColumn: reviewCol);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Repro.Steps*");
@@ -574,9 +575,10 @@ public class TaskManagerTests : IDisposable
     [Fact]
     public void Create_ДефектВReviewКолонкеСШагами_Проходит()
     {
+        var reviewCol = new BoardColumn { Role = "review" };
         var task = _sut.Create(null, "u", new CreateTaskRequest("баг",
             Kind: TaskKind.Defect, Repro: new DefectRepro { Steps = "1. Открыть" }),
-            targetIsReview: true);
+            targetColumn: reviewCol);
 
         task.Repro!.Steps.Should().Be("1. Открыть");
     }
@@ -585,7 +587,8 @@ public class TaskManagerTests : IDisposable
     public void Create_ОбычнаяЗадачаВReviewБезШагов_НеЗадета()
     {
         // Правило EnsureReproOnReview касается только Kind == Defect
-        var task = _sut.Create(null, "u", new CreateTaskRequest("t"), targetIsReview: true);
+        var reviewCol = new BoardColumn { Role = "review" };
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"), targetColumn: reviewCol);
 
         task.Kind.Should().Be(TaskKind.Task);
     }
@@ -654,8 +657,9 @@ public class TaskManagerTests : IDisposable
     {
         var task = _sut.Create(null, "u", new CreateTaskRequest("баг", Kind: TaskKind.Defect));
 
+        var reviewCol = new BoardColumn { Role = "review" };
         var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"),
-            targetIsReview: true);
+            effectiveColumn: reviewCol);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Repro.Steps*");

@@ -31,10 +31,11 @@ public static class DefectRules
 
     // 2) Отказ при переводе дефекта в Done без Verification. Инвариант закрытого
     // дефекта — дизъюнкция: Status == Done ⇒ Verification != null ИЛИ
-    // Outcome == ClosedWithoutCheck. Если закрываем обычным путём (не ClosedWithoutCheck),
-    // Verification обязан содержать осмысленный Notes — пустая или пробельная строка
-    // эквивалентна отсутствию вердикта (иначе {notes: ""} проходил бы как валидная
-    // проверка и закрывал дефект мимо сути «что проверили»).
+    // Outcome == ClosedWithoutCheck. Verification обязан содержать осмысленный Notes —
+    // null и whitespace эквивалентны отсутствию вердикта (паспорт 432b6de2; иначе
+    // {notes: ""} или {verification: {}} проходили бы как валидная проверка и
+    // закрывали дефект мимо сути «что проверили»). VerifiedAt — лишь метка времени,
+    // её одной для гейта недостаточно.
     public static void EnsureVerificationOnClose(TaskItem task)
     {
         if (task.Kind != TaskKind.Defect) return;
@@ -46,17 +47,10 @@ public static class DefectRules
             "либо используйте внутренний путь ClosedWithoutCheck.");
     }
 
-    // Notes считается содержательным, только если строка непустая и не из одних пробелов.
-    // null Notes допустим — Verification может прийти только с VerifiedAt (контроллер
-    // проставляет его сам из X-Caller-Session-Id) без явного комментария проверяющего:
-    // в этом случае решение о закрытии уже принято человеком/персоной, и пустой комментарий
-    // гейт не блокирует.
-    private static bool HasMeaningfulNotes(TaskVerification? verification)
-    {
-        if (verification is null) return false;
-        if (verification.Notes is null) return true;
-        return !string.IsNullOrWhiteSpace(verification.Notes);
-    }
+    // Вердикт содержателен, только если Verification существует и его Notes — непустая
+    // строка без одних лишь пробелов. null/whitespace Notes — не вердикт: паспорт 432b6de2.
+    private static bool HasMeaningfulNotes(TaskVerification? verification) =>
+        verification is not null && !string.IsNullOrWhiteSpace(verification.Notes);
 
     // 3) Отказ при попадании дефекта в колонку с Role == "review" без заполненных
     // Repro.Steps. Колонка ревью предполагает, что наблюдатель передаёт дефект

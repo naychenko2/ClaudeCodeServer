@@ -320,7 +320,9 @@ builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<PromptSnapshotStore>();
 builder.Services.AddSingleton<PromptAuditService>();
-builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
+// WorkspaceKnowledgeStore — DI в подсистеме `KnowledgeSubsystem`
+// (волна 3, шаг 3): миграция из старых Project-записей — отдельный блок
+// PostConfigure ниже (см. ограничения в шапке KnowledgeSubsystem.cs).
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
@@ -384,8 +386,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.PersonasCrudService>();
 // Чаты (фаза 2, волна 3): оркестрация chats_send/chats_report_up — общая для REST и wsp-тулсета
 builder.Services.AddSingleton<ClaudeHomeServer.Services.SessionMessagingService>();
-// Знания (фаза 2, волна 3): каталог баз Dify под пользователя — общий для REST и wsp-тулсета
-builder.Services.AddSingleton<ClaudeHomeServer.Services.KnowledgeBaseCatalogService>();
+// Знания (фаза 2, волна 3): каталог баз Dify под пользователя — общий для REST и wsp-тулсета.
+// Регистрация `KnowledgeBaseCatalogService` переехала в `KnowledgeSubsystem` (волна 3,
+// шаг 3 — выделение подсистемы Knowledge).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.PersonasToolset>();
 // Волна 3 (ADR-012): рабочее пространство, граф кода и уведомления
@@ -553,6 +556,12 @@ builder.Services.AddSubsystems(builder.Configuration,
     // учитывает; порядок здесь — очередь старта IHostedService и читаемость
     // (нижние слои раньше).
     new ClaudeHomeServer.Services.Dossiers.DossiersSubsystem(),
+    // Knowledge — после Dossiers: вертикаль Dify RAG (Knowledge.md + ADR-013).
+    // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, ...}` остаются в
+    // Program.cs (кросс-вертикальный клей), поэтому KnowledgeSubsystem не зависит
+    // от Dossiers/Knowledge напрямую; миграция WorkspaceKnowledgeStore из Project —
+    // отдельный пост-билд блок ниже, чтобы не словить construct до PostRestoreHook.
+    new ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem(),
     new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
@@ -566,11 +575,8 @@ builder.Services.AddSubsystems(builder.Configuration,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
 // со стектрейсом; см. Services/Http/QuietHttpLogger.
-builder.Services.AddQuietHttpClient("dify", new QuietHttpClientProfile(
-    Category: "ClaudeHomeServer.Knowledge.Dify",
-    Subject: "базой знаний Dify",
-    Consequence: "Семантический поиск по заметкам и знаниям не работает."))
-    .WithoutEgressProxy();
+// HTTP-клиент `dify` зарегистрирован внутри KnowledgeSubsystem (волна 3, шаг 3): Dify —
+// локальный сервис, и `WithoutEgressProxy` обязателен (инвариант, как у Forgejo).
 // Forgejo — клиент локального Git-сервера: зарегистрирован внутри GitSubsystem
 // (Forgejo — локальный сервис, `WithoutEgressProxy` обязателен).
 builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
@@ -667,16 +673,17 @@ builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvid
 // LLM-канал модулей (контракт §10): лимит конкурентности per-модуль + учёт вызовов R13
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.HostLlmConcurrencyLimiter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageStore>();
-builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
-builder.Services.AddSingleton<KnowledgeService>();
-// Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
-// (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)
-builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
-builder.Services.AddGatedHostedService<ProjectKnowledgeTurnSync>(builder.Configuration);
-// Каскадная уборка знаний при удалении пользователя (UsersController)
-builder.Services.AddSingleton<UserKnowledgeCascade>();
+// Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
+// мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
+// KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`
+// (волна 3, шаг 3). Миграция `WorkspaceKnowledgeStore.MigrateFromProjects` тоже
+// остаётся отдельным пост-билд блоком (строка ~ниже) — см. ограничения в шапке
+// KnowledgeSubsystem.cs.
 // Участники реконсайлера error-документов Dify: пять владельцев локальных сторов
-// «запись → {DocId, Hash}» (форвард на существующие singleton'ы, не новые экземпляры)
+// «запись → {DocId, Hash}» (форвард на существующие singleton'ы, не новые экземпляры).
+// Остаются в композиционном корне сознательно — кросс-вертикальный клей, не собственность
+// Knowledge: перенос в KnowledgeSubsystem дал бы ей прямые ссылки на DossierStore и
+// прочие чужие вертикали.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<PersonaMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
@@ -687,12 +694,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
     sp => sp.GetRequiredService<NotesKnowledgeService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
-// Реконсайлер error-документов Dify (Dify:Reconcile, дефолт Mode=off — dark launch):
-// singleton + hosted, чтобы снапшот состояния был доступен видимости (шаг 4)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeAlertNotifier,
-    ClaudeHomeServer.Services.Knowledge.KnowledgeAlertNotifier>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>();
-builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
 // Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная

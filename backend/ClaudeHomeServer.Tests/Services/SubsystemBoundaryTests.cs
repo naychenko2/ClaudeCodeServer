@@ -494,6 +494,45 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.StoredMessage",
                 }),
         },
+        // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Сторож проверяет
+        // только типы из `Services.Knowledge` (KnowledgeAlertNotifier, KnowledgeIndexReconciler,
+        // IKnowledgeSyncParticipant/KnowledgeSyncTarget) — `KnowledgeService`/`WorkspaceKnowledgeStore`
+        // /`KnowledgeBaseCatalogService`/`ProjectKnowledgeSyncService`/`UserKnowledgeCascade` живут
+        // в КОРНЕ `ClaudeHomeServer.Services` и этой записью НЕ покрываются (это сознательное
+        // ограничение: чтобы перенести их в `Services.Knowledge` и закрыть проверкой, нужен
+        // отдельный шаг с переименованием namespace и правкой всех импортов; см. шапку
+        // KnowledgeSubsystem.cs).
+        // Допуски:
+        // 1) `NotificationService` (Services/ корень) — `KnowledgeAlertNotifier` шлёт алерт
+        //    владельцу через общий нотификатор (KnowledgeAlertNotifier.cs:23-24), это
+        //    «вертикаль → спинка» (общая инфраструктура, как у Git/Tts/Images/Reader).
+        // 2) `NotificationStore` (Services/ корень) — там же, для чтения `LastNotifiedAtAsync`.
+        // 3) `KnowledgeService` (Services/ корень) — клиент Dify, `KnowledgeIndexReconciler`
+        //    вызывает `ListAllDocumentsAsync` (KnowledgeIndexReconciler.cs:225). До переноса
+        //    `KnowledgeService` в `Services.Knowledge` тип живёт в корне.
+        // 4) `DifyDocumentItem`/`DifyDocumentsPage` (Services/ корень) — возвращаемые типы
+        //    `KnowledgeService.ListAllDocumentsAsync`, материализуются в полях async-state-машины
+        //    `KnowledgeIndexReconciler+<ProcessTargetAsync>d__29` и в лямбде `<>c`.
+        // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, NotesKnowledgeService,
+        // ProjectKnowledgeSyncService, ...}` остаются в Program.cs (кросс-вертикальный клей)
+        // и поэтому НЕ входят в allow-list Knowledge.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Knowledge",
+                "ClaudeHomeServer.Services.Knowledge",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Knowledge" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.NotificationService",
+                    "ClaudeHomeServer.Services.NotificationStore",
+                    "ClaudeHomeServer.Services.KnowledgeService",
+                    "ClaudeHomeServer.Services.DifyDocumentItem",
+                    "ClaudeHomeServer.Services.DifyDocumentsPage",
+                }),
+        },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
         // `IAppSubsystem` (подаётся в Program.cs как обычные `AddSingleton`/
         // `AddHostedService`), поэтому попадает в таблицу вручную — зато сторож

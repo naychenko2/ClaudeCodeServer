@@ -272,6 +272,64 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.NotificationService",
                 }),
         },
+        // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
+        // Допуски:
+        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода модели,
+        //    который генерирует JSON с фигурами (префикс-шов, как у `Git`/`Deploy`).
+        // 2) Допуски к корню Services — точные: `ProjectManager` (запись фона и флаг
+        //    `Background` в доменной модели проекта), `UserStore` (перечень владельцев
+        //    для массового прогона `RunAllAsync` в `ProjectBackgroundBackfill`).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Backgrounds",
+                "ClaudeHomeServer.Services.Backgrounds",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Backgrounds",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                }),
+        },
+        // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
+        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
+        //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
+        // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
+        //    флаг `Icon.Glyph` в доменной модели проекта). `BackupCore.Snapshot` /
+        //    `BackupContext.FromConfiguration` в `ProjectIconMigration` — статические
+        //    вызовы из тел методов; рефлексия стражей их НЕ видит (см. «Известное
+        //    ограничение»), выделение мьютекса бэкапа в шов — отдельная задача.
+        new object[]
+        {
+            new VerticalBoundary(
+                "ProjectIcons",
+                "ClaudeHomeServer.Services.ProjectIcons",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.ProjectIcons",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    // `BackupResult` (тип возврата `BackupCore.Snapshot` в `ProjectIconMigration.RunAsync`)
+                    // — поле async-state-машины `<RunAsync>d__9`. Сам статический вызов
+                    // рефлексия НЕ видит (см. «Известное ограничение»), но возвращаемый
+                    // тип через `var backup = BackupCore.Snapshot(...)` материализуется
+                    // компилятором C# в поле state-машины. Точечный FullName, чтобы не
+                    // открывать вертикаль Backup целиком: миграция значков пользуется
+                    // инфраструктурным примитивом снятия снимка, а не логикой Backup.
+                    "ClaudeHomeServer.Services.Backup.BackupResult",
+                }),
+        },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
         // `IAppSubsystem` (подаётся в Program.cs как обычные `AddSingleton`/
         // `AddHostedService`), поэтому попадает в таблицу вручную — зато сторож

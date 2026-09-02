@@ -328,19 +328,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FallbackSettingsStor
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();
-// Фон рабочего пространства проекта: JSON от модели → собранный сервером SVG-тайл (ADR-008)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundService>();
-// Значок проекта: текстовый ход по названию → кандидаты (имена из набора lucide);
-// без состояния, синглтон как и остальные места модели
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService>();
-// Разовая миграция значков существующим проектам (ADR-009 §10): бэкап → прогон → удаление
-// растровых иконок; идемпотентна, при полностью мигрированном сторе старт — чистый no-op
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigration>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigrationService>(builder.Configuration);
-// Разовая генерация фонов существующим проектам на старте (ADR-008 §10):
-// прогон идемпотентен, повторный запуск ничего не перетирает
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfillService>(builder.Configuration);
+// Фон рабочего пространства проекта (ADR-008) и значок проекта (ADR-009) переехали
+// в подсистемы `BackgroundsSubsystem` / `ProjectIconsSubsystem` (волна 2 внутренних
+// подсистем): регистрации подключаются через `AddSubsystems(...)` ниже. Здесь остаются
+// только общие клиенты и конфигурация, нужные вне подсистем (HTTP-клиенты fal/glif —
+// общие с биллинг-сервисами, см. шапку `ImagesSubsystem`).
 // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
@@ -586,7 +578,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
     new ClaudeHomeServer.Services.Images.ImagesSubsystem(),
     new ClaudeHomeServer.Services.Tts.TtsSubsystem(),
-    new ClaudeHomeServer.Services.Deploy.DeploySubsystem());
+    new ClaudeHomeServer.Services.Deploy.DeploySubsystem(),
+    new ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem(),
+    new ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

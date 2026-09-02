@@ -1,5 +1,5 @@
 import { memo, useState, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -1727,9 +1727,58 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
 
-    case 'work_loop_stopped':
-      // Остановка цикла «до готово» — та же визуальная семья, что и «Ход остановлен
-      // пользователем»: текст готов с сервера (лимит/ошибка/ручной стоп), не пересобираем
+    case 'work_loop_stopped': {
+      // Остановка цикла «до готово» — вид зависит от причины (SessionManager.
+      // AddWorkLoopStoppedNoticeAsync шлёт reason ∈ manual|error|blocked|limit|
+      // waiting_timeout|stuck_reset|team_restart), текст готов с сервера, не пересобираем.
+      // manual (и технические stuck_reset/team_restart) — нейтральное ожидаемое действие,
+      // та же пилюля, что «Ход остановлен пользователем» (case 'interrupted')
+      if (item.reason === 'limit') {
+        // Мягкое предупреждение — не критично, но стоит проверить результат.
+        // Та же янтарная пилюля, что rate_limit/truncated
+        return (
+          <div style={{
+            alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
+            background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '7px 12px',
+            fontSize: 12.5, color: C.warningText, textAlign: 'center',
+          }}>
+            <AlertCircle size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+            <span>{item.text}</span>
+          </div>
+        );
+      }
+
+      if (item.reason === 'blocked' || item.reason === 'waiting_timeout') {
+        // Координатор сам встал и ждёт решения человека — не поломка, но требует внимания.
+        // Карточка на всю ширину (не пилюля-чип — длинный текст блокера, до ~300 символов,
+        // в чипе смотрелся бы криво), тот же потолок высоты со скроллом, что у case 'error'
+        const Icon = item.reason === 'blocked' ? Ban : Clock;
+        return (
+          <div style={{
+            background: C.infoBg, border: `1px solid ${C.info}`, borderRadius: 8, padding: '8px 12px',
+            fontSize: 13, color: C.info, display: 'flex', alignItems: 'flex-start', gap: 8,
+          }}>
+            <Icon size={13} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word', maxHeight: 180, overflow: 'auto' }}>{item.text}</span>
+          </div>
+        );
+      }
+
+      if (item.reason === 'error') {
+        // Ход цикла завершился ошибкой — та же карточка, что у обычной ошибки хода (case 'error'),
+        // без кнопки «Повторить»: цикл остановлен окончательно, повторять тут нечего
+        return (
+          <div style={{
+            background: C.dangerBg, borderRadius: 8, padding: '8px 12px',
+            fontSize: 13, color: C.dangerText, border: `1px solid ${C.dangerBorder}`,
+            display: 'flex', alignItems: 'flex-start', gap: 6,
+          }}>
+            <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word', maxHeight: 180, overflow: 'auto' }}>{item.text}</span>
+          </div>
+        );
+      }
+
       return (
         <div style={{
           alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
@@ -1740,6 +1789,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           <span>{item.text}</span>
         </div>
       );
+    }
 
     case 'truncated':
       return (

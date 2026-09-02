@@ -39,6 +39,13 @@ catch { /* нет консоли/права — не критично, оста�
 // «сирот» по pid-файлу, а он общий с работающим сервером.
 if (ClaudeHomeServer.Services.Backup.BackupCli.TryHandle(args)) return;
 
+// ADR-015 §8 этап 2: dryRun-прогон синка профилей. Работает без поднятого веб-приложения:
+// обходит подпапки _profilesDir, делает усыновление (если манифеста нет) и считает
+// "удалил бы" по mirror-зонам. Удалений не производит — только печатает сводку.
+// Рубильник Claude:ProfileSync:Mirror (off | dryRun | on) управляет поведением;
+// в dryRun запускать через env-переменную Claude__ProfileSync__Mirror=dryRun.
+if (ClaudeHomeServer.Services.Llm.ProfileSyncCli.TryHandle(args)) return;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Локальные машинно-специфичные переопределения (пути, URL, секреты).

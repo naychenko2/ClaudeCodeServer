@@ -37,7 +37,17 @@ public class LlmProviderRegistry
         _profilesDir = Path.Combine(dataDir, "claude-profiles");
         _userProfileDir = config["ClaudeUserProfileDir"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        // Корень поставки (claude-defaults). Тестам нужен собственный, чтобы воспроизвести
+        // fail-safe «нет поставки → зона выключена»; у остальных — AppContext.BaseDirectory/claude-defaults.
+        _defaultsRoot = config["Claude:DefaultsRoot"]
+            ?? Path.Combine(AppContext.BaseDirectory, "claude-defaults");
         _inheritSystemEnv = config.GetValue("Claude:InheritSystemEnv", false);
+        // ADR-015 §1/§8: рубильник зеркала — off | dryRun | on. Дефолт off; в этой задаче
+        // включаем не дальше dryRun. Удаления (`on`) — отдельный этап с корзиной.
+        _mirrorMode = config.GetValue("Claude:ProfileSync:Mirror", ProfileMirrorMode.Off);
+        // Корзина синка — рядом с data/, вне claude-profiles (ADR-015 §5.3). Здесь же
+        // инициализируется, чтобы путь был единым и у NormalizeAll, и у тестов.
+        _trashStore = new SyncTrashStore(Path.Combine(dataDir, SyncTrashStore.RootDirName));
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
@@ -321,6 +331,18 @@ public class LlmProviderRegistry
     private static readonly TimeSpan SyncTtl = TimeSpan.FromMinutes(5);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastSync = new();
 
+    // ADR-015: режим зеркала (off по умолчанию). В этой задаче включаем не дальше dryRun.
+    private readonly ProfileMirrorMode _mirrorMode;
+
+    // Корзина синка профилей (ADR-015 §5.3). Все удаления в режиме on идут через неё.
+    private readonly SyncTrashStore _trashStore;
+
+    internal SyncTrashStore TrashStore => _trashStore;
+
+    // Корень поставки claude-defaults (по ADR-015 §3 fail-safe). Дефолт — рядом с exe;
+    // тесты подставляют свой, чтобы воспроизвести отсутствие поставки.
+    private readonly string _defaultsRoot;
+
     // Для тестов и подписок: читают адрес профиля
     public string GetProfileDir(string key) => Path.Combine(_profilesDir, key);
 
@@ -342,13 +364,25 @@ public class LlmProviderRegistry
     }
 
     // Копирует общие настройки из ~/.claude в профиль провайдера (только новее по mtime —
-    // дешёвый инкрементальный синк на каждый ход с троттлингом)
+    // дешёвый инкрементальный синк на каждый ход с троттлингом). Дополнительно ведёт
+    // .sync-manifest.json (ADR-015 §3): для каждого доставленного файла заносится запись
+    // {отн.путь, зона, источник, размер, mtime}. Только host-источник; defaults-файлы
+    // (поставка) заносятся в SeedDefaultWorkflows.
     private void SyncUserProfile(string profileDir)
     {
         if (!Directory.Exists(_userProfileDir)) return;
 
+        var manifest = ProfileSyncManifestStore.LoadOrEmpty(profileDir);
+        var delivered = 0;
+
         foreach (var name in SyncFiles)
-            CopyIfNewer(Path.Combine(_userProfileDir, name), Path.Combine(profileDir, name));
+        {
+            if (CopyAndRecord(
+                    Path.Combine(_userProfileDir, name),
+                    Path.Combine(profileDir, name),
+                    profileDir, name, "host", manifest))
+                delivered++;
+        }
 
         MergeSettingsInto(
             Path.Combine(_userProfileDir, "settings.json"),
@@ -363,12 +397,328 @@ public class LlmProviderRegistry
                 var rel = Path.GetRelativePath(_userProfileDir, src);
                 // .git клонов marketplace в plugins/ — десятки тысяч объектов, CLI они не нужны
                 if (rel.Split('\\', '/').Contains(".git")) continue;
-                CopyIfNewer(src, Path.Combine(profileDir, rel));
+                if (CopyAndRecord(src, Path.Combine(profileDir, rel), profileDir, sub, "host", manifest))
+                    delivered++;
             }
         }
 
-        SeedDefaultWorkflows(profileDir);
+        var seededCount = SeedDefaultWorkflows(profileDir, manifest);
         EnsureInstalledPluginsEnabled(profileDir);
+
+        if (delivered > 0 || seededCount > 0)
+            ProfileSyncManifestStore.Save(profileDir, manifest);
+
+        Console.WriteLine($"[ProfileSync] {Path.GetFileName(profileDir)}: доставлено={delivered}, seed из поставки={seededCount}");
+    }
+
+    // Копирует src→dst, если источник новее, и при успехе заносит/обновляет запись в манифесте.
+    // Возвращает true, если файл был доставлен (скопирован) в этом вызове.
+    private static bool CopyAndRecord(string src, string dst, string profileDir, string zone, string source,
+        ProfileSyncManifest manifest)
+    {
+        try
+        {
+            if (!File.Exists(src)) return false;
+            if (File.Exists(dst) && File.GetLastWriteTimeUtc(src) <= File.GetLastWriteTimeUtc(dst)) return false;
+            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.Copy(src, dst, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Синк настройки {src} → {dst} не удался: {ex.Message}");
+            return false;
+        }
+
+        try
+        {
+            var info = new FileInfo(dst);
+            var rel = MakeManifestKey(profileDir, dst);
+            manifest.Files[rel] = new ProfileSyncEntry
+            {
+                Zone = zone,
+                Source = source,
+                Size = info.Length,
+                Mtime = info.LastWriteTimeUtc,
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProfileSync] Запись манифеста для {dst} не удалась: {ex.Message}");
+        }
+        return true;
+    }
+
+    // Относительный путь от корня профиля через "/". Path.GetRelativePath на Linux
+    // чувствителен к регистру — а у нас ключи без учёта регистра; через "/"
+    // получаем кросс-платформенный канонический вид.
+    private static string MakeManifestKey(string profileDir, string fullPath) =>
+        Path.GetRelativePath(profileDir, fullPath).Replace('\\', '/');
+
+    // Зоны mirror без поставки — источник всегда host (~/.claude).
+    // Для них fail-safe не применяется.
+    private static readonly string[] MirrorDirs = ["rules", "commands", "agents"];
+
+    // Зеркальные зоны с двумя источниками: defaults + host. По ADR-015 §3 файл,
+    // принадлежащий поставке (source="defaults"), не считается кандидатом на удаление
+    // даже при отсутствии в host-источнике. Fail-safe: нет claude-defaults/{зона}
+    // (дев-стенд из bin/Debug) → вся зона выключается на этом проходе, иначе мы бы
+    // удалили default-файлы, которых seed не вернёт.
+    // В этой задаче `skills` пропускается в расчёте выводов целиком (ADR-015 §9.1 — открытый
+    // вопрос владельца каталога). `workflows` считается штатно.
+    private static readonly string[] SeedMirrorDirs = ["skills", "workflows"];
+
+    // ─── ADR-015 §5.4: триггер нормализации ────────────────────────────────────
+    // Обход всех подпапок _profilesDir. На ходе профиля SyncUserProfile пишет только
+    // то, что доставил сейчас; openrouter без обхода _profilesDir не вылечится никогда.
+    // Что делает:
+    //   1. Усыновление — если манифеста нет, текущий состав mirror-зон заносится
+    //      в манифест (ADR-015 §5.1). Один проход на профиль, дальше — инкрементально.
+    //   2. Mirror-расчёт — для каждого пути из манифеста проверяет три условия §3:
+    //      (1) путь в манифесте; (2) в источнике больше нет; (3) в профиле не изменился
+    //      (size+mtime == манифесту). Только в dryRun/on; в режиме off — только
+    //      усыновление и выход.
+    //   3. В dryRun — без записи (только отчёт). В on — реальное удаление по манифесту.
+    public List<ProfileMirrorReport> NormalizeAll()
+    {
+        var reports = new List<ProfileMirrorReport>();
+        if (!Directory.Exists(_profilesDir))
+        {
+            Console.WriteLine($"[ProfileSync] Нет каталога профилей {_profilesDir}");
+            return reports;
+        }
+
+        // Уборка корзины — один раз за проход, а не на каждом профиле: ретенция общая.
+        var purged = _trashStore.PurgeOld(DateTime.UtcNow - SyncTrashStore.Retention);
+        if (purged > 0)
+            Console.WriteLine($"[ProfileSync] Корзина {_trashStore.RootPath}: убрано {purged} устаревших проходов (>{SyncTrashStore.Retention.TotalDays:F0}д)");
+
+        foreach (var profileDir in Directory.GetDirectories(_profilesDir))
+        {
+            try { reports.Add(NormalizeOneProfile(profileDir)); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ProfileSync] Нормализация {profileDir} не удалась: {ex.Message}");
+            }
+        }
+        return reports;
+    }
+
+    private ProfileMirrorReport NormalizeOneProfile(string profileDir)
+    {
+        var name = Path.GetFileName(profileDir);
+        var report = new ProfileMirrorReport { Profile = name };
+        var manifest = ProfileSyncManifestStore.LoadOrEmpty(profileDir);
+
+        // 1. Усыновление: пустой манифест — заносим текущий состав mirror-зон профиля.
+        var adopted = false;
+        if (manifest.Files.Count == 0)
+        {
+            AdoptProfileFiles(profileDir, manifest);
+            ProfileSyncManifestStore.Save(profileDir, manifest);
+            adopted = true;
+        }
+
+        if (_mirrorMode == ProfileMirrorMode.Off)
+        {
+            // В режиме off — только усыновление, без зеркального расчёта.
+            if (adopted)
+                Console.WriteLine($"[ProfileSync] {name}: усыновление {manifest.Files.Count} файлов (mirror=off, расчёт пропущен)");
+            return report;
+        }
+
+        // 2. Зеркальный расчёт.
+        var manifestSizeBefore = manifest.Files.Count;
+        CalculateMirrorDivergence(profileDir, manifest, report);
+
+        // В dryRun ничего реально не меняется; в on — удалённые файлы вычищаются из манифеста.
+        var dirty = _mirrorMode == ProfileMirrorMode.On
+                    || manifest.Files.Count != manifestSizeBefore;
+        if (dirty) ProfileSyncManifestStore.Save(profileDir, manifest);
+
+        PrintSummary(name, report, adopted);
+        return report;
+    }
+
+    // Усыновление: обходим mirror-зоны профиля и заносим все существующие файлы
+    // в манифест как «принесённые синком». Source: «defaults» если файл лежит в
+    // claude-defaults/{зона}/{тот же путь}, иначе «host». plugins/ и прочие
+    // hands-off зоны не трогаем — там территория CLI.
+    private void AdoptProfileFiles(string profileDir, ProfileSyncManifest manifest)
+    {
+        var zones = new (string zone, bool isFile)[]
+        {
+            ("CLAUDE.md", true),
+            ("rules", false),
+            ("commands", false),
+            ("agents", false),
+            ("skills", false),
+            ("workflows", false),
+        };
+
+        // Снимок путей, принадлежащих поставке, для разметки source=defaults.
+        var defaultsKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var z in zones)
+        {
+            if (z.isFile) continue;
+            var dDir = Path.Combine(_defaultsRoot, z.zone);
+            if (!Directory.Exists(dDir)) continue;
+            foreach (var f in Directory.EnumerateFiles(dDir, "*", SearchOption.AllDirectories))
+            {
+                var rel = MakeManifestKey(dDir, f);
+                defaultsKeys.Add(z.zone + "/" + rel);
+            }
+        }
+
+        foreach (var (zone, isFile) in zones)
+        {
+            var profilePath = Path.Combine(profileDir, zone);
+            if (isFile)
+            {
+                if (!File.Exists(profilePath)) continue;
+                AddAdoptedEntry(profileDir, manifest, zone, profilePath, "host");
+            }
+            else
+            {
+                if (!Directory.Exists(profilePath)) continue;
+                foreach (var f in Directory.EnumerateFiles(profilePath, "*", SearchOption.AllDirectories))
+                {
+                    if (f.Split('\\', '/').Contains(".git")) continue;
+                    var rel = MakeManifestKey(profileDir, f);
+                    var source = defaultsKeys.Contains(rel) ? "defaults" : "host";
+                    AddAdoptedEntry(profileDir, manifest, zone, f, source);
+                }
+            }
+        }
+    }
+
+    private static void AddAdoptedEntry(string profileDir, ProfileSyncManifest manifest, string zone,
+        string fullPath, string source)
+    {
+        try
+        {
+            var info = new FileInfo(fullPath);
+            var rel = MakeManifestKey(profileDir, fullPath);
+            manifest.Files[rel] = new ProfileSyncEntry
+            {
+                Zone = zone,
+                Source = source,
+                Size = info.Length,
+                Mtime = info.LastWriteTimeUtc,
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProfileSync] Усыновление {fullPath} не удалось: {ex.Message}");
+        }
+    }
+
+    // Зеркальный расчёт. В dryRun — без записи; в on — реальное удаление.
+    private void CalculateMirrorDivergence(string profileDir, ProfileSyncManifest manifest,
+        ProfileMirrorReport report)
+    {
+        var skippedDueToFailsafe = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var seedZone in SeedMirrorDirs)
+        {
+            var dDir = Path.Combine(_defaultsRoot, seedZone);
+            if (!Directory.Exists(dDir))
+                skippedDueToFailsafe.Add(seedZone);
+        }
+
+        var toDelete = new List<string>();
+        var toPruneFromManifest = new List<string>();
+
+        foreach (var (rel, entry) in manifest.Files.ToArray())
+        {
+            // Skills пропускаем в этой задаче — ADR-015 §9.1 владелец открыт.
+            if (entry.Zone == "skills") continue;
+
+            // Только mirror-зоны (CLAUDE.md, rules, commands, agents, workflows).
+            // plugins/projects/sessions/settings.json — hands-off, в манифесте их нет.
+            var isMirror = entry.Zone == "CLAUDE.md"
+                          || MirrorDirs.Contains(entry.Zone)
+                          || entry.Zone == "workflows";
+            if (!isMirror) continue;
+
+            // defaults-файлы принадлежат поставке — никогда не удалять (ADR-015 §3).
+            if (entry.Source == "defaults") continue;
+
+            // Fail-safe: для seed-mirror-зон без claude-defaults/{зона} — пропустить.
+            if (SeedMirrorDirs.Contains(entry.Zone) && skippedDueToFailsafe.Contains(entry.Zone))
+            {
+                if (!report.SkippedZones.Contains(entry.Zone))
+                    report.SkippedZones.Add(entry.Zone);
+                continue;
+            }
+
+            // (2) В источнике больше нет?
+            var srcPath = Path.Combine(_userProfileDir, rel);
+            if (File.Exists(srcPath)) continue;
+
+            // Файла в источнике нет. Проверяем профиль и условие (3).
+            var dstPath = Path.Combine(profileDir, rel);
+            if (!File.Exists(dstPath))
+            {
+                // В профиле тоже нет — по факту уже удалён. вычищаем запись из манифеста,
+                // чтобы следующий проход не считал его divergent.
+                toPruneFromManifest.Add(rel);
+                continue;
+            }
+
+            var info = new FileInfo(dstPath);
+            if (info.Length != entry.Size || info.LastWriteTimeUtc != entry.Mtime)
+            {
+                // (3) нарушено — ручная правка в профиле. Не удалять, в WARN.
+                report.Divergent.Add(rel);
+                continue;
+            }
+
+            // Все три условия: путь в манифесте; в источнике нет; профиль не менялся.
+            toDelete.Add(rel);
+        }
+
+        // В режиме on — реальное удаление; в dryRun — только список «удалил бы».
+        if (_mirrorMode == ProfileMirrorMode.On)
+        {
+            var stamp = DateTime.UtcNow;
+            var profileName = Path.GetFileName(profileDir);
+            foreach (var rel in toDelete)
+            {
+                var dstPath = Path.Combine(profileDir, rel);
+                // Сначала переносим в корзину; если перенос не удался — НЕ удаляем
+                // из профиля и НЕ убираем из манифеста (следующий проход попробует снова).
+                if (!_trashStore.Move(profileName, profileDir, rel, stamp))
+                    continue;
+                try
+                {
+                    File.Delete(dstPath);
+                }
+                catch (Exception ex)
+                {
+                    // Копия в корзине уже есть, из профиля убрать не смогли — оставляем
+                    // оба места, в манифесте НЕ убираем: следующий проход повторит попытку.
+                    Console.Error.WriteLine($"[ProfileSync] Удаление {dstPath} после переноса в корзину не удалось: {ex.Message}");
+                    continue;
+                }
+                toPruneFromManifest.Add(rel);
+                report.Trashed.Add(rel);
+            }
+        }
+        report.WouldDelete.AddRange(toDelete);
+
+        // Чистим манифест от записей, чьих файлов уже нет (удалили в on, или были удалены снаружи).
+        foreach (var rel in toPruneFromManifest)
+            manifest.Files.Remove(rel);
+    }
+
+    private void PrintSummary(string profile, ProfileMirrorReport report, bool adopted)
+    {
+        var tag = adopted ? "усыновлён " : "";
+        // В on-сводке виден и счётчик «унесено в корзину» — без него пришлось бы
+        // сверять WouldDelete с реальным удалением через лог.
+        Console.WriteLine(
+            $"[ProfileSync] {profile} {tag}: wouldDelete={report.WouldDelete.Count} " +
+            $"trashed={report.Trashed.Count} divergent={report.Divergent.Count} " +
+            $"skippedZones=[{string.Join(",", report.SkippedZones)}]");
     }
 
     // Встроенные механики «Обсудить с командой» (панель экспертов, командный спринт,
@@ -379,22 +729,50 @@ public class LlmProviderRegistry
     // управляющие символы C1, а CLI отбивает такой скрипт («script contains control characters»).
     // Источник истины — claude-defaults; перезаписываются только одноимённые файлы,
     // личные workflow-скрипты владельца (другие имена) остаются нетронутыми.
-    private static void SeedDefaultWorkflows(string profileDir)
+    //
+    // Если передан манифест, заносим defaults-файлы в него с source="defaults" — иначе
+    // mirror-расчёт (ADR-015 §3) мог бы счесть их «удалил бы»: они же не в ~/.claude.
+    private int SeedDefaultWorkflows(string profileDir, ProfileSyncManifest? manifest)
     {
+        var count = 0;
         try
         {
-            var src = Path.Combine(AppContext.BaseDirectory, "claude-defaults", "workflows");
-            if (!Directory.Exists(src)) return;
+            var src = Path.Combine(_defaultsRoot, "workflows");
+            if (!Directory.Exists(src)) return 0;
 
             var target = Path.Combine(profileDir, "workflows");
             Directory.CreateDirectory(target);
             foreach (var file in Directory.GetFiles(src, "*.js"))
-                File.Copy(file, Path.Combine(target, Path.GetFileName(file)), overwrite: true);
+            {
+                var name = Path.GetFileName(file);
+                var dst = Path.Combine(target, name);
+                File.Copy(file, dst, overwrite: true);
+                count++;
+                if (manifest != null)
+                {
+                    try
+                    {
+                        var info = new FileInfo(dst);
+                        manifest.Files["workflows/" + name] = new ProfileSyncEntry
+                        {
+                            Zone = "workflows",
+                            Source = "defaults",
+                            Size = info.Length,
+                            Mtime = info.LastWriteTimeUtc,
+                        };
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ProfileSync] Запись defaults в манифест {dst} не удалась: {ex.Message}");
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[LlmProviders] Сидинг встроенных механик в {profileDir} не удался: {ex.Message}");
         }
+        return count;
     }
 
     // Плагины CLI, установленные владельцем, включаются профилю самим сервером. Раньше
@@ -440,21 +818,6 @@ public class LlmProviderRegistry
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[LlmProviders] Включение плагинов в профиле {profileDir} не удалось: {ex.Message}");
-        }
-    }
-
-    private static void CopyIfNewer(string src, string dst)
-    {
-        try
-        {
-            if (!File.Exists(src)) return;
-            if (File.Exists(dst) && File.GetLastWriteTimeUtc(src) <= File.GetLastWriteTimeUtc(dst)) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-            File.Copy(src, dst, overwrite: true);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[LlmProviders] Синк настройки {src} → {dst} не удался: {ex.Message}");
         }
     }
 

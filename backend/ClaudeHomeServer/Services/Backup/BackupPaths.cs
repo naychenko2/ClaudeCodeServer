@@ -55,6 +55,10 @@ public static class BackupPaths
         if (root.Equals("logs", StringComparison.OrdinalIgnoreCase)) return false;
         // Конфиги MCP на один ход и cwd one-shot вызовов — живут минуты
         if (root.Equals("sandbox-tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        // Корзина синка профилей (ADR-015 §5.3): мусорная зона с TTL, в облако ехать
+        // не должна и восстановлению из архива не подлежит. По ADR-015 восстановление
+        // архива = повторное усыновление, а не возврат .sync-trash.
+        if (root.Equals(Llm.SyncTrashStore.RootDirName, StringComparison.OrdinalIgnoreCase)) return false;
         // Последний известный статус MCP-серверов: наблюдение, а не настройка. Восстановленное
         // из архива, оно врёт — описывает состояние чужой машины в прошлом. Заново приедет
         // из первого же system/init (или пробы по кнопке).

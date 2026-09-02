@@ -548,4 +548,448 @@ public class LlmProviderRegistryTests
         // Маркер дефолта стабилен и совпадает с алиасом "default" из ClaudeCatalog
         LlmProviderRegistry.DefaultClaudeModel.Should().Be("default");
     }
+
+    // ─── ADR-015 §3: манифест доставки .sync-manifest.json ──────────────────────
+
+    // Хелпер: поднимает временный layout (host-профиль + профиль провайдера) и
+    // возвращает корни для теста. Усыновление/расчёт выполняются поверх.
+    private static (string tmp, string userDir, string profileDir, string defaultsDir) CreateSyncLayout(
+        Dictionary<string, string?>? extra = null)
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        var profileDir = Path.Combine(tmp, "data", "claude-profiles", "deepseek");
+        var defaultsDir = Path.Combine(tmp, "defaults");
+        Directory.CreateDirectory(userDir);
+        Directory.CreateDirectory(profileDir);
+        Directory.CreateDirectory(defaultsDir);
+        return (tmp, userDir, profileDir, defaultsDir);
+    }
+
+    private static LlmProviderRegistry CreateRegistry(
+        string userDir, string profileDir, string defaultsDir,
+        ProfileMirrorMode mode, Dictionary<string, string?>? extra = null)
+    {
+        // profileDir вида tmp/data/claude-profiles/deepseek. DataPath указываем на
+        // tmp/data/projects.json — Path.GetDirectoryName отдаст tmp/data, и
+        // _profilesDir соберётся как tmp/data/claude-profiles (та же папка, в которой
+        // лежит наш deepseek). Через GetFullPath нормализуем «..», иначе Directory.Exists
+        // по неразвёрнутому пути возвращает false на свежих .NET.
+        var dataPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(profileDir)!, "..", "projects.json"));
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:DisplayName"] = "DeepSeek",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+            ["LlmProviders:deepseek:Models:0:PriceInMissPer1M"] = "0.5",
+            ["LlmProviders:deepseek:Models:0:PriceInHitPer1M"] = "0.1",
+            ["LlmProviders:deepseek:Models:0:PriceOutPer1M"] = "1.0",
+            ["ClaudeUserProfileDir"] = userDir,
+            ["DataPath"] = dataPath,
+            ["Claude:DefaultsRoot"] = defaultsDir,
+            ["Claude:ProfileSync:Mirror"] = mode.ToString(),
+        };
+        foreach (var (k, v) in extra ?? []) settings[k] = v;
+        return new LlmProviderRegistry(TestConfig.Build(settings));
+    }
+
+    [Fact]
+    public void Синк_ЗаписываетМанифест_ДляКаждогоДоставленногоФайла()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            File.WriteAllText(Path.Combine(userDir, "CLAUDE.md"), "# host memory");
+            Directory.CreateDirectory(Path.Combine(userDir, "rules"));
+            File.WriteAllText(Path.Combine(userDir, "rules", "style.md"), "правила стиля");
+
+            var reg = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.Off);
+            reg.BuildCliEnv("deepseek-v4-pro");
+
+            // .sync-manifest.json создан и содержит обе записи с source=host
+            var manifestPath = Path.Combine(profileDir, ".sync-manifest.json");
+            File.Exists(manifestPath).Should().BeTrue();
+
+            var json = File.ReadAllText(manifestPath);
+            json.Should().Contain("\"CLAUDE.md\"");
+            json.Should().Contain("\"rules/style.md\"");
+            json.Should().Contain("\"source\": \"host\"");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DryRun_ИзменённыйФайлВПрофиле_НеПопадаетВWouldDelete_НоВDivergent()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            File.WriteAllText(Path.Combine(userDir, "CLAUDE.md"), "# host");
+            // Делаем host-файл старым, чтобы первый BuildCliEnv скопировал его в профиль
+            File.SetLastWriteTimeUtc(Path.Combine(userDir, "CLAUDE.md"), DateTime.UtcNow.AddMinutes(-10));
+
+            var reg = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.Off);
+            reg.BuildCliEnv("deepseek-v4-pro");
+
+            // Сценарий «расхождение»: host-источник удалён (mirror кандидат), но в профиле
+            // файл изменился — значит его правил человек (не синк). Условие 3 нарушено:
+            // профильный size/mtime больше не совпадают с манифестом → divergent, не удалять.
+            File.Delete(Path.Combine(userDir, "CLAUDE.md"));
+            var dst = Path.Combine(profileDir, "CLAUDE.md");
+            File.WriteAllText(dst, "# ручная правка в профиле");
+            File.SetLastWriteTimeUtc(dst, DateTime.UtcNow.AddDays(1));
+
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            var reports = regDry.NormalizeAll();
+            var report = reports.Single();
+            // Регистр ключа в манифесте зависит от ОС (на Windows Path.GetRelativePath
+            // иногда возвращает смешанный регистр: «claudE.md»). Сам манифест сравнивает
+            // case-insensitively — поэтому и ассерт case-insensitive.
+            report.WouldDelete.Should().NotContain(p => string.Equals(p, "CLAUDE.md", StringComparison.OrdinalIgnoreCase));
+            report.Divergent.Should().Contain(p => string.Equals(p, "CLAUDE.md", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DryRun_ПутьНеВМанифесте_НеПопадаетВWouldDelete()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            // В профиле лежит файл, но синк его туда не клал — в манифесте его нет.
+            // Если бы мы считали весь профиль, попало бы в WouldDelete «удалил бы».
+            Directory.CreateDirectory(Path.Combine(profileDir, "commands"));
+            File.WriteAllText(Path.Combine(profileDir, "commands", "extra.md"), "ручной файл");
+
+            // Без host-источника файлы commands не появятся в манифесте, потому что
+            // CopyIfNewer копирует только новее. После NormalizeAll — манифест остаётся
+            // пустым (усыновление подберёт только то, что лежит, без решений об удалении).
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            var reports = regDry.NormalizeAll();
+            // Усыновление занесло extra.md в манифест как host — тогда условие 1 выполнено.
+            // Условие 2: в источнике (host/commands/extra.md) файла нет. Условие 3: размер/mtime
+            // совпадают (только что записаны). Ожидаемо попадёт в WouldDelete.
+            // Это правильное поведение mirror — ручной файл, не принесённый синком, удалится.
+            // Но: задача говорит «путь, которого нет в манифесте, не попадает тоже».
+            // Чтобы воспроизвести случай «нет в манифесте», нужна ситуация, когда мы
+            // запустили NormalizeAll БЕЗ усыновления — то есть манифест уже существовал.
+            // Это сценарий бэкапа: манифест восстановлен, в нём только то, что синк приносил,
+            // а в профиле лежит мусор — он НЕ должен попасть в WouldDelete.
+            // Проверка: extra.md НЕ в WouldDelete, потому что его нет в манифесте.
+            // Дополнительно: ручной файл commands/extra.md лежит в профиле, манифест из усыновления
+            // его ЗАНЁС — это поведение зеркала по условиям ADR-015 §3: «путь в манифесте».
+            // Для теста нужна другая конфигурация — пустой манифест, ручной файл, источник пуст.
+            // Симулируем: положим манифест руками (только запись CLAUDE.md), commands/extra.md
+            // — лишнее, в WouldDelete не должно попасть.
+            File.Delete(Path.Combine(profileDir, ".sync-manifest.json"));
+            var manifest = new ProfileSyncManifest
+            {
+                Files = new Dictionary<string, ProfileSyncEntry>
+                {
+                    ["CLAUDE.md"] = new() { Zone = "CLAUDE.md", Source = "host", Size = 5, Mtime = DateTime.UtcNow },
+                },
+            };
+            // camelCase — формат ProfileSyncManifestStore; иначе LoadOrEmpty не прочтёт
+            // Files обратно (PascalCase) и следующий NormalizeAll сделает усыновление заново.
+            var opts = new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            };
+            File.WriteAllText(Path.Combine(profileDir, ".sync-manifest.json"),
+                System.Text.Json.JsonSerializer.Serialize(manifest, opts));
+
+            var reports2 = regDry.NormalizeAll();
+            reports2.Single().WouldDelete.Should().NotContain("commands/extra.md");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DryRun_FailSafe_БезDefaultsЗона_ИсключаетсяИзРасчёта()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            // defaults каталог пуст (без workflows) — зеркало workflows должно быть выключено.
+            // В профиле есть workflow-файл, которого нет в host — кандидат на удаление
+            // через нормальный mirror, но с fail-safe должен быть исключён.
+            Directory.CreateDirectory(Path.Combine(profileDir, "workflows"));
+            File.WriteAllText(Path.Combine(profileDir, "workflows", "phantom.js"), "// нет в host");
+
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            var reports = regDry.NormalizeAll();
+            var report = reports.Single();
+
+            // defaults/workflows нет → зона workflows в SkippedZones
+            report.SkippedZones.Should().Contain("workflows");
+            // phantom.js НЕ попал в WouldDelete (fail-safe отключил всю зону)
+            report.WouldDelete.Should().NotContain("workflows/phantom.js");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DryRun_SkillsНеСчитаются_ДажеЕслиИхНетВПоставке()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            // В профиле лежит skill, которого нет ни в host, ни в defaults.
+            // По задаче (§9.1 ADR открыт) skills/ не участвует в расчёте.
+            Directory.CreateDirectory(Path.Combine(profileDir, "skills", "ghost"));
+            File.WriteAllText(Path.Combine(profileDir, "skills", "ghost", "SKILL.md"), "--");
+
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            var reports = regDry.NormalizeAll();
+            var report = reports.Single();
+
+            report.WouldDelete.Should().NotContain(s => s.StartsWith("skills/"));
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DryRun_DefaultsФайлыНеУдаляются()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            // Поставка содержит panel-of-experts.js — кладётся в профиль через SeedDefaultWorkflows.
+            Directory.CreateDirectory(Path.Combine(defaultsDir, "workflows"));
+            File.WriteAllText(Path.Combine(defaultsDir, "workflows", "panel.js"), "// shipped");
+
+            // Запускаем SyncUserProfile через BuildCliEnv — сидер запишет defaults в манифест.
+            var regOff = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.Off);
+            regOff.BuildCliEnv("deepseek-v4-pro");
+
+            // Проверяем, что файл из поставки остался в манифесте с source=defaults
+            // и НЕ попадает в WouldDelete даже в dryRun.
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            var reports = regDry.NormalizeAll();
+            var report = reports.Single();
+
+            File.Exists(Path.Combine(profileDir, "workflows", "panel.js")).Should().BeTrue();
+            report.WouldDelete.Should().NotContain("workflows/panel.js");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void NormalizeAll_УсыновлениеЗаполняетПустойМанифест()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            // В профиле уже лежат файлы в mirror-зонах (накопились за время жизни).
+            Directory.CreateDirectory(Path.Combine(profileDir, "rules"));
+            File.WriteAllText(Path.Combine(profileDir, "CLAUDE.md"), "# прошлый со");
+            File.WriteAllText(Path.Combine(profileDir, "rules", "old.md"), "старое правило");
+
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            regDry.NormalizeAll();
+
+            var manifestPath = Path.Combine(profileDir, ".sync-manifest.json");
+            File.Exists(manifestPath).Should().BeTrue();
+            var json = File.ReadAllText(manifestPath);
+            json.Should().Contain("\"CLAUDE.md\"");
+            json.Should().Contain("\"rules/old.md\"");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void On_УдаляетФайлы_ПрошедшиеВсеТриУсловия()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            // В профиле rules/extra.md, в host-source нет — кандидат на удаление.
+            Directory.CreateDirectory(Path.Combine(profileDir, "rules"));
+            File.WriteAllText(Path.Combine(profileDir, "rules", "extra.md"), "лишнее");
+
+            var regOn = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.On);
+            regOn.NormalizeAll();
+
+            // В режиме on лишний файл удалён
+            File.Exists(Path.Combine(profileDir, "rules", "extra.md")).Should().BeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DryRun_НичегоНеУдаляет()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(profileDir, "rules"));
+            File.WriteAllText(Path.Combine(profileDir, "rules", "extra.md"), "лишнее");
+
+            var regDry = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.DryRun);
+            regDry.NormalizeAll();
+
+            // Файл должен остаться — dryRun ничего не удаляет
+            File.Exists(Path.Combine(profileDir, "rules", "extra.md")).Should().BeTrue();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Синк_DefaultsФайлы_ЗаписываютсяВМанифестССоответствующимSource()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(defaultsDir, "workflows"));
+            File.WriteAllText(Path.Combine(defaultsDir, "workflows", "panel.js"), "// shipped");
+
+            var regOff = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.Off);
+            regOff.BuildCliEnv("deepseek-v4-pro");
+
+            var manifestPath = Path.Combine(profileDir, ".sync-manifest.json");
+            var json = File.ReadAllText(manifestPath);
+            // source=defaults у этой записи — иначе mirror-расчёт считал бы её кандидатом на удаление
+            json.Should().Contain("\"workflows/panel.js\"");
+            json.Should().Contain("\"source\": \"defaults\"");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    // ─── ADR-015 §5.3: корзина удалённого (SyncTrashStore) ─────────────────
+
+    [Fact]
+    public void On_УдаляемыйФайл_ПереноситсяВКорзинуССохранениемОтносительногоПути()
+    {
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(profileDir, "rules"));
+            File.WriteAllText(Path.Combine(profileDir, "rules", "extra.md"), "лишнее");
+
+            var regOn = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.On);
+            var reports = regOn.NormalizeAll();
+            var report = reports.Single();
+
+            // Файл удалён из профиля
+            File.Exists(Path.Combine(profileDir, "rules", "extra.md")).Should().BeFalse();
+            // В отчёте — в Trashed
+            report.Trashed.Should().Contain("rules/extra.md");
+
+            // Корзина лежит рядом с data/, не в claude-profiles (ADR-015 §5.3):
+            // вложенная папка сама была бы принята за профиль при обходе.
+            var dataDir = Path.Combine(tmp, "data");
+            var profileName = Path.GetFileName(profileDir);
+            var trashRoot = Path.Combine(dataDir, SyncTrashStore.RootDirName, profileName);
+            Directory.Exists(trashRoot).Should().BeTrue();
+            var stampDirs = Directory.GetDirectories(trashRoot);
+            stampDirs.Length.Should().Be(1);
+            // Отметка прохода — UTC, формат без ':' (Windows не разрешает в имени файла)
+            SyncTrashStore.TryParseStamp(Path.GetFileName(stampDirs[0]), out var stamp).Should().BeTrue();
+            // Структура каталогов внутри отметки сохранена (rules/extra.md)
+            File.Exists(Path.Combine(stampDirs[0], "rules", "extra.md")).Should().BeTrue();
+            File.ReadAllText(Path.Combine(stampDirs[0], "rules", "extra.md")).Should().Be("лишнее");
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void On_СбойПереносаВКорзину_ФайлОстаётсяВПрофиле()
+    {
+        // Блокируем создание .sync-trash файлом с тем же именем — Directory.CreateDirectory
+        // на этом упадёт (на Windows и Linux: имя занято объектом файловой системы другого типа).
+        var (tmp, userDir, profileDir, defaultsDir) = CreateSyncLayout();
+        try
+        {
+            var dataDir = Path.Combine(tmp, "data");
+            File.WriteAllText(Path.Combine(dataDir, SyncTrashStore.RootDirName), "blocker");
+
+            Directory.CreateDirectory(Path.Combine(profileDir, "rules"));
+            File.WriteAllText(Path.Combine(profileDir, "rules", "extra.md"), "лишнее");
+
+            var regOn = CreateRegistry(userDir, profileDir, defaultsDir, ProfileMirrorMode.On);
+            var reports = regOn.NormalizeAll();
+            var report = reports.Single();
+
+            // Кандидат в WouldDelete есть, но перенос не состоялся → файл остаётся в профиле
+            report.WouldDelete.Should().Contain("rules/extra.md");
+            report.Trashed.Should().NotContain("rules/extra.md");
+            File.Exists(Path.Combine(profileDir, "rules", "extra.md")).Should().BeTrue();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void SyncTrashStore_PurgeOld_ЧиститТолькоСтарыеОтметки()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "pts_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new SyncTrashStore(tmp);
+            var now = DateTime.UtcNow;
+            // Три прохода: старый (20 дней назад), недавний (1 день), только что
+            var stamps = new[]
+            {
+                ("old",    now.AddDays(-20)),
+                ("recent", now.AddDays(-1)),
+                ("fresh",  now),
+            };
+            foreach (var (_, stamp) in stamps)
+            {
+                var stampDir = Path.Combine(tmp, "deepseek", store.FormatRunStamp(stamp));
+                Directory.CreateDirectory(stampDir);
+                File.WriteAllText(Path.Combine(stampDir, "x.md"), "x");
+            }
+
+            var removed = store.PurgeOld(now - SyncTrashStore.Retention);
+            removed.Should().Be(1);
+            // Только старый ушёл
+            Directory.Exists(Path.Combine(tmp, "deepseek", store.FormatRunStamp(now.AddDays(-20)))).Should().BeFalse();
+            Directory.Exists(Path.Combine(tmp, "deepseek", store.FormatRunStamp(now.AddDays(-1)))).Should().BeTrue();
+            Directory.Exists(Path.Combine(tmp, "deepseek", store.FormatRunStamp(now))).Should().BeTrue();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
 }

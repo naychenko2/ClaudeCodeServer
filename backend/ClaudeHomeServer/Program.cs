@@ -7,7 +7,6 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Deploy;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
@@ -484,14 +483,6 @@ builder.Services.AddSingleton<PersonaAutomationService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
-// Выкатка прода из чата (ADR-010): приём заявок + доклад об итоге прошлой выкатки, который
-// делает уже новый инстанс (чат-заказчик умер вместе со старым). BuildIdProvider читает
-// идентификатор сборки один раз на старте — он уезжает в X-Build ответа /api/health.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.BuildIdProvider>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.IDeployHost,
-    ClaudeHomeServer.Services.Deploy.DeployHost>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.DeployService>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Deploy.DeployReportService>(builder.Configuration);
 
 // === Десктопный агент (ADR-008): руки песочницы на машине пользователя ===
 // Реестр устройств и хеши их токенов — единственный стор грани; сеансы рук и живые
@@ -568,7 +559,8 @@ builder.Services.AddSubsystems(builder.Configuration,
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
     new ClaudeHomeServer.Services.Images.ImagesSubsystem(),
-    new ClaudeHomeServer.Services.Tts.TtsSubsystem());
+    new ClaudeHomeServer.Services.Tts.TtsSubsystem(),
+    new ClaudeHomeServer.Services.Deploy.DeploySubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -675,10 +667,6 @@ builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvid
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.HostLlmConcurrencyLimiter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageStore>();
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
-// Выкатка на бой пунктом меню: сигнал трею-раннеру. По умолчанию выключена — см. TrayDeployOptions.
-builder.Services.Configure<TrayDeployOptions>(builder.Configuration.GetSection(TrayDeployOptions.Section));
-builder.Services.AddSingleton<ITrayGate, WindowsTrayGate>();
-builder.Services.AddSingleton<DeployLauncher>();
 builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
 // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)

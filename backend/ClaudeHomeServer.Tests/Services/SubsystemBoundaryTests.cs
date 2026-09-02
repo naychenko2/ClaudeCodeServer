@@ -190,6 +190,44 @@ public class SubsystemBoundaryTests
                     })
                     .ToArray()),
         },
+        // Deploy — вертикаль выкатки прода (ADR-010 + трей-раннер из веб-морды).
+        // Граница расширена под:
+        // 1) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для `schtasks`
+        //    (`DeployHost.WakeAgentAsync` будит задачу планировщика через `launchers.Local`);
+        //    легально: Execution — нижний слой, общий для всех, кто запускает процессы;
+        // 2) `ClaudeHomeServer.Services.Git` — `GitService` для git-guard в `DeployHost`
+        //    (проба репозитория: `rev-parse HEAD` и `status --porcelain`). Это СОЗНАТЕЛЬНАЯ
+        //    связь «вертикаль → вертикаль» (TODO на шов: завести `IGitGuard` в `Services.Git`
+        //    и перевести `DeployHost` на него, тогда `Services.Git` уйдёт из allow-list);
+        // 3) `ClaudeHomeServer.Services` (корень) — `SessionManager` и `NotificationService`
+        //    для `DeployReportService` (доклад об итоге выкатки в чат-инициатор и
+        //    push-уведомление); аналогично `Git`/`Tts`/`Images`/`Reader`: корень — общая
+        //    инфраструктура, а не «спинка» уровня `SharedAllowedPrefixes`;
+        // 4) `ClaudeHomeServer.Services.Backup` — статический класс `Backup.InstanceLock` с
+        //    методом `TryAcquireDeploy()`, через который `DeployHost.TryLockAgent` берёт
+        //    мьютекс `Global\ccs-deploy`. Это инфраструктурный примитив общего назначения
+        //    (мьютекс деплоя), а не зависимость от логики Backup, и СОЗНАТЕЛЬНО выходит
+        //    за рамки обычной рефлексии: доступ к статическому члену через точку не
+        //    попадает в поля/конструкторы/return-типы, и без явного allow-list сторож
+        //    этот шов пропустит. TODO на шов: выделить мьютекс в отдельный примитив
+        //    (например, `DeployAgentLock` в `Services.Composition`) и убрать из allow-list
+        //    ссылку на `Services.Backup`.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Deploy",
+                "ClaudeHomeServer.Services.Deploy",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Deploy",
+                        "ClaudeHomeServer.Services.Execution",
+                        "ClaudeHomeServer.Services.Git",
+                        "ClaudeHomeServer.Services",
+                        "ClaudeHomeServer.Services.Backup",
+                    })
+                    .ToArray()),
+        },
     };
 
     [Theory]

@@ -211,7 +211,6 @@ public sealed class TasksToolset(
                 // Колонку передаём целиком, чтобы TaskManager не воссоздавал заглушку —
                 // она уже у нас на руках из резолва выше, отдавать минимум данных неуместно
                 var targetColumn = project?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
-                var targetIsReview = BoardColumnHelper.IsReview(project, columnId);
 
                 // Outcome при создании не передаём — у CreateTaskRequest такого поля нет вовсе
                 // (исход дефекта принадлежит только UpdateTaskRequest)
@@ -244,7 +243,7 @@ public sealed class TasksToolset(
                 TaskItem created;
                 try
                 {
-                    created = tasks.Create(targetProjectId, context.OwnerId, req, targetIsReview, targetColumn);
+                    created = tasks.Create(targetProjectId, context.OwnerId, req, targetColumn);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -286,11 +285,16 @@ public sealed class TasksToolset(
                 var columnId = arguments.ContainsKey("columnId") ? StringArg(arguments, "columnId") : null;
                 var targetProject = targetProjectId is null ? null : projects.GetById(targetProjectId);
                 var cat = columnId is null ? null : BoardColumnHelper.Category(targetProject, columnId);
-                var targetProjectForRules = targetProject;
-                // Дефект: колонка ревью ⇒ нужен Repro.Steps (EnsureReproOnReview)
-                var targetIsReview = columnId is null
-                    ? false
-                    : BoardColumnHelper.IsReview(targetProjectForRules, columnId);
+                // Дефект: колонка ревью ⇒ нужен Repro.Steps (EnsureReproOnReview). Колонка для
+                // гейта — та, в которой карточка ОКАЖЕТСЯ после Update: новая из req.columnId
+                // либо текущая (когда columnId не менялся — а review-колонка могла уже стоять).
+                // Без текущей колонки гейт не срабатывает на repro:{} для дефекта, уже стоящего
+                // в ревью (находка 2 ревью Глеба).
+                BoardColumn? effectiveColumn = null;
+                if (!string.IsNullOrEmpty(columnId))
+                    effectiveColumn = targetProject?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
+                else if (existing.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
+                    effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == existing.ColumnId);
                 var personaId = StringArg(arguments, "personaId");
                 // Скоупы назначаемой персоны, не вызывателя — как REST Update (блокер 2.1)
                 if (personaId.Length > 0
@@ -347,7 +351,7 @@ public sealed class TasksToolset(
                 TaskItem updated;
                 try
                 {
-                    updated = tasks.Update(id, req, targetIsReview)
+                    updated = tasks.Update(id, req, effectiveColumn)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -493,7 +497,18 @@ public sealed class TasksToolset(
                 var subtasks = task.Subtasks
                     .Select(s => new UpdateSubtaskRequest(s.Id, s.Title, s.IsDone)).ToList();
                 subtasks.Add(new UpdateSubtaskRequest("", StringArg(arguments, "title"), false));
-                var updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                // Дефект-в-Done с пустым verification бросает EnsureVerificationOnClose — здесь
+                // это не наша ошибка, а валидный запрет. Пробрасываем как Deny, чтобы клиент
+                // получил текст правила, а не 500 (находка minor-ревью Глеба).
+                TaskItem? updated;
+                try
+                {
+                    updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
                 await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
                 return Json(updated);
@@ -515,7 +530,15 @@ public sealed class TasksToolset(
                 var subtasks = task.Subtasks
                     .Select(s => Match(s) ? new UpdateSubtaskRequest(s.Id, s.Title, isDone) : new UpdateSubtaskRequest(s.Id, s.Title, s.IsDone))
                     .ToList();
-                var updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                TaskItem? updated;
+                try
+                {
+                    updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
                 await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
                 return Json(updated);

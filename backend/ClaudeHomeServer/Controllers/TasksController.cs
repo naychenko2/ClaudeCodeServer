@@ -49,7 +49,6 @@ public class ProjectTasksController(
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
-        var targetIsReview = BoardColumnHelper.IsReview(project, req.ColumnId);
         // Полный объект колонки — для гейта DefectRules.EnsureNotClosedAtCreate:
         // дефект в Todo с columnId="done" не должен пройти мимо правила только потому,
         // что клиент не привёл Status в соответствие с категорией колонки.
@@ -76,7 +75,7 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            task = tasks.Create(projectId, UserId, req, targetIsReview, targetColumn);
+            task = tasks.Create(projectId, UserId, req, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -235,8 +234,13 @@ public class TasksController(
         {
             // Личная задача — проект не сохраняем в TaskItem, но колонку прокидываем
             // через TaskManager.Create для гейта DefectRules (review-гейт у личных
-            // задач не действует — пользователь сам решает, что ему делать).
-            task = tasks.Create(null, UserId, req, targetIsReview: false, targetColumn);
+            // задач не действует: targetColumn приходит из BoardColumns ПРОЕКТА, а у
+            // личной задачи projectId == null ⇒ project == null ⇒ targetColumn всегда null,
+            // гейт EnsureReproOnReview no-op). Внутренние пути (NoteTaskSyncService/
+            // TeamWaveService) могут слать personal-карточки в review-колонку своих
+            // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
+            // обычный кейс гейта.
+            task = tasks.Create(null, UserId, req, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -313,8 +317,16 @@ public class TasksController(
         var targetProject = targetProjectId is null ? null : projects.GetById(targetProjectId);
         var cat = BoardColumnHelper.Category(targetProject, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
-        // Дефект: карточка попадает в review-колонку → нужны шаги воспроизведения (гейт — TaskManager/DefectRules)
-        var targetIsReview = BoardColumnHelper.IsReview(targetProject, req.ColumnId);
+        // Дефект: карточка попадает в review-колонку → нужны шаги воспроизведения (гейт —
+        // TaskManager.EnsureReproOnReview). Колонка должна быть той, в которой карточка
+        // ОКАЖЕТСЯ после Update: новая из req.ColumnId либо текущая (когда columnId не
+        // менялся — а Review-колонка могла уже стоять). Без текущей колонки гейт не
+        // срабатывает на repro:{} для дефекта, уже стоящего в ревью (находка 2 ревью Глеба).
+        BoardColumn? effectiveColumn = null;
+        if (!string.IsNullOrEmpty(req.ColumnId))
+            effectiveColumn = targetProject?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
+        else if (task.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
+            effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == task.ColumnId);
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
         // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
@@ -349,7 +361,7 @@ public class TasksController(
         TaskItem updated;
         try
         {
-            updated = tasks.Update(taskId, req, targetIsReview)
+            updated = tasks.Update(taskId, req, effectiveColumn)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }
         catch (InvalidOperationException ex)

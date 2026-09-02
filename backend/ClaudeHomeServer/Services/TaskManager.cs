@@ -14,12 +14,6 @@ public class TaskManager
     private readonly NotificationService? _notif;
     private readonly PersonaManager? _personas;
 
-    // Заглушка «колонка ревью» для DefectRules.EnsureReproOnReview: контроллер резолвит
-    // лишь признак targetIsReview (по факту, глядя в Project.BoardColumns), а не саму
-    // колонку — DefectRules же принимает BoardColumn?, поэтому воссоздаём минимальный
-    // объект с нужным Role.
-    private static readonly BoardColumn ReviewColumnStub = new() { Role = "review" };
-
     // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
@@ -75,7 +69,7 @@ public class TaskManager
         _tasks.Values.Where(t => t.SourceNoteId == noteId).ToList();
 
     public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req,
-        bool targetIsReview = false, BoardColumn? targetColumn = null)
+        BoardColumn? targetColumn = null)
     {
         // Клиентский id (офлайн-создание) с идемпотентностью: повтор POST с тем же id
         // при потерянном ack возвращает существующую задачу — без дубля. Если id занят
@@ -142,9 +136,10 @@ public class TaskManager
         // Дефект: нельзя создать сразу в Done (по статусу или по целевой колонке),
         // нельзя попасть в review-колонку без шагов воспроизведения (DefectRules; no-op
         // для обычных задач). Бросает до вставки в словарь — при отказе состояние
-        // менеджера не меняется.
+        // менеджера не меняется. Гейт EnsureReproOnReview смотрит на targetColumn.Role,
+        // review-признак резолвится вызывающей стороной (BoardColumnHelper.IsReview).
         DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
-        DefectRules.EnsureReproOnReview(task, targetIsReview ? ReviewColumnStub : null);
+        DefectRules.EnsureReproOnReview(task, targetColumn);
         _tasks[task.Id] = task;
         Save();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
@@ -185,7 +180,13 @@ public class TaskManager
     private double NextOrder(string ownerId) =>
         _tasks.Values.Where(t => t.OwnerId == ownerId).Select(t => t.Order).DefaultIfEmpty(0).Max() + 1000;
 
-    public TaskItem? Update(string id, UpdateTaskRequest req, bool? targetIsReview = null)
+    // Гейты DefectRules смотрят на ИСХОДНОЕ состояние карточки, а не на переданный
+    // переход: kind считается из task (а не req.Kind), а колонка для ревью-гейта — это
+    // колонка, в которой карточка ОКАЖЕТСЯ после Update (effectiveColumn: новая из req,
+    // иначе — текущая). Раньше оба признака брались из запроса, и обход сводился к
+    // паре «kind: "task"» + «status: "done»» либо «repro: {}» без columnId на карточке,
+    // уже стоящей в review-колонке.
+    public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
@@ -196,18 +197,24 @@ public class TaskManager
 
         // Дефект: отказ вычисляется ДО первой мутации — этот метод правит хранимый объект
         // по ссылке, а не копию, поэтому эффективное состояние (что БУДЕТ после применения
-        // req) собираем заранее и проверяем DefectRules на нём, не трогая task. Бросает
-        // InvalidOperationException — вызывающая сторона (контроллер) превращает её в 400.
+        // req) собираем заранее и проверяем DefectRules на нём, не трогая task. Kind берём
+        // из task, не из req — иначе дефект обходит гейты переданной сменой вида (находка 1
+        // ревью Глеба): клиентский kind=Task на дефекте раньше превращал effective.Kind=Task
+        // и снимал все гейты DefectRules, карточка закрывалась без Verification. Вид immutable
+        // после создания: присылка req.Kind != task.Kind просто игнорируется (на UI форма
+        // редактирования шлёт kind при каждом сохранении — сегмент «Задача / Дефект» легитимный
+        // кейс переключения, отдельный коммит на запрет менять вид не заказывался).
+        // Бросает InvalidOperationException — вызывающая сторона (контроллер) превращает в 400.
         var effective = new TaskItem
         {
-            Kind = req.Kind ?? task.Kind,
+            Kind = task.Kind,
             Status = req.Status ?? task.Status,
             Repro = req.Repro ?? task.Repro,
             Verification = req.Verification ?? task.Verification,
             Outcome = req.Outcome ?? task.Outcome,
         };
         DefectRules.EnsureVerificationOnClose(effective);
-        DefectRules.EnsureReproOnReview(effective, targetIsReview == true ? ReviewColumnStub : null);
+        DefectRules.EnsureReproOnReview(effective, effectiveColumn);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -261,8 +268,8 @@ public class TaskManager
             }).ToList();
         // Дефект: вид карточки, шаги воспроизведения и вердикт проверки — null = не менять,
         // объект = задать целиком (частичного обновления Repro/Verification нет: клиент
-        // шлёт все поля разом, как и Labels/Subtasks)
-        if (req.Kind is not null) task.Kind = req.Kind.Value;
+        // шлёт все поля разом, как и Labels/Subtasks). Kind: смена запрещена выше, поэтому
+        // здесь req.Kind либо null, либо равен task.Kind.
         if (req.Repro is not null) task.Repro = req.Repro;
         if (req.Verification is not null) task.Verification = req.Verification;
         if (req.Outcome is not null) task.Outcome = req.Outcome;

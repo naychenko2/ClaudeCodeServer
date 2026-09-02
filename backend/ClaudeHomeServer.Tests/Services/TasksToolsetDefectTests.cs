@@ -294,6 +294,157 @@ public class TasksToolsetDefectTests : IClassFixture<TestWebApplicationFactory>
             .Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
     }
 
+    // ─── Находка 1: смена kind снимает гейты (ревью Глеба) ────────────────
+
+    [Fact]
+    public async Task Update_ДефектСоСменойKindНаTaskИDone_Deny()
+    {
+        // Сценарий из находки 1: персона шлёт kind=Task+status=done на дефекте — раньше
+        // effective.Kind=Task снимал гейт EnsureVerificationOnClose, карточка закрывалась
+        // без вердикта. Вид immutable после создания: req.Kind != task.Kind молча игнорируется,
+        // вид остаётся Defect, гейт EnsureVerificationOnClose срабатывает на закрытие без
+        // Verification. Та же Deny, но текст от EnsureVerificationOnClose.
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (createText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Дефект",
+            projectId,
+            kind = "defect",
+        });
+        var taskId = JsonSerializer.Deserialize<JsonElement>(createText).GetProperty("id").GetString()!;
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = taskId,
+            kind = "task",
+            status = "done",
+        });
+
+        isError.Should().BeTrue();
+        text.Should().Contain("Verification");
+        // Карточка осталась дефектом и не закрылась
+        var (getText, _) = await CallToolAsync(sessionId, "tasks_get", new { id = taskId });
+        var task = JsonSerializer.Deserialize<JsonElement>(getText);
+        task.GetProperty("kind").GetString().Should().Be("defect");
+        task.GetProperty("status").GetString().Should().Be("todo");
+    }
+
+    [Fact]
+    public async Task Update_ДефектСоСменойKindНаTaskБезStatus_Проходит()
+    {
+        // Вид immutable после создания: kind=task игнорируется, без status изменения карточка
+        // остаётся дефектом в исходном статусе. Легитимный сценарий UI-формы редактирования.
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (createText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Дефект",
+            projectId,
+            kind = "defect",
+        });
+        var taskId = JsonSerializer.Deserialize<JsonElement>(createText).GetProperty("id").GetString()!;
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = taskId,
+            kind = "task",
+        });
+
+        isError.Should().BeFalse();
+        var updated = JsonSerializer.Deserialize<JsonElement>(text);
+        updated.GetProperty("kind").GetString().Should().Be("defect");
+    }
+
+    // ─── Находка 2: repro:{} в review-колонке (ревью Глеба) ────────────────
+
+    [Fact]
+    public async Task Update_ДефектСтираетReproБезColumnId_НоВReview_Deny()
+    {
+        // Сценарий из находки 2: дефект уже стоит в review-колонке, персона шлёт
+        // tasks_update {repro: {}} без columnId — раньше targetIsReview не резолвился,
+        // гейт EnsureReproOnReview не срабатывал, шаги стирались. Теперь effectiveColumn
+        // = текущая колонка карточки, Role=review, гейт срабатывает.
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        await SetBoardAsync(projectId, new
+        {
+            columns = new[]
+            {
+                new { id = "review-col", name = "На согласовании", category = "inProgress", role = "review" },
+            },
+        });
+        // Создаём дефект уже в review-колонке, с шагами — гейт Create пропускает
+        var (createText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Дефект в ревью",
+            projectId,
+            kind = "defect",
+            columnId = "review-col",
+            repro = new { steps = "1. Шаг" },
+        });
+        var taskId = JsonSerializer.Deserialize<JsonElement>(createText).GetProperty("id").GetString()!;
+
+        // Стираем repro без columnId — карточка остаётся в review-колонке.
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = taskId,
+            repro = new { },
+        });
+
+        isError.Should().BeTrue();
+        text.Should().Contain("Repro.Steps");
+    }
+
+    // ─── Находка 3: Verification без Notes (ревью Глеба, паспорт 432b6de2) ──
+
+    [Fact]
+    public async Task Update_ДефектСVerificationБезNotes_Deny()
+    {
+        // Сценарий из находки 3: tasks_update {verification: {}} — раньше null Notes
+        // считался содержательным, карточка закрывалась без единого слова о проверке.
+        // Теперь null/whitespace Notes — не вердикт (паспорт 432b6de2).
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (createText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Дефект на закрытие",
+            projectId,
+            kind = "defect",
+        });
+        var taskId = JsonSerializer.Deserialize<JsonElement>(createText).GetProperty("id").GetString()!;
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = taskId,
+            status = "done",
+            verification = new { },
+        });
+
+        isError.Should().BeTrue();
+        text.Should().Contain("Verification");
+    }
+
+    [Fact]
+    public async Task Update_ДефектСVerificationСПробельнымNotes_Deny()
+    {
+        // Тот же инвариант: пробельный Notes — не вердикт.
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (createText, _) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "Дефект на закрытие",
+            projectId,
+            kind = "defect",
+        });
+        var taskId = JsonSerializer.Deserialize<JsonElement>(createText).GetProperty("id").GetString()!;
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = taskId,
+            status = "done",
+            verification = new { notes = "   " },
+        });
+
+        isError.Should().BeTrue();
+        text.Should().Contain("Verification");
+    }
+
     // ─── Outcome только для Defect (паспорт 432b6de2, Д-3) ─────────────────
 
     [Fact]

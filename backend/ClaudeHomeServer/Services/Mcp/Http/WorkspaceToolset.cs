@@ -471,7 +471,18 @@ public sealed partial class WorkspaceToolset(
                     && (task.ProjectId is null || !allowed.Contains(task.ProjectId)))
                     return Deny($"Задача {entityId} вне разрешённой зоны этой сессии");
                 var mergedLabels = UnionStrings(task.Labels, incoming);
-                var updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels));
+                // Дефект-в-Done с пустым verification бросает EnsureVerificationOnClose на
+                // любой правке (переименование, метки, подзадачи) — пробрасываем как Deny,
+                // чтобы клиент получил текст правила, а не 500 (находка minor-ревью Глеба).
+                TaskItem? updatedTask;
+                try
+                {
+                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 // Бродкаст task_updated — как REST-путь (TasksController.Update): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки (блокер волны 3.1;
                 // TaskManager.Update бродкаста не делает — он был обязанностью контроллера)
@@ -538,7 +549,17 @@ public sealed partial class WorkspaceToolset(
                     && (task.ProjectId is null || !allowed.Contains(task.ProjectId)))
                     return Deny($"Задача {entityId} вне разрешённой зоны этой сессии");
                 var (keptLabels, removedLabels) = SubtractStrings(task.Labels, removing);
-                var updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels));
+                // Дефект-в-Done с пустым verification бросает EnsureVerificationOnClose на
+                // любой правке (см. tags_apply) — пробрасываем как Deny.
+                TaskItem? updatedTask;
+                try
+                {
+                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 // Бродкаст task_changed(updated) — как tags_apply (блокер волны 3.1): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки
                 if (updatedTask is not null)

@@ -269,7 +269,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const workLoopState = useMemo<WorkLoopState | null>(() => {
     if (liveWorkLoop !== undefined) return liveWorkLoop.active ? liveWorkLoop : null;
     return session.workLoop
-      ? { active: true, iteration: session.workLoop.iteration, maxIterations: session.workLoop.maxIterations, phase: session.workLoop.phase }
+      ? {
+        active: true,
+        iteration: session.workLoop.iteration,
+        maxIterations: session.workLoop.maxIterations,
+        phase: session.workLoop.phase,
+        waitingReason: undefined,
+        waitingTicks: 0,
+      }
       : null;
   }, [liveWorkLoop, session.workLoop]);
   const handleToggleWorkLoop = useCallback(async () => {
@@ -2572,10 +2579,41 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
           // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
           <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
+            <WaitingIndicator
+              planning={planningKind}
+              awaitingResponse={awaitingResponse}
+              waitingReason={workLoopState?.waitingReason ?? null}
+              waitingTicks={workLoopState?.waitingTicks ?? 0}
+            />
             <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
               <TurnPlanPill todos={taskTodos} />
             </div>
+          </div>
+        )}
+
+        {/* Плашка «Сжимаю контекст…» под лентой: видна, пока isCompacting=true. В самой ленте
+            процесс уплотнения никак не виден — только в шапке (ContextAmount) и поповере, а
+            пользователь смотрит на ленту и теряется. Тонкая строка со спиннером и текстом,
+            отдельной жизнью от WaitingIndicator (компакция может идти без хода). Гаснет по
+            compact_status с compact_result. */}
+        {isCompacting && (
+          <div
+            data-testid="compact-indicator"
+            style={{
+              marginTop: 4,
+              marginLeft: 38,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              minHeight: 17,
+              color: C.textMuted,
+              fontSize: 12,
+              fontFamily: 'inherit',
+            }}
+          >
+            {/* Спиннер из утилитарного класса — единый стиль с кнопкой «Сжимаю…» в поповере */}
+            <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
+            <span>Сжимаю контекст…</span>
           </div>
         )}
 

@@ -1041,7 +1041,7 @@ export type ServerMessage = { sessionId: string } & (
   // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
-  | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null; waitingReason?: string | null; waitingTicks?: number }
   // Явная остановка цикла «до готово» в ленту — человекочитаемый текст (лимит/ошибка/ручной
   // стоп), готовый с сервера. reason ∈ limit|error|manual (см. WorkLoopStoppedMessage)
   | { type: 'work_loop_stopped'; reason: string; text: string }
@@ -1507,6 +1507,12 @@ export interface WorkLoopState {
   iteration: number;
   maxIterations: number;
   phase: 'working' | 'waiting' | 'verifying' | null;
+  // Причина ожидания по маркеру `<waiting>` (только при phase='waiting'). null — обычное
+  // ожидание по живой делегированной задаче, счётчик тиков не идёт
+  waitingReason?: string | null;
+  // Число тиков ожидания (Loop:WaitingTickSeconds, дефолт 300 с). Потолок — Loop:MaxWaitingTicks.
+  // 0 — счётчик ещё не стартовал или только что сброшен
+  waitingTicks?: number;
 }
 
 // === Режим «Командная реализация» ===

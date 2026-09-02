@@ -767,10 +767,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'git_turn_commit', projectId: msg.projectId, sha: msg.sha, subject: msg.subject }]);
 
     case 'work_loop':
-      // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп)
+      // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп).
+      // WaitingReason и WaitingTicks заполнены только при ожидании по маркеру `<waiting>`
+      // (не по живой задаче): пробрасываем наверх, чтобы WaitingIndicator показал причину
+      // и счётчик тиков рядом с печатной машинкой.
       return {
         ...prev,
-        workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
+        workLoop: {
+          active: msg.active,
+          iteration: msg.iteration,
+          maxIterations: msg.maxIterations,
+          phase: msg.phase,
+          waitingReason: msg.waitingReason ?? null,
+          waitingTicks: msg.waitingTicks ?? 0,
+        },
       };
 
     case 'work_loop_stopped':

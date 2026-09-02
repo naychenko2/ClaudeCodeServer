@@ -173,7 +173,9 @@ public class WatchdogPresenceTests : IDisposable
     {
         public Dictionary<string, Session> Chats { get; } = new();
         public string? WorkDir { get; set; } = "C:\\work";
+#pragma warning disable CS0067 // фейк не эмулирует мгновенное гашение по удалению чата
         public event Action<Session>? ChatDeleted;
+#pragma warning restore CS0067
         public Session? FindChat(string sessionId, string ownerId) =>
             Chats.TryGetValue(sessionId, out var s) && s.OwnerId == ownerId ? s : null;
         public string? ResolveWorkDir(WatchdogRecord w) => WorkDir;

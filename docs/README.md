@@ -98,9 +98,22 @@
 [ADR-010](adr/ADR-010-deploy-from-chat.md) (пересборка и переопубликация прода из чата: сервер
 себя не деплоит, заявка в журнал и внешний агент выкатки),
 [ADR-011](adr/ADR-011-lsp-and-codegraph-roles.md) (роли LSP и CodeGraph в навигации по коду:
-уровень символа против уровня типов, свой языковой сервер не делаем);
+уровень символа против уровня типов, свой языковой сервер не делаем),
+[ADR-012](adr/ADR-012-mcp-over-http-transport.md) (продуктовые MCP-серверы переезжают со stdio
+на HTTP внутри Kestrel),
+[ADR-012-specialty-settings-single-layer](adr/ADR-012-specialty-settings-single-layer.md)
+(настройки специальностей: один глобальный слой с admin-only записью — номер совпал
+с транспортом MCP, это разные решения),
+[ADR-013](adr/ADR-013-turn-event-bus.md) (шина событий хода: связь вертикалей событием
+вместо прямой зависимости),
+[ADR-014](adr/ADR-014-internal-subsystems.md) (внутренние подсистемы: контракт `IAppSubsystem`,
+пилот Video, правило зависимостей между вертикалями),
+[ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:
+кто источник истины для каждой зоны, удаление только по манифесту доставки);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
-(резолв модели и фолбэк хода по цепочке).
+(резолв модели и фолбэк хода по цепочке),
+[specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
+к ADR-012 о специальностях (раздел «Специальности» — только настройки роли).
 
 **research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),

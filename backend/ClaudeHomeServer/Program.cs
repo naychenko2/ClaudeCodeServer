@@ -253,11 +253,8 @@ builder.Services.AddSingleton<ProjectPresetService>();
 // Документы: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<MarkitdownService>();
 builder.Services.AddSingleton<DocumentAiService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitServerService>();
-// Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Git.GitAutoCommitService>(builder.Configuration);
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitAiService>();
+// Подсистема Git (волна 1.5): GitService/GitServerService/GitAutoCommitService/GitAiService
+// и CommitAttributionService (ниже) — теперь регистрируются в `Services/Git/GitSubsystem.cs`.
 builder.Services.AddSingleton<NotesService>();
 builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<NotesAiService>();
@@ -451,9 +448,6 @@ builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
-// Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути (Session.CommittedFilePaths),
-// чтобы атрибуция файлов чатам не врала после коммита — см. CommitAttributionService
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.CommitAttributionService>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();
@@ -566,6 +560,10 @@ builder.Services.AddHttpClient("safe-download")
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
 builder.Services.AddSubsystems(builder.Configuration,
+    // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
+    // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),
+    // плюс hosted-сервисы SessionManager/ProjectManager. Раньше — сломает их DI-порядок.
+    new ClaudeHomeServer.Services.Git.GitSubsystem(),
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
@@ -580,7 +578,8 @@ builder.Services.AddQuietHttpClient("dify", new QuietHttpClientProfile(
     Subject: "базой знаний Dify",
     Consequence: "Семантический поиск по заметкам и знаниям не работает."))
     .WithoutEgressProxy();
-builder.Services.AddHttpClient("forgejo").WithoutEgressProxy();
+// Forgejo — клиент локального Git-сервера: зарегистрирован внутри GitSubsystem
+// (Forgejo — локальный сервис, `WithoutEgressProxy` обязателен).
 builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
     Category: "ClaudeHomeServer.Media.Fal",
     Subject: "сервисом fal.ai",

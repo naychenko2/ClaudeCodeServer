@@ -156,6 +156,40 @@ public class SubsystemBoundaryTests
                     })
                     .ToArray()),
         },
+        // Git — НИЖНИЙ слой вертикалей (на него смотрят будущие Dossiers/Knowledge/Deploy,
+        // плюс hosted-сервисы SessionManager/ProjectManager). Граница расширена под:
+        // 1) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory`, через который
+        //    GitService запускает процессы git (источник истины, как в задаче);
+        // 2) `ClaudeHomeServer.Services` (корень) — `SessionManager`, `ProjectManager`,
+        //    `UserStore`, `ProjectFileSessionsIndex` живут в корне как общая инфраструктура
+        //    (аналогично Reader/Tts/Images);
+        // 3) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации об
+        //    авто-коммите (GitAutoCommitService отправляет событие в ленту сессии);
+        // 4) `ClaudeHomeServer.Protocol` — тип WS-события `*Message` для той же нотификации;
+        // 5) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для генерации сообщения
+        //    коммита и имени стэша в `GitAiService`. Это сознательная связь «вертикаль →
+        //    спинка»: LLM-инфраструктура общего назначения (дешёвые one-shot ходы через
+        //    локальную модель или haiku), используемая и другими разделами (теги заметок,
+        //    сводки, память...). Вынос Llm в отдельный allow-list вместо расширения
+        //    SharedAllowedPrefixes — чтобы не открывать любой подсистеме весь
+        //    `ClaudeHomeServer.Services.Llm`.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Git",
+                "ClaudeHomeServer.Services.Git",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Git",
+                        "ClaudeHomeServer.Services.Execution",
+                        "ClaudeHomeServer.Services",
+                        "ClaudeHomeServer.Hubs",
+                        "ClaudeHomeServer.Protocol",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
+                    .ToArray()),
+        },
     };
 
     [Theory]

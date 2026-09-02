@@ -952,6 +952,9 @@ export function Composer({
     voiceScrollPendingRef.current = false;
     autoResize();
     const el = textareaRef.current;
+    // Пишем не в сам ref, а в scrollTop DOM-узла: прокрутка поля к концу — императивная
+    // операция, декларативного эквивалента у неё нет
+    // eslint-disable-next-line react-hooks/immutability
     if (el) el.scrollTop = el.scrollHeight;
   }, [text, autoResize]);
 

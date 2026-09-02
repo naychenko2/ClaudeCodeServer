@@ -163,24 +163,13 @@ builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
-// Паспорта изменений (ADR-004): этап 1 — редактор секретов + стор + hosted-захват коммитов;
-// этап 2 — recall в промпт персон и поиск для MCP dossier_lookup
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallService>();
-// Конспекты обсуждений (ADR-004 §6): стор снятых конспектов + генерация через
-// CheapTextRunner (ключ discussion-digest); снимаются на экспорте, живут до ветки
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionStore>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionService>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>(builder.Configuration);
-// Автовыгрузка паспортов в локальную ветку ccs/dossiers/v1 после захвата — singleton +
-// hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>();
-builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
-// Автоимпорт паспортов по новому tip ветки ccs/dossiers/v1 (тумблер проекта
-// AutoImportDossiers): наблюдение за веткой тиком 60 с, без fetch/pull
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Dossiers.DossierAutoImporter>(builder.Configuration);
+// Паспорта изменений (ADR-004) — DI в подсистеме `DossiersSubsystem`
+// (волна 3, шаг 2): InstanceSecretsProvider/DossierStore/DossierCaptureState/
+// DossierRecallService/DossierDiscussion{Store,Service}/DossierCaptureService (hosted)/
+// DossierAutoExporter (singleton + hosted через AddGatedHostedFrom — подписки в
+// StartAsync на тот же инстанс)/DossierAutoImporter (hosted). Форвардер
+// IKnowledgeSyncParticipant → DossierStore в блоке Knowledge ниже — участник
+// реконсайлера Dify, остаётся в Program.cs до выделения Knowledge (следующий шаг).
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
@@ -557,6 +546,11 @@ builder.Services.AddSubsystems(builder.Configuration,
     // CodeGraph — после Git, потому что это первая подсистема с пост-билд фазой
     // (`IAppPhaseSubsystem.ConfigureApp` регистрирует языковые провайдеры `.cs`/`.ts`/`.tsx`).
     new ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem(),
+    // Dossiers — после CodeGraph: вертикаль захвата паспортов зависит от швов
+    // `Services.Git` (GitГitService — захват коммитов) и `Services.CodeGraph`
+    // (CodeGraphService — обогащение паспортов графом кода). Нижние слои должны
+    // регистрироваться раньше, иначе DI при первом резолве упадёт.
+    new ClaudeHomeServer.Services.Dossiers.DossiersSubsystem(),
     new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),

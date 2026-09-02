@@ -424,6 +424,77 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.UsageInfo",
                 }),
         },
+        // Dossiers — паспорта изменений (ADR-004). Сознательно завязана на две
+        // «вертикали-нижнего-слоя» (Git/CodeGraph) — TODO на швы по прецеденту Deploy→Git,
+        // и общий слой Dify-синка (Services.Memory). Допуски к корню Services точечные:
+        // 1) `SessionManager`/`ProjectManager`/`TaskManager`/`FileService`/`UserStore`
+        //    — общая инфраструктура (DossierCaptureService.cs:39-42, DossierStore.cs:41-42,
+        //    DossierDiscussionService.cs:27, DossierRecallService:tasks/file params).
+        // 2) `KnowledgeService` (DossierStore.cs:40, опциональный параметр ctor) — тот же
+        //    шов «вертикаль → спинка», что у `Spend` (KnowledgeService — общий для Dify-синка).
+        // 3) `FeatureFlagService` (DossierAutoExporter.cs:44, DossierAutoImporter.cs:36) —
+        //    гейт флага `change-dossiers-recall` владельца.
+        // Префиксы-швы:
+        // 4) `ClaudeHomeServer.Services.Git` — `GitService` для захвата коммитов
+        //    (DossierCaptureService.cs:53), recall (DossierRecallService),
+        //    автовыгрузки/импорта (DossierAutoExporter/Importer). TODO на шов:
+        //    завести `IGitGuard` в `Services.Git` и перевести вертикаль на него
+        //    (по прецеденту Deploy→Git).
+        // 5) `ClaudeHomeServer.Services.CodeGraph` — `CodeGraphService` для обогащения
+        //    паспортов графом кода (DossierCaptureService.cs:54, DossierRecallService).
+        //    TODO на шов аналогично Git.
+        // 6) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для выжимки паспортов
+        //    и конспектов (DossierCaptureService, DossierDiscussionService). Префикс-шов,
+        //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`.
+        // 7) `ClaudeHomeServer.Services.Memory` — общий слой Dify-синка: `MemoryDocRef`
+        //    и `MemoryDifyDebouncer` в полях `DossierStore`/`DossierAutoExporter`
+        //    (DossierStore.cs:21,48; DossierAutoExporter.cs:48). Префикс-шов, как
+        //    `Git`/`Deploy` на `Services.Backup`.
+        // Точечный допуск к `ClaudeHomeServer.Protocol`:
+        // 8) `StoredMessage` — параметр публичных методов `DossierCaptureService.
+        //    SelectCommitWindow`/`TimestampOf` (материализуется в generic-аргументе
+        //    `IReadOnlyList<StoredMessage>`) и `DossierDiscussionService.BuildFeed`.
+        //    `ServerMessage` ТУТ НЕ нужен: фигурирует только в private-методе
+        //    `DossierCaptureService.OnSessionMessageAsync`, а сторож читает только
+        //    public-методы (см. «Известное ограничение» в шапке файла).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Dossiers",
+                "ClaudeHomeServer.Services.Dossiers",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Dossiers",
+                        "ClaudeHomeServer.Services.Git",
+                        "ClaudeHomeServer.Services.CodeGraph",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Services.Memory",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.FileService",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.KnowledgeService",
+                    "ClaudeHomeServer.Services.FeatureFlagService",
+                    // DossierStore — участник реконсайлера error-документов Dify
+                    // (KnowledgeIndexReconciler, ADR-004 §4); public-метод ListTargets
+                    // возвращает `IReadOnlyList<Knowledge.KnowledgeSyncTarget>` —
+                    // рефлексия видит `KnowledgeSyncTarget` как возвращаемый тип
+                    // и в generic-аргументе. Шов через IKnowledgeSyncParticipant
+                    // (DossierStore имплементирует интерфейс) рефлексия не видит,
+                    // см. «Известное ограничение» в шапке. Форвардер регистрации
+                    // `IKnowledgeSyncParticipant → DossierStore` остаётся в блоке
+                    // Knowledge (Program.cs:~688) до выделения Knowledge — отдельный
+                    // шаг волны 3.
+                    "ClaudeHomeServer.Services.Knowledge.KnowledgeSyncTarget",
+                    "ClaudeHomeServer.Protocol.StoredMessage",
+                }),
+        },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
         // `IAppSubsystem` (подаётся в Program.cs как обычные `AddSingleton`/
         // `AddHostedService`), поэтому попадает в таблицу вручную — зато сторож

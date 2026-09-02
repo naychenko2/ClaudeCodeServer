@@ -99,13 +99,16 @@
 себя не деплоит, заявка в журнал и внешний агент выкатки),
 [ADR-011](adr/ADR-011-lsp-and-codegraph-roles.md) (роли LSP и CodeGraph в навигации по коду:
 уровень символа против уровня типов, свой языковой сервер не делаем),
-[ADR-012](adr/ADR-012-mcp-over-http-transport.md) (продуктовые MCP-серверы переезжают со stdio
-на HTTP внутри Kestrel),
-[ADR-012-specialty-settings-single-layer](adr/ADR-012-specialty-settings-single-layer.md)
-(настройки специальностей: один глобальный слой с admin-only записью — номер совпал
-с транспортом MCP, это разные решения),
+[ADR-012-mcp-over-http](adr/ADR-012-mcp-over-http-transport.md) (продуктовые MCP-серверы
+переехали со stdio на HTTP внутри Kestrel: ноль node-процессов на ход),
+[ADR-012-specialty-settings](adr/ADR-012-specialty-settings-single-layer.md) (настройки
+специальностей — один глобальный слой с admin-only записью; номер совпал с транспортом MCP,
+это разные решения),
 [ADR-013](adr/ADR-013-turn-event-bus.md) (шина событий хода: связь вертикалей событием
 вместо прямой зависимости),
+[ADR-013](adr/ADR-013-server-chat-watchdogs.md) (серверные сторожа чатов: долгое ожидание
+живёт в бэкенде и будит чат, а не умирает вместе с процессом CLI — номер совпал с шиной
+событий хода, это разные решения),
 [ADR-014](adr/ADR-014-internal-subsystems.md) (внутренние подсистемы: контракт `IAppSubsystem`,
 пилот Video, правило зависимостей между вертикалями),
 [ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:

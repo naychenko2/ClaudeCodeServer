@@ -39,6 +39,12 @@ public sealed class DockerProcessRunner : IProcessLauncher
 
     public Process Start(ProcessSpec spec)
     {
+        // Сырая командная строка — механизм Windows-cmd (см. ProcessSpec.RawArguments):
+        // песочница всегда Linux, сюда это поле дойти не должно — молча исполнить Args
+        // вместо заданной строки было бы тихой подменой команды
+        if (spec.RawArguments is not null)
+            throw new NotSupportedException("RawArguments — только local-раннер (cmd /s /c); песочница всегда Linux");
+
         // Дешёвый (троттлёный) гарант, что контейнер поднят и актуален
         _sandbox.EnsureRunningAsync().GetAwaiter().GetResult();
 

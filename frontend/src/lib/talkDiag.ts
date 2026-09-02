@@ -15,7 +15,7 @@ const MAX = 400;
 
 export interface DiagEntry { t: number; msg: string }
 
-let entries: DiagEntry[] = [];
+const entries: DiagEntry[] = [];
 
 function fmt(v: unknown): string {
   if (typeof v === 'string') return v.length > 200 ? `${v.slice(0, 200)}…` : v;

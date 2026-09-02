@@ -22,6 +22,9 @@ export function ChatTopicIcon({ topic, size = ICON_SIZE.xs, color = C.textMuted 
   // Каталога подписей больше нет — tooltip показывает само имя компонента
   return (
     <span title={topic ?? undefined} aria-label={topic ?? undefined} style={{ display: 'flex', flexShrink: 0, color }}>
+      {/* Компонент не создаётся, а ВЫБИРАЕТСЯ из готового набора lucide по имени: состояния
+          у иконки нет, терять при пересоздании нечего */}
+      {/* eslint-disable-next-line react-hooks/static-components */}
       <Icon {...ICON_PROPS} size={size} />
     </span>
   );
@@ -52,6 +55,8 @@ export function ChatTopicBackdrop({ topic, size = 48, opacity = 0.1, align = 'le
       display: 'flex', alignItems: 'flex-start',
       justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
     }}>
+      {/* см. ChatTopicIcon выше: иконка выбирается из набора lucide, а не создаётся */}
+      {/* eslint-disable-next-line react-hooks/static-components */}
       <Icon {...ICON_PROPS} size={size} />
     </div>
   );

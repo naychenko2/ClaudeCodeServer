@@ -7,10 +7,11 @@
 // При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
 // состава, и без загруженного снимка дроп затирал бы чужие монеты.
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { AlarmClock, Plus, Search } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
+import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import { showToast } from '../../lib/toast';
 import type { Session } from '../../types';
 import { useChatActivity, STATUS_COLOR, STATUS_PULSE, type ActivityStatus } from '../../lib/projectActivity';
@@ -37,6 +38,9 @@ export function WallDock({ onOpenWall, slots = 0 }: {
 }) {
   const { chats, projects, focusId } = useWallState();
   const activity = useChatActivity();
+  // Сторожа чатов: у номерка чата с живым сторожем — будильник в нижнем углу
+  // (верхний занят точкой статуса)
+  const watchdogs = useWatchdogPresence();
   // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
   // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
   // курсор не дойдёт до неё, а знать «сюда можно» надо заранее.
@@ -152,6 +156,8 @@ export function WallDock({ onOpenWall, slots = 0 }: {
         const borderColor = colored ? projColor : C.border;
         const st = activity.get(s.id);
         const visible = onWall && idx < slots;
+        // У чата на стене живой сторож: значок в нижнем углу номерка, подпись в плашке
+        const watchdog = watchdogs.sessions.has(s.id);
         return (
           // Обёртка — якорь точки статуса: точка живёт НАД кнопкой (как в доке
           // проектов), внутри кнопки её съедало бы приглушение невлезших
@@ -159,7 +165,7 @@ export function WallDock({ onOpenWall, slots = 0 }: {
             <RailIconButton
               side="left"
               variant="media"
-              label={`${idx + 1}. ${s.name?.trim() || 'Без названия'}${st ? ` — ${CHAT_STATUS_TITLE[st]}` : ''}`}
+              label={`${idx + 1}. ${s.name?.trim() || 'Без названия'}${st ? ` — ${CHAT_STATUS_TITLE[st]}` : ''}${watchdog ? ' — сторож ждёт' : ''}`}
               active={onWall && visible && s.id === focusId}
               wrapper={onWall ? {
                 draggable: true,
@@ -198,6 +204,19 @@ export function WallDock({ onOpenWall, slots = 0 }: {
                 '--cc-dot-c': STATUS_COLOR[st],
                 boxSizing: 'content-box', pointerEvents: 'none',
               } as CSSProperties} />
+            )}
+            {/* Будильник сторожа — в нижнем углу (верхний занят точкой статуса), тот же
+                знак, что у иконки проекта в доке проектов: accent-глиф на подложке цвета
+                холста, читаемый и поверх приглушённого невлезшего номерка */}
+            {watchdog && (
+              <span style={{
+                position: 'absolute', right: -2, bottom: -2, width: 10, height: 10,
+                borderRadius: R.full, background: C.bgMain, border: `2px solid ${C.bgMain}`,
+                boxSizing: 'content-box', pointerEvents: 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <AlarmClock size={10} strokeWidth={2.4} color={C.accent} />
+              </span>
             )}
           </span>
         );

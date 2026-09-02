@@ -1416,10 +1416,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     notify: online && isNotifySupported(),
     dossier: !!project && online,
     expiry: online,
-    // Архив всегда доступен: сетевой клиент PUT /api/chats/{id}/archived есть в
-    // любом онлайн-чате, и compact-колонка стены намеренно оставляет архив снаружи —
-    // она и так узкая, и в архивный чат возвращают из той же колонки через шапку
-    archive: online && !compact,
+    // Архив доступен и в узкой колонке «Стены»: сетевой клиент
+    // PUT /api/chats/{id}/archived есть в любом онлайн-чате, а ряд от него не распухнет —
+    // на стене действие по умолчанию лежит в «⋯» (WALL_ACTIONS_HIDDEN_BY_DEFAULT)
+    archive: online,
     delete: !!onChatDeleted && online && !compact,
   };
   const headerActions = CHAT_ACTION_ORDER.filter(k => headerActionAvailable[k]);

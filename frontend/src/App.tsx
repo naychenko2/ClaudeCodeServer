@@ -310,6 +310,18 @@ export default function App() {
     return () => window.removeEventListener('cc-open-note', open)
   }, [])
 
+  // Открытие внепроектного чата по id: переключаем раздел на «Чаты» и кладём id в
+  // cc_open_chat — ChatsPage подхватит при монтировании. Канал общий с форком чата
+  // (cc-open-chat) и уведомлениями проактивных персон.
+  // Объявлено ДО эффекта-слушателя ниже: обращение к функции выше её объявления не даёт
+  // эффекту видеть свежее значение (react-hooks/immutability).
+  const openChatById = (chatId: string) => {
+    localStorage.setItem('cc_open_chat', chatId)
+    localStorage.setItem(HUB_TAB_KEY, 'chats')
+    setHubTab('chats')
+    navToSection({ screen: 'chats', chatId })
+  }
+
   // Форк чата от лица другой персоны (кнопка «Сменить персону» в чате) для глобальной
   // персоны: переключаемся в раздел «Чаты», где ChatsPage откроет новый чат по id.
   // Канал общий с уведомлениями проактивных персон (#/chats/{id}) — все они зовут
@@ -685,6 +697,13 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // Зеркала навигационных функций, объявленных НИЖЕ этого эффекта: обращение к ним прямо
+  // из обработчика читало бы переменную выше её объявления и не давало эффекту видеть
+  // свежую версию (react-hooks/immutability). Переносить сами функции сюда нельзя — они
+  // тянут за собой openProject и navPush/navReplace. Приём тот же, что у openUrlRef ниже.
+  const openProjectFromHomeRef = useRef<((p: Project) => void) | null>(null)
+  const switchHubTabRef = useRef<((t: HubTabValue) => void) | null>(null)
+
   // Синхронизация раздела с URL при внешней смене hash. Внутренняя навигация (navPush/
   // navReplace) идёт через pushState/replaceState и сама НЕ диспатчит hashchange → рекурсии
   // нет. Этот обработчик ловит остальные источники смены URL — ручную вставку hash в
@@ -704,7 +723,7 @@ export default function App() {
           api.projects.list()
             .then(list => {
               const p = list.find(x => x.id === target.projectId)
-              if (p) openProjectFromHome(p)
+              if (p) openProjectFromHomeRef.current?.(p)
             })
             .catch(() => { /* офлайн/нет доступа — оставляем текущий экран */ })
         }
@@ -713,7 +732,7 @@ export default function App() {
       if (target.screen === 'projects') {
         // #/projects — закрыть открытый проект и уйти к списку (та же логика, что
         // у switchHubTab('projects') при повторном клике по активной пилюле «Проекты»).
-        if (hubTab !== 'projects' || project) switchHubTab('projects')
+        if (hubTab !== 'projects' || project) switchHubTabRef.current?.('projects')
         return
       }
       // Маппинг экранов хаба → HubTabValue.
@@ -734,11 +753,12 @@ export default function App() {
           if (target.moduleId) next = `module:${target.moduleId}` as HubTabValue
           break
       }
-      if (next && next !== hubTab) switchHubTab(next)
+      if (next && next !== hubTab) switchHubTabRef.current?.(next)
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- нужен свежий hubTab/project при срабатывании; switchHubTab/openProjectFromHome стабильны между рендерами
+    // Свежие hubTab/project нужны при срабатывании, поэтому они в зависимостях;
+    // switchHubTab/openProjectFromHome зовутся через зеркала-рефы и сюда не попадают
   }, [hubTab, project]);
 
   const openProject = (p: Project) => {
@@ -867,6 +887,11 @@ export default function App() {
     else if (cur?.screen === 'home' && t !== 'home') navPush(dest)
     else navReplace(dest)
   }
+  // Заправка зеркал для эффекта hashchange выше — без зависимостей, на каждый рендер:
+  // обработчик там живёт дольше рендера и обязан звать свежие версии
+  useEffect(() => { openProjectFromHomeRef.current = openProjectFromHome })
+  useEffect(() => { switchHubTabRef.current = switchHubTab })
+
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
   // Задача передаётся через sessionStorage — WorkspacePage подхватывает при монтировании.
   const openTaskInProject = (p: Project, taskId: string) => {
@@ -1074,15 +1099,6 @@ export default function App() {
         })
         .catch(() => {})
     }
-  }
-  // Открытие внепроектного чата по id: переключаем раздел на «Чаты» и кладём id в
-  // cc_open_chat — ChatsPage подхватит при монтировании. Канал общий с форком чата
-  // (cc-open-chat) и уведомлениями проактивных персон.
-  const openChatById = (chatId: string) => {
-    localStorage.setItem('cc_open_chat', chatId)
-    localStorage.setItem(HUB_TAB_KEY, 'chats')
-    setHubTab('chats')
-    navToSection({ screen: 'chats', chatId })
   }
   // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).

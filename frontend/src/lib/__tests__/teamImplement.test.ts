@@ -6,7 +6,6 @@ import type { ChatItem, ServerMessage, SessionTeamImplement, TeamEscalationKind,
 import {
   teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
   teamImplementBadgeAt, TEAM_IMPLEMENT_STOPPED_BADGE_FULL, TEAM_IMPLEMENT_STOPPED_BADGE_SHORT,
-  TEAM_IMPLEMENT_STOPPED_HINT,
   teamEscalationTone, teamEscalationInformational, teamEscalationDetailsMarkdown,
   teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,

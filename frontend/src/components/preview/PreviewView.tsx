@@ -153,7 +153,9 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
               const frame = iframeRef.current
               if (!frame) return
               // У поддомена другой origin: contentWindow.location браузер трогать запретит,
-              // поэтому перезагружаем присваиванием src
+              // поэтому перезагружаем присваиванием src самому себе — это и есть приём
+              // перезагрузки кадра, а не опечатка
+              // eslint-disable-next-line no-self-assign
               if (externalUrl) frame.src = frame.src
               else frame.contentWindow?.location.reload()
             }} title="Обновить">

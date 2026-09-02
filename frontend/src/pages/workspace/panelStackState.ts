@@ -1078,7 +1078,6 @@ function createPanelZones(ns: string, opts?: {
     // exclusive/activeSide/сигналы — runtime: в localStorage не пишем,
     // иначе флаг поднимался бы на WallPage и при откате кода. sanitizeZones
     // обнулит их и при чтении — двойная защита.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructure to omit
     const { exclusive: _exclusive, activeSide: _activeSide, closeCompactSignal: _closeCompactSignal, restoreCompactSignal: _restoreCompactSignal, ...rest } = _zones;
     lsSet(KEY, JSON.stringify(rest));
   }

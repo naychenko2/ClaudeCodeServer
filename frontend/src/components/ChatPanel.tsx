@@ -976,7 +976,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       startSpeaking(spoken, turnVoicePersonaId(items, session.personaId));
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
+    // Фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
     if (text) startSpeaking(text, turnVoicePersonaId(items, session.personaId));
   }, [items, session.id, session.personaId, voiceMode, voiceDigest, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
 
@@ -1008,18 +1008,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         if (streamRef.current !== s) return; // стрим уже сброшен (новый ход/чат)
         streamRef.current = null;
         streamStRef.current = TURN_STREAM_INIT;
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- финал озвучки: микрофон петли открывается именно отсюда
+        // Финал озвучки: микрофон петли открывается именно отсюда
         setSpeechPhase('idle');
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- вместе с фазой: подсветка говорящей гаснет ровно тогда, когда смолкает голос
+        // Вместе с фазой: подсветка говорящей гаснет ровно тогда, когда смолкает голос
         setSpeakingPersonaId(null);
         // Голос захватывается ОДИН раз на весь ход: пакеты синтезируются заранее
         // (prefetch), и смена голоса посреди хода выбросила бы оплаченный пакет
       }, voiceId, session.id);
       streamRef.current = s;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- см. startSpeaking: та же дисциплина токена
+      // См. startSpeaking: та же дисциплина токена
       setSpeechPhase('willSpeak');
       setSpeechPhase('speaking');
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- подсветка говорящей зажигается тем же кадром, что и фаза
+      // Подсветка говорящей зажигается тем же кадром, что и фаза
       setSpeakingPersonaId(voiceId ?? null);
     }
     for (const c of r.chunks) streamRef.current!.enqueue(c);
@@ -2280,7 +2280,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // start. null = «по умолчанию» (показать последние WINDOW_FIRST) — до первого действия
   // пользователя окно следует за концом ленты.
   const [hiddenCount, setHiddenCount] = useState<number | null>(null);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс окна при смене чата: панель переиспользуется между сессиями (без key), как и mode выше
+  // Сброс окна при смене чата: панель переиспользуется между сессиями (без key), как и mode выше
   useEffect(() => { setHiddenCount(null); }, [session.id]);
   const hidden = Math.min(
     hiddenCount ?? Math.max(0, renderedItems.length - WINDOW_FIRST),
@@ -2549,7 +2549,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             teamPlanningIndicatorVisible */}
         {showTeamPlanningIndicator && (() => {
           const plannerId = resolvePlannerPersonaId(teamImplementState, liveTeamPlanning?.personaId, session.personaId);
-          // eslint-disable-next-line react-hooks/rules-of-hooks -- getPersonaById читает нереактивный стор; personasVersion нужен, чтобы бамп заставил пересчитать (deps через key в ChatPanel)
+          // getPersonaById читает нереактивный стор; personasVersion нужен, чтобы бамп заставил пересчитать (deps через key в ChatPanel)
           const plannerPersona = plannerId ? getPersonaById(plannerId) : null;
           return (
             <TeamPlanningIndicator

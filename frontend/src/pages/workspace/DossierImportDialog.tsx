@@ -118,7 +118,7 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
   if (!open) return null;
 
   const run = async () => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- переход перед запросом, чтобы нажатая кнопка показала спиннер
+    // Переход перед запросом, чтобы нажатая кнопка показала спиннер
     setPhase('loading');
     try {
       const res = await api.dossiers.importRun(projectId);

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.CodeGraph;
@@ -133,7 +134,7 @@ public sealed class CodeGraphToolset(
     /// у stdio-ветки.
     /// </summary>
     private bool TryResolve(McpToolCallContext context,
-        out string root, out string? error, out bool projectless)
+        out string root, [NotNullWhen(false)] out string? error, out bool projectless)
     {
         root = "";
         error = null;

@@ -146,12 +146,17 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   // «Сейчас пойдёт» для превью под пилюлями: на явной модели показываем её саму,
   // на дефолте — резолв места по матрице персоны/слота/назначения
   const explicitModel = (session.model ?? '').trim();
+  // Хук зовём БЕЗУСЛОВНО, а результат применяем по условию: выбор модели прямо в этом
+  // диалоге переключает explicitModel между пустым и заполненным, то есть при условном
+  // вызове число хуков менялось бы между рендерами и React падал бы на «Rendered fewer
+  // hooks than expected». Лишним запрос не будет — превью кэшируется в presets.ts.
+  const effectiveLine = useEffectiveLine({
+    kind: 'action',
+    actionKey: session.personaId ? USAGE.chatPersona : USAGE.chatNew,
+  });
   const previewLine = explicitModel
     ? `Сейчас пойдёт: ${modelLabel(explicitModel)}`
-    : (useEffectiveLine({
-        kind: 'action',
-        actionKey: session.personaId ? USAGE.chatPersona : USAGE.chatNew,
-      }) ?? 'Сейчас пойдёт: выбираем…');
+    : (effectiveLine ?? 'Сейчас пойдёт: выбираем…');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginTop: 20, width: '100%' }}>

@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Knowledge;
 
 public class WorkspaceKnowledgeStore
 {

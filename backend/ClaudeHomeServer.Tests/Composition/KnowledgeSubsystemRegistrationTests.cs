@@ -59,8 +59,8 @@ public class KnowledgeSubsystemRegistrationTests
         var services = BuildServices(BuildConfig(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
 
         // Синглтоны из блока Program.cs:323 и Program.cs:388 до выноса в подсистему.
-        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.WorkspaceKnowledgeStore));
-        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.KnowledgeBaseCatalogService));
+        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore));
+        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeBaseCatalogService));
 
         // Секция DifyOptions: services.Configure<DifyOptions>(...) регистрирует дескриптор
         // IConfigureOptions<DifyOptions> (через OptionsConfigurationServiceCollectionExtensions),
@@ -71,9 +71,9 @@ public class KnowledgeSubsystemRegistrationTests
 
         // Сервисы из блока Program.cs:668-693 до выноса в подсистему (без 5 форвардеров
         // `IKnowledgeSyncParticipant → {DossierStore, ...}`, которые остаются в Program.cs).
-        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.KnowledgeService));
-        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.ProjectKnowledgeSyncService));
-        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.UserKnowledgeCascade));
+        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeService));
+        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.ProjectKnowledgeSyncService));
+        services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.UserKnowledgeCascade));
 
         // IKnowledgeAlertNotifier (шов нотификатора) + конкретный KnowledgeAlertNotifier.
         services.Should().Contain(s => s.ServiceType == typeof(IKnowledgeAlertNotifier));
@@ -87,7 +87,7 @@ public class KnowledgeSubsystemRegistrationTests
         // `AddGatedHostedService<ProjectKnowledgeTurnSync>(config)` — hosted-мост событий хода
         // Claude на FileService.OnMutated. В тестах среда не Testing по умолчанию, гейт пропускает
         // регистрацию; ищем по ImplementationType (AddHostedService<T>).
-        services.Should().Contain(s => s.ImplementationType == typeof(ClaudeHomeServer.Services.ProjectKnowledgeTurnSync));
+        services.Should().Contain(s => s.ImplementationType == typeof(ClaudeHomeServer.Services.Knowledge.ProjectKnowledgeTurnSync));
     }
 
     // Инвариант «`KnowledgeIndexReconciler` и его hosted указывают на ОДИН инстанс»:
@@ -169,10 +169,10 @@ public class KnowledgeSubsystemRegistrationTests
 
         // Если KnowledgeSubsystem отсутствует в Program.cs — любой из этих резолвов
         // бросит InvalidOperationException «Unable to resolve service for type …».
-        sp.GetRequiredService<ClaudeHomeServer.Services.KnowledgeService>();
-        sp.GetRequiredService<ClaudeHomeServer.Services.WorkspaceKnowledgeStore>();
-        sp.GetRequiredService<ClaudeHomeServer.Services.ProjectKnowledgeSyncService>();
-        sp.GetRequiredService<ClaudeHomeServer.Services.KnowledgeBaseCatalogService>();
+        sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeService>();
+        sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore>();
+        sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.ProjectKnowledgeSyncService>();
+        sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeBaseCatalogService>();
         sp.GetRequiredService<KnowledgeIndexReconciler>();
 
         // Пять форвардеров IKnowledgeSyncParticipant остаются в Program.cs (кросс-вертикальный

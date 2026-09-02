@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Controllers;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Knowledge;
 
 /// <summary>
 /// Каталог баз знаний Dify под пользователя: список релевантных (личные + публичные),

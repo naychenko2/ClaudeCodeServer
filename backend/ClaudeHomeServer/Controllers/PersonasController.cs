@@ -6,6 +6,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Tts;

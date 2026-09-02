@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.CodeGraph.Core;
 using ClaudeHomeServer.Services.CodeGraph.Roslyn;
+using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 

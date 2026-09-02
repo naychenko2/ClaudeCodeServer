@@ -430,8 +430,10 @@ public class SubsystemBoundaryTests
         // 1) `SessionManager`/`ProjectManager`/`TaskManager`/`FileService`/`UserStore`
         //    — общая инфраструктура (DossierCaptureService.cs:39-42, DossierStore.cs:41-42,
         //    DossierDiscussionService.cs:27, DossierRecallService:tasks/file params).
-        // 2) `KnowledgeService` (DossierStore.cs:40, опциональный параметр ctor) — тот же
-        //    шов «вертикаль → спинка», что у `Spend` (KnowledgeService — общий для Dify-синка).
+        // 2) `KnowledgeService` (DossierStore.cs:40, опциональный параметр ctor) — клиент
+        //    Dify, шов «вертикаль → спинка» по аналогии с `Spend` (KnowledgeService — общий
+        //    для Dify-синка). После переноса в `Services.Knowledge` имя в FullName сохраняется,
+        //    поэтому и тут обновляем префикс.
         // 3) `FeatureFlagService` (DossierAutoExporter.cs:44, DossierAutoImporter.cs:36) —
         //    гейт флага `change-dossiers-recall` владельца.
         // Префиксы-швы:
@@ -478,8 +480,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.TaskManager",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.KnowledgeService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
+                    "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
                     // DossierStore — участник реконсайлера error-документов Dify
                     // (KnowledgeIndexReconciler, ADR-004 §4); public-метод ListTargets
                     // возвращает `IReadOnlyList<Knowledge.KnowledgeSyncTarget>` —
@@ -488,31 +490,49 @@ public class SubsystemBoundaryTests
                     // (DossierStore имплементирует интерфейс) рефлексия не видит,
                     // см. «Известное ограничение» в шапке. Форвардер регистрации
                     // `IKnowledgeSyncParticipant → DossierStore` остаётся в блоке
-                    // Knowledge (Program.cs:~688) до выделения Knowledge — отдельный
-                    // шаг волны 3.
+                    // Knowledge (Program.cs:~688) — кросс-вертикальный клей.
                     "ClaudeHomeServer.Services.Knowledge.KnowledgeSyncTarget",
                     "ClaudeHomeServer.Protocol.StoredMessage",
                 }),
         },
         // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Сторож проверяет
-        // только типы из `Services.Knowledge` (KnowledgeAlertNotifier, KnowledgeIndexReconciler,
-        // IKnowledgeSyncParticipant/KnowledgeSyncTarget) — `KnowledgeService`/`WorkspaceKnowledgeStore`
-        // /`KnowledgeBaseCatalogService`/`ProjectKnowledgeSyncService`/`UserKnowledgeCascade` живут
-        // в КОРНЕ `ClaudeHomeServer.Services` и этой записью НЕ покрываются (это сознательное
-        // ограничение: чтобы перенести их в `Services.Knowledge` и закрыть проверкой, нужен
-        // отдельный шаг с переименованием namespace и правкой всех импортов; см. шапку
-        // KnowledgeSubsystem.cs).
-        // Допуски:
-        // 1) `NotificationService` (Services/ корень) — `KnowledgeAlertNotifier` шлёт алерт
-        //    владельцу через общий нотификатор (KnowledgeAlertNotifier.cs:23-24), это
-        //    «вертикаль → спинка» (общая инфраструктура, как у Git/Tts/Images/Reader).
-        // 2) `NotificationStore` (Services/ корень) — там же, для чтения `LastNotifiedAtAsync`.
-        // 3) `KnowledgeService` (Services/ корень) — клиент Dify, `KnowledgeIndexReconciler`
-        //    вызывает `ListAllDocumentsAsync` (KnowledgeIndexReconciler.cs:225). До переноса
-        //    `KnowledgeService` в `Services.Knowledge` тип живёт в корне.
-        // 4) `DifyDocumentItem`/`DifyDocumentsPage` (Services/ корень) — возвращаемые типы
-        //    `KnowledgeService.ListAllDocumentsAsync`, материализуются в полях async-state-машины
-        //    `KnowledgeIndexReconciler+<ProcessTargetAsync>d__29` и в лямбде `<>c`.
+        // типы из `Services.Knowledge` (KnowledgeAlertNotifier, KnowledgeIndexReconciler,
+        // IKnowledgeSyncParticipant/KnowledgeSyncTarget, KnowledgeService, WorkspaceKnowledgeStore,
+        // KnowledgeBaseCatalogService, ProjectKnowledgeSyncService, UserKnowledgeCascade,
+        // а также вложенные типы KnowledgeService — DifyDocumentItem/DifyDocumentsPage).
+        // Префикс-шов: `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для событий
+        // `knowledge_changed` (KnowledgeController, DifyToolset) и `ProjectKnowledgeTurnSync`
+        // (hosted-мост событий хода Claude на FileService.OnMutated).
+        // Допуски к корню Services — точечные (по образцу Dossiers/Spend):
+        // 1) `NotificationService`/`NotificationStore` (Services/ корень) — `KnowledgeAlertNotifier`
+        //    шлёт алерт владельцу через общий нотификатор (KnowledgeAlertNotifier.cs:23-24),
+        //    «вертикаль → спинка» (общая инфраструктура).
+        // 2) `UserStore` (Services/ корень) — `KnowledgeBaseCatalogService` (для доступа
+        //    к списку пользователей, по префиксу имени определяется «своя»/«чужая» БЗ).
+        // 3) `ProjectManager` (Services/ корень) — `ProjectKnowledgeSyncService`/
+        //    `ProjectKnowledgeTurnSync`/`UserKnowledgeCascade` для разрешения пути
+        //    проекта и удаления каскада (UserKnowledgeCascade удаляет все БЗ проекта).
+        // 4) `FileService` (Services/ корень) — `ProjectKnowledgeSyncService` подписан
+        //    на `FileService.OnMutated` через мост хода, видит поле типа `IHubContext`.
+        // 5) `SessionManager` (Services/ корень) — `ProjectKnowledgeTurnSync` пишет
+        //    `session_known` снапшоты через `SessionManager` (поле `_sessions`).
+        // 6) `PersonaManager`/`PersonaMemoryService` (Services/ корень) — `UserKnowledgeCascade`
+        //    удаляет персональные БЗ и Dify-датасеты персон при удалении пользователя.
+        // 7) `TeamMemoryService` (Services/ корень) — `UserKnowledgeCascade` чистит
+        //    team-memory-датасеты per-проект.
+        // 8) `Dossiers.DossierStore` (Services/Dossiers) — `UserKnowledgeCascade` чистит
+        //    dossiers-датасеты per-проект. Сознательная зависимость: каскадная уборка
+        //    знаний идёт по ВСЕМ владельцам стора «запись → Dify-документ», как и форвардер
+        //    `IKnowledgeSyncParticipant → DossierStore` в Program.cs. Выделение явного
+        //    интерфейса «владелец Dify-датасета» — отдельная задача.
+        // 9) `NotesKnowledgeService` (Services/ корень) — `UserKnowledgeCascade` чистит
+        //    notes-датасет; на него уже есть форвардер `IKnowledgeSyncParticipant →
+        //    NotesKnowledgeService` в Program.cs, каскад идёт той же логикой.
+        // Допуски к `ClaudeHomeServer.Controllers` (DTO):
+        // 10) `KnowledgeBaseSummary`/`KnowledgeBaseDetail`/`KnowledgeDocumentDto`
+        //    (Controllers) — `KnowledgeBaseCatalogService` отдаёт их же и REST, и MCP-тулсету
+        //    (общая оркестрация; ADR-014 §Knowledge). DTO живут в Controllers как
+        //    ASP.NET-контракт ответа — выделение отдельной сборки под общие DTO не делали.
         // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, NotesKnowledgeService,
         // ProjectKnowledgeSyncService, ...}` остаются в Program.cs (кросс-вертикальный клей)
         // и поэтому НЕ входят в allow-list Knowledge.
@@ -522,15 +542,28 @@ public class SubsystemBoundaryTests
                 "Knowledge",
                 "ClaudeHomeServer.Services.Knowledge",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Knowledge" })
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Knowledge",
+                        "ClaudeHomeServer.Hubs",
+                    })
                     .ToArray(),
                 new[]
                 {
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.NotificationStore",
-                    "ClaudeHomeServer.Services.KnowledgeService",
-                    "ClaudeHomeServer.Services.DifyDocumentItem",
-                    "ClaudeHomeServer.Services.DifyDocumentsPage",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.FileService",
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.PersonaMemoryService",
+                    "ClaudeHomeServer.Services.TeamMemoryService",
+                    "ClaudeHomeServer.Services.Dossiers.DossierStore",
+                    "ClaudeHomeServer.Services.NotesKnowledgeService",
+                    "ClaudeHomeServer.Controllers.KnowledgeBaseSummary",
+                    "ClaudeHomeServer.Controllers.KnowledgeBaseDetail",
+                    "ClaudeHomeServer.Controllers.KnowledgeDocumentDto",
                 }),
         },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации

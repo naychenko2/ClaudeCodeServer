@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services;
 

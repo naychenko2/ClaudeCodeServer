@@ -45,23 +45,17 @@ namespace ClaudeHomeServer.Services.Knowledge;
 // Границы (сознательные):
 // - Источник истины — Dify + локальный стор `data/workspace-knowledge.json`. Бэкап идёт
 //   общим правилом `data/`; отдельно ничего не прописываем.
-// - `KnowledgeService`/`ProjectKnowledgeSyncService`/`UserKnowledgeCascade`/`KnowledgeBaseCatalogService`
-//   живут в КОРНЕ `ClaudeHomeServer.Services` (доменная инфраструктура) — сторож границ
-//   в SubsystemBoundaryTests.Boundaries их НЕ покрывает (он сканирует только типы из
-//   `NamespaceRoot`). Это сознательное ограничение: чтобы перенести их в `Services.Knowledge`
-//   и закрыть проверкой, нужен отдельный шаг с переименованием namespace и правкой всех
-//   импортов по проекту. Сейчас ни одна из этих ссылок на корень не нарушает границу
-//   вертикали Knowledge, потому что сам сторож её не видит — но и защиты у нас нет.
-//   TODO на шов: перенести типы в `Services.Knowledge`, тогда правила ниже начнут
-//   работать «по-настоящему».
 // - `ICheapTextRunner` (Services.Llm) — KnowledgeIndexReconciler не использует, но
 //   `ProjectKnowledgeSyncService` (вне записи) при будущем расширении может; сейчас
 //   допуск не нужен.
 // - `NotificationService`/`NotificationStore` (Services/ корень) — `KnowledgeAlertNotifier`
 //   шлёт алерт владельцу через общий нотификатор; это «вертикаль → спинка» (как у Git),
 //   см. `KnowledgeAlertNotifier.cs:23-24`.
-// - `IKnowledgeAlertNotifier`/`KnowledgeIndexReconciler`/`KnowledgeSyncTarget`/`IKnowledgeSyncParticipant`
-//   — свои, в `Services.Knowledge` (покрыты записью Boundaries напрямую).
+// - Все типы подсистемы (`WorkspaceKnowledgeStore`/`KnowledgeService`/`KnowledgeBaseCatalogService`/
+//   `ProjectKnowledgeSyncService`/`UserKnowledgeCascade`/`KnowledgeAlertNotifier`/
+//   `KnowledgeIndexReconciler`/`IKnowledgeSyncParticipant`/`KnowledgeSyncTarget`/
+//   `IKnowledgeAlertNotifier`) живут в `Services.Knowledge` и попадают под префиксный
+//   allow-list сторожа SubsystemBoundaryTests напрямую.
 public sealed class KnowledgeSubsystem : IAppSubsystem
 {
     public string Key => "knowledge";

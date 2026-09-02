@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services.CodeGraph;
+using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;

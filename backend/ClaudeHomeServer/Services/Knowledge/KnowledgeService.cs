@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using Microsoft.Extensions.Options;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Knowledge;
 
 public record DifyDocumentInfo(
     [property: JsonPropertyName("id")] string Id,

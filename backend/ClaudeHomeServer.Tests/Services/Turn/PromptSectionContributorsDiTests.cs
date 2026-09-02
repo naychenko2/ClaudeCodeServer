@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Llm;

@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;

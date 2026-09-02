@@ -7,7 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Knowledge;
 
 // Синхронизация «файл проекта ↔ документ базы знаний Dify»: файл, добавленный в БЗ,
 // отслеживается по карте WorkspaceKnowledge.Docs (relativePath → {DocId, Hash}) — правка

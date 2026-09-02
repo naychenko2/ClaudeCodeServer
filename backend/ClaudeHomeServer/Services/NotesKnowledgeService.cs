@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services;
 

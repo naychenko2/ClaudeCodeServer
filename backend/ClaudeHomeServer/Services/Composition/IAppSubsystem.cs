@@ -22,6 +22,21 @@ public interface IAppSubsystem
     void Register(IServiceCollection services, IConfiguration config);
 }
 
+// Опциональная фаза «после Build»: подсистемы, которым нужно выполнить действия
+// на готовом `WebApplication` (регистрация провайдеров графа, миграция стора знаний
+// из старого формата, пост-билд-хуки и т.п.), реализуют этот интерфейс помимо
+// базового `IAppSubsystem`. `UseSubsystems` после `builder.Build()` зовёт
+// `ConfigureApp` в порядке регистрации.
+//
+// Выделено в отдельный интерфейс, а не в default interface method `IAppSubsystem`:
+// в проекте DIM раньше ломал Moq (см. комментарии в `ILlmSessionAdapter.cs`),
+// и подсистемы пишутся без DI-фреймворков для моков, чтобы не плодить второй
+// источник граблей.
+public interface IAppPhaseSubsystem : IAppSubsystem
+{
+    void ConfigureApp(WebApplication app);
+}
+
 // Регистрация подсистем: одна точка входа, через которую Program.cs подключает
 // все внутренние разделы. Защита от дублей `Key` — контрактная гарантия, что
 // `Telemetry:Backends` и `Telemetry:Alerts` не окажутся конкурентами за одну секцию.
@@ -58,8 +73,30 @@ public static class SubsystemRegistration
                     nameof(subsystems));
 
             subsystem.Register(services, config);
+
+            // Регистрация инстанса под интерфейсом — чтобы `UseSubsystems` после
+            // builder.Build() мог резолвить `IEnumerable<IAppSubsystem>` и звать
+            // `ConfigureApp` у тех, кто реализует `IAppPhaseSubsystem`. Без этого
+            // подсистема как объект после Build теряется (Register отработал и забыл).
+            services.AddSingleton<IAppSubsystem>(subsystem);
         }
 
         return services;
+    }
+
+    // Пост-билд шаг: для каждой подсистемы, реализующей `IAppPhaseSubsystem`,
+    // зовём `ConfigureApp(app)` в порядке регистрации. Вызывать ОДИН РАЗ после
+    // `builder.Build()` и до middleware-конвейера — иначе часть действий
+    // (например, регистрация провайдеров графа) придёт позже реального
+    // первого обращения и поведет себя непредсказуемо.
+    public static WebApplication UseSubsystems(this WebApplication app)
+    {
+        var subsystems = app.Services.GetServices<IAppSubsystem>();
+        foreach (var subsystem in subsystems)
+        {
+            if (subsystem is IAppPhaseSubsystem phase)
+                phase.ConfigureApp(app);
+        }
+        return app;
     }
 }

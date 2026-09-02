@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Video;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -88,6 +89,28 @@ public class VideoSubsystemRegistrationTests
 
         primary.UseProxy.Should().BeTrue(
             "YouTube за DPI: через egress-прокси идут метаданные, WithoutEgressProxy тут НЕ звать");
+    }
+
+    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // `TestWebApplicationFactory<Program>` и резолвит типы Video из РЕАЛЬНОГО DI-графа.
+    // Если `new VideoSubsystem()` убрали из `AddSubsystems(...)` — резолв падает
+    // с InvalidOperationException, регрессия ловится.
+    //
+    // `YouTubeOAuthService` НЕ резолвим напрямую: у него исходящая зависимость
+    // `McpSecretStore` (сознательная граница, см. CLAUDE.md «Раздел „Видео“»), и полный
+    // резолв под нагрузкой тяжёл; вместо него — реестр провайдеров, который создаётся
+    // подсистемой и доступен всегда.
+    [Fact]
+    public void Program_RegistersVideoSubsystem_ServicesResolvable()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        sp.GetRequiredService<VideoOptions>();
+        sp.GetRequiredService<VideoProviderRegistry>();
+        // IVideoProvider собирается через IEnumerable; оба провайдера (Smotrim + YouTube)
+        // обязаны быть в контейнере — иначе пустой набор и `video`-панель падает в офлайн.
+        sp.GetRequiredService<IEnumerable<IVideoProvider>>().Should().HaveCount(2);
     }
 
     private static ServiceProvider BuildServiceProvider()

@@ -618,6 +618,80 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.WatchdogsChangedMessage",
                 }),
         },
+        // Memory — долгая память персон и общая память команды проекта. Подсистема
+        // регистрирует только фасады (PersonaMemoryService/TeamMemoryService + их
+        // консолидация/autolearn), а общий слой ядра (MemoryWriteResolver/MemoryDify/
+        // MemoryConsolidationCore/AutolearnGate/...) живёт в этом namespace уже давно.
+        // Допуски к корню Services — точные (по образцу Dossiers/Spend):
+        // 1) `SessionManager`/`ProjectManager`/`PersonaManager` (Services/ корень) —
+        //    общая инфраструктура для фасадов: SessionManager (подписка autolearn на
+        //    OnSessionMessage), ProjectManager (резолв проекта для team-memory),
+        //    PersonaManager (список персон для консолидации).
+        // 2) `ProjectEventLogService` (Services/ корень) — `PersonaMemoryAutolearnService`
+        //    логирует событие памяти в ленту проекта.
+        // Префиксы-швы (как у Dossiers/Spend):
+        // 3) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify и `IKnowledgeSyncParticipant`;
+        //    `MemoryDify` использует `KnowledgeService`/`KnowledgeSyncTarget` для записи
+        //    в Dify-датасеты (per-persona/per-project).
+        // 4) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для консолидации (LLM-merge)
+        //    и autolearn (извлечение фактов из транскрипта). Префикс-шов, как у
+        //    `Git`/`Backgrounds`/`Deploy`/`Spend`/`Dossiers`.
+        // 5) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации о новых
+        //    записях памяти команды (`TeamMemoryAutolearnService` шлёт `memory_changed`
+        //    в ленту сессии).
+        // Точечный допуск к `ClaudeHomeServer.Protocol`:
+        // 6) `StoredMessage`/`StoredUserMessage`/`StoredTextMessage` — `AutolearnGate.CheckContent`
+        //    и `LastTurnLength` принимают `IReadOnlyList<StoredMessage>` (видна в public-методе),
+        //    `switch` по `StoredUserMessage`/`StoredTextMessage` в `LastTurnLength` — это
+        //    pattern matching, рефлексия поля типа не видит, но аргументы публичного метода —
+        //    видит. Префикс `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил
+        //    новые зависимости от любых из ~105 публичных типов протокола.
+        // ⚠ Два форвардера `IKnowledgeSyncParticipant → {PersonaMemoryService,
+        // TeamMemoryService}` остаются в Program.cs (кросс-вертикальный клей реконсайлера
+        // error-документов Dify) и потому НЕ входят в allow-list Memory.
+        // Сами шесть типов фасадов (`PersonaMemoryService`/`TeamMemoryService`/`*Consolidation*`/
+        // `*Autolearn*`) пока живут в `ClaudeHomeServer.Services` (root) — задача явно
+        // ограничилась переносом регистраций, без рефакторинга имён/неймспейсов; полный
+        // переезд в `Services.Memory` — отдельная задача. Поэтому в allow-list они идут
+        // ТОЧНЫМИ именами, а не префиксом корня `ClaudeHomeServer.Services` (префикс был бы
+        // разрушением default-deny).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Memory",
+                "ClaudeHomeServer.Services.Memory",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Memory",
+                        "ClaudeHomeServer.Services.Knowledge",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Hubs",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.ProjectEventLogService",
+                    // Шесть фасадов памяти — собственность подсистемы Memory, но пока
+                    // остаются в `ClaudeHomeServer.Services` (root). Точные имена, чтобы
+                    // не открывать корневой префикс.
+                    "ClaudeHomeServer.Services.PersonaMemoryService",
+                    "ClaudeHomeServer.Services.PersonaMemoryConsolidationService",
+                    "ClaudeHomeServer.Services.PersonaMemoryAutolearnService",
+                    "ClaudeHomeServer.Services.TeamMemoryService",
+                    "ClaudeHomeServer.Services.TeamMemoryConsolidationService",
+                    "ClaudeHomeServer.Services.TeamMemoryAutolearnService",
+                    // AutolearnGate.CheckContent / LastTurnLength — public-метод
+                    // с параметром IReadOnlyList<StoredMessage> и switch по
+                    // StoredUserMessage/StoredTextMessage.
+                    "ClaudeHomeServer.Protocol.StoredMessage",
+                    "ClaudeHomeServer.Protocol.StoredUserMessage",
+                    "ClaudeHomeServer.Protocol.StoredTextMessage",
+                }),
+        },
     };
 
     [Theory]

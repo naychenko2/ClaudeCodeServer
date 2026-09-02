@@ -162,8 +162,8 @@ builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
-builder.Services.AddSingleton<PersonaMemoryService>();
-builder.Services.AddSingleton<TeamMemoryService>();
+// Память персон и команды (волна 3, шаг 4) — DI в подсистеме `MemorySubsystem`:
+// PersonaMemoryService и TeamMemoryService регистрируются там же.
 // Паспорта изменений (ADR-004) — DI в подсистеме `DossiersSubsystem`
 // (волна 3, шаг 2): InstanceSecretsProvider/DossierStore/DossierCaptureState/
 // DossierRecallService/DossierDiscussion{Store,Service}/DossierCaptureService (hosted)/
@@ -209,16 +209,12 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 // подсистемой ImagesSubsystem вместе с прочими внутренними разделами ниже
 // (`AddSubsystems(...)`). FalImageService регистрируется внутри как драйвер —
 // отдельный AddSingleton дал бы второй экземпляр того же типа.
-// Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
-builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
-builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
-// Autolearn — singleton + hosted: PersonaAskService пишет память после консультаций напрямую
-builder.Services.AddSingleton<PersonaMemoryAutolearnService>();
-builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<PersonaMemoryAutolearnService>());
-// Консолидация памяти команды проекта — singleton + hosted: team-autolearn ставит заявки RequestConsolidation
-builder.Services.AddSingleton<TeamMemoryConsolidationService>();
-builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
-builder.Services.AddGatedHostedService<TeamMemoryAutolearnService>(builder.Configuration);
+// Память персон и команды (волна 3, шаг 4) — DI в подсистеме `MemorySubsystem`:
+// PersonaMemoryService/PersonaMemoryConsolidationService/PersonaMemoryAutolearnService/
+// TeamMemoryService/TeamMemoryConsolidationService/TeamMemoryAutolearnService.
+// Форвардеры `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService}`
+// остаются ниже (Program.cs:~688-691) сознательно — кросс-вертикальный клей
+// реконсайлера error-документов Dify, не собственность Memory.
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
 // Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
@@ -557,6 +553,11 @@ builder.Services.AddSubsystems(builder.Configuration,
     // учитывает; порядок здесь — очередь старта IHostedService и читаемость
     // (нижние слои раньше).
     new ClaudeHomeServer.Services.Dossiers.DossiersSubsystem(),
+    // Memory — после Dossiers: фасады памяти персон/команды опираются на
+    // общий слой `Services.Memory` (MemoryWriteResolver/MemoryDify), который сам
+    // независим; но порядок «после Dossiers» держит логически: оба раздела пишут
+    // в Dify-датасеты и идут в одной волне вертикалей памяти/знаний.
+    new ClaudeHomeServer.Services.Memory.MemorySubsystem(),
     // Knowledge — после Dossiers: вертикаль Dify RAG (Knowledge.md + ADR-013).
     // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, ...}` остаются в
     // Program.cs (кросс-вертикальный клей), поэтому KnowledgeSubsystem не зависит
@@ -685,6 +686,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageSt
 // Остаются в композиционном корне сознательно — кросс-вертикальный клей, не собственность
 // Knowledge: перенос в KnowledgeSubsystem дал бы ей прямые ссылки на DossierStore и
 // прочие чужие вертикали.
+// Первые два (Persona/TeamMemoryService) — фасады подсистемы Memory (волна 3, шаг 4);
+// `AddSingleton` ниже — форвардеры IKnowledgeSyncParticipant для них, а сами
+// регистрации этих сервисов переехали в `MemorySubsystem.Register`.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<PersonaMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(

@@ -314,7 +314,6 @@ export function PlanRemarks({ contentRef, planText, containerToken, status, onSu
     });
     // openForm — function declaration, хоистится; token гарантирует срабатывание
     // на каждый клик, остальные поля запроса — данные, а не сигнал
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalRequest, status]);
 
   function openForm(anchor: FormAnchor) {

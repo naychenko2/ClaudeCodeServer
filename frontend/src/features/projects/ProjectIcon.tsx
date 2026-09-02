@@ -33,6 +33,9 @@ function ProjectGlyph({ project, size }: { project: Project; size: number }) {
   const Named = componentForName(glyph?.name);
   if (Named) {
     return (
+      // Компонент не создаётся, а ВЫБИРАЕТСЯ по имени из белого списка lucide (ADR-009 §5):
+      // состояния у иконки нет, терять при пересоздании нечего
+      // eslint-disable-next-line react-hooks/static-components
       <Named
         size={inner}
         strokeWidth={stroke}

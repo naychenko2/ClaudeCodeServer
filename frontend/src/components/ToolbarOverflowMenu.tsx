@@ -101,6 +101,10 @@ export function ToolbarOverflowMenu({
   const triggerElRef = useRef<HTMLElement | null>(null);
   const labelId = useId();
 
+  // Объявлено ДО эффектов, которые её зовут: обращение к функции выше её объявления
+  // не даёт эффекту видеть актуальное значение (react-hooks/immutability)
+  const close = () => { setOpen(false); setAnchor(null); };
+
   // Закрытие: клик вне (десктоп-дропдаун) + Esc (везде)
   useEffect(() => {
     if (!open) return;
@@ -136,9 +140,8 @@ export function ToolbarOverflowMenu({
       scrollParents.forEach(t => t.removeEventListener('scroll', close));
       window.removeEventListener('resize', close);
     };
-    // close стабилен по составу (setOpen/setAnchor) — без него в зависимостях эффект
-    // пересоздавался бы каждый рендер
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // close стабилен по составу (setOpen/setAnchor) — в зависимостях не нужен, иначе
+    // эффект пересоздавался бы каждый рендер
   }, [open]);
 
   // Замер после открытия: список влез — снимаем прокрутку, чтобы поповер образца
@@ -150,10 +153,8 @@ export function ToolbarOverflowMenu({
   // Длина списка, а не сам массив: он пересоздаётся каждым рендером, и эффект бежал
   // бы снова уже с раскрытым поповером — тот увеличивает scrollHeight, прокрутка
   // возвращалась бы ровно в момент, ради которого её и снимали
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isMobile, items?.length]);
 
-  const close = () => { setOpen(false); setAnchor(null); };
   // Расчёт направления дропдауна по rect якоря (кнопка «⋯» или точка курсора при
   // внешнем открытии) — общая часть toggle и openTrigger-эффекта
   const openNear = (anchorRect: DOMRect | null | undefined) => {

@@ -430,6 +430,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Dify напрямую через KnowledgeService, ключ не покидает бэкенд; хвост — сессия-вызыватель
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.DifyToolset>();
+// Сторожа чатов: хвост /mcp/watch/{sessionId} — сессия-вызыватель; право на чат
+// проверяется на каждый tools/list и вызов (WatchToolset.TryResolve)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.WatchToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 builder.Services.AddSingleton<BoardService>();
 // Шина событий хода (ADR-013): один экземпляр на инстанс, изоляция владельцев — через
@@ -445,6 +449,21 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
 // Новый контрибьютор — одна строка в PromptSectionContributorsDi.AddPromptSectionContributors().
 builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
+// Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
+// ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
+// (см. AddHosted), юниты гоняют TickAsync напрямую
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.IWatchdogEnvironment,
+    ClaudeHomeServer.Services.Watchdog.WatchdogEnvironment>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.IWatchdogCommandRunner,
+    ClaudeHomeServer.Services.Watchdog.WatchdogCommandRunner>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.IWatchdogAlarm,
+    ClaudeHomeServer.Services.Watchdog.WatchdogAlarm>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Watchdog.WatchdogService>(builder.Configuration);
+// Снапшот сторожей + событие watchdogs_changed (визуализация для фронта): подписка на
+// Changed стора живёт в конструкторе — слушатель обязан существовать к первым постановкам;
+// прогрев ниже делает подписку независимой от hosted-цикла
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
 builder.Services.AddSingleton<ModelCatalogService>();
@@ -928,6 +947,8 @@ if (!inspectionMode)
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
 app.Services.GetRequiredService<TeamWaveService>();
+// Слушатель событий стора сторожей (watchdogs_changed): подписка встаёт в конструкторе
+app.Services.GetRequiredService<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
 // до первых запросов (иначе ранние правки персон не долетят до .md-файлов).
 // В копии НЕ поднимаем: синк пишет .claude/agents/*.md в реальные папки проектов

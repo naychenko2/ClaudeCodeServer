@@ -390,7 +390,8 @@ public class WorkspaceHttpOwnerIsolationTests : IDisposable
 
             var received = await Task.WhenAny(updated.Task, Task.Delay(15_000));
             received.Should().Be(updated.Task, "task_changed(updated) обязан прийти в группу владельца");
-            updated.Task.Result.GetProperty("task").GetProperty("labels").EnumerateArray()
+            var updatedMsg = await updated.Task;
+            updatedMsg.GetProperty("task").GetProperty("labels").EnumerateArray()
                 .Select(l => l.GetString())
                 .Should().Contain("метка-из-mcp", "в событии — уже обновлённая задача");
         }
@@ -600,7 +601,8 @@ public class WorkspaceHttpOwnerIsolationTests : IDisposable
 
             var received = await Task.WhenAny(updated.Task, Task.Delay(15_000));
             received.Should().Be(updated.Task, "task_changed(updated) обязан прийти в группу владельца");
-            updated.Task.Result.GetProperty("task").GetProperty("labels").EnumerateArray()
+            var updatedMsg = await updated.Task;
+            updatedMsg.GetProperty("task").GetProperty("labels").EnumerateArray()
                 .Should().BeEmpty("в событии — уже обновлённая задача без метки");
         }
         finally { await connection.DisposeAsync(); }

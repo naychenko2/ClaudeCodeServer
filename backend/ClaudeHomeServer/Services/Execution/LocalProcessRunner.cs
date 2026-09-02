@@ -46,7 +46,10 @@ public sealed class LocalProcessRunner : IProcessLauncher
             psi.StandardErrorEncoding = enc;
             if (spec.RedirectStdin) psi.StandardInputEncoding = enc;
         }
-        foreach (var a in spec.Args) psi.ArgumentList.Add(a);
+        // RawArguments — сырая строка ВМЕСТО экранированного списка (см. ProcessSpec):
+        // ArgumentList экранирует " как \", что ломает cmd /s /c с вложенными кавычками
+        if (spec.RawArguments is { } raw) psi.Arguments = raw;
+        else foreach (var a in spec.Args) psi.ArgumentList.Add(a);
         // Сначала выкидываем унаследованное (psi.Environment — копия окружения хоста),
         // потом кладём оверрайды: осознанный Env всегда сильнее системной переменной.
         if (spec.ClearEnv is not null)

@@ -22,6 +22,7 @@ import { ChatPanel } from '../../components/ChatPanel';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useCanHover } from '../../lib/pointer';
 import { useAgentsRunning, useBgCommandRunning } from '../../lib/agentsPresence';
+import { useChatWatchdogs } from '../../lib/watchdogPresence';
 import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
 import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
 
@@ -44,14 +45,18 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   // Живая фоновая работа: ход завершён, статус спокойный — без этого колонка чата,
   // где идёт работа, выглядит ровно как простаивающая. Стену держат открытой именно
   // чтобы следить, поэтому молчать тут дороже всего. Агенты и фоновая команда
-  // (дев-сервер, watch) держат колонку живой одинаково, различает их только подпись
+  // (дев-сервер, watch) держат колонку живой одинаково, различает их только подпись.
+  // Туда же сторож: ход давно завершён, но сервер сам ждёт условие — колонка
+  // обязана выглядеть живой, пока ожидание не кончилось
   const agentsRunning = useAgentsRunning(session.id);
   const bgCommandRunning = useBgCommandRunning(session.id);
-  const busy = status === 'working' || status === 'waiting' || agentsRunning || bgCommandRunning;
+  const watchdogBusy = useChatWatchdogs(session.id);
+  const busy = status === 'working' || status === 'waiting' || agentsRunning || bgCommandRunning || watchdogBusy;
   const busyLabel = status === 'waiting' ? 'ждёт вас'
     : status === 'working' ? 'идёт ход'
       : agentsRunning ? 'работают агенты'
-        : 'фоновая команда';
+        : bgCommandRunning ? 'фоновая команда'
+          : 'сторож ждёт';
   // Вложения композера — per-колонка: загрузка кладёт файл в рабочую папку сессии
   // и возвращает путь сюда; заглушка-[] превращала бы скрепку в молчаливую потерю
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);

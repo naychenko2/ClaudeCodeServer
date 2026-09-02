@@ -99,6 +99,13 @@
 себя не деплоит, заявка в журнал и внешний агент выкатки),
 [ADR-011](adr/ADR-011-lsp-and-codegraph-roles.md) (роли LSP и CodeGraph в навигации по коду:
 уровень символа против уровня типов, свой языковой сервер не делаем);
+[ADR-012-mcp-over-http](adr/ADR-012-mcp-over-http-transport.md) (продуктовые MCP-серверы
+переехали со stdio на HTTP внутри Kestrel: ноль node-процессов на ход),
+[ADR-012-specialty-settings](adr/ADR-012-specialty-settings-single-layer.md) (настройки
+специальностей — один глобальный слой с admin-only записью; номер совпал с транспортом MCP,
+это разные решения),
+[ADR-013](adr/ADR-013-server-chat-watchdogs.md) (серверные сторожа чатов: долгое ожидание
+живёт в бэкенде и будит чат, а не умирает вместе с процессом CLI);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке).
 

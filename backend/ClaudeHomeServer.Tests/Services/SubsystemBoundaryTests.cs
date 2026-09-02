@@ -358,6 +358,49 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Backup.BackupResult",
                 }),
         },
+        // Spend — аналитика расхода токенов (Spend Analytics v2). Самая «толстая» по
+        // количеству зависимостей вертикаль волны 2: дашборд резолвит имена/метаданные
+        // по всем доменам, а фоновый maintenance — ещё историю чатов для backfill.
+        // Допуски к корню Services — точечные:
+        // 1) `SessionManager`, `ProjectManager`, `TaskManager`, `PersonaManager`,
+        //    `UserStore` (`SpendAnalyticsService.cs:65-67`) — резолв имён и метаданных
+        //    в дашборде (чаты, проекты, задачи, персоны, пользователи).
+        // 2) `ChatHistoryService` (`SpendMaintenanceService.cs:15`) — backfill истории
+        //    расхода из сохранённых транскриптов при первом запуске.
+        // 3) `ClaudeHomeServer.Services.Llm` — `LlmProviderRegistry` для расчёта
+        //    стоимости по прайсу провайдера (тот же шов «вертикаль → спинка LLM», что
+        //    у `Git`/`Backgrounds`/`Deploy`): цены живут в одном месте на все
+        //    потребительские разделы, вынос из SharedAllowedPrefixes держит гейт узким.
+        // 4) `ClaudeHomeServer.Protocol` — типы WS-событий (`StoredMessage`/`StoredResultMessage`
+        //    и связанные), которые `SpendMaintenanceService.BackfillAsync` разбирает из
+        //    истории чатов при первичном наполнении стора; тот же шов, что у `Git`/`Deploy`,
+        //    читающих историю/события протокола.
+        // `SpendStore` форвардит `ISpendCollector` через `sp => ...GetRequiredService<SpendStore>()` —
+        // инвариант «интерфейс и конкретный тип указывают на ОДИН инстанс» (тест
+        // `SpendSubsystemRegistrationTests.Register_SpendCollector_IsSameInstanceAsStore`).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Spend",
+                "ClaudeHomeServer.Services.Spend",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Spend",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Protocol",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.ChatHistoryService",
+                }),
+        },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
         // `IAppSubsystem` (подаётся в Program.cs как обычные `AddSingleton`/
         // `AddHostedService`), поэтому попадает в таблицу вручную — зато сторож

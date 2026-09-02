@@ -255,15 +255,7 @@ builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
-// Аналитика расхода токенов (Spend Analytics v2): хранилище записей (детали + дневные
-// агрегаты), запросы дашборда и обслуживание (backfill истории + rollup за окном)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendStore>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.ISpendCollector>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Spend.SpendStore>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsService>();
-// Замеры размера постановки задач по секциям (разрез «Задача» в аналитике)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>(builder.Configuration);
+// Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальная LLM (Ollama или llama-server, выбор по LocalLlm:Provider) для
 // бесплатного ранжирования действий мимо claude CLI. Обе реализации регистрируются
@@ -565,6 +557,7 @@ builder.Services.AddSubsystems(builder.Configuration,
     // CodeGraph — после Git, потому что это первая подсистема с пост-билд фазой
     // (`IAppPhaseSubsystem.ConfigureApp` регистрирует языковые провайдеры `.cs`/`.ts`/`.tsx`).
     new ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem(),
+    new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),

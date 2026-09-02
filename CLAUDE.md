@@ -290,16 +290,32 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
 процессе за реверс-прокси, эти — внутри Microsoft DI, без выгрузки и hot-plug.
 
 **Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`,
-`Models`, `Services.Http`/`Security`) и от явных швов (например,
+`Models`, `Services.Http`/`Composition`/`Mcp`) и от явных швов (например,
 `IDesktopChatDirectory`), но НИКОГДА от другой вертикали напрямую.
 Нужна связь — два пути: событие `TurnEventBus` ([ADR-013](docs/adr/ADR-013-turn-event-bus.md))
-или явный интерфейс-шов. Удерживается тестом `SubsystemBoundaryTests`
-(рефлексия по сборке, источник правды — сборка, не текст). Сейчас сторож
-проверяет только **4 явно перечисленных неймспейса** (`Services.Desktop`,
-`Services.Backup`, `Services.Knowledge`, `Services.Personas` как
-запрещённые ссылки из `Services.Video`), а не весь `Services.*` —
-покрытие default-allow и расширение на остальные пары вертикалей
-запланировано отдельной задачей.
+или явный интерфейс-шов. Удерживается двумя сторожами:
+- `SubsystemBoundaryTests` (рефлексия по сборке, источник правды — сборка,
+  не текст): default-deny + точечный allow-list. Контракт разделяет
+  «префикс поддерева» и «точное имя namespace»: `AllowedNamespacePrefixes`
+  открывает поддеревья (`X.` и `X`), `AllowedExactNamespaces` — ровно
+  указанный тип по `FullName` (полезно для nested-типов вроде
+  `SsrfGuard+AddressCheck` и для точечных синглтонов из корня `Services`
+  типа `PersonaManager`/`SessionManager`). Покрытие — все 8 вертикалей
+  (Video, Yandex, Reader, Images, Tts, Git, Deploy, Watchdog).
+- `SubsystemBoundaryCoverageTests`: каждая реализация `IAppSubsystem` в
+  сборке должна иметь строку в `Boundaries`; вертикали без подсистемы
+  (`Services.Watchdog` сейчас единственная) перечисляются явно. Ловит
+  «новая подсистема/вертикаль забыта в таблице» — без этого теста свежее
+  подразделение проходило молча, и границы по нему не работали.
+
+Известное ограничение сторожей (расширение до IL — отдельная задача):
+читаются поля, параметры конструкторов, публичные свойства и сигнатуры
+публичных методов, но НЕ тела методов и IL. Невидимы статические вызовы
+(`DeployHost.cs:47` → `GitService.IsGitRepo`, `DeployHost.cs:122` →
+`Backup.InstanceLock.TryAcquireDeploy()`, `ReaderService.cs:220,305-307`
+→ `SsrfGuard.*`) и `sp.GetRequiredService<T>()`. Шов через статический
+вызов ловится отдельным явным `AllowedNamespacePrefixes` (как
+`Services.Backup` для Deploy).
 
 **Разведка по кандидатам** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md)):
 **Video — пилот** ✅ (`VideoSubsystem`, 1 контроллер, 0 hosted, 1 исходящая
@@ -317,14 +333,13 @@ Microsoft DI не выгружает контейнер по конструкц�
 `InternalsVisibleTo` (на нём стоят все тесты), в .NET сборка — не бесплатная
 папка как в pnpm-монорепе.
 
-**Метрика успеха:** `Program.cs` уменьшился со 1616 строк / 246 регистраций
-на `master` до 1605 / 241 на текущем `HEAD` (Δ −11 строк, −5 регистраций
-от `master`); чистый вычет самого пилота Video от его непосредственной
-базы `6f862b1f` (1629 / 248) — **Δ −24 строки, −6 регистраций**
-(плюс ещё одна `AddMemoryCache` переехала внутрь подсистемы — это
-закреплено отдельным MINOR-фиксом `6146674f`, см. ADR-014).
-Считается так: `wc -l backend/ClaudeHomeServer/Program.cs` для строк
-и `grep -c 'builder\.Services\.Add' backend/ClaudeHomeServer/Program.cs`
+**Метрика успеха:** `Program.cs` = **1577 строк / 251 регистрация**
+на текущем `HEAD` (замерено после волны 1 подсистем на ветке
+`feature/subsystems-wave1`; merge-base `662ee43f` от `master` давал
+1616 / 246, origin/master — 1637 / 252, расхождение с заявленной ранее
+цифрой 1605 / 241 объясняется включением коммитов из origin). Считается
+так: `wc -l backend/ClaudeHomeServer/Program.cs` для строк и
+`grep -c 'builder\.Services\.Add' backend/ClaudeHomeServer/Program.cs`
 для регистраций (полный разбор баз и способа подсчёта — в ADR-014,
 раздел «Метрика успеха»). Цель — уход под 1000 / 150 по мере выделения
 следующих вертикалей. Вторая метрика — среднее число файлов, которое

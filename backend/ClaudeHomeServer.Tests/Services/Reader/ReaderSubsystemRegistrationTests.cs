@@ -1,6 +1,7 @@
 using System.Reflection;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Reader;
+using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -67,6 +68,20 @@ public class ReaderSubsystemRegistrationTests
         Assert.IsType<SocketsHttpHandler>(primary);
         var sockets = (SocketsHttpHandler)primary;
         Assert.False(sockets.UseProxy);
+    }
+
+    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // `TestWebApplicationFactory<Program>` и резолвит типы Reader из РЕАЛЬНОГО DI-графа.
+    // Если `new ReaderSubsystem()` убрали из `AddSubsystems(...)` — резолв падает
+    // с InvalidOperationException, регрессия ловится.
+    [Fact]
+    public void Program_RegistersReaderSubsystem_ServicesResolvable()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        sp.GetRequiredService<ReaderService>();
+        sp.GetRequiredService<ReaderQuotaService>();
     }
 
     // HttpClient оборачивает primary-билдер декораторами (Logging/Activities), поэтому

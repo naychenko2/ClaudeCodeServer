@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tts;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,6 +69,20 @@ public class TtsSubsystemRegistrationTests
 
         primary.UseProxy.Should().BeTrue(
             "SpeechKit — внешний сервис за DPI: egress-прокси обязателен, WithoutEgressProxy тут НЕ звать");
+    }
+
+    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // `TestWebApplicationFactory<Program>` и резолвит типы Tts из РЕАЛЬНОГО DI-графа
+    // (а не из изолированного ServiceCollection). Если `new TtsSubsystem()` убрали из
+    // `AddSubsystems(...)` — резолв падает с InvalidOperationException, регрессия ловится.
+    [Fact]
+    public void Program_RegistersTtsSubsystem_ServicesResolvable()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        sp.GetRequiredService<YandexTtsService>();
+        sp.GetRequiredService<VoiceResolver>();
     }
 
     private static ServiceProvider BuildServiceProvider()

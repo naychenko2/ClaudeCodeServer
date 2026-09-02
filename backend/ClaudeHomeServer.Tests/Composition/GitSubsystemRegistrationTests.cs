@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,6 +72,26 @@ public class GitSubsystemRegistrationTests
         // Подключён hosted-сервис через `AddGatedHostedService<GitAutoCommitService>(config)`.
         // В тестах среда не Testing по умолчанию, гейт пропускает регистрацию.
         services.Should().Contain(s => s.ImplementationType == typeof(GitAutoCommitService));
+    }
+
+    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // `TestWebApplicationFactory<Program>` и резолвит типы Git из РЕАЛЬНОГО DI-графа
+    // (а не из изолированного ServiceCollection, как предыдущие тесты). Если кто-то
+    // уберёт `new GitSubsystem()` из `AddSubsystems(...)` в Program.cs — резолв
+    // упадёт с InvalidOperationException, и тест поймает регрессию. Без него класс
+    // дефекта «вынесли подсистему, но забыли подключить» проходит молча.
+    [Fact]
+    public void Program_RegistersGitSubsystem_ServicesResolvable()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        // Если GitSubsystem отсутствует в Program.cs — любой из этих резолвов бросит
+        // InvalidOperationException «Unable to resolve service for type …».
+        sp.GetRequiredService<GitService>();
+        sp.GetRequiredService<GitServerService>();
+        sp.GetRequiredService<GitAiService>();
+        sp.GetRequiredService<CommitAttributionService>();
     }
 
     // Сторож прокси-инварианта (см. шапку GitSubsystem.cs): Forgejo — локальный сервис,

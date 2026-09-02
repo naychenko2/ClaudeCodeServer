@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Yandex;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,6 +68,20 @@ public class YandexSubsystemRegistrationTests
 
         primary.UseProxy.Should().BeTrue(
             "Яндекс-биллинг — внешний сервис за DPI: egress-прокси обязателен, WithoutEgressProxy тут НЕ звать");
+    }
+
+    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // `TestWebApplicationFactory<Program>` и резолвит типы Yandex из РЕАЛЬНОГО DI-графа.
+    // Если `new YandexSubsystem()` убрали из `AddSubsystems(...)` — резолв падает
+    // с InvalidOperationException, регрессия ловится.
+    [Fact]
+    public void Program_RegistersYandexSubsystem_ServicesResolvable()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        sp.GetRequiredService<YandexIamTokenProvider>();
+        sp.GetRequiredService<YandexAccountService>();
     }
 
     private static ServiceProvider BuildServiceProvider()

@@ -97,7 +97,8 @@ export function DeployModal({ onClose }: Props) {
       await sleep(phaseNow === 'awaiting' ? AWAIT_POLL_MS : RUN_POLL_MS);
       if (stopped.current) return;
 
-      let fresh: DeployState | null = null;
+      // Без начального значения: catch уходит на continue, поэтому ниже fresh всегда присвоен
+      let fresh: DeployState;
       try {
         fresh = await api.deploy.status();
       } catch {

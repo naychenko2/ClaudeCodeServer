@@ -318,9 +318,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
   const setView = (v: 'list' | 'tree') => { setViewMode(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* квота */ } };
   const toggleDir = (p: string) =>
-    setCollapsedDirs(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+    setCollapsedDirs(prev => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n; });
   const toggleDay = (title: string) =>
-    setCollapsedDays(prev => { const n = new Set(prev); n.has(title) ? n.delete(title) : n.add(title); return n; });
+    setCollapsedDays(prev => { const n = new Set(prev); if (n.has(title)) n.delete(title); else n.add(title); return n; });
 
   const workingFiles = useMemo(
     () => status ? mergeWorking(status.staged, status.unstaged, status.untracked) : [],

@@ -13,7 +13,7 @@ import { api } from './api';
 
 // Составы по sessionId. Внутри — только ссылки из GET/события: кладём всегда новый
 // массив, useSyncExternalStore различает обновления по ссылке
-let entries = new Map<string, SessionContextEntry[]>();
+const entries = new Map<string, SessionContextEntry[]>();
 const listeners = new Set<() => void>();
 
 function emit(): void {

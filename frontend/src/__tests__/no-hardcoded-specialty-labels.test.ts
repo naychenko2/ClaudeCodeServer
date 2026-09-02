@@ -28,7 +28,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 // Полный список пар roleKey → русская подпись из backend/ClaudeHomeServer/Services/
 // SpecialtyCatalog.cs. Если каталог расширится — дописать сюда же. Этот список —
@@ -137,7 +137,7 @@ describe('сторож: литеральные карты roleKey → подпи
       samples: Array<{ line: number; text: string }> }> = [];
     for (const file of sources) {
       // Тесты — не нарушение: фикстуры законно используют каталожные значения.
-      if (file.includes(`${'__tests__'}${require('path').sep}`)) continue;
+      if (file.includes(`${'__tests__'}${sep}`)) continue;
       if (file.includes('.test.ts') || file.includes('.test.tsx')) continue;
       // lib/specialties.ts — там ICON_COLOR_BY_KEY, и если кто-то добавит туда
         // литеральную подпись — это нарушение (см. комментарий выше). Поэтому

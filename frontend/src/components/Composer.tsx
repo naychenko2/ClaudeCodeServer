@@ -726,7 +726,7 @@ export function Composer({
   // чем выбросила бы левые в «⋯» (useToolbarOverflow держит их формой forceAllVisible).
   // Лёгкий массив ключей ниже не зависит от button-нод (те создаются в JSX позже по
   // условиям) и нужен только для счёта видимых элементов через useActionVisibility
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- стабильный порядок: до useToolbarOverflow и других условных хуков
+  // Стабильный порядок: до useToolbarOverflow и других условных хуков
   const composerVis = useActionVisibility('composer', ['slash', 'loop', 'worktree']);
   const collapsibleKeyCount = (['attach', 'slash', 'loop', 'worktree', 'discuss'] as const)
     .filter(k => composerVis.isVisible(k)).length;

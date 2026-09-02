@@ -137,7 +137,7 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
 
   const run = async (action: LastAction) => {
     setLastAction(action);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- переход перед запросом, чтобы нажатая кнопка показала спиннер
+    // Переход перед запросом, чтобы нажатая кнопка показала спиннер
     setPhase('loading');
     try {
       const res = await api.dossiers.exportRun(projectId, action === 'exportPush');

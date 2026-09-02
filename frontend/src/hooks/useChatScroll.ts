@@ -62,7 +62,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     restoredRef.current = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и восстановление позиции скролла при смене сессии
     setShowScrollDown(false);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- иначе тень шапки переезжает из прошлого чата в новый
+    // Иначе тень шапки переезжает из прошлого чата в новый
     setScrolled(false);
     // Загружаем позицию, оставленную выгрузкой страницы (свежую — протухшую игнорируем:
     // sessionStorage переживает bfcache, а через полчаса возврата лента уже неактуальна)

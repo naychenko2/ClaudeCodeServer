@@ -569,7 +569,8 @@ builder.Services.AddSubsystems(builder.Configuration,
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
-    new ClaudeHomeServer.Services.Images.ImagesSubsystem());
+    new ClaudeHomeServer.Services.Images.ImagesSubsystem(),
+    new ClaudeHomeServer.Services.Tts.TtsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -584,19 +585,8 @@ builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
     Category: "ClaudeHomeServer.Media.Fal",
     Subject: "сервисом fal.ai",
     Consequence: "Генерация изображений и учёт расхода недоступны."));
-// Синтез речи голосового режима чата — тоже опциональная внешняя зависимость: без ключа или
-// при недоступном Яндексе фронт уходит на голос браузера. Внешний сервис — БЕЗ WithoutEgressProxy
-// (как fal/glif): ходит через egress-прокси.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Tts.YandexTtsService>();
-// Единственная точка склейки голоса (персона → конфиг). Singleton: дефолты инстанса
-// читаются один раз, поэтому предупреждение об опечатке в голосе не сыплется на каждую фразу
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Tts.VoiceResolver>();
-builder.Services.AddQuietHttpClient(
-    ClaudeHomeServer.Services.Tts.YandexTtsService.HttpClientName,
-    new QuietHttpClientProfile(
-        Category: "ClaudeHomeServer.Tts.Yandex",
-        Subject: "синтезом речи Yandex SpeechKit",
-        Consequence: "Озвучка ответов переключится на голос браузера."));
+// Озвучка голосового режима чата переехала в TtsSubsystem (волна 1.4).
+// Контракт фолбэка на голос браузера живёт в TtsController: 503 not_configured / 502 upstream.
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Controllers.FilesController.OnlyOfficeCommandClient,
     new QuietHttpClientProfile(

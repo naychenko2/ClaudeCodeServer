@@ -134,6 +134,28 @@ public class SubsystemBoundaryTests
                     })
                     .ToArray()),
         },
+        // Tts — вертикаль озвучки голосового режима чата. Граница расширена под корень
+        // `ClaudeHomeServer.Services` ради одной осознанной зависимости (как у Reader/Images):
+        // `VoiceResolver` (Services/Tts) принимает `PersonaManager` (Services/ корень) —
+        // голос персоны как часть цепочки склейки; это связь «вертикаль → спинка»
+        // (доменная модель пользователей и персон), а не на другую вертикаль.
+        // `TtsVoiceCatalog` (Services/Tts) — статический каталог белого списка голосов;
+        // его используют СНАРУЖИ вертикали `PersonaManager` и `PersonasController`, но это
+        // сознательная обратная стрелка «спина → каталог вертикали», а не зависимость
+        // самой вертикали Tts от чужой вертикали.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Tts",
+                "ClaudeHomeServer.Services.Tts",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Tts",
+                        "ClaudeHomeServer.Services",
+                    })
+                    .ToArray()),
+        },
     };
 
     [Theory]

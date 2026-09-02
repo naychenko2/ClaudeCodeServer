@@ -118,6 +118,15 @@ describe('estimateContext: окно модели', () => {
     expect(est.pct).toBe(20);
   });
 
+  it('минорная версия внутри 1M-поколения → 1M (opus 4.9)', () => {
+    expect(estimateContext([started('claude-opus-4-9'), result(200_000)]).window).toBe(1_000_000);
+  });
+
+  it('fable/mythos любой версии → 1M', () => {
+    expect(estimateContext([started('claude-fable-5-1'), result(200_000)]).window).toBe(1_000_000);
+    expect(estimateContext([started('claude-mythos-5-1'), result(200_000)]).window).toBe(1_000_000);
+  });
+
   it('fallbackModel используется когда session_started нет', () => {
     const est = estimateContext([result(100_000)], 'haiku');
     expect(est.window).toBe(200_000);

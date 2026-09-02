@@ -91,14 +91,16 @@ function emit() {
 const CLAUDE_DESC_RU: Record<string, string> = {
   'default': 'Универсальная · сложные повседневные задачи',
   'opus': 'Универсальная · сложные повседневные задачи',
-  'claude-fable-5': 'Самая мощная · трудные и долгие задачи',
+  'claude-fable': 'Самая мощная · трудные и долгие задачи',
   'sonnet': 'Экономичная · рутинные задачи',
   'haiku': 'Самая быстрая · короткие ответы',
 };
 
-// Ключ описания — алиас без суффикса окна («opus[1m]» → «opus»)
+// Ключ описания — алиас без суффикса окна («opus[1m]» → «opus») и без хвоста версии
+// («claude-fable-5-1» → «claude-fable»): описания версионно-нейтральные, поэтому и ключ
+// не должен нести номер версии — иначе новая версия модели теряет русское описание.
 function claudeDescKey(value: string): string {
-  return value.replace(/\[1m\]$/i, '');
+  return value.replace(/\[1m\]$/i, '').replace(/-\d+(?:-\d+)*$/, '');
 }
 
 // Загрузить список с сервера (вызывается при старте после проверки auth).
@@ -303,8 +305,8 @@ const CONTEXT_1M = 1_000_000;
 
 const CONTEXT_WINDOWS: Array<{ match: RegExp; window: number }> = [
   { match: /haiku/i, window: 200_000 },
-  { match: /opus-(4-[678]|5)|opus-4\.[678]/i, window: CONTEXT_1M },
-  { match: /sonnet-(4-6|5)|sonnet-4\.6/i, window: CONTEXT_1M },
+  { match: /opus-(4-[6-9]|5)|opus-4\.[6-9]/i, window: CONTEXT_1M },
+  { match: /sonnet-(4-[6-9]|5)|sonnet-4\.[6-9]/i, window: CONTEXT_1M },
   { match: /fable|mythos/i, window: CONTEXT_1M },
   { match: /deepseek/i, window: CONTEXT_1M }, // V4-модели — 1M (точное окно приходит с бэка)
   { match: /glm.*\[1m\]/i, window: CONTEXT_1M }, // glm-5.2[1m] — окно 1M

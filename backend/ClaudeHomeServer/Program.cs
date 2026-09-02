@@ -547,9 +547,11 @@ builder.Services.AddSubsystems(builder.Configuration,
     // (`IAppPhaseSubsystem.ConfigureApp` регистрирует языковые провайдеры `.cs`/`.ts`/`.tsx`).
     new ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem(),
     // Dossiers — после CodeGraph: вертикаль захвата паспортов зависит от швов
-    // `Services.Git` (GitГitService — захват коммитов) и `Services.CodeGraph`
+    // `Services.Git` (GitService — захват коммитов) и `Services.CodeGraph`
     // (CodeGraphService — обогащение паспортов графом кода). Нижние слои должны
-    // регистрироваться раньше, иначе DI при первом резолве упадёт.
+    // регистрироваться раньше: Microsoft DI порядок регистраций при резолве не
+    // учитывает; порядок здесь — очередь старта IHostedService и читаемость
+    // (нижние слои раньше).
     new ClaudeHomeServer.Services.Dossiers.DossiersSubsystem(),
     new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
     new VideoSubsystem(),

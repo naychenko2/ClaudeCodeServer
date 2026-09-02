@@ -46,10 +46,10 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // - Прочие типы корня Services (SessionManager/ProjectManager/TaskManager/FileService/
 //   UserStore/KnowledgeService/FeatureFlagService) — «вертикаль → спинка» (общая
 //   инфраструктура доменных моделей), как у `Git`/`Spend`/`Tts`/`Images`/`Deploy`.
-// - `Protocol.StoredMessage` (точечный allow-list) — публичные методы DossierCaptureService
-//   (`TimestampOf`, `SelectCommitWindow`) и DossierDiscussionService (`BuildFeed`)
-//   принимают `IReadOnlyList<StoredMessage>`; рефлексия сторожа читает параметры
-//   публичных методов. `ServerMessage` тут НЕ нужен — присутствует только в
+// - `Protocol.StoredMessage` (точечный allow-list) — поля async-state-машин
+//   `DossierCaptureService+<BuildTranscriptAsync>d__39` и
+//   `DossierDiscussionService+<EnsureOneAsync>d__10` (сами методы private/internal —
+//   сторож их сигнатуры не читает). `ServerMessage` тут НЕ нужен — присутствует только в
 //   private-методе `OnSessionMessageAsync`, рефлексия private не сканирует.
 //
 //

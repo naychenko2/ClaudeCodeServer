@@ -446,17 +446,16 @@ public class SubsystemBoundaryTests
         // 6) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для выжимки паспортов
         //    и конспектов (DossierCaptureService, DossierDiscussionService). Префикс-шов,
         //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`.
-        // 7) `ClaudeHomeServer.Services.Memory` — общий слой Dify-синка: `MemoryDocRef`
-        //    и `MemoryDifyDebouncer` в полях `DossierStore`/`DossierAutoExporter`
+        // 7) `ClaudeHomeServer.Services.Memory` — общий слой Dify-синка: `MemoryDocRef`,
+        //    `MemoryDifyDebouncer` и `MemorySyncItem` в полях `DossierStore`/`DossierAutoExporter`
         //    (DossierStore.cs:21,48; DossierAutoExporter.cs:48). Префикс-шов, как
         //    `Git`/`Deploy` на `Services.Backup`.
         // Точечный допуск к `ClaudeHomeServer.Protocol`:
-        // 8) `StoredMessage` — параметр публичных методов `DossierCaptureService.
-        //    SelectCommitWindow`/`TimestampOf` (материализуется в generic-аргументе
-        //    `IReadOnlyList<StoredMessage>`) и `DossierDiscussionService.BuildFeed`.
-        //    `ServerMessage` ТУТ НЕ нужен: фигурирует только в private-методе
-        //    `DossierCaptureService.OnSessionMessageAsync`, а сторож читает только
-        //    public-методы (см. «Известное ограничение» в шапке файла).
+        // 8) `StoredMessage` — поля async-state-машин `DossierCaptureService+<BuildTranscriptAsync>d__39`
+        //    и `DossierDiscussionService+<EnsureOneAsync>d__10` (сами методы private/internal —
+        //    сторож их сигнатуры не читает). `ServerMessage` ТУТ НЕ нужен: фигурирует только
+        //    в private-методе `DossierCaptureService.OnSessionMessageAsync`, а сторож читает
+        //    только public-методы (см. «Известное ограничение» в шапке файла).
         new object[]
         {
             new VerticalBoundary(

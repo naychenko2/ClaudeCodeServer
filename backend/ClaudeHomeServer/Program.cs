@@ -582,7 +582,9 @@ builder.Services.AddSingleton<ReaderService>();
 // Сам `VideoSubsystem.Register` подключает и платформенный `IMemoryCache` для своих
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
-builder.Services.AddSubsystems(builder.Configuration, new VideoSubsystem());
+builder.Services.AddSubsystems(builder.Configuration,
+    new VideoSubsystem(),
+    new ClaudeHomeServer.Services.Yandex.YandexSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -610,17 +612,6 @@ builder.Services.AddQuietHttpClient(
         Category: "ClaudeHomeServer.Tts.Yandex",
         Subject: "синтезом речи Yandex SpeechKit",
         Consequence: "Озвучка ответов переключится на голос браузера."));
-// Деньги Yandex Cloud: остаток на биллинг-аккаунте (Billing API принимает только IAM-токен,
-// поэтому рядом живёт обмен ключа сервисного аккаунта на токен). Опциональная зависимость:
-// без ключа раздел просто выключен, недоступность Яндекса — не ошибка приложения.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Yandex.YandexIamTokenProvider>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Yandex.YandexAccountService>();
-builder.Services.AddQuietHttpClient(
-    ClaudeHomeServer.Services.Yandex.YandexIamTokenProvider.HttpClientName,
-    new QuietHttpClientProfile(
-        Category: "ClaudeHomeServer.Billing.Yandex",
-        Subject: "биллингом Yandex Cloud",
-        Consequence: "Остаток на счёте не показывается; на озвучку и её учёт это не влияет."));
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Controllers.FilesController.OnlyOfficeCommandClient,
     new QuietHttpClientProfile(

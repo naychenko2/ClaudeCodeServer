@@ -74,6 +74,15 @@ public class SubsystemBoundaryTests
                     .Concat(new[] { "ClaudeHomeServer.Services.Video" })
                     .ToArray()),
         },
+        new object[]
+        {
+            new VerticalBoundary(
+                "Yandex",
+                "ClaudeHomeServer.Services.Yandex",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Yandex" })
+                    .ToArray()),
+        },
     };
 
     [Theory]

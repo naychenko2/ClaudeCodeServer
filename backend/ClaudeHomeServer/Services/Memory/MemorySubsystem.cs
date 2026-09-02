@@ -49,11 +49,10 @@ namespace ClaudeHomeServer.Services.Memory;
 //   моделей), как у Git/Spend/Tts/Images/Deploy.
 // - `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации о новых записях
 //   памяти команды (TeamMemoryAutolearnService шлёт `memory_changed` в ленту сессии).
-// - Точечный допуск к `ClaudeHomeServer.Protocol` (по аналогии с Dossiers): типы
-//   WS-событий, которые `PersonaMemoryAutolearnService`/`TeamMemoryAutolearnService`
-//   разбирают из истории ходов, попадают в поля async-state-машин. Префикс
-//   `ClaudeHomeServer.Protocol` снят (см. Boundaries[Knowledge]), точные имена —
-//   в allow-list.
+// - Точечный допуск к `ClaudeHomeServer.Protocol` (по аналогии с Dossiers):
+//   `StoredMessage`/`StoredUserMessage`/`StoredTextMessage` в сигнатурах public-методов
+//   `AutolearnGate.CheckContent` и `LastTurnLength`. Префикс `ClaudeHomeServer.Protocol`
+//   снят по волне 3, точные имена — в allow-list (см. Boundaries[Memory]).
 //
 // Типы самих фасадов (`PersonaMemoryService`/`TeamMemoryService`/`PersonaMemoryConsolidationService`/
 // `PersonaMemoryAutolearnService`/`TeamMemoryConsolidationService`/`TeamMemoryAutolearnService`)

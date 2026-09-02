@@ -68,7 +68,7 @@
   [lib/knowledge.ts](../../frontend/src/lib/knowledge.ts) (realtime `knowledge_changed`). Без `Dify:ApiKey` —
   `GET /api/knowledge` → `{configured:false, items:[]}`, раздел показывает empty-state.
 - **Синхронизация «файл проекта ↔ документ БЗ»** —
-  [ProjectKnowledgeSyncService.cs](../../backend/ClaudeHomeServer/Services/ProjectKnowledgeSyncService.cs):
+  [ProjectKnowledgeSyncService.cs](../../backend/ClaudeHomeServer/Services/Knowledge/ProjectKnowledgeSyncService.cs):
   карта `WorkspaceKnowledge.Docs` (relativePath → {DocId, Hash}), дифф по хешам с дебаунсом 15с —
   правка → переиндексация (delete+create с восстановлением тегов), удаление файла → удаление
   документа, перенос/переименование (файла и папки) → миграция ключей, перенос мимо API —
@@ -78,7 +78,7 @@
   Lifecycle-каскады: удаление проекта → датасет+wkStore (учёт шаринга RootPath) + notes-синк +
   проектные персоны; смена RootPath → `WorkspaceKnowledgeStore.Move`; rename проекта/handle
   персоны → best-effort `RenameDatasetAsync` (PATCH); удаление пользователя →
-  [UserKnowledgeCascade.cs](../../backend/ClaudeHomeServer/Services/UserKnowledgeCascade.cs) (персоны +
+  [UserKnowledgeCascade.cs](../../backend/ClaudeHomeServer/Services/Knowledge/UserKnowledgeCascade.cs) (персоны +
   сторы + все датасеты `{username}:*`).
 - **Восстановление документов, упавших при индексации** — реконсайлер, отдельный раздел ниже.
 - **Неймспейс контура** (`Dify:Namespace`, дефолт пусто): Dev и Prod на одном Dify не пересекаются —

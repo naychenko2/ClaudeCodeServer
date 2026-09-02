@@ -116,7 +116,7 @@ public interface IAppSubsystem
 2. **Общая форма резолва каталога данных** —
    `SubsystemHostingExtensions.ResolveDataDir(IConfiguration, params string[])`.
    До этого три вертикали (`Services/CodeGraph/GraphPersistence.cs`,
-   `Services/Dossiers/DossierStore.cs`, `Services/WorkspaceKnowledgeStore.cs`)
+   `Services/Dossiers/DossierStore.cs`, `Services/Knowledge/WorkspaceKnowledgeStore.cs`)
    дублировали один и тот же сниппет `Path.GetDirectoryName(Path.GetFullPath(
    config["DataPath"] ?? …))`, плюс он встречался в двух местах Program.cs
    (пост-билд и handle-migration). В этой задаче хелпер только СОЗДАН; три

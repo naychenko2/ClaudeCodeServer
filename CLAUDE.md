@@ -209,9 +209,11 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
   открывает поддеревья (`X.` и `X`), `AllowedExactNamespaces` — ровно
   указанный тип по `FullName` (полезно для nested-типов вроде
   `SsrfGuard+AddressCheck` и для точечных синглтонов из корня `Services`
-  типа `PersonaManager`/`SessionManager`). Покрытие — все 12 вертикалей
-  (Video, Yandex, Reader, Images, Tts, Git, Deploy, Watchdog плюс волна 2:
-  CodeGraph, Spend, Backgrounds, ProjectIcons).
+  типа `PersonaManager`/`SessionManager`). Покрытие — все 15 вертикалей
+  (Video, Yandex, Reader, Images, Tts, Git, Deploy, Watchdog; волна 2:
+  CodeGraph, Spend, Backgrounds, ProjectIcons; волна 3: Dossiers, Knowledge,
+  Memory). Подсистем при этом 14 — `Services.Watchdog` вертикаль без
+  `IAppSubsystem`.
 - `SubsystemBoundaryCoverageTests`: каждая реализация `IAppSubsystem` в
   сборке должна иметь строку в `Boundaries`; вертикали без подсистемы
   (`Services.Watchdog` сейчас единственная) перечисляются явно. Ловит
@@ -243,10 +245,13 @@ Microsoft DI не выгружает контейнер по конструкц�
 `InternalsVisibleTo` (на нём стоят все тесты), в .NET сборка — не бесплатная
 папка как в pnpm-монорепе.
 
-**Метрика успеха:** `Program.cs` = **1542 строки / 236 регистраций**
-на текущем `HEAD` (замерено после волны 2 подсистем на ветке
-`feature/subsystems-wave2`; после волны 1 было 1577 / 251, merge-base
-`662ee43f` от `master` давал 1616 / 246, origin/master — 1637 / 252).
+**Метрика успеха:** `Program.cs` = **1544 строки / 207 регистраций**
+на текущем `HEAD` (замерено после волны 3 подсистем на ветке
+`feature/subsystems-wave3`; после волны 2 было 1542 / 236, после волны 1 —
+1577 / 251, merge-base `662ee43f` от `master` давал 1616 / 246,
+origin/master — 1637 / 252). Строки в волне 3 почти не сдвинулись при
+−29 регистрациях: вынесенные блоки заменены комментариями-указателями
+на подсистему (сознательно — навигация по композиционному корню).
 Считается так: `wc -l backend/ClaudeHomeServer/Program.cs` для строк и
 `grep -c 'builder\.Services\.Add' backend/ClaudeHomeServer/Program.cs`
 для регистраций (полный разбор баз и способа подсчёта — в ADR-014,

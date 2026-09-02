@@ -23,10 +23,12 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   в StartAsync встали на ТОТ ЖЕ экземпляр, что и в DI;
 // - DossierAutoImporter (hosted) — наблюдение за tip ветки, тик 60 с.
 //
-// Известная граница: форвардер `IKnowledgeSyncParticipant → DossierStore` живёт
-// в блоке Knowledge (Program.cs:~688-689) — участник реконсайлера error-документов
-// Dify. Это часть Knowledge-подсистемы (следующий шаг волны 3), перенос вместе
-// с выделением Knowledge.
+// ⚠ Форвардер `IKnowledgeSyncParticipant → DossierStore` живёт в блоке Knowledge
+// (Program.cs:~688-689) — участник реконсайлера error-документов Dify. После
+// выделения `KnowledgeSubsystem` (волна 3, шаг 3) он ОСТАЁТСЯ в композиционном
+// корне сознательно: это кросс-вертикальный клей пяти владельцев стора
+// «запись → {DocId, Hash}», и перенос в Knowledge дал бы ей прямую ссылку на
+// `DossierStore`. См. шапку `KnowledgeSubsystem.cs`.
 //
 // Границы (сознательные):
 // - Источник истины — свой стор `data/dossiers/*`. Бэкап идёт общим правилом `data/`,
@@ -44,8 +46,11 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   используются в `DossierStore`/`DossierAutoExporter` для той же дебаунс-семантики,
 //   что и у `PersonaMemoryService`/`TeamMemoryService`. Префикс-шов, как у `Git`/`Deploy`.
 // - Прочие типы корня Services (SessionManager/ProjectManager/TaskManager/FileService/
-//   UserStore/KnowledgeService/FeatureFlagService) — «вертикаль → спинка» (общая
-//   инфраструктура доменных моделей), как у `Git`/`Spend`/`Tts`/`Images`/`Deploy`.
+//   UserStore/FeatureFlagService) — «вертикаль → спинка» (общая инфраструктура
+//   доменных моделей), как у `Git`/`Spend`/`Tts`/`Images`/`Deploy`.
+// - `Knowledge.KnowledgeService`/`Knowledge.KnowledgeSyncTarget` (Services.Knowledge
+//   после переноса шага 6) — клиент Dify в `DossierStore` и участие в реконсайлере;
+//   точечный allow-list, см. Boundaries[Dossiers].
 // - `Protocol.StoredMessage` (точечный allow-list) — поля async-state-машин
 //   `DossierCaptureService+<BuildTranscriptAsync>d__39` и
 //   `DossierDiscussionService+<EnsureOneAsync>d__10` (сами методы private/internal —

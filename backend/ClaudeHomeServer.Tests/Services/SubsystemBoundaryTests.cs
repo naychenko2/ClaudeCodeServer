@@ -165,11 +165,9 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.PersonaManager",
-                    // ImageBackfillService — поле/параметр типа `ImageBackfilledMessage`
-                    // (record, наследует `ServerMessage` — ImageBackfillService.cs:22).
-                    // Базовый `ServerMessage` нужен отдельно: компилятор материализует
-                    // ссылку на базовый record в полях/конструкторе `ImageBackfilledMessage`.
-                    "ClaudeHomeServer.Protocol.ImageBackfilledMessage",
+                    // ссылку на базовый record ServerMessage материализует наследование
+                    // ImageBackfilledMessage (объявлен в самой вертикали,
+                    // ImageBackfillService.cs:21).
                     "ClaudeHomeServer.Protocol.ServerMessage",
                 }),
         },
@@ -215,16 +213,14 @@ public class SubsystemBoundaryTests
         // 4) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации об
         //    авто-коммите (GitAutoCommitService отправляет событие в ленту сессии).
         // 5) `ClaudeHomeServer.Protocol` — префикс СНЯТ (волна 3) как полностью
-        //    избыточный: вертикаль Git использует `GitTurnCommitMessage`/`GitStatusChangedMessage`
-        //    (см. GitAutoCommitService.cs:63,79) ТОЛЬКО как литералы в generic-вызовах
-        //    `Clients.Group(...).SendAsync("message", new GitXxxMessage(...))`. Рефлексия
-        //    сторожа (поля/параметры/конструкторы/public-методы) эти типы не видит —
-        //    они существуют лишь в IL generic-аргументах и литералах, см. «Известное
-        //    ограничение» в шапке файла. Поэтому убираем префикс, а `AllowedExactNamespaces`
-        //    для `ClaudeHomeServer.Protocol.*` оставляем пустым — это сознательный
-        //    нулевой allow-list (по аналогии со снятым `Services.Llm` у Watchdog в
-        //    волне 1): если вертикаль получит поле/параметр типа из Protocol, сторож
-        //    поймает это сразу.
+        //    избыточный: `GitTurnCommitMessage`/`GitStatusChangedMessage` создаются в
+        //    аргументах SendAsync и не переживают await (нет поля state-машины),
+        //    а метод OnSessionMessageAsync с ServerMessage в сигнатуре — private,
+        //    сторож читает только public-методы. Поэтому убираем префикс, а
+        //    `AllowedExactNamespaces` для `ClaudeHomeServer.Protocol.*` оставляем
+        //    пустым — это сознательный нулевой allow-list (по аналогии со снятым
+        //    `Services.Llm` у Watchdog в волне 1): если вертикаль получит поле/параметр
+        //    типа из Protocol, сторож поймает это сразу.
         new object[]
         {
             new VerticalBoundary(
@@ -475,12 +471,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserHomeResolver",
                     "ClaudeHomeServer.Services.SessionMessagingService",
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome",
-                    // WatchdogNotifier.cs:3 — поле/параметр типа `WatchdogsChangedMessage`
-                    // (record, наследует `ServerMessage`). Базовый `ServerMessage` нужен
-                    // отдельно: компилятор материализует ссылку на базовый record в
-                    // полях/конструкторе наследника.
+                    // WatchdogNotifier.cs:3 — поле async-state-машины
+                    // WatchdogNotifier+<BroadcastAsync>d__8 (локал msg переживает await).
                     "ClaudeHomeServer.Protocol.WatchdogsChangedMessage",
-                    "ClaudeHomeServer.Protocol.ServerMessage",
                 }),
         },
     };

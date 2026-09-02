@@ -155,19 +155,8 @@ builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.UserModelTierResolver>();
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
-// CodeGraph: граф зависимостей кода (узлы — типы, рёбра — Calls/Implements/References)
-// GraphPersistence требует dataDir из IConfiguration — ленивый factory, чтобы test-in-memory
-// (DataPath из TestWebApplicationFactory) тоже применялся, как у ProjectManager.
-builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.CodeGraph.GraphPersistence(
-    Path.GetDirectoryName(Path.GetFullPath(
-        sp.GetRequiredService<IConfiguration>()["DataPath"]
-            ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!,
-    sp.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.GraphPersistence>>()));
-builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
-// Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider>();
-// Тонкие запросы к графу (find/neighbors/hubs) — за ними MCP-сервер codegraph
-builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphQueryService>();
+// CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
+// (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 builder.Services.AddSingleton<PersonaManager>();
@@ -266,15 +255,7 @@ builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
-// Аналитика расхода токенов (Spend Analytics v2): хранилище записей (детали + дневные
-// агрегаты), запросы дашборда и обслуживание (backfill истории + rollup за окном)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendStore>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.ISpendCollector>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Spend.SpendStore>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsService>();
-// Замеры размера постановки задач по секциям (разрез «Задача» в аналитике)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>(builder.Configuration);
+// Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальная LLM (Ollama или llama-server, выбор по LocalLlm:Provider) для
 // бесплатного ранжирования действий мимо claude CLI. Обе реализации регистрируются
@@ -328,19 +309,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FallbackSettingsStor
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();
-// Фон рабочего пространства проекта: JSON от модели → собранный сервером SVG-тайл (ADR-008)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundService>();
-// Значок проекта: текстовый ход по названию → кандидаты (имена из набора lucide);
-// без состояния, синглтон как и остальные места модели
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService>();
-// Разовая миграция значков существующим проектам (ADR-009 §10): бэкап → прогон → удаление
-// растровых иконок; идемпотентна, при полностью мигрированном сторе старт — чистый no-op
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigration>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigrationService>(builder.Configuration);
-// Разовая генерация фонов существующим проектам на старте (ADR-008 §10):
-// прогон идемпотентен, повторный запуск ничего не перетирает
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill>();
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfillService>(builder.Configuration);
+// Фон рабочего пространства проекта (ADR-008) и значок проекта (ADR-009) переехали
+// в подсистемы `BackgroundsSubsystem` / `ProjectIconsSubsystem` (волна 2 внутренних
+// подсистем): регистрации подключаются через `AddSubsystems(...)` ниже. Здесь остаются
+// только общие клиенты и конфигурация, нужные вне подсистем (HTTP-клиенты fal/glif —
+// общие с биллинг-сервисами, см. шапку `ImagesSubsystem`).
 // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
@@ -581,12 +554,18 @@ builder.Services.AddSubsystems(builder.Configuration,
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),
     // плюс hosted-сервисы SessionManager/ProjectManager. Раньше — сломает их DI-порядок.
     new ClaudeHomeServer.Services.Git.GitSubsystem(),
+    // CodeGraph — после Git, потому что это первая подсистема с пост-билд фазой
+    // (`IAppPhaseSubsystem.ConfigureApp` регистрирует языковые провайдеры `.cs`/`.ts`/`.tsx`).
+    new ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem(),
+    new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
     new ClaudeHomeServer.Services.Images.ImagesSubsystem(),
     new ClaudeHomeServer.Services.Tts.TtsSubsystem(),
-    new ClaudeHomeServer.Services.Deploy.DeploySubsystem());
+    new ClaudeHomeServer.Services.Deploy.DeploySubsystem(),
+    new ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem(),
+    new ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -929,27 +908,6 @@ if (!inspectionMode)
     // Фоновый прогрев активной локальной LLM (грузим веса в память заранее; best-effort).
     // Резолвится через интерфейс — выбор движка уже сделан по LocalLlm:Provider.
     _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.ILocalLlmClient>().WarmUpAsync());
-    // Регистрация языковых провайдеров CodeGraph (C# для .cs; TS/React для .ts/.tsx)
-    try
-    {
-        var codeGraphService = app.Services.GetRequiredService<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
-        var csProvider = new ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider(
-            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider>>());
-        codeGraphService.RegisterProvider(".cs", csProvider);
-        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .cs");
-        // TS-провайдер гоняет Node-экстрактор frontend/scripts/codegraph-extractor.mjs;
-        // без Node/скрипта тихо отдаёт пустой граф (см. TypeScriptGraphProvider).
-        var tsProvider = new ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider(
-            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider>>(),
-            app.Configuration);
-        codeGraphService.RegisterProvider(".ts", tsProvider);
-        codeGraphService.RegisterProvider(".tsx", tsProvider);
-        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .ts/.tsx");
-    }
-    catch (Exception ex)
-    {
-        Console.Error.WriteLine($"[CodeGraph] не удалось зарегистрировать провайдер: {ex.Message}");
-    }
 }
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager

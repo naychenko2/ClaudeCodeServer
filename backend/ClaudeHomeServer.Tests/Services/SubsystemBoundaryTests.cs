@@ -230,6 +230,34 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectFileSessionsIndex",
                 }),
         },
+        // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
+        // Пост-билд фаза `ConfigureApp` регистрирует языковые провайдеры (`.cs`/`.ts`/`.tsx`),
+        // MCP-тулсет `CodeGraphToolset` живёт в `Services/Mcp/Http` и регистрируется в Program.cs.
+        // Допуски к корню Services — точечные:
+        // 1) `ProjectManager` (Services/ корень) — граф зависит от проектов
+        //    (`CodeGraphService.cs:43` параметр ctor и поле `_projects:15`).
+        // `WorkspaceKnowledgeStore.NormalizePath` — статический вызов из тел методов
+        // `CodeGraphService`/`/QueryService`/`/PromptProvider` (невидим рефлексии,
+        // см. «Известное ограничение» в шапке файла); шов через `WorkspaceKnowledgeStore`
+        // оставляем как есть, отдельный allow-list под static-вызов не нужен.
+        // `LocalProcessRunner.ResolveExecutable("node")` в `TypeScriptGraphProvider:155` —
+        // аналогичный static-вызов из `Services.Execution`, рефлексия его не видит.
+        new object[]
+        {
+            new VerticalBoundary(
+                "CodeGraph",
+                "ClaudeHomeServer.Services.CodeGraph",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.CodeGraph",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                }),
+        },
         // Deploy — вертикаль выкатки прода (ADR-010 + трей-раннер из веб-морды).
         // Допуск к корню Services точечный:
         // 1) `SessionManager` и `NotificationService` (Services/ корень) для
@@ -270,6 +298,107 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.NotificationService",
+                }),
+        },
+        // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
+        // Допуски:
+        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода модели,
+        //    который генерирует JSON с фигурами (префикс-шов, как у `Git`/`Deploy`).
+        // 2) Допуски к корню Services — точные: `ProjectManager` (запись фона и флаг
+        //    `Background` в доменной модели проекта), `UserStore` (перечень владельцев
+        //    для массового прогона `RunAllAsync` в `ProjectBackgroundBackfill`).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Backgrounds",
+                "ClaudeHomeServer.Services.Backgrounds",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Backgrounds",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                }),
+        },
+        // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
+        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
+        //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
+        // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
+        //    флаг `Icon.Glyph` в доменной модели проекта). `BackupCore.Snapshot` /
+        //    `BackupContext.FromConfiguration` в `ProjectIconMigration` — статические
+        //    вызовы из тел методов; рефлексия стражей их НЕ видит (см. «Известное
+        //    ограничение»), выделение мьютекса бэкапа в шов — отдельная задача.
+        new object[]
+        {
+            new VerticalBoundary(
+                "ProjectIcons",
+                "ClaudeHomeServer.Services.ProjectIcons",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.ProjectIcons",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    // `BackupResult` (тип возврата `BackupCore.Snapshot` в `ProjectIconMigration.RunAsync`)
+                    // — поле async-state-машины `<RunAsync>d__9`. Сам статический вызов
+                    // рефлексия НЕ видит (см. «Известное ограничение»), но возвращаемый
+                    // тип через `var backup = BackupCore.Snapshot(...)` материализуется
+                    // компилятором C# в поле state-машины. Точечный FullName, чтобы не
+                    // открывать вертикаль Backup целиком: миграция значков пользуется
+                    // инфраструктурным примитивом снятия снимка, а не логикой Backup.
+                    "ClaudeHomeServer.Services.Backup.BackupResult",
+                }),
+        },
+        // Spend — аналитика расхода токенов (Spend Analytics v2). Самая «толстая» по
+        // количеству зависимостей вертикаль волны 2: дашборд резолвит имена/метаданные
+        // по всем доменам, а фоновый maintenance — ещё историю чатов для backfill.
+        // Допуски к корню Services — точечные:
+        // 1) `SessionManager`, `ProjectManager`, `TaskManager`, `PersonaManager`,
+        //    `UserStore` (`SpendAnalyticsService.cs:65-67`) — резолв имён и метаданных
+        //    в дашборде (чаты, проекты, задачи, персоны, пользователи).
+        // 2) `ChatHistoryService` (`SpendMaintenanceService.cs:15`) — backfill истории
+        //    расхода из сохранённых транскриптов при первом запуске.
+        // 3) `ClaudeHomeServer.Services.Llm` — `LlmProviderRegistry` для расчёта
+        //    стоимости по прайсу провайдера (тот же шов «вертикаль → спинка LLM», что
+        //    у `Git`/`Backgrounds`/`Deploy`): цены живут в одном месте на все
+        //    потребительские разделы, вынос из SharedAllowedPrefixes держит гейт узким.
+        // 4) `ClaudeHomeServer.Protocol` — типы WS-событий (`StoredMessage`/`StoredResultMessage`
+        //    и связанные), которые `SpendMaintenanceService.BackfillAsync` разбирает из
+        //    истории чатов при первичном наполнении стора; тот же шов, что у `Git`/`Deploy`,
+        //    читающих историю/события протокола.
+        // `SpendStore` форвардит `ISpendCollector` через `sp => ...GetRequiredService<SpendStore>()` —
+        // инвариант «интерфейс и конкретный тип указывают на ОДИН инстанс» (тест
+        // `SpendSubsystemRegistrationTests.Register_SpendCollector_IsSameInstanceAsStore`).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Spend",
+                "ClaudeHomeServer.Services.Spend",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Spend",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Protocol",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.ChatHistoryService",
                 }),
         },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации

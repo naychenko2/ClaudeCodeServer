@@ -4,40 +4,49 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
-/// Сторож границ вертикалей: типы из <c>Services/Video</c> не должны ссылаться на
-/// типы других сервисных вертикалей. Правило — default-deny: разрешено ссылаться
-/// только на «спинку» (BCL, ASP.NET, модели) и явно перечисленные служебные
-/// вертикали, остальные <c>ClaudeHomeServer.Services.*</c> считаются чужой территорией.
+/// Сторож границ вертикалей: типы из подсистемной вертикали не должны ссылаться на типы
+/// из других сервисных вертикалей. Правило — default-deny: разрешено ссылаться только на
+/// «спинку» (BCL, ASP.NET, модели) и явно перечисленные служебные вертикали, остальные
+/// <c>ClaudeHomeServer.Services.*</c> считаются чужой территорией.
 ///
-/// Под «спинкой» понимается минимальный шов, через который любая вертикаль
-/// пользуется платформой и общими сервисами:
-/// <c>System.*</c>, <c>Microsoft.*</c>, <c>ClaudeHomeServer.Models</c>,
-/// <c>ClaudeHomeServer.Services.Http</c> (общие HTTP-утилиты),
+/// Под «спинкой» понимается минимальный шов, через который любая вертикаль пользуется
+/// платформой и общими сервисами: <c>System.*</c>, <c>Microsoft.*</c>,
+/// <c>ClaudeHomeServer.Models</c>, <c>ClaudeHomeServer.Services.Http</c> (общие HTTP-утилиты),
 /// <c>ClaudeHomeServer.Services.Security</c> (общие защитные примитивы),
 /// <c>ClaudeHomeServer.Services.Composition</c> (контракт <c>IAppSubsystem</c>),
-/// <c>ClaudeHomeServer.Services.Mcp</c> (сознательная граница для
-/// <c>McpSecretStore</c>) и сам <c>ClaudeHomeServer.Services.Video</c>.
+/// <c>ClaudeHomeServer.Services.Mcp</c> (сознательная граница для <c>McpSecretStore</c>).
 ///
-/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Desktop, Backup, Llm,
-/// Images, Tts, Deploy, Memory, Turn, Docs, Git и т.п.) — нарушение. Список
-/// не дописывается под каждую новую вертикаль: появилась новая — тест автоматом
-/// ловит любую ссылку на неё, и повод обсудить шов. Подход — как в <c>PiiRules</c>
-/// (default-deny с явным allow-list).
+/// Всё прочее под <c>ClaudeHomeServer.Services.*</c> (Desktop, Backup, Llm, Images, Tts,
+/// Deploy, Memory, Turn, Docs, Git и т.п.) — нарушение. Список не дописывается под каждую
+/// новую вертикаль: появилась новая — тест автоматом ловит любую ссылку на неё, и повод
+/// обсудить шов. Подход — как в <c>PiiRules</c> (default-deny с явным allow-list).
 ///
-/// Тест работает через рефлексию типов, а не через чтение исходного файла:
-/// один из существующих стражей (<c>McpToolsetStabilityTests</c> через <c>FindSource</c>
-/// и <c>MethodBody</c>) сломался на прошлом этапе просто от переименования метода
+/// Таблица <see cref="Boundaries"/> — единственная точка расширения: каждая будущая
+/// подсистема добавляет ОДНУ строку со своим корневым namespace и собственным allow-list
+/// (по умолчанию — общая спинка плюс сам проверяемый namespace).
+///
+/// Тест работает через рефлексию типов, а не через чтение исходного файла: один из
+/// существующих стражей (<c>McpToolsetStabilityTests</c> через <c>FindSource</c> и
+/// <c>MethodBody</c>) сломался на прошлом этапе просто от переименования метода
 /// <c>PromptToolsSinkFor</c> → <c>SafePromptSnapshotAttach</c>, и пришлось чинить
 /// отдельной задачей. Источник правды тут — сборка, а не текст.
 ///
-/// Что НЕ проверяется осознанно: интерфейсы и базовые классы (за пределами четырёх
-/// мест ниже). Если потребуется — расширим в следующем шаге.
+/// Что НЕ проверяется осознанно: интерфейсы и базовые классы (за пределами четырёх мест
+/// ниже). Если потребуется — расширим в следующем шаге.
 /// </summary>
 public class SubsystemBoundaryTests
 {
-    /// <summary>Неймспейсы, на которые Video ИМЕТ ПРАВО ссылаться. Совпадение по
-    /// неймспейсу или по префиксу «X.» (на случай поднеймспейсов).</summary>
-    private static readonly string[] AllowedNamespacePrefixes =
+    /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
+    /// проверяемой вертикали и явный список разрешённых namespace-префиксов (с учётом
+    /// вложенных через префикс "X.").</summary>
+    public sealed record VerticalBoundary(
+        string VerticalName,
+        string NamespaceRoot,
+        string[] AllowedNamespacePrefixes);
+
+    /// <summary>Неймспейсы, на которые ЛЮБАЯ вертикаль имеет право ссылаться
+    /// (BCL/платформа + общие служебные слои + сама вертикаль).</summary>
+    private static readonly string[] SharedAllowedPrefixes =
     {
         // BCL и платформа — спинка для всех.
         "System",
@@ -50,24 +59,37 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.Security",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Mcp",
-        // Сам проверяемый — внутри вертикали ссылаться на себя можно.
-        "ClaudeHomeServer.Services.Video",
     };
 
-    [Fact]
-    public void Video_НеСсылаетсяНаДругиеВертикали()
+    /// <summary>Таблица границ. Каждая подсистема добавляет ОДНУ строку: имя +
+    /// корневой namespace + allow-list (по умолчанию shared-спинка + сама вертикаль).</summary>
+    public static IEnumerable<object[]> Boundaries => new[]
     {
-        // Привязка к типу из Video как точке входа в нужную сборку: проект тестов
-        // ссылается на ClaudeHomeServer, typeof(...).Assembly гарантированно даёт её.
-        var videoAssembly = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        new object[]
+        {
+            new VerticalBoundary(
+                "Video",
+                "ClaudeHomeServer.Services.Video",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Video" })
+                    .ToArray()),
+        },
+    };
 
-        var videoTypes = CollectTypesInNamespaceTree(
-            videoAssembly,
-            "ClaudeHomeServer.Services.Video");
+    [Theory]
+    [MemberData(nameof(Boundaries))]
+    public void Vertical_НеСсылаетсяНаДругиеВертикали(VerticalBoundary boundary)
+    {
+        // Привязка к типу из подсистемы как точке входа в нужную сборку: проект тестов
+        // ссылается на ClaudeHomeServer, typeof(...).Assembly гарантированно даёт её.
+        // Подсистема `video` — единственная в таблице, её тип доступен как якорь сборки.
+        var assembly = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+
+        var types = CollectTypesInNamespaceTree(assembly, boundary.NamespaceRoot);
 
         var violations = new List<string>();
 
-        foreach (var type in videoTypes)
+        foreach (var type in types)
         {
             // Дедупликация: одно поле record-а порождает несколько упоминаний (поле,
             // конструктор, свойство, get/set, Equals/PrintMembers). В отчёте достаточно
@@ -76,7 +98,7 @@ public class SubsystemBoundaryTests
 
             foreach (var referenced in CollectReferencedTypes(type))
             {
-                if (!IsAllowed(referenced))
+                if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes))
                 {
                     seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
                 }
@@ -85,14 +107,14 @@ public class SubsystemBoundaryTests
             foreach (var (owner, forbidden) in seen)
             {
                 violations.Add(
-                    $"{owner} ссылается на {forbidden} из чужой вертикали " +
-                    "(нет в AllowedNamespacePrefixes)");
+                    $"{boundary.VerticalName}: {owner} ссылается на {forbidden} " +
+                    "из чужой вертикали (нет в AllowedNamespacePrefixes)");
             }
         }
 
         violations.Should().BeEmpty(
-            "типы из Services/Video должны ссылаться только на спинку (System.*, " +
-            "Microsoft.*, Models) и явно разрешённые служебные вертикали " +
+            $"типы из {boundary.NamespaceRoot} должны ссылаться только на спинку " +
+            "(System.*, Microsoft.*, Models) и явно разрешённые служебные вертикали " +
             "(Services.Http/Security/Composition/Mcp) либо на самих себя. " +
             "Любая ссылка на прочие Services.* — нарушение архитектурного правила " +
             "(см. CLAUDE.md/ADR-014). Найденные нарушения:\n" +
@@ -203,15 +225,15 @@ public class SubsystemBoundaryTests
         }
     }
 
-    private static bool IsAllowed(Type type)
+    private static bool IsAllowed(Type type, string[] allowed)
     {
         var ns = type.Namespace;
         if (ns is null) return true; // Безымянный namespace — не Services.*, разрешаем.
 
-        foreach (var allowed in AllowedNamespacePrefixes)
+        foreach (var prefix in allowed)
         {
-            if (ns == allowed
-                || ns.StartsWith(allowed + ".", StringComparison.Ordinal))
+            if (ns == prefix
+                || ns.StartsWith(prefix + ".", StringComparison.Ordinal))
             {
                 return true;
             }

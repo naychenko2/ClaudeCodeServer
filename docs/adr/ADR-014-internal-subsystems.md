@@ -95,6 +95,86 @@ public interface IAppSubsystem
 Контракт жёсткий, расширение через дополнительные методы — отдельный вопрос
 (пока не нужен: один раз зарегистрироваться достаточно).
 
+### Контракт v1.1 — что добавилось при выделении следующих подсистем
+
+Версия 1.0 (этап 0) закрыла один интерфейс и один сторож. К моменту массового
+выделения (этап 2+) разведка по 15 вертикалям 2026-09-02 выявила четыре общих
+элемента, которые нужны ДО того, как переносить следующую подсистему. Они
+оформлены как аддитивное расширение v1.0 — без поломки контракта этапа 0.
+
+1. **Хелпер hosted с Testing-гейтом** —
+   `SubsystemHostingExtensions.AddGatedHostedService<T>` /
+   `.AddGatedHostedFrom<T>`. Семантика скопирована 1-в-1 из локальных функций
+   `AddHosted<T>` / `AddHostedFrom<T>` в Program.cs:121-130: в Testing-среде без
+   явного `Testing:EnableHostedServices=true` hosted НЕ регистрируется.
+   Это та же логика, что в `Services/Images/ImageBackfillHostedService.cs:20-24`
+   (там её копировали вручную — после v1.1 копия не нужна, и подсистема просто
+   зовёт `AddGatedHostedService` из `Register`). В Program.cs локальные функции
+   удалены: те же 25+ регистраций теперь идут через extension-метод, поведение
+   продукта не меняется.
+
+2. **Общая форма резолва каталога данных** —
+   `SubsystemHostingExtensions.ResolveDataDir(IConfiguration, params string[])`.
+   До этого три вертикали (`Services/CodeGraph/GraphPersistence.cs`,
+   `Services/Dossiers/DossierStore.cs`, `Services/WorkspaceKnowledgeStore.cs`)
+   дублировали один и тот же сниппет `Path.GetDirectoryName(Path.GetFullPath(
+   config["DataPath"] ?? …))`, плюс он встречался в двух местах Program.cs
+   (пост-билд и handle-migration). В этой задаче хелпер только СОЗДАН; три
+   существующих места не переписываются — миграция пойдёт по мере выделения
+   их подсистем, иначе правка dataDir-логики смешалась бы с выделением.
+
+3. **Опциональная app-фаза** — отдельный интерфейс
+   `IAppPhaseSubsystem : IAppSubsystem { void ConfigureApp(WebApplication); }`,
+   плюс `AddSubsystems` дополнительно регистрирует каждый инстанс как
+   `services.AddSingleton<IAppSubsystem>(s)` (чтобы набор был доступен после
+   `Build()`), и метод `SubsystemRegistration.UseSubsystems(this WebApplication)`
+   зовёт `ConfigureApp(app)` в порядке регистрации для тех, кто реализует
+   `IAppPhaseSubsystem`. В `Program.cs` после `var app = builder.Build()` и ДО
+   всех прочих пост-билд инициализаций добавлен `app.UseSubsystems()` —
+   подсистемы получают шанс сделать свою работу раньше, чем её увидят
+   пост-билд шаги (например, Knowledge MigrateFromProjects).
+   Отдельный интерфейс (а не DIM на `IAppSubsystem`) — потому что DIM в
+   проекте уже ломал Moq (см. комментарии в `ILlmSessionAdapter.cs`).
+   Подсистемы без `IAppPhaseSubsystem` продолжают работать как раньше: их
+   `Register` отрабатывает, фаза их не трогает.
+
+4. **Сторож границ на много вертикалей** —
+   `SubsystemBoundaryTests` перестроен из захардкоженного Video-теста в
+   табличную форму. Запись `VerticalBoundary(VerticalName, NamespaceRoot,
+   AllowedNamespacePrefixes)` и `IEnumerable<object[]> Boundaries` с одной
+   записью (Video — белый список перенесён как есть). Новые подсистемы
+   добавляют ОДНУ строку в таблицу. `[Theory]` + `[MemberData]` прогоняет
+   все записи одинаковым набором рефлексии.
+
+Ссылка на заметку разведки: «Матрица подсистем — разведка 15 вертикалей
+(2026-09-02)» в `notes/` проекта.
+
+### Уточнение оценки Desktop
+
+Разведка 2026-09-02 показала, что оценка этапа 0 («рефакторинг трёх
+god-объектов») была завышена. Реальный объём:
+
+- **Врастание Desktop в SessionManager — 1 тип / 3 строки**:
+  `Services/SessionManager.cs:564` сам делает
+  `new Desktop.DesktopCapabilityTokenService(jwt)` в конструкторе. Достать —
+  зарегистрировать `DesktopCapabilityTokenService` в DI и принимать его в
+  SessionManager через конструктор. Это не рефакторинг god-объекта, это
+  переход от `new` к DI, ~3 строки диффа.
+- **Готовый шов найден**: `IDesktopTurnGate`
+  (`Services/Llm/DesktopServerLocator.cs:25-39`) — контракт «десктопный ли
+  чат + выпуск capability-токена на ход». Реализация не зарегистрирована,
+  но сам контракт лежит рядом с рантаймом ходов, и именно через него
+  SessionManager сможет узнать «десктопный ли чат» без знания про Desktop.
+  Это убирает прямой импорт `Services/Desktop` из `Services/Llm`.
+- **JwtService всё ещё знает про `DesktopCaller`** (этап 0 фиксировал),
+  и ClaudeSession всё ещё инъектит desktop-MCP-сервер. Эти два врастания
+  остаются, но на фоне найденного шва IDesktopTurnGate они выглядят
+  меньше: первый рефакторинг убирает 1 импорт + добавляет конструктор,
+  второй переезжает на `IDesktopMcpContribution` (отдельная задача).
+
+Desktop по-прежнему не блокирует остальные подсистемы — следующая волна
+выделения (Images / Tts / Telemetry / Dossiers) идёт независимо.
+
 ### Правило зависимостей вертикалей
 
 **Вертикаль зависит от спины и швов, но НИКОГДА от другой вертикали.**

@@ -118,16 +118,8 @@ builder.Services.AddControllers()
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
 // ~27 бутов тестовых хостов только жгли время прогона и порождали фоновую возню
 // (диагностика 2026-07-30). Singleton-регистрации остаются — лениво достаются из DI.
-var enableHostedServices = !builder.Environment.IsEnvironment("Testing")
-    || builder.Configuration.GetValue<bool>("Testing:EnableHostedServices");
-void AddHosted<T>() where T : class, IHostedService
-{
-    if (enableHostedServices) builder.Services.AddHostedService<T>();
-}
-void AddHostedFrom<T>(Func<IServiceProvider, T> factory) where T : class, IHostedService
-{
-    if (enableHostedServices) builder.Services.AddHostedService(factory);
-}
+// Хелперы живут в Services/Composition/SubsystemHostingExtensions.cs — те же правила
+// гейта, чтобы подсистемы и main-Program регистрировали hosted одинаково.
 
 builder.Services.AddSignalR(o =>
     {
@@ -188,14 +180,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallSe
 // CheapTextRunner (ключ discussion-digest); снимаются на экспорте, живут до ветки
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierDiscussionService>();
-AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>(builder.Configuration);
 // Автовыгрузка паспортов в локальную ветку ccs/dossiers/v1 после захвата — singleton +
 // hosted (подписка на стор в StartAsync): тот же экземпляр, что в DI
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>();
-AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierAutoExporter>());
 // Автоимпорт паспортов по новому tip ветки ccs/dossiers/v1 (тумблер проекта
 // AutoImportDossiers): наблюдение за веткой тиком 60 с, без fetch/pull
-AddHosted<ClaudeHomeServer.Services.Dossiers.DossierAutoImporter>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Dossiers.DossierAutoImporter>(builder.Configuration);
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
@@ -223,11 +215,11 @@ builder.Services.AddSingleton<SubscriptionActivityTracker>();
 builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>();
 builder.Services.AddSingleton<SubscriptionWindowMismatchGuard>();
 // Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
-AddHosted<SubscriptionUsageWarmupService>();
+builder.Services.AddGatedHostedService<SubscriptionUsageWarmupService>(builder.Configuration);
 // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
 // singleton — статусы опроса per-аккаунт (токен не подходит / ошибка) читает /api/usage
 builder.Services.AddSingleton<SubscriptionOAuthUsageService>();
-AddHostedFrom(sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 // Генерация картинок (иконка проекта, аватар персоны): драйверы fal/glif, настройка по
@@ -236,18 +228,18 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddImageGeneration();
 // Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
-AddHostedFrom(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 // Autolearn — singleton + hosted: PersonaAskService пишет память после консультаций напрямую
 builder.Services.AddSingleton<PersonaMemoryAutolearnService>();
-AddHostedFrom(sp => sp.GetRequiredService<PersonaMemoryAutolearnService>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<PersonaMemoryAutolearnService>());
 // Консолидация памяти команды проекта — singleton + hosted: team-autolearn ставит заявки RequestConsolidation
 builder.Services.AddSingleton<TeamMemoryConsolidationService>();
-AddHostedFrom(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
-AddHosted<TeamMemoryAutolearnService>();
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
+builder.Services.AddGatedHostedService<TeamMemoryAutolearnService>(builder.Configuration);
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
-AddHosted<PersonaProjectBindingsMigration>();
+builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
 // Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
-AddHosted<ClaudeHomeServer.Services.Llm.GlmModelAliasMigration>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Llm.GlmModelAliasMigration>(builder.Configuration);
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
@@ -266,7 +258,7 @@ builder.Services.AddSingleton<DocumentAiService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitServerService>();
 // Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)
-AddHosted<ClaudeHomeServer.Services.Git.GitAutoCommitService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Git.GitAutoCommitService>(builder.Configuration);
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitAiService>();
 builder.Services.AddSingleton<NotesService>();
 builder.Services.AddSingleton<NotesKnowledgeService>();
@@ -281,7 +273,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.ISpendCollector>(
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsService>();
 // Замеры размера постановки задач по секциям (разрез «Задача» в аналитике)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore>();
-AddHosted<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>(builder.Configuration);
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальная LLM (Ollama или llama-server, выбор по LocalLlm:Provider) для
 // бесплатного ранжирования действий мимо claude CLI. Обе реализации регистрируются
@@ -343,11 +335,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIcon
 // Разовая миграция значков существующим проектам (ADR-009 §10): бэкап → прогон → удаление
 // растровых иконок; идемпотентна, при полностью мигрированном сторе старт — чистый no-op
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigration>();
-AddHosted<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigrationService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigrationService>(builder.Configuration);
 // Разовая генерация фонов существующим проектам на старте (ADR-008 §10):
 // прогон идемпотентен, повторный запуск ничего не перетирает
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill>();
-AddHosted<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfillService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfillService>(builder.Configuration);
 // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
@@ -476,7 +468,7 @@ builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddSingleton<TeamWaveService>();
 // Сторож зависших волн (Э4): без него молчаливо умерший исполнитель оставлял бы штаб
 // в стадии «волна N» навсегда
-AddHosted<TeamWaveWatchdog>();
+builder.Services.AddGatedHostedService<TeamWaveWatchdog>(builder.Configuration);
 builder.Services.AddSingleton<SessionSummaryService>();
 // Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов»): one-shot сборка
 // по кнопке с кэшем в Session.ArchiveSummary; «Итог сессии» выше — другой маршрут
@@ -498,7 +490,7 @@ builder.Services.AddSingleton<ITriggerSource, TaskStatusTriggerSource>();
 builder.Services.AddSingleton<PersonaAutomationService>();
 // Бэкапы: singleton + hosted-обёртка — снапшот дёргают и таймер, и админский API
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
-AddHostedFrom(sp =>
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
 // Выкатка прода из чата (ADR-010): приём заявок + доклад об итоге прошлой выкатки, который
 // делает уже новый инстанс (чат-заказчик умер вместе со старым). BuildIdProvider читает
@@ -507,7 +499,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.BuildIdProvider>(
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.IDeployHost,
     ClaudeHomeServer.Services.Deploy.DeployHost>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.DeployService>();
-AddHosted<ClaudeHomeServer.Services.Deploy.DeployReportService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Deploy.DeployReportService>(builder.Configuration);
 
 // === Десктопный агент (ADR-008): руки песочницы на машине пользователя ===
 // Реестр устройств и хеши их токенов — единственный стор грани; сеансы рук и живые
@@ -534,17 +526,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectio
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
-AddHosted<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>();
-AddHosted<TaskSchedulerService>();
-AddHosted<ChatExpiryService>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
+builder.Services.AddGatedHostedService<TaskSchedulerService>(builder.Configuration);
+builder.Services.AddGatedHostedService<ChatExpiryService>(builder.Configuration);
 // Автоправило архивации чатов (флаг chat-auto-archive) — singleton + hosted: кнопка
 // «Применить сейчас» (POST /api/chats/archive-run) дёргает RunNowAsync того же инстанса
 builder.Services.AddSingleton<ChatArchiveService>();
-AddHostedFrom(sp => sp.GetRequiredService<ChatArchiveService>());
-AddHosted<ChatTurnLoggerService>();
-AddHosted<NoteExpiryService>();
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ChatArchiveService>());
+builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configuration);
+builder.Services.AddGatedHostedService<NoteExpiryService>(builder.Configuration);
 // Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
-AddHosted<ChangelogWarmupService>();
+builder.Services.AddGatedHostedService<ChangelogWarmupService>(builder.Configuration);
 // Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
 builder.Services.AddSingleton<TerminalService>();
 // Последний известный порт сервиса: без него живой дев-сервер после перезапуска продукта
@@ -726,7 +718,7 @@ builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
 // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)
 builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
-AddHosted<ProjectKnowledgeTurnSync>();
+builder.Services.AddGatedHostedService<ProjectKnowledgeTurnSync>(builder.Configuration);
 // Каскадная уборка знаний при удалении пользователя (UsersController)
 builder.Services.AddSingleton<UserKnowledgeCascade>();
 // Участники реконсайлера error-документов Dify: пять владельцев локальных сторов
@@ -746,7 +738,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeAlertNotifier,
     ClaudeHomeServer.Services.Knowledge.KnowledgeAlertNotifier>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>();
-AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
 // Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная
@@ -897,6 +889,12 @@ if (inspectionMode)
 }
 
 var app = builder.Build();
+
+// Пост-билд шаг подсистем: для каждой подсистемы, реализующей IAppPhaseSubsystem,
+// зовём ConfigureApp(app) в порядке регистрации. Вызываем ДО любых других
+// пост-билд инициализаций и до middleware-конвейера, чтобы зависящие от него
+// шаги (например, MigrateFromProjects в Knowledge) уже видели результат.
+app.UseSubsystems();
 
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
 WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()

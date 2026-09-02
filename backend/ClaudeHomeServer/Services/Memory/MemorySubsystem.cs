@@ -23,9 +23,9 @@ namespace ClaudeHomeServer.Services.Memory;
 //   Persona-консолидации: merge дублей по типу + вытеснение по TeamMemory:MaxEntries.
 //   Singleton + hosted через AddGatedHostedFrom.
 // - TeamMemoryAutolearnService (IHostedService) — командный аналог autolearn: one-shot
-//   из хода в проектной/групповой/совещательной сессии; hosted напрямую (не фабрика,
-//   единственный из шести — авто-память команды не разделяет состояние с DI-инстансом
-//   для заявок консолидации, как персонный).
+//   из хода в проектной/групповой/совещательной сессии. Singleton + hosted через
+//   AddGatedHostedFrom (тот же инстанс, что и в DI — общий паттерн со всеми
+//   consolidation/autolearn сервисами).
 //
 // ⚠ Два форвардера `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService}`
 // (Program.cs:~688-691) остаются в композиционном корне сознательно — кросс-вертикальный

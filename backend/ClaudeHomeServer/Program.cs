@@ -155,19 +155,8 @@ builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.UserModelTierResolver>();
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
-// CodeGraph: граф зависимостей кода (узлы — типы, рёбра — Calls/Implements/References)
-// GraphPersistence требует dataDir из IConfiguration — ленивый factory, чтобы test-in-memory
-// (DataPath из TestWebApplicationFactory) тоже применялся, как у ProjectManager.
-builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.CodeGraph.GraphPersistence(
-    Path.GetDirectoryName(Path.GetFullPath(
-        sp.GetRequiredService<IConfiguration>()["DataPath"]
-            ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!,
-    sp.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.GraphPersistence>>()));
-builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
-// Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider>();
-// Тонкие запросы к графу (find/neighbors/hubs) — за ними MCP-сервер codegraph
-builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphQueryService>();
+// CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
+// (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 builder.Services.AddSingleton<PersonaManager>();
@@ -573,6 +562,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),
     // плюс hosted-сервисы SessionManager/ProjectManager. Раньше — сломает их DI-порядок.
     new ClaudeHomeServer.Services.Git.GitSubsystem(),
+    // CodeGraph — после Git, потому что это первая подсистема с пост-билд фазой
+    // (`IAppPhaseSubsystem.ConfigureApp` регистрирует языковые провайдеры `.cs`/`.ts`/`.tsx`).
+    new ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem(),
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
@@ -923,27 +915,6 @@ if (!inspectionMode)
     // Фоновый прогрев активной локальной LLM (грузим веса в память заранее; best-effort).
     // Резолвится через интерфейс — выбор движка уже сделан по LocalLlm:Provider.
     _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.ILocalLlmClient>().WarmUpAsync());
-    // Регистрация языковых провайдеров CodeGraph (C# для .cs; TS/React для .ts/.tsx)
-    try
-    {
-        var codeGraphService = app.Services.GetRequiredService<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
-        var csProvider = new ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider(
-            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider>>());
-        codeGraphService.RegisterProvider(".cs", csProvider);
-        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .cs");
-        // TS-провайдер гоняет Node-экстрактор frontend/scripts/codegraph-extractor.mjs;
-        // без Node/скрипта тихо отдаёт пустой граф (см. TypeScriptGraphProvider).
-        var tsProvider = new ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider(
-            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider>>(),
-            app.Configuration);
-        codeGraphService.RegisterProvider(".ts", tsProvider);
-        codeGraphService.RegisterProvider(".tsx", tsProvider);
-        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .ts/.tsx");
-    }
-    catch (Exception ex)
-    {
-        Console.Error.WriteLine($"[CodeGraph] не удалось зарегистрировать провайдер: {ex.Message}");
-    }
 }
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager

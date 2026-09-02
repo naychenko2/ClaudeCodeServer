@@ -230,6 +230,34 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectFileSessionsIndex",
                 }),
         },
+        // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
+        // Пост-билд фаза `ConfigureApp` регистрирует языковые провайдеры (`.cs`/`.ts`/`.tsx`),
+        // MCP-тулсет `CodeGraphToolset` живёт в `Services/Mcp/Http` и регистрируется в Program.cs.
+        // Допуски к корню Services — точечные:
+        // 1) `ProjectManager` (Services/ корень) — граф зависит от проектов
+        //    (`CodeGraphService.cs:43` параметр ctor и поле `_projects:15`).
+        // `WorkspaceKnowledgeStore.NormalizePath` — статический вызов из тел методов
+        // `CodeGraphService`/`/QueryService`/`/PromptProvider` (невидим рефлексии,
+        // см. «Известное ограничение» в шапке файла); шов через `WorkspaceKnowledgeStore`
+        // оставляем как есть, отдельный allow-list под static-вызов не нужен.
+        // `LocalProcessRunner.ResolveExecutable("node")` в `TypeScriptGraphProvider:155` —
+        // аналогичный static-вызов из `Services.Execution`, рефлексия его не видит.
+        new object[]
+        {
+            new VerticalBoundary(
+                "CodeGraph",
+                "ClaudeHomeServer.Services.CodeGraph",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.CodeGraph",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                }),
+        },
         // Deploy — вертикаль выкатки прода (ADR-010 + трей-раннер из веб-морды).
         // Допуск к корню Services точечный:
         // 1) `SessionManager` и `NotificationService` (Services/ корень) для

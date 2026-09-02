@@ -145,8 +145,11 @@ public class SubsystemBoundaryTests
         // видит как ссылки из Images-типов.
         // `ClaudeHomeServer.Hubs` — нужен `IHubContext<SessionHub>` (событие
         // `image_backfilled` едет в ленту персоны).
-        // `ClaudeHomeServer.Protocol` — тип сообщения `ImageBackfilledMessage`
-        // наследует `ServerMessage` из общего протокола WS-событий.
+        // Точечный допуск к `ClaudeHomeServer.Protocol`: `ImageBackfilledMessage`
+        // (ImageBackfillService отправляет событие в ленту персоны; см. также
+        // `event image_backfilled` в `ServerMessage`). Префикс `ClaudeHomeServer.Protocol`
+        // снят (волна 3), чтобы сторож ловил новые зависимости от любых из ~105
+        // публичных типов протокола (включая десктопный `DesktopCallCommand`/`DeviceHello`).
         new object[]
         {
             new VerticalBoundary(
@@ -157,12 +160,17 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Images",
                         "ClaudeHomeServer.Hubs",
-                        "ClaudeHomeServer.Protocol",
                     })
                     .ToArray(),
                 new[]
                 {
                     "ClaudeHomeServer.Services.PersonaManager",
+                    // ImageBackfillService — поле/параметр типа `ImageBackfilledMessage`
+                    // (record, наследует `ServerMessage` — ImageBackfillService.cs:22).
+                    // Базовый `ServerMessage` нужен отдельно: компилятор материализует
+                    // ссылку на базовый record в полях/конструкторе `ImageBackfilledMessage`.
+                    "ClaudeHomeServer.Protocol.ImageBackfilledMessage",
+                    "ClaudeHomeServer.Protocol.ServerMessage",
                 }),
         },
         // Tts — вертикаль озвучки голосового режима чата. Допуск к корню Services
@@ -206,7 +214,17 @@ public class SubsystemBoundaryTests
         //    `ClaudeHomeServer.Services.Llm`.
         // 4) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации об
         //    авто-коммите (GitAutoCommitService отправляет событие в ленту сессии).
-        // 5) `ClaudeHomeServer.Protocol` — тип WS-события `*Message` для той же нотификации.
+        // 5) `ClaudeHomeServer.Protocol` — префикс СНЯТ (волна 3) как полностью
+        //    избыточный: вертикаль Git использует `GitTurnCommitMessage`/`GitStatusChangedMessage`
+        //    (см. GitAutoCommitService.cs:63,79) ТОЛЬКО как литералы в generic-вызовах
+        //    `Clients.Group(...).SendAsync("message", new GitXxxMessage(...))`. Рефлексия
+        //    сторожа (поля/параметры/конструкторы/public-методы) эти типы не видит —
+        //    они существуют лишь в IL generic-аргументах и литералах, см. «Известное
+        //    ограничение» в шапке файла. Поэтому убираем префикс, а `AllowedExactNamespaces`
+        //    для `ClaudeHomeServer.Protocol.*` оставляем пустым — это сознательный
+        //    нулевой allow-list (по аналогии со снятым `Services.Llm` у Watchdog в
+        //    волне 1): если вертикаль получит поле/параметр типа из Protocol, сторож
+        //    поймает это сразу.
         new object[]
         {
             new VerticalBoundary(
@@ -219,7 +237,6 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Execution",
                         "ClaudeHomeServer.Services.Llm",
                         "ClaudeHomeServer.Hubs",
-                        "ClaudeHomeServer.Protocol",
                     })
                     .ToArray(),
                 new[]
@@ -371,10 +388,14 @@ public class SubsystemBoundaryTests
         //    стоимости по прайсу провайдера (тот же шов «вертикаль → спинка LLM», что
         //    у `Git`/`Backgrounds`/`Deploy`): цены живут в одном месте на все
         //    потребительские разделы, вынос из SharedAllowedPrefixes держит гейт узким.
-        // 4) `ClaudeHomeServer.Protocol` — типы WS-событий (`StoredMessage`/`StoredResultMessage`
-        //    и связанные), которые `SpendMaintenanceService.BackfillAsync` разбирает из
-        //    истории чатов при первичном наполнении стора; тот же шов, что у `Git`/`Deploy`,
-        //    читающих историю/события протокола.
+        // 4) Точечный допуск к `ClaudeHomeServer.Protocol` — типы WS-событий, которые
+        //    `SpendMaintenanceService.BackfillAsync` разбирает из истории чатов при
+        //    первичном наполнении стора: `StoredMessage`/`StoredResultMessage`
+        //    (попадают в поля async-state-машины `<BackfillAsync>d__7` через `var`),
+        //    плюс `StoredFalCostMessage`/`StoredGlifCostMessage`/`UsageInfo` для
+        //    подсчёта стоимости провайдеров по прайсу. Префикс `ClaudeHomeServer.Protocol`
+        //    снят (волна 3), чтобы сторож ловил новые зависимости от любых из ~105
+        //    публичных типов протокола (включая десктопный `DesktopCallCommand`/`DeviceHello`).
         // `SpendStore` форвардит `ISpendCollector` через `sp => ...GetRequiredService<SpendStore>()` —
         // инвариант «интерфейс и конкретный тип указывают на ОДИН инстанс» (тест
         // `SpendSubsystemRegistrationTests.Register_SpendCollector_IsSameInstanceAsStore`).
@@ -388,7 +409,6 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Spend",
                         "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Protocol",
                     })
                     .ToArray(),
                 new[]
@@ -399,6 +419,13 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ChatHistoryService",
+                    // SpendMaintenanceService.cs: BackfillAsync — поля async-state-машины
+                    // материализуют возвращаемые типы из истории чатов.
+                    "ClaudeHomeServer.Protocol.StoredMessage",
+                    "ClaudeHomeServer.Protocol.StoredResultMessage",
+                    "ClaudeHomeServer.Protocol.StoredFalCostMessage",
+                    "ClaudeHomeServer.Protocol.StoredGlifCostMessage",
+                    "ClaudeHomeServer.Protocol.UsageInfo",
                 }),
         },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
@@ -410,8 +437,11 @@ public class SubsystemBoundaryTests
         //    (WatchdogRunner.cs:3);
         // 2) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для события
         //    `watchdogs_changed` (WatchdogNotifier.cs:22-23);
-        // 3) `ClaudeHomeServer.Protocol` — `WatchdogsChangedMessage : ServerMessage`
-        //    (WatchdogNotifier.cs:3);
+        // 3) Точечный допуск к `ClaudeHomeServer.Protocol`: `WatchdogsChangedMessage`
+        //    (WatchdogNotifier.cs:3) — единственный тип протокола, на который ссылается
+        //    вертикаль. Префикс `ClaudeHomeServer.Protocol` снят (волна 3), чтобы
+        //    сторож ловил новые зависимости от любых из ~105 публичных типов протокола
+        //    (включая десктопный `DesktopCallCommand`/`DeviceHello`).
         // 4) Допуски к корню Services — точные: серверные сторожа должны знать про чаты,
         //    проекты, юзеров и домашние папки, чтобы гаситься при удалении/архивации
         //    и резолвить рабочий каталог опроса. Это «вертикаль → спинка» (общая
@@ -435,7 +465,6 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Watchdog",
                         "ClaudeHomeServer.Services.Execution",
                         "ClaudeHomeServer.Hubs",
-                        "ClaudeHomeServer.Protocol",
                     })
                     .ToArray(),
                 new[]
@@ -446,6 +475,12 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserHomeResolver",
                     "ClaudeHomeServer.Services.SessionMessagingService",
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome",
+                    // WatchdogNotifier.cs:3 — поле/параметр типа `WatchdogsChangedMessage`
+                    // (record, наследует `ServerMessage`). Базовый `ServerMessage` нужен
+                    // отдельно: компилятор материализует ссылку на базовый record в
+                    // полях/конструкторе наследника.
+                    "ClaudeHomeServer.Protocol.WatchdogsChangedMessage",
+                    "ClaudeHomeServer.Protocol.ServerMessage",
                 }),
         },
     };

@@ -19,7 +19,6 @@ export const EFFORTS: EffortOption[] = [
 // Все провайдеры работают через claude CLI — набор уровней --effort единый.
 // Параметр намеренно сохранён: сигнатура — точка расширения под провайдер-специфичные
 // наборы уровней, все вызывающие стороны уже передают провайдера.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- задел на будущее, см. комментарий
 export function effortsForProvider(_provider: string): EffortOption[] {
   return EFFORTS;
 }

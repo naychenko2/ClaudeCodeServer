@@ -67,6 +67,17 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
+      // Префикс `_` = «намеренно не используется»: destructure-to-omit
+      // (`const { [key]: _drop, ...rest }`), catch без разбора ошибки, параметр,
+      // оставленный в сигнатуре ради совместимости или задела на будущее. Соглашение
+      // уже разлито по коду — правилу надо про него сказать, иначе каждое такое место
+      // требует ритуального eslint-disable не глядя.
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+        destructuredArrayIgnorePattern: '^_',
+      }],
       // Понижено до warn по итогам задачи 3/5: точность правила на нашей базе — 1
       // находка из 116 (все остальные — доминирующие легитимные идиомы фронта: fetch
       // со сбросом состояния, сброс при смене сущности, подписки matchMedia/ResizeObserver).

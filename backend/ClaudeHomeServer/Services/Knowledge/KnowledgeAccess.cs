@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Knowledge;
 
 // Чистая логика изоляции per-owner для раздела «Знания» (вынесена из
 // KnowledgeBasesController ради тестируемости). Решения принимаются по ИМЕНИ датасета

@@ -1304,6 +1304,42 @@ export function Composer({
     }
   };
 
+  // Столбец кнопок справа от поля: авторазмер тянет карточку вниз, и когда поле
+  // выросло выше столбца кнопок, ряд (фразы · микрофон · «отправить») ложится
+  // вертикально у правого края — поле получает ширину карточки целиком. Высоту
+  // мерит ResizeObserver: авторазмер пишет её прямо в DOM без ререндеров, здесь
+  // единственный ререндер — смена режима при пересечении порога. Переключение
+  // ОДНОСТОРОННЕЕ (защёлка): смена раскладки уширяет поле, текст перезакладывается
+  // в меньше строк, и двусторонний порог качал бы режим туда-сюда у граничного
+  // текста. Обратно в ряд — только когда поле опустело: текст ушёл в чат
+  // (resetInput) или стёрт вручную. Иначе столбец из кнопок остался бы висеть
+  // у однострочного поля, растянув карточку по своей высоте
+  const [tallInput, setTallInput] = useState(false);
+  const sideBtnH = isMobile ? 36 : 32;
+  const sendBtnH = isMobile ? 38 : 34;
+  const columnNeed = (1 + (hasSpeech ? 1 : 0)) * (sideBtnH + 6) + sendBtnH;
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let cur = tallInput;
+    const ro = new ResizeObserver(entries => {
+      if (cur) return; // защёлка: назад — только через опустевшее поле (эффект ниже)
+      const h = (entries[0].target as HTMLElement).offsetHeight;
+      if (h >= columnNeed) { cur = true; setTallInput(true); }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+    // talkActive/isListening: поле подменяется зонами разговора/записи — по
+    // возврату textarea наблюдатель переподписывается на свежий узел
+  }, [talkActive, isListening, tallInput, columnNeed]);
+  // Сброс защёлки: поле пустое — столбца у однострочного поля быть не должно
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс защёлки столбца при опустевшем поле
+    if (text === '') setTallInput(false);
+  }, [text]);
+  // Столбец только при живом textarea: в разговоре и записи поле низкое, кнопки — ряд
+  const columnRight = tallInput && !talkActive && !isListening;
+
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
     position: 'relative',
@@ -2324,10 +2360,13 @@ export function Composer({
         </div>
       )}
 
-      {/* В белой рамке — только сам ввод: поле, микрофон и «отправить» */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {/* В белой рамке — только сам ввод: поле, микрофон и «отправить».
+          Выросшее выше столбца кнопок поле разворачивает правую группу
+          вертикально (columnRight) — кнопки прижимаются к низу, «отправить»
+          остаётся в правом нижнем углу, поле забирает ширину карточки */}
+      <div style={{ display: 'flex', alignItems: columnRight ? 'flex-end' : 'center', gap: 6 }}>
         {inputArea}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <div style={{ display: 'flex', flexDirection: columnRight ? 'column' : 'row', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {/* Три ветки правой группы. В петле — ВСЕГДА одна кнопка «остановить», в любой
               фазе (решение владельца): один жест глушит чтение, прерывает ход и выходит
               из режима. Разбираться, что означает кнопка сейчас, на ходу невозможно.

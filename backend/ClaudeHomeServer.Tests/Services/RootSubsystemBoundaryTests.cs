@@ -146,12 +146,13 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.FileService",
         "ClaudeHomeServer.Services.NotificationService",
         "ClaudeHomeServer.Services.NotificationStore",
-        // Знаниевые классы на случай, если они окажутся в корне (сейчас в Services.Knowledge).
-        "ClaudeHomeServer.Services.KnowledgeService",
-        "ClaudeHomeServer.Services.WorkspaceKnowledgeStore",
-        "ClaudeHomeServer.Services.KnowledgeBaseCatalogService",
-        "ClaudeHomeServer.Services.ProjectKnowledgeSyncService",
-        "ClaudeHomeServer.Services.UserKnowledgeCascade",
+        // Знаниевых типов в корне БОЛЬШЕ НЕТ: шаги 6 и 8 волны 3 перенесли
+        // KnowledgeService/WorkspaceKnowledgeStore/KnowledgeBaseCatalogService/
+        // ProjectKnowledgeSyncService/UserKnowledgeCascade/KnowledgeAccess в
+        // `Services.Knowledge`, где их держит обычный per-vertical сторож.
+        // Держать их тут «на всякий случай» нельзя: запись в ExcludedRootTypes
+        // — это ИСКЛЮЧЕНИЕ из проверки, то есть ровно тот слепой пятак, ради
+        // закрытия которого сторож и заводился (находка ревью 50f3b849).
     };
 
     [Fact]

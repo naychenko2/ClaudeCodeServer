@@ -169,24 +169,29 @@ export function FileLink({ path, onOpen, mono, children }: {
 }
 
 // Служебные маркеры протоколов — не для глаз: завершение цикла «до готово»
-// (<promise>ГОТОВО</promise>, слово-обещание конфигурируемо на бэкенде) и протокол
-// «Командной реализации» — <team:work>постановка</team>, <escalate:вид>…</escalate>.
+// (<promise>ГОТОВО</promise>, слово-обещание конфигурируемо на бэкенде), остановка и
+// ожидание того же цикла (<blocked>причина</blocked>, <waiting>чего ждёшь</waiting> —
+// см. OmoPrompts.WorkLoopSection/WorkLoopWaitingTick) и протокол «Командной реализации» —
+// <team:work>постановка</team>, <escalate:вид>…</escalate>.
 // Парные маркеры ищем ПОЗИЦИОННО: [открывающий тег, закрывающий тег], обе границы — вне
 // код-фрагментов, и вырезаем диапазон [openStart, closeEnd) из исходного текста целиком,
 // вместе с вложенным кодом: fenced-блок внутри <team:work> не разрывает пару (рез по
 // сегментам показывал код-фенс и хвост постановки как обычный текст). Та же семантика,
-// что у бэкенда (SessionManager.FindPairedMarkerOutsideCode + StripTeamProtocolMarkers):
-// зачистка и разбор не расходятся. Закрытие по имени (</team:work>, </escalate:check>)
-// терпим — как и парсер бэкенда.
+// что у бэкенда (SessionManager.FindPairedMarkerOutsideCode + StripTeamProtocolMarkers,
+// TryExtractBlockedMarker/TryExtractWaitingMarker): зачистка и разбор не расходятся.
+// Закрытие по имени (</team:work>, </escalate:check>) терпим — как и парсер бэкенда;
+// blocked/waiting/promise закрываются только точным тегом (бэкенд их так же не варьирует).
 const PAIRED_MARKERS: ReadonlyArray<readonly [RegExp, RegExp]> = [
   [/<escalate:[a-z]+>/i, /<\/escalate(?::\w+)?>/i],
   [/<team:work>/i, /<\/team(?::work)?>/i],
   [/<promise>/i, /<\/promise>/i],
+  [/<blocked>/i, /<\/blocked>/i],
+  [/<waiting>/i, /<\/waiting>/i],
 ];
 // Незакрытый открывающий тег в хвосте — ход ещё стримится, закрывающий тег придёт позже;
 // без этого пользователь успевает прочитать «<team:work>Создать …» целиком. Хвост прячем
 // до конца текста (включая код-блок внутри незакрытой постановки), а не до фенса.
-const OPEN_TAGS = /<(?:promise|team:work|escalate:[a-z]+)>/gi;
+const OPEN_TAGS = /<(?:promise|blocked|waiting|team:work|escalate:[a-z]+)>/gi;
 // Осиротевший закрывающий тег без пары (повторное закрытие, цитата закрытия отдельно от
 // открытия) — служебный синтаксис протокола, человеку не место ни в какой форме
 // (симметрично OrphanCloserRegex бэкенда)

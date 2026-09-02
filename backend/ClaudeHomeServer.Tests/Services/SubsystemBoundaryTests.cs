@@ -83,6 +83,27 @@ public class SubsystemBoundaryTests
                     .Concat(new[] { "ClaudeHomeServer.Services.Yandex" })
                     .ToArray()),
         },
+        // Reader — единственная подсистема с прямой зависимостью от корня Services:
+        // `SsrfGuard` (Services/ корень, общая инфраструктура, ADR-005) не переезжает
+        // в подсистему, и других ссылок из Reader на корень Services нет. Точечный
+        // allow-list вместо расширения SharedAllowedPrefixes — чтобы не открывать
+        // любой подсистеме весь `ClaudeHomeServer.Services.*` (там живут конкретные
+        // сервисы вроде FileService/SessionManager/PersonaManager).
+        // `AngleSharp.*` — third-party HTML-парсер (SmartReader + HtmlParser).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Reader",
+                "ClaudeHomeServer.Services.Reader",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Reader",
+                        "ClaudeHomeServer.Services",
+                        "AngleSharp",
+                    })
+                    .ToArray()),
+        },
     };
 
     [Theory]

@@ -13,7 +13,6 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Services.Mcp;
-using ClaudeHomeServer.Services.Reader;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
@@ -563,28 +562,14 @@ builder.Services.AddHttpClient("media-proxy");
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-// Ридер (ADR-005): без кук/креденшалов/авто-редиректов/системного egress-прокси — цепочку
-// хопов ведёт сам ReaderService, перепроверяя SsrfGuard на каждом. Хендлер (UseProxy=false +
-// ConnectCallback — вторая, TOCTOU-safe линия обороны) вынесен в ReaderHttpHandlerFactory,
-// чтобы её можно было проверить тестом напрямую.
-builder.Services.AddHttpClient(ReaderService.HttpClientName, client =>
-{
-    client.Timeout = Timeout.InfiniteTimeSpan; // таймауты — явные, в ReaderService (заголовки/операция)
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("ClaudeCodeServer-Reader/1.0");
-    client.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml");
-    client.DefaultRequestHeaders.AcceptLanguage.ParseAdd(
-        builder.Configuration.GetValue("Reader:AcceptLanguage", "en-US,en;q=0.9")!);
-})
-.ConfigurePrimaryHttpMessageHandler(ReaderHttpHandlerFactory.Create);
-builder.Services.AddSingleton<ReaderQuotaService>();
-builder.Services.AddSingleton<ReaderService>();
 // Раздел «Видео» — пилот подсистемы (см. `Services/Video/VideoSubsystem.cs`).
 // Сам `VideoSubsystem.Register` подключает и платформенный `IMemoryCache` для своих
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
 builder.Services.AddSubsystems(builder.Configuration,
     new VideoSubsystem(),
-    new ClaudeHomeServer.Services.Yandex.YandexSubsystem());
+    new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
+    new ClaudeHomeServer.Services.Reader.ReaderSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

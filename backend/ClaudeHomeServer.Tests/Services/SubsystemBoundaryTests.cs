@@ -54,6 +54,25 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class SubsystemBoundaryTests
 {
+    // До multi-assembly-фикса typeof(VideoSubsystem).Assembly форсировал загрузку Main —
+    // сторож получал ровно её типы и не задумывался о lazy-load. После фикса сторож
+    // перебирает AppDomain.CurrentDomain.GetAssemblies(): если ни один тест в этом
+    // testhost до сих пор не тронул Main, она не загружена, и сторож проходит
+    // вакуумно — выборка по любой вертикали в Main будет пустой. Статический
+    // конструктор гарантирует загрузку Main при первом обращении к типу этого класса,
+    // и сторож видит обе сборки (Core + Main).
+    static SubsystemBoundaryTests()
+    {
+        // До multi-assembly-фикса typeof(...).Assembly форсировал загрузку Main
+        // и сторож получал её типы по умолчанию. После фикса сторож перебирает
+        // AppDomain.CurrentDomain.GetAssemblies() с фильтром по имени —
+        // без явного форс-референса Main не загружается, если её никто не тронул
+        // до этого теста (сборка-точка-точка ленивая), и сторож проходит
+        // вакуумно по всем вертикалям в Main. Этот статический конструктор
+        // гарантирует загрузку Main при первом обращении к типу этого класса.
+        _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+    }
+
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
     /// проверяемой вертикали и явный список разрешённых namespace-префиксов (с учётом
     /// вложенных через префикс "X.") + точных namespace-имён (одноуровневые синглтоны
@@ -698,12 +717,27 @@ public class SubsystemBoundaryTests
     [MemberData(nameof(Boundaries))]
     public void Vertical_НеСсылаетсяНаДругиеВертикали(VerticalBoundary boundary)
     {
-        // Привязка к типу из подсистемы как точке входа в нужную сборку: проект тестов
-        // ссылается на ClaudeHomeServer, typeof(...).Assembly гарантированно даёт её.
-        // Подсистема `video` — первая в таблице, её тип доступен как якорь сборки.
-        var assembly = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        // Сторож сканирует типы не из одной сборки (раньше typeof(VideoSubsystem).Assembly
+        // возвращал единственную ClaudeHomeServer.dll, где жили все вертикали), а по всем
+        // загруженным сборкам ClaudeHomeServer.* — сейчас это Core + Main, в будущем
+        // добавляются отдельные сборки вынесенных вертикалей. Фильтр берёт:
+        //  - `ClaudeHomeServer` — главная сборка (этап 0/1 не выносил вертикали, она
+        //    ещё содержит все `Services.*`, и её имя НЕ имеет точки в имени сборки);
+        //  - `ClaudeHomeServer.<X>` — Core и будущие вертикальные сборки.
+        // Исключение `ClaudeHomeServer.Tests` гарантирует, что тестовая сборка с её
+        // стабами не путается с продовыми типами. Статический конструктор форсирует
+        // загрузку Main до этого момента (см. комментарий там).
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a =>
+            {
+                var name = a.GetName().Name;
+                return name is not null
+                    && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
+                    && name != "ClaudeHomeServer.Tests"
+                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+            });
 
-        var types = CollectTypesInNamespaceTree(assembly, boundary.NamespaceRoot);
+        var types = CollectTypesInNamespaceTree(assemblies, boundary.NamespaceRoot);
 
         var violations = new List<string>();
 
@@ -739,12 +773,20 @@ public class SubsystemBoundaryTests
             string.Join("\n", violations));
     }
 
-    private static IEnumerable<Type> CollectTypesInNamespaceTree(Assembly assembly, string namespaceRoot)
+    private static IEnumerable<Type> CollectTypesInNamespaceTree(IEnumerable<Assembly> assemblies, string namespaceRoot)
     {
-        // Сам неймспейс + все вложенные поднеймспейсы.
-        return assembly.GetTypes()
-            .Where(t => t.Namespace == namespaceRoot
-                        || (t.Namespace?.StartsWith(namespaceRoot + ".", StringComparison.Ordinal) ?? false));
+        // Сам неймспейс + все вложенные поднеймспейсы, по всем переданным сборкам.
+        foreach (var assembly in assemblies)
+        {
+            foreach (var type in assembly.GetTypes())
+            {
+                if (type.Namespace == namespaceRoot
+                    || (type.Namespace?.StartsWith(namespaceRoot + ".", StringComparison.Ordinal) ?? false))
+                {
+                    yield return type;
+                }
+            }
+        }
     }
 
     private static IEnumerable<Type> CollectReferencedTypes(Type type)

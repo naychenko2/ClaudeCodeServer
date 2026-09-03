@@ -62,6 +62,13 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class RootSubsystemBoundaryTests
 {
+    // Загрузка Main — иначе AppDomain.CurrentDomain.GetAssemblies() её не увидит
+    // (см. комментарий в SubsystemBoundaryTests).
+    static RootSubsystemBoundaryTests()
+    {
+        _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+    }
+
     /// <summary>Неймспейсы, на которые ЛЮБОЙ root-тип имеет право ссылаться
     /// (BCL/платформа + общие служебные слои). Источник правды — <c>SharedAllowedPrefixes</c>
     /// из <see cref="SubsystemBoundaryTests"/>.</summary>
@@ -158,14 +165,32 @@ public class RootSubsystemBoundaryTests
     [Fact]
     public void RootServices_НеСсылаетсяНаПодсистемныеВертикали()
     {
-        var assembly = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        // Сторож смотрит типы только в root-неймспейсе `ClaudeHomeServer.Services`
+        // (вертикали типа `ClaudeHomeServer.Services.Video` — не его забота,
+        // их проверяет SubsystemBoundaryTests). После выделения Core часть root-типов
+        // (например, SsrfGuard) живёт в ClaudeHomeServer.Core.dll — без перебора
+        // ВСЕХ ClaudeHomeServer.* сборок страж видит только Main и пропускает
+        // нарушения в Core. Главная сборка `ClaudeHomeServer` (имя без суффикса —
+        // этап 0/1 ещё не вынес вертикали) тоже входит в выборку. Тестовая сборка
+        // `ClaudeHomeServer.Tests` исключена: её `namespace` имеет префикс
+        // `ClaudeHomeServer.Tests.*`, не путается с `ClaudeHomeServer.Services.*`,
+        // но ловить в ней root-типы тоже нечего.
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a =>
+            {
+                var name = a.GetName().Name;
+                return name is not null
+                    && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
+                    && name != "ClaudeHomeServer.Tests"
+                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+            });
 
         // Только top-level root: Namespace строго "ClaudeHomeServer.Services", без nested
         // (`Foo+Bar` — часть родительского типа, проверяются через него) и без
         // compiler-generated типов (async state-машины `Foo+<Method>d__N`, лямбды
         // `<>c__DisplayClass*`, кэши для анонимных типов и т.п.). У таких типов
         // `Name` содержит `<` — это устойчивый маркер C#-компилятора.
-        var rootTypes = assembly.GetTypes()
+        var rootTypes = assemblies.SelectMany(a => a.GetTypes())
             .Where(t => t.Namespace == "ClaudeHomeServer.Services")
             .Where(t => !(t.FullName?.Contains('+') ?? false))
             .Where(t => !(t.Name?.Contains('<') ?? false))

@@ -57,6 +57,16 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- === Этап 0 модульности: ClaudeHomeServer.Core (feature/subsystems-foundation) ===
+       Тонкая библиотека под Web SDK с общей спинкой сервисов (контракт IAppSubsystem,
+       хостинг-расширения подсистем, базовый стор, тихий HTTP-логгер, McpSecretStore,
+       SsrfGuard). Main ссылается на Core; вертикали пока живут в Main, перенос в
+       отдельные сборки — этап 3. Вертикали зависят ТОЛЬКО от Core (не от Main), и
+       физически это уже не пускает их в Program.cs/middleware. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="AngleSharp" Version="1.5.2" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />

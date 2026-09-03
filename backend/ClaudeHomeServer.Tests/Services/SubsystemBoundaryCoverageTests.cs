@@ -21,14 +21,39 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class SubsystemBoundaryCoverageTests
 {
+    // Загрузка Main — иначе AppDomain.CurrentDomain.GetAssemblies() её не увидит
+    // (см. комментарий в SubsystemBoundaryTests).
+    static SubsystemBoundaryCoverageTests()
+    {
+        _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+    }
+
     [Fact]
     public void AllIAppSubsystemImplementations_HaveBoundaryEntry()
     {
-        var assembly = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        // Раньше typeof(VideoSubsystem).Assembly давал единственную сборку ClaudeHomeServer.dll,
+        // где жили все реализации IAppSubsystem. После выделения Core (и в будущем — отдельных
+        // вертикальных сборок) нужен перебор ВСЕХ ClaudeHomeServer.* сборок: без него страж
+        // увидит только Main (одну из многих) и решит, что остальных реализаций не
+        // существует — забудешь добавить вертикаль в Boundaries, тест пройдёт зелёным.
+        // Главная сборка `ClaudeHomeServer` (имя без суффикса — этап 0/1 ещё не вынес
+        // вертикали, и она содержит почти все реализации) тоже входит в выборку.
+        // Тестовая сборка `ClaudeHomeServer.Tests` намеренно исключена: там живут
+        // `StubSubsystem`/`FakeSubsystem` (тестовые стабы IAppSubsystem), они нам
+        // не нужны в реестре продовых вертикалей.
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a =>
+            {
+                var name = a.GetName().Name;
+                return name is not null
+                    && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
+                    && name != "ClaudeHomeServer.Tests"
+                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+            });
 
         // Не-интерфейсные реализации IAppSubsystem, не абстрактные. Distinct по namespace —
         // две реализации из одного namespace (теоретически) не должны раздувать отчёт.
-        var subsystemNamespaces = assembly.GetTypes()
+        var subsystemNamespaces = assemblies.SelectMany(a => a.GetTypes())
             .Where(t => typeof(IAppSubsystem).IsAssignableFrom(t)
                         && !t.IsInterface
                         && !t.IsAbstract)

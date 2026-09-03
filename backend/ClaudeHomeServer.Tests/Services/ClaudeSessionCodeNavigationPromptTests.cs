@@ -57,8 +57,8 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
-                    ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    ? ["/c", "ping -n 10 127.0.0.1 >nul"]
+                    : ["-c", "sleep 10"],
                 WorkingDirectory = spec.WorkingDirectory,
                 ClearEnv = spec.ClearEnv,
                 StdioEncoding = spec.StdioEncoding,

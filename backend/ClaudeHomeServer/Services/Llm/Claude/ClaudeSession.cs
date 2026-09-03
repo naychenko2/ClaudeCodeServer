@@ -3395,30 +3395,85 @@ public class ClaudeSession : ILlmSessionAdapter
         // НЕ завершаются автоматически при выходе родителя — без явного Kill с
         // entireProcessTree они остаются сиротами и копятся сутками, съедая память.
         // На POSIX Kill уже мёртвого процесса — no-op (ловим внутри метода).
-        _launcher.Kill(run.Process, run.LaunchTurnId);
-        if (!run.Process.HasExited)
-        {
-            // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
-            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await run.Process.WaitForExitAsync(exitCts.Token); }
-            catch (OperationCanceledException) { } // 10 с истекло — идём дальше
-        }
-        // Смерть процесса была безмолвной — exit-code недоставало для диагностики причины
-        // (штатный выход CLI по result vs крах). Сохраняем до Dispose: при активной смерти
-        // хода ниже он попадёт в лог, чтобы различить «процесс сам вышел» и «упал по ошибке».
-        // stderr к этому моменту уже в логе — он перехватывается построчно через
-        // ErrorDataReceived (см. RunTurnAsync), а не копится здесь.
+        //
+        // Этот блок — ГОРЯЧИЙ путь: FinalizeRunAsync зовётся на каждом завершении хода, и
+        // исключения на Kill/HasExited/WaitForExitAsync/Dispose вылетают, когда процесс уже
+        // мёртв (CLI завершился первым — штатная ситуация same-process). Те же четыре типа,
+        // что в DisposeAsync (7792a003): InvalidOperationException/Win32Exception/COMException/
+        // ObjectDisposedException. Глотать ВСЁ нельзя — логические баги должны всплывать;
+        // провал — одна строка в Console.Error.
         int? exitCode = null;
-        try { if (run.Process.HasExited) exitCode = run.Process.ExitCode; }
-        catch (Exception) { /* ExitCode бросает, если процесс ещё не вышел или не задан код */ }
-        // Dispose закрывает потоки процесса, поэтому он ЗАПРЕЩЁН, пока в stdout висит чтение:
-        // закрытие потока под активным ReadLineAsync — неподдерживаемая гонка (наблюдалось
-        // зависание тестового хоста целиком). Ридер ещё жив — вешаем Dispose на его завершение.
-        if (run.ReaderTask is { IsCompleted: false } liveReader)
-            _ = liveReader.ContinueWith(
-                _ => { try { run.Process.Dispose(); } catch { /* уже освобождён */ } },
-                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        else run.Process.Dispose();
+        Process? readerAliveProcess = null;
+        Task? readerAliveTask = null;
+        try
+        {
+            _launcher.Kill(run.Process, run.LaunchTurnId);
+            if (!run.Process.HasExited)
+            {
+                // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
+                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await run.Process.WaitForExitAsync(exitCts.Token); }
+                catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+            }
+            // Смерть процесса была безмолвной — exit-code недоставало для диагностики причины
+            // (штатный выход CLI по result vs крах). Сохраняем до Dispose: при активной смерти
+            // хода ниже он попадёт в лог, чтобы различить «процесс сам вышел» и «упал по ошибке».
+            // stderr к этому моменту уже в логе — он перехватывается построчно через
+            // ErrorDataReceived (см. RunTurnAsync), а не копится здесь.
+            try { if (run.Process.HasExited) exitCode = run.Process.ExitCode; }
+            catch (Exception) { /* ExitCode бросает, если процесс ещё не вышел или не задан код */ }
+            // Dispose закрывает потоки процесса, поэтому он ЗАПРЕЩЁН, пока в stdout висит чтение:
+            // закрытие потока под активным ReadLineAsync — неподдерживаемая гонка (наблюдалось
+            // зависание тестового хоста целиком). Ридер ещё жив — вешаем Dispose на его завершение.
+            // Запоминаем хвостовик в finally — иначе после гонки на HasExited/WaitForExitAsync
+            // диспозил бы уже освобождённый объект и хендл тек бы до GC.
+            if (run.ReaderTask is { IsCompleted: false } liveReader)
+            {
+                readerAliveProcess = run.Process;
+                readerAliveTask = liveReader;
+            }
+            else
+            {
+                try { run.Process.Dispose(); }
+                catch (Exception ex) when (ex is InvalidOperationException
+                    or System.ComponentModel.Win32Exception
+                    or System.Runtime.InteropServices.COMException
+                    or ObjectDisposedException)
+                {
+                    Console.Error.WriteLine($"[ClaudeSession] FinalizeRunAsync: Dispose процесса упал на гонке состояния (session {Info.Id}, ex={ex.GetType().Name}: {ex.Message})");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+            or System.ComponentModel.Win32Exception
+            or System.Runtime.InteropServices.COMException
+            or ObjectDisposedException)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] FinalizeRunAsync: уборка процесса упала на гонке состояния (session {Info.Id}, ex={ex.GetType().Name}: {ex.Message})");
+        }
+        finally
+        {
+            // Хвостовик к Dispose через ContinueWith — регистрируем ПОСЛЕ блока try, чтобы
+            // при гонке состояния (процесс уже мёртв, объект освобождён) пропустить хвостовик,
+            // а не навешивать его на уже закрытый процесс
+            if (readerAliveTask is not null && readerAliveProcess is not null)
+            {
+                var processToDispose = readerAliveProcess;
+                _ = readerAliveTask.ContinueWith(
+                    _ =>
+                    {
+                        try { processToDispose.Dispose(); }
+                        catch (Exception ex) when (ex is InvalidOperationException
+                            or System.ComponentModel.Win32Exception
+                            or System.Runtime.InteropServices.COMException
+                            or ObjectDisposedException)
+                        {
+                            Console.Error.WriteLine($"[ClaudeSession] FinalizeRunAsync: хвостовик Dispose упал на гонке состояния (session {Info.Id}, ex={ex.GetType().Name}: {ex.Message})");
+                        }
+                    },
+                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+        }
         if (ReferenceEquals(_currentProcess, run.Process)) _currentProcess = null;
         // Прогон всё ещё «текущий»? Если его уже заместил новый (несовместимый ход убил
         // старый, финализация опоздала) — общие пер-сессионные ресурсы (file watcher,
@@ -5069,15 +5124,46 @@ public class ClaudeSession : ILlmSessionAdapter
         // DecidePermissionAsync держит граф адаптера до часового таймаута
         CancelPendingControlResponses();
         _cts.Cancel();
-        if (_currentProcess != null && !_currentProcess.HasExited)
+        // Уборка процесса не имеет права падать: исключения на HasExited/Kill/WaitForExitAsync/
+        // Dispose вылетают, когда процесс сам завершился, его убил кто-то другой или хендл уже
+        // закрыт (InvalidOperationException «No process is associated with this object»,
+        // Win32Exception, COMException «Неверный дескриптор», ObjectDisposedException).
+        // DisposeAsync зовётся из фоновых путей (ReviveStuckSession, ватчер сессии), где
+        // исключение никто не поймает — поэтому ловим ровно эти четыре типа и оставляем
+        // одну строку в логе. Логические баги (любой другой Exception) обязаны всплывать.
+        try
         {
-            // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
-            _launcher.Kill(_currentProcess, _currentTurnId);
-            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
-            catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+            if (_currentProcess != null && !_currentProcess.HasExited)
+            {
+                // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
+                _launcher.Kill(_currentProcess, _currentTurnId);
+                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
+                catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+            }
         }
-        _currentProcess?.Dispose();
+        catch (Exception ex) when (ex is InvalidOperationException
+            or System.ComponentModel.Win32Exception
+            or System.Runtime.InteropServices.COMException
+            or ObjectDisposedException)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] DisposeAsync: уборка процесса упала на гонке состояния (session {Info.Id}, ex={ex.GetType().Name}: {ex.Message})");
+        }
+        finally
+        {
+            // Dispose отдельным шагом в finally: если Kill/WaitForExitAsync кинули на гонке
+            // состояния, без finally хендл бы тек до GC. Сам Dispose тоже гоняется на состояние
+            // (InvalidOperationException/Win32Exception/COMException/ObjectDisposedException) —
+            // ловим здесь же, а не даём исключению уйти из finally.
+            try { _currentProcess?.Dispose(); }
+            catch (Exception ex) when (ex is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or System.Runtime.InteropServices.COMException
+                or ObjectDisposedException)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] DisposeAsync: Dispose процесса упал на гонке состояния (session {Info.Id}, ex={ex.GetType().Name}: {ex.Message})");
+            }
+        }
         // _cts/_turnLock/_stdinLock НЕ диспозим (инцидент 16.08.2026: «Cannot access a
         // disposed object: SemaphoreSlim» в ленте). Реанимация зависшего чата
         // (ReviveStuckSession) зовёт DisposeAsync в фоне, пока ход запаркован на

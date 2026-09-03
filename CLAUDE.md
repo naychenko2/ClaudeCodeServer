@@ -193,10 +193,28 @@ glif — `compose_project` + опрос джобы) за роутером `Image
 ## Внутренние подсистемы (Services/Composition)
 
 Внутренние границы продукта — **подсистемы**, контракт
-[`IAppSubsystem.cs`](backend/ClaudeHomeServer/Services/Composition/IAppSubsystem.cs)
+[`IAppSubsystem.cs`](backend/ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs)
 с `Key`/`Title`/`Register` и `AddSubsystems`. Не путать с **внешними модулями**
 YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в отдельном
 процессе за реверс-прокси, эти — внутри Microsoft DI, без выгрузки и hot-plug.
+
+**Общая инфраструктура — `ClaudeHomeServer.Core`** (проект добавлен коммитом
+`14e474de`): контракт `IAppSubsystem` + хелперы `AddSubsystems`/`UseSubsystems`,
+`QuietHttpLogger`, `JsonFileStore`, `McpSecretStore`, `SsrfGuard`. Ноль
+`PackageReference`, направление ссылок `Main → Vertical → Core`. Швы
+(`ISessionDirectory` и пр.) заводятся по фактической потребности, не впрок.
+
+**Курс после пилота физической изоляции** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md),
+раздел «Курс после пилота»): существующие 15 вертикалей не переносим (профиль
+правок против — 89% коммитов трогают только спину, выигрыш Δ −50% не окупается),
+НО **новая подсистема рождается отдельным `.csproj`**, если её потребности
+закрываются существующими швами `Core` плюс максимум 1–2 новыми узкими
+интерфейсами. Иначе — честный сигнал, что фича про спину, и она остаётся в
+Main. Сторожа границ перестроены на перебор нескольких сборок
+(`AppDomain.CurrentDomain.GetAssemblies()` с фильтром `ClaudeHomeServer` и
+`ClaudeHomeServer.*`, минус `*.Tests`) и защищены от вакуумного прохода
+явными ассертами — иначе фильтр или порядок загрузки молча отдают пустой
+набор (доказано мутацией в ревью: 17/17 зелёных при нулевом наборе).
 
 **Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`,
 `Models`, `Services.Http`/`Composition`/`Mcp`) и от явных швов (например,
@@ -210,10 +228,9 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
   указанный тип по `FullName` (полезно для nested-типов вроде
   `SsrfGuard+AddressCheck` и для точечных синглтонов из корня `Services`
   типа `PersonaManager`/`SessionManager`). Покрытие — все 15 вертикалей
-  (Video, Yandex, Reader, Images, Tts, Git, Deploy, Watchdog; волна 2:
-  CodeGraph, Spend, Backgrounds, ProjectIcons; волна 3: Dossiers, Knowledge,
-  Memory). Подсистем при этом 14 — `Services.Watchdog` вертикаль без
-  `IAppSubsystem`.
+  (Video, Yandex, Reader, Images, Tts, Git, CodeGraph, Deploy, Backgrounds,
+  ProjectIcons, Spend, Dossiers, Knowledge, Memory — 14 подсистем; Watchdog —
+  вертикаль без `IAppSubsystem`, тоже в таблице).
 - `SubsystemBoundaryCoverageTests`: каждая реализация `IAppSubsystem` в
   сборке должна иметь строку в `Boundaries`; вертикали без подсистемы
   (`Services.Watchdog` сейчас единственная) перечисляются явно. Ловит

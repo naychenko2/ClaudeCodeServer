@@ -230,15 +230,30 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
         {toolArg
           ? (() => {
               // Путь к файлу делаем кликабельным — открывает файл на просмотр (десктоп: split справа от чата).
+              // Имя файла вынесено в отдельный span: каталог слева обрезается через direction: rtl,
+              // basename всегда виден полностью и стилистически отделён — при длинном пути файл
+              // читается как имя файла, а не как «…часть хвоста».
               const clickable = argIsPath && !!onOpenFile && pathVal != null;
+              const sepIdx = argIsPath ? toolArg.lastIndexOf('/') : -1;
+              const dir = sepIdx >= 0 ? toolArg.slice(0, sepIdx + 1) : '';
+              const base = sepIdx >= 0 ? toolArg.slice(sepIdx + 1) : toolArg;
               return (
-                <span
-                  className={argIsPath ? 'cc-trunc-left' : undefined}
-                  onClick={clickable ? (e) => { e.stopPropagation(); onOpenFile!(relPath(String(pathVal), project?.rootPath)); } : undefined}
-                  title={clickable ? 'Открыть файл' : undefined}
-                  style={{ fontFamily: FONT.mono, fontSize: 11, flex: 1, color: clickable ? C.accent : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'inherit' }}
-                >
-                  {toolArg}
+                <span style={{ flex: 1, display: 'flex', alignItems: 'baseline', overflow: 'hidden', fontFamily: FONT.mono, fontSize: 11, minWidth: 0 }}>
+                  {dir && (
+                    <span
+                      className="cc-trunc-left"
+                      style={{ color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+                    >
+                      {dir}
+                    </span>
+                  )}
+                  <span
+                    onClick={clickable ? (e) => { e.stopPropagation(); onOpenFile!(relPath(String(pathVal), project?.rootPath)); } : undefined}
+                    title={clickable ? 'Открыть файл' : undefined}
+                    style={{ color: clickable ? C.accent : C.textMuted, cursor: clickable ? 'pointer' : 'inherit', flexShrink: 0 }}
+                  >
+                    {base}
+                  </span>
                 </span>
               );
             })()

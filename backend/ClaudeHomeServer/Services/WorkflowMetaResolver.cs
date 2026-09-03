@@ -12,7 +12,18 @@ namespace ClaudeHomeServer.Services;
 // вырезанным meta-блоком того же скрипта, что реально исполнил CLI.
 public static class WorkflowMetaResolver
 {
-    public static ILogger Log { get; set; } = NullLogger.Instance;
+    // Изоляция по ExecutionContext: параллельные тест-классы (а внутри них параллельные
+    // WebApplicationFactory-подъёмы) пишут каждый в свой AsyncLocal и не топчут друг друга.
+    // Program.cs:863 и тесты-коллекторы задают значение через сеттер — оба видят только свою
+    // запись; в чужом ExecutionContext остаётся прежнее значение (или NullLogger по умолчанию).
+    // Гонка статического Log (флейк полного прогона) этим снимается.
+    private static readonly AsyncLocal<ILogger?> _log = new();
+
+    public static ILogger Log
+    {
+        get => _log.Value ?? NullLogger.Instance;
+        set => _log.Value = value;
+    }
 
     // ~/.claude/workflows — каталог workflow-скриптов основного профиля (подписка)
     public static readonly string GlobalWorkflowsDir = Path.Combine(

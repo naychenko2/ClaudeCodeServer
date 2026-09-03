@@ -647,7 +647,7 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
   `BackupCore.CopyDataTo`, не-JSON стор — свой способ снимка, критичный стор — в
   `BackupValidation.Validate`. Ломающее изменение формата = инкремент `BackupSchema.Version`.
 - **HTTP-клиент к опциональной зависимости — через `AddQuietHttpClient`**
-  ([QuietHttpLogger.cs](backend/ClaudeHomeServer/Services/Http/QuietHttpLogger.cs)): дефолтный
+  ([QuietHttpLogger.cs](backend/ClaudeHomeServer.Core/Services/Http/QuietHttpLogger.cs)): дефолтный
   логгер печатает каждый провал как Error со стектрейсом и забивает консоль.
 - Path traversal защита: `FileService.SafeJoin` — все пути через неё.
 - Хранилище проектов — `data/projects.json`; метаданные сессий — `data/sessions.json`, история

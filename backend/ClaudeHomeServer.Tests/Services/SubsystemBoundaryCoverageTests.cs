@@ -49,14 +49,33 @@ public class SubsystemBoundaryCoverageTests
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
                     && name != "ClaudeHomeServer.Tests"
                     && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
-            });
+            })
+            .ToList();
+
+        var allTypes = assemblies.SelectMany(a => a.GetTypes()).ToList();
+
+        // Защита от вакуумного прохода: если фильтр сборок или порядок загрузки сломается,
+        // набор станет пустым и сторож пройдёт зелёным, ничего не проверив (доказано мутацией
+        // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(2,
+            "сторож должен видеть минимум ClaudeHomeServer и ClaudeHomeServer.Core");
+        allTypes.Should().NotBeEmpty(
+            "сборки должны отдавать типы (ориентир замера — ~4230) — иначе проверка полноты " +
+            "таблицы Boundaries ничего не проверяет");
 
         // Не-интерфейсные реализации IAppSubsystem, не абстрактные. Distinct по namespace —
         // две реализации из одного namespace (теоретически) не должны раздувать отчёт.
-        var subsystemNamespaces = assemblies.SelectMany(a => a.GetTypes())
+        var subsystemTypes = allTypes
             .Where(t => typeof(IAppSubsystem).IsAssignableFrom(t)
                         && !t.IsInterface
                         && !t.IsAbstract)
+            .ToList();
+
+        subsystemTypes.Should().NotBeEmpty(
+            "реализации IAppSubsystem обязаны найтись (ориентир замера — 14) — пустой набор " +
+            "означает сломанный фильтр сборок, а не отсутствие подсистем");
+
+        var subsystemNamespaces = subsystemTypes
             .Select(t => t.Namespace!)
             .Where(ns => !string.IsNullOrEmpty(ns))
             .Distinct(StringComparer.Ordinal)

@@ -4,11 +4,19 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Библиотека под Web SDK: типов ASP.NET (WebApplication, HttpContext,
-         IExceptionHandler, IHttpClientBuilder, IServiceCollection, IConfiguration,
-         ILogger, IHostedService) много, и без Web SDK FrameworkReference
-         Microsoft.AspNetCore.App их не подтягивает (Microsoft.Extensions.* едут
-         транзитивно — отсюда и падающие IConfiguration/IHostedService/ILogger).
+    <!-- Web SDK взят ради НЕЯВНЫХ global usings ASP.NET: типов платформы тут много
+         (WebApplication, HttpContext, IExceptionHandler, IHttpClientBuilder,
+         IServiceCollection, IConfiguration, ILogger, IHostedService), и без них
+         сыпался CS0246. Дело именно в global usings, а НЕ в FrameworkReference:
+         связка `Microsoft.NET.Sdk` + `<FrameworkReference Include="Microsoft.AspNetCore.App"/>`
+         типы подтягивает, и сборка проходит, если дописать шесть явных
+         `<Using Include="..."/>` (Microsoft.AspNetCore.Builder, Microsoft.AspNetCore.Http,
+         Microsoft.Extensions.Configuration, Microsoft.Extensions.DependencyInjection,
+         Microsoft.Extensions.Hosting, Microsoft.Extensions.Logging).
+         На этапе 3, когда вертикальных csproj станет много, предпочтительна вторая
+         форма: Web SDK у библиотеки тянет веб-специфичное поведение, которое здесь
+         приходится глушить костылями `OutputType=Library` и
+         `EnableDefaultContentItems=false`.
          OutputType=Library и без Program.cs — обычный режим библиотеки, Main не
          требуется (CS5001 подавляется наличием хотя бы одной сборки в проекте;
          добавлять пустой Program.cs ради одного Compile статического класса

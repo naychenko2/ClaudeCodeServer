@@ -183,7 +183,14 @@ public class RootSubsystemBoundaryTests
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
                     && name != "ClaudeHomeServer.Tests"
                     && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
-            });
+            })
+            .ToList();
+
+        // Защита от вакуумного прохода: если фильтр сборок или порядок загрузки сломается,
+        // набор станет пустым и сторож пройдёт зелёным, ничего не проверив (доказано мутацией
+        // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(2,
+            "сторож должен видеть минимум ClaudeHomeServer и ClaudeHomeServer.Core");
 
         // Только top-level root: Namespace строго "ClaudeHomeServer.Services", без nested
         // (`Foo+Bar` — часть родительского типа, проверяются через него) и без
@@ -196,6 +203,10 @@ public class RootSubsystemBoundaryTests
             .Where(t => !(t.Name?.Contains('<') ?? false))
             .Where(t => !ExcludedRootTypes.Contains(t.FullName ?? string.Empty))
             .ToList();
+
+        rootTypes.Should().NotBeEmpty(
+            "в корне ClaudeHomeServer.Services должны найтись типы (ориентир замера — ~189) — " +
+            "иначе проверка границ корня ничего не проверяет");
 
         var violations = new List<string>();
 

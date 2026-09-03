@@ -735,9 +735,19 @@ public class SubsystemBoundaryTests
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
                     && name != "ClaudeHomeServer.Tests"
                     && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
-            });
+            })
+            .ToList();
 
-        var types = CollectTypesInNamespaceTree(assemblies, boundary.NamespaceRoot);
+        var types = CollectTypesInNamespaceTree(assemblies, boundary.NamespaceRoot).ToList();
+
+        // Защита от вакуумного прохода: если фильтр сборок или порядок загрузки сломается,
+        // набор станет пустым и сторож пройдёт зелёным, ничего не проверив (доказано мутацией
+        // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(2,
+            "сторож должен видеть минимум ClaudeHomeServer и ClaudeHomeServer.Core");
+        types.Should().NotBeEmpty(
+            $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
+            "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");
 
         var violations = new List<string>();
 

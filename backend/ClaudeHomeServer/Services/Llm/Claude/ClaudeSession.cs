@@ -5069,15 +5069,31 @@ public class ClaudeSession : ILlmSessionAdapter
         // DecidePermissionAsync держит граф адаптера до часового таймаута
         CancelPendingControlResponses();
         _cts.Cancel();
-        if (_currentProcess != null && !_currentProcess.HasExited)
+        // Уборка процесса не имеет права падать: исключения на HasExited/Kill/WaitForExitAsync/
+        // Dispose вылетают, когда процесс сам завершился, его убил кто-то другой или хендл уже
+        // закрыт (InvalidOperationException «No process is associated with this object»,
+        // Win32Exception, COMException «Неверный дескриптор», ObjectDisposedException).
+        // DisposeAsync зовётся из фоновых путей (ReviveStuckSession, ватчер сессии), где
+        // исключение никто не поймает — поэтому глотаем всё и оставляем одну строку в логе.
+        try
         {
-            // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
-            _launcher.Kill(_currentProcess, _currentTurnId);
-            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
-            catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+            if (_currentProcess != null && !_currentProcess.HasExited)
+            {
+                // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
+                _launcher.Kill(_currentProcess, _currentTurnId);
+                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
+                catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+            }
+            _currentProcess?.Dispose();
         }
-        _currentProcess?.Dispose();
+        catch (Exception ex) when (ex is InvalidOperationException
+            or System.ComponentModel.Win32Exception
+            or System.Runtime.InteropServices.COMException
+            or ObjectDisposedException)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] DisposeAsync: уборка процесса упала на гонке состояния (session {Info.Id}, ex={ex.GetType().Name}: {ex.Message})");
+        }
         // _cts/_turnLock/_stdinLock НЕ диспозим (инцидент 16.08.2026: «Cannot access a
         // disposed object: SemaphoreSlim» в ленте). Реанимация зависшего чата
         // (ReviveStuckSession) зовёт DisposeAsync в фоне, пока ход запаркован на

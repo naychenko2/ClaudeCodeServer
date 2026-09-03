@@ -265,7 +265,7 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
         }
     }
 
-    private static List<ModelInfo>? TryParseModels(string line, string requestId)
+    internal static List<ModelInfo>? TryParseModels(string line, string requestId)
     {
         try
         {
@@ -294,9 +294,43 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
                 var description = m.TryGetProperty("description", out var ds) ? ds.GetString() : null;
                 result.Add(new ModelInfo(value, displayName ?? value, description));
             }
+            result = CollapseSameLabel(result);
             return result.Count > 0 ? result : null;
         }
         catch (JsonException) { return null; }
         catch (KeyNotFoundException) { return null; }
+    }
+
+    // Одинаковая ПОДПИСЬ у разных value — это дубль на экране: в списке две строки «Fable»,
+    // различить которые нельзя (у Opus подписи CLI разводит сам — «Opus» и «Opus (1M context)»,
+    // такие записи остаются обе). Из одноимённых оставляем ОДНУ, предпочитая алиас без номера
+    // версии («fable[1m]» перед «claude-fable-5-1»): алиасы не протухают с выходом следующей
+    // версии модели, а суффикс окна алиасу не мешает.
+    private static List<ModelInfo> CollapseSameLabel(List<ModelInfo> models)
+    {
+        var byLabel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var kept = new List<ModelInfo>();
+        foreach (var m in models)
+        {
+            var label = m.DisplayName.Trim();
+            if (!byLabel.TryGetValue(label, out var idx))
+            {
+                byLabel[label] = kept.Count;
+                kept.Add(m);
+                continue;
+            }
+            // Занятое место уступается только версионно-нейтральному алиасу
+            if (IsVersionlessAlias(m.Value) && !IsVersionlessAlias(kept[idx].Value))
+                kept[idx] = m;
+        }
+        return kept;
+    }
+
+    // Версионно-нейтральный алиас — value без номера версии; суффикс окна («[1m]») номером
+    // не считается и снимается перед проверкой.
+    private static bool IsVersionlessAlias(string value)
+    {
+        var bare = value.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase) ? value[..^4] : value;
+        return !bare.Any(char.IsDigit);
     }
 }

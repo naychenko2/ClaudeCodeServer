@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Spend;
 

@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Генерация контента задач одноразовым вызовом (без сессии). Идёт через «дешёвый» раннер:
 // локальная модель Ollama (если действие task-ai на неё заведено) или claude (Tasks:AiModel).

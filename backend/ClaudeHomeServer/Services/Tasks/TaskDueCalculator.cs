@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Перевод локального срока задачи (DueDate/DueTime в таймзоне пользователя) в UTC-моменты
 // для планировщика. Контейнер живёт в UTC — никакой математики через DateTime.Now.

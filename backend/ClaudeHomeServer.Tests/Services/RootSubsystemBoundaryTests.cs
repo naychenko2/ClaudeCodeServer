@@ -41,8 +41,12 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   по построению держит ссылки на все вертикали и сам перечислен в
 ///   <c>SharedAllowedPrefixes</c> или в точечных allow-list каждой вертикали
 ///   (<c>PersonaManager</c>, <c>ProjectManager</c>, <c>SessionManager</c>,
-///   <c>UserStore</c>, <c>TaskManager</c>, <c>ChatHistoryService</c>,
+///   <c>UserStore</c>, <c>ChatHistoryService</c>,
 ///   <c>FileService</c>, <c>NotificationService</c>, <c>NotificationStore</c>).
+///   <c>TaskManager</c> уехал в вертикаль <c>Services.Tasks</c> (волна 4C, шаг 1) —
+///   его держит собственный подсистемный сторож <c>SubsystemBoundaryTests</c>,
+///   а из root-исключений он снят, чтобы пустая запись не глушила проверку
+///   по <c>FullName</c> (комментарий у <c>ExcludedRootTypes</c>).
 ///   Исключены из проверки и сами, и как цели ссылок (defense-in-depth: даже
 ///   если правило для peer-root сломается, эти типы не флагаются).
 /// - Self-ссылки внутри класса: тип ссылается сам на себя, на свои
@@ -159,6 +163,17 @@ public class RootSubsystemBoundaryTests
         // Метрики задач: TaskExecutionService пишет метрики в spend-стор через
         // TaskPromptMetricsStore. Единственный root→Spend переход.
         "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore",
+        // ⚠ Волна 4C, шаг 1 — выделена вертикаль Tasks, но шесть root-типов держат
+        // `TaskManager` в конструкторе как «продуктовую зависимость», а не как
+        // инфраструктуру. Префикс `Services.Tasks` не открываем (Tasks — продуктовая
+        // вертикаль, а не «общий слой»): точечный допуск ровно на `TaskManager`,
+        // чтобы `NoteTaskSyncService`/`SessionContextResolver`/`SessionMessagingService`/
+        // `TaskExecutionService`/`TeamWaveService`/`UnifiedSearchService` могли держать
+        // его в сигнатуре. Если завтра root начнёт ссылаться ещё на `TaskAiService`/
+        // `BoardService`/`DailyBriefingService` и т.п., сторож покраснеет — повод
+        // пересмотреть, не вынести ли конкретный root-тип внутрь Tasks (или не выделить
+        // общий Tasks-интерфейс).
+        "ClaudeHomeServer.Services.Tasks.TaskManager",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как
@@ -172,7 +187,9 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.ProjectManager",
         "ClaudeHomeServer.Services.SessionManager",
         "ClaudeHomeServer.Services.UserStore",
-        "ClaudeHomeServer.Services.TaskManager",
+        // TaskManager уехал в Services.Tasks.TasksSubsystem (волна 4C, шаг 1) —
+        // его границы ловит SubsystemBoundaryTests по строке `Tasks` в Boundaries,
+        // здесь он больше не исключение.
         "ClaudeHomeServer.Services.ChatHistoryService",
         "ClaudeHomeServer.Services.FileService",
         "ClaudeHomeServer.Services.NotificationService",

@@ -5,6 +5,7 @@ using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;

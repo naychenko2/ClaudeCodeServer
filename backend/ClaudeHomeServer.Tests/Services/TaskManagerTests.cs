@@ -1,5 +1,5 @@
 ﻿using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
@@ -702,5 +702,36 @@ public class TaskManagerTests : IDisposable
 
         act.Should().Throw<InvalidOperationException>();
         _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
+    }
+
+    // ─── Шов Tasks → Models.Session (три статических резолвера) ─────────────────
+    // Волна 4C, шаг 1 — после переезда TaskManager в `Services.Tasks.TaskManager`
+    // нужно доказать, что ctor всё ещё ставит резолверы на `Session`. Без этого
+    // `Session.ParentSessionId`/`TaskDone`/`TaskDelegationDepth` выродились бы в
+    // null/0/false (архитектор: «если TaskManager однажды не будет создан к моменту
+    // первой сериализации Session — иерархия чатов, гейт глубины делегирования и
+    // фильтр "Завершён" тихо выродятся»). Инициализация в TaskManager.cs:32-36.
+
+    [Fact]
+    public void Constructor_УстанавливаетТриРезолвераНаSession()
+    {
+        // ctor уже вызван в этом тест-фикстуре (InstancePerTest); проверяем,
+        // что все три резолвера на Session не null и корректно резолвят наши задачи.
+        // Без инициализации в TaskManager.cs:32-36 Session.ParentSessionId/
+        // Session.TaskDelegationDepth (гейт TASKS_EXECUTE)/Session.TaskDone выродились бы
+        // в null/0/false — архитектор прямо предупреждает (досье переезда Task).
+        var live = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-live"));
+        var done = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-done"));
+        _sut.Update(done.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        Session.TaskSourceSessionResolver.Should().NotBeNull("ctor должен ставить TaskSourceSessionResolver");
+        Session.TaskDelegationDepthResolver.Should().NotBeNull("ctor должен ставить TaskDelegationDepthResolver");
+        Session.TaskDoneResolver.Should().NotBeNull("ctor должен ставить TaskDoneResolver");
+
+        // Live: делегации нет → 0, TaskDone=false.
+        Session.TaskDelegationDepthResolver!(live.Id).Should().Be(0);
+        Session.TaskDoneResolver!(live.Id).Should().BeFalse();
+        // Done: TaskDone=true.
+        Session.TaskDoneResolver!(done.Id).Should().BeTrue();
     }
 }

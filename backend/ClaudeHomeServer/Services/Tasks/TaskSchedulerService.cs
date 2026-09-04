@@ -4,7 +4,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Фоновый планировщик задач: напоминания к сроку и автозапуск Claude-исполнителя.
 // Один на приложение, тик каждые 30 с. Идемпотентность — отметки на самой задаче

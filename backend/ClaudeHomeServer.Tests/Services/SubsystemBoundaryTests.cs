@@ -430,7 +430,7 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ChatHistoryService",
@@ -496,7 +496,7 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.FeatureFlagService",
@@ -1144,7 +1144,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.NotesService",
-                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.RuleRuntimeState",
                 }),
         },
@@ -1245,6 +1245,117 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.TerminalOutputMessage",
                     "ClaudeHomeServer.Protocol.TerminalStatusMessage",
                     "ClaudeHomeServer.Protocol.TerminalRenamedMessage",
+                }),
+        },
+        // Tasks — вертикаль задач с доской агентов (BoardService) и утренним брифингом
+        // (DailyBriefingService, волна 4C, шаг 1).
+        // Префикс-швы:
+        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для `TaskAiService`
+        //    (генерация описания/подзадач/классификация/нормализация/дедуп) и
+        //    `DailyBriefingService` (утренний брифинг) — префикс-шов, как у
+        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`.
+        // 2) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для `TaskSchedulerService`
+        //    (`BroadcastTaskChangedAsync`/напоминания) и `DailyBriefingService`
+        //    (событие `task_reminder` в ленту).
+        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»
+        // (по аналогии с `Dossiers`/`Git`/`Spend`/`Knowledge`):
+        // 1) `SessionManager` — `TaskSchedulerService` цикл «до готово» вызывает
+        //    `TaskExecutionService` для автозапуска исполнителя; `BoardService` берёт
+        //    живые сессии по id; `DailyBriefingService` использует для поиска чатов
+        //    владельца. `SessionManager` остаётся backbone-типом корня.
+        // 2) `ProjectManager` — `TaskAiService` берёт контекст проекта (CLAUDE.md);
+        //    `DailyBriefingService` перебирает проекты владельца для git-активности;
+        //    `TaskManager.LogTask` пишет события в проектный лог
+        //    (TaskManager.cs:~LogTask, опциональный параметр ctor).
+        // 3) `UserStore` — перебор пользователей в `TaskSchedulerService.TickAsync` и
+        //    `DailyBriefingService.GenerateAsync`/`GitActivityAsync`.
+        // 4) `UserHomeResolver` — путь владельца для git-активности по проектам
+        //    (DailyBriefingService.RunGitLogAsync).
+        // 5) `NotificationService` — `SendNotificationMessageAsync` в TaskSchedulerService
+        //    и DailyBriefingService.NotifyAsync (напоминания + «доброе утро»).
+        // 6) `AppSettingsService` — гейт `DailyBriefingEnabled` (DailyBriefingService.MaybeRunScheduledAsync).
+        // 7) `ProjectEventLogService` — запись событий задач в проектный лог
+        //    (`TaskManager.LogTask`) + чтение событий за сутки (`DailyBriefingService`).
+        // 8) `PersonaManager` — `BoardService` берёт персоны для подписи колонки;
+        //    `DailyBriefingService` находит персона-секретаря; `TaskManager` —
+        //    опциональная зависимость для лога.
+        // 9) `PushService` — `DailyBriefingService.GenerateAsync` шлёт web-push по расписанию.
+        // 10) `NotesService` — `DailyBriefingService.BuildAndWriteAsync` пишет в дневник
+        //     (`GetOrCreateDaily`/`Update`). Пока остаётся в корне (следующий шаг
+        //     волны 4C).
+        // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage` материализуется
+        // как параметр public-метода `TaskSchedulerService.SendNotificationAsync`
+        // (см. `PushService`/`NotificationService`). Остальные Protocol-ссылки идут
+        // через тела методов и async-state-машины; префикс `ClaudeHomeServer.Protocol`
+        // снят (волна 3), чтобы сторож ловил новые зависимости.
+        // ⚠ Зафиксированные швы из тел методов (рефлексия не видит):
+        // - `Tasks.TaskManager` ставит три резолвера на `Models.Session`
+        //   (`Session.TaskSourceSessionResolver`/`TaskDelegationDepthResolver`/
+        //   `TaskDoneResolver`) в конструкторе TaskManager.cs:32-36. Связь Tasks →
+        //   Models видна через `ClaudeHomeServer.Models` (SharedAllowedPrefixes),
+        //   но мутация статической модели из другой вертикали — невидима сторожу
+        //   рефлексии; зафиксирована комментарием у `TasksSubsystem.Register`,
+        //   чтобы расширение сторожа до IL не ловило это как нарушение.
+        // - `Services.TaskExecutionService` (корень, остаётся в корне до этапа 4)
+        //   зовёт `Services.Tasks.TaskSchedulerService.TaskUrl(...)` статически
+        //   из 6 мест тел методов (строки 292, 744, 970, 998, 1045, 1315) —
+        //   Tasks-тип цитируется из корневого типа, рефлексия не видит.
+        //   Когда `TaskExecutionService` переедет, запись `Services.TaskExecutionService`
+        //   исчезнет из корня и шов сам разорвётся.
+        // - `Services.PersonaAutomationService` (корень, остаётся в корне до этапа 4)
+        //   зовёт `Services.Tasks.TaskDueCalculator.ResolveTimeZone(...)` в теле
+        //   метода (`PersonaAutomationService.cs:530`). Аналогичный шов
+        //   root → Tasks-тип через статику; разорвётся при переезде Persona.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Tasks",
+                "ClaudeHomeServer.Services.Tasks",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Tasks",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Hubs",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    // Корневые «спинки» (см. комментарий выше 1–10).
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.UserHomeResolver",
+                    "ClaudeHomeServer.Services.NotificationService",
+                    "ClaudeHomeServer.Services.AppSettingsService",
+                    "ClaudeHomeServer.Services.ProjectEventLogService",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.PushService",
+                    // Notes пока в корне — следующий шаг волны 4C.
+                    "ClaudeHomeServer.Services.NotesService",
+                    // ⚠ TaskSchedulerService (Tasks) держит в ctor
+                    // `TaskExecutionService executor` (полный жизненный цикл хода:
+                    // автозапуск Claude-исполнителя + страховка незакрытой задачи)
+                    // и `PersonaAutomationService automation` (collaborator проактивности).
+                    // Оба остаются в корне до этапа 4 (расщепление SessionManager).
+                    // Когда `TaskExecutionService`/`PersonaAutomationService` уедут —
+                    // эти точечные допуски уйдут вместе с ними.
+                    "ClaudeHomeServer.Services.TaskExecutionService",
+                    "ClaudeHomeServer.Services.PersonaAutomationService",
+                    // ⚠ Шов `Tasks → Models.Session`: три статических резолвера в
+                    // TaskManager.cs:32-36. Контракт: мутация проходит до первого
+                    // использования (TaskManager — singleton, инстанс строится при
+                    // первом резолве из контроллеров/hosted-сервисов; Backbone
+                    // SessionManager — тоже singleton, формирует сессии после этого).
+                    // Префикс `ClaudeHomeServer.Models` уже открыт через SharedAllowedPrefixes,
+                    // но сам факт мутации статической модели чужой вертикали фиксируем
+                    // отдельным комментарием, чтобы ревью и расширение сторожа до IL видели
+                    // волюнтаристский шов. Future-proof: свести к интерфейсу
+                    // `ITaskFacts { string? SourceSession(string taskId); bool Done(string taskId); ... }`
+                    // и инжектить в Session — отдельная задача (этап 4).
+                    // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage`
+                    // в публичной сигнатуре `TaskSchedulerService.SendNotificationAsync`.
+                    "ClaudeHomeServer.Protocol.NotificationMessage",
                 }),
         },
     };

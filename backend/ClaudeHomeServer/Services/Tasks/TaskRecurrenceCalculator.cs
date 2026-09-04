@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Расчёт даты следующего экземпляра регулярной задачи. Отсчёт всегда от срока
 // текущего экземпляра (не от даты завершения) — расписание не «плывёт».

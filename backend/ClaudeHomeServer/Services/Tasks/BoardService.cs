@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Диспетчерская доска агентов: агрегирует задачи с исполнителем Claude/персона
 // и их живые сессии, классифицирует по колонкам (очередь/работает/ждёт/готово).

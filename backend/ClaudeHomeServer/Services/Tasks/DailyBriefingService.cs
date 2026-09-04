@@ -5,7 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Утренний бриф-агент. Собирает из уже готовых источников:
 // просроченные и сегодняшние задачи, изменённые сегодня заметки, git-активность

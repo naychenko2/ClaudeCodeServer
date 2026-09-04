@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services;
 

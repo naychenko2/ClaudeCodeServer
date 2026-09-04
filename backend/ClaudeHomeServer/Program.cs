@@ -10,6 +10,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.ProjectServices;
@@ -205,8 +206,8 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
 // Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
 // — DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
-builder.Services.AddSingleton<TaskManager>();
-builder.Services.AddSingleton<TaskAiService>();
+// TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
+// — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
 // Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
 // для REST фронта и MCP-тула context_list
@@ -320,7 +321,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WatchToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
-builder.Services.AddSingleton<BoardService>();
+// BoardService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 // Шина событий хода (ADR-013): один экземпляр на инстанс, изоляция владельцев — через
 // TurnContext события. На этапе 0 подписчиков нет; этап 2 — реестр секций промпта
 // (6 провайдеров + DossierTrailerHint) подключается к шине через SessionManager.
@@ -369,7 +370,7 @@ builder.Services.AddSingleton<SessionSummaryService>();
 // карта плана (место plan-map, «Визуальный разворот плана» часть B) —
 // DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<ChatTaskExtractionService>();
-builder.Services.AddSingleton<DailyBriefingService>();
+// DailyBriefingService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
 builder.Services.AddSingleton<AutomationStateStore>();
 builder.Services.AddSingleton<AutomationRootResolver>();
@@ -411,7 +412,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectio
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
 builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
-builder.Services.AddGatedHostedService<TaskSchedulerService>(builder.Configuration);
+// TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddGatedHostedService<ChatExpiryService>(builder.Configuration);
 // Автоправило архивации чатов (флаг chat-auto-archive) — singleton + hosted: кнопка
 // «Применить сейчас» (POST /api/chats/archive-run) дёргает RunNowAsync того же инстанса
@@ -486,7 +487,14 @@ builder.Services.AddSubsystems(builder.Configuration,
     new ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem(),
     // Changelog — «Что нового»: листовая подсистема, ни от кого не зависит, читает
     // git-вывод и `data/changelog/product.json` через `FileService`.
-    new ClaudeHomeServer.Services.Changelog.ChangelogSubsystem());
+    new ClaudeHomeServer.Services.Changelog.ChangelogSubsystem(),
+    // Tasks — вертикаль задач с доской агентов (BoardService) и утренним брифингом
+    // (DailyBriefingService). Регистрируется после Changelog потому что зависит от
+    // `Services.Hubs` (IHubContext<SessionHub>) и `Services.Llm` (ICheapTextRunner
+    // через TaskAiService). TaskSchedulerService — gated hosted, его тип `AddGatedHostedService`
+    // активируется флагом (см. appsettings). Шов Tasks → Models.Session (три статических
+    // резолвера) описан в `Services/Tasks/TasksSubsystem.cs` (см. комментарий 6).
+    new ClaudeHomeServer.Services.Tasks.TasksSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

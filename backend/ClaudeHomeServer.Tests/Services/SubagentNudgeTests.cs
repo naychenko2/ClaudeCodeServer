@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Prompts;
 using FluentAssertions;

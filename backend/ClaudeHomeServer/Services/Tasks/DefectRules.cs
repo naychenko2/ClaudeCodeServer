@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Tasks;
 
 // Чистые правила дефектов: четыре ветки, ни одной зависимости на хранилище или HTTP.
 // Без ILogger, JsonFileStore, TaskManager и HttpContext — тестируется unit-тестами

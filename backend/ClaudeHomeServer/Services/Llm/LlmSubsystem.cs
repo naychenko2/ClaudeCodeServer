@@ -15,8 +15,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // 1) `UserModelTierResolver` — слоты моделей (strong/medium/weak) per-user,
 //    глобальная таблица назначений LocalActionCatalog. Шов к слою персон.
 // 2) `GlmModelAliasMigration` (gated hosted) — разовая переадресация закреплённых
-//    GLM-моделей на актуальный каталог (z.ai алиасы). Опора на SessionManager
-//    и SpecialtySettingsStore.
+//    GLM-моделей на актуальный каталог (z.ai алиасы). Одноразовая миграция сторов
+//    с marker-файлом; регистрируется здесь как hosted-сервис, а очередь старта
+//    задаётся местом `LlmSubsystem` в списке `AddSubsystems` (Program.cs:~490).
 // 3) `OneShotClaudeRunner` + `IOneShotRunner` (форвард) — основной раннер
 //    дешёвых ходов через claude CLI. Опора на `ClaudeSubscriptionPool` и
 //    `SubscriptionActivityTracker` (ротация подписок).
@@ -60,7 +61,11 @@ namespace ClaudeHomeServer.Services.Llm;
 //     разведения отказа провайдера и отказа канала наружу.
 // 20) `ChatDigestService` (место `chat-digest`, сводка архива) и
 //     `PlanMapService` (место `plan-map`, визуальный разворот плана).
-// 21) `GlmModelAliasMigration` (gated hosted) — см. п.2.
+//
+// Итого 29 регистраций (в их числе два тихих HTTP-клиента Ollama/llama-server).
+// Program.cs похудел на 93 строки и прибавил 27 строк комментариев-указателей
+// на подсистему — net −66; удалённых `builder.Services.Add*` ровно 29,
+// столько же `services.Add*` в `Register` ниже.
 //
 // Шов `services.Memory` (`MemoryWriteResolver`) лежит ВНЕ `Services.Llm`,
 // поэтому НЕ переносится сюда — отдельная вертикаль Memory, и реестр уже
@@ -89,9 +94,6 @@ namespace ClaudeHomeServer.Services.Llm;
 //   провайдеров в WorkflowAgentParser и установки `WorkflowAgentParser.ProfilesRoot`.
 // - `ILocalLlmClient` резолвится в Program.cs:~912 для фонового прогрева активной
 //   локальной модели.
-//
-// Удалено из Program.cs (всё, что выше): 24 строки регистраций,
-// 2 тихих HTTP-клиента, 5 прокомментированных пояснений.
 public sealed class LlmSubsystem : IAppSubsystem
 {
     public string Key => "llm";
@@ -105,9 +107,10 @@ public sealed class LlmSubsystem : IAppSubsystem
         // AppSettingsService и доменному ModelTier (из Models).
         services.AddSingleton<UserModelTierResolver>();
 
-        // One-shot ответы персон через провайдерский ClaudeSubscriptionPool
-        // и подписки на утилизацию (SubscriptionActivityTracker). Ротация подписок
-        // — отдельный модуль, здесь только потребитель пула.
+        // Основной раннер дешёвых one-shot ходов через claude CLI: держит
+        // ClaudeSubscriptionPool и SubscriptionActivityTracker (ротация подписок —
+        // отдельный модуль, здесь только потребитель пула). `IOneShotRunner` —
+        // форвард на ТОТ ЖЕ singleton (интерфейс мокируется в тестах).
         services.AddSingleton<OneShotClaudeRunner>();
         services.AddSingleton<IOneShotRunner>(sp => sp.GetRequiredService<OneShotClaudeRunner>());
 
@@ -132,15 +135,13 @@ public sealed class LlmSubsystem : IAppSubsystem
             new QuietHttpClientProfile(
                 Category: "ClaudeHomeServer.Llm.Ollama",
                 Subject: "локальной моделью Ollama",
-                Consequence: "Фоновые действия уйдут облачной модели."))
-            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+                Consequence: "Фоновые действия уйдут облачной модели."));
         services.AddQuietHttpClient(
             LlamaServerClient.HttpClientName,
             new QuietHttpClientProfile(
                 Category: "ClaudeHomeServer.Llm.LlamaServer",
                 Subject: "локальной моделью llama-server",
-                Consequence: "Фоновые действия уйдут облачной модели."))
-            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+                Consequence: "Фоновые действия уйдут облачной модели."));
 
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
@@ -168,8 +169,9 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LocalActionPresetService>();
 
         // Разовая переадресация закреплённых моделей GLM на актуальный каталог
-        // (z.ai алиасы) — gated hosted: в Testing не стартует, прогон детерминирован
-        // маркером в data.
+        // (z.ai алиасы) — gated hosted: в Testing не стартует, повторный проход
+        // отсекается marker-файлом в data. Очередь старта задаётся не этой строкой,
+        // а местом `LlmSubsystem` в списке `AddSubsystems` (Program.cs:~490).
         services.AddGatedHostedService<GlmModelAliasMigration>(config);
 
         // Реестр провайдеров: цены, профили CLI, projects-каталоги.

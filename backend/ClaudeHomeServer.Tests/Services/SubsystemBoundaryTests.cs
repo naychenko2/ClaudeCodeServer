@@ -641,39 +641,35 @@ public class SubsystemBoundaryTests
         // регистрирует только фасады (PersonaMemoryService/TeamMemoryService + их
         // консолидация/autolearn), а общий слой ядра (MemoryWriteResolver/MemoryDify/
         // MemoryConsolidationCore/AutolearnGate/...) живёт в этом namespace уже давно.
-        // Допуски к корню Services — точные (по образцу Dossiers/Spend):
-        // 1) `SessionManager`/`ProjectManager`/`PersonaManager` (Services/ корень) —
-        //    общая инфраструктура для фасадов: SessionManager (подписка autolearn на
-        //    OnSessionMessage), ProjectManager (резолв проекта для team-memory),
-        //    PersonaManager (список персон для консолидации).
-        // 2) `ProjectEventLogService` (Services/ корень) — `PersonaMemoryAutolearnService`
-        //    логирует событие памяти в ленту проекта.
+        // Список сверен прогоном probe (волна 4, шаг 0 — доработка по ревью): в нём
+        // ровно то, что подтверждается фактической ссылкой. Удалены как мёртвые
+        // `SessionManager`/`ProjectManager`/`PersonaManager`/`ProjectEventLogService`,
+        // `PersonaMemoryService`/`TeamMemoryService`, `Protocol.StoredUserMessage`/
+        // `Protocol.StoredTextMessage` и префикс `ClaudeHomeServer.Hubs` — все эти связи
+        // идут из ТЕЛ методов фасадов, живущих в корне `Services`, а тела рефлексия
+        // не читает (см. «Известное ограничение» в шапке).
         // Префиксы-швы (как у Dossiers/Spend):
-        // 3) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify и `IKnowledgeSyncParticipant`;
-        //    `MemoryDify` использует `KnowledgeService`/`KnowledgeSyncTarget` для записи
-        //    в Dify-датасеты (per-persona/per-project).
-        // 4) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для консолидации (LLM-merge)
-        //    и autolearn (извлечение фактов из транскрипта). Префикс-шов, как у
-        //    `Git`/`Backgrounds`/`Deploy`/`Spend`/`Dossiers`.
-        // 5) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации о новых
-        //    записях памяти команды (`TeamMemoryAutolearnService` шлёт `memory_changed`
-        //    в ленту сессии).
+        // 1) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify;
+        //    `MemoryDify` держит `KnowledgeService` полем и материализует
+        //    `DifyDocumentInfo` в async-state `DiffSyncAsync`.
+        // 2) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` в поле
+        //    `MemoryWriteResolver` (консолидация LLM-merge и autolearn). Префикс-шов,
+        //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`/`Dossiers`.
+        // Точечные допуски к корню Services:
+        // 3) Четыре фасада (`PersonaMemoryConsolidationService`/`PersonaMemoryAutolearnService`/
+        //    `TeamMemoryConsolidationService`/`TeamMemoryAutolearnService`) — их регистрирует
+        //    `MemorySubsystem` лямбдами, типы видны в замыкании `MemorySubsystem+<>c`.
+        //    Точными именами, а не префиксом корня `ClaudeHomeServer.Services` (префикс был бы
+        //    разрушением default-deny): сами типы пока живут в корне, полный переезд
+        //    в `Services.Memory` — отдельная задача.
         // Точечный допуск к `ClaudeHomeServer.Protocol`:
-        // 6) `StoredMessage`/`StoredUserMessage`/`StoredTextMessage` — `AutolearnGate.CheckContent`
-        //    и `LastTurnLength` принимают `IReadOnlyList<StoredMessage>` (видна в public-методе),
-        //    `switch` по `StoredUserMessage`/`StoredTextMessage` в `LastTurnLength` — это
-        //    pattern matching, рефлексия поля типа не видит, но аргументы публичного метода —
-        //    видит. Префикс `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил
-        //    новые зависимости от любых из ~105 публичных типов протокола.
+        // 4) `StoredMessage` — `AutolearnGate.CheckContent`/`LastTurnLength` принимают
+        //    `IReadOnlyList<StoredMessage>` (видна в сигнатуре public-метода). Префикс
+        //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые
+        //    зависимости от любых из ~105 публичных типов протокола.
         // ⚠ Два форвардера `IKnowledgeSyncParticipant → {PersonaMemoryService,
         // TeamMemoryService}` остаются в Program.cs (кросс-вертикальный клей реконсайлера
         // error-документов Dify) и потому НЕ входят в allow-list Memory.
-        // Сами шесть типов фасадов (`PersonaMemoryService`/`TeamMemoryService`/`*Consolidation*`/
-        // `*Autolearn*`) пока живут в `ClaudeHomeServer.Services` (root) — задача явно
-        // ограничилась переносом регистраций, без рефакторинга имён/неймспейсов; полный
-        // переезд в `Services.Memory` — отдельная задача. Поэтому в allow-list они идут
-        // ТОЧНЫМИ именами, а не префиксом корня `ClaudeHomeServer.Services` (префикс был бы
-        // разрушением default-deny).
         new object[]
         {
             new VerticalBoundary(
@@ -685,30 +681,20 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Memory",
                         "ClaudeHomeServer.Services.Knowledge",
                         "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.ProjectEventLogService",
-                    // Шесть фасадов памяти — собственность подсистемы Memory, но пока
-                    // остаются в `ClaudeHomeServer.Services` (root). Точные имена, чтобы
-                    // не открывать корневой префикс.
-                    "ClaudeHomeServer.Services.PersonaMemoryService",
+                    // Четыре фасада памяти — регистрируются лямбдами MemorySubsystem,
+                    // видны в замыкании `MemorySubsystem+<>c`. Сами типы пока в корне
+                    // `ClaudeHomeServer.Services`, поэтому точные имена.
                     "ClaudeHomeServer.Services.PersonaMemoryConsolidationService",
                     "ClaudeHomeServer.Services.PersonaMemoryAutolearnService",
-                    "ClaudeHomeServer.Services.TeamMemoryService",
                     "ClaudeHomeServer.Services.TeamMemoryConsolidationService",
                     "ClaudeHomeServer.Services.TeamMemoryAutolearnService",
                     // AutolearnGate.CheckContent / LastTurnLength — public-метод
-                    // с параметром IReadOnlyList<StoredMessage> и switch по
-                    // StoredUserMessage/StoredTextMessage.
+                    // с параметром IReadOnlyList<StoredMessage>.
                     "ClaudeHomeServer.Protocol.StoredMessage",
-                    "ClaudeHomeServer.Protocol.StoredUserMessage",
-                    "ClaudeHomeServer.Protocol.StoredTextMessage",
                 }),
         },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
@@ -807,8 +793,9 @@ public class SubsystemBoundaryTests
                 }),
         },
         // Turn — шина событий хода + контрибьюторы секций системного промпта.
-        // Префикс-шов: Services.CodeGraph (CodeGraphContributor читает
-        // CodeGraphPromptProvider). Точечные: root Services, Dossiers
+        // Все внешние допуски точечные (префиксов-швов нет): CodeGraphPromptProvider
+        // (единственный тип, который читает CodeGraphContributor — открывать всю
+        // вертикаль CodeGraph ради него нельзя), root Services, Dossiers
         // (PersonaRecallContributor тянет DossierRecallService/Request),
         // Services.Llm (RecallItem в полях контрибьюторов, TurnRunPassport
         // в TurnCompleted, SubagentRunPassport в SubagentRunCompleted),
@@ -822,7 +809,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Turn",
-                        "ClaudeHomeServer.Services.CodeGraph",
                     })
                     .ToArray(),
                 new[]
@@ -830,6 +816,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.StoredMessage",
                     "ClaudeHomeServer.Protocol.McpServerInfo",
                     "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
+                    "ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider",
                     "ClaudeHomeServer.Services.PersonaBindingsService",
                     "ClaudeHomeServer.Services.NotesKnowledgeService",
                     "ClaudeHomeServer.Services.NoteSemanticHit",

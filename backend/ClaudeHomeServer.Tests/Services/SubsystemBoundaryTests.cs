@@ -738,6 +738,17 @@ public class SubsystemBoundaryTests
         // `Services` (ModelTier/AppSettingsService/ChatHistoryService/...),
         // WorkspaceKnowledgeStore (ClaudeSession материализует в async-state)
         // и ISpendCollector (метрики трат).
+        //
+        // Волна 4B, шаг 2 — в `Services.Llm` переехали `SpecialtySettingsStore` +
+        // `SpecialtySettingsLayer`, `UsageService`, `ClaudeSubscriptionPool` +
+        // `SubscriptionActivityTracker` + `SubscriptionWindowMismatchGuard` +
+        // `SubscriptionUsageWarmupService` + `SubscriptionOAuthUsageService`,
+        // `WorkflowAgentParser` + `WorkflowWatcher` + `WorkflowMetaResolver`.
+        // Удалены из `AllowedExactNamespaces` как осиротевшие (теперь ссылки
+        // внутренние: `ClaudeHomeServer.Services.Llm.*`); `WorkflowWatcher`
+        // остался как `Services.Llm.WorkflowWatcher` — поле async-state-машины
+        // `ClaudeSession+<...>d__N`, материал-аргумент публичного метода
+        // `ClaudeSession.OnSubagentStreamAsync`.
         new object[]
         {
             new VerticalBoundary(
@@ -769,6 +780,12 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.PromptSectionDto",
                     "ClaudeHomeServer.Protocol.CliSkillDto",
                     "ClaudeHomeServer.Protocol.RecallItemDto",
+                    // Волна 4B, шаг 2 — WorkflowAgentParser/Watcher материализуют
+                    // типы протокола в полях public-методов и в generic-аргументах
+                    // лямбд (<>c__DisplayClass).
+                    "ClaudeHomeServer.Protocol.WorkflowAgentDto",
+                    "ClaudeHomeServer.Protocol.WorkflowAgentBlockDto",
+                    "ClaudeHomeServer.Protocol.WorkflowToolDto",
                     // Root Services — точные (общая инфраструктура: реестры, сторы,
                     // рантайм-состояния, доменные модели). Префикс `ClaudeHomeServer.Services`
                     // для них НЕ открываем (default-deny), только FullName.
@@ -780,17 +797,31 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.ClaudeSubscriptionPool",
                     "ClaudeHomeServer.Services.NotesService",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.SkillsService",
-                    "ClaudeHomeServer.Services.SpecialtySettingsStore",
-                    "ClaudeHomeServer.Services.SubscriptionActivityTracker",
                     "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.WorkflowWatcher",
                     "ClaudeHomeServer.Services.ModelCatalogService",
                     "ClaudeHomeServer.Services.ModelCatalogService+ModelInfo",
+                    // Волна 4B, шаг 2 — переехавшие типы тянут точечные зависимости
+                    // от корня Services:
+                    // 1) `SpecialtyTemplate` (Services/SpecialtyCatalog.cs:12) — каталожный
+                    //    record прав специальности; `SpecialtySettingsStore.EffectiveTemplate`
+                    //    материализует его в return-типе (public-метод виден рефлексии).
+                    //    SpecialtyCatalog целиком в Llm НЕ переезжает — нужен только этот
+                    //    record (см. вердикт архитектора по вопросу 4: SpecialtyCatalog
+                    //    остаётся в корне, в Llm едет только слой настроек).
+                    // 2) `SpecialtyPromptPresets+SectionMeta` — generic-аргумент
+                    //    `Dictionary<string, SectionMeta>` в поле async-state-машины
+                    //    `SpecialtySettingsStore.EffectivePromptSectionStates`.
+                    // 3) `NotificationService` (Services/NotificationService.cs) —
+                    //    `SubscriptionAlertNotifier` шлёт алерт админам через общий
+                    //    нотификатор (тот же шов «вертикаль → спинка», что у
+                    //    `Knowledge`/`Deploy`).
+                    "ClaudeHomeServer.Services.SpecialtyTemplate",
+                    "ClaudeHomeServer.Services.SpecialtyPromptPresets+SectionMeta",
+                    "ClaudeHomeServer.Services.NotificationService",
                     // Knowledge — WorkspaceKnowledgeStore (CLI-сессия и фабрика
                     // адаптеров материализуют тип в async-state). Префикс не открываем:
                     // Knowledge — отдельная вертикаль, точечный допуск ровно на нужный тип.
@@ -863,8 +894,14 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
-                    "ClaudeHomeServer.Services.SpecialtySettingsStore",
-                    "ClaudeHomeServer.Services.SpecialtySettingsStore+EffectivePromptSection",
+                    // PromptSectionsContributor ссылается на Llm.SpecialtySettingsStore
+                    // и его nested EffectivePromptSection (поле async-state-машины). В
+                    // корне Services этого типа больше нет — SpecialtySettingsStore
+                    // переехал в Llm (волна 4B, шаг 2), и Turn держит ссылку на новый
+                    // адрес (см. `ClaudeHomeServer.Services.Llm.SpecialtySettingsStore`
+                    // в allow-list Llm).
+                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore",
+                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
                     "ClaudeHomeServer.Services.Llm.RecallItem",

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Хранит историю снимков использования лимитов подписки (data/usage.json) для экрана usage.
 // Снимки приходят с каждым ходом (через RateLimitMessage) — троттлим, чтобы не плодить дубли,

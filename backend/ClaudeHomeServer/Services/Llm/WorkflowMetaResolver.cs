@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Достаёт блок `export const meta = { … }` из скрипта именованного workflow.
 //

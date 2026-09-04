@@ -1,5 +1,5 @@
 using System.Text.Json;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;

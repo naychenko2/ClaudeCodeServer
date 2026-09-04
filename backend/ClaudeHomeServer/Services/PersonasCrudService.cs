@@ -1,12 +1,11 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Personas;
-using ClaudeHomeServer.Services.TriggerSources;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 

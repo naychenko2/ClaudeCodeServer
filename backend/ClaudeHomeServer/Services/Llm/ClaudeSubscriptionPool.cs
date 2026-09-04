@@ -3,7 +3,7 @@ using System.Globalization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Пул подписок Claude. Позволяет использовать несколько аккаунтов на одном сервере:
 // новые чаты направляются на наименее загруженную подписку (по утилизации 5-часового

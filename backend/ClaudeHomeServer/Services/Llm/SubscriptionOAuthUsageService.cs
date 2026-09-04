@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Llm.Claude;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Периодический опрос точной утилизации подписок Claude через OAuth-эндпоинт
 // GET api.anthropic.com/api/oauth/usage (тот же источник, что интерактивный экран /usage CLI):

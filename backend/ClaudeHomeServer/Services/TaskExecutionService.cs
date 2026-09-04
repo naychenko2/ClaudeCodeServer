@@ -3,6 +3,7 @@ using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;

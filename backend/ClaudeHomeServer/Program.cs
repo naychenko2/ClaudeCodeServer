@@ -179,31 +179,16 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftSer
 // Провижн авто-ассистента (фича default-personas-onboarding): заготовка «Ассистент»
 // как дефолт при первом включении флага. Singleton — статический реестр семафоров.
 builder.Services.AddSingleton<DefaultAssistantProvisioner>();
-// Специальности и пресеты правил: стор настроек специальностей и пресетов правил
-// выбора модели (глобальные + per-owner) + применение шаблонов прав
-builder.Services.AddSingleton<SpecialtySettingsStore>();
+// Применение шаблонов прав специальности (тонкая прослойка над SpecialtySettingsStore,
+// который переехал в Services.Llm — DI там же, см. LlmSubsystem.cs)
 builder.Services.AddSingleton<SpecialtyTemplatesService>();
 // Планирование режима «Командная реализация» (Э2): подбор координатора/планировщика,
 // карточки кандидатов и структурный план
 builder.Services.AddSingleton<TeamPlanningService>();
 // Файловые сабагенты-персоны: генерация + синк .md-агентов
-// Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
-builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
-    sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
-// Время последней фактической активности аккаунта пула (живой ход / идл-пинг) —
-// делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService
-builder.Services.AddSingleton<SubscriptionActivityTracker>();
-// Сторож «чужого» setup-токена: расхождение сброса 5h-окна между setup-токеном (probe/turn)
-// и профильным логином (oauth) — алерт админам, без вывода из ротации. Шов нотификатора —
-// для юнит-тестов дедупа (как IKnowledgeAlertNotifier)
-builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>();
-builder.Services.AddSingleton<SubscriptionWindowMismatchGuard>();
-// Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
-builder.Services.AddGatedHostedService<SubscriptionUsageWarmupService>(builder.Configuration);
-// Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
-// singleton — статусы опроса per-аккаунт (токен не подходит / ошибка) читает /api/usage
-builder.Services.AddSingleton<SubscriptionOAuthUsageService>();
-builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
+// Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта,
+// активность аккаунта, сторож setup-токена, прогрев/идл-пинг и OAuth-опрос утилизации —
+// переехали в Services.Llm (волна 4B, шаг 2). DI в подсистеме `LlmSubsystem`.
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 // Генерация картинок (иконка проекта, аватар персоны, фон проекта) — подключается
@@ -276,7 +261,8 @@ builder.Services.AddSingleton<PromptAuditService>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
-builder.Services.AddSingleton<UsageService>();
+// UsageService — DI в подсистеме `LlmSubsystem` (волна 4B, шаг 2: переезд подписок и
+// настроек специальностей к модели).
 // Модельный слой (LlmProviderRegistry / ProviderBalanceService / ProviderHealthRegistry /
 // ContextCapacityRegistry / IProviderBalanceService / FileChangeAttributor /
 // ILlmSessionAdapterFactory / SubagentRunLog / TurnRunLog / EgressProbe) —
@@ -785,11 +771,11 @@ var app = builder.Build();
 app.UseSubsystems();
 
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
-WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
-    .CreateLogger(nameof(WorkflowAgentParser));
+ClaudeHomeServer.Services.Llm.WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger(nameof(ClaudeHomeServer.Services.Llm.WorkflowAgentParser));
 // Логгер резолвера meta-блоков workflow (обогащение input вызова по имени)
-ClaudeHomeServer.Services.WorkflowMetaResolver.Log = app.Services.GetRequiredService<ILoggerFactory>()
-    .CreateLogger(nameof(ClaudeHomeServer.Services.WorkflowMetaResolver));
+ClaudeHomeServer.Services.Llm.WorkflowMetaResolver.Log = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger(nameof(ClaudeHomeServer.Services.Llm.WorkflowMetaResolver));
 // Дополнительные разрешённые корни транскриптов — пути проектов сторонних CLI-провайдеров
 // (GLM/DeepSeek используют изолированные профили, транскрипты пишутся не в ~/.claude)
 try
@@ -797,13 +783,13 @@ try
     var registry = app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
     foreach (var dir in registry.GetProviderProjectsDirs())
     {
-        WorkflowAgentParser.AddAllowedRoot(dir);
+        ClaudeHomeServer.Services.Llm.WorkflowAgentParser.AddAllowedRoot(dir);
         Console.WriteLine($"[WorkflowAgentParser] разрешён корень провайдера: {dir}");
     }
     // Профили подписок (sub-*) и созданные после старта: разрешаем весь корень
     // claude-profiles по шаблону {key}/projects — иначе WorkflowWatcher у таких
     // сессий молча выключается («Детали недоступны» в блоке Workflow)
-    WorkflowAgentParser.ProfilesRoot = registry.ProfilesDir;
+    ClaudeHomeServer.Services.Llm.WorkflowAgentParser.ProfilesRoot = registry.ProfilesDir;
     Console.WriteLine($"[WorkflowAgentParser] разрешён корень профилей: {registry.ProfilesDir}");
 }
 catch (Exception ex)

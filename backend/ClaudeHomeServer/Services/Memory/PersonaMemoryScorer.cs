@@ -1,7 +1,6 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Memory;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Memory;
 
 // Скоринг записи памяти персоны — тонкая обёртка над общим ядром MemoryScorerCore.
 // Специфика персоны: веса типов (semantic > procedural > episodic), якорь свежести от последнего

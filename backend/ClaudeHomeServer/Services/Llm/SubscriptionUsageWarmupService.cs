@@ -5,7 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Идл-пинг утилизации подписок: минимальный ход claude --model haiku по каждому
 // ПРОСТАИВАЮЩЕМУ аккаунту пула — свежий rate_limit_event без ожидания живого чата.

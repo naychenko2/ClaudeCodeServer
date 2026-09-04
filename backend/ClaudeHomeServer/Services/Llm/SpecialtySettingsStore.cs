@@ -2,9 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Секция промпта специальности в слое настроек: id из каталога (SpecialtyPromptPresets),
 // enabled — явное вкл/выкл (параметр «задан» самим наличием элемента с id в слое),

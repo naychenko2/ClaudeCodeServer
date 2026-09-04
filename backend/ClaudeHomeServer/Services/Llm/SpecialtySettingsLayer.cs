@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Слой настроек: шаблоны специальностей, «любая специальность» и пресеты-цепочки.
 public class SpecialtySettingsLayer

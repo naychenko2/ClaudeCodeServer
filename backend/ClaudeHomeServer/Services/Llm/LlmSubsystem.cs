@@ -61,11 +61,29 @@ namespace ClaudeHomeServer.Services.Llm;
 //     разведения отказа провайдера и отказа канала наружу.
 // 20) `ChatDigestService` (место `chat-digest`, сводка архива) и
 //     `PlanMapService` (место `plan-map`, визуальный разворот плана).
+// 21) Волна 4B, шаг 2 — переселение в `Services.Llm`:
+//   - `SpecialtySettingsStore` + `SpecialtySettingsLayer` (ADR-007 §2): матрицы
+//     моделей по уровням, пресеты-цепочки и DefaultTier для специальностей; все
+//     потребители (`ModelAssignmentResolver`, `LocalActionRouter`, `PresetStore`)
+//     уже в `Llm`. `SpecialtyPromptPresets`/`SpecialtyCatalog`/`SpecialtyTemplatesService`
+//     остаются в корне (не часть модели).
+//   - `UsageService`: учёт расхода токенов/стоимости по аккаунтам подписок;
+//     читается `ModelsController`/`UsageController` и самим `ClaudeSubscriptionPool`
+//     для восстановления пометок исчерпания из снапшота.
+//   - `ClaudeSubscriptionPool` + `SubscriptionActivityTracker` +
+//     `SubscriptionWindowMismatchGuard` (с `ISubscriptionAlertNotifier` форвардером) +
+//     `SubscriptionUsageWarmupService` (gated hosted) +
+//     `SubscriptionOAuthUsageService` (gated hosted): ротация подписок пула —
+//     часть механики фолбэка хода; три главных потребителя
+//     (`FallbackLlmSessionAdapter`, `LlmSessionAdapterFactory`, `OneShotClaudeRunner`)
+//     уже здесь.
+//   - `WorkflowAgentParser`/`WorkflowWatcher`/`WorkflowMetaResolver` — статические
+//     парсеры транскриптов; DI не нужны, логгер и кеш инициализируются в Program.cs
+//     после Build (поэтому просто наличие файлов в `Services.Llm` достаточно).
 //
-// Итого 29 регистраций (в их числе два тихих HTTP-клиента Ollama/llama-server).
-// Program.cs похудел на 93 строки и прибавил 27 строк комментариев-указателей
-// на подсистему — net −66; удалённых `builder.Services.Add*` ровно 29,
-// столько же `services.Add*` в `Register` ниже.
+// Итого 39 регистраций (в их числе два тихих HTTP-клиента Ollama/llama-server и
+// два gated hosted сервиса подписок). Волна 4B, шаг 2 прибавил +10 регистраций
+// и перенёс их из Program.cs — net −10 в композиционном корне.
 //
 // Шов `services.Memory` (`MemoryWriteResolver`) лежит ВНЕ `Services.Llm`,
 // поэтому НЕ переносится сюда — отдельная вертикаль Memory, и реестр уже
@@ -209,5 +227,48 @@ public sealed class LlmSubsystem : IAppSubsystem
         // перенос сюда согласован с архитектурой шага.
         services.AddSingleton<ChatDigestService>();
         services.AddSingleton<PlanMapService>();
+
+        // === Волна 4B, шаг 2 — переселение из корня `Services` ===
+        // Все три группы ниже уже лежали ВНУТРИ `Services.Llm` по потребителям (см.
+        // inventory services-root, вердикт по вопросу 4): новые вертикали только
+        // ради них заводить нерационально — это перенесённые папки, не модули.
+
+        // Стор настроек специальностей и пресетов-цепочек выбора модели (ADR-007 §2).
+        // SpecialtySettingsLayer — соседний класс в том же файле, отдельной регистрации
+        // не требуется.
+        services.AddSingleton<SpecialtySettingsStore>();
+
+        // Учёт расхода токенов/стоимости по аккаунтам подписок. Читается
+        // ModelsController/UsageController и ClaudeSubscriptionPool (восстановление
+        // пометок исчерпания из снапшота после рестарта).
+        services.AddSingleton<UsageService>();
+
+        // Пул подписок с восстановлением пометок исчерпания из снапшотов usage.
+        services.AddSingleton(sp => new ClaudeSubscriptionPool(
+            sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
+
+        // Время последней фактической активности аккаунта пула (живой ход / идл-пинг) —
+        // делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService.
+        services.AddSingleton<SubscriptionActivityTracker>();
+
+        // Сторож «чужого» setup-токена: расхождение сброса 5h-окна между setup-токеном
+        // (probe/turn) и профильным логином (oauth) — алерт админам, без вывода из ротации.
+        // Шов нотификатора — для юнит-тестов дедупа (как IKnowledgeAlertNotifier).
+        services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>();
+        services.AddSingleton<SubscriptionWindowMismatchGuard>();
+
+        // Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий
+        // аккаунт).
+        services.AddGatedHostedService<SubscriptionUsageWarmupService>(config);
+
+        // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через
+        // api/oauth/usage; singleton — статусы опроса per-аккаунт (токен не подходит /
+        // ошибка) читает /api/usage.
+        services.AddSingleton<SubscriptionOAuthUsageService>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
+
+        // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
+        // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры
+        // и кеш корней после Build).
     }
 }

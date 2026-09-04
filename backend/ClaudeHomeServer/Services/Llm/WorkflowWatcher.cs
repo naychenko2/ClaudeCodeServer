@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Следит за папкой wf_* и шлёт workflow_progress по мере завершения агентов.
 // УБЕРИ САМО-ЗАВЕРШЕНИЕ: между волнами агентов раннер делает паузы, и если

@@ -2,7 +2,7 @@
 using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Общий парсер agent-*.jsonl файлов workflow-транскриптов.
 // Используется и WorkflowWatcher (реалтайм), и WorkflowController (REST).

@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Время последней ФАКТИЧЕСКОЙ активности аккаунта пула подписок: живой ход чата
 // (rate_limit_event из SessionManager) или пробный пинг (SubscriptionUsageWarmupService).

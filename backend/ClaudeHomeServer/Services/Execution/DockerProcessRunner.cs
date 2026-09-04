@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Execution;
 

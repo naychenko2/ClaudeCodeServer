@@ -5,13 +5,13 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services.Dossiers;
 

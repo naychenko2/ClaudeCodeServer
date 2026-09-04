@@ -1,7 +1,7 @@
 using System.Globalization;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Куда сторож подписок сообщает алерты владельцу. Отдельный шов (а не прямой вызов
 // NotificationService) — тот же приём, что IKnowledgeAlertNotifier: сам NotificationService

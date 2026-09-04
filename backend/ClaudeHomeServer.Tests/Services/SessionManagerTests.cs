@@ -9292,7 +9292,7 @@ public class SessionManagerTests : IDisposable
         Directory.CreateDirectory(projDir);
         var path = Path.Combine(projDir, csid + ".jsonl");
         File.WriteAllText(path, content);
-        ClaudeHomeServer.Services.WorkflowAgentParser.AddAllowedRoot(_tempDir);
+        WorkflowAgentParser.AddAllowedRoot(_tempDir);
         return path;
     }
 

@@ -112,7 +112,7 @@ namespace ClaudeHomeServer.Services.Llm;
 //
 // Прогрев после Build:
 // - `LlmProviderRegistry` резолвится в Program.cs:~869 для регистрации корней
-//   провайдеров в WorkflowAgentParser и установки `WorkflowAgentParser.ProfilesRoot`.
+//   провайдеров в TranscriptRoots и установки `TranscriptRoots.ProfilesRoot`.
 // - `ILocalLlmClient` резолвится в Program.cs:~912 для фонового прогрева активной
 //   локальной модели.
 public sealed class LlmSubsystem : IAppSubsystem
@@ -196,7 +196,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddGatedHostedService<GlmModelAliasMigration>(config);
 
         // Реестр провайдеров: цены, профили CLI, projects-каталоги.
-        // Резолвится в Program.cs:~869 для регистрации корней в WorkflowAgentParser.
+        // Резолвится в Program.cs:~869 для регистрации корней в TranscriptRoots.
         services.AddSingleton<LlmProviderRegistry>();
 
         // Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory, без персиста.

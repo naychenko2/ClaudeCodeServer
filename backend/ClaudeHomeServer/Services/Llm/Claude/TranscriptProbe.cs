@@ -14,7 +14,7 @@ internal static class TranscriptProbe
     public static string? FindMainTranscript(string cwd, string claudeSessionId)
     {
         var flat = string.Concat(cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
-        foreach (var root in WorkflowAgentParser.AllowedRoots)
+        foreach (var root in TranscriptRoots.AllowedRoots)
         {
             if (!Directory.Exists(root)) continue;
 

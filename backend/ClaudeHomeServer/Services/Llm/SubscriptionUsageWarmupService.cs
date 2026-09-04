@@ -118,7 +118,7 @@ public sealed class SubscriptionUsageWarmupService(
         var utf8NoBom = new UTF8Encoding(false);
         var psi = new ProcessStartInfo
         {
-            FileName = ClaudeCliLocator.FindClaudeExecutable(),
+            FileName = ClaudeHomeServer.Services.Execution.ClaudeCliLocator.FindClaudeExecutable(),
             WorkingDirectory = workDir,
             UseShellExecute = false,
             RedirectStandardInput = true,

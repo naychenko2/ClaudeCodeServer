@@ -3,6 +3,9 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
+// Тесты парсера agent-*.jsonl. Тесты реестра корней (`DefaultRoot`/`IsPathAllowed`)
+// в волне 4C шаг 4 уехали в `TranscriptRootsTests`: реестр вынесен в спину
+// `Services.TranscriptRoots`, парсер остался здесь.
 public class WorkflowAgentParserTests : IDisposable
 {
     private readonly string _dir;
@@ -188,6 +191,11 @@ public class WorkflowAgentParserTests : IDisposable
         agent.Files.Should().BeEquivalentTo("first.cs", "*.ts");
     }
 
+    // ─── IsPathAllowed (вынесено в TranscriptRootsTests) ─────────────────────
+    // Тесты реестра `DefaultRoot`/`IsPathAllowed` живут в
+    // `TranscriptRootsTests.cs` с момента волны 4C шага 4: реестр уехал в спину
+    // `Services.TranscriptRoots`, парсер остался здесь.
+
     // ─── ParseAgentTimeline ──────────────────────────────────────────────────
 
     [Fact]
@@ -263,45 +271,5 @@ public class WorkflowAgentParserTests : IDisposable
         block.Kind.Should().Be("structured");
         block.Text.Should().Contain("агент на связи");
         block.ToolName.Should().BeNull();
-    }
-
-    // ─── IsPathAllowed ───────────────────────────────────────────────────────
-
-    [Fact]
-    public void IsPathAllowed_ПутьВнутриAllowedRoot_True()
-    {
-        var inside = Path.Combine(WorkflowAgentParser.DefaultRoot, "proj", "wf_1");
-        WorkflowAgentParser.IsPathAllowed(inside).Should().BeTrue();
-    }
-
-    [Fact]
-    public void IsPathAllowed_ПутьВнеAllowedRoot_False()
-    {
-        WorkflowAgentParser.IsPathAllowed(_dir).Should().BeFalse();
-        WorkflowAgentParser.IsPathAllowed(Path.GetTempPath()).Should().BeFalse();
-    }
-
-    [Fact]
-    public void IsPathAllowed_ПрофильПодProfilesRoot_РазрешёнТолькоProjects()
-    {
-        // profilesRoot передаём параметром в перегрузку, а не через статическое поле:
-        // параллельный старт WebApplicationFactory в интеграционных тестах перезаписывает
-        // WorkflowAgentParser.ProfilesRoot (Program.cs), и гонка делает проверку flaky.
-        // Транскрипты любого профиля (в т.ч. подписки sub-*, созданной после старта)
-        var wf = Path.Combine(_dir, "sub-my-second", "projects", "-p-x-", "sid", "subagents", "workflows", "wf_1");
-        WorkflowAgentParser.IsPathAllowed(wf, _dir).Should().BeTrue();
-        // Но не остальное содержимое профиля (креденшалы и т.п.)
-        WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "sub-my-second", ".credentials.json"), _dir)
-            .Should().BeFalse();
-        // И не сам корень с одним сегментом
-        WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "projects"), _dir).Should().BeFalse();
-    }
-
-    [Fact]
-    public void IsPathAllowed_ProfilesRoot_TraversalНеПроходит()
-    {
-        var profilesRoot = Path.Combine(_dir, "profiles");
-        var sneaky = Path.Combine(_dir, "profiles", "key", "..", "..", "secret", "projects", "x");
-        WorkflowAgentParser.IsPathAllowed(sneaky, profilesRoot).Should().BeFalse();
     }
 }

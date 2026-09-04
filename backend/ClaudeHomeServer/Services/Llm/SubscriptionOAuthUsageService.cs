@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using ClaudeHomeServer.Services.Llm.Claude;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -418,7 +417,7 @@ public sealed partial class SubscriptionOAuthUsageService(
     {
         try
         {
-            var psi = new ProcessStartInfo(ClaudeCliLocator.FindClaudeExecutable())
+            var psi = new ProcessStartInfo(ClaudeHomeServer.Services.Execution.ClaudeCliLocator.FindClaudeExecutable())
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,

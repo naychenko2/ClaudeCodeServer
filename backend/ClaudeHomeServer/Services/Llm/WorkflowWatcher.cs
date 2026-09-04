@@ -78,7 +78,7 @@ public sealed class WorkflowWatcher : IDisposable
 
     public void Start()
     {
-        if (!WorkflowAgentParser.IsPathAllowed(_wfPath)) return;
+        if (!TranscriptRoots.IsPathAllowed(_wfPath)) return;
 
         lock (_gate)
         {

@@ -317,7 +317,7 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
         Directory.CreateDirectory(projDir);
         await File.WriteAllTextAsync(Path.Combine(projDir, csid + ".jsonl"),
             "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"mess");
-        WorkflowAgentParser.AddAllowedRoot(_factory.TempDir);
+        TranscriptRoots.AddAllowedRoot(_factory.TempDir);
 
         var refused = await _client.PostAsync(
             $"/api/chats/{sessionId}/team-wave/restart-turn", Body(new { }));

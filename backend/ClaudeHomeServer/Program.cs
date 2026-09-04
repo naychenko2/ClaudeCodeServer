@@ -789,18 +789,18 @@ try
     var registry = app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
     foreach (var dir in registry.GetProviderProjectsDirs())
     {
-        ClaudeHomeServer.Services.Llm.WorkflowAgentParser.AddAllowedRoot(dir);
-        Console.WriteLine($"[WorkflowAgentParser] разрешён корень провайдера: {dir}");
+        ClaudeHomeServer.Services.TranscriptRoots.AddAllowedRoot(dir);
+        Console.WriteLine($"[TranscriptRoots] разрешён корень провайдера: {dir}");
     }
     // Профили подписок (sub-*) и созданные после старта: разрешаем весь корень
     // claude-profiles по шаблону {key}/projects — иначе WorkflowWatcher у таких
     // сессий молча выключается («Детали недоступны» в блоке Workflow)
-    ClaudeHomeServer.Services.Llm.WorkflowAgentParser.ProfilesRoot = registry.ProfilesDir;
-    Console.WriteLine($"[WorkflowAgentParser] разрешён корень профилей: {registry.ProfilesDir}");
+    ClaudeHomeServer.Services.TranscriptRoots.ProfilesRoot = registry.ProfilesDir;
+    Console.WriteLine($"[TranscriptRoots] разрешён корень профилей: {registry.ProfilesDir}");
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"[WorkflowAgentParser] не удалось зарегистрировать корни провайдеров: {ex.Message}");
+    Console.Error.WriteLine($"[TranscriptRoots] не удалось зарегистрировать корни провайдеров: {ex.Message}");
 }
 
 // Доводка после восстановления из бэкапа: сбросить карты документов баз знаний, чтобы

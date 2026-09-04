@@ -867,6 +867,13 @@ public class SubsystemBoundaryTests
                     // Spend — ISpendCollector пишут все четыре ход-раннера (cloud-cheap,
                     // Ollama/LlamaServer и OneShot-Claude). Префикс не открываем.
                     "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                    // TranscriptRoots — реестр корней транскриптов (волна 4C, шаг 4).
+                    // Вынесен из WorkflowAgentParser в спину `Services.TranscriptRoots`,
+                    // чтобы устранить цикл Llm ⇄ Execution. Llm держит шов
+                    // `WorkflowWatcher`/`SubagentStreamWatcher`/`TranscriptProbe`/`ClaudeSession`
+                    // через вызовы `TranscriptRoots.IsPathAllowed/DefaultRoot/ProfilesRoot/
+                    // AllowedRoots` (поля и параметры public-методов — рефлексия видит).
+                    "ClaudeHomeServer.Services.TranscriptRoots",
                 }),
         },
         // Docs — индекс документации (ADR) + ИИ-помощь по документам (волна 4A, шаг 2).
@@ -968,28 +975,20 @@ public class SubsystemBoundaryTests
         // IProcessLauncher/IPathMapper/ILauncherFactory). Точечный: UserStore
         // (LauncherFactory знает владельца процесса).
         //
-        // ⚠ Известный временный цикл `Llm ⇄ Execution`. Обратное ребро
-        // `Llm → Execution` уже разрешено префиксом `ClaudeHomeServer.Services.Execution`
-        // в allow-list Llm (OneShotClaudeRunner/ClaudeSession держат
-        // `IProcessLauncher`/`ILauncherFactory` как поле). Прямое ребро
-        // `Execution → Llm` появилось после переезда `WorkflowAgentParser` в
-        // `Services.Llm` (волна 4B, шаг 2):
-        //   * `DockerProcessRunner.cs:182` — `WorkflowAgentParser.AddAllowedRoot(...)`
-        //     в теле метода `EnsureProfile` (статический вызов, рефлексией не
-        //     контролируется);
-        //   * `LocalProcessRunner.cs:13` — `Llm.Claude.ClaudeCliLocator.FindClaudeExecutable()`
-        //     в инициализаторе свойства `ClaudeCliCommand` (статический вызов,
-        //     тип свойства `string`, рефлексия не видит). Это **дореформенный**
-        //     экземпляр — существовал ещё до волны 4, но не был зафиксирован
-        //     в allow-list, потому что `ClaudeCliLocator` жил тогда в корне
-        //     `Services/` (ссылка на спину, законно).
-        // Цикл НЕ режется в этой задаче — разрез (куда на самом деле
-        // принадлежит `WorkflowAgentParser`/`ClaudeCliLocator`) заведен
-        // отдельной задачей разбора архитектора. Здесь только фиксация швов:
-        // без явного объявления при расширении сторожа до IL оба ребра
-        // выглядели бы как нарушения. Префикс `Services.Llm` НЕ открываем —
-        // точечный допуск ровно на два типа, чтобы не превращать цикл
-        // в «Llm открыт Execution, Execution открыт Llm» целиком.
+        // Волна 4C, шаг 4 — цикл `Llm ⇄ Execution` разрезан:
+        //   * `ClaudeCliLocator` (поиск исполняемого файла claude CLI) уехал
+        //     в `Services.Execution` — задача слоя Execution, не Llm;
+        //   * реестр корней транскриптов уехал в спину `Services.TranscriptRoots`
+        //     (три источника из разных слоёв: константа `~/.claude/projects`,
+        //     `LlmProviderRegistry.ProfilesDir` через Program.cs,
+        //     `DockerProcessRunner.EnsureProfile` через `TranscriptRoots.AddAllowedRoot`).
+        // Префикс `Services.Llm` больше не открываем — прямых рёбер нет.
+        // Точечный допуск к `TranscriptRoots` оставлен для будущего IL-скана:
+        // статический вызов `TranscriptRoots.AddAllowedRoot(...)` в теле
+        // `DockerProcessRunner.EnsureProfile` рефлексия сейчас не видит
+        // (см. «Известное ограничение»), но без явного объявления при
+        // расширении сторожа до IL это выглядело бы как нарушение, а не как
+        // ожидаемая зависимость от «спинки» рядом с `SafeJoin`/`SsrfGuard`.
         new object[]
         {
             new VerticalBoundary(
@@ -1001,11 +1000,9 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.UserStore",
-                    // Шов Llm ⇄ Execution (см. комментарий выше):
-                    // ребра `Execution → Llm`, статические вызовы из тел
-                    // методов, рефлексией не ловятся.
-                    "ClaudeHomeServer.Services.Llm.WorkflowAgentParser",
-                    "ClaudeHomeServer.Services.Llm.Claude.ClaudeCliLocator",
+                    // Шов Execution → TranscriptRoots (см. комментарий выше):
+                    // статический вызов из тела метода, рефлексией не ловится.
+                    "ClaudeHomeServer.Services.TranscriptRoots",
                 }),
         },
         // Auth — узкая вертикаль авторизации (AdminByStoreRequirement +

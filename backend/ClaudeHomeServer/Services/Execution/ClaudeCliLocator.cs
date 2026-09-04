@@ -1,10 +1,14 @@
 using System.Diagnostics;
 
-namespace ClaudeHomeServer.Services.Llm.Claude;
+namespace ClaudeHomeServer.Services.Execution;
 
 // Поиск исполняемого файла claude CLI. На Windows ищем claude.exe напрямую —
 // cmd.exe /c не проксирует stdin корректно. Используется ClaudeSession,
 // ModelCatalogService (опрос списка моделей) и TaskAiService.
+//
+// Переехал из `Services.Llm.Claude` (волна 4C, шаг 4): запуск CLI — это задача
+// слоя Execution, а не Llm. До переезда `LocalProcessRunner.ClaudeCliCommand`
+// держал ребро `Execution → Llm` (статический вызов, рефлексией не ловился).
 public static class ClaudeCliLocator
 {
     public static string FindClaudeExecutable()

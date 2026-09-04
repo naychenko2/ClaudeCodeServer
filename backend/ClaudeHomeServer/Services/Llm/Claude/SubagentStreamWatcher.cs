@@ -107,10 +107,10 @@ internal sealed class SubagentStreamWatcher : IDisposable
             ProjectId: null);
         _cliContextWindow = cliContextWindow;
         _preferredConfigRoot = string.IsNullOrWhiteSpace(preferredConfigRoot) ? null : preferredConfigRoot;
-        // Снимок на момент создания ватчера: статик WorkflowAgentParser.ProfilesRoot —
+        // Снимок на момент создания ватчера: статик TranscriptRoots.ProfilesRoot —
         // глобальный, и в тестах его перезаписывает Program.cs параллельных
         // WebApplicationFactory-хостов; живой ватчер не должен менять корень посреди работы
-        _profilesRoot = profilesRoot ?? WorkflowAgentParser.ProfilesRoot;
+        _profilesRoot = profilesRoot ?? TranscriptRoots.ProfilesRoot;
     }
 
     public void Start()
@@ -403,7 +403,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
         // 0 паспортов). Общий перебор остаётся фолбэком.
         var ownRoot = _preferredConfigRoot is { } preferred
             ? Path.Combine(preferred, "projects")
-            : WorkflowAgentParser.DefaultRoot;
+            : TranscriptRoots.DefaultRoot;
         if (Directory.Exists(ownRoot) && FindSubagentsDir(ownRoot, flat) is { } own) return own;
 
         // Профили подписок (sub-*) и созданные после старта сервера не входят в AllowedRoots
@@ -418,7 +418,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
                 if (found is not null) return found;
             }
 
-        foreach (var root in WorkflowAgentParser.AllowedRoots)
+        foreach (var root in TranscriptRoots.AllowedRoots)
         {
             // Свой корень уже просмотрен выше (DefaultRoot при неизвестном профиле)
             if (!Directory.Exists(root) || string.Equals(root, ownRoot, StringComparison.OrdinalIgnoreCase)) continue;

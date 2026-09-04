@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Controllers;
@@ -55,7 +56,7 @@ public class WorkflowController : ControllerBase
         {
             return (null, BadRequest(new { error = "Недопустимый transcriptDir" }));
         }
-        if (!WorkflowAgentParser.IsPathAllowed(fullPath))
+        if (!TranscriptRoots.IsPathAllowed(fullPath))
             return (null, Forbid());
 
         if (Directory.Exists(fullPath) && Directory.GetFiles(fullPath, "agent-*.jsonl").Length > 0)

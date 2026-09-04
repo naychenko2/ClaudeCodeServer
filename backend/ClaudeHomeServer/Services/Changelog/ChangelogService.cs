@@ -4,7 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using Microsoft.Extensions.Logging;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Changelog;
 
 /// <summary>
 /// Продуктовая история: сводит git-коммиты СО ВСЕХ проектов в человеческую

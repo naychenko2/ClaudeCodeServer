@@ -1,7 +1,6 @@
-using System.Text;
 using System.Text.Json;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Docs;
 
 // ИИ-помощь по документам: конвертирует бинарный документ в Markdown (MarkitdownService),
 // затем локальной моделью (ICheapTextRunner, с фолбэком на claude) строит краткое содержание,

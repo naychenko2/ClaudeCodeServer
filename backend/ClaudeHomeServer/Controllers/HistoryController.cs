@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Changelog;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 

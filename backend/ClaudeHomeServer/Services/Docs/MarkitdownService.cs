@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Docs;
 
 // Конвертация бинарных документов (pdf/docx/xlsx/pptx и др.) в Markdown внешней утилитой
 // markitdown (pip-пакет, ставится на хост). Детерминированно, без модели. Запуск на ХОСТЕ

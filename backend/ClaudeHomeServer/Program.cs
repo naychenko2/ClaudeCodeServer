@@ -5,6 +5,7 @@ using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
+using ClaudeHomeServer.Services.Changelog;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
@@ -231,9 +232,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>()
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();
-// Документы: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
-builder.Services.AddSingleton<MarkitdownService>();
-builder.Services.AddSingleton<DocumentAiService>();
+// Документы AI: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MarkitdownService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocumentAiService>();
 // Подсистема Git (волна 1.5): GitService/GitServerService/GitAutoCommitService/GitAiService
 // и CommitAttributionService (ниже) — теперь регистрируются в `Services/Git/GitSubsystem.cs`.
 builder.Services.AddSingleton<NotesService>();
@@ -257,7 +258,6 @@ builder.Services.AddSingleton<UnifiedSearchService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
 builder.Services.AddSingleton<PersonaAskService>();
-builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();
 builder.Services.AddSingleton<SkillsCliService>();
@@ -433,8 +433,7 @@ builder.Services.AddSingleton<ChatArchiveService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ChatArchiveService>());
 builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configuration);
 builder.Services.AddGatedHostedService<NoteExpiryService>(builder.Configuration);
-// Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
-builder.Services.AddGatedHostedService<ChangelogWarmupService>(builder.Configuration);
+// Фоновый прогрев сводок «Что нового» — в `Services.Changelog.ChangelogSubsystem`.
 // Терминал (PTY) — единственная регистрация в корне Services, под гейтом workspace-destructive.
 // Подсистема не заведена сознательно: единственная регистрация и два резолва при
 // shutdownTerminals (см. блок var app = builder.Build() ниже) — прецедент вертикали
@@ -498,7 +497,10 @@ builder.Services.AddSubsystems(builder.Configuration,
     // ProjectServices — раздел «Сервисы проекта» (Preview/DevServer). Регистрация ниже
     // всех: вертикаль листовая, ни от кого не зависит; наоборот, на неё ссылаются
     // PreviewController и SessionHub (через Program.cs).
-    new ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem());
+    new ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem(),
+    // Changelog — «Что нового»: листовая подсистема, ни от кого не зависит, читает
+    // git-вывод и `data/changelog/product.json` через `FileService`.
+    new ClaudeHomeServer.Services.Changelog.ChangelogSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

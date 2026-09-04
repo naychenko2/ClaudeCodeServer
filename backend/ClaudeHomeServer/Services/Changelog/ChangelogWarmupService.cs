@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Changelog;
 
 /// <summary>
 /// Фоновый прогрев сводок «Что нового»: заранее дергает ChangelogService.GetDay

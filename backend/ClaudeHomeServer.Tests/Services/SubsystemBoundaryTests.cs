@@ -777,15 +777,24 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Spend.ISpendCollector",
                 }),
         },
-        // Docs — индекс документации (ADR). Единственная внешняя зависимость —
-        // FileService (Services/ корень, точечный допуск).
+        // Docs — индекс документации (ADR) + ИИ-помощь по документам (волна 4A, шаг 2).
+        // Внешние зависимости:
+        // 1) Префикс-шов `Services.Llm` — `ICheapTextRunner` для ИИ-помощи (summary/extract/tags/
+        //    enhance) и `LocalActionCatalog.DocFormat/Summary/Extract/Tags`. Тот же шов,
+        //    что у `Backgrounds`/`Git`/`Deploy`/`Changelog`.
+        // 2) Точечный допуск к корню Services — `FileService`: DocsIndexService читает каталог
+        //    `docs/` и кеширует индекс, DocumentAiService читает файлы по хосту через FilesController.
         new object[]
         {
             new VerticalBoundary(
                 "Docs",
                 "ClaudeHomeServer.Services.Docs",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Docs" })
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Docs",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
                     .ToArray(),
                 new[]
                 {
@@ -1043,6 +1052,29 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.JwtService",
                     "ClaudeHomeServer.Services.OutputRingBuffer",
+                }),
+        },
+        // Changelog — «Что нового» (волна 4A, шаг 2): продуктовая история по коммитам всех
+        // проектов + фоновый прогрев кеша. Внешние зависимости:
+        // 1) Префикс-шов `Services.Llm` — `ICheapTextRunner` для дневной сводки (тот же шов,
+        //    что у `Backgrounds`/`Git`/`Deploy`/`Docs`).
+        // 2) Точечный допуск к корню Services — `FileService`: чтение git-вывода и
+        //    `data/changelog/product.json` (ChangelogService).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Changelog",
+                "ClaudeHomeServer.Services.Changelog",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Changelog",
+                        "ClaudeHomeServer.Services.Llm",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.FileService",
                 }),
         },
         // Terminal — вертикаль PTY-терминала (волна 4A, листовая: регистрация одна,

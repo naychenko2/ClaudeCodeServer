@@ -153,7 +153,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFacto
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.UserModelTierResolver>();
+// UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
+// (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
@@ -218,7 +219,7 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
 // Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
-builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Llm.GlmModelAliasMigration>(builder.Configuration);
+// — DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
@@ -242,65 +243,18 @@ builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
 // Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
-// AI-хаб: локальная LLM (Ollama или llama-server, выбор по LocalLlm:Provider) для
-// бесплатного ранжирования действий мимо claude CLI. Обе реализации регистрируются
-// как конкретные синглтоны (тестам и прямому прогреву они нужны под своим типом), а
-// ILocalLlmClient — тот, кого держат потребители (CheapTextRunner, LocalActionRouter,
-// SessionManager и т.д.). Тихие HTTP-логгеры на оба имени: каждая реализация пишет в
-// свою категорию, и одна мёртвая зависимость не глушит жалобы другой.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlamaServerClient>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILocalLlmClient>(sp =>
-{
-    var options = ClaudeHomeServer.Services.Llm.LocalLlmOptions.Read(sp.GetRequiredService<IConfiguration>());
-    return options.Provider == ClaudeHomeServer.Services.Llm.LocalLlmOptions.LlamaServer
-        ? sp.GetRequiredService<ClaudeHomeServer.Services.Llm.LlamaServerClient>()
-        : sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>();
-});
-// Локальная модель опциональна: погашенная локаль — штатная ситуация, а не авария
-// (каждая реализация ловит её сама и уходит в фолбэк). Тихий логгер вместо дефолтного,
-// иначе каждый вызов даёт Error со стектрейсом на весь экран.
-builder.Services.AddQuietHttpClient(
-    ClaudeHomeServer.Services.Llm.OllamaClient.HttpClientName,
-    new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
-        Category: "ClaudeHomeServer.Llm.Ollama",
-        Subject: "локальной моделью Ollama",
-        Consequence: "Фоновые действия уйдут облачной модели."));
-builder.Services.AddQuietHttpClient(
-    ClaudeHomeServer.Services.Llm.LlamaServerClient.HttpClientName,
-    new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
-        Category: "ClaudeHomeServer.Llm.LlamaServer",
-        Subject: "локальной моделью llama-server",
-        Consequence: "Фоновые действия уйдут облачной модели."));
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
-// Прямой HTTP-адаптер бесплатных моделей OpenRouter для фоновых one-shot задач
-// (второй транспорт рядом с провайдером через claude CLI; модели — курируемый список
-// OpenRouter:DirectModels)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.CloudCheapClient>();
-// Интерфейс one-shot раннера → тот же singleton (мокируется в тестах)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());
-// Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый» текстовый раннер с фолбэком.
-// Стор оверрайдов — админские тумблеры маршрута из UI, слой поверх конфига Ollama:Actions.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionOverridesStore>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionRouter>();
-// Резолвер моделей агентных мест (новый чат, чат персоны, исполнитель задач…):
-// явная модель → назначение админа → слот тира (сильная/средняя/слабая)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ModelAssignmentResolver>();
-// Стор настроек фолбэк-оркестрации модели (ADR §4): глобальный потолок подмен плюс
-// per-owner override, значение клампится в 1..HardMaxSubstitutions, дефолт 3.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FallbackSettingsStore>();
-// Пресеты автоподбора исполнителя фоновых действий (рекомендованное/бесплатные/локальные)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
-    ClaudeHomeServer.Services.Llm.CheapTextRunner>();
+// Модельный слой (OneShotClaudeRunner / OllamaClient / LlamaServerClient / CloudCheapClient /
+// LocalActionRouter / ModelAssignmentResolver / CheapTextRunner / LocalActionOverridesStore /
+// LocalActionPresetService / FallbackSettingsStore / OllamaActionRankService и тихие HTTP-клиенты
+// Ollama/LlamaServer) — DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
 // Фон рабочего пространства проекта (ADR-008) и значок проекта (ADR-009) переехали
 // в подсистемы `BackgroundsSubsystem` / `ProjectIconsSubsystem` (волна 2 внутренних
 // подсистем): регистрации подключаются через `AddSubsystems(...)` ниже. Здесь остаются
 // только общие клиенты и конфигурация, нужные вне подсистем (HTTP-клиенты fal/glif —
 // общие с биллинг-сервисами, см. шапку `ImagesSubsystem`).
-// Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
+// Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти.
+// Живёт в `Services.Memory`, не в `Services.Llm` — отдельная вертикаль Memory,
+// регистрация оставлена здесь сознательно.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
 builder.Services.AddSingleton<PersonaAskService>();
@@ -324,35 +278,12 @@ builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
 builder.Services.AddSingleton<UsageService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
-// Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory наблюдение, без персиста и бэкапа
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderHealthRegistry>();
-// Наблюдаемая ёмкость окна модели (ContextOverflow): модель, не принявшая контекст, не получает
-// следующие ходы с контекстом ≥ N. In-memory наблюдение, без персиста и бэкапа — singleton на процесс
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ContextCapacityRegistry>();
-// Интерфейс указывает на тот же singleton — нужен контроллеру и подмене в тестах ролей
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IProviderBalanceService>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.ProviderBalanceService>());
-// Атрибуция file_changed чату-источнику при параллельных ходах одного проекта (см. FileChangeAttributor)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FileChangeAttributor>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory,
-    ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
+// Модельный слой (LlmProviderRegistry / ProviderBalanceService / ProviderHealthRegistry /
+// ContextCapacityRegistry / IProviderBalanceService / FileChangeAttributor /
+// ILlmSessionAdapterFactory / SubagentRunLog / TurnRunLog / EgressProbe) —
+// DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
 // Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
-// Паспорта прогонов сабагентов: отчёт или обрыв на середине, цена прогона. В памяти —
-// последние 200 (их отдаёт API), на диске — data/logs/subagent-runs-*.jsonl: рестарт инстанса
-// иначе уносит с собой всю серию прогонов, по которой и ведётся разбор обрывов
-builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog.Create(
-    sp.GetRequiredService<IConfiguration>()));
-// Паспорта ходов: чем кончился каждый ход и какой ценой. Тот же приём, что у сабагентов —
-// память для API, диск для разбора «что ломалось за сутки» после рестарта инстанса
-builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.TurnRunLog.Create(
-    sp.GetRequiredService<IConfiguration>()));
-// Жив ли исходящий прокси (HTTP(S)_PROXY): отличает отказ канала наружу от отказа
-// эндпоинта вендора — при первом смена модели не лечит ничего
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IEgressProbe>(sp =>
-    new ClaudeHomeServer.Services.Llm.EgressProbe(sp.GetRequiredService<IConfiguration>()));
 // Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();
@@ -449,12 +380,9 @@ builder.Services.AddSingleton<TeamWaveService>();
 // в стадии «волна N» навсегда
 builder.Services.AddGatedHostedService<TeamWaveWatchdog>(builder.Configuration);
 builder.Services.AddSingleton<SessionSummaryService>();
-// Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов»): one-shot сборка
-// по кнопке с кэшем в Session.ArchiveSummary; «Итог сессии» выше — другой маршрут
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ChatDigestService>();
-// Карта плана (место plan-map, «Визуальный разворот плана» часть B): one-shot слепок плана
-// по кнопке «Собрать схему», кэш data/plan-maps.json
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.PlanMapService>();
+// Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов») и
+// карта плана (место plan-map, «Визуальный разворот плана» часть B) —
+// DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
@@ -553,10 +481,16 @@ builder.Services.AddSubsystems(builder.Configuration,
     // учитывает; порядок здесь — очередь старта IHostedService и читаемость
     // (нижние слои раньше).
     new ClaudeHomeServer.Services.Dossiers.DossiersSubsystem(),
-    // Memory — после Dossiers: фасады памяти персон/команды опираются на
-    // общий слой `Services.Memory` (MemoryWriteResolver/MemoryDify), который сам
-    // независим; но порядок «после Dossiers» держит логически: оба раздела пишут
-    // в Dify-датасеты и идут в одной волне вертикалей памяти/знаний.
+    // Llm — после Dossiers: нижний слой, от которого зависят Memory (ICheapTextRunner
+    // для консолидации/autolearn), Spend (LlmProviderRegistry для прайса),
+    // Backgrounds/ProjectIcons (ICheapTextRunner для подбора фона/значка).
+    // Шаг 0 волны 4: адрес переездов Workflow / Subscription / Specialty на
+    // следующих шагах — здесь живут LlmProviderRegistry/ModelAssignmentResolver/
+    // UserModelTierResolver/OneShotClaudeRunner/CheapTextRunner и т.д.
+    new ClaudeHomeServer.Services.Llm.LlmSubsystem(),
+    // Memory — после Llm: фасады памяти персон/команды используют ICheapTextRunner
+    // (консолидация LLM-merge и autolearn). Общий слой `Services.Memory`
+    // (MemoryWriteResolver/MemoryDify) при этом независим.
     new ClaudeHomeServer.Services.Memory.MemorySubsystem(),
     // Knowledge — после Dossiers: вертикаль Dify RAG (Knowledge.md + ADR-013).
     // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, ...}` остаются в

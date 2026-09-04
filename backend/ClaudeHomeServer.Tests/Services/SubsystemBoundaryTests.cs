@@ -711,6 +711,321 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.StoredTextMessage",
                 }),
         },
+        // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
+        // каждый со своим allow-list строго по фактическим ссылкам (прогон probe — см.
+        // отчёт шага 0). Префиксы-швы используются ТОЛЬКО там, где Llm/Turn реально
+        // держит связь с целым поддеревом (Execution — запуск процессов, Turn — шина
+        // событий хода); точечные типы — везде, где связь идёт через 1–2 типа из
+        // чужой вертикали. Не раздувать список без ссылки: ровно то, что нашёл probe.
+        //
+        // Llm — пилот волны 4 (305 типов, основной объём). Шовные префиксы:
+        //   * Execution — IProcessLauncher/ILauncherFactory для OneShotClaudeRunner
+        //     и ClaudeSession (запуск cli-процесса);
+        //   * Turn — ITurnEventBus/TurnContext/PromptSection/PromptAssembling/
+        //     PromptSessionContext для ClaudeSession (consume событий и секций
+        //     промпта из шины Turn).
+        // Точечные допуски: протокольные WS-типы (поля async-state-машин
+        // FallbackLlmSessionAdapter и ClaudeSession), точечные root-типы из
+        // `Services` (ModelTier/AppSettingsService/ChatHistoryService/...),
+        // WorkspaceKnowledgeStore (ClaudeSession материализует в async-state)
+        // и ISpendCollector (метрики трат).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Llm",
+                "ClaudeHomeServer.Services.Llm",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Services.Execution",
+                        "ClaudeHomeServer.Services.Turn",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    // Protocol — поля async-state-машин (FallbackLlmSessionAdapter,
+                    // ClaudeSession, LlamaServerClient.ReadChatStreamAsync,
+                    // OllamaClient.ReadChatStreamAsync, LlmProviderRegistry,
+                    // LlmSessionContext, TurnFileWatcher, ChatDigestService,
+                    // ClaudeRateLimitParser, TurnPromptAssembler, SubagentStreamWatcher).
+                    "ClaudeHomeServer.Protocol.StoredMessage",
+                    "ClaudeHomeServer.Protocol.UsageInfo",
+                    "ClaudeHomeServer.Protocol.ServerMessage",
+                    "ClaudeHomeServer.Protocol.RateLimitMessage",
+                    "ClaudeHomeServer.Protocol.ErrorMessage",
+                    "ClaudeHomeServer.Protocol.ResultMessage",
+                    "ClaudeHomeServer.Protocol.McpServerInfo",
+                    "ClaudeHomeServer.Protocol.TurnWorktreeInfo",
+                    "ClaudeHomeServer.Protocol.PromptSectionDto",
+                    "ClaudeHomeServer.Protocol.CliSkillDto",
+                    "ClaudeHomeServer.Protocol.RecallItemDto",
+                    // Root Services — точные (общая инфраструктура: реестры, сторы,
+                    // рантайм-состояния, доменные модели). Префикс `ClaudeHomeServer.Services`
+                    // для них НЕ открываем (default-deny), только FullName.
+                    "ClaudeHomeServer.Services.ModelTier",
+                    "ClaudeHomeServer.Services.ModelTier[]",
+                    "ClaudeHomeServer.Services.ModelRoutePreset",
+                    "ClaudeHomeServer.Services.PresetScope",
+                    "ClaudeHomeServer.Services.SkillInfo",
+                    "ClaudeHomeServer.Services.SystemPromptPart",
+                    "ClaudeHomeServer.Services.AppSettingsService",
+                    "ClaudeHomeServer.Services.ChatHistoryService",
+                    "ClaudeHomeServer.Services.ClaudeSubscriptionPool",
+                    "ClaudeHomeServer.Services.NotesService",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.SkillsService",
+                    "ClaudeHomeServer.Services.SpecialtySettingsStore",
+                    "ClaudeHomeServer.Services.SubscriptionActivityTracker",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.WorkflowWatcher",
+                    "ClaudeHomeServer.Services.ModelCatalogService",
+                    "ClaudeHomeServer.Services.ModelCatalogService+ModelInfo",
+                    // Knowledge — WorkspaceKnowledgeStore (CLI-сессия и фабрика
+                    // адаптеров материализуют тип в async-state). Префикс не открываем:
+                    // Knowledge — отдельная вертикаль, точечный допуск ровно на нужный тип.
+                    "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
+                    // Spend — ISpendCollector пишут все четыре ход-раннера (cloud-cheap,
+                    // Ollama/LlamaServer и OneShot-Claude). Префикс не открываем.
+                    "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                }),
+        },
+        // Docs — индекс документации (ADR). Единственная внешняя зависимость —
+        // FileService (Services/ корень, точечный допуск).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Docs",
+                "ClaudeHomeServer.Services.Docs",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Docs" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.FileService",
+                }),
+        },
+        // Turn — шина событий хода + контрибьюторы секций системного промпта.
+        // Префикс-шов: Services.CodeGraph (CodeGraphContributor читает
+        // CodeGraphPromptProvider). Точечные: root Services, Dossiers
+        // (PersonaRecallContributor тянет DossierRecallService/Request),
+        // Services.Llm (RecallItem в полях контрибьюторов, TurnRunPassport
+        // в TurnCompleted, SubagentRunPassport в SubagentRunCompleted),
+        // Protocol (StoredMessage/McpServerInfo/PromptSnapshotDraft в полях).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Turn",
+                "ClaudeHomeServer.Services.Turn",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Turn",
+                        "ClaudeHomeServer.Services.CodeGraph",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Protocol.StoredMessage",
+                    "ClaudeHomeServer.Protocol.McpServerInfo",
+                    "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
+                    "ClaudeHomeServer.Services.PersonaBindingsService",
+                    "ClaudeHomeServer.Services.NotesKnowledgeService",
+                    "ClaudeHomeServer.Services.NoteSemanticHit",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.PersonaPromptBuilder",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.SkillsService",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.SkillInfo",
+                    "ClaudeHomeServer.Services.ChatHistoryService",
+                    "ClaudeHomeServer.Services.FeatureFlagService",
+                    "ClaudeHomeServer.Services.PersonaMemoryService",
+                    "ClaudeHomeServer.Services.PersonaMemoryHit",
+                    "ClaudeHomeServer.Services.PersonaMemoryService+PersonaRecallResult",
+                    "ClaudeHomeServer.Services.SpecialtySettingsStore",
+                    "ClaudeHomeServer.Services.SpecialtySettingsStore+EffectivePromptSection",
+                    "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
+                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
+                    "ClaudeHomeServer.Services.Llm.RecallItem",
+                    "ClaudeHomeServer.Services.Llm.TurnRunPassport",
+                    "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                }),
+        },
+        // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).
+        // Точечные: ModelTier (PantheonTemplate), Llm.Claude.SubagentRunPassport
+        // (SubagentPrompts формирует заголовок сабагента из паспорта).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Prompts",
+                "ClaudeHomeServer.Services.Prompts",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Prompts" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ModelTier",
+                    "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                }),
+        },
+        // Execution — запуск процессов и песочница (LauncherFactory/SandboxManager/
+        // IProcessLauncher/IPathMapper/ILauncherFactory). Точечный: UserStore
+        // (LauncherFactory знает владельца процесса).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Execution",
+                "ClaudeHomeServer.Services.Execution",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Execution" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.UserStore",
+                }),
+        },
+        // Auth — узкая вертикаль авторизации (AdminByStoreRequirement +
+        // AdminByStoreHandler, 1 файл). Зависимость только от UserStore.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Auth",
+                "ClaudeHomeServer.Services.Auth",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Auth" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.UserStore",
+                }),
+        },
+        // Backup — инфраструктура снимков data/. Точечный допуск к ProjectManager
+        // (BackupService знает владельца каталога). По прецеденту Deploy→Backup:
+        // внутри вертикали есть статика `Backup.InstanceLock.TryAcquireDeploy`,
+        // которую внешние потребители (DeployHost) зовут через статику — но
+        // внешние сервисы на наш Backup НЕ ссылаются, поэтому allow-list остаётся
+        // узким.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Backup",
+                "ClaudeHomeServer.Services.Backup",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Backup" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                }),
+        },
+        // Desktop — ручной агент песочницы (ADR-008). Префикс-шов Hubs (DeviceHub),
+        // точечные — Protocol (DesktopCall*/DeviceHello*/DesktopCancel/DesktopGo),
+        // плюс root Services (JwtService/FeatureFlagService/PersonaManager/
+        // ProjectManager/SessionManager/UserStore) для capability-токенов и каталога
+        // чатов/устройств/сессий.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Desktop",
+                "ClaudeHomeServer.Services.Desktop",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Desktop",
+                        "ClaudeHomeServer.Hubs",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Protocol.DesktopCallResult",
+                    "ClaudeHomeServer.Protocol.DesktopCallCommand",
+                    "ClaudeHomeServer.Protocol.DeviceHello",
+                    "ClaudeHomeServer.Protocol.DeviceHelloAck",
+                    "ClaudeHomeServer.Protocol.DesktopCancelCommand",
+                    "ClaudeHomeServer.Protocol.DesktopGoCommand",
+                    "ClaudeHomeServer.Services.JwtService",
+                    "ClaudeHomeServer.Services.FeatureFlagService",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                }),
+        },
+        // Diagnostics — файловый лог инстанса (FileLog, 1 файл). Полностью изолирован.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Diagnostics",
+                "ClaudeHomeServer.Services.Diagnostics",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Diagnostics" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // Modules — YARP-реверс-прокси для внешних модулей. Префикс-шов
+        // Yarp.ReverseProxy.Configuration (third-party, по прецеденту AngleSharp
+        // у Reader — открываем префиксом). Точечные: FeatureFlagService/JwtService
+        // (ModuleGatewayMiddleware знает владельца), Services.Llm.LocalAction
+        // (ModuleRegistry регистрирует LLM-действия модулей, тип едет в поле).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Modules",
+                "ClaudeHomeServer.Services.Modules",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Modules",
+                        "Yarp.ReverseProxy.Configuration",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.FeatureFlagService",
+                    "ClaudeHomeServer.Services.JwtService",
+                    "ClaudeHomeServer.Services.Llm.LocalAction",
+                }),
+        },
+        // Personas — черновик персоны по промпту (PersonaDraftService, 1 файл).
+        // Полностью изолирован: Stateless-сервис по тексту промпта.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Personas",
+                "ClaudeHomeServer.Services.Personas",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Personas" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // TriggerSources — источники событий проактивности персон (timer/file/note/
+        // git/task). Точечные root-сервисы: AppSettingsService/ProjectManager/
+        // UserHomeResolver (AutomationRootResolver знает владельца), FileService
+        // (GitCommitTriggerSource слушает файлы), PersonaManager (MentionTriggerSource),
+        // NotesService (NoteTriggerSource), TaskManager (TaskStatusTriggerSource),
+        // RuleRuntimeState (TriggerContext несёт состояние правила).
+        new object[]
+        {
+            new VerticalBoundary(
+                "TriggerSources",
+                "ClaudeHomeServer.Services.TriggerSources",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.TriggerSources" })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.AppSettingsService",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.UserHomeResolver",
+                    "ClaudeHomeServer.Services.FileService",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.NotesService",
+                    "ClaudeHomeServer.Services.TaskManager",
+                    "ClaudeHomeServer.Services.RuleRuntimeState",
+                }),
+        },
     };
 
     [Theory]

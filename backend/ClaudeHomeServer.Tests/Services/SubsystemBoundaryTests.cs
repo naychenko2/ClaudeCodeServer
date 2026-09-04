@@ -1266,11 +1266,9 @@ public class SubsystemBoundaryTests
         //    (TaskManager.cs:~LogTask, опциональный параметр ctor).
         // 3) `UserStore` — перебор пользователей в `TaskSchedulerService.TickAsync` и
         //    `DailyBriefingService.GenerateAsync`/`GitActivityAsync`.
-        // 4) `UserHomeResolver` — путь владельца для git-активности по проектам
-        //    (DailyBriefingService.RunGitLogAsync).
-        // 5) `NotificationService` — `SendNotificationMessageAsync` в TaskSchedulerService
+        // 4) `NotificationService` — `SendNotificationMessageAsync` в TaskSchedulerService
         //    и DailyBriefingService.NotifyAsync (напоминания + «доброе утро»).
-        // 6) `AppSettingsService` — гейт `DailyBriefingEnabled` (DailyBriefingService.MaybeRunScheduledAsync).
+        // 5) `AppSettingsService` — гейт `DailyBriefingEnabled` (DailyBriefingService.MaybeRunScheduledAsync).
         // 7) `ProjectEventLogService` — запись событий задач в проектный лог
         //    (`TaskManager.LogTask`) + чтение событий за сутки (`DailyBriefingService`).
         // 8) `PersonaManager` — `BoardService` берёт персоны для подписи колонки;
@@ -1295,14 +1293,27 @@ public class SubsystemBoundaryTests
         //   чтобы расширение сторожа до IL не ловило это как нарушение.
         // - `Services.TaskExecutionService` (корень, остаётся в корне до этапа 4)
         //   зовёт `Services.Tasks.TaskSchedulerService.TaskUrl(...)` статически
-        //   из 6 мест тел методов (строки 292, 744, 970, 998, 1045, 1315) —
+        //   из 6 мест тел методов (строки 294, 746, 972, 1000, 1047, 1317) —
         //   Tasks-тип цитируется из корневого типа, рефлексия не видит.
         //   Когда `TaskExecutionService` переедет, запись `Services.TaskExecutionService`
         //   исчезнет из корня и шов сам разорвётся.
         // - `Services.PersonaAutomationService` (корень, остаётся в корне до этапа 4)
         //   зовёт `Services.Tasks.TaskDueCalculator.ResolveTimeZone(...)` в теле
-        //   метода (`PersonaAutomationService.cs:530`). Аналогичный шов
+        //   метода (`PersonaAutomationService.cs:531`). Аналогичный шов
         //   root → Tasks-тип через статику; разорвётся при переезде Persona.
+        // - `Services.Tasks.TaskManager` зовёт `Services.ModelTiers.TryParse(...)` в
+        //   теле метода (`TaskManager.cs:112,250`) — root-тип `ModelTiers`
+        //   (AppSettingsService.cs:15). Шов Tasks → корень через статику.
+        // - `Services.Tasks.TaskManager` зовёт `Services.ExecutorStopClassifier.IsTerminal(...)`
+        //   в теле метода (`TaskManager.cs:429`) — root-тип `ExecutorStopClassifier`
+        //   (ExecutorStopClassifier.cs:16). Шов Tasks → корень через статику.
+        // - `Services.Tasks.TaskSchedulerService` зовёт
+        //   `Controllers.TaskHubExtensions.BroadcastTaskChangedAsync(...)` в теле
+        //   метода (`TaskSchedulerService.cs:128`) — это extension-метод,
+        //   объявленный в `Controllers/TasksController.cs:486` (`public static class
+        //   TaskHubExtensions`). ⚠ ИНВЕРСИЯ СЛОЁВ: сервис Tasks вызывает код,
+        //   объявленный в `ClaudeHomeServer.Controllers.*`. Оставить как шов;
+        //   разбор вынести в отдельную задачу этапа 4.
         new object[]
         {
             new VerticalBoundary(
@@ -1322,7 +1333,6 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.UserHomeResolver",
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
@@ -1354,6 +1364,16 @@ public class SubsystemBoundaryTests
                     // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage`
                     // в публичной сигнатуре `TaskSchedulerService.SendNotificationAsync`.
                     "ClaudeHomeServer.Protocol.NotificationMessage",
+                    // ⚠ Шов `Tasks → Models`-слой через `ModelTiers`/`ExecutorStopClassifier`
+                    // (root-статика, см. комментарий выше). Пока объявляем как точечные
+                    // имена; возможный путь — отдельный мини-шейп вроде `ITaskModelTierPolicy`.
+                    "ClaudeHomeServer.Services.ModelTiers",
+                    "ClaudeHomeServer.Services.ExecutorStopClassifier",
+                    // ⚠ ИНВЕРСИЯ СЛОЁВ `Tasks → Controllers` через extension-метод
+                    // `TaskHubExtensions.BroadcastTaskChangedAsync` (см. комментарий выше;
+                    // TaskSchedulerService.cs:128). Прямой шов Tasks-вертикали на
+                    // Controllers-пространство имён. Разбор и разворот — этап 4.
+                    "ClaudeHomeServer.Controllers.TaskHubExtensions",
                 }),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
@@ -1387,6 +1407,15 @@ public class SubsystemBoundaryTests
         //    `NoteTaskSyncService.BroadcastNoteChangedAsync` (материал-аргумент `SendAsync`,
         //    поле state-машины). Префикс `ClaudeHomeServer.Protocol` снят (волна 3),
         //    оставлен точный тип по образцу швов у `Spend`/`Memory`/`Dossiers`/`Watchdog`/`Terminal`.
+        // 8) `FileService` (Services/ корень) — `NotesService` зовёт
+        //    `FileService.SafeJoinPublic(...)` из 12 мест тел методов
+        //    (NotesService.cs:128,133,498,653,660,724,767,780,814,815,874,889,903,920,1005
+        //    и NotesService.Annotations.cs:41,50,447). Статический вызов через
+        //    path-traversal-санитайзер — допускаем как инфраструктурный шов.
+        // 9) ⚠ ИНВЕРСИЯ СЛОЁВ `Notes → Controllers` через extension-метод
+        //    `TaskHubExtensions.BroadcastTaskChangedAsync` (NoteTaskSyncService.cs:61,106,157,162).
+        //    Прямой шов Notes-вертикали на Controllers-пространство имён. Объявляем
+        //    явно, разбор — этап 4 (как у `Tasks`).
         new object[]
         {
             new VerticalBoundary(
@@ -1407,7 +1436,11 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
+                    "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Protocol.NotesChangedMessage",
+                    // ⚠ ИНВЕРСИЯ СЛОЁВ `Notes → Controllers` через extension-метод
+                    // TaskHubExtensions (см. комментарий выше, пункт 9). Разбор — этап 4.
+                    "ClaudeHomeServer.Controllers.TaskHubExtensions",
                 }),
         },
         // Skills — вертикаль навыков (волна 4C, шаг 3): чтение скиллов и агентов из

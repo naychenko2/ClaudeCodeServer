@@ -1,4 +1,4 @@
-using System.Reflection;
+п»їusing System.Reflection;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -18,11 +18,11 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// SessionManager.BuildPromptSectionsProvider (план «Секции промптов» этап 3): граничные
-// контракты — персона без специальности (none), групповой чат, гейт по флагу
-// specialty-prompt-sections на каждый ход (переключение действует сразу, без пересборки).
-// Сборка своя (а не общий SessionManagerTests): нужен SpecialtySettingsStore, которого
-// у общего _sut той сборки нет.
+// SessionManager.BuildPromptSectionsProvider (РїР»Р°РЅ В«РЎРµРєС†РёРё РїСЂРѕРјРїС‚РѕРІВ» СЌС‚Р°Рї 3): РіСЂР°РЅРёС‡РЅС‹Рµ
+// РєРѕРЅС‚СЂР°РєС‚С‹ вЂ” РїРµСЂСЃРѕРЅР° Р±РµР· СЃРїРµС†РёР°Р»СЊРЅРѕСЃС‚Рё (none), РіСЂСѓРїРїРѕРІРѕР№ С‡Р°С‚, РіРµР№С‚ РїРѕ С„Р»Р°РіСѓ
+// specialty-prompt-sections РЅР° РєР°Р¶РґС‹Р№ С…РѕРґ (РїРµСЂРµРєР»СЋС‡РµРЅРёРµ РґРµР№СЃС‚РІСѓРµС‚ СЃСЂР°Р·Сѓ, Р±РµР· РїРµСЂРµСЃР±РѕСЂРєРё).
+// РЎР±РѕСЂРєР° СЃРІРѕСЏ (Р° РЅРµ РѕР±С‰РёР№ SessionManagerTests): РЅСѓР¶РµРЅ SpecialtySettingsStore, РєРѕС‚РѕСЂРѕРіРѕ
+// Сѓ РѕР±С‰РµРіРѕ _sut С‚РѕР№ СЃР±РѕСЂРєРё РЅРµС‚.
 public class SessionManagerPromptSectionsProviderTests : IDisposable
 {
     private readonly string _tempDir;
@@ -87,7 +87,7 @@ public class SessionManagerPromptSectionsProviderTests : IDisposable
             personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
             launchers, sandbox, specialtySettings: specialtySettings);
 
-        // UserStore при пустом хранилище создаёт дефолтного admin — используем его id владельцем
+        // UserStore РїСЂРё РїСѓСЃС‚РѕРј С…СЂР°РЅРёР»РёС‰Рµ СЃРѕР·РґР°С‘С‚ РґРµС„РѕР»С‚РЅРѕРіРѕ admin вЂ” РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ id РІР»Р°РґРµР»СЊС†РµРј
         var ownerId = userStore.GetFirst()!.Id;
         return (sut, personas, userStore, ownerId);
     }
@@ -101,82 +101,82 @@ public class SessionManagerPromptSectionsProviderTests : IDisposable
     }
 
     [Fact]
-    public void СпециальностьNone_ПровайдерNull()
+    public void РЎРїРµС†РёР°Р»СЊРЅРѕСЃС‚СЊNone_РџСЂРѕРІР°Р№РґРµСЂNull()
     {
         var (sut, personas, _, ownerId) = BuildSut();
-        var persona = personas.Create(ownerId, "Аня", null, null, null, null, null,
+        var persona = personas.Create(ownerId, "РђРЅСЏ", null, null, null, null, null,
             PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: PersonaSpecialty.None);
 
         var provider = Invoke(sut, ownerId, new Session(), persona);
 
-        provider.Should().BeNull("у персоны нет специальности — секций не бывает по контракту плана");
+        provider.Should().BeNull("Сѓ РїРµСЂСЃРѕРЅС‹ РЅРµС‚ СЃРїРµС†РёР°Р»СЊРЅРѕСЃС‚Рё вЂ” СЃРµРєС†РёР№ РЅРµ Р±С‹РІР°РµС‚ РїРѕ РєРѕРЅС‚СЂР°РєС‚Сѓ РїР»Р°РЅР°");
     }
 
     [Fact]
-    public void ГрупповойЧат_ПровайдерNull()
+    public void Р“СЂСѓРїРїРѕРІРѕР№Р§Р°С‚_РџСЂРѕРІР°Р№РґРµСЂNull()
     {
         var (sut, personas, _, ownerId) = BuildSut();
-        var persona = personas.Create(ownerId, "Боря", null, null, null, null, null,
+        var persona = personas.Create(ownerId, "Р‘РѕСЂСЏ", null, null, null, null, null,
             PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: PersonaSpecialty.Executor);
-        var session = new Session { Participants = [persona.Id, "другая-персона"] };
+        var session = new Session { Participants = [persona.Id, "РґСЂСѓРіР°СЏ-РїРµСЂСЃРѕРЅР°"] };
 
         var provider = Invoke(sut, ownerId, session, persona);
 
-        provider.Should().BeNull("групповые чаты без секций специальности — контракт плана");
+        provider.Should().BeNull("РіСЂСѓРїРїРѕРІС‹Рµ С‡Р°С‚С‹ Р±РµР· СЃРµРєС†РёР№ СЃРїРµС†РёР°Р»СЊРЅРѕСЃС‚Рё вЂ” РєРѕРЅС‚СЂР°РєС‚ РїР»Р°РЅР°");
     }
 
     [Fact]
-    public void ПерсонаNull_ПровайдерNull()
+    public void РџРµСЂСЃРѕРЅР°Null_РџСЂРѕРІР°Р№РґРµСЂNull()
     {
         var (sut, _, _, ownerId) = BuildSut();
 
         var provider = Invoke(sut, ownerId, new Session(), persona: null);
 
-        provider.Should().BeNull("сессия без персоны (онбординг, чат-мастер) — секций нет");
+        provider.Should().BeNull("СЃРµСЃСЃРёСЏ Р±РµР· РїРµСЂСЃРѕРЅС‹ (РѕРЅР±РѕСЂРґРёРЅРі, С‡Р°С‚-РјР°СЃС‚РµСЂ) вЂ” СЃРµРєС†РёР№ РЅРµС‚");
     }
 
     [Fact]
-    public async Task ФлагВыключен_ТекстNull()
+    public async Task Р¤Р»Р°РіР’С‹РєР»СЋС‡РµРЅ_РўРµРєСЃС‚Null()
     {
         var (sut, personas, _, ownerId) = BuildSut();
-        var persona = personas.Create(ownerId, "Вера", null, null, null, null, null,
+        var persona = personas.Create(ownerId, "Р’РµСЂР°", null, null, null, null, null,
             PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: PersonaSpecialty.Executor);
 
         var provider = Invoke(sut, ownerId, new Session(), persona);
-        provider.Should().NotBeNull("провайдер собирается — гейт по флагу внутри, на каждый ход");
+        provider.Should().NotBeNull("РїСЂРѕРІР°Р№РґРµСЂ СЃРѕР±РёСЂР°РµС‚СЃСЏ вЂ” РіРµР№С‚ РїРѕ С„Р»Р°РіСѓ РІРЅСѓС‚СЂРё, РЅР° РєР°Р¶РґС‹Р№ С…РѕРґ");
 
         var text = await provider!(null);
-        text.Should().BeNull("флаг specialty-prompt-sections выключен по умолчанию — как до фичи");
+        text.Should().BeNull("С„Р»Р°Рі specialty-prompt-sections РІС‹РєР»СЋС‡РµРЅ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ вЂ” РєР°Рє РґРѕ С„РёС‡Рё");
     }
 
     [Fact]
-    public async Task ФлагВключён_ТекстСекцийПоРоли()
+    public async Task Р¤Р»Р°РіР’РєР»СЋС‡С‘РЅ_РўРµРєСЃС‚РЎРµРєС†РёР№РџРѕР РѕР»Рё()
     {
         var (sut, personas, users, ownerId) = BuildSut();
         users.SetFeatureFlag(ownerId, FeatureFlagKeys.SpecialtyPromptSections, true).Should().BeTrue();
-        var persona = personas.Create(ownerId, "Гриша", null, null, null, null, null,
+        var persona = personas.Create(ownerId, "Р“СЂРёС€Р°", null, null, null, null, null,
             PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: PersonaSpecialty.Executor);
 
         var provider = Invoke(sut, ownerId, new Session(), persona);
         var text = await provider!(null);
 
         text.Should().NotBeNull();
-        text.Should().Contain("dossier_lookup", "у исполнителя секция «история» включена по умолчанию");
+        text.Should().Contain("dossier_lookup", "Сѓ РёСЃРїРѕР»РЅРёС‚РµР»СЏ СЃРµРєС†РёСЏ В«РёСЃС‚РѕСЂРёСЏВ» РІРєР»СЋС‡РµРЅР° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ");
     }
 
     [Fact]
-    public async Task ФлагПереключаетсяНаКаждыйХод_БезПересборкиАдаптера()
+    public async Task Р¤Р»Р°РіРџРµСЂРµРєР»СЋС‡Р°РµС‚СЃСЏРќР°РљР°Р¶РґС‹Р№РҐРѕРґ_Р‘РµР·РџРµСЂРµСЃР±РѕСЂРєРёРђРґР°РїС‚РµСЂР°()
     {
-        // Контракт: гейт по флагу — ВНУТРИ провайдера (как у dossier), не на его построении —
-        // переключение флага должно действовать сразу, без пересоздания адаптера/сессии
+        // РљРѕРЅС‚СЂР°РєС‚: РіРµР№С‚ РїРѕ С„Р»Р°РіСѓ вЂ” Р’РќРЈРўР Р РїСЂРѕРІР°Р№РґРµСЂР° (РєР°Рє Сѓ dossier), РЅРµ РЅР° РµРіРѕ РїРѕСЃС‚СЂРѕРµРЅРёРё вЂ”
+        // РїРµСЂРµРєР»СЋС‡РµРЅРёРµ С„Р»Р°РіР° РґРѕР»Р¶РЅРѕ РґРµР№СЃС‚РІРѕРІР°С‚СЊ СЃСЂР°Р·Сѓ, Р±РµР· РїРµСЂРµСЃРѕР·РґР°РЅРёСЏ Р°РґР°РїС‚РµСЂР°/СЃРµСЃСЃРёРё
         var (sut, personas, users, ownerId) = BuildSut();
-        var persona = personas.Create(ownerId, "Даша", null, null, null, null, null,
+        var persona = personas.Create(ownerId, "Р”Р°С€Р°", null, null, null, null, null,
             PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: PersonaSpecialty.Executor);
         var provider = Invoke(sut, ownerId, new Session(), persona)!;
 
-        (await provider(null)).Should().BeNull("флаг выключен на момент первого вызова");
+        (await provider(null)).Should().BeNull("С„Р»Р°Рі РІС‹РєР»СЋС‡РµРЅ РЅР° РјРѕРјРµРЅС‚ РїРµСЂРІРѕРіРѕ РІС‹Р·РѕРІР°");
 
         users.SetFeatureFlag(ownerId, FeatureFlagKeys.SpecialtyPromptSections, true);
-        (await provider(null)).Should().NotBeNull("тот же провайдер — переключение флага подхватилось без пересборки");
+        (await provider(null)).Should().NotBeNull("С‚РѕС‚ Р¶Рµ РїСЂРѕРІР°Р№РґРµСЂ вЂ” РїРµСЂРµРєР»СЋС‡РµРЅРёРµ С„Р»Р°РіР° РїРѕРґС…РІР°С‚РёР»РѕСЃСЊ Р±РµР· РїРµСЂРµСЃР±РѕСЂРєРё");
     }
 }

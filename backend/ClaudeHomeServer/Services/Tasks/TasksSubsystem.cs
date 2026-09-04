@@ -26,8 +26,6 @@ namespace ClaudeHomeServer.Services.Tasks;
 //      `DailyBriefingService` перебирает проекты владельца для git-активности.
 //    - `UserStore` — `TaskSchedulerService` и `DailyBriefingService` перебирают
 //      пользователей; `TaskAiService` берёт таймзону владельца.
-//    - `UserHomeResolver` — `TaskSchedulerService` берёт путь владельца (резолв
-//      корня для git-активности по проектам).
 //    - `NotificationService` — `TaskSchedulerService` шлёт напоминания
 //      (`SendNotificationMessageAsync`), `DailyBriefingService` шлёт «доброе утро».
 //    - `AppSettingsService` — `DailyBriefingService` читает гейт

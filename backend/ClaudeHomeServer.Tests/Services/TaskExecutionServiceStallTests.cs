@@ -1,4 +1,4 @@
-using System.Reflection;
+п»їusing System.Reflection;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
@@ -18,14 +18,14 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Страховка «ход исполнителя закончился успешно, а задачу он не закрыл». До неё такой ход
-// молча пропускался гейтом join-а (TryDeliverCompletionAsync: «статус не Done»), и задача
-// висела в «В работе» вечно — нового хода могло не быть никогда, а человеку никто не говорил.
+// РЎС‚СЂР°С…РѕРІРєР° В«С…РѕРґ РёСЃРїРѕР»РЅРёС‚РµР»СЏ Р·Р°РєРѕРЅС‡РёР»СЃСЏ СѓСЃРїРµС€РЅРѕ, Р° Р·Р°РґР°С‡Сѓ РѕРЅ РЅРµ Р·Р°РєСЂС‹Р»В». Р”Рѕ РЅРµС‘ С‚Р°РєРѕР№ С…РѕРґ
+// РјРѕР»С‡Р° РїСЂРѕРїСѓСЃРєР°Р»СЃСЏ РіРµР№С‚РѕРј join-Р° (TryDeliverCompletionAsync: В«СЃС‚Р°С‚СѓСЃ РЅРµ DoneВ»), Рё Р·Р°РґР°С‡Р°
+// РІРёСЃРµР»Р° РІ В«Р’ СЂР°Р±РѕС‚РµВ» РІРµС‡РЅРѕ вЂ” РЅРѕРІРѕРіРѕ С…РѕРґР° РјРѕРіР»Рѕ РЅРµ Р±С‹С‚СЊ РЅРёРєРѕРіРґР°, Р° С‡РµР»РѕРІРµРєСѓ РЅРёРєС‚Рѕ РЅРµ РіРѕРІРѕСЂРёР».
 //
-// Здесь три ветки решения (ClassifyStall) и их эффекты: промежуточный ход многошаговой задачи
-// не должен получать ничего (регрессия на спам), брошенная задача — ровно один оклик исполнителю
-// и ровно одно уведомление человеку. CLI не поднимается: процесс чата подставляется моком
-// адаптера (тот же приём, что в TaskExecutionServiceDelegationReportTests).
+// Р—РґРµСЃСЊ С‚СЂРё РІРµС‚РєРё СЂРµС€РµРЅРёСЏ (ClassifyStall) Рё РёС… СЌС„С„РµРєС‚С‹: РїСЂРѕРјРµР¶СѓС‚РѕС‡РЅС‹Р№ С…РѕРґ РјРЅРѕРіРѕС€Р°РіРѕРІРѕР№ Р·Р°РґР°С‡Рё
+// РЅРµ РґРѕР»Р¶РµРЅ РїРѕР»СѓС‡Р°С‚СЊ РЅРёС‡РµРіРѕ (СЂРµРіСЂРµСЃСЃРёСЏ РЅР° СЃРїР°Рј), Р±СЂРѕС€РµРЅРЅР°СЏ Р·Р°РґР°С‡Р° вЂ” СЂРѕРІРЅРѕ РѕРґРёРЅ РѕРєР»РёРє РёСЃРїРѕР»РЅРёС‚РµР»СЋ
+// Рё СЂРѕРІРЅРѕ РѕРґРЅРѕ СѓРІРµРґРѕРјР»РµРЅРёРµ С‡РµР»РѕРІРµРєСѓ. CLI РЅРµ РїРѕРґРЅРёРјР°РµС‚СЃСЏ: РїСЂРѕС†РµСЃСЃ С‡Р°С‚Р° РїРѕРґСЃС‚Р°РІР»СЏРµС‚СЃСЏ РјРѕРєРѕРј
+// Р°РґР°РїС‚РµСЂР° (С‚РѕС‚ Р¶Рµ РїСЂРёС‘Рј, С‡С‚Рѕ РІ TaskExecutionServiceDelegationReportTests).
 public class TaskExecutionServiceStallTests : IDisposable
 {
     private static readonly TimeSpan Stale = TimeSpan.FromMinutes(15);
@@ -76,8 +76,8 @@ public class TaskExecutionServiceStallTests : IDisposable
             })
             .Returns(Task.CompletedTask);
         var clients = new Mock<IHubClients>();
-        // Только session-группа: клиент чата состоит и в user_/project_-группе, широкая
-        // рассылка задвоила бы сообщения в снимке
+        // РўРѕР»СЊРєРѕ session-РіСЂСѓРїРїР°: РєР»РёРµРЅС‚ С‡Р°С‚Р° СЃРѕСЃС‚РѕРёС‚ Рё РІ user_/project_-РіСЂСѓРїРїРµ, С€РёСЂРѕРєР°СЏ
+        // СЂР°СЃСЃС‹Р»РєР° Р·Р°РґРІРѕРёР»Р° Р±С‹ СЃРѕРѕР±С‰РµРЅРёСЏ РІ СЃРЅРёРјРєРµ
         clients.Setup(c => c.Group(It.Is<string>(g => !g.StartsWith("project_") && !g.StartsWith("user_"))))
             .Returns(clientProxy.Object);
         clients.Setup(c => c.Group(It.Is<string>(g => g.StartsWith("project_") || g.StartsWith("user_"))))
@@ -127,7 +127,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     {
         GC.SuppressFinalize(this);
         if (!Directory.Exists(_dir)) return;
-        // История пишется из fire-and-forget обработчиков — уборка temp не предмет теста
+        // РСЃС‚РѕСЂРёСЏ РїРёС€РµС‚СЃСЏ РёР· fire-and-forget РѕР±СЂР°Р±РѕС‚С‡РёРєРѕРІ вЂ” СѓР±РѕСЂРєР° temp РЅРµ РїСЂРµРґРјРµС‚ С‚РµСЃС‚Р°
         for (var i = 1; ; i++)
         {
             try
@@ -143,12 +143,12 @@ public class TaskExecutionServiceStallTests : IDisposable
         }
     }
 
-    // --- Предикат: три ветки решения ------------------------------------------
+    // --- РџСЂРµРґРёРєР°С‚: С‚СЂРё РІРµС‚РєРё СЂРµС€РµРЅРёСЏ ------------------------------------------
 
-    // Задача после успешного хода исполнителя, который её не закрыл
+    // Р—Р°РґР°С‡Р° РїРѕСЃР»Рµ СѓСЃРїРµС€РЅРѕРіРѕ С…РѕРґР° РёСЃРїРѕР»РЅРёС‚РµР»СЏ, РєРѕС‚РѕСЂС‹Р№ РµС‘ РЅРµ Р·Р°РєСЂС‹Р»
     private static TaskItem StaleTask(DateTime? nudgedAt = null, DateTime? alertedAt = null) => new()
     {
-        Title = "Починить билд",
+        Title = "РџРѕС‡РёРЅРёС‚СЊ Р±РёР»Рґ",
         OwnerId = "user-1",
         Status = TaskItemStatus.InProgress,
         LinkedSessionId = "sess-1",
@@ -163,9 +163,9 @@ public class TaskExecutionServiceStallTests : IDisposable
         new() { Id = "sess-1", OwnerId = "user-1", Status = status, UpdatedAt = updatedAt };
 
     [Fact]
-    public void ClassifyStall_ИдётСледующийХод_НичегоНеДелаем()
+    public void ClassifyStall_РРґС‘С‚РЎР»РµРґСѓСЋС‰РёР№РҐРѕРґ_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
-        // Многошаговая задача: исполнитель работает дальше — оклик был бы спамом
+        // РњРЅРѕРіРѕС€Р°РіРѕРІР°СЏ Р·Р°РґР°С‡Р°: РёСЃРїРѕР»РЅРёС‚РµР»СЊ СЂР°Р±РѕС‚Р°РµС‚ РґР°Р»СЊС€Рµ вЂ” РѕРєР»РёРє Р±С‹Р» Р±С‹ СЃРїР°РјРѕРј
         var action = TaskExecutionService.ClassifyStall(StaleTask(),
             Chat(SessionStatus.Working, Now.AddHours(-1)), Now, Stale);
 
@@ -173,9 +173,9 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ХодЖдётРазрешения_НичегоНеДелаем()
+    public void ClassifyStall_РҐРѕРґР–РґС‘С‚Р Р°Р·СЂРµС€РµРЅРёСЏ_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
-        // Waiting — permission_request: о нём человека уже уведомили (BuildWaitingNotification)
+        // Waiting вЂ” permission_request: Рѕ РЅС‘Рј С‡РµР»РѕРІРµРєР° СѓР¶Рµ СѓРІРµРґРѕРјРёР»Рё (BuildWaitingNotification)
         var action = TaskExecutionService.ClassifyStall(StaleTask(),
             Chat(SessionStatus.Waiting, Now.AddHours(-1)), Now, Stale);
 
@@ -183,7 +183,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ТишинаКорочеПорога_НичегоНеДелаем()
+    public void ClassifyStall_РўРёС€РёРЅР°РљРѕСЂРѕС‡РµРџРѕСЂРѕРіР°_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
         var action = TaskExecutionService.ClassifyStall(StaleTask(),
             Chat(SessionStatus.Active, Now.AddMinutes(-5)), Now, Stale);
@@ -192,7 +192,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ЧатМолчитДольшеПорога_ОкликаемИсполнителя()
+    public void ClassifyStall_Р§Р°С‚РњРѕР»С‡РёС‚Р”РѕР»СЊС€РµРџРѕСЂРѕРіР°_РћРєР»РёРєР°РµРјРСЃРїРѕР»РЅРёС‚РµР»СЏ()
     {
         var action = TaskExecutionService.ClassifyStall(StaleTask(),
             Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale);
@@ -201,10 +201,10 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ЧатМолчитДольшеОкнаСвежести_СразуЗовёмЧеловека()
+    public void ClassifyStall_Р§Р°С‚РњРѕР»С‡РёС‚Р”РѕР»СЊС€РµРћРєРЅР°РЎРІРµР¶РµСЃС‚Рё_РЎСЂР°Р·СѓР—РѕРІС‘РјР§РµР»РѕРІРµРєР°()
     {
-        // Задача висит со вчера: платный оклик в позавчерашний разговор бесполезен, а на
-        // первом тике после обновления такие ходы ушли бы во все старые задачи разом
+        // Р—Р°РґР°С‡Р° РІРёСЃРёС‚ СЃРѕ РІС‡РµСЂР°: РїР»Р°С‚РЅС‹Р№ РѕРєР»РёРє РІ РїРѕР·Р°РІС‡РµСЂР°С€РЅРёР№ СЂР°Р·РіРѕРІРѕСЂ Р±РµСЃРїРѕР»РµР·РµРЅ, Р° РЅР°
+        // РїРµСЂРІРѕРј С‚РёРєРµ РїРѕСЃР»Рµ РѕР±РЅРѕРІР»РµРЅРёСЏ С‚Р°РєРёРµ С…РѕРґС‹ СѓС€Р»Рё Р±С‹ РІРѕ РІСЃРµ СЃС‚Р°СЂС‹Рµ Р·Р°РґР°С‡Рё СЂР°Р·РѕРј
         var task = StaleTask();
         task.UpdatedAt = Now - TaskExecutionService.NudgeWindow.Add(TimeSpan.FromHours(1));
 
@@ -215,16 +215,16 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ЧатаИсполнителяНет_СразуЗовёмЧеловека()
+    public void ClassifyStall_Р§Р°С‚Р°РСЃРїРѕР»РЅРёС‚РµР»СЏРќРµС‚_РЎСЂР°Р·СѓР—РѕРІС‘РјР§РµР»РѕРІРµРєР°()
     {
-        // Чат удалён или протух по TTL — окликать некого, отсчёт от самой задачи
+        // Р§Р°С‚ СѓРґР°Р»С‘РЅ РёР»Рё РїСЂРѕС‚СѓС… РїРѕ TTL вЂ” РѕРєР»РёРєР°С‚СЊ РЅРµРєРѕРіРѕ, РѕС‚СЃС‡С‘С‚ РѕС‚ СЃР°РјРѕР№ Р·Р°РґР°С‡Рё
         var action = TaskExecutionService.ClassifyStall(StaleTask(), null, Now, Stale);
 
         action.Should().Be(TaskExecutionService.ExecutorStallAction.Alert);
     }
 
     [Fact]
-    public void ClassifyStall_ОкликСвежий_ЖдёмОтвета()
+    public void ClassifyStall_РћРєР»РёРєРЎРІРµР¶РёР№_Р–РґС‘РјРћС‚РІРµС‚Р°()
     {
         var action = TaskExecutionService.ClassifyStall(StaleTask(nudgedAt: Now.AddMinutes(-5)),
             Chat(SessionStatus.Active, Now.AddMinutes(-30)), Now, Stale);
@@ -233,7 +233,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ОкликНеПомог_ЗовёмЧеловека()
+    public void ClassifyStall_РћРєР»РёРєРќРµРџРѕРјРѕРі_Р—РѕРІС‘РјР§РµР»РѕРІРµРєР°()
     {
         var action = TaskExecutionService.ClassifyStall(StaleTask(nudgedAt: Now.AddMinutes(-16)),
             Chat(SessionStatus.Active, Now.AddMinutes(-30)), Now, Stale);
@@ -242,7 +242,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ЧеловекаУжеПозвали_БольшеНичего()
+    public void ClassifyStall_Р§РµР»РѕРІРµРєР°РЈР¶РµРџРѕР·РІР°Р»Рё_Р‘РѕР»СЊС€РµРќРёС‡РµРіРѕ()
     {
         var task = StaleTask(nudgedAt: Now.AddHours(-2), alertedAt: Now.AddHours(-1));
 
@@ -251,7 +251,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ЗадачаЗакрыта_НичегоНеДелаем()
+    public void ClassifyStall_Р—Р°РґР°С‡Р°Р—Р°РєСЂС‹С‚Р°_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
         var task = StaleTask();
         task.Status = TaskItemStatus.Done;
@@ -261,9 +261,9 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ХодПровалился_НичегоНеДелаем()
+    public void ClassifyStall_РҐРѕРґРџСЂРѕРІР°Р»РёР»СЃСЏ_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
-        // Провал уведомляет сам («Не смог выполнить задачу») — дубля быть не должно
+        // РџСЂРѕРІР°Р» СѓРІРµРґРѕРјР»СЏРµС‚ СЃР°Рј (В«РќРµ СЃРјРѕРі РІС‹РїРѕР»РЅРёС‚СЊ Р·Р°РґР°С‡СѓВ») вЂ” РґСѓР±Р»СЏ Р±С‹С‚СЊ РЅРµ РґРѕР»Р¶РЅРѕ
         var task = StaleTask();
         task.ClaudeResult = "error";
 
@@ -272,9 +272,9 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ИсполнительОстановленТерминально_НичегоНеДелаем()
+    public void ClassifyStall_РСЃРїРѕР»РЅРёС‚РµР»СЊРћСЃС‚Р°РЅРѕРІР»РµРЅРўРµСЂРјРёРЅР°Р»СЊРЅРѕ_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
-        // У остановки своё уведомление с причиной (HandleExecutorStoppedAsync)
+        // РЈ РѕСЃС‚Р°РЅРѕРІРєРё СЃРІРѕС‘ СѓРІРµРґРѕРјР»РµРЅРёРµ СЃ РїСЂРёС‡РёРЅРѕР№ (HandleExecutorStoppedAsync)
         var task = StaleTask();
         task.ExecutorStoppedAt = Now.AddMinutes(-30);
         task.ExecutorStopReason = ExecutorStopClassifier.AuthFailedReason;
@@ -284,9 +284,9 @@ public class TaskExecutionServiceStallTests : IDisposable
     }
 
     [Fact]
-    public void ClassifyStall_ХодЕщёИдёт_НичегоНеДелаем()
+    public void ClassifyStall_РҐРѕРґР•С‰С‘РРґС‘С‚_РќРёС‡РµРіРѕРќРµР”РµР»Р°РµРј()
     {
-        // ClaudeResult пуст — result первого хода ещё не пришёл
+        // ClaudeResult РїСѓСЃС‚ вЂ” result РїРµСЂРІРѕРіРѕ С…РѕРґР° РµС‰С‘ РЅРµ РїСЂРёС€С‘Р»
         var task = StaleTask();
         task.ClaudeResult = null;
 
@@ -294,25 +294,25 @@ public class TaskExecutionServiceStallTests : IDisposable
             .Should().Be(TaskExecutionService.ExecutorStallAction.None);
     }
 
-    // --- Эффекты: оклик исполнителю и уведомление человеку --------------------
+    // --- Р­С„С„РµРєС‚С‹: РѕРєР»РёРє РёСЃРїРѕР»РЅРёС‚РµР»СЋ Рё СѓРІРµРґРѕРјР»РµРЅРёРµ С‡РµР»РѕРІРµРєСѓ --------------------
 
-    // Живой чат-исполнитель с подставным процессом (иначе SendOrEnqueueAsync поднял бы CLI)
+    // Р–РёРІРѕР№ С‡Р°С‚-РёСЃРїРѕР»РЅРёС‚РµР»СЊ СЃ РїРѕРґСЃС‚Р°РІРЅС‹Рј РїСЂРѕС†РµСЃСЃРѕРј (РёРЅР°С‡Рµ SendOrEnqueueAsync РїРѕРґРЅСЏР» Р±С‹ CLI)
     private async Task<(TaskItem Task, Session Chat)> ArrangeExecutorChatAsync(TimeSpan silence)
     {
         var user = _userStore.Add("stall-owner", "password123", "user");
-        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "Задача: билд");
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "Р—Р°РґР°С‡Р°: Р±РёР»Рґ");
         StubProcess(chat);
         chat.Status = SessionStatus.Active;
         chat.UpdatedAt = Now - silence;
 
-        var created = _tasks.Create(null, user.Id, new CreateTaskRequest("Починить билд"));
+        var created = _tasks.Create(null, user.Id, new CreateTaskRequest("РџРѕС‡РёРЅРёС‚СЊ Р±РёР»Рґ"));
         _tasks.MarkClaudeStarted(created.Id, chat.Id, Now.AddHours(-2));
         _tasks.MarkClaudeResult(created.Id, "success");
         return (_tasks.GetById(created.Id)!, chat);
     }
 
-    // Подставной процесс чата: реестр сессий приватный — тот же white-box приём, что в
-    // SessionManagerTests и TaskExecutionServiceDelegationReportTests
+    // РџРѕРґСЃС‚Р°РІРЅРѕР№ РїСЂРѕС†РµСЃСЃ С‡Р°С‚Р°: СЂРµРµСЃС‚СЂ СЃРµСЃСЃРёР№ РїСЂРёРІР°С‚РЅС‹Р№ вЂ” С‚РѕС‚ Р¶Рµ white-box РїСЂРёС‘Рј, С‡С‚Рѕ РІ
+    // SessionManagerTests Рё TaskExecutionServiceDelegationReportTests
     private void StubProcess(Session session)
     {
         var field = typeof(SessionManager).GetField("_sessions",
@@ -329,9 +329,9 @@ public class TaskExecutionServiceStallTests : IDisposable
         (await _notifStore.GetListAsync(ownerId)).Count;
 
     [Fact]
-    public async Task CheckStalledExecutorAsync_МногошаговаяЗадачаМеждуХодами_НиОкликаНиУведомления()
+    public async Task CheckStalledExecutorAsync_РњРЅРѕРіРѕС€Р°РіРѕРІР°СЏР—Р°РґР°С‡Р°РњРµР¶РґСѓРҐРѕРґР°РјРё_РќРёРћРєР»РёРєР°РќРёРЈРІРµРґРѕРјР»РµРЅРёСЏ()
     {
-        // Ход закончился минуту назад — следующий вполне может начаться сам
+        // РҐРѕРґ Р·Р°РєРѕРЅС‡РёР»СЃСЏ РјРёРЅСѓС‚Сѓ РЅР°Р·Р°Рґ вЂ” СЃР»РµРґСѓСЋС‰РёР№ РІРїРѕР»РЅРµ РјРѕР¶РµС‚ РЅР°С‡Р°С‚СЊСЃСЏ СЃР°Рј
         var (task, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(1));
 
         await _sut.CheckStalledExecutorAsync(task, Now);
@@ -339,33 +339,33 @@ public class TaskExecutionServiceStallTests : IDisposable
         var after = _tasks.GetById(task.Id)!;
         after.ExecutorNudgedAt.Should().BeNull();
         after.ExecutorStaleAlertedAt.Should().BeNull();
-        Sent<UserMessageMessage>().Should().BeEmpty("между ходами исполнителя дёргать нельзя");
+        Sent<UserMessageMessage>().Should().BeEmpty("РјРµР¶РґСѓ С…РѕРґР°РјРё РёСЃРїРѕР»РЅРёС‚РµР»СЏ РґС‘СЂРіР°С‚СЊ РЅРµР»СЊР·СЏ");
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(0);
     }
 
     [Fact]
-    public async Task CheckStalledExecutorAsync_ЧатМолчит_ОкликаетИсполнителяРовноОдин()
+    public async Task CheckStalledExecutorAsync_Р§Р°С‚РњРѕР»С‡РёС‚_РћРєР»РёРєР°РµС‚РСЃРїРѕР»РЅРёС‚РµР»СЏР РѕРІРЅРѕРћРґРёРЅ()
     {
         var (task, chat) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(20));
 
         await _sut.CheckStalledExecutorAsync(task, Now);
-        // Второй тик планировщика через полминуты — оклик не должен повториться
+        // Р’С‚РѕСЂРѕР№ С‚РёРє РїР»Р°РЅРёСЂРѕРІС‰РёРєР° С‡РµСЂРµР· РїРѕР»РјРёРЅСѓС‚С‹ вЂ” РѕРєР»РёРє РЅРµ РґРѕР»Р¶РµРЅ РїРѕРІС‚РѕСЂРёС‚СЊСЃСЏ
         await _sut.CheckStalledExecutorAsync(_tasks.GetById(task.Id)!, Now.AddSeconds(30));
 
         var after = _tasks.GetById(task.Id)!;
         after.ExecutorNudgedAt.Should().Be(Now);
-        after.ExecutorStaleAlertedAt.Should().BeNull("человека зовём только если оклик не помог");
-        var nudge = Sent<UserMessageMessage>().Should().ContainSingle("оклик ровно один").Subject;
+        after.ExecutorStaleAlertedAt.Should().BeNull("С‡РµР»РѕРІРµРєР° Р·РѕРІС‘Рј С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРєР»РёРє РЅРµ РїРѕРјРѕРі");
+        var nudge = Sent<UserMessageMessage>().Should().ContainSingle("РѕРєР»РёРє СЂРѕРІРЅРѕ РѕРґРёРЅ").Subject;
         nudge.StaffNote.Should().Be(TaskExecutionService.StaleNudgeStaffNote,
-            "в ленте это плашка-разделитель, а не пузырь с сырым служебным промптом");
+            "РІ Р»РµРЅС‚Рµ СЌС‚Рѕ РїР»Р°С€РєР°-СЂР°Р·РґРµР»РёС‚РµР»СЊ, Р° РЅРµ РїСѓР·С‹СЂСЊ СЃ СЃС‹СЂС‹Рј СЃР»СѓР¶РµР±РЅС‹Рј РїСЂРѕРјРїС‚РѕРј");
         nudge.Text.Should().Contain("tasks_complete").And.Contain("chats_report_up");
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(0,
-            "человека на этом шаге ещё не трогаем");
-        chat.Id.Should().Be(task.LinkedSessionId, "оклик уходит в чат самого исполнителя");
+            "С‡РµР»РѕРІРµРєР° РЅР° СЌС‚РѕРј С€Р°РіРµ РµС‰С‘ РЅРµ С‚СЂРѕРіР°РµРј");
+        chat.Id.Should().Be(task.LinkedSessionId, "РѕРєР»РёРє СѓС…РѕРґРёС‚ РІ С‡Р°С‚ СЃР°РјРѕРіРѕ РёСЃРїРѕР»РЅРёС‚РµР»СЏ");
     }
 
     [Fact]
-    public async Task CheckStalledExecutorAsync_ОкликНеПомог_РовноОдноУведомлениеЧеловеку()
+    public async Task CheckStalledExecutorAsync_РћРєР»РёРєРќРµРџРѕРјРѕРі_Р РѕРІРЅРѕРћРґРЅРѕРЈРІРµРґРѕРјР»РµРЅРёРµР§РµР»РѕРІРµРєСѓ()
     {
         var (task, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(40));
         _tasks.MarkExecutorNudged(task.Id, Now.AddMinutes(-20));
@@ -376,16 +376,16 @@ public class TaskExecutionServiceStallTests : IDisposable
         var after = _tasks.GetById(task.Id)!;
         after.ExecutorStaleAlertedAt.Should().Be(Now);
         var items = await _notifStore.GetListAsync(task.OwnerId!);
-        items.Should().ContainSingle("о брошенной задаче человека зовут один раз");
-        items[0].Title.Should().Be("Задача осталась в работе");
-        Sent<UserMessageMessage>().Should().BeEmpty("второго оклика исполнителю быть не должно");
+        items.Should().ContainSingle("Рѕ Р±СЂРѕС€РµРЅРЅРѕР№ Р·Р°РґР°С‡Рµ С‡РµР»РѕРІРµРєР° Р·РѕРІСѓС‚ РѕРґРёРЅ СЂР°Р·");
+        items[0].Title.Should().Be("Р—Р°РґР°С‡Р° РѕСЃС‚Р°Р»Р°СЃСЊ РІ СЂР°Р±РѕС‚Рµ");
+        Sent<UserMessageMessage>().Should().BeEmpty("РІС‚РѕСЂРѕРіРѕ РѕРєР»РёРєР° РёСЃРїРѕР»РЅРёС‚РµР»СЋ Р±С‹С‚СЊ РЅРµ РґРѕР»Р¶РЅРѕ");
     }
 
     [Fact]
-    public async Task CheckStalledExecutorAsync_ПерезапускИсполнителя_СбрасываетОтметкиСтраховки()
+    public async Task CheckStalledExecutorAsync_РџРµСЂРµР·Р°РїСѓСЃРєРСЃРїРѕР»РЅРёС‚РµР»СЏ_РЎР±СЂР°СЃС‹РІР°РµС‚РћС‚РјРµС‚РєРёРЎС‚СЂР°С…РѕРІРєРё()
     {
-        // Человек перезапустил исполнителя — новая попытка получает и свой оклик, и своё
-        // уведомление, иначе страховка молчала бы навсегда
+        // Р§РµР»РѕРІРµРє РїРµСЂРµР·Р°РїСѓСЃС‚РёР» РёСЃРїРѕР»РЅРёС‚РµР»СЏ вЂ” РЅРѕРІР°СЏ РїРѕРїС‹С‚РєР° РїРѕР»СѓС‡Р°РµС‚ Рё СЃРІРѕР№ РѕРєР»РёРє, Рё СЃРІРѕС‘
+        // СѓРІРµРґРѕРјР»РµРЅРёРµ, РёРЅР°С‡Рµ СЃС‚СЂР°С…РѕРІРєР° РјРѕР»С‡Р°Р»Р° Р±С‹ РЅР°РІСЃРµРіРґР°
         var (task, chat) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(40));
         _tasks.MarkExecutorNudged(task.Id, Now.AddMinutes(-20));
         await _sut.CheckStalledExecutorAsync(_tasks.GetById(task.Id)!, Now);

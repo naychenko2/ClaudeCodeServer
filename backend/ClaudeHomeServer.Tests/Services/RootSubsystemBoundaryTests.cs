@@ -124,11 +124,6 @@ public class RootSubsystemBoundaryTests
         // Генерация картинок и backfill: ImageGenerationService,
         // ImageBackfillService, ImageModelInfo, GeneratedImage. 4 пары.
         "ClaudeHomeServer.Services.Images",
-        // Паспорта изменений: DossierRecallService / DossierRecallRequest.
-        // Используются PersonaMemoryService для recall-фазы памяти. 2 пары —
-        // кандидат на переезд в RootAllowedExactTypes, оставлен префиксом для
-        // запаса при добавлении новых полей recall-фазы.
-        "ClaudeHomeServer.Services.Dossiers",
         // Триггеры автоматизации: MentionTriggerSource, AutomationRootResolver,
         // ITriggerSource. PersonaAutomationService опирается на них напрямую.
         // 3 пары — кандидат на сужение, оставлен префиксом ради новых источников.
@@ -269,7 +264,7 @@ public class RootSubsystemBoundaryTests
             .ToList();
 
         rootTypes.Should().NotBeEmpty(
-            "в корне ClaudeHomeServer.Services должны найтись типы (ориентир замера — ~189) — " +
+            "в корне ClaudeHomeServer.Services должны найтись типы (ориентир замера — ~95 после волны 4) — " +
             "иначе проверка границ корня ничего не проверяет");
 
         var violations = new List<string>();

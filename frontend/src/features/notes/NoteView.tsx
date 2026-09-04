@@ -777,6 +777,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 panelBelow={isMobile || connectionsBelow}
                 panelTarget={!isMobile && !connectionsBelow ? panelEl : null}
                 deferPanel={!isMobile && !connectionsBelow}
+                // Сайдбар связей плавает справа, текст обтекает его и уходит под него —
+                // рельс маркеров живёт на левом поле. Связи ушли под контент — правое
+                // поле свободно, рельс возвращается туда
+                railSide={!isMobile && !connectionsBelow ? 'left' : 'right'}
                 viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source, hideLeadingH1: hero }}
               />
             )}

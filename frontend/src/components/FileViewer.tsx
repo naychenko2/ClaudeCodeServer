@@ -1498,8 +1498,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
   // Колонка документа: свойства сверху, панель комментариев под ними (приезжает порталом
   // в sideEl). Живёт, пока есть хоть один блок — пустая рамка сбоку документу ни к чему.
-  // Режим выбирается по комментариям: они — длинный живой список, ему нужна своя полоса;
-  // одни свойства — низкая карточка, её текст спокойно обтекает
+  // Раскладка ОДНА на оба случая (со свойствами и с комментариями): вторая колонка флекса
+  // жала бы текст в остаток ширины на всю длину документа, оставляя справа под низкой
+  // панелью пустую полосу до конца
   const hasComments = (commentCounts?.total ?? 0) > 0;
   const docSide = (docProps.type || hasComments) ? (
     <aside style={stackSide ? {
@@ -1507,22 +1508,22 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       // строками, а не полосой пустоты
       width: '100%', marginTop: 12,
       borderTop: `1px solid ${C.border}`, paddingTop: 4,
-    } : hasComments ? {
-      // Есть комментарии — колонка в потоке, справа от текста (не плавающая):
-      // панель не перекрывает контент, sticky держит её в вьюпорте на длинных
-      // документах. Компактная ступень (сплит с чатом): 224px вместо 290 — секции
-      // свёрнуты в заголовки, этой ширины хватает, а документу остаётся больше
-      width: sideCompact ? 224 : 290, flex: 'none',
-      position: 'sticky', top: SP.xs,
-      maxHeight: 'calc(100vh - 150px)', overflowY: 'auto',
-      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-      padding: '10px 12px', boxShadow: SHADOW.card,
     } : {
-      // Только свойства — липкая накладка: карточка плывёт справа, текст её обтекает
-      // и ниже идёт во всю ширину под неё — поэтому фон непрозрачный, а рамка с тенью
-      // читаются как наложенная карточка, а не как часть документа
+      // Накладка: карточка плывёт справа, текст её обтекает и ниже идёт во всю ширину
+      // под неё — поэтому фон непрозрачный, а рамка с тенью читаются как наложенная
+      // карточка, а не как часть документа. Компактная ступень (сплит с чатом): 224px
+      // вместо 290 — секции свёрнуты в заголовки, этой ширины хватает, а документу
+      // остаётся больше
       float: 'right', width: sideCompact ? 224 : 290, marginLeft: 18, marginBottom: 12,
-      position: 'sticky', top: SP.xs, zIndex: 1,
+      // Липкость — ТОЛЬКО у низкой карточки свойств. С комментариями карточка вырастает
+      // почти во весь экран, и липкая она тащилась бы вниз накладкой на текст: правая
+      // треть строк уходила бы в слепую зону, где нельзя ни прочитать, ни выделить —
+      // то есть сам жест «выделил кусок → оставил комментарий» переставал бы работать.
+      // Возврат к панели остаётся по клику на маркер. Так же ведёт себя сайдбар связей
+      // в NoteView. zIndex держит карточку над прокомментированными блоками: маркеры
+      // ставят им position: relative, и без него абзацы лезли бы поверх неё
+      ...(hasComments ? null : { position: 'sticky' as const, top: SP.xs }),
+      zIndex: 1,
       maxHeight: 'calc(100vh - 150px)', overflowY: 'auto',
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
       padding: '10px 12px', boxShadow: SHADOW.card,
@@ -2054,23 +2055,25 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                     // порталом (panelTarget), иначе она рисует собственный сайдбар и рядом
                     // с документом оказывается две колонки.
                     //
-                    // Раскладку определяет НАЛИЧИЕ КОММЕНТАРИЕВ:
-                    // — есть комментарии: колонка в потоке (flex-рядок), текст не обтекает
-                    //   и не уходит под панель;
-                    // — только свойства: плавающая карточка (float, контейнер flow-root —
-                    //   замена clearfix), текст обтекает и ниже идёт во всю ширину.
-                    <div style={hasComments
-                      ? { display: 'flex', alignItems: 'flex-start', gap: 18 }
-                      : { display: 'flow-root' }}>
+                    // Блок ПЛАВАЮЩИЙ, а не вторая колонка флекса: свёрнутые секции — это
+                    // две-три строки заголовков, и в двухколоночной раскладке весь текст
+                    // ниже всё равно жался бы в остаток ширины, оставляя справа пустую
+                    // полосу до самого конца документа. Обтекание пускает текст под блок,
+                    // flow-root — чтобы контейнер учитывал высоту флоата (замена clearfix)
+                    <div style={{ display: 'flow-root' }}>
                       {/* Плавающая карточка обязана стоять в разметке ДО текста, который её
                           обтекает */}
-                      {!hasComments && !stackSide && docSide}
-                      <div style={hasComments ? { flex: 1, minWidth: 0 } : { minWidth: 0 }}
+                      {!stackSide && docSide}
+                      <div style={{ minWidth: 0 }}
                         data-selection-scope="doc" data-selection-priority="2">
                         <DocCommentedMarkdown
                           scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
                           onCounts={onCommentCounts}
                           panelTarget={sideEl}
+                          // Карточка свойств и комментариев плавает справа, текст идёт под
+                          // неё — рельс маркеров уводим на левое поле. Уехала карточка под
+                          // текст (узкий просмотрщик) — правое поле снова свободно
+                          railSide={stackSide ? 'right' : 'left'}
                           // Пока контейнер колонки не смонтирован, панель не рисуется нигде:
                           // без этого она успевала мигнуть на своём обычном месте
                           deferPanel
@@ -2087,7 +2090,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                             где его ждут глазами */}
                         {stackSide && docSide}
                       </div>
-                      {hasComments && !stackSide && docSide}
                     </div>
                   )
                   : <div data-selection-scope="doc" data-selection-priority="2"><SyntaxHighlighter

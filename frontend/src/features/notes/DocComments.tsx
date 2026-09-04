@@ -30,6 +30,11 @@ const COMMENTS_OPEN_KEY = 'cc_doc_comments_open';
 
 const statusColor = (open: boolean) => (open ? C.warning : C.success);
 
+// Зазор между краем документа и флажком: поле шире рельса ровно на него, и на столько же
+// маркер отступает от края. Одно число на обе стороны — иначе рельс, меняя сторону,
+// смещался бы относительно текста без причины
+const RAIL_EDGE = 6;
+
 // Ступени рельса маркеров по ширине документа: размер флажка, его зазор от текста
 // и размер иконки внутри. Узкий документ (сплит с чатом, мобила) обязан отдавать полю
 // меньше — иначе строка текста рвётся на два слова
@@ -101,11 +106,16 @@ interface Props {
   // Панель предназначена для внешнего контейнера (panelTarget). Пока контейнер не готов
   // (первый рендер, ref ещё не назначен) — не рисуем собственную панель, чтобы не мелькала.
   deferPanel?: boolean;
+  // Сторона поля под маркеры комментариев. 'left' — когда справа стоит ПЛАВАЮЩАЯ карточка
+  // (свойства и комментарии у файла, связи в заметке): текст обтекает её и уходит под неё,
+  // и маркеры на правом поле прятались бы под карточкой. Дефолт 'right' — панели справа
+  // нет либо она ушла под текст, и маркер смотрит в сторону панели
+  railSide?: 'left' | 'right';
 }
 
 const HINT_KEY = 'cc_doc_comments_hint';
 
-export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts, panelTarget, deferPanel }: Props) {
+export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts, panelTarget, deferPanel, railSide = 'right' }: Props) {
   const docRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { items, reload } = useDocAnnotations(scope, docPath);
@@ -347,14 +357,26 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  // ── Маркеры якорных блоков на правом поле (DOM-слой поверх рендера) ──
-  // Флажок-кружок и пунктирная нить живут В ПОЛЕ справа, текста не касаются: заливка
-  // блока плюс полоса слева читались как blockquote (у цитаты ровно этот язык —
-  // сплошная полоса слева + фон). Поле справа, а не слева, потому что там же стоит
-  // панель комментариев — маркер смотрит в её сторону
+  // ── Маркеры якорных блоков на поле документа (DOM-слой поверх рендера) ──
+  // Флажок-кружок и пунктирная нить живут В ПОЛЕ, текста не касаются: заливка блока
+  // плюс полоса слева читались как blockquote (у цитаты ровно этот язык — сплошная
+  // полоса слева + фон). Сторону поля задаёт railSide: по умолчанию правое (маркер
+  // смотрит в сторону панели), но когда справа плавает карточка свойств и комментариев,
+  // текст уходит под неё — там поле занято, и рельс переезжает налево.
+  // Слева с цитатой рельс не спорит, хотя стоит с той же стороны: нить ПУНКТИРНАЯ,
+  // статусного цвета и вынесена ЗА бокс текста, тогда как полоса цитаты сплошная,
+  // акцентная и приклеена к её краю
   useEffect(() => {
     const root = docRef.current;
     if (!root) return;
+    const railLeft = railSide === 'left';
+    // Левое поле — общее для всех блоков, поэтому смещение считается от края документа,
+    // а не от края блока: иначе маркеры пунктов списка и цитат вставали бы лесенкой
+    // по своим отступам и налезали на буллеты. У скрытого предка (вкладка, свёрнутая
+    // панель) замер даёт нули, и маркер сел бы поверх первых букв — ждём раскладки:
+    // эффект вернётся сюда по docWidth, как только контейнер покажут
+    if (railLeft && root.offsetWidth === 0) return;
+    const rootLeft = root.getBoundingClientRect().left;
     const cleanups: (() => void)[] = [];
     const byBlock = new Map<HTMLElement, DocAnnotation[]>();
     for (const a of shown) {
@@ -381,8 +403,11 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       const color = selected ? C.accent : statusColor(hasOpen);
       // Блок со своим скроллом (таблица едет в обёртке overflow-x) обрезал бы маркер
       // в поле и получал вечную горизонтальную прокрутку на его ширину — такому блоку
-      // флажок ставим ВНУТРЬ, у правого края, и нить не тянем
+      // флажок ставим ВНУТРЬ, у ближнего края, и нить не тянем
       const clipped = isClipped(el);
+      // Отступ блока от левого края документа: на него сдвигаем маркер, чтобы он встал
+      // в общее поле, а не у собственного края вложенного блока
+      const indent = railLeft ? el.getBoundingClientRect().left - rootLeft : 0;
       // Флажок: счётчик, когда комментариев несколько, иначе иконка статуса
       // (пузырёк — есть открытые, галочка — все решены)
       const flag = document.createElement('button');
@@ -393,7 +418,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         : 'Все решены';
       Object.assign(flag.style, {
         position: 'absolute', top: clipped ? '3px' : '1px',
-        right: clipped ? '3px' : `-${rail.size + rail.gap}px`,
+        ...(railLeft
+          ? { left: clipped ? `${RAIL_EDGE}px` : `-${Math.max(indent - RAIL_EDGE, 0)}px` }
+          : { right: clipped ? '3px' : `-${rail.size + rail.gap}px` }),
         width: `${rail.size}px`, height: `${rail.size}px`, borderRadius: '50%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         border: `${rail.size >= 16 ? 1.5 : 1}px solid ${color}`,
@@ -422,10 +449,14 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       if (thread) {
         thread.dataset.annMarker = '';
         Object.assign(thread.style, {
-          position: 'absolute', right: `-${rail.size / 2 + rail.gap}px`,
+          position: 'absolute',
+          // Нить идёт по центру кружка — с той же стороны, что и он сам
+          ...(railLeft
+            ? { left: `-${Math.max(indent - RAIL_EDGE - rail.size / 2, 0)}px`, borderLeft: `1.5px dashed ${color}` }
+            : { right: `-${rail.size / 2 + rail.gap}px`, borderRight: `1.5px dashed ${color}` }),
           // Зазор в 5px под кружком — чтобы нить начиналась от его края, а не из-под него
           top: `${rail.size + 5}px`, bottom: '1px',
-          borderRight: `1.5px dashed ${color}`, opacity: '.6', pointerEvents: 'none',
+          opacity: '.6', pointerEvents: 'none',
         } satisfies Partial<CSSStyleDeclaration>);
         el.appendChild(thread);
       }
@@ -441,7 +472,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     return () => cleanups.forEach(f => f());
     // Ступень раскладывается на примитивы: объект rail пересобирается на каждый
     // пиксель перетаскивания сплиттера, а маркеры зависят только от самих чисел
-  }, [shown, content, fmOffset, selectedId, rail.size, rail.gap, rail.icon]);
+    // docWidth — не только ступень рельса: по нему эффект возвращается, когда скрытый
+    // контейнер показали и замер левого поля наконец возможен
+  }, [shown, content, fmOffset, selectedId, rail.size, rail.gap, rail.icon, railSide, docWidth]);
 
   // Действия секции: разбор открытых и фильтр. Живут в правом слоте заголовка и видны,
   // только пока секция раскрыта
@@ -630,20 +663,26 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const below = !useTarget && !defer && (isMobile || panelBelow);
   return (
     // Панель уехала во внешний контейнер (useTarget) — своя двухколоночная раскладка тут
-    // не нужна и ВРЕДНА: у открытого файла колонка свойств и комментариев уже стоит
-    // справа в потоке (FileViewer), вторая колонка рядом дала бы двойную полосу
+    // не нужна и ВРЕДНА: flex-контейнер не обтекает плавающие блоки, а колонка свойств
+    // и комментариев у открытого файла стоит именно плавающей, чтобы текст шёл под ней,
+    // а не оставлял пустую полосу справа
     <div style={useTarget ? undefined : { display: 'flex', alignItems: 'flex-start', gap: 18 }}>
       <div ref={setDocNode} onMouseUp={onMouseUp} onTouchEnd={onMouseUp}
         style={{
           ...(useTarget ? { minWidth: 0 } : { flex: 1, minWidth: 0 }),
-          // Место под рельс маркеров справа — иначе флажок вылезет за край документа.
+          // Место под рельс маркеров — иначе флажок вылезет за край документа.
           // Пока комментариев нет, поле документу ни к чему
-          paddingRight: items.length > 0 ? rail.size + rail.gap + 6 : undefined,
-          // Своё BFC — условие соседства с плавающей колонкой (NoteView держит сайдбар
-          // связей на float): без него бокс текста уходит ПОД колонку вместе с полем,
-          // и маркеры ложатся поверх её карточек. Та же причина, что у ul/blockquote
-          // в MarkdownViewer
-          display: items.length > 0 ? 'flow-root' : undefined,
+          ...(items.length > 0
+            ? railSide === 'left'
+              ? { paddingLeft: rail.size + rail.gap + RAIL_EDGE }
+              : { paddingRight: rail.size + rail.gap + RAIL_EDGE }
+            : null),
+          // Рельс справа соседствует с плавающей колонкой (NoteView держит сайдбар
+          // связей на float) — там тексту нужно СВОЁ BFC, иначе он уходит под колонку
+          // вместе с полем и маркеры ложатся поверх её карточек. С рельсом слева всё
+          // наоборот: поле свободно, и BFC только запрещал бы обтекание, оставляя
+          // справа пустую полосу до конца документа
+          display: items.length > 0 && railSide === 'right' ? 'flow-root' : undefined,
         }}>
         {/* Подсказка первого использования — пока нет ни одного комментария */}
         {!hintDismissed && items.length === 0 && (

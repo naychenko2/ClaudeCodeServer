@@ -1,9 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Memory;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Memory;
 
 // Консолидация долгой памяти персон (P4, флаг persona-memory-consolidation).
 // Два шага: (1) LLM-merge — one-shot предлагает схлопнуть дубли/родственные записи

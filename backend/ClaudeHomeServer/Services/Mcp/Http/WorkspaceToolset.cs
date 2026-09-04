@@ -9,6 +9,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Deploy;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Memory;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;

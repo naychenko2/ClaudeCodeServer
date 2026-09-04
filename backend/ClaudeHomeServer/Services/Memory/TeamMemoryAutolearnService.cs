@@ -4,10 +4,9 @@ using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Memory;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Memory;
 
 // Авто-память КОМАНДЫ проекта (флаг team-memory-autolearn): по завершении хода в ЛЮБОЙ проектной
 // сессии — обычной, групповом чате или совещании — one-shot вызовом Claude вычленяет из диалога

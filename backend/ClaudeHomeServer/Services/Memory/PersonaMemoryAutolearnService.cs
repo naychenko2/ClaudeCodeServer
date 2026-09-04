@@ -2,9 +2,8 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Memory;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Memory;
 
 // Авто-память персоны (флаг persona-memory-autolearn): по завершении хода в персонной
 // сессии one-shot вызовом Claude извлекает из диалога факты о пользователе (semantic) и

@@ -89,13 +89,12 @@ public class SubsystemBoundaryCoverageTests
 
         // Вертикали без подсистемы. Список явный: если появится ещё одна «вертикаль
         // с неймспейсом, но без IAppSubsystem», добавляется строка сюда, и тест сразу
-        // это отразит. Сегодня — Watchdog и Terminal (регистрация одна, прецедент
-        // не заводить подсистему ради единственного AddSingleton).
-        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "ClaudeHomeServer.Services.Watchdog",
-            "ClaudeHomeServer.Services.Terminal",
-        };
+        // это отразит. Сегодня — пусто: Watchdog и Terminal уже имеют строки в
+        // `SubsystemBoundaryTests.Boundaries` (это «вертикали с подсистемой», но
+        // без `IAppSubsystem` — попадают в общую таблицу, не в этот список).
+        // Покрытие = пересечение с `boundaryRoots`, отдельный список не нужен
+        // (был дубль — убран в волне 4B шаг 1, см. отчёт).
+        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal);
 
         var allExpected = new HashSet<string>(boundaryRoots, StringComparer.Ordinal);
         foreach (var ns in verticalOnlyNamespaces) allExpected.Add(ns);
@@ -196,11 +195,11 @@ public class SubsystemBoundaryCoverageTests
             .Select(o => ((SubsystemBoundaryTests.VerticalBoundary)o[0]).NamespaceRoot)
             .ToHashSet(StringComparer.Ordinal);
 
-        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "ClaudeHomeServer.Services.Watchdog",
-            "ClaudeHomeServer.Services.Terminal",
-        };
+        // Дубль `verticalOnlyNamespaces` для Watchdog/Terminal убран (волна 4B шаг 1):
+        // обе вертикали уже имеют строки в `Boundaries`, отдельная запись тут
+        // маскировала бы удаление строки из `Boundaries`. Пустой список ниже
+        // остаётся как явный сигнал «вертикалей без строки в Boundaries нет».
+        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal);
 
         var coveredNamespaces = new HashSet<string>(StringComparer.Ordinal);
         foreach (var ns in boundaryRoots) coveredNamespaces.Add(ns);

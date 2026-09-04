@@ -4,9 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
-using ClaudeHomeServer.Services.Memory;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Memory;
 
 // Память команды проекта (③-3.4): общее хранилище решений/договорённостей/фактов/терминов проекта,
 // из которого ВСЕ персоны команды recall'ят наравне с личной памятью — команда учится вместе, а не

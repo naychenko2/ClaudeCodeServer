@@ -576,8 +576,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.PersonaMemoryService",
-                    "ClaudeHomeServer.Services.TeamMemoryService",
+                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
+                    "ClaudeHomeServer.Services.Memory.TeamMemoryService",
                     "ClaudeHomeServer.Services.Dossiers.DossierStore",
                     "ClaudeHomeServer.Services.NotesKnowledgeService",
                     "ClaudeHomeServer.Controllers.KnowledgeBaseSummary",
@@ -638,16 +638,12 @@ public class SubsystemBoundaryTests
                 }),
         },
         // Memory — долгая память персон и общая память команды проекта. Подсистема
-        // регистрирует только фасады (PersonaMemoryService/TeamMemoryService + их
-        // консолидация/autolearn), а общий слой ядра (MemoryWriteResolver/MemoryDify/
-        // MemoryConsolidationCore/AutolearnGate/...) живёт в этом namespace уже давно.
-        // Список сверен прогоном probe (волна 4, шаг 0 — доработка по ревью): в нём
-        // ровно то, что подтверждается фактической ссылкой. Удалены как мёртвые
-        // `SessionManager`/`ProjectManager`/`PersonaManager`/`ProjectEventLogService`,
-        // `PersonaMemoryService`/`TeamMemoryService`, `Protocol.StoredUserMessage`/
-        // `Protocol.StoredTextMessage` и префикс `ClaudeHomeServer.Hubs` — все эти связи
-        // идут из ТЕЛ методов фасадов, живущих в корне `Services`, а тела рефлексия
-        // не читает (см. «Известное ограничение» в шапке).
+        // регистрирует фасады `PersonaMemoryService`/`TeamMemoryService` + их
+        // консолидацию/autolearn; в волне 4B шаг 1 эти шесть файлов переехали
+        // из корня `Services/` в `Services/Memory/` — теперь они охвачены префиксом
+        // `ClaudeHomeServer.Services.Memory` и точные имена в allow-list не нужны.
+        // Общий слой ядра (MemoryWriteResolver/MemoryDify/MemoryConsolidationCore/
+        // AutolearnGate/...) живёт в этом namespace уже давно.
         // Префиксы-швы (как у Dossiers/Spend):
         // 1) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify;
         //    `MemoryDify` держит `KnowledgeService` полем и материализует
@@ -655,15 +651,38 @@ public class SubsystemBoundaryTests
         // 2) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` в поле
         //    `MemoryWriteResolver` (консолидация LLM-merge и autolearn). Префикс-шов,
         //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`/`Dossiers`.
-        // Точечные допуски к корню Services:
-        // 3) Четыре фасада (`PersonaMemoryConsolidationService`/`PersonaMemoryAutolearnService`/
-        //    `TeamMemoryConsolidationService`/`TeamMemoryAutolearnService`) — их регистрирует
-        //    `MemorySubsystem` лямбдами, типы видны в замыкании `MemorySubsystem+<>c`.
-        //    Точными именами, а не префиксом корня `ClaudeHomeServer.Services` (префикс был бы
-        //    разрушением default-deny): сами типы пока живут в корне, полный переезд
-        //    в `Services.Memory` — отдельная задача.
+        // Точечные допуски к корню Services — «вертикаль → спинка», аналогично
+        // `Dossiers`/`Knowledge`/`Git`. После переезда фасадов в `Services.Memory`
+        // эти связи стали видны сторожу (раньше они шли из тел методов корневых
+        // фасадов — рефлексия тел не читала, см. «Известное ограничение»):
+        // 3) `SessionManager` (PersonaMemoryService.cs:61, PersonaMemoryAutolearnService.cs:32,
+        //    TeamMemoryAutolearnService.cs:40, TeamMemoryConsolidationService.cs:?;
+        //    TeamMemoryService.cs:?) — нужен фасадам памяти для подписки на ходы
+        //    (`OnSessionMessage`) и записи recall-результатов.
+        // 4) `ProjectManager` (TeamMemoryAutolearnService.cs:40, TeamMemoryService.cs:?) —
+        //    фасады team-памяти резолвят проект для recall и для авто-памяти.
+        // 5) `UserStore` (PersonaMemoryService.cs:61) — общий учёт пользователей,
+        //    нужен для проверки владельца персоны/проекта в lookup-методах фасадов.
+        // 6) `PersonaManager` (PersonaMemoryService.cs:61, PersonaMemoryAutolearnService.cs:32,
+        //    PersonaMemoryConsolidationService.cs:29) — lookup персоны для recall
+        //    итераций и для авто-памяти по итогам хода. Тип живёт в корне `Services/`
+        //    без IAppSubsystem (Persona в инвентаре — группа, а не подсистема), и
+        //    формально это «вертикаль → root-синглтон», а не «вертикаль → вертикаль».
+        //    Но исторически тип принадлежит группе Persona, поэтому фиксируем
+        //    явно в отчёте шага 4B.1: `Memory` → `PersonaManager` — фактическая
+        //    зависимость от «доменной модели персон», допустимая как вертикаль →
+        //    спинка, по аналогии с тем, как `Images` зависит от того же типа
+        //    (см. Boundaries.Images ниже).
+        // 7) `PersonaMemoryScorer`/`TeamMemoryScorer` (PersonaMemoryConsolidationService.cs:112,
+        //    TeamMemoryConsolidationService.cs:?) — статические вызовы из тел методов
+        //    `BuildEvictIds`. Сторож видит только сигнатуры public-методов, тела —
+        //    нет (см. «Известное ограничение» в шапке). Поэтому эти типы НЕ попадают
+        //    в allow-list Memory — рефлексия их не видит, и тест остаётся зелёным.
+        //    Это **сознательный** пропуск, не нарушение: те же вызовы из
+        //    `MemoryConsolidationCore.cs` (внутри `Services.Memory`) лежат в
+        //    префиксе `Services.Memory` и не требуют допуска.
         // Точечный допуск к `ClaudeHomeServer.Protocol`:
-        // 4) `StoredMessage` — `AutolearnGate.CheckContent`/`LastTurnLength` принимают
+        // 8) `StoredMessage` — `AutolearnGate.CheckContent`/`LastTurnLength` принимают
         //    `IReadOnlyList<StoredMessage>` (видна в сигнатуре public-метода). Префикс
         //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые
         //    зависимости от любых из ~105 публичных типов протокола.
@@ -681,17 +700,21 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Memory",
                         "ClaudeHomeServer.Services.Knowledge",
                         "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
                 new[]
                 {
-                    // Четыре фасада памяти — регистрируются лямбдами MemorySubsystem,
-                    // видны в замыкании `MemorySubsystem+<>c`. Сами типы пока в корне
-                    // `ClaudeHomeServer.Services`, поэтому точные имена.
-                    "ClaudeHomeServer.Services.PersonaMemoryConsolidationService",
-                    "ClaudeHomeServer.Services.PersonaMemoryAutolearnService",
-                    "ClaudeHomeServer.Services.TeamMemoryConsolidationService",
-                    "ClaudeHomeServer.Services.TeamMemoryAutolearnService",
+                    // Вертикаль → спинка (см. пункты 3-6 комментария выше).
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.ProjectEventLogService",
+                    "ClaudeHomeServer.Services.NotesService",
+                    "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
+                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
+                    "ClaudeHomeServer.Services.Dossiers.DossierRecallResult",
                     // AutolearnGate.CheckContent / LastTurnLength — public-метод
                     // с параметром IReadOnlyList<StoredMessage>.
                     "ClaudeHomeServer.Protocol.StoredMessage",
@@ -837,9 +860,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SkillInfo",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.PersonaMemoryService",
-                    "ClaudeHomeServer.Services.PersonaMemoryHit",
-                    "ClaudeHomeServer.Services.PersonaMemoryService+PersonaRecallResult",
+                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
+                    "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
+                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
                     "ClaudeHomeServer.Services.SpecialtySettingsStore",
                     "ClaudeHomeServer.Services.SpecialtySettingsStore+EffectivePromptSection",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
@@ -1088,8 +1111,17 @@ public class SubsystemBoundaryTests
         //    - `OutputRingBuffer` — общий примитив реплея вывода (шапка `OutputRingBuffer.cs`).
         // 4) Точечные допуски к `ClaudeHomeServer.Protocol`: `TerminalOutputMessage`/
         //    `TerminalStatusMessage`/`TerminalRenamedMessage` — типы WS-событий терминала,
-        //    которые TerminalService шлёт в хаб (TerminalService.cs:252-414). Префикс
+        //    которые TerminalService шлёт в хаб (TerminalService.cs:272,297,396). Префикс
         //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые зависимости.
+        //    ⚠ Эти три записи **инертны** с точки зрения сторожа: использование
+        //    идёт из ТЕЛ методов TerminalService (SendAsync с новым message-объектом
+        //    не переживает await — поля state-машины нет), а сторож читает только
+        //    публичные сигнатуры. Удаление всех трёх оставляет тест зелёным —
+        //    проверено ревью 4A. Оставлены как **обозначение шва**, чтобы будущая
+        //    правка TerminalService, вытащившая один из типов в публичную сигнатуру,
+        //    сразу упёрлась в сторож — по образцу шва `Deploy → Services.Backup`,
+        //    задокументированного в шапке (невидимо для рефлексии — обозначение шва,
+        //    не контролируемое сторожем).
         new object[]
         {
             new VerticalBoundary(

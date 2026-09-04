@@ -1,8 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
-using ClaudeHomeServer.Services.Images;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Images;
 
 // Генерация изображений через fal.ai (тем же ключом Fal:ApiKey, что и учёт стоимости).
 // Синхронный вызов fal.run/{model}: возвращает картинку, которую мы скачиваем в байты.

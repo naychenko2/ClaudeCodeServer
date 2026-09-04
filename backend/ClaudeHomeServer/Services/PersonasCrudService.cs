@@ -4,6 +4,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.TriggerSources;
 using Microsoft.AspNetCore.Mvc;

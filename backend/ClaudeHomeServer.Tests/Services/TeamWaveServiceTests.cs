@@ -2,6 +2,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Prompts;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;

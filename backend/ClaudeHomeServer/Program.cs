@@ -618,9 +618,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageSt
 // `AddSingleton` ниже — форвардеры IKnowledgeSyncParticipant для них, а сами
 // регистрации этих сервисов переехали в `MemorySubsystem.Register`.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-    sp => sp.GetRequiredService<PersonaMemoryService>());
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.PersonaMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-    sp => sp.GetRequiredService<TeamMemoryService>());
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.TeamMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(

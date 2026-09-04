@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>
 /// Выданная ссылка внешнего доступа. Самого токена здесь НЕТ — он у клиента, а мы храним

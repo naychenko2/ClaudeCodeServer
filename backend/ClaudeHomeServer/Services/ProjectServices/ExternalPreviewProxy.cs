@@ -1,7 +1,7 @@
 using System.Net;
 using Yarp.ReverseProxy.Forwarder;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>
 /// Правки запроса и ответа при форварде на дев-сервер поддомена.

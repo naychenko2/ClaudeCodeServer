@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>Кто слушает порт: номер процесса и его имя (имя может не читаться — процесс чужой).</summary>
 public sealed record PortOwner(int Pid, string? ProcessName);

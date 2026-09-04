@@ -1,8 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ProjectServices;
 using FluentAssertions;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 

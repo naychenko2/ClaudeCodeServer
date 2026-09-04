@@ -3,7 +3,6 @@ using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
@@ -12,6 +11,8 @@ using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
+using ClaudeHomeServer.Services.ProjectServices;
+using ClaudeHomeServer.Services.Terminal;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
@@ -19,11 +20,9 @@ using ClaudeHomeServer.Services.Video;
 using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
-using Yarp.ReverseProxy.Model;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -436,25 +435,14 @@ builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configurat
 builder.Services.AddGatedHostedService<NoteExpiryService>(builder.Configuration);
 // Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
 builder.Services.AddGatedHostedService<ChangelogWarmupService>(builder.Configuration);
-// Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
+// Терминал (PTY) — единственная регистрация в корне Services, под гейтом workspace-destructive.
+// Подсистема не заведена сознательно: единственная регистрация и два резолва при
+// shutdownTerminals (см. блок var app = builder.Build() ниже) — прецедент вертикали
+// без IAppSubsystem, как у Services.Watchdog.
 builder.Services.AddSingleton<TerminalService>();
-// Последний известный порт сервиса: без него живой дев-сервер после перезапуска продукта
-// выглядел бы остановленным, и запуск падал бы на занятом порту
-builder.Services.AddSingleton<DevServerPortMemory>();
-builder.Services.AddSingleton<DevServerService>();
-builder.Services.AddSingleton<LaunchConfigService>();
-builder.Services.AddSingleton<ProjectServiceDiscovery>();
-// Внешний доступ к дев-серверу проекта по отдельному поддомену. По умолчанию ВЫКЛЮЧЕН —
-// см. ExternalPreviewOptions: код уезжает всем, у кого свой инстанс, поэтому защита обязана
-// быть конфигурацией, а не отсутствием кода.
-builder.Services.Configure<ExternalPreviewOptions>(builder.Configuration.GetSection(ExternalPreviewOptions.Section));
-builder.Services.AddSingleton<ExternalPreviewStore>();
-builder.Services.AddSingleton<ExternalPreviewRouter>();
-// "proxy" ходит только к нашим же сервисам: dev-серверы проектов и скачивание готового
-// документа у OnlyOffice в office-callback. Egress-прокси им не нужен — см. WithoutEgressProxy.
-// Медиа-прокси /api/proxy на этом клиенте НЕ сидит — он живёт на отдельном "media-proxy" ниже:
-// прямой канал наружу душится DPI, поэтому внешние CDN обязаны идти через системный egress.
-builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
+// Раздел «Сервисы проекта» (Preview/DevServer/ExternalPreview/...) — пилотная подсистема
+// волны 4A. Сам `ProjectServicesSubsystem.Register` подключает ВСЕ регистрации этой
+// группы: подсистема самодостаточна, точка регистрации HTTP-клиента `proxy` тоже там.
 // Внешние CDN медиа (/api/proxy): прямой канал к ним душится DPI —
 // эти запросы ОБЯЗАНЫ идти через системный egress-прокси.
 builder.Services.AddHttpClient("media-proxy");
@@ -506,7 +494,11 @@ builder.Services.AddSubsystems(builder.Configuration,
     new ClaudeHomeServer.Services.Tts.TtsSubsystem(),
     new ClaudeHomeServer.Services.Deploy.DeploySubsystem(),
     new ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem(),
-    new ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem());
+    new ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem(),
+    // ProjectServices — раздел «Сервисы проекта» (Preview/DevServer). Регистрация ниже
+    // всех: вертикаль листовая, ни от кого не зависит; наоборот, на неё ссылаются
+    // PreviewController и SessionHub (через Program.cs).
+    new ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

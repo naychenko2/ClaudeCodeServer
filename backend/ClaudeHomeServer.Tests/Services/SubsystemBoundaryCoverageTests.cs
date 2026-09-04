@@ -87,12 +87,14 @@ public class SubsystemBoundaryCoverageTests
             .Select(o => ((SubsystemBoundaryTests.VerticalBoundary)o[0]).NamespaceRoot)
             .ToHashSet(StringComparer.Ordinal);
 
-        // Вертикали без подсистемы. На сегодня — единственная (Watchdog). Список явный:
-        // если появится ещё одна «вертикаль с неймспейсом, но без IAppSubsystem»,
-        // добавляется строка сюда, и тест сразу это отразит.
+        // Вертикали без подсистемы. Список явный: если появится ещё одна «вертикаль
+        // с неймспейсом, но без IAppSubsystem», добавляется строка сюда, и тест сразу
+        // это отразит. Сегодня — Watchdog и Terminal (регистрация одна, прецедент
+        // не заводить подсистему ради единственного AddSingleton).
         var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal)
         {
             "ClaudeHomeServer.Services.Watchdog",
+            "ClaudeHomeServer.Services.Terminal",
         };
 
         var allExpected = new HashSet<string>(boundaryRoots, StringComparer.Ordinal);
@@ -197,6 +199,7 @@ public class SubsystemBoundaryCoverageTests
         var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal)
         {
             "ClaudeHomeServer.Services.Watchdog",
+            "ClaudeHomeServer.Services.Terminal",
         };
 
         var coveredNamespaces = new HashSet<string>(StringComparer.Ordinal);

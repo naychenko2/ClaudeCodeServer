@@ -4,7 +4,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Terminal;
 
 /// <summary>ДТО списка терминалов для фронта.</summary>
 public record TerminalInfoDto(string Id, string ProjectId, string Name, string Status, string? Shell);

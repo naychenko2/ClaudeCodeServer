@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>
 /// Определяет, по какой семье loopback-адресов отвечает порт, и собирает базовый URL

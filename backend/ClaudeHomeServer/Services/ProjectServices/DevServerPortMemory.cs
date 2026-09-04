@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>Что мы помним о прошлом запуске сервиса: где слушал и каким процессом был.</summary>
 public sealed record RememberedRun(int Port, int Pid);

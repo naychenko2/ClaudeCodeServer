@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using Microsoft.Extensions.Options;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>Почему запрос на поддомен не обслужен. Наружу коды не раскрываем — только в лог.</summary>
 public enum ExternalPreviewDenial

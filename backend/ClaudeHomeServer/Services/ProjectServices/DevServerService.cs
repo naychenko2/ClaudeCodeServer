@@ -7,7 +7,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>Экземпляр запущенного сервиса проекта (один процесс).</summary>
 internal sealed class DevServerInstance : IDisposable

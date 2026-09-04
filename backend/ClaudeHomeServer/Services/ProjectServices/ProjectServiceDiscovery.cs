@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.ProjectServices;
 
 /// <summary>
 /// Один запускаемый сервис проекта (инференс из манифеста или из <c>.claude/launch.json</c>).

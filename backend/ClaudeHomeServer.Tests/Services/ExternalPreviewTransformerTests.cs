@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ProjectServices;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 

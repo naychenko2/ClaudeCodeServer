@@ -1013,6 +1013,73 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.RuleRuntimeState",
                 }),
         },
+        // ProjectServices — вертикаль раздела «Сервисы проекта» (волна 4A). Допуски:
+        // 1) Префикс-шов `ClaudeHomeServer.Execution` — `IProcessLauncher`/`ILauncherFactory`/
+        //    `SandboxManager` для запуска процессов дев-серверов/терминалов (тот же шов,
+        //    что у `Git`/`Deploy`/`Backgrounds`/`Spend`/`Dossiers`).
+        // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для рассылки
+        //    вывода и статусов дев-серверов подписчикам группы (DevServerService:121).
+        // 3) Допуски к корню Services точечные:
+        //    - `ProjectManager` — общая инфраструктура (`DevServerService`, `ExternalPreviewRouter`).
+        //    - `JwtService` — формирование токена внешней ссылки (`ExternalPreviewRouter:38`).
+        //    - `OutputRingBuffer` — общий примитив реплея вывода, общий с Terminal (шапка
+        //      `OutputRingBuffer.cs:5-10` явно фиксирует общее использование).
+        //    Префикс на корень Services не открываем (default-deny).
+        new object[]
+        {
+            new VerticalBoundary(
+                "ProjectServices",
+                "ClaudeHomeServer.Services.ProjectServices",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.ProjectServices",
+                        "ClaudeHomeServer.Services.Execution",
+                        "ClaudeHomeServer.Hubs",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.JwtService",
+                    "ClaudeHomeServer.Services.OutputRingBuffer",
+                }),
+        },
+        // Terminal — вертикаль PTY-терминала (волна 4A, листовая: регистрация одна,
+        // подсистема не заведена). Допуски:
+        // 1) Префикс-шов `ClaudeHomeServer.Execution` — `IProcessLauncher`/`ILauncherFactory`
+        //    для запуска процессов терминалов (тот же шов, что у `ProjectServices`).
+        // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<TerminalHub>` для рассылки
+        //    вывода/статусов терминала (TerminalService:91).
+        // 3) Допуски к корню Services точечные:
+        //    - `ProjectManager` — общая инфраструктура (`TerminalService:92`).
+        //    - `OutputRingBuffer` — общий примитив реплея вывода (шапка `OutputRingBuffer.cs`).
+        // 4) Точечные допуски к `ClaudeHomeServer.Protocol`: `TerminalOutputMessage`/
+        //    `TerminalStatusMessage`/`TerminalRenamedMessage` — типы WS-событий терминала,
+        //    которые TerminalService шлёт в хаб (TerminalService.cs:252-414). Префикс
+        //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые зависимости.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Terminal",
+                "ClaudeHomeServer.Services.Terminal",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Terminal",
+                        "ClaudeHomeServer.Services.Execution",
+                        "ClaudeHomeServer.Hubs",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.OutputRingBuffer",
+                    "ClaudeHomeServer.Protocol.TerminalOutputMessage",
+                    "ClaudeHomeServer.Protocol.TerminalStatusMessage",
+                    "ClaudeHomeServer.Protocol.TerminalRenamedMessage",
+                }),
+        },
     };
 
     [Theory]

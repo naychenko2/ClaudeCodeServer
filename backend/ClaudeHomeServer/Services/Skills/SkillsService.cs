@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Skills;
 
 public class SkillInfo
 {

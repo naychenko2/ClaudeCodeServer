@@ -187,6 +187,16 @@ public class RootSubsystemBoundaryTests
         // root-тип внутрь Notes.
         "ClaudeHomeServer.Services.Notes.NotesService",
         "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
+        // ⚠ Волна 4C, шаг 3 — выделена вертикаль Skills; известный шов
+        // `SessionManager → SkillsService` (InstalledSkillNames для блока
+        // «Командные механики» руководителя проекта) остаётся до этапа 4
+        // (расщепление SessionManager). Плюс `PersonaBindingsService`/
+        // `PersonasCrudService` дёргают `SkillsService` в ctor для валидации
+        // Skill-привязок персон и UI карточки персоны (список глобальных
+        // скиллов). Префикс `Services.Skills` не открываем (Skills — листовая
+        // продуктовая вертикаль): точечный допуск ровно на `SkillsService` (того
+        // же типа, что у `Llm`/`Turn` в их allow-list).
+        "ClaudeHomeServer.Services.Skills.SkillsService",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

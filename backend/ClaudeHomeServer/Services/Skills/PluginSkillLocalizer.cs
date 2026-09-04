@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Skills;
 
 // Русские описания скиллов установленных плагинов (upstream — на английском, имена команд
 // не трогаем: их резолвит CLI). Перевод — фоном через SkillTranslationService (haiku);

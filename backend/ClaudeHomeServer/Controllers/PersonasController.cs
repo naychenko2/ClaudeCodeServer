@@ -10,6 +10,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Personas;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;

@@ -2,6 +2,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Backup;

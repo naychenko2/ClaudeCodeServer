@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;

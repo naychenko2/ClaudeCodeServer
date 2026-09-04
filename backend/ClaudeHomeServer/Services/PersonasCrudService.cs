@@ -6,6 +6,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Personas;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;

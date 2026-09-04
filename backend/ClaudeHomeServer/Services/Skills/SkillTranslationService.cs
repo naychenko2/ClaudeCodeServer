@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Skills;
 
 // Переводы для реестра навыков (реестр skills.sh — на английском):
 //  • запрос поиска RU→EN (иначе fuzzy/semantic-поиск по английским именам мимо);

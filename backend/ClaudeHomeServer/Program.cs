@@ -239,12 +239,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolv
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
 builder.Services.AddSingleton<PersonaAskService>();
 builder.Services.AddSingleton<SyncService>();
-builder.Services.AddSingleton<SkillsService>();
-builder.Services.AddSingleton<SkillsCliService>();
-builder.Services.AddSingleton<SkillTranslationService>();
-builder.Services.AddSingleton<PluginSkillLocalizer>();
-builder.Services.AddSingleton<SkillSuggestService>();
-builder.Services.AddSingleton<SkillGenerationService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
@@ -493,7 +487,12 @@ builder.Services.AddSubsystems(builder.Configuration,
     // мост чекбоксов заметок ↔ задач). Регистрируется после Tasks: шов `Notes → Tasks`
     // через `NoteTaskSyncService` (TaskManager, CreateTaskRequest, UpdateTaskRequest) —
     // нижний слой регистрируется раньше, как и везде.
-    new ClaudeHomeServer.Services.Notes.NotesSubsystem());
+    new ClaudeHomeServer.Services.Notes.NotesSubsystem(),
+    // Skills — вертикаль навыков (реестр skills.sh, LLM-подбор/генерация, обёртка
+    // CLI «npx skills»). Регистрируется после Notes: порядок с Task/Notes не связан
+    // (Skills — листовая, единственный шов `SessionManager → SkillsService` остаётся
+    // до этапа 4 — расщепление SessionManager).
+    new ClaudeHomeServer.Services.Skills.SkillsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

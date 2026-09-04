@@ -3,7 +3,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Skills;
 
 // Кандидат LLM-подбора: навык реестра + обоснование, почему он подходит контексту.
 public record SkillSuggestion(RegistrySkill Skill, string Reason);

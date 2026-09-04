@@ -2,6 +2,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;

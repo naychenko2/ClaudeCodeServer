@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Skills;
 
 // Сгенерированный навык: слаг-имя (латиница, для папки и frontmatter), описание и тело SKILL.md.
 public record GeneratedSkill(string Name, string Description, string Body);

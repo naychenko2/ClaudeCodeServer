@@ -1,8 +1,7 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Skills;
 
 // Навык из реестра skills.sh (результат поиска/листинга репозитория).
 // Source — «owner/repo», Skill — имя навыка внутри репозитория (сегмент после @).

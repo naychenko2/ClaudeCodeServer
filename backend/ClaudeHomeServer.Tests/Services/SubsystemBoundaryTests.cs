@@ -823,14 +823,14 @@ public class SubsystemBoundaryTests
                     // для них НЕ открываем (default-deny), только FullName.
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ModelTier[]",
-                    "ClaudeHomeServer.Services.SkillInfo",
+                    "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.SkillsService",
+                    "ClaudeHomeServer.Services.Skills.SkillsService",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ModelCatalogService",
                     "ClaudeHomeServer.Services.ModelCatalogService+ModelInfo",
@@ -924,9 +924,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.PersonaPromptBuilder",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.SkillsService",
+                    "ClaudeHomeServer.Services.Skills.SkillsService",
                     "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.SkillInfo",
+                    "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
@@ -1411,6 +1411,47 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Protocol.NotesChangedMessage",
+                }),
+        },
+        // Skills — вертикаль навыков (волна 4C, шаг 3): чтение скиллов и агентов из
+        // глобального (~/.claude/skills, ~/.claude/workflows, ~/.claude/plugins) и
+        // проектного (.claude/skills, .claude/agents) каталога; обёртка CLI «npx skills»
+        // для поиска/установки из реестра skills.sh; LLM-подбор под персону/проект/запрос;
+        // LLM-генерация тела нового навыка; перевод описаний RU→EN; фоновый перевод
+        // плагиновых описаний с персистентным кешем.
+        // Префиксы-швы (по образцу `Tasks`/`Notes`/`Dossiers`):
+        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для `SkillSuggestService`,
+        //    `SkillTranslationService`, `SkillGenerationService` (действия
+        //    `LocalActionCatalog.SkillSuggest/SkillTranslate/SkillGenerate`). Префикс-шов,
+        //    как у `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
+        // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для запуска
+        //    CLI «npx skills» в `SkillsCliService.RunAsync` (запуск процесса — общий
+        //    слой, по аналогии с `ProjectServices`/`Terminal`/`Git`/`Deploy`).
+        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»:
+        // 3) `PersonaManager` — `SkillSuggestService.SuggestForPersonaAsync` резолвит
+        //    персону владельца и читает существующие Skill-привязки
+        //    (`PersonaBinding.Target`) для исключения уже привязанных скиллов.
+        // 4) `ProjectManager` — `SkillSuggestService.SuggestForProjectAsync` берёт
+        //    контекст проекта (имя + системный промпт); `SkillsService.GetProjectSkills/
+        //    Agents` работают с `projectRootPath`; `SkillsController` использует
+        //    `GetById(projectId)` для получения пути.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Skills",
+                "ClaudeHomeServer.Services.Skills",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Skills",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Services.Execution",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
                 }),
         },
     };

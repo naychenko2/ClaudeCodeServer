@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;

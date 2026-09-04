@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;

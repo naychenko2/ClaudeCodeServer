@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.Services.Llm;
 

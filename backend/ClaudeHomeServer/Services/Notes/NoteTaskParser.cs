@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Notes;
 
 // Парсер чекбоксов markdown с метаданными в стиле Obsidian Tasks (флаг notes-task-sync).
 // Понимает: `- [ ] текст 📅 2026-07-10 🔁 every week ⏳ 2026-07-09`.

@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Notes;
 
 // Документ изменился между выделением и созданием — verify-guard отказал (наружу 409)
 public sealed class AnnotationConflictException(string message) : InvalidOperationException(message);

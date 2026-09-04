@@ -4,7 +4,7 @@ using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Notes;
 
 // Семантический индекс заметок в Dify: отдельный dataset per-owner
 // («{username}:notes», permission only_me). Синхронизация — полный дифф по хешам

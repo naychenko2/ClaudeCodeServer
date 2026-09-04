@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.Services.Memory;
 

@@ -5,7 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Notes;
 
 // Двусторонняя связь чекбоксов заметок и задач (флаг notes-task-sync, MVP).
 // Заметка — источник истины: чекбокс можно «промоутнуть» в настоящую задачу

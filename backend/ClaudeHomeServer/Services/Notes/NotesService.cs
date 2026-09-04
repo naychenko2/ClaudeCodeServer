@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Notes;
 
 // Obsidian-совместимая база заметок. Источник правды — .md файлы на диске:
 //   • личный vault пользователя:  {dataDir}/notes/{userId}/

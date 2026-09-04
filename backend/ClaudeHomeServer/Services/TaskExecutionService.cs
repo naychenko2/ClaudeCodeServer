@@ -4,6 +4,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.SignalR;
 

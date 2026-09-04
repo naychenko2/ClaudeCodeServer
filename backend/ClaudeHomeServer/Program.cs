@@ -5,12 +5,10 @@ using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
-using ClaudeHomeServer.Services.Changelog;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
-using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.ProjectServices;
@@ -223,10 +221,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MarkitdownService>(
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocumentAiService>();
 // Подсистема Git (волна 1.5): GitService/GitServerService/GitAutoCommitService/GitAiService
 // и CommitAttributionService (ниже) — теперь регистрируются в `Services/Git/GitSubsystem.cs`.
-builder.Services.AddSingleton<NotesService>();
-builder.Services.AddSingleton<NotesKnowledgeService>();
-builder.Services.AddSingleton<NotesAiService>();
-builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
 // Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
 // Модельный слой (OneShotClaudeRunner / OllamaClient / LlamaServerClient / CloudCheapClient /
@@ -419,7 +413,7 @@ builder.Services.AddGatedHostedService<ChatExpiryService>(builder.Configuration)
 builder.Services.AddSingleton<ChatArchiveService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<ChatArchiveService>());
 builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configuration);
-builder.Services.AddGatedHostedService<NoteExpiryService>(builder.Configuration);
+// NoteExpiryService — DI в подсистеме `NotesSubsystem` (волна 4C, шаг 2).
 // Фоновый прогрев сводок «Что нового» — в `Services.Changelog.ChangelogSubsystem`.
 // Терминал (PTY) — единственная регистрация в корне Services, под гейтом workspace-destructive.
 // Подсистема не заведена сознательно: единственная регистрация и два резолва при
@@ -494,7 +488,12 @@ builder.Services.AddSubsystems(builder.Configuration,
     // через TaskAiService). TaskSchedulerService — gated hosted, его тип `AddGatedHostedService`
     // активируется флагом (см. appsettings). Шов Tasks → Models.Session (три статических
     // резолвера) описан в `Services/Tasks/TasksSubsystem.cs` (см. комментарий 6).
-    new ClaudeHomeServer.Services.Tasks.TasksSubsystem());
+    new ClaudeHomeServer.Services.Tasks.TasksSubsystem(),
+    // Notes — вертикаль заметок (Obsidian-совместимый vault, AI-сводки, синк с Dify,
+    // мост чекбоксов заметок ↔ задач). Регистрируется после Tasks: шов `Notes → Tasks`
+    // через `NoteTaskSyncService` (TaskManager, CreateTaskRequest, UpdateTaskRequest) —
+    // нижний слой регистрируется раньше, как и везде.
+    new ClaudeHomeServer.Services.Notes.NotesSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -618,7 +617,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-    sp => sp.GetRequiredService<NotesKnowledgeService>());
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 

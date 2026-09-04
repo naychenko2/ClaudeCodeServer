@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 

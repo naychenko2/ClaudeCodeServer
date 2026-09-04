@@ -3,9 +3,9 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
+using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Controllers;
 

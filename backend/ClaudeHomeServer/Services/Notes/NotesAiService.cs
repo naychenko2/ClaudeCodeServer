@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Notes;
 
 // ИИ-помощь по заметкам одноразовыми вызовами: предложение связей, авто-теги, конспект дня.
 // Идут через «дешёвый» раннер — локальная модель Ollama (если действие на неё заведено) или

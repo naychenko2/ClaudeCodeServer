@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 

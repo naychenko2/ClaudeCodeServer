@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.TriggerSources;
 using FluentAssertions;

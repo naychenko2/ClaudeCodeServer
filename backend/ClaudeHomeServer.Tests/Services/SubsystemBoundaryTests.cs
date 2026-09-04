@@ -579,7 +579,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
                     "ClaudeHomeServer.Services.Memory.TeamMemoryService",
                     "ClaudeHomeServer.Services.Dossiers.DossierStore",
-                    "ClaudeHomeServer.Services.NotesKnowledgeService",
+                    "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
                     "ClaudeHomeServer.Controllers.KnowledgeBaseSummary",
                     "ClaudeHomeServer.Controllers.KnowledgeBaseDetail",
                     "ClaudeHomeServer.Controllers.KnowledgeDocumentDto",
@@ -721,7 +721,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
-                    "ClaudeHomeServer.Services.NotesService",
+                    "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallResult",
@@ -827,7 +827,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.NotesService",
+                    "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.SkillsService",
@@ -919,8 +919,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
                     "ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider",
                     "ClaudeHomeServer.Services.PersonaBindingsService",
-                    "ClaudeHomeServer.Services.NotesKnowledgeService",
-                    "ClaudeHomeServer.Services.NoteSemanticHit",
+                    "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
+                    "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.PersonaPromptBuilder",
                     "ClaudeHomeServer.Services.ProjectManager",
@@ -1143,7 +1143,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserHomeResolver",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.NotesService",
+                    "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.RuleRuntimeState",
                 }),
@@ -1331,8 +1331,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.PushService",
-                    // Notes пока в корне — следующий шаг волны 4C.
-                    "ClaudeHomeServer.Services.NotesService",
+                    // Notes — вертикаль (волна 4C, шаг 2): `DailyBriefingService.BuildAndWriteAsync`
+                    // пишет в дневниковую заметку (`GetOrCreateDaily`/`Update`).
+                    "ClaudeHomeServer.Services.Notes.NotesService",
                     // ⚠ TaskSchedulerService (Tasks) держит в ctor
                     // `TaskExecutionService executor` (полный жизненный цикл хода:
                     // автозапуск Claude-исполнителя + страховка незакрытой задачи)
@@ -1356,6 +1357,60 @@ public class SubsystemBoundaryTests
                     // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage`
                     // в публичной сигнатуре `TaskSchedulerService.SendNotificationAsync`.
                     "ClaudeHomeServer.Protocol.NotificationMessage",
+                }),
+        },
+        // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
+        // (`[[wikilinks]]`/backlinks/граф/комментарии), AI-сводки, синк с Dify,
+        // мост чекбоксов заметок ↔ задач (`NoteTaskSyncService`), авто-истечение
+        // заметок (`NoteExpiryService`). `UnifiedSearchService` остаётся в корне —
+        // он фасад поперёк Notes+Task, отдельная задача на разрез.
+        // Префиксы-швы (по образцу `Tasks`/`Spend`/`Memory`/`Dossiers`):
+        // 1) `ClaudeHomeServer.Services.Tasks` — префикс-шов через `NoteTaskSyncService`
+        //    (`TaskManager` + `CreateTaskRequest` + `UpdateTaskRequest`): мост чекбоксов
+        //    заметок и карточек задач. Шов снимается порядком — Tasks уже вертикаль,
+        //    направление одно: Notes → Tasks.
+        // 2) `ClaudeHomeServer.Services.Knowledge` — префикс-шов через `NotesKnowledgeService`
+        //    (`IKnowledgeSyncParticipant` + `KnowledgeService` + `KnowledgeSyncTarget`):
+        //    синхронизация заметок с Dify-датасетом per-owner; тот же шов, что у
+        //    `Knowledge` → `Memory`/`Dossiers` и у `Memory`/`Spend` → `Knowledge`.
+        // 3) `ClaudeHomeServer.Services.Llm` — префикс-шов через `NotesAiService`
+        //    (`ICheapTextRunner`) для тегов/сводок заметок. Префикс-шов по прецеденту
+        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
+        // 4) `ClaudeHomeServer.Hubs` — префикс-шов через `NoteTaskSyncService` и
+        //    `NoteExpiryService` (`IHubContext<SessionHub>`): рассылка `notes_changed`
+        //    и напоминания об истечении заметок. По прецеденту `Tasks`/`Git`/`Images`/
+        //    `ProjectServices`/`Terminal`/`Watchdog`.
+        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»:
+        // 5) `ProjectManager` — `NoteTaskSyncService` (projectId для промоута чекбокса),
+        //    `NoteExpiryService` (проекты для авто-истечения), `NotesService` (пути
+        //    к папкам заметок).
+        // 6) `UserStore` — `NotesKnowledgeService` (имя владельца → имя Dify-датасета
+        //    `{username}:notes`).
+        // 7) Точечный допуск к `ClaudeHomeServer.Protocol` — `NotesChangedMessage` в
+        //    `NoteTaskSyncService.BroadcastNoteChangedAsync` (материал-аргумент `SendAsync`,
+        //    поле state-машины). Префикс `ClaudeHomeServer.Protocol` снят (волна 3),
+        //    оставлен точный тип по образцу швов у `Spend`/`Memory`/`Dossiers`/`Watchdog`/`Terminal`.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Notes",
+                "ClaudeHomeServer.Services.Notes",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Notes",
+                        "ClaudeHomeServer.Services.Tasks",
+                        "ClaudeHomeServer.Services.Knowledge",
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Hubs",
+                    })
+                    .ToArray(),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.ProjectEventLogService",
+                    "ClaudeHomeServer.Protocol.NotesChangedMessage",
                 }),
         },
     };

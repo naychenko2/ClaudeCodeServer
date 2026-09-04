@@ -681,6 +681,16 @@ public class SubsystemBoundaryTests
         //    Это **сознательный** пропуск, не нарушение: те же вызовы из
         //    `MemoryConsolidationCore.cs` (внутри `Services.Memory`) лежат в
         //    префиксе `Services.Memory` и не требуют допуска.
+        // 8) `SessionSummaryService` (Services/SessionSummaryService.cs) — статические
+        //    вызовы `SessionSummaryService.BuildTranscript(...)` из тел методов
+        //    `PersonaMemoryAutolearnService.cs:92` и `TeamMemoryAutolearnService.cs:106`.
+        //    Связь идёт из тел методов, рефлексией не контролируется — но шов
+        //    должен быть зафиксирован (как `Llm → SpecialtyCatalog`/`SpecialtyPromptPresets`
+        //    и `Execution → WorkflowAgentParser`/`ClaudeCliLocator` в той же волне):
+        //    без явного объявления при расширении сторожа до IL это выглядело бы
+        //    как нарушение, а не как ожидаемая зависимость от корневого
+        //    `SessionSummaryService` (тот же шов «вертикаль → спинка», что и
+        //    прочие точечные допуски к `ClaudeHomeServer.Services.*` ниже).
         // Точечный допуск к `ClaudeHomeServer.Protocol`:
         // 8) `StoredMessage` — `AutolearnGate.CheckContent`/`LastTurnLength` принимают
         //    `IReadOnlyList<StoredMessage>` (видна в сигнатуре public-метода). Префикс
@@ -718,6 +728,11 @@ public class SubsystemBoundaryTests
                     // AutolearnGate.CheckContent / LastTurnLength — public-метод
                     // с параметром IReadOnlyList<StoredMessage>.
                     "ClaudeHomeServer.Protocol.StoredMessage",
+                    // Шов Memory → Services.SessionSummaryService (см. пункт 8
+                    // комментария выше). Статический вызов из тел методов
+                    // PersonaMemoryAutolearnService.cs:92 и TeamMemoryAutolearnService.cs:106,
+                    // рефлексией не ловится — зафиксирован для будущего IL-скана.
+                    "ClaudeHomeServer.Services.SessionSummaryService",
                 }),
         },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
@@ -745,10 +760,27 @@ public class SubsystemBoundaryTests
         // `SubscriptionUsageWarmupService` + `SubscriptionOAuthUsageService`,
         // `WorkflowAgentParser` + `WorkflowWatcher` + `WorkflowMetaResolver`.
         // Удалены из `AllowedExactNamespaces` как осиротевшие (теперь ссылки
-        // внутренние: `ClaudeHomeServer.Services.Llm.*`); `WorkflowWatcher`
-        // остался как `Services.Llm.WorkflowWatcher` — поле async-state-машины
-        // `ClaudeSession+<...>d__N`, материал-аргумент публичного метода
-        // `ClaudeSession.OnSubagentStreamAsync`.
+        // внутренние: `ClaudeHomeServer.Services.Llm.*`): `ModelRoutePreset` и
+        // `PresetScope` переехали в `SpecialtySettingsStore.cs:78,88`.
+        // `WorkflowWatcher` остался как `Services.Llm.WorkflowWatcher` — поле
+        // async-state-машины `ClaudeSession+<...>d__N`, материал-аргумент
+        // публичного метода `ClaudeSession.OnSubagentStreamAsync`.
+        //
+        // До переезда SpecialtySettingsStore в `Services.Llm` статические
+        // вызовы `SpecialtyCatalog.*` и `SpecialtyPromptPresets.*` шли из тел
+        // методов корневого `Services/SpecialtySettingsStore.cs` — рефлексия
+        // их не видела, и эти типы в allow-list Llm НЕ нужны были (как
+        // сейчас не нужны `Deploy → Services.Backup.InstanceLock.*`). После
+        // переезда `SpecialtySettingsStore` остался ЕДИНСТВЕННЫМ потребителем
+        // обоих типов внутри `Services.Llm`, и без явного объявления шов
+        // «теряется» при расширении сторожа до IL — будет выглядеть как
+        // нарушение, а не как ожидаемая зависимость от корневого каталога.
+        // Поэтому `SpecialtyCatalog` и `SpecialtyPromptPresets` (статические
+        // классы из `ClaudeHomeServer.Services`) добавлены в `AllowedExactNamespaces`:
+        // сейчас они НЕ ловятся рефлексией (вызовы идут из тел методов,
+        // статический класс не материализуется в поле async-state-машины),
+        // но это **зафиксированный шов** для будущего IL-скана — аналогично
+        // `Memory → SessionSummaryService` и `Execution → WorkflowAgentParser`.
         new object[]
         {
             new VerticalBoundary(
@@ -791,8 +823,6 @@ public class SubsystemBoundaryTests
                     // для них НЕ открываем (default-deny), только FullName.
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ModelTier[]",
-                    "ClaudeHomeServer.Services.ModelRoutePreset",
-                    "ClaudeHomeServer.Services.PresetScope",
                     "ClaudeHomeServer.Services.SkillInfo",
                     "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
@@ -821,6 +851,14 @@ public class SubsystemBoundaryTests
                     //    `Knowledge`/`Deploy`).
                     "ClaudeHomeServer.Services.SpecialtyTemplate",
                     "ClaudeHomeServer.Services.SpecialtyPromptPresets+SectionMeta",
+                    // Шов на статические классы каталога специальностей — см. комментарий
+                    // выше перед Allow-list Llm. Сейчас `SpecialtySettingsStore.cs:185,195,222,
+                    // 240,268,271-275,309-312,483,496,512,542,573,616,620-626,637-638,651,691,
+                    // 880,1020,1038,1042,1052` зовёт их из тел методов (рефлексией не
+                    // контролируется) — при расширении сторожа до IL это будут первые
+                    // пойманные нарушения, поэтому шов зафиксирован заранее.
+                    "ClaudeHomeServer.Services.SpecialtyCatalog",
+                    "ClaudeHomeServer.Services.SpecialtyPromptPresets",
                     "ClaudeHomeServer.Services.NotificationService",
                     // Knowledge — WorkspaceKnowledgeStore (CLI-сессия и фабрика
                     // адаптеров материализуют тип в async-state). Префикс не открываем:
@@ -929,6 +967,29 @@ public class SubsystemBoundaryTests
         // Execution — запуск процессов и песочница (LauncherFactory/SandboxManager/
         // IProcessLauncher/IPathMapper/ILauncherFactory). Точечный: UserStore
         // (LauncherFactory знает владельца процесса).
+        //
+        // ⚠ Известный временный цикл `Llm ⇄ Execution`. Обратное ребро
+        // `Llm → Execution` уже разрешено префиксом `ClaudeHomeServer.Services.Execution`
+        // в allow-list Llm (OneShotClaudeRunner/ClaudeSession держат
+        // `IProcessLauncher`/`ILauncherFactory` как поле). Прямое ребро
+        // `Execution → Llm` появилось после переезда `WorkflowAgentParser` в
+        // `Services.Llm` (волна 4B, шаг 2):
+        //   * `DockerProcessRunner.cs:182` — `WorkflowAgentParser.AddAllowedRoot(...)`
+        //     в теле метода `EnsureProfile` (статический вызов, рефлексией не
+        //     контролируется);
+        //   * `LocalProcessRunner.cs:13` — `Llm.Claude.ClaudeCliLocator.FindClaudeExecutable()`
+        //     в инициализаторе свойства `ClaudeCliCommand` (статический вызов,
+        //     тип свойства `string`, рефлексия не видит). Это **дореформенный**
+        //     экземпляр — существовал ещё до волны 4, но не был зафиксирован
+        //     в allow-list, потому что `ClaudeCliLocator` жил тогда в корне
+        //     `Services/` (ссылка на спину, законно).
+        // Цикл НЕ режется в этой задаче — разрез (куда на самом деле
+        // принадлежит `WorkflowAgentParser`/`ClaudeCliLocator`) заведен
+        // отдельной задачей разбора архитектора. Здесь только фиксация швов:
+        // без явного объявления при расширении сторожа до IL оба ребра
+        // выглядели бы как нарушения. Префикс `Services.Llm` НЕ открываем —
+        // точечный допуск ровно на два типа, чтобы не превращать цикл
+        // в «Llm открыт Execution, Execution открыт Llm» целиком.
         new object[]
         {
             new VerticalBoundary(
@@ -940,6 +1001,11 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.UserStore",
+                    // Шов Llm ⇄ Execution (см. комментарий выше):
+                    // ребра `Execution → Llm`, статические вызовы из тел
+                    // методов, рефлексией не ловятся.
+                    "ClaudeHomeServer.Services.Llm.WorkflowAgentParser",
+                    "ClaudeHomeServer.Services.Llm.Claude.ClaudeCliLocator",
                 }),
         },
         // Auth — узкая вертикаль авторизации (AdminByStoreRequirement +

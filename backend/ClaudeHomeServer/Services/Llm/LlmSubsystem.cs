@@ -81,9 +81,12 @@ namespace ClaudeHomeServer.Services.Llm;
 //     парсеры транскриптов; DI не нужны, логгер и кеш инициализируются в Program.cs
 //     после Build (поэтому просто наличие файлов в `Services.Llm` достаточно).
 //
-// Итого 39 регистраций (в их числе два тихих HTTP-клиента Ollama/llama-server и
-// два gated hosted сервиса подписок). Волна 4B, шаг 2 прибавил +10 регистраций
-// и перенёс их из Program.cs — net −10 в композиционном корне.
+// Итого 38 регистраций (в их числе два тихих HTTP-клиента Ollama/llama-server и
+// два gated hosted сервиса подписок). Волна 4B, шаг 2 прибавил +8 регистраций
+// (SpecialtySettingsStore/UsageService/ClaudeSubscriptionPool/SubscriptionActivityTracker/
+// ISubscriptionAlertNotifier+SubscriptionAlertNotifier/SubscriptionWindowMismatchGuard/
+// SubscriptionUsageWarmupService/SubscriptionOAuthUsageService+AddGatedHostedFrom от него)
+// и перенесла их из Program.cs — net −8 в композиционном корне.
 //
 // Шов `services.Memory` (`MemoryWriteResolver`) лежит ВНЕ `Services.Llm`,
 // поэтому НЕ переносится сюда — отдельная вертикаль Memory, и реестр уже

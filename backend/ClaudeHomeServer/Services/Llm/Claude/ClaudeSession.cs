@@ -850,26 +850,40 @@ public class ClaudeSession : ILlmSessionAdapter
         // от свойств хода не зависит (иначе сигнатура запуска «мерцала» бы между ходами)
         var externalMcp = _externalMcpProvider?.Invoke();
         var hasExternal = externalMcp is { Servers.Count: > 0 };
-        // Урезание набора MCP для локального провайдера с TrimMcpServers=true (поставщик
-        // выводится из EffectiveModel — свойство сессии, не хода). Замер 2026-09-05 на
-        // qwen3.8-27b: полный набор стоит 26 557 входных токенов (87% окна 65 536) — даже
-        // без истории разговор не влезает с первого хода. Выключаем ВСЁ, кроме desktop —
-        // тот стоит дёшево и нужен для десктопных чатов. Родной Claude и облачные
+        // Селективное урезание набора MCP для локального провайдера с TrimMcpServers=true.
+        // Поставщик выводится из EffectiveModel — свойство сессии, не хода (инвариант
+        // McpToolsetStabilityTests: состав tools/list стабилен в пределах одной сессии).
+        // Замер 2026-09-05 на qwen3.8-27b (окно 245 760, CTX=huge): полный набор тянет 46 480
+        // входных токенов и роняет генерацию вдвое (21.7 ток/с против 48 ток/с без MCP),
+        // а локальный исполнитель задач без tasks не закрывает задачу через tasks_complete.
+        // Белый список KeepMcpServers в LlmProviderConfig выделяет ровно нужные серверы
+        // (на local-qwen по умолчанию ["tasks"]), остальные гасятся выборочно. Пустой список
+        // = прежнее «всё или ничего» (гасится всё, кроме desktop). Родной Claude и облачные
         // провайдеры не задеты (TrimMcpServers=false по умолчанию).
-        var trimMcp = _providers?.ResolveByModel(EffectiveModel) is { TrimMcpServers: true };
+        var provider = _providers?.ResolveByModel(EffectiveModel);
+        var trimMcp = provider is { TrimMcpServers: true };
         if (trimMcp)
         {
-            hasTasks = hasNotes = hasMemory = hasPersonas = hasWorkspace = false;
-            hasNotifications = hasWidgets = hasCodeGraph = hasDify = false;
-            hasConsultants = false;
-            hasModules = false;
-            hasFalAi = false;
-            hasGlif = false;
-            hasWatch = false;
-            userServers = null;
-            externalMcp = null;
-            hasExternal = false;
-            // desktop оставляем: десктопные чаты работают через эту грань
+            bool Keep(string key) => provider!.KeepMcpServers
+                .Contains(key, StringComparer.OrdinalIgnoreCase);
+            hasTasks = hasTasks && Keep("tasks");
+            hasNotes = hasNotes && Keep("notes");
+            hasMemory = hasMemory && Keep("memory");
+            hasPersonas = hasPersonas && Keep("personas");
+            hasWorkspace = hasWorkspace && Keep("wsp");
+            hasNotifications = hasNotifications && Keep("notifications");
+            hasWidgets = hasWidgets && Keep("widgets");
+            hasCodeGraph = hasCodeGraph && Keep("codegraph");
+            hasDify = hasDify && Keep("dify");
+            hasWatch = hasWatch && Keep("watch");
+            hasConsultants = hasConsultants && Keep("consultants");
+            hasModules = hasModules && Keep("modules");
+            hasFalAi = hasFalAi && Keep("fal-ai");
+            hasGlif = hasGlif && Keep("glif");
+            if (!Keep("user")) userServers = null;
+            if (!Keep("external")) { externalMcp = null; hasExternal = false; }
+            // desktop по-прежнему остаётся всегда: десктопные чаты работают через эту грань,
+            // и стоит он дёшево
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null

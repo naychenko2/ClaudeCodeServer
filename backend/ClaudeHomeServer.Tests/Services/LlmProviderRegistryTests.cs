@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -549,6 +550,322 @@ public class LlmProviderRegistryTests
         LlmProviderRegistry.DefaultClaudeModel.Should().Be("default");
     }
 
+    // ─── ADR-014 / docs/research/local-vllm-provider.md: локальный провайдер ────────────
+
+    // Хелпер: конфиг с локальным провайдером vLLM. Провайдер задаётся ТОЛЬКО этими полями;
+    // при изменении состава секции (добавление полей, переименование) правки придётся
+    // протащить и сюда.
+    private static LlmProviderRegistry CreateLocal(Dictionary<string, string?>? extra = null)
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:local-qwen:DisplayName"] = "Локальная Qwen3.8-27B",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:8080",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:SupportedEfforts:0"] = "low",
+            ["LlmProviders:local-qwen:SupportedEfforts:1"] = "medium",
+            ["LlmProviders:local-qwen:SupportedEfforts:2"] = "xhigh",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen38-27b",
+            ["LlmProviders:local-qwen:Models:0:DisplayName"] = "Qwen3.8-27B (локальная)",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "57344",
+        };
+        foreach (var (k, v) in extra ?? []) settings[k] = v;
+        var config = TestConfig.Build(settings);
+        return new LlmProviderRegistry(config);
+    }
+
+    [Fact]
+    public void Enabled_ЛокальныйБезApiKey_Включен()
+    {
+        CreateLocal().GetByKey("local-qwen")!.Enabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Enabled_БезIsLocalИБезApiKey_Выключен()
+    {
+        // Защита от регресса: glm без ключа и без IsLocal — НЕ enabled.
+        // Это и есть причина, по которой признак IsLocal был введён.
+        Create().GetByKey("glm")!.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Enabled_ЛокальныйБезБазовогоАдреса_Выключен()
+    {
+        // AnthropicBaseUrl пуст — нет точки входа, провайдер не рабочий
+        var reg = CreateLocal();
+        reg.GetByKey("local-qwen")!.AnthropicBaseUrl = "";
+        reg.GetByKey("local-qwen")!.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void BuildCliEnv_Локальный_СтавитБазовыйАдресИОкноКонтекста()
+    {
+        var env = CreateLocal().BuildCliEnv("qwen38-27b")!;
+        env["ANTHROPIC_BASE_URL"].Should().Be("http://127.0.0.1:8080");
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("57344");
+        // Заглушка для локального провайдера: пустая строка отбивается CLI как «Not logged in»
+        env["ANTHROPIC_AUTH_TOKEN"].Should().Be(LlmProviderRegistry.LocalNoAuthToken);
+        env["ANTHROPIC_API_KEY"].Should().Be(LlmProviderRegistry.LocalNoAuthToken);
+    }
+
+    // Явный ApiKey у локального провайдера (напр. прокси с реальной авторизацией) — не
+    // перетираем заглушкой. Без этого ход уехал бы на локальный эндпоинт с фиктивным токеном
+    [Fact]
+    public void BuildCliEnv_ЛокальныйСApiKey_НеПеретираетТокен()
+    {
+        var reg = CreateLocal(new() { ["LlmProviders:local-qwen:ApiKey"] = "real-proxy-token" });
+        var env = reg.BuildCliEnv("qwen38-27b")!;
+        env["ANTHROPIC_AUTH_TOKEN"].Should().Be("real-proxy-token");
+        env["ANTHROPIC_API_KEY"].Should().Be("real-proxy-token");
+    }
+
+    // У не-локального провайдера пустой ключ означает «не настроен» — BuildCliEnv кидает
+    // исключение раньше, чем доходит до env-сборки. Защита от случайной подмены заглушкой
+    [Fact]
+    public void BuildCliEnv_НеЛокальныйБезApiKey_ИсключениеНеЗаглушка()
+    {
+        var act = () => Create().BuildCliEnv("glm-5.2");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*не настроен*");
+    }
+
+    [Fact]
+    public void ResolveByModel_qwen_ВозвращаетЛокальныйПровайдер()
+    {
+        CreateLocal().ResolveByModel("qwen38-27b")!.Key.Should().Be("local-qwen");
+    }
+
+    [Theory]
+    // Поддерживаемые уровни не трогаем
+    [InlineData("low", "low")]
+    [InlineData("medium", "medium")]
+    [InlineData("xhigh", "xhigh")]
+    // Незнакомый уровень — ближайший снизу по шкале low<medium<high<xhigh<max.
+    // high не поддерживается провайдером, ближайший снизу — medium.
+    // max не поддерживается, ближайший снизу — xhigh.
+    [InlineData("high", "medium")]
+    [InlineData("max", "xhigh")]
+    public void EffortFor_Локальный_ПодменяетПоСписку(string input, string expected)
+    {
+        CreateLocal().EffortFor("qwen38-27b", input).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Контракт, на который опирается боевая секция local-qwen: SupportedEfforts=["low"] —
+    /// единственный уровень, и правило «ближайший снизу» схлопывает в него ЛЮБОЙ запрошенный.
+    /// Ради этого у провайдера сознательно НЕ заводится EffortMap: карта была бы второй точкой
+    /// правды об одном и том же (§7б local-vllm-provider.md, грабля 2 — сервер отвечает 400 на
+    /// high, а на medium/xhigh модель размышляет минутами).
+    /// </summary>
+    [Theory]
+    [InlineData("low")]
+    [InlineData("medium")]
+    [InlineData("high")]
+    [InlineData("xhigh")]
+    [InlineData("max")]
+    public void EffortFor_ЕдинственныйУровеньLow_СхлопываетЛюбойЗапрос(string input)
+    {
+        var reg = CreateLocal(new()
+        {
+            // Перечисление заменяем целиком: конфигурация тестов складывается из ключей,
+            // и лишние индексы SupportedEfforts:1/2 иначе остались бы от хелпера
+            ["LlmProviders:local-qwen:SupportedEfforts:1"] = null,
+            ["LlmProviders:local-qwen:SupportedEfforts:2"] = null,
+        });
+        reg.EffortFor("qwen38-27b", input).Should().Be("low");
+    }
+
+    [Theory]
+    // Совершенно незнакомый CLI уровень (CLI заведёт новый): ближайший снизу — самый
+    // лёгкий поддерживаемый (low), иначе уедет как есть и вернёт 400.
+    [InlineData("minimal")]
+    [InlineData("super")]
+    public void EffortFor_НезнакомыйУровень_СамыйЛёгкийПоддерживаемый(string input)
+    {
+        CreateLocal().EffortFor("qwen38-27b", input).Should().Be("low");
+    }
+
+    [Theory]
+    // Защита от регресса: у glm/kimi/minimax пустой SupportedEfforts — поведение не меняется
+    [InlineData("deepseek-v4-pro", "high", "high")]
+    [InlineData("glm-5.2", "high", "high")]
+    [InlineData("kimi-k3", "max", "max")]
+    public void EffortFor_ПровайдерБезСписка_НеТрогает(string model, string effort, string expected)
+    {
+        var reg = Create(new()
+        {
+            ["LlmProviders:glm:ApiKey"] = "zai-key",
+            ["LlmProviders:kimi:ApiKey"] = "kimi-key",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        });
+        reg.EffortFor(model, effort).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("opus")]
+    [InlineData("claude-opus-4-8")]
+    [InlineData("sonnet[1m]")]
+    public void EffortFor_РоднойClaude_НеТрогает(string? model)
+    {
+        Create().EffortFor(model, "high").Should().Be("high");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EffortFor_ПустойEffort_ЛокальныйВозвращаетСамыйЛёгкий(string? effort)
+    {
+        // qwen3.8-27b имеет SupportedEfforts = [low, medium, xhigh]. Пустой effort — не
+        // «оставь как есть» (иначе CLI подставит «high» → 400 на vLLM), а «подбери
+        // самый лёгкий поддерживаемый» — здесь «low».
+        CreateLocal().EffortFor("qwen38-27b", effort).Should().Be("low");
+    }
+
+    // Локальный провайдер с единственным уровнем «medium» — пустой effort даёт «medium».
+    // Контракт «самый лёгкий из SupportedEfforts», не «первый элемент списка».
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EffortFor_ПустойEffort_ЛокальныйТолькоMedium(string? effort)
+    {
+        var reg = CreateLocal(new()
+        {
+            ["LlmProviders:local-qwen:SupportedEfforts:0"] = "medium",
+            ["LlmProviders:local-qwen:SupportedEfforts:1"] = null,
+            ["LlmProviders:local-qwen:SupportedEfforts:2"] = null,
+        });
+        reg.EffortFor("qwen38-27b", effort).Should().Be("medium");
+    }
+
+    // Провайдер без SupportedEfforts (glm/kimi/minimax по §7б) — пустой effort возвращает
+    // null, флаг --effort НЕ ставится. Это fail-open: пусть CLI берёт свой дефолт, как
+    // было до подмены.
+    [Theory]
+    [InlineData("deepseek-v4-pro")]
+    [InlineData("glm-5.2")]
+    [InlineData("kimi-k3")]
+    public void EffortFor_ПустойEffort_ПровайдерБезСписка_Null(string model)
+    {
+        var reg = Create(new()
+        {
+            ["LlmProviders:glm:ApiKey"] = "zai-key",
+            ["LlmProviders:kimi:ApiKey"] = "kimi-key",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        });
+        reg.EffortFor(model, null).Should().BeNull();
+        reg.EffortFor(model, "").Should().BeNull();
+        reg.EffortFor(model, "   ").Should().BeNull();
+    }
+
+    // Родной Claude (модель не резолвится ни в какого провайдера) — пустой effort даёт null.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("opus")]
+    [InlineData("claude-opus-4-8")]
+    [InlineData("sonnet[1m]")]
+    public void EffortFor_ПустойEffort_РоднойClaude_Null(string? model)
+    {
+        Create().EffortFor(model, null).Should().BeNull();
+    }
+
+    // EffortMap приоритетнее SupportedEfforts. Конфиг декларативнее правила «ближайший снизу»:
+    // «high → medium» явно видно при разборе инцидентов и в git diff конфига.
+    [Theory]
+    [InlineData("high", "medium")]
+    [InlineData("max", "xhigh")]
+    public void EffortFor_ЯвныйEffortMap_ПриоритетнееАлгоритма(string input, string expected)
+    {
+        // Без карты: high через SupportedEfforts [low,medium,xhigh] дал бы medium через
+        // «ближайший снизу» — этот тест проверяет, что EffortMap даёт тот же результат
+        // ЯВНО, без вычислений. Для max карта даёт xhigh напрямую, а алгоритм дал бы тот же
+        // xhigh через «ближайший снизу» — тут проверка, что карта не подменяется алгоритмом.
+        var reg = CreateLocal(new()
+        {
+            ["LlmProviders:local-qwen:EffortMap:high"] = "medium",
+            ["LlmProviders:local-qwen:EffortMap:max"] = "xhigh",
+        });
+        reg.EffortFor("qwen38-27b", input).Should().Be(expected);
+    }
+
+    // EffortMap в карте есть ключ, но в карте нет значения (пустая строка) — откатываемся на алгоритм.
+    [Theory]
+    [InlineData("high", "medium")]  // high в SupportedEfforts нет → ближайший снизу = medium
+    public void EffortFor_ПустоеЗначениеВКарте_ОткатНаАлгоритм(string input, string expected)
+    {
+        var reg = CreateLocal(new()
+        {
+            ["LlmProviders:local-qwen:EffortMap:high"] = "",  // пустое значение — fail-open
+        });
+        reg.EffortFor("qwen38-27b", input).Should().Be(expected);
+    }
+
+    [Fact]
+    public void BuildCliEnv_Локальный_ПрокидываетMaxThinkingTokens()
+    {
+        var env = CreateLocal(new()
+        {
+            ["LlmProviders:local-qwen:MaxThinkingTokens"] = "5000",
+        }).BuildCliEnv("qwen38-27b")!;
+        env["MAX_THINKING_TOKENS"].Should().Be("5000");
+        // Сторож имени: CLAUDE_CODE_MAX_THINKING_TOKENS в бинарнике CLI не существует (0 вхождений
+        // в claude.exe 2.1.241) — такой ключ молча ничего не делал бы.
+        env.Keys.Should().NotContain("CLAUDE_CODE_MAX_THINKING_TOKENS");
+    }
+
+    [Fact]
+    public void BuildCliEnv_БезMaxThinkingTokens_НеСтавитКлюч()
+    {
+        // null/0/нет-поля — ключ НЕ ставится (fail-open для остальных провайдеров:
+        // glm/kimi/minimax оставляют дефолт CLI — не лезем в их поведение).
+        CreateLocal().BuildCliEnv("qwen38-27b")!.Keys.Should().NotContain("MAX_THINKING_TOKENS");
+    }
+
+    [Fact]
+    public void BuildCliEnv_MaxThinkingTokensНоль_НеСтавитКлюч()
+    {
+        var env = CreateLocal(new()
+        {
+            ["LlmProviders:local-qwen:MaxThinkingTokens"] = "0",
+        }).BuildCliEnv("qwen38-27b")!;
+        env.Keys.Should().NotContain("MAX_THINKING_TOKENS");
+    }
+
+    [Fact]
+    public void ProviderEnvKeys_ВключаетMaxThinkingTokens()
+    {
+        // Реестр должен вычищать MAX_THINKING_TOKENS из унаследованного env на
+        // КАЖДОМ запуске CLI — иначе мастер-рубильник на машине уедет на наш эндпоинт.
+        LlmProviderRegistry.ProviderEnvKeys.Should().Contain("MAX_THINKING_TOKENS");
+    }
+
+    [Fact]
+    public void ComputeCost_qwenБезЦен_Null()
+    {
+        // Цены не заданы — расход нулевой, в отчётах «Использования» строка не появляется
+        var reg = CreateLocal();
+        var usage = new UsageInfo(1000, 0, 1000, 0);
+        reg.ComputeCost("qwen38-27b", usage).Should().BeNull();
+    }
+
+    [Fact]
+    public void ComputeCost_qwen_НеТащитOpenRouter()
+    {
+        // Защита от регресса при добавлении qwen-моделей в OpenRouter: резолв по каталогу
+        // должен брать локального провайдера, а не облачного агрегатора
+        var reg = CreateLocal(new Dictionary<string, string?>
+        {
+            ["LlmProviders:openrouter:DisplayName"] = "OpenRouter",
+            ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api",
+            ["LlmProviders:openrouter:ApiKey"] = "sk-or",
+            ["LlmProviders:openrouter:Models:0:Id"] = "qwen38-27b",
+        });
+        reg.ResolveByModel("qwen38-27b")!.Key.Should().Be("local-qwen");
+    }
+
     // ─── ADR-015 §3: манифест доставки .sync-manifest.json ──────────────────────
 
     // Хелпер: поднимает временный layout (host-профиль + профиль провайдера) и
@@ -991,5 +1308,83 @@ public class LlmProviderRegistryTests
         {
             try { Directory.Delete(tmp, recursive: true); } catch { }
         }
+    }
+
+    // ─── Живое окно из LocalEndpointProbe ──────────────────────────────────────
+    // Фейковая проба: имитирует LocalEndpointProbe.TryGetKnownContextWindow без HTTP,
+    // отдаёт захардкоженное max_model_len (или не отдаёт, если 0).
+    private sealed class FakeLocalProbe(int knownWindow) : ILocalEndpointProbe
+    {
+        public Task<LocalProbeOutcome> CheckAsync(LlmProviderConfig provider, CancellationToken ct = default)
+            => Task.FromResult(LocalProbeOutcome.Alive);
+        public bool TryGetKnownContextWindow(string providerKey, out int window)
+        {
+            window = knownWindow;
+            return knownWindow > 0;
+        }
+        public void Invalidate(string providerKey) { }
+    }
+
+    private static LlmProviderRegistry CreateWithLocal(Dictionary<string, string?> settings, ILocalEndpointProbe probe)
+    {
+        var config = TestConfig.Build(settings);
+        return new LlmProviderRegistry(config, probe);
+    }
+
+    // Локальный провайдер (IsLocal=true) с пробой, у которой есть живое окно:
+    // BuildCliEnv кладёт в CLAUDE_CODE_MAX_CONTEXT_TOKENS ЖИВОЕ значение, не каталог.
+    [Fact]
+    public void BuildCliEnv_ЛокальныйПровайдер_ИспользуетLiveMaxModelLenИзПробы()
+    {
+        // Каталог объявляет 71680 (старый CTX=long), проба знает фактические 65536 (CTX=fast).
+        // Без правки BuildCliEnv прокидывал бы 71680 — CLI считал бы, что контекст влезает,
+        // и не сжимал вовремя (57345 + 8192 < 71680), а сервер отбивал на одном токене.
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 65536);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("65536");
+    }
+
+    // Проба не успела опросить стенд (knownWindow=0) — fail-open на каталог.
+    [Fact]
+    public void BuildCliEnv_ЛокальныйПровайдер_ПробаНеЗнает_ФолалноНаКаталог()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 0);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("71680");
+    }
+
+    // Облачный провайдер — проба НЕ применяется, даже если бы могла отдать число.
+    // Иначе отказа в локальной пробе на облачном провайдере (IsLocal=false) выдавал бы
+    // ложное окно — регрессия прежнего поведения.
+    [Fact]
+    public void BuildCliEnv_ОблачныйПровайдер_ПробаИгнорируется()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:DisplayName"] = "DeepSeek",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+            ["LlmProviders:deepseek:Models:0:ContextWindow"] = "1048576",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 99999);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("deepseek-v4-pro")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
     }
 }

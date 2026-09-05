@@ -127,7 +127,13 @@
 [voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
 и Claude: разрывы и план P0/P1/P2),
 [speechkit-pricing.md](research/speechkit-pricing.md) (биллинг Yandex SpeechKit: цены STT/TTS,
-правила округления, расчёт голосового режима, v1 против v3). Читать как «так было тогда».
+правила округления, расчёт голосового режима, v1 против v3),
+[llm-execution-cycle-verdict.md](research/llm-execution-cycle-verdict.md) (вердикт по циклу
+`Llm ⇄ Execution` волны 4B: куда принадлежат `WorkflowAgentParser` и `ClaudeCliLocator`),
+[local-vllm-provider.md](research/local-vllm-provider.md) (локальная Qwen3.8-27B как
+CLI-провайдер: проверенная конфигурация стенда с замерами, грабли подключения —
+прокси съедает loopback, `--effort high` не принимается, провал кэша промпта
+на `mamba-cache-mode align`). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

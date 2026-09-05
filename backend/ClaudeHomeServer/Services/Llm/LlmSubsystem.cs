@@ -25,6 +25,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //    `ILocalLlmClient` по `LocalLlm:Provider`, плюс тихие HTTP-клиенты на оба
 //    имени (QuietHttpLogger, см. Services/Http). Локальная модель опциональна,
 //    погашенная локаль — штатная ситуация, а не авария.
+// 4a) `LocalEndpointProbe` + тихий HTTP-клиент на его имя — pre-flight проба
+//     локального эндпоинта (vLLM/llama.cpp); читается реестром ниже и
+//     FallbackLlmSessionAdapter для ранней диагностики «локальная модель не запущена».
 // 5) `OllamaActionRankService` — бесплатное ранжирование действий локальной
 //    моделью Ollama для роутинга через LocalActionRouter.
 // 6) `CloudCheapClient` — прямой HTTP-адаптер бесплатных моделей OpenRouter
@@ -41,7 +44,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // 12) `LlmProviderRegistry` — реестр провайдеров и их прайсов; читается
 //     ModuleRegistry (динамический слой LocalActionCatalog), LlmProviderRegistry
 //     отдаёт `GetProviderProjectsDirs()`/`ProfilesDir` для пост-билд инициализации
-//     WorkflowAgentParser (Program.cs:~869).
+//     WorkflowAgentParser (Program.cs:~869). Принимает `ILocalEndpointProbe` и
+//     подставляет живое `max_model_len` в `CLAUDE_CODE_MAX_CONTEXT_TOKENS` для
+//     локального провайдера (см. ADR-007 §4 — окно контекста из живого `/v1/models`).
 // 13) `ProviderBalanceService` + `IProviderBalanceService` (форвард на тот же
 //     singleton) — остаток баланса у внешнего провайдера, обязательный контракт
 //     «интерфейс и конкретный тип указывают на ОДИН инстанс» (форвардер, не
@@ -87,6 +92,10 @@ namespace ClaudeHomeServer.Services.Llm;
 // ISubscriptionAlertNotifier+SubscriptionAlertNotifier/SubscriptionWindowMismatchGuard/
 // SubscriptionUsageWarmupService/SubscriptionOAuthUsageService+AddGatedHostedFrom от него)
 // и перенесла их из Program.cs — net −8 в композиционном корне.
+// Мерж master → ветка: ещё +2 (тихий HTTP-клиент LocalEndpointProbe +
+// ILocalEndpointProbe → LocalEndpointProbe), LlmProviderRegistry теперь
+// фабрикой через пробу. Все три добавки — из линии «локальная Qwen как
+// CLI-провайдер», они закрывают pre-flight «локальная модель не запущена».
 //
 // Шов `services.Memory` (`MemoryWriteResolver`) лежит ВНЕ `Services.Llm`,
 // поэтому НЕ переносится сюда — отдельная вертикаль Memory, и реестр уже
@@ -163,6 +172,16 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Category: "ClaudeHomeServer.Llm.LlamaServer",
                 Subject: "локальной моделью llama-server",
                 Consequence: "Фоновые действия уйдут облачной модели."));
+        // Pre-flight проба локального эндпоинта (LocalEndpointProbe): GET /v1/models
+        // с парсингом JSON по статусу модели. Шум гасится — проба стоит на горячем
+        // пути каждого хода на локальной модели, без тишины лог заспамит Error-ами
+        // «connection refused» за минуту.
+        services.AddQuietHttpClient(
+            LocalEndpointProbe.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEndpointProbe",
+                Subject: "локальным движком модели (vLLM/llama.cpp)",
+                Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
 
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
@@ -195,9 +214,24 @@ public sealed class LlmSubsystem : IAppSubsystem
         // а местом `LlmSubsystem` в списке `AddSubsystems` (Program.cs:~490).
         services.AddGatedHostedService<GlmModelAliasMigration>(config);
 
+        // Pre-flight проба локального эндпоинта: при остановленном llama.cpp/vLLM ход
+        // завершится сразу понятной ошибкой, без шагов цепочки (см. LocalEndpointProbe,
+        // FallbackLlmSessionAdapter). Используется реестром ниже для подстановки живого
+        // max_model_len в CLAUDE_CODE_MAX_CONTEXT_TOKENS.
+        services.AddSingleton<ILocalEndpointProbe>(sp =>
+            new LocalEndpointProbe(sp.GetRequiredService<IHttpClientFactory>()));
+
         // Реестр провайдеров: цены, профили CLI, projects-каталоги.
+        // Зависит от ILocalEndpointProbe: подставляет живое max_model_len в
+        // CLAUDE_CODE_MAX_CONTEXT_TOKENS для локального провайдера. Цикла нет: проба
+        // живёт от IHttpClientFactory, не от реестра. До этой правки конфиг жил руками —
+        // за сутки значение 71 680 → 61 440 → 65 536, и CLI считал по объявленному
+        // (57345 + 8192 < 71680), не сжимал вовремя и ход падал на одном токене.
         // Резолвится в Program.cs:~869 для регистрации корней в TranscriptRoots.
-        services.AddSingleton<LlmProviderRegistry>();
+        services.AddSingleton<LlmProviderRegistry>(sp =>
+            new LlmProviderRegistry(
+                sp.GetRequiredService<IConfiguration>(),
+                sp.GetRequiredService<ILocalEndpointProbe>()));
 
         // Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory, без персиста.
         services.AddSingleton<ProviderHealthRegistry>();

@@ -851,6 +851,27 @@ public class ClaudeSession : ILlmSessionAdapter
         // от свойств хода не зависит (иначе сигнатура запуска «мерцала» бы между ходами)
         var externalMcp = _externalMcpProvider?.Invoke();
         var hasExternal = externalMcp is { Servers.Count: > 0 };
+        // Урезание набора MCP для локального провайдера с TrimMcpServers=true (поставщик
+        // выводится из EffectiveModel — свойство сессии, не хода). Замер 2026-09-05 на
+        // qwen3.8-27b: полный набор стоит 26 557 входных токенов (87% окна 65 536) — даже
+        // без истории разговор не влезает с первого хода. Выключаем ВСЁ, кроме desktop —
+        // тот стоит дёшево и нужен для десктопных чатов. Родной Claude и облачные
+        // провайдеры не задеты (TrimMcpServers=false по умолчанию).
+        var trimMcp = _providers?.ResolveByModel(EffectiveModel) is { TrimMcpServers: true };
+        if (trimMcp)
+        {
+            hasTasks = hasNotes = hasMemory = hasPersonas = hasWorkspace = false;
+            hasNotifications = hasWidgets = hasCodeGraph = hasDify = false;
+            hasConsultants = false;
+            hasModules = false;
+            hasFalAi = false;
+            hasGlif = false;
+            hasWatch = false;
+            userServers = null;
+            externalMcp = null;
+            hasExternal = false;
+            // desktop оставляем: десктопные чаты работают через эту грань
+        }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal && !hasWatch
@@ -2374,8 +2395,16 @@ public class ClaudeSession : ILlmSessionAdapter
         if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))
             args.AddRange(["--model", ResolveModelForCli(turnModel)!]);
 
-        if (!string.IsNullOrWhiteSpace(Info.Effort))
-            args.AddRange(["--effort", Info.Effort]);
+        // Подбор effort — в одной точке реестра (LlmProviderRegistry.EffortFor). Резолв делается
+        // ВСЕГДА, в т.ч. при пустом Info.Effort: для провайдера с SupportedEfforts EffortFor
+        // вернёт самый лёгкий уровень (иначе CLI подставит дефолт «high» и qwen3.8-27b через
+        // vLLM ответит 400), для родного Claude и провайдеров без SupportedEfforts — null,
+        // флаг не ставится, CLI берёт свой дефолт, как было до подмены. Подменять
+        // неподдерживаемый провайдером уровень (напр. qwen3.8-27b не принимает «high») —
+        // тоже здесь, без своей логики в OneShotClaudeRunner.
+        var effort = _providers?.EffortFor(EffectiveModel, Info.Effort);
+        if (!string.IsNullOrEmpty(effort))
+            args.AddRange(["--effort", effort!]);
 
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
@@ -2957,10 +2986,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // в HTTP_PROXY, а инструмент молча исчезнет у модели (503 CLIENT_HTTP_NOT_IMPLEMENTED).
         // Признак «в ходу есть http-сервер» — сводный: контекстный флаг (widgets/memory,
         // решён SessionManager на едином гейте) ИЛИ pmem-консультанты этого хода на http.
-        // Ставим только при активном http-транспорте (рубильник отката возвращает stdio —
-        // env обязан откатиться вместе с ним) и только local-владельцу: песочнице хостовое
-        // окружение не доезжает вовсе, иначе exec-переменная подменяет узкий egress-whitelist
-        // контейнера. Правило целиком — в LoopbackProxyBypass.ForTurn.
+        // Ставим при активном http-транспорте (рубильник отката возвращает stdio —
+        // env обязан откатиться вместе с ним) ЛИБО на ходе локального LLM-провайдера
+        // (там обход нужен ради самого хода, см. ниже) и только local-владельцу: песочнице
+        // хостовое окружение не доезжает вовсе, иначе exec-переменная подменяет узкий
+        // egress-whitelist контейнера. Правило целиком — в LoopbackProxyBypass.ForTurn.
         // Обе формы: часть http-клиентов смотрит лишь на нижний регистр, часть — на верхний.
         // Рубильник живой (HttpMcpEnabledProvider на каждый ход): откат уносит не только
         // http-узлы конфига, но и этот env — оверрайд обязан откатиться вместе с транспортом
@@ -2984,6 +3014,15 @@ public class ClaudeSession : ILlmSessionAdapter
         };
         httpApiUrls.AddRange(personaAgents?.MemoryServers
             .Where(s => s.UseHttp).Select(s => s.ApiUrl) ?? []);
+        // Локальный LLM-провайдер (IsLocal, эндпоинт на loopback) требует обхода САМ ПО СЕБЕ,
+        // независимо от транспорта MCP: с HTTP_PROXY в окружении CLI тащит в прокси даже
+        // 127.0.0.1 и падает «Connection refused — a firewall or proxy may be blocking it»
+        // (docs/research/local-vllm-provider.md §7б, грабля 1 — так был потерян первый замер).
+        // Его адрес добавляем в список: хост эндпоинта может быть не loopback-именем.
+        var localProvider = _providers?.ResolveByModel(EffectiveModel) is { IsLocal: true } lp
+            ? lp : null;
+        if (localProvider is not null)
+            httpApiUrls.Add(localProvider.AnthropicBaseUrl);
         // Унаследованное — СКЛЕЙКОЙ обеих форм, а не «??»: на Linux словарь окружения
         // регистрозависим, и пустая NO_PROXY выигрывала у осмысленного lowercase-списка,
         // обнуляя его. Пустая строка — отсутствие значения; дедупликацию делает Merge.
@@ -2994,6 +3033,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var noProxy = Services.Mcp.Http.LoopbackProxyBypass.ForTurn(
             httpMcpActive,
             _launcher.IsSandboxed,
+            localProvider is not null,
             inheritedNoProxy,
             httpApiUrls.ToArray());
         if (noProxy is not null)

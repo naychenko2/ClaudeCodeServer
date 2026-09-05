@@ -223,17 +223,34 @@ public class LlmProviderRegistry
 
     // Подобрать effort, который CLI передаст в --effort, с учётом SupportedEfforts провайдера
     // модели. Точка подмены ОДНА — оба места (ClaudeSession, OneShotClaudeRunner) обязаны
-    // звать её, дублировать логику нельзя. Пустой effort / пустой SupportedEfforts / родной
-    // Claude (модель не резолвится) → отдаём как есть (fail-open, остальные провайдеры не
-    // задеты). Фактический блокер: API vLLM принимает только low/medium/xhigh и 400 на «high».
+    // звать её, дублировать логику нельзя.
+    //
+    // Пустой effort (null / "" / пробелы) — это не «не трогать», а «нет запроса»: для
+    // провайдера с непустым SupportedEfforts возвращаем самый лёгкий поддерживаемый уровень,
+    // иначе CLI подставит свой дефолт (напр. «high» у qwen3.8-27b через vLLM → 400).
+    // Для родного Claude и провайдеров с пустым SupportedEfforts (glm/kimi/minimax) — null,
+    // флаг --effort не ставится: пусть CLI берёт свой дефолт, как было до подмены.
+    //
+    // Непустой effort — обычная подмена: EffortMap приоритетнее SupportedEfforts (конфиг
+    // доверенный), затем точное совпадение, иначе ближайший снизу по шкале.
     public string? EffortFor(string? model, string? effort)
     {
-        if (string.IsNullOrWhiteSpace(effort)) return effort;
         var p = ResolveByModel(model);
-        if (p is null) return effort;
-        var supported = p.SupportedEfforts
+        var supported = p?.SupportedEfforts
             .Where(s => !string.IsNullOrWhiteSpace(s))
-            .ToList();
+            .ToList() ?? [];
+
+        if (string.IsNullOrWhiteSpace(effort))
+        {
+            // Пустой effort: для провайдера с SupportedEfforts — самый лёгкий уровень;
+            // иначе null (флаг не ставится).
+            return supported.Count > 0 ? PickLightestSupported(supported) : null;
+        }
+
+        // Непустой effort: родной Claude (провайдер не нашёлся) — отдать как есть,
+        // как и провайдер с пустым SupportedEfforts (fail-open для glm/kimi/minimax).
+        if (p is null || supported.Count == 0) return effort;
+
         // Явная карта EffortMap приоритетнее SupportedEfforts: конфиг доверенный, и
         // «high → medium» декларативнее правила «ближайший снизу». Без проверки значения
         // карты на шкалу/SupportedEfforts: провайдер сам отвечает за корректность подмены
@@ -242,7 +259,7 @@ public class LlmProviderRegistry
             && p.EffortMap.TryGetValue(effort, out var mapped)
             && !string.IsNullOrWhiteSpace(mapped))
             return mapped;
-        if (supported.Count == 0) return effort;
+
         // Точное совпадение (с учётом регистра) — не трогаем
         foreach (var s in supported)
             if (string.Equals(s, effort, StringComparison.OrdinalIgnoreCase))
@@ -274,6 +291,28 @@ public class LlmProviderRegistry
         var pick = supportedIdxs.Where(i => i <= requestedIdx).DefaultIfEmpty(-1).Max();
         if (pick < 0) return EffortScale[supportedIdxs.Min()];
         return EffortScale[pick];
+    }
+
+    // Самый лёгкий поддерживаемый уровень по шкале EffortScale: для ["low"] → "low",
+    // для ["medium","xhigh"] → "medium". Значения вне шкалы (провайдер прислал что-то
+    // левое) — игнорируем; если все вне шкалы, возвращаем первый элемент списка,
+    // как и существующее правило про «незнакомый CLI-уровень» в EffortFor.
+    private static string PickLightestSupported(IReadOnlyList<string> supported)
+    {
+        var bestIdx = -1;
+        var best = supported[0];
+        foreach (var s in supported)
+        {
+            for (var i = 0; i < EffortScale.Length; i++)
+                if (string.Equals(EffortScale[i], s, StringComparison.OrdinalIgnoreCase)
+                    && (bestIdx < 0 || i < bestIdx))
+                {
+                    bestIdx = i;
+                    best = EffortScale[i];
+                    break;
+                }
+        }
+        return bestIdx < 0 ? supported[0] : best;
     }
 
     public static int ClaudeContextWindow(string? cliModel) =>

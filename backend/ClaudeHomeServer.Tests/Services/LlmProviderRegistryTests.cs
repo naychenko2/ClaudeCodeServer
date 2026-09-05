@@ -714,9 +714,61 @@ public class LlmProviderRegistryTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void EffortFor_ПустойEffort_ВозвращаетКакЕсть(string? effort)
+    public void EffortFor_ПустойEffort_ЛокальныйВозвращаетСамыйЛёгкий(string? effort)
     {
-        CreateLocal().EffortFor("qwen38-27b", effort).Should().Be(effort);
+        // qwen3.8-27b имеет SupportedEfforts = [low, medium, xhigh]. Пустой effort — не
+        // «оставь как есть» (иначе CLI подставит «high» → 400 на vLLM), а «подбери
+        // самый лёгкий поддерживаемый» — здесь «low».
+        CreateLocal().EffortFor("qwen38-27b", effort).Should().Be("low");
+    }
+
+    // Локальный провайдер с единственным уровнем «medium» — пустой effort даёт «medium».
+    // Контракт «самый лёгкий из SupportedEfforts», не «первый элемент списка».
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EffortFor_ПустойEffort_ЛокальныйТолькоMedium(string? effort)
+    {
+        var reg = CreateLocal(new()
+        {
+            ["LlmProviders:local-qwen:SupportedEfforts:0"] = "medium",
+            ["LlmProviders:local-qwen:SupportedEfforts:1"] = null,
+            ["LlmProviders:local-qwen:SupportedEfforts:2"] = null,
+        });
+        reg.EffortFor("qwen38-27b", effort).Should().Be("medium");
+    }
+
+    // Провайдер без SupportedEfforts (glm/kimi/minimax по §7б) — пустой effort возвращает
+    // null, флаг --effort НЕ ставится. Это fail-open: пусть CLI берёт свой дефолт, как
+    // было до подмены.
+    [Theory]
+    [InlineData("deepseek-v4-pro")]
+    [InlineData("glm-5.2")]
+    [InlineData("kimi-k3")]
+    public void EffortFor_ПустойEffort_ПровайдерБезСписка_Null(string model)
+    {
+        var reg = Create(new()
+        {
+            ["LlmProviders:glm:ApiKey"] = "zai-key",
+            ["LlmProviders:kimi:ApiKey"] = "kimi-key",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        });
+        reg.EffortFor(model, null).Should().BeNull();
+        reg.EffortFor(model, "").Should().BeNull();
+        reg.EffortFor(model, "   ").Should().BeNull();
+    }
+
+    // Родной Claude (модель не резолвится ни в какого провайдера) — пустой effort даёт null.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("opus")]
+    [InlineData("claude-opus-4-8")]
+    [InlineData("sonnet[1m]")]
+    public void EffortFor_ПустойEffort_РоднойClaude_Null(string? model)
+    {
+        Create().EffortFor(model, null).Should().BeNull();
     }
 
     // EffortMap приоритетнее SupportedEfforts. Конфиг декларативнее правила «ближайший снизу»:

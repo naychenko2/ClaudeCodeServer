@@ -2373,14 +2373,16 @@ public class ClaudeSession : ILlmSessionAdapter
         if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))
             args.AddRange(["--model", ResolveModelForCli(turnModel)!]);
 
-        if (!string.IsNullOrWhiteSpace(Info.Effort))
-        {
-            // Подмена неподдерживаемого провайдером уровня (напр. qwen3.8-27b не принимает
-            // «high») делается в одной точке реестра — здесь и в OneShotClaudeRunner не должно
-            // быть собственной логики выбора уровня.
-            var effort = _providers?.EffortFor(EffectiveModel, Info.Effort) ?? Info.Effort;
-            args.AddRange(["--effort", effort]);
-        }
+        // Подбор effort — в одной точке реестра (LlmProviderRegistry.EffortFor). Резолв делается
+        // ВСЕГДА, в т.ч. при пустом Info.Effort: для провайдера с SupportedEfforts EffortFor
+        // вернёт самый лёгкий уровень (иначе CLI подставит дефолт «high» и qwen3.8-27b через
+        // vLLM ответит 400), для родного Claude и провайдеров без SupportedEfforts — null,
+        // флаг не ставится, CLI берёт свой дефолт, как было до подмены. Подменять
+        // неподдерживаемый провайдером уровень (напр. qwen3.8-27b не принимает «high») —
+        // тоже здесь, без своей логики в OneShotClaudeRunner.
+        var effort = _providers?.EffortFor(EffectiveModel, Info.Effort);
+        if (!string.IsNullOrEmpty(effort))
+            args.AddRange(["--effort", effort!]);
 
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI

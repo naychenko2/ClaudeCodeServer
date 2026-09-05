@@ -3074,4 +3074,38 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("success");
     }
+
+    // «Стоп» завершает ход даже без терминала от CLI: в проде финал может прийти ОТЛИЧНО от Exited
+    // (ResultMessage пришёл ДО Interrupt, но аккумулятор/карточка ещё не отрисованы — терминал
+    // уже осел в Settle, и приход Exited позже не обязателен). Главное — _userInterrupted взведён
+    // и ход должен закрыться с outcome=interrupted, а НЕ висеть до DisposeAsync.
+    //
+    // Сейчас адаптер висит: WaitAsync на attemptTcs ждёт ExitedMessage, которого нет, а _cts
+    // (отменяется только в DisposeAsync) Interrupt не трогает. Это и есть причина инцидента
+    // 2026-09-05: «Стоп» на стенде Вера → CLI виснет, turn/completed не публикуется.
+    [Fact]
+    public async Task InterruptБезТерминалаОтCli_ХодВсёРавноЗавершается()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, provider: "acc-a");
+        inner.Scripts.Enqueue(() =>
+        {
+            // Симулируем «Стоп»: пользователь прервал, inner.Interrupt убил процесс, но ExitedMessage
+            // до FallbackLlmSessionAdapter не дошёл (на стенде это и наблюдалось).
+            sut.Interrupt();
+            inner.Interrupts.Should().Be(1, "sut.Interrupt пробрасывает сигнал в inner");
+        });
+
+        await sut.SendMessageAsync("сделай");
+
+        // Без ExitedMessage ход всё равно должен завершиться: ждём ExitedMessage, по которому
+        // SessionManager снимает Working и разбирает Pending. Таймаут 3 с — на стенде «Стоп»
+        // отрабатывал за <1 с.
+        await WaitForAsync(
+            () => Downstream().OfType<ExitedMessage>().Any(),
+            "ExitedMessage финала хода (регрессия: без него ход висит до DisposeAsync, и queued, position=1)");
+
+        // Итог: попытка ровно одна — подмены быть не должно (Interrupt = не ошибка доставки)
+        inner.Attempts.Should().ContainSingle("остановка пользователем — не ошибка доставки, фолбэка нет");
+    }
 }

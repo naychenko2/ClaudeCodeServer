@@ -613,9 +613,48 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 await _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
 
+                // Ждём терминал попытки через ЛИНКОВАННЫЙ токен: иначе «Стоп» будит только паузу
+                // egress-ретрая (turn.Interrupted.Cancel), а ожидание attemptTcs живёт до DisposeAsync —
+                // на стенде «Стоп» приходил, CLI убивался, но терминал (ExitedMessage) от inner в
+                // адаптер не доходил в окне (race с автофолбэком / задержка финализации), и ход
+                // навечно оставался в Working (инцидент 2026-09-05). Linked токен разрывает оба
+                // источника: отмену сессии (_cts) и прерывание пользователя (turn.Interrupted).
                 AttemptEnd end;
-                try { end = await attemptTcs.Task.WaitAsync(_cts.Token); }
-                catch (OperationCanceledException) { return; } // сессию закрыли — оркестрация снята
+                using (var waitCts = CancellationTokenSource.CreateLinkedTokenSource(
+                           _cts.Token, turn.Interrupted.Token))
+                {
+                    try
+                    {
+                        end = await attemptTcs.Task.WaitAsync(waitCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Прерывание пользователем («Стоп» / interrupt ради очереди) — честный
+                        // финал: ждать терминала от inner больше незачем, и попытка НЕ считается
+                        // ошибкой доставки. Сессию закрыли — просто выходим.
+                        if (_userInterrupted)
+                        {
+                            turnOutcome = "interrupted";
+                            // inner не успел прислать ExitedMessage (race на стенде 2026-09-05:
+                            // CLI убит, финализация застряла на pipe, drain не дошёл) — downstream
+                            // (SessionManager, редуктор ленты) без ExitedMessage считает ход
+                            // живым и блокирует следующее сообщение через queued, position=1.
+                            // Шлём ExitedMessage сами: SessionManager по нему снимет Working и
+                            // разберёт Pending, маркер «Ход остановлен пользователем» ставит UI.
+                            lock (turn.Sync)
+                            {
+                                if (!turn.Settled)
+                                {
+                                    turn.Hold(new ExitedMessage(_inner.SubmittedTurnSeq));
+                                    turn.AttemptResolved = true;
+                                }
+                            }
+                            await SettleAsync(turn);
+                            return;
+                        }
+                        return; // _cts отменён — сессию закрыли, оркестрация снята
+                    }
+                }
                 lastEnd = end;
 
                 if (_userInterrupted) { turnOutcome = "interrupted"; await SettleAsync(turn); return; }

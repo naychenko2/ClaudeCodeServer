@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -1307,5 +1308,83 @@ public class LlmProviderRegistryTests
         {
             try { Directory.Delete(tmp, recursive: true); } catch { }
         }
+    }
+
+    // ─── Живое окно из LocalEndpointProbe ──────────────────────────────────────
+    // Фейковая проба: имитирует LocalEndpointProbe.TryGetKnownContextWindow без HTTP,
+    // отдаёт захардкоженное max_model_len (или не отдаёт, если 0).
+    private sealed class FakeLocalProbe(int knownWindow) : ILocalEndpointProbe
+    {
+        public Task<LocalProbeOutcome> CheckAsync(LlmProviderConfig provider, CancellationToken ct = default)
+            => Task.FromResult(LocalProbeOutcome.Alive);
+        public bool TryGetKnownContextWindow(string providerKey, out int window)
+        {
+            window = knownWindow;
+            return knownWindow > 0;
+        }
+        public void Invalidate(string providerKey) { }
+    }
+
+    private static LlmProviderRegistry CreateWithLocal(Dictionary<string, string?> settings, ILocalEndpointProbe probe)
+    {
+        var config = TestConfig.Build(settings);
+        return new LlmProviderRegistry(config, probe);
+    }
+
+    // Локальный провайдер (IsLocal=true) с пробой, у которой есть живое окно:
+    // BuildCliEnv кладёт в CLAUDE_CODE_MAX_CONTEXT_TOKENS ЖИВОЕ значение, не каталог.
+    [Fact]
+    public void BuildCliEnv_ЛокальныйПровайдер_ИспользуетLiveMaxModelLenИзПробы()
+    {
+        // Каталог объявляет 71680 (старый CTX=long), проба знает фактические 65536 (CTX=fast).
+        // Без правки BuildCliEnv прокидывал бы 71680 — CLI считал бы, что контекст влезает,
+        // и не сжимал вовремя (57345 + 8192 < 71680), а сервер отбивал на одном токене.
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 65536);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("65536");
+    }
+
+    // Проба не успела опросить стенд (knownWindow=0) — fail-open на каталог.
+    [Fact]
+    public void BuildCliEnv_ЛокальныйПровайдер_ПробаНеЗнает_ФолалноНаКаталог()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 0);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("71680");
+    }
+
+    // Облачный провайдер — проба НЕ применяется, даже если бы могла отдать число.
+    // Иначе отказа в локальной пробе на облачном провайдере (IsLocal=false) выдавал бы
+    // ложное окно — регрессия прежнего поведения.
+    [Fact]
+    public void BuildCliEnv_ОблачныйПровайдер_ПробаИгнорируется()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:DisplayName"] = "DeepSeek",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+            ["LlmProviders:deepseek:Models:0:ContextWindow"] = "1048576",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 99999);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("deepseek-v4-pro")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
     }
 }

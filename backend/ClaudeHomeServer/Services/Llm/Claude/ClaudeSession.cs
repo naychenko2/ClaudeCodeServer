@@ -850,6 +850,27 @@ public class ClaudeSession : ILlmSessionAdapter
         // от свойств хода не зависит (иначе сигнатура запуска «мерцала» бы между ходами)
         var externalMcp = _externalMcpProvider?.Invoke();
         var hasExternal = externalMcp is { Servers.Count: > 0 };
+        // Урезание набора MCP для локального провайдера с TrimMcpServers=true (поставщик
+        // выводится из EffectiveModel — свойство сессии, не хода). Замер 2026-09-05 на
+        // qwen3.8-27b: полный набор стоит 26 557 входных токенов (87% окна 65 536) — даже
+        // без истории разговор не влезает с первого хода. Выключаем ВСЁ, кроме desktop —
+        // тот стоит дёшево и нужен для десктопных чатов. Родной Claude и облачные
+        // провайдеры не задеты (TrimMcpServers=false по умолчанию).
+        var trimMcp = _providers?.ResolveByModel(EffectiveModel) is { TrimMcpServers: true };
+        if (trimMcp)
+        {
+            hasTasks = hasNotes = hasMemory = hasPersonas = hasWorkspace = false;
+            hasNotifications = hasWidgets = hasCodeGraph = hasDify = false;
+            hasConsultants = false;
+            hasModules = false;
+            hasFalAi = false;
+            hasGlif = false;
+            hasWatch = false;
+            userServers = null;
+            externalMcp = null;
+            hasExternal = false;
+            // desktop оставляем: десктопные чаты работают через эту грань
+        }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !hasExternal && !hasWatch

@@ -87,6 +87,15 @@ public class LlmProviderConfig
     // управляет effort (см. EffortMap), а эта переменная только страхует от лишнего параметра.
     public int? MaxThinkingTokens { get; set; }
 
+    // Урезать состав MCP-серверов до минимума (false — обычный состав). Для провайдеров с
+    // маленькимом окном (vLLM/llama.cpp, qwen3.8-27b на 65k) описания MCP-инструментов
+    // едят десятки тысяч токенов служебного контекста — на local-qwen замерено 26 557
+    // токенов только на MCP при общем 65k окне (см. замер 2026-09-05). false по умолчанию —
+    // родной Claude и облачные провайдеры работают как раньше. Состав зависит только от
+    // свойства сессии (EffectiveModel → провайдер), не от хода: McpToolsetStabilityTests
+    // остаётся зелёным, сигнатура запуска стабильна в пределах одной сессии.
+    public bool TrimMcpServers { get; set; }
+
     public string EffectiveModelPrefix => string.IsNullOrWhiteSpace(ModelPrefix) ? Key : ModelPrefix;
 
     // Все префиксы для резолва по id модели (см. ModelPrefixes). Пустые строки

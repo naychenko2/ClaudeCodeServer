@@ -3,26 +3,12 @@ using ClaudeHomeServer.Services.Llm.Claude;
 
 namespace ClaudeHomeServer.Services.Turn;
 
-// Карта событий v1 (фиксируется на этапе 0 плана «Шина событий хода», подробности — ADR-013).
-// Переселенцев на этом этапе нет: типы объявлены, подписчиков ноль, поведение продукта
-// не меняется. Имя события (const Event) — канонический ключ для доки и логов.
+// Карта событий шины TurnEventBus (подробности — ADR-013). Имя события (const Event) —
+// канонический ключ для доки и логов; соответствие кода и таблицы в ADR проверяет
+// TurnEventsMapContractTests.
 //
 // Правило: в UI события НЕ ходят. Дорога к клиенту одна — ServerMessage/OnMessage;
 // шина второй не заводит.
-
-// turn/started — ход принят к исполнению (текст пользователя известен, попыток ещё не было).
-public sealed record TurnStarted(TurnContext Turn, string Text) : ITurnNotification
-{
-    public const string Event = "turn/started";
-}
-
-// turn/attempt-started — началась ПОПЫТКА хода конкретной парой «модель × провайдер»
-// (цепочка фолбэка: попыток у одного хода может быть несколько).
-public sealed record TurnAttemptStarted(TurnContext Turn, int Attempt, string Model, string ProviderKey)
-    : ITurnNotification
-{
-    public const string Event = "turn/attempt-started";
-}
 
 // Одна секция системного промпта хода: Key — ключ секции (recall-notes, persona-layer …),
 // Text — её текст. Порядок секций задаёт порядок склейки.
@@ -91,13 +77,6 @@ public sealed record PromptAssembled(
     PromptSnapshotPayload? Snapshot = null) : ITurnNotification
 {
     public const string Event = "prompt/assembled";
-}
-
-// tool/result — наблюдён результат инструмента (в том числе ошибочный). Не путать с
-// permission: DecidePermissionAsync в v1 шину не зовёт (путь безопасности, ADR-013).
-public sealed record ToolResultObserved(TurnContext Turn, string ToolName, bool IsError) : ITurnNotification
-{
-    public const string Event = "tool/result";
 }
 
 // subagent/completed — сабагент хода завершился. Подписчик: session manager — пишет

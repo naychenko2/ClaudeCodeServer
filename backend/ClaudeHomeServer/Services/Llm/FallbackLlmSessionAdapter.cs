@@ -1562,9 +1562,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var overflow = trace.Count > 0 && trace[^1].Class == FallbackErrorClass.ContextOverflow;
         if (overflow)
         {
+            // ExpectResultFollows: true — за этим сообщением БЕЗУСЛОВНО идёт финальный result
+            // ниже; без флага SkipNextTeamTurnEnd в SessionManager не взводится, и парный
+            // result разбирает конец хода штабом второй раз (дефект be684c7b).
             await _downstream(new ErrorMessage(
                 "Разговор слишком велик — ни одна из доступных моделей не смогла его обработать.\n\n"
-                + "Сожмите контекст командой /compact или выберите модель с бóльшим окном в настройках чата."));
+                + "Сожмите контекст командой /compact или выберите модель с бóльшим окном в настройках чата.",
+                ExpectResultFollows: true));
         }
         else
         {
@@ -1573,10 +1577,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             // переносы в error-сообщениях (white-space: pre-wrap), так что обходной
             // разделитель « · » больше не нужен. Служебные термины и ключи сюда не попадают.
             var attempts = string.Join("\n", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
+            // ExpectResultFollows: true по той же причине, что в ветке overflow — за этой ошибкой
+            // сразу идёт result в конце метода (дефект be684c7b).
             await _downstream(new ErrorMessage(
                 "Ни одна из доступных моделей не ответила.\n\n"
                 + attempts + "\n\n"
-                + "Попробуйте позже или выберите другую модель в настройках чата."));
+                + "Попробуйте позже или выберите другую модель в настройках чата.",
+                ExpectResultFollows: true));
         }
 
         var reason = string.IsNullOrEmpty(lastEnd.Result?.ApiErrorStatus)

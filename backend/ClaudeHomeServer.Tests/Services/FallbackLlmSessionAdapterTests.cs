@@ -579,6 +579,38 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
     }
 
+    // Регресс-страховка дефекта be684c7b (этап 4): при исчерпании цепочки FailExhaustedAsync
+    // шлёт наружу ErrorMessage("ни одна модель не ответила") и следом ResultMessage. Парный
+    // result опирается на SkipNextTeamTurnEnd в SessionManager — флаг взводится ТОЛЬКО на
+    // ErrorMessage{ExpectResultFollows: true}. Без него оба сообщения независимо дёргают
+    // HandleTeamTurnEndAsync, и в командном чате штаб разбирает ход дважды (второй раз по
+    // пустому turnText). Существующая пара ErrorMessage{ExpectResultFollows:true}+Result
+    // уже проверена в SessionManagerTests; здесь — что FailExhaustedAsync отправляет свой
+    // вердикт-ошибку именно с этим флагом.
+    [Fact]
+    public async Task ЦепочкаИсчерпана_ErrorMessageВердиктаИдётСExpectResultFollows()
+    {
+        var providers = BuildProviders();
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
+        for (var i = 0; i < 5; i++)
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Вердикт-ошибка «ни одна модель не ответила» обязана нести флаг ExpectResultFollows:
+        // иначе SessionManager не взведёт SkipNextTeamTurnEnd, и парный result ниже пройдёт
+        // через разбор хода штабом второй раз (дефект be684c7b).
+        Downstream().OfType<ErrorMessage>()
+            .Should().ContainSingle(e => e.ExpectResultFollows,
+                "вердикт исчерпания идёт В ПАРЕ с финальным result — SessionManager должен "
+                + "взвести SkipNextTeamTurnEnd на ошибке и пропустить разбор по result");
+        // Сама пара: после такой ErrorMessage всегда идёт result с subtype=error.
+        Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
+    }
+
     // Репро инцидента 2026-08-08 (волны 1+2): чат с замороженной opus (нативный claude), цепочка
     // пресета «Основной — Сильный»: opus → kimi-k3 → glm-5.2. Обе подписки Claude исчерпаны —
     // ход уходит на kimi-k3 (шаг 2 цепочки) одним маркером «Цепочка пресета: шаг 2», а не в

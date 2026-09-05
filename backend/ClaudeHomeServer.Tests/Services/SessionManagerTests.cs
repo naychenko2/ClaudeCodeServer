@@ -3753,6 +3753,172 @@ public class SessionManagerTests : IDisposable
         lock (entry.GetType().GetField("TeamTurnLock")!.GetValue(entry)!) return buffer.ToString();
     }
 
+    // Этап 4 / шаг 1а: слот осушенного буфера хода штаба с ключом по TurnSeq — для
+    // подписчика turn/completed. Хранилище живёт на private SessionEntry, методы публичны,
+    // но на приватном классе — доступ через рефлексию в обоих направлениях.
+    private static System.Collections.Generic.Dictionary<int, string> GetLastTurnTexts(object entry) =>
+        (System.Collections.Generic.Dictionary<int, string>)entry.GetType()
+            .GetField("LastTurnTexts", BindingFlags.Public | BindingFlags.Instance)!.GetValue(entry)!;
+
+    private static int GetLastTurnSeq(object entry) =>
+        (int)entry.GetType()
+            .GetField("LastTurnSeq", BindingFlags.Public | BindingFlags.Instance)!.GetValue(entry)!;
+
+    private static void SetLastTurnSeq(object entry, int value) =>
+        entry.GetType()
+            .GetField("LastTurnSeq", BindingFlags.Public | BindingFlags.Instance)!.SetValue(entry, value);
+
+    private static void InvokePutTurnText(object entry, int seq, string text) =>
+        entry.GetType()
+            .GetMethod("PutTurnText", BindingFlags.Public | BindingFlags.Instance)!
+            .Invoke(entry, [seq, text]);
+
+    private static bool InvokeTryTakeTurnText(object entry, int seq, out string? text)
+    {
+        var args = new object?[] { seq, null };
+        var ok = (bool)entry.GetType()
+            .GetMethod("TryTakeTurnText", BindingFlags.Public | BindingFlags.Instance)!
+            .Invoke(entry, args)!;
+        text = (string?)args[1];
+        return ok;
+    }
+
+    // --- Этап 4 / шаг 1а: слот текста хода на SessionEntry с ключом по TurnSeq ---
+    // Поведение OnMessageAsync не меняется — текст по-прежнему идёт в HandleTeamTurnEndAsync,
+    // параллельно кладётся в LastTurnTexts. Тесты ниже — на правила хранилища и на сам факт
+    // заполнения по тому же пути, по которому ходит прод.
+
+    [Fact]
+    public async Task LastTurnText_PutTurnText_ПерваяЗаписьПоКлючуВыигрывает()
+    {
+        // Повторная запись по тому же ключу не затирает непустую — защита от двойного
+        // терминала одного хода (побочная находка плана, тот же класс дефекта, что
+        // «волна-призрак»).
+        var session = await MkBusySessionAsync("ltt-first-wins");
+        var entry = GetEntry(session.Id);
+        var slot = GetLastTurnTexts(entry);
+
+        InvokePutTurnText(entry, 7, "первый");
+        InvokePutTurnText(entry, 7, "второй");
+
+        slot.Should().HaveCount(1);
+        slot[7].Should().Be("первый");
+    }
+
+    [Fact]
+    public async Task LastTurnText_PutTurnText_НулевойКлючНеКладётся()
+    {
+        // 0 — «не знаем TurnSeq» (local voice, синтетические ходы); такие записи в слот не идут.
+        var session = await MkBusySessionAsync("ltt-zero-seq");
+        var entry = GetEntry(session.Id);
+        var slot = GetLastTurnTexts(entry);
+
+        InvokePutTurnText(entry, 0, "текст");
+        InvokePutTurnText(entry, -1, "текст");
+
+        slot.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LastTurnText_TryTakeTurnText_ИзымаетИПовторноВозвращаетFalse()
+    {
+        var session = await MkBusySessionAsync("ltt-take-once");
+        var entry = GetEntry(session.Id);
+
+        InvokePutTurnText(entry, 7, "текст");
+
+        InvokeTryTakeTurnText(entry, 7, out var first).Should().BeTrue();
+        first.Should().Be("текст");
+        // контракт подписчика turn/completed: повторное чтение по тому же ключу — false
+        InvokeTryTakeTurnText(entry, 7, out var second).Should().BeFalse();
+        second.Should().BeNull();
+        GetLastTurnTexts(entry).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LastTurnText_TryTakeTurnText_ЧужойКлючНеТрогаетЗапись()
+    {
+        var session = await MkBusySessionAsync("ltt-take-other");
+        var entry = GetEntry(session.Id);
+
+        InvokePutTurnText(entry, 7, "текст");
+        GetLastTurnTexts(entry).Should().HaveCount(1, "предусловие: запись лежит");
+
+        InvokeTryTakeTurnText(entry, 8, out var none).Should().BeFalse();
+        none.Should().BeNull();
+        GetLastTurnTexts(entry).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task LastTurnText_Потолок_ВытесняетСамуюСтаруюЗаписьНеСвежую()
+    {
+        // 4-я запись при потолке 3 вытесняет минимальный TurnSeq (=1), не свежий (=3) — иначе
+        // бы подписчик turn/completed, пришедший позже публикации (окно между
+        // FallbackLlmSessionAdapter.cs:943 и :984), увидел вытесненную запись предыдущего
+        // хода и прочёл «не свой» текст.
+        var session = await MkBusySessionAsync("ltt-cap");
+        var entry = GetEntry(session.Id);
+        var slot = GetLastTurnTexts(entry);
+
+        InvokePutTurnText(entry, 1, "один");
+        InvokePutTurnText(entry, 2, "два");
+        InvokePutTurnText(entry, 3, "три");
+        InvokePutTurnText(entry, 4, "четыре");
+
+        slot.Should().HaveCount(3);
+        slot.Should().NotContainKey(1);
+        slot.Should().ContainKey(2).WhoseValue.Should().Be("два");
+        slot.Should().ContainKey(3).WhoseValue.Should().Be("три");
+        slot.Should().ContainKey(4).WhoseValue.Should().Be("четыре");
+    }
+
+    [Fact]
+    public async Task LastTurnText_Терминал_КладётОсушенныйТекстВСлот()
+    {
+        // Тот же путь, что в PreemptForPending_ЗанятыйШтаб: текст дельты копится в
+        // TeamTurnText, result осушает буфер и кладёт снимок в LastTurnTexts под ключом
+        // entry.LastTurnSeq. В тесте LastTurnSeq ставим явно (SessionStartedMessage сюда
+        // не отправляем — нас интересует сам факт заполнения по этому пути).
+        var (session, _, _) = await MakeTeamStabAsync("ltt-deposit");
+        session.Status = SessionStatus.Working;
+        var entry = GetEntry(session.Id);
+        SetLastTurnSeq(entry, 7);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new TextDeltaMessage("текст хода штаба"), TestRunId);
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        var slot = GetLastTurnTexts(entry);
+        slot.Should().ContainKey(7);
+        slot[7].Should().Be("текст хода штаба",
+            "снимок буфера до осушения равен тексту, который ушёл бы в HandleTeamTurnEndAsync");
+    }
+
+    [Fact]
+    public async Task LastTurnText_ДвойнойТерминалОдногоХода_НеЗатираетТекстПервого()
+    {
+        // Первый терминал кладёт текст в слот; второй терминал того же TurnSeq приходит
+        // с пустым буфером и без правила «первая запись выигрывает» затёр бы снимок пустой
+        // строкой — подписчик turn/completed потерял бы маркер эскалации.
+        var (session, _, _) = await MakeTeamStabAsync("ltt-double-terminal");
+        session.Status = SessionStatus.Working;
+        var entry = GetEntry(session.Id);
+        SetLastTurnSeq(entry, 7);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new TextDeltaMessage("первый терминал"), TestRunId);
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        var slot = GetLastTurnTexts(entry);
+        slot.Should().ContainKey(7);
+        slot[7].Should().Be("первый терминал",
+            "повторная запись по тому же TurnSeq не затирает текст первого терминала");
+    }
+
     // M7: ходы в тестах завершаются прямым вызовом HandleTeamTurnEndAsync, минуя запуск
     // (SendDirectAsync/SendMessageAndWaitAsync), — флаг «вводная от человека» проставляем явно,
     // как это сделал бы запуск хода по сообщению человека.

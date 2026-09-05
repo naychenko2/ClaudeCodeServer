@@ -77,7 +77,7 @@ public sealed class TurnEventsMapContractTests
             $"ADR не найден по пути '{adrPath}'. Тест-генератор карты обязан читать файл — без него карта в доке собирается из кода не работает.");
 
         var adrText = File.ReadAllText(adrPath);
-        // Ищем идентификаторы событий в backticks: `turn/started`, `prompt/assembling`,
+        // Ищем идентификаторы событий в backticks: `prompt/assembling`,
         // `subagent/completed` и т.п. Префикс из четырёх имён — канонические пространства
         // имён шины; в коде других префиксов быть не должно, и ADR их не упоминает.
         var adrEvents = Regex.Matches(adrText, @"`(turn|prompt|tool|subagent)/[a-z0-9\-]+`")

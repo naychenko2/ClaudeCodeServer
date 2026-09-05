@@ -55,6 +55,27 @@ public class SessionManager : IDisposable
         // работающее интервью, а не тупик, и карточка «вопросов не будет» там была бы враньём.
         // Живёт рядом с TeamTurnText и чистится вместе с ним (под TeamTurnLock).
         public bool TeamTurnAsked;
+        // Осушенный текст хода штаба с ключом по TurnSeq — хранилище, через которое подписчик
+        // turn/completed получит текст, не переносимый событием. Заполняется OnMessageAsync под
+        // TeamTurnLock (там же, где осушается TeamTurnText); читается подписчиком по ключу
+        // события. Первая запись по ключу выигрывает: повторная не затирает непустую (двойной
+        // терминал одного хода, защита от потери маркера эскалации — тот же класс дефекта, что
+        // «волна-призрак», ради которого TeamTurnText чистят при прерывании). Потолок
+        // MaxLastTurnTextEntries защищает от роста при шторме терминалов; при превышении
+        // вытесняется самая старая запись (минимальный TurnSeq), не свежая — иначе бы запись
+        // свежего хода вытеснила ещё не прочитанную запись предыдущего. См.
+        // docs/research/session-core-split-2026-09.md, «План шага 1 / Слот».
+        public readonly Dictionary<int, string> LastTurnTexts = new();
+        // Номер текущего хода, чей текст ляжет в LastTurnTexts по приходу result/error.
+        // Обновляется на SessionStartedMessage: к этому моменту ClaudeSession уже инкрементировал
+        // SubmittedTurnSeq в SubmitTurn (ClaudeSession.cs:2351), а SessionStartedMessage шлётся
+        // ПОСЛЕ (ClaudeSession.cs:4099) — то есть чтение SubmittedTurnSeq через entry.Process
+        // в OnMessageAsync даёт уже актуальный номер. volatile: путь SessionStartedMessage
+        // (_onMessage → OnMessageAsync) и путь turn/completed (finally FallbackLlmSessionAdapter
+        // после сброса _turn, FallbackLlmSessionAdapter.cs:943, 984) идут разными нитями, и без
+        // барьера возможна перестановка. 0 — ход синтетический (local voice), turn/completed
+        // по нему не публикуется, слот не пополняется.
+        public volatile int LastTurnSeq;
         // Планировщик прямо сейчас строит план по вводной (StartTeamWorkAsync обернул
         // CreateTeamPlanAsync). Гард молчаливого тупика по концу хода смотрит сюда: пока
         // планирование живо, «Planning && WaveNumber == 0» — это работающий планировщик,
@@ -184,6 +205,58 @@ public class SessionManager : IDisposable
         // на CLI BuildCliTurnText допишет сводку разговора (транскрипт CLI этих реплик
         // не знает). Не персистится — рестарт сервера сводку теряет (v1, редкий кейс).
         public int LocalTurnsSinceCli;
+
+        // Потолок LastTurnTexts. 3 взято с запасом: в штатном ходу живёт ровно одна запись,
+        // вторая нужна на случай окна между сбросом _turn (FallbackLlmSessionAdapter.cs:943)
+        // и публикацией turn/completed (984), третья — гарантия, что шторм терминалов не
+        // поднимется выше и вытеснение сработает только на дефекте.
+        public const int MaxLastTurnTextEntries = 3;
+
+        // Положить текст осушенного буфера в слот по ключу turnSeq. Первая запись выигрывает:
+        // если ключ уже занят, текст не затирается (защита от двойного терминала одного хода —
+        // коммит ced28708, см. также docs/research/session-core-split-2026-09.md, вопрос 1).
+        // При превышении потолка вытесняется самая старая запись (минимальный TurnSeq), не
+        // самая свежая: между сбросом _turn и публикацией turn/completed на FallbackLlmSessionAdapter
+        // оркестрация завершена, но событие ещё не ушло — в этом окне свежая запись уже лежит,
+        // а старая всё ещё нужна подписчику. turnSeq <= 0 — невалидный ключ (синтетические ходы
+        // local voice, чей TurnSeq неизвестен), такие записи не кладём.
+        public void PutTurnText(int turnSeq, string text)
+        {
+            if (turnSeq <= 0) return;
+            lock (TeamTurnLock)
+            {
+                if (LastTurnTexts.ContainsKey(turnSeq)) return;
+                while (LastTurnTexts.Count >= MaxLastTurnTextEntries)
+                {
+                    int oldest = int.MaxValue;
+                    foreach (var k in LastTurnTexts.Keys)
+                        if (k < oldest) oldest = k;
+                    if (oldest == int.MaxValue) break;
+                    LastTurnTexts.Remove(oldest);
+                }
+                LastTurnTexts[turnSeq] = text;
+            }
+        }
+
+        // Изъять текст по ключу turnSeq. Возвращает true и заполняет text, если ключ найден
+        // (запись при этом удаляется). false и text == null — ключа нет. Чтение и удаление
+        // атомарны: подписчик turn/completed зовёт ровно один раз на ход, повторное чтение по
+        // тому же ключу возвращает false — это контракт, на котором держится защита от потери
+        // маркера при гонке «двойной терминал».
+        public bool TryTakeTurnText(int turnSeq, out string? text)
+        {
+            lock (TeamTurnLock)
+            {
+                if (LastTurnTexts.TryGetValue(turnSeq, out var existing))
+                {
+                    LastTurnTexts.Remove(turnSeq);
+                    text = existing;
+                    return true;
+                }
+            }
+            text = null;
+            return false;
+        }
     }
 
     // Дальше какой глубины цепочка автоотчётов не идёт. 3 — как у делегирования задач:
@@ -9190,7 +9263,19 @@ private Task HandleTurnCompleted(TurnCompleted e)
                 case SessionStartedMessage m:
                     acc.SetSaveKey(m.ClaudeSessionId);
                     acc.OnSessionStarted(m.Model, m.Mode, m.TurnWorktree);
-                    if (entry is not null) entry.TurnInWorktree = m.TurnWorktree != null;
+                    if (entry is not null)
+                    {
+                        entry.TurnInWorktree = m.TurnWorktree != null;
+                        // Этап 4 / шаг 1а: фиксируем TurnSeq текущего хода для слота осушенного
+                        // буфера. SubmittedTurnSeq инкрементируется в SubmitTurn
+                        // (ClaudeSession.cs:2351), а SessionStartedMessage шлётся после неё
+                        // (ClaudeSession.cs:4099) — к моменту нашего чтения номер уже актуален.
+                        // 0 — локальный голосовой ход (адаптер не Claude, SubmittedTurnSeq = 0),
+                        // turn/completed по нему не публикуется, слот не пополняется.
+                        entry.LastTurnSeq = entry.Process is { } adapter
+                            ? (int)adapter.SubmittedTurnSeq
+                            : 0;
+                    }
                     SaveSessions();
                     break;
                 case TextDeltaMessage m:
@@ -9533,6 +9618,12 @@ private Task HandleTurnCompleted(TurnCompleted e)
                     entry.TurnSawAngleBracket = false;
                     turnAsked = entry.TeamTurnAsked;
                     entry.TeamTurnAsked = false;
+                    // Этап 4 / шаг 1а: кладём осушенный текст в слот по ключу TurnSeq, чтобы
+                    // подписчик turn/completed получил его без расширения события. Под тем же
+                    // локом — без него вторая запись (двойной терминал) могла бы пройти между
+                    // ContainsKey и индексатором и затереть первый текст. PutTurnText сам
+                    // берёт TeamTurnLock: реентрантность lock() в C# спасает от двойного взятия.
+                    entry.PutTurnText(entry.LastTurnSeq, turnText);
                 }
                 if (!string.IsNullOrEmpty(catchUpDelta))
                     await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));

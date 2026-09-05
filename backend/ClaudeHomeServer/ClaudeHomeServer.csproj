@@ -31,6 +31,11 @@
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->
   <ItemGroup>
+    <!-- Краткая карта для BareMode-провайдеров (SystemPrompts/CLAUDE-local.md) —
+         путь относительно AppContext.BaseDirectory, нужна и в bin/ (dotnet run), и в
+         /app/ (publish). Без копии флаг system-prompt-file укажет на несуществующий файл
+         и ход провайдера упадёт (см. ревью 2026-09-05). -->
+    <None Include="SystemPrompts\CLAUDE-local.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\mcp\**\*" LinkBase="mcp" CopyToPublishDirectory="PreserveNewest" />
     <!-- __tests__ исключаем: Node-хёрнессы не должны попадать в production-артефакт,
          их место в репозитории для локального/CI-прогона -->

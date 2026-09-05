@@ -6,9 +6,6 @@ public enum SessionStatus { Starting, Working, Active, Waiting, Finished, Error,
 // отдельно не хранится, чтобы не было второго источника истины.
 public enum ChatOrigin { Manual, Task, Automation }
 
-// Режимы прав — соответствуют значениям флага --permission-mode у claude CLI
-public enum ClaudeMode { Default, AcceptEdits, Plan, Auto, DontAsk, Bypass }
-
 // Значения Session.OnboardingKind:
 // User — онбординг первого входа (ведёт системный «Мастер настройки», персоны у сессии нет);
 // Project — онбординг проекта (ведёт личная дефолт-персона владельца).
@@ -16,31 +13,6 @@ public static class OnboardingKinds
 {
     public const string User = "user";
     public const string Project = "project";
-}
-
-public static class ClaudeModeExtensions
-{
-    // Значение флага --permission-mode для claude CLI
-    public static string ToCliFlag(this ClaudeMode mode) => mode switch
-    {
-        ClaudeMode.AcceptEdits => "acceptEdits",
-        ClaudeMode.Plan => "plan",
-        ClaudeMode.Auto => "auto",
-        ClaudeMode.DontAsk => "dontAsk",
-        ClaudeMode.Bypass => "bypassPermissions",
-        _ => "default",
-    };
-
-    // Wire-токен для фронта (совпадает с именами режимов в frontend/src/lib/modes.ts)
-    public static string ToWireToken(this ClaudeMode mode) => mode switch
-    {
-        ClaudeMode.AcceptEdits => "acceptEdits",
-        ClaudeMode.Plan => "plan",
-        ClaudeMode.Auto => "auto",
-        ClaudeMode.DontAsk => "dontAsk",
-        ClaudeMode.Bypass => "bypass",
-        _ => "default",
-    };
 }
 
 // Состояние цикла «до готово» (флаг work-loop, идея ralph/ulw-loop из oh-my-openagent):

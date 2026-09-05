@@ -115,6 +115,23 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
   только сервер, `CLAUDE_CODE_OAUTH_TOKEN` не трогается.
 - One-shot вызовы — всегда `--safe-mode` + `--no-session-persistence` (состав флагов —
   `OneShotClaudeRunner.BuildArgs`, под тестом).
+- **`BareMode` + `SystemPromptFile`** в `LlmProviderConfig` — отключают автозагрузку CLAUDE.md,
+  хуков, LSP, плагинов и авто-памяти; CLI получает ТОЛЬКО короткую карту через
+  `--system-prompt-file`. Для локальных моделей с малым окном это снижает вход с ~95 000 до
+  ~2 400 токенов (замер 2026-09-05). Файл карты (`backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md`,
+  4 419 байт / ~4.3 КБ) поставляется с продуктом. **Цепочка резолва** per-project:
+  `<корень проекта>/docs/CLAUDE-local.md` (приоритет, потолок 16 КБ — выше
+  отступаем к серверной) → серверный дефолт от `AppContext.BaseDirectory` (прокинут
+  через `LlmSessionContext.ContentRootPath`) → оба флага снимаются с warning. Резолв от
+  `AppContext.BaseDirectory` — лечение ревью 2026-09-05: иначе в любом чужом проекте ход
+  падает с exit=1. Если файл не найден — оба флага снимаются с warning в stderr
+  («SystemPromptFile не найден»), ход идёт обычным путём (CLI сам подтянет CLAUDE.md
+  проекта); SafeJoin ловится, ход не валится (тоже с warning). `--bare` ломает
+  OAuth-авторизацию CLI, но это безопасно СТРУКТУРНО: BareMode включается только для
+  не-родного провайдера (реестр находит через `ResolveByModel`), а у не-родных OAuth нет
+  (ставят `ANTHROPIC_API_KEY` из `BuildCliEnv`). Состав стабилен в пределах сессии
+  (`McpToolsetStabilityTests`).
+  Тесты — `ClaudeSessionBareArgsTests`.
 - **Три слота моделей (strong/medium/weak) + глобальная таблица назначений.** Слот личный
   per-user поверх глобального инстанса; каждое МЕСТО применения модели — строка каталога
   `LocalActionCatalog`. Слот разрешается в модель **по владельцу действия** через

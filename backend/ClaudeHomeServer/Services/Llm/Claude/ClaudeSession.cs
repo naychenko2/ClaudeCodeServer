@@ -67,6 +67,23 @@ public class ClaudeSession : ILlmSessionAdapter
     public bool CurrentTurnSuppressTasksExecute => _currentTurnSuppressTasksExecute;
 
     private readonly string _rootPath;
+    // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
+    // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
+    private readonly ILogger? _log;
+    // Корень сервера (AppContext.BaseDirectory, прокинут через LlmSessionContext.ContentRootPath) —
+    // от него резолвится SystemPromptFile BareMode, а не от _rootPath (корень ПРОЕКТА чата).
+    // Файл поставляется с продуктом и существует ровно в одном месте — в репозитории/публикации
+    // бэкенда, а не в каждом проекте пользователя. null — тесты без DI / старый контракт:
+    // в этом случае SystemPromptFile ожидается абсолютным путём.
+    private readonly string? _serverContentRoot;
+    // Фактическое состояние BareMode в последнем BuildArgs: true если CLI реально
+    // получил `--bare`. Снимок промпта читает этот признак, а не повторно ResolveByModel
+    // (см. ревью 2026-09-05: при деградации BuildBareModeArgs снимает оба флага, и снимок
+    // обязан показывать обычный режим, а не «bare»).
+    private bool _lastBareModeApplied;
+    // Для тестов-сторожей (InternalsVisibleTo): мутация гейта или снимка обязана
+    // краснеть на этом свойстве. Не часть публичного API.
+    internal bool LastBareModeApplied => _lastBareModeApplied;
     private readonly Func<ServerMessage, Task> _onMessage;
     // Словари ниже — Concurrent: их мутируют и памп stdout, и SignalR-вызовы
     // (RespondPermission/AnswerQuestion/RespondPlan/Interrupt) параллельно
@@ -687,14 +704,17 @@ public class ClaudeSession : ILlmSessionAdapter
         string? falMcpApiKey = null,
         string? glifMcpToken = null,
         ModelAssignmentResolver? assignments = null,
-        FileChangeAttributor? fileChangeAttributor = null)
+        FileChangeAttributor? fileChangeAttributor = null,
+        ILogger? logger = null)
     {
+        _log = logger;
         _providers = providers;
         _assignments = assignments;
         _subscriptionPool = subscriptionPool;
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _rootPath = context.RootPath;
+        _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
         _falMcpApiKey = falMcpApiKey;
@@ -2420,11 +2440,80 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrEmpty(effort))
             args.AddRange(["--effort", effort!]);
 
+        // Режим bare отключает автозагрузку CLAUDE.md, хуков, LSP, плагинов и авто-памяти.
+        // У локальных моделей полная карта проекта съедает контекст и тормозит ход (замер
+        // 2026-09-05: 95 070 токенов при полной CLAUDE.md против 2 392 при --bare + краткой
+        // карте в SystemPromptFile — файл 5 521 байт, ~5.4 КБ). Вместо неё подаём явную
+        // короткую карту. Признак берётся от свойств СЕССИИ (EffectiveModel → провайдер),
+        // не хода: сигнатура запуска стабильна в пределах сессии, McpToolsetStabilityTests
+        // остаётся зелёным. Состав MCP задаётся через --mcp-config ниже — --bare его НЕ
+        // трогает (проверено отдельно).
+        //
+        // OAuth-инвариант: --bare ломает OAuth-авторизацию CLI (пропускает чтение кредов
+        // ~/.claude/.credentials.json, см. OneShotClaudeRunner.cs:299). Здесь это безопасно
+        // СТРУКТУРНО: bareProvider != null ⇒ провайдер найден реестром ⇒ это сторонний
+        // CLI-провайдер с API-ключом, OAuth используется ТОЛЬКО у пула подписок родного Claude
+        // (LlmProviderRegistry.cs:411, BuildCliEnv ставит ANTHROPIC_API_KEY из authToken).
+        // null от ResolveByModel = родной Claude без env-оверрайдов — BareMode там не включится,
+        // условие bareProvider is { BareMode: true } не выполнится.
+        var bareProvider = _providers?.ResolveByModel(EffectiveModel);
+        if (bareProvider is { BareMode: true })
+        {
+            try
+            {
+                var bareArgs = BuildBareModeArgs(
+                    _rootPath, _serverContentRoot,
+                    bareProvider.SystemPromptFile ?? "",
+                    bareProvider.BareTools,
+                    _launcher.Paths,
+                    _log,
+                    out var bareWarning,
+                    out _lastBareModeApplied);
+                if (bareWarning is not null)
+                    Console.Error.WriteLine($"[ClaudeSession] {bareWarning}");
+                args.AddRange(bareArgs);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // SafeJoin бросает на пути ЗА корень (FileService.cs:74). Раньше вылетало
+                // из BuildArgs без диагностики и валило ход — теперь ловится тут.
+                Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile за пределами корня, ход без BareMode: {ex.Message}");
+                _lastBareModeApplied = false;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // ToRuntime: путь не входит в монтирование песочницы (путь есть на хосте,
+                // но bind-mount в container его не показывает).
+                Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile недоступен в песочнице, ход без него: {ex.Message}");
+                _lastBareModeApplied = false;
+            }
+
+            // Доп. деградация: BareMode сконфигурирован провайдером, но BuildBareModeArgs
+            // сам снял оба флага (файл карты не найден). Случай редкий и обычно означает
+            // неполную поставку (bin/SystemPrompts положили не в тот каталог), но видимое
+            // предупреждение в логе хода ускоряет диагностику — иначе единственный сигнал
+            // это «модель уехала по полной CLAUDE.md», а почему — непонятно.
+            if (bareProvider.BareMode && !_lastBareModeApplied)
+            {
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] BareMode НЕ применён (провайдер {bareProvider.Key}, " +
+                    $"SystemPromptFile={bareProvider.SystemPromptFile ?? "<empty>"}). " +
+                    $"CLI получит полную CLAUDE.md проекта — локальный исполнитель может " +
+                    $"не уложиться в окно. Проверьте наличие файла карты в поставке.");
+            }
+        }
+        else
+        {
+            // Голый провайдер (облачный или родной Claude) — BareMode не задействован,
+            // даже если в его LlmProviderConfig когда-то по ошибке что-то пропишут.
+            _lastBareModeApplied = false;
+        }
+
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
         // сам пропускает). Только родной Claude — сторонним провайдерам фоновые запросы
         // не включаем (кэш-экономика чужая).
-        var promptSuggestionsActive = _providers is null || _providers.ResolveByModel(EffectiveModel) is null;
+        var promptSuggestionsActive = bareProvider is null;
         if (promptSuggestionsActive)
             args.AddRange(["--prompt-suggestions", "true"]);
 
@@ -3846,13 +3935,39 @@ public class ClaudeSession : ILlmSessionAdapter
     /// папка чата, профиль CLI), а не по «вообще машине» — иначе показали бы то, чего CLI
     /// не видел. Состав инструментов сюда не входит: он приходит позже, из system/init.
     /// </summary>
-    private CliLayerDto BuildCliLayerFiles()
+    private CliLayerDto BuildCliLayerFiles() => BuildCliLayerFilesInternal();
+
+    // Тестовый дублёр BuildCliLayerFiles — вынесен internal, чтобы мутация гейта
+    // (`if (_lastBareModeApplied)` ↔ `if (!_lastBareModeApplied)`) ловилась
+    // прямым ассертом на секции снимка. Не часть публичного API.
+    internal CliLayerDto BuildCliLayerFilesForTest() => BuildCliLayerFilesInternal();
+
+    private CliLayerDto BuildCliLayerFilesInternal()
     {
         var files = new List<PromptSectionDto>();
-        AddClaudeMd(files, Path.Combine(_rootPath, "CLAUDE.md"), "CLAUDE.md проекта");
-        AddClaudeMd(files, Path.Combine(_rootPath, ".claude", "CLAUDE.md"), "CLAUDE.md проекта (.claude)");
-        if (_cliConfigRoot is { Length: > 0 } configRoot)
-            AddClaudeMd(files, Path.Combine(configRoot, "CLAUDE.md"), "Ваш общий CLAUDE.md (для всех проектов)");
+        // BareMode отключает автозагрузку CLAUDE.md — кладём в снимок короткое пояснение
+        // вместо двух полных CLAUDE.md, иначе пользователю показывают то, чего CLI не видел.
+        // Решаем по ФАКТУ (BuildBareModeArgs вернул пустой список или файл не найден →
+        // _lastBareModeApplied=false → показываем обычный режим). Иначе при деградации
+        // снимок врёт: пометка «bare» видна, а CLI получил полную CLAUDE.md (см. ревью
+        // 2026-09-05, Medium-находка «снимок промпта врёт»).
+        if (_lastBareModeApplied)
+        {
+            files.Add(new PromptSectionDto(
+                Key: "(bare)",
+                Title: "BareMode: автозагрузка отключена",
+                Text: "Карта проекта подаётся через --system-prompt-file (поле " +
+                      "LlmProviderConfig:SystemPromptFile). CLAUDE.md, .claude/CLAUDE.md, " +
+                      "хуки, LSP, плагины CLI НЕ читает — см. комментарий у BuildArgs.",
+                Kind: "cli-file"));
+        }
+        else
+        {
+            AddClaudeMd(files, Path.Combine(_rootPath, "CLAUDE.md"), "CLAUDE.md проекта");
+            AddClaudeMd(files, Path.Combine(_rootPath, ".claude", "CLAUDE.md"), "CLAUDE.md проекта (.claude)");
+            if (_cliConfigRoot is { Length: > 0 } configRoot)
+                AddClaudeMd(files, Path.Combine(configRoot, "CLAUDE.md"), "Ваш общий CLAUDE.md (для всех проектов)");
+        }
 
         var skills = new List<CliSkillDto>();
         if (_skills is not null)
@@ -3971,6 +4086,142 @@ public class ClaudeSession : ILlmSessionAdapter
            && (permissionDenials is null || permissionDenials.Count == 0)
            && (usage is null || (usage.InputTokens == 0 && usage.OutputTokens == 0
                                   && usage.CacheReadTokens == 0 && usage.CacheCreationTokens == 0));
+
+    // Чистая функция сборки аргументов BareMode (--bare + опц. --tools + --system-prompt-file).
+    // Вызывается ИЗ BuildArgs при bareProvider.BareMode=true. Ход аргументов:
+    //   1) --bare (всегда);
+    //   2) --tools "<список>" (только если bareTools непустой);
+    //   3) --system-prompt-file <путь в среде исполнения> (только если SystemPromptFile задан
+    //      и файл существует; иначе оба флага снимаются с warning).
+    // На out bareModeEffective: true если CLI реально получит `--bare` (хотя бы пустой карты);
+    // false если оба флага сняты (нет файла карты). Снимок промпта в BuildCliLayerFiles
+    // решает по этому признаку, а не по флагу BareMode провайдера — иначе при деградации
+    // снапшот показывал карту Bare, которой в реальном запуске нет.
+    //
+    // SafeJoin может бросить UnauthorizedAccessException (путь за пределы корня) —
+    // вызывающий ловит и пишет в stderr, ход продолжается без BareMode.
+    internal static IReadOnlyList<string> BuildBareModeArgs(
+        string projectRoot, string? serverContentRoot,
+        string promptFilePath, string[]? bareTools,
+        Execution.IPathMapper paths,
+        out string? warning,
+        out bool bareModeEffective)
+        => BuildBareModeArgs(projectRoot, serverContentRoot, promptFilePath, bareTools,
+            paths, logger: null, out warning, out bareModeEffective);
+
+    internal static IReadOnlyList<string> BuildBareModeArgs(
+        string projectRoot, string? serverContentRoot,
+        string promptFilePath, string[]? bareTools,
+        Execution.IPathMapper paths,
+        ILogger? logger,
+        out string? warning,
+        out bool bareModeEffective)
+    {
+        warning = null;
+        bareModeEffective = false;
+        // BareMode без файла карты: --bare работает, но без явной карты модель
+        // останется без контекста. Это сознательный сценарий "только без CLAUDE.md"
+        // (CLI сам подтянет проектный, если есть) — НЕ снимаем флаг.
+        if (string.IsNullOrWhiteSpace(promptFilePath))
+        {
+            bareModeEffective = true;
+            return BuildToolsArg(bareTools, "--bare");
+        }
+
+        var resolved = ResolvePromptPath(promptFilePath, serverContentRoot, projectRoot,
+            out var projectLocalUsed, out var projectLocalOversized);
+        if (!File.Exists(resolved))
+        {
+            warning = $"SystemPromptFile не найден ({resolved}) — BareMode снят, ход в обычном режиме";
+            return [];
+        }
+        if (projectLocalOversized)
+        {
+            warning = $"Проектная карта превышает {ProjectMapSizeLimit / 1024} КБ — взят серверный дефолт ({resolved})";
+        }
+        // Лог размера: важно для диагностики раздутого входа. Logger опциональный — тесты
+        // BuildBareModeArgs передают null.
+        logger?.LogInformation(
+            "BareMode: взята {Source} карта {Path} ({Bytes} байт)",
+            projectLocalUsed ? "проектная" : "серверная",
+            resolved,
+            new FileInfo(resolved).Length);
+        var args = new List<string>(capacity: 4 + (bareTools is { Length: > 0 } ? 2 : 0))
+        {
+            "--bare",
+        };
+        // Состав: --bare → (опц.) --tools → --system-prompt-file <путь>. Три порядка
+        // проверены на 2.1.241/2.1.261 — набор идентичен, CLI принимает любой. Текущий
+        // порядок (--bare → --tools → --system-prompt-file) оставлен как наиболее читаемый.
+        if (bareTools is { Length: > 0 })
+            args.AddRange(BuildToolsArg(bareTools, null));
+        args.Add("--system-prompt-file");
+        args.Add(paths.ToRuntime(resolved));
+        bareModeEffective = true;
+        return args;
+    }
+
+    // Сборка цепочки ["--tools", "Bash Edit Read"]. Если tools пустой/null — возвращает
+    // либо только ["--bare"], либо пустой список. lead служит для случая "только --bare"
+    // когда нужно вернуть базовый токен (плюс возможный --tools).
+    private static List<string> BuildToolsArg(string[]? bareTools, string? lead)
+    {
+        var result = new List<string>(capacity: lead is null ? 2 : 4);
+        if (lead is not null) result.Add(lead);
+        if (bareTools is { Length: > 0 })
+        {
+            result.Add("--tools");
+            result.Add(string.Join(' ', bareTools));
+        }
+        return result;
+    }
+
+    private static string ResolveHostPath(string configured, string? serverContentRoot, string projectRoot)
+    {
+        if (Path.IsPathRooted(configured)) return configured;
+        if (!string.IsNullOrEmpty(serverContentRoot))
+            return FileService.SafeJoin(serverContentRoot, configured);
+        return FileService.SafeJoin(projectRoot, configured);
+    }
+
+    // Резолв карты BareMode с приоритетом проектного файла: если в проекте чата есть
+    // docs/CLAUDE-local.md — он перебивает серверный дефолт и любую настройку
+    // SystemPromptFile провайдера. Так чужие проекты с собственной картой не получают
+    // серверную (на случай если BareMode включён дефолтом продукта), а наш проект
+    // получает специфику ClaudeHomeServer из docs/CLAUDE-local.md. Файл должен
+    // существовать физически — иначе падаем в обычный резолв.
+    //
+    // Проектная карта ограничена ProjectMapSizeLimit: больше — отступаем к серверному
+    // дефолту и помечаем вызывающего (флаг projectLocalOversized=true → warning в stderr).
+    // Защита от случайного раздувания входа: фича вводилась ради малого контекста
+    // локальной модели, а проектный файл в чужом репо теоретически может быть любым.
+    // Потолок не распространяется на серверную карту — она под нашим контролем.
+    private const int ProjectMapSizeLimit = 16 * 1024;
+
+    internal static string ResolvePromptPath(string configured, string? serverContentRoot, string projectRoot)
+        => ResolvePromptPath(configured, serverContentRoot, projectRoot,
+            out _, out _);
+
+    internal static string ResolvePromptPath(
+        string configured, string? serverContentRoot, string projectRoot,
+        out bool projectLocalUsed, out bool projectLocalOversized)
+    {
+        projectLocalUsed = false;
+        projectLocalOversized = false;
+        var projectLocal = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
+        if (File.Exists(projectLocal))
+        {
+            var size = new FileInfo(projectLocal).Length;
+            if (size > ProjectMapSizeLimit)
+            {
+                projectLocalOversized = true;
+                return ResolveHostPath(configured, serverContentRoot, projectRoot);
+            }
+            projectLocalUsed = true;
+            return projectLocal;
+        }
+        return ResolveHostPath(configured, serverContentRoot, projectRoot);
+    }
 
     private static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys,

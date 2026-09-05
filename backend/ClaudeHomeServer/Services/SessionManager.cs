@@ -3729,6 +3729,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
+
+            ContentRootPath: AppContext.BaseDirectory,
             TasksMcp: tasksMcp,
             NotesMcp: notesMcp,
             PersonaProvider: BuildPersonaProvider(session, ownerId),
@@ -3940,7 +3942,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             // …а режим, в котором CLI не спрашивает разрешений (acceptEdits/bypass), штабу
             // запрещён в любой точке смены — иначе CoordinatorWriteGuard молчит.
             if (entry.Info.TeamImplement is { } teamForGuard)
-                parsedMode = GuardCompatibleMode(parsedMode, teamForGuard.CoordinatorNoCode);
+                parsedMode = PermissionModeGuard.GuardCompatibleMode(parsedMode, teamForGuard.CoordinatorNoCode);
             if (entry.Info.Mode != parsedMode)
             {
                 entry.Info.Mode = parsedMode;
@@ -5096,6 +5098,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
+                ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
                 NotesMcp: notesMcp,
                 PersonaProvider: BuildPersonaProvider(entry.Info, entry.Info.OwnerId),
@@ -5146,6 +5149,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
+                ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
                 NotesMcp: notesMcp,
                 PersonaProvider: BuildPersonaProvider(entry.Info, project.OwnerId),
@@ -5937,7 +5941,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // любой точке смены, не только при включении режима (аудит 2026-08-01: обход
         // селектором в стадии волны → координатор писал файлы мимо задач).
         if (entry.Info.TeamImplement is { } teamForGuard)
-            parsed = GuardCompatibleMode(parsed, teamForGuard.CoordinatorNoCode);
+            parsed = PermissionModeGuard.GuardCompatibleMode(parsed, teamForGuard.CoordinatorNoCode);
         if (entry.Info.Mode == parsed) return entry.Info;
         entry.Info.Mode = parsed;
         SaveSessions();
@@ -6109,7 +6113,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // --permission-mode: в acceptEdits/bypassPermissions запись через shell проходит мимо
         // сервера целиком (проверено вживую той же командой из находки Веры). Default/Auto
         // спрашивают всегда — переводим координатора туда, не трогая уже совместимые режимы.
-        if (enabled && GuardCompatibleMode(entry.Info.Mode, coordinatorNoCode) is var guarded
+        if (enabled && PermissionModeGuard.GuardCompatibleMode(entry.Info.Mode, coordinatorNoCode) is var guarded
             && guarded != entry.Info.Mode)
         {
             entry.Info.Mode = guarded;
@@ -6195,15 +6199,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         return entry.Info;
     }
 
-    // Режим прав, совместимый с гардом «координатор не пишет код»: в acceptEdits,
-    // bypassPermissions И dontAsk (Minor, волна 3 — открытый вопрос предыдущего аудита:
-    // имя режима у CLI означает ровно «не спрашивать разрешение», тот же класс, что
-    // acceptEdits/bypass) CLI разрешение не спрашивает, и запись файла через shell (heredoc,
-    // tee, sed -i) проходит мимо CoordinatorWriteGuard. Такие режимы поднимаем до Auto —
-    // остальные оставляем как есть (в т.ч. Plan: он спрашивает всегда).
-    private static ClaudeMode GuardCompatibleMode(ClaudeMode mode, bool coordinatorNoCode) =>
-        coordinatorNoCode && mode is ClaudeMode.AcceptEdits or ClaudeMode.Bypass or ClaudeMode.DontAsk
-            ? ClaudeMode.Auto : mode;
+    // Режим прав, совместимый с гардом «координатор не пишет код», переехал в Core
+    // (`ClaudeHomeServer.Services.PermissionModeGuard`) — там же, где тип `ClaudeMode`. Ядро
+    // SessionManager и штаб TeamWaveService зовут его из Core по новому пути.
 
     // Вход в план-режим стадий интервью и планирования (Э8): запоминаем режим прав человека
     // и переводим чат в Plan — на этих стадиях правки запрещает сама permission-механика CLI,
@@ -6229,7 +6227,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     private void RestoreUserMode(string sessionId, SessionEntry entry)
     {
         if (entry.Info.TeamImplement is not { SavedMode: { } saved } team) return;
-        var restored = GuardCompatibleMode(saved, team.CoordinatorNoCode);
+        var restored = PermissionModeGuard.GuardCompatibleMode(saved, team.CoordinatorNoCode);
         WithTeamState(sessionId, t => { t.SavedMode = null; return true; });
         if (entry.Info.Mode == restored) return;
         entry.Info.Mode = restored;
@@ -7509,276 +7507,38 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // исполнителя (TaskManager.TaskCompleted → TeamWaveService.OnTaskDone).
     public Func<string, string, Task>? TeamSubtaskDropHandler { get; set; }
 
-    // Маркер эскалации в ответе координатора: `<escalate:deviation>суть</escalate>`.
-    // Инструмента для этого не заводим — состав tools/list не должен зависеть от режима хода
-    // (перезапуск CLI со всеми MCP), а маркер в тексте у нас уже работает в цикле «до готово».
-    // Как и там, ищем вне код-блоков: модель часто цитирует протокол, прежде чем им пользоваться.
-    // `decision` в протоколе координатора больше нет — вопрос в живом ходу задаётся ASK;
-    // парсер терпит маркер как фолбэк (старые транскрипты, привычка модели) — карточка с полем
-    // лучше молчаливого зависания.
+    // Тонкие обёртки на Core-хелпер TeamProtocolMarkers. Реализации уехали в спину
+    // (`ClaudeHomeServer.Core.Services.TeamProtocolMarkers`): их зовёт и ядро SessionManager,
+    // и штаб TeamWaveService, и живая трансляция любого чата в OnMessageAsync, и
+    // TaskExecutionService. Обёртки оставлены ровно для обратной совместимости тестов
+    // SessionManagerTests/TaskExecutionServiceTests — тесты обращаются к этим методам
+    // напрямую (`SessionManager.ParseEscalationMarker(text)`), и под-шаг 2а явно требует
+    // «зелёные без правок тестов». Семантика и поведение не меняются.
     internal static (TeamEscalationKind Kind, string Text)? ParseEscalationMarker(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        // Теги маркера ищем ВНЕ код-блоков (модель любит цитировать протокол примером), а
-        // содержимое между ними берём из ОРИГИНАЛЬНОГО текста — со всем вложенным кодом.
-        // Закрытие по имени (</escalate:check>) терпит close-регэксп: строгое сравнение роняло
-        // маркер в молчаливый тупик (модель по XML-привычке закрывает тег по имени при генерации).
-        var found = FindPairedMarkerOutsideCode(text, EscalateOpenTagRegex, EscalateCloseTagRegex);
-        if (found is null) return null;
-        var (openEnd, closeStart, _, openMatch) = found.Value;
-        var kind = openMatch.Groups[1].Value switch
-        {
-            "deviation" => TeamEscalationKind.PlanDeviation,
-            "check" => TeamEscalationKind.CheckFailed,
-            // Тупик в волне (Э8): не остановка «жду решения», а возврат в интервью
-            "clarify" => TeamEscalationKind.NeedsClarification,
-            _ => TeamEscalationKind.ProductDecision,
-        };
-        return (kind, text[openEnd..closeStart].Trim());
-    }
+        => TeamProtocolMarkers.ParseEscalationMarker(text);
 
-    // Маркер работы в ответе координатора (Э5): `<team:work>постановка</team>`. Им координатор
-    // говорит, что вводная человека требует правки файлов — бэкенд разложит её планировщиком
-    // и развернёт волну. Разговорный ответ маркера не несёт и не стоит ничего.
-    // Разбор — как у эскалации: вне код-блоков, потому что протокол модель любит цитировать.
     internal static string? ParseWorkMarker(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        // Теги маркера ищем ВНЕ код-блоков (модель любит цитировать протокол примером), а
-        // содержимое между ними берём из ОРИГИНАЛЬНОГО текста — со всем вложенным кодом. Без
-        // этого код-блок внутри <team:work> (дамп компонента в разведке) вырезался до извлечения,
-        // и планировщик получал постановку без кода (P19). Закрытие по имени (</team:work>)
-        // терпит close-регэксп — фикс инцидента 2026-07-31 сохранён.
-        var found = FindPairedMarkerOutsideCode(text, WorkOpenTagRegex, WorkCloseTagRegex);
-        if (found is null) return null;
-        var (openEnd, closeStart, _, _) = found.Value;
-        var request = text[openEnd..closeStart].Trim();
-        return request.Length == 0 ? null : request;
-    }
+        => TeamProtocolMarkers.ParseWorkMarker(text);
 
-    // Маркер разговора (M6): `<team:talk/>` — координатор честно разобрал сообщение человека:
-    // работы нет, файлы менять не нужно. Легальный выход из интервью без плана — по голому
-    // тексту бэкенд не отличит такой ответ от молчаливого тупика (stall-гард). Разбор — как
-    // у прочих маркеров: вне код-блоков, потому что протокол модель любит цитировать.
     internal static bool HasTalkMarker(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        // Самодостаточный тег — хотя бы один match целиком вне код-блоков (как у парных маркеров:
-        // процитированный в ```-примере маркер не считается активным вызовом).
-        var ranges = GetCodeBlockRanges(text);
-        foreach (System.Text.RegularExpressions.Match m in TalkMarkerRegex.Matches(text))
-            if (IsRangeOutsideCode(ranges, m.Index, m.Index + m.Length)) return true;
-        return false;
-    }
+        => TeamProtocolMarkers.HasTalkMarker(text);
 
-    // Маркер молчания (B4 «Доклада о завершении задачи»): `<no-reply/>` — ходу нечего сказать
-    // человеку. Ответ ровно этим маркером не должен оставить в ленте ни реплики, ни следа
-    // пустого хода: стрижка ниже вырезает маркер, а «после стрижки пусто» нигде не создаёт
-    // запись (ни в живой трансляции, ни в истории — TurnAccumulator.FlushBuffers).
-    // В отличие от маркеров штаба живёт в ЛЮБОМ чате: им отвечает обычная персона постановщика.
-    internal const string NoReplyMarker = "<no-reply/>";
+    internal const string NoReplyMarker = TeamProtocolMarkers.NoReplyMarker;
 
     internal static bool HasNoReplyMarker(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        // Самодостаточный тег — как <team:talk/>: процитированный в ```-примере не считается
-        var ranges = GetCodeBlockRanges(text);
-        foreach (System.Text.RegularExpressions.Match m in NoReplyMarkerRegex.Matches(text))
-            if (IsRangeOutsideCode(ranges, m.Index, m.Index + m.Length)) return true;
-        return false;
-    }
-
-    // Волна 6 (живая приёмка волны 5): маркеры протокола — внутренняя договорённость между
-    // координатором и бэкендом (их же разбирают Parse*/Has* выше), в реплике, которую видит
-    // человек, им не место. Модель периодически закрывает тег по имени длинного маркера
-    // (`</team:work>`, `</escalate:check>`) — парсер это уже терпит, а сырой текст хода
-    // раньше уходил в ленту/историю как есть, и закрывающий тег протекал буквально.
-    // Код-блоки не трогаем — симметрично тому, что их же исключают Parse*/Has* выше:
-    // модель вправе процитировать протокол примером, это не активный вызов.
-    private static readonly System.Text.RegularExpressions.Regex CodeSpanOrFenceRegex =
-        new("```[\\s\\S]*?```|`[^`\n]*`", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex TalkMarkerRegex =
-        new(@"<team:talk\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex NoReplyMarkerRegex =
-        new(@"<no-reply\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    // Открывающие/закрывающие теги маркеров — и для РАЗБОРА (Parse*/Has* выше), и для
-    // зачистки ленты (RemovePairedMarkers ниже) один и тот же позиционный поиск пары:
-    // зачистка и разбор находят границы маркера одним способом и не расходятся. Найти
-    // закрывающий тег ВНЕ кода одним lazy-регэкспом нельзя — он свернётся на закрывающем
-    // теге, процитированном внутри код-блока, и настоящий маркер с вложенным кодом (P19)
-    // не соберётся. Поэтому ищем теги по отдельности и проверяем, что оба лежат вне
-    // код-блоков, а содержимое между ними берём из оригинала.
-    private static readonly System.Text.RegularExpressions.Regex WorkOpenTagRegex =
-        new("<team:work>", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex WorkCloseTagRegex =
-        new(@"</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex EscalateOpenTagRegex =
-        new(@"<escalate:(deviation|check|decision|clarify)>", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex EscalateCloseTagRegex =
-        new(@"</escalate(?::\w+)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    // Осиротевший закрывающий тег без пары (прод 2026-08-02, находка Веры): в длинном
-    // структурированном ответе модель иногда закрывает маркер повторно или цитирует закрытие
-    // отдельно от открытия, которое уже вырезано парным поиском выше (например тем же именем
-    // маркера двумя абзацами раньше). Такой закрывающий тег — всегда служебный синтаксис
-    // нашего протокола (`</team>`/`</team:work>`, `</escalate>`/`</escalate:kind>`), человеку
-    // он не нужен ни в какой форме — вырезаем и его.
-    private static readonly System.Text.RegularExpressions.Regex OrphanCloserRegex =
-        new(@"</escalate(?::\w+)?>|</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
+        => TeamProtocolMarkers.HasNoReplyMarker(text);
 
     internal static string StripTeamProtocolMarkers(string text)
-    {
-        if (string.IsNullOrEmpty(text) || !text.Contains('<')) return text;
-        // Парные маркеры (эскалация/работа) вырезаем из ИСХОДНОГО текста позиционно — тем же
-        // поиском пары тегов вне код-блоков, что и разбор. Рез по код-блокам здесь не годится:
-        // маркер с fenced-блоком внутри (хвост P19) разрезался на сегменты, сегмент до фенса
-        // оставался в ленте с буквальным <team:work> и всей постановкой, а закрывающий тег
-        // съедался как осиротевший. Диапазон [openStart, closeEnd) уносит и вложенный код.
-        text = RemovePairedMarkers(text, EscalateOpenTagRegex, EscalateCloseTagRegex);
-        text = RemovePairedMarkers(text, WorkOpenTagRegex, WorkCloseTagRegex);
-        // Остальное (самозакрывающиеся маркеры, осиротевшие закрывающие теги) — по-прежнему
-        // посегментно: только вне код-блоков, процитированный в примере протокол не трогаем.
-        var sb = new System.Text.StringBuilder(text.Length);
-        var pos = 0;
-        foreach (System.Text.RegularExpressions.Match code in CodeSpanOrFenceRegex.Matches(text))
-        {
-            sb.Append(StripUnpairedMarkers(text[pos..code.Index]));
-            sb.Append(text, code.Index, code.Length);
-            pos = code.Index + code.Length;
-        }
-        sb.Append(StripUnpairedMarkers(text[pos..]));
-        return sb.ToString();
-    }
-
-    // Вырезает из текста каждый парный маркер openTag...closeTag, у которого ОБА тега лежат
-    // вне код-блоков. После каждого удаления поиск начинается заново — позиции сдвинулись.
-    private static string RemovePairedMarkers(string text,
-        System.Text.RegularExpressions.Regex openTagRegex, System.Text.RegularExpressions.Regex closeTagRegex)
-    {
-        while (FindPairedMarkerOutsideCode(text, openTagRegex, closeTagRegex) is { } found)
-        {
-            var openStart = found.OpenMatch.Index;
-            text = text.Remove(openStart, found.CloseEnd - openStart);
-        }
-        return text;
-    }
-
-    private static string StripUnpairedMarkers(string text)
-    {
-        if (text.Length == 0 || !text.Contains('<')) return text;
-        text = TalkMarkerRegex.Replace(text, "");
-        text = NoReplyMarkerRegex.Replace(text, "");
-        text = OrphanCloserRegex.Replace(text, "");
-        return text;
-    }
-
-    // Диапазоны fenced- (```...```) и инлайн- (`...`) код-блоков в порядке появления. В отличие
-    // от прежнего вырезания кода перед разбором маркера, позиции позволяют найти теги ВНЕ кода
-    // и вернуть содержимое маркера из оригинала — со всем вложенным кодом (фикс P19: раньше
-    // код-блок внутри <team:work> вырезался до извлечения, и планировщик получал пустую постановку).
-    private static List<(int Start, int End)> GetCodeBlockRanges(string text)
-    {
-        var ranges = new List<(int Start, int End)>();
-        foreach (System.Text.RegularExpressions.Match code in CodeSpanOrFenceRegex.Matches(text))
-            ranges.Add((code.Index, code.Index + code.Length));
-        return ranges;
-    }
-
-    // Целиком ли диапазон [start, end) лежит вне код-блоков (не пересекается ни с одним).
-    private static bool IsRangeOutsideCode(List<(int Start, int End)> ranges, int start, int end)
-    {
-        foreach (var (s, e) in ranges)
-            if (start < e && end > s) return false;   // пересечение с код-блоком
-        return true;
-    }
-
-    // Первый парный маркер (openTag...closeTag), у которого ОБА тега целиком лежат вне код-блоков.
-    // Возвращает границы в оригинальном тексте (включая конец закрывающего тега — зачистка ленты
-    // вырезает диапазон [openStart, closeEnd) целиком) и match открывающего тега (для групп —
-    // напр. тип эскалации). Содержимое между тегами (включая вложенный код) вызывающий берёт из
-    // оригинала через text[openEnd..closeStart]. Так процитированный в ```-примере маркер не
-    // сработает (тег внутри код-блока), а код внутри настоящей постановки не потеряется.
-    private static (int OpenEnd, int CloseStart, int CloseEnd, System.Text.RegularExpressions.Match OpenMatch)?
-        FindPairedMarkerOutsideCode(
-            string text,
-            System.Text.RegularExpressions.Regex openTagRegex,
-            System.Text.RegularExpressions.Regex closeTagRegex)
-    {
-        var ranges = GetCodeBlockRanges(text);
-        for (var om = openTagRegex.Match(text); om.Success; om = om.NextMatch())
-        {
-            var openEnd = om.Index + om.Length;
-            if (!IsRangeOutsideCode(ranges, om.Index, openEnd)) continue;   // открывающий в коде — цитата
-            for (var cm = closeTagRegex.Match(text, openEnd); cm.Success; cm = cm.NextMatch())
-            {
-                if (IsRangeOutsideCode(ranges, cm.Index, cm.Index + cm.Length))
-                    return (openEnd, cm.Index, cm.Index + cm.Length, om);   // закрывающий вне кода — настоящий маркер
-            }
-        }
-        return null;
-    }
-
-    // Полные открывающие теги маркеров (без вариативных \s* — тем, которые их допускают,
-    // соответствует отдельная проверка ниже). Хвост текста, совпадающий с СОБСТВЕННЫМ
-    // префиксом одного из них, ещё может дорасти до настоящего маркера следующей дельтой —
-    // до этого момента показывать его нельзя (иначе полтега мелькнёт в стриме раньше, чем
-    // мы поймём, что это протокол).
-    private static readonly string[] MarkerOpenTags =
-    [
-        "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
-        "<team:work>",
-        // Самозакрывающийся маркер молчания целиком: любой его префикс («<n», «<no-repl»,
-        // «<no-reply/») ещё может дорасти до маркера — до этого показывать хвост нельзя
-        NoReplyMarker,
-    ];
+        => TeamProtocolMarkers.StripTeamProtocolMarkers(text);
 
     internal static bool IsAmbiguousMarkerTail(string tail)
-    {
-        if (tail.Length == 0 || tail[0] != '<') return false;
-        foreach (var open in MarkerOpenTags)
-            if (open.Length > tail.Length && open.StartsWith(tail, StringComparison.Ordinal))
-                return true;
-        // У `<team:talk/>` и `<no-reply/>` пробелы перед `/>` не фиксированы регэкспом разбора —
-        // сюда попадает только незавершённый префикс (полный маркер уже вырезан
-        // StripTeamProtocolMarkers)
-        return System.Text.RegularExpressions.Regex.IsMatch(tail, @"^<(?:team:talk|no-reply)\s*/?$");
-    }
+        => TeamProtocolMarkers.IsAmbiguousMarkerTail(tail);
 
-    // Обрезает с хвоста текста потенциально незавершённый маркер (см. IsAmbiguousMarkerTail).
-    // Используется только при живой трансляции хода — на финальном тексте хода обрезка не
-    // нужна: дальше дельт не будет, и придержанный хвост можно просто показать как есть.
     internal static string TrimAmbiguousMarkerTail(string text)
-    {
-        var idx = text.LastIndexOf('<');
-        if (idx < 0) return text;
-        var tail = text[idx..];
-        return IsAmbiguousMarkerTail(tail) ? text[..idx] : text;
-    }
-
-    // Полностью открытый маркер (открывающий тег уже целиком напечатан), у которого просто
-    // ЕЩЁ НЕ пришло закрытие, — IsAmbiguousMarkerTail его пропускает (он больше не префикс
-    // открывающего тега, он им равен), а StripTeamProtocolMarkers его не трогает (регэксп
-    // требует закрывающую часть). Раз открывающий тег буквально присутствует в уже очищенном
-    // от ЗАВЕРШЁННЫХ маркеров тексте — значит, этот конкретный маркер ещё не закрылся: прячем
-    // с его начала и до конца буфера (тело маркера — постановка для планировщика, не для
-    // человека, и в любом случае может дописываться следующими дельтами).
-    private static readonly string[] MarkerOpenLiterals =
-    [
-        "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
-        "<team:work>", "<team:talk", "<no-reply",
-    ];
+        => TeamProtocolMarkers.TrimAmbiguousMarkerTail(text);
 
     internal static string TrimUnresolvedMarkerOpen(string strippedText)
-    {
-        var cut = strippedText.Length;
-        foreach (var open in MarkerOpenLiterals)
-        {
-            var idx = strippedText.IndexOf(open, StringComparison.Ordinal);
-            if (idx >= 0 && idx < cut) cut = idx;
-        }
-        return cut == strippedText.Length ? strippedText : strippedText[..cut];
-    }
+        => TeamProtocolMarkers.TrimUnresolvedMarkerOpen(strippedText);
 
     // Отсечки сторожа волн, погашенные вопросом ASK (OnStabAskQuestionAsync), возвращаются
     // по завершении хода — ответ получен, либо ход прерван (прерывание без result приходит
@@ -7835,7 +7595,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             team = teamAfterResolve;
         }
 
-        if (ParseEscalationMarker(turnText) is { } marker)
+        if (TeamProtocolMarkers.ParseEscalationMarker(turnText) is { } marker)
         {
             // Тупик в волне (Э8) — не «жду решения», а возврат в интервью: волны на паузе,
             // карточка с push, следом ход с просьбой задать вопросы ASK-карточками.
@@ -7846,7 +7606,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             return;
         }
 
-        if (ParseWorkMarker(turnText) is { } request)
+        if (TeamProtocolMarkers.ParseWorkMarker(turnText) is { } request)
         {
             await StartTeamWorkAsync(sessionId, request);
             return;
@@ -7854,7 +7614,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
         // Разговорный ответ в интервью (M6): работы нет — закрываем интервью без плана
         // и без ложной эскалации, практика возвращается в прежнее состояние.
-        if (HasTalkMarker(turnText))
+        if (TeamProtocolMarkers.HasTalkMarker(turnText))
         {
             await CloseTeamTalkAsync(sessionId);
             return;
@@ -8007,7 +7767,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // Координатор снял блокер действием, а не молчанием: либо продолжает работу маркером
         // team:work, либо итерация финиширована (все плановые волны закрыты). Иначе карточка
         // уместна — координатор реально ждёт решения человека, оставляем как есть.
-        var hasWork = ParseWorkMarker(turnText) is not null;
+        var hasWork = TeamProtocolMarkers.ParseWorkMarker(turnText) is not null;
         var allWavesClosed = AllPlannedWavesClosed(team);
         if (!hasWork && !allWavesClosed) return false;
 
@@ -9408,8 +9168,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                             }
                             else
                             {
-                                var safe = TrimAmbiguousMarkerTail(
-                                    TrimUnresolvedMarkerOpen(StripTeamProtocolMarkers(entry.TeamTurnText.ToString())));
+                                var safe = TeamProtocolMarkers.TrimAmbiguousMarkerTail(
+                                    TeamProtocolMarkers.TrimUnresolvedMarkerOpen(TeamProtocolMarkers.StripTeamProtocolMarkers(entry.TeamTurnText.ToString())));
                                 // Пока в очищенном тексте нет ни одного непробельного символа,
                                 // показывать нечего: ход, ответивший ровно маркером, не должен
                                 // родить в ленте пустой пузырь из «\n» вокруг маркера. Длину
@@ -9705,7 +9465,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 lock (entry.TeamTurnLock)
                 {
                     turnText = entry.TeamTurnText.ToString();
-                    var finalSafe = StripTeamProtocolMarkers(turnText);
+                    var finalSafe = TeamProtocolMarkers.StripTeamProtocolMarkers(turnText);
                     // Тот же гард, что в живой трансляции: ход, ответивший ровно маркером,
                     // не должен догнать ленту пробелами вокруг вырезанного маркера.
                     catchUpDelta = finalSafe.Length > entry.TeamTurnShownLength && finalSafe.Trim().Length > 0

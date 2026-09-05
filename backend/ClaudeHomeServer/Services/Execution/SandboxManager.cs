@@ -63,6 +63,7 @@ public sealed class SandboxManager
     public const string ProjectsMount = "/projects";
     public const string ProfilesMount = "/sandbox-profiles";
     public const string TmpMount = "/turn-tmp";
+    public const string SystemPromptsMount = "/app/SystemPrompts";
 
     public SandboxManager(IConfiguration config, ILogger<SandboxManager> log)
     {
@@ -144,6 +145,13 @@ public sealed class SandboxManager
     private List<string> BuildRunArgs(string confHash)
     {
         var portEnd = Options.PortRangeStart + Options.PortRangeSize - 1;
+        // Хостовый путь краткой карты BareMode (SystemPrompts/): берём от BaseDirectory
+        // бэкенда, как и mcp/mcp-dify (остальные mount'ы — от data dir, не BaseDirectory).
+        // Каталога нет (поставка без карты — bareProvider.SystemPromptFile пустой или
+        // BareMode не используется) — bind-mount подавляем, чтобы не плодить пустой
+        // каталог в контейнере.
+        var systemPromptsHost = Path.Combine(AppContext.BaseDirectory, "SystemPrompts");
+        var systemPromptsExists = Directory.Exists(systemPromptsHost);
         var args = new List<string>
         {
             "run", "-d",
@@ -156,6 +164,8 @@ public sealed class SandboxManager
             "-p", $"{Options.PortRangeStart}-{portEnd}:{Options.PortRangeStart}-{portEnd}",
             "--add-host", "host.docker.internal:host-gateway",
         };
+        if (systemPromptsExists)
+            args.AddRange(["-v", $"{systemPromptsHost}:{SystemPromptsMount}"]);
         // Токен подписки в контейнер здесь НЕ кладём: он запёкся бы в момент создания и не
         // обновлялся бы после — единая точка правды теперь DockerProcessRunner.BuildTurnEnv
         // (доставка per-exec, на каждый docker exec заново).
@@ -181,10 +191,13 @@ public sealed class SandboxManager
     // (смена диапазона портов/mount'ов/прокси не применяется к живому контейнеру)
     private string ConfigHash(string imageId)
     {
+        var systemPromptsHost = Path.Combine(AppContext.BaseDirectory, "SystemPrompts");
+        var systemPromptsExists = Directory.Exists(systemPromptsHost);
         var payload = string.Join("\n",
             imageId, Options.ProjectsRoot, ProfilesHostDir, TmpHostDir,
             Options.PortRangeStart.ToString(), Options.PortRangeSize.ToString(),
-            Options.Proxy, Options.Memory, Options.Cpus);
+            Options.Proxy, Options.Memory, Options.Cpus,
+            systemPromptsExists ? systemPromptsHost : "");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..16];
     }
 

@@ -214,6 +214,86 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 собирается отдельно от хоста и может нести CLI старее — работающие фоновые задачи важнее
 экономии файлов). Ручной дублер — `Claude:PersistOneShotSessions=true`.
 
+## BareMode: короткая карта вместо полной CLAUDE.md
+
+Для локальных моделей с маленьким окном (vLLM/llama.cpp/qwen3.8-27b на 65–245 КБ)
+полная автозагрузка CLAUDE.md проекта съедает десятки тысяч входных токенов
+(замер 2026-09-05: 95 070 токенов при полной CLAUDE.md против 2 392 при
+`BareMode` + краткой карте — файл `SystemPrompts/CLAUDE-local.md`, 4 419 байт,
+~4.3 КБ) и тормозит ход. Провайдер с `LlmProviderConfig:BareMode=true` запускает
+CLI с `--bare` (отключает автозагрузку CLAUDE.md, хуков, LSP, плагинов и
+авто-памяти) и `--system-prompt-file <путь>` (явная короткая карта проекта).
+
+**`--tools` только сужает набор, расширять нельзя.** Замерено на qwen3.8-27b
+локально (2026-09-05):
+
+| Прогон | Инструменты |
+|---|---|
+| `--bare` без `--tools` | `Bash, Edit, PowerShell, Read` |
+| `--bare --tools "default"` | `Bash, Edit, PowerShell, Read` |
+| `--bare` + наш `BareTools=["Bash","Edit","Read","PowerShell"]` | `Bash, Edit, Read, PowerShell` (тот же набор) |
+| без `--bare`, тот же список | `Bash, Edit, Glob, Grep, Read, Write` |
+
+Под `--bare` физический потолок — `Bash/Edit/Read/PowerShell`. `Write/Glob/Grep`
+недоступны, их роль исполняет `Bash` (`printf >`, `find`, `grep`). Это совпадает
+с курсом CLI 2.1.116, где `Glob/Grep` удалены в пользу `bfs/ugrep` через `Bash`.
+Поэтому `BareTools` для `local-qwen` сведён к `["Bash","Edit","Read","PowerShell"]`
+(явный список задан только для документирования состава, --bare без --tools даёт
+тот же набор).
+
+**Файл карты** — `backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md` (~4.3 КБ,
+4 419 байт; замер 2026-09-05). Поставляется
+с продуктом, лежит в репозитории/публикации бэкенда. В `appsettings.json` —
+`LlmProviders:local-qwen:SystemPromptFile: "SystemPrompts/CLAUDE-local.md"`.
+`<None>` в csproj копирует файл и в `bin/` (для `dotnet run`), и в `/app/` для
+Docker-публикации (`CopyToOutputDirectory` + `CopyToPublishDirectory`).
+
+**Цепочка резолва** (per-project):
+
+1. **`docs/CLAUDE-local.md` в корне проекта чата** — приоритет. Если файл существует
+   и не больше 16 КБ (потолок против раздувания входа) — берётся он. Так чужие
+   проекты с собственной картой не получают серверную (на случай если BareMode
+   включён дефолтом продукта), а наш репо получает специфику ClaudeHomeServer
+   из `docs/CLAUDE-local.md`.
+2. **Серверный дефолт** — `bin/SystemPrompts/CLAUDE-local.md`, путь резолвится от
+   `AppContext.BaseDirectory` (прокинут через `LlmSessionContext.ContentRootPath`).
+   Резолв от `AppContext.BaseDirectory` — лечение ревью 2026-09-05: в любом другом
+   проекте локальная модель была мертва на старте (`System prompt file not found`,
+   exit=1, без единого события stream-json → `TurnErrorClassifier:Unreachable` →
+   ложная цепь фолбэка).
+3. **Ничего не нашли** — оба флага (`--bare`, `--system-prompt-file`) снимаются,
+   ход идёт обычным путём (CLI сам подтянет CLAUDE.md проекта). Лучше пусть
+   модель получит полный CLAUDE.md, чем упадёт с exit=1 без диагностики.
+   Предупреждение уходит в stderr через out-параметр
+   `BuildBareModeArgs(..., out warning)`.
+
+Сейчас путь идёт через `ClaudeSession.BuildBareModeArgs` — чистая static-функция
+под тестом.
+
+**SafeJoin за пределы корня** (например `../etc/passwd`) — ловится
+`UnauthorizedAccessException` в BuildArgs, ход продолжается без BareMode
+(ранее исключение вылетало без диагностики и валило ход).
+
+**OAuth-инвариант.** `--bare` ломает OAuth-авторизацию CLI (пропускает чтение
+`~/.claude/.credentials.json`). Безопасно СТРУКТУРНО: BareMode включается
+только если `ResolveByModel(EffectiveModel)` нашёл провайдер, а находятся
+там только не-родные провайдеры с API-ключом (родной Claude использует OAuth
+через пул подписок, реестр его не возвращает — `LlmProviderRegistry.cs:11`).
+Условие `bareProvider is { BareMode: true }` для OAuth-чата не выполнится.
+Защита держится структурой — добавлять рантайм-чек «BareMode у OAuth-провайдера»
+не нужно.
+
+**Снимок промпта** при BareMode не показывает CLAUDE.md (`BuildCliLayerFiles`):
+кладёт короткое пояснение «карта подаётся через --system-prompt-file», чтобы
+пользователь не видел ~72 КБ, которых в промпте нет.
+
+**Состав MCP под BareMode работает** (проверено ревью 2026-09-05) — флаг
+не трогает `--mcp-config`. Тесты — `ClaudeSessionBareArgsTests` (полный набор
+кейсов: файл от сервера, файл не существует, абсолютный путь, путь за корень,
+пустой SystemPromptFile, BareTools задан/пуст/null, файл не найден и --tools,
+потолок 16 КБ проектной карты с отступом к серверной, лог размера,
+снимок промпта по эффективному применению).
+
 ## Пул подписок Claude и опрос usage
 
 `ClaudeSubscriptionPool` (секция `ClaudeSubscriptions`) — несколько аккаунтов Claude на

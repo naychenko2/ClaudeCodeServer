@@ -323,4 +323,10 @@ public sealed record LlmSessionContext(
     Turn.ITurnEventBus? Events = null,
     // MCP-сервер сторожей чатов (watch_*): null — чат без владельца. Наличие контекста —
     // свойство владельца (инвариант стабильности состава ADR-012).
-    WatchMcpContext? WatchMcp = null);
+    WatchMcpContext? WatchMcp = null,
+    // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
+    // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
+    // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации
+    // бэкенда, а не в каждом проекте пользователя. null — тесты/старый контракт:
+    // в этом случае SystemPromptFile ожидается абсолютным путём.
+    string? ContentRootPath = null);

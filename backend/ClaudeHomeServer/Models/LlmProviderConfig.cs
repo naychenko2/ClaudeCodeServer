@@ -109,6 +109,30 @@ public class LlmProviderConfig
     // остаётся: десктопные чаты работают через эту грань, и стоит он дёшево.
     public string[] KeepMcpServers { get; set; } = [];
 
+    // Запускать CLI в режиме --bare: без автозагрузки CLAUDE.md, хуков, LSP,
+    // плагинов и авто-памяти. Контекст подаётся явно через SystemPromptFile.
+    // Дефолт false — родной Claude и облачные провайдеры не задеты.
+    public bool BareMode { get; set; }
+
+    // Путь к краткой карте проекта для --system-prompt-file (при BareMode).
+    // Пусто — флаг не ставится.
+    public string? SystemPromptFile { get; set; }
+
+    // Встроенные инструменты CLI, возвращаемые при BareMode (флаг --tools).
+    // Важно: --tools только СУЖАЕТ встроенный набор — расширить его сверх того, что
+    // CLI отдаёт под --bare, нельзя. Замерено 2026-09-05 на qwen3.8-27b локально:
+    //   --bare без --tools    → Bash, Edit, PowerShell, Read
+    //   --bare --tools default → Bash, Edit, PowerShell, Read
+    //   --bare --tools "Bash Edit Read Write Glob Grep" → Bash, Edit, Read
+    //   без --bare, тот же список → Bash, Edit, Glob, Grep, Read, Write
+    // Т.е. Write/Glob/Grep под --bare НЕДОСТУПНЫ, их роль исполняет Bash
+    // (printf > file, find, grep). Это совпадает с курсом CLI 2.1.116: Glob/Grep
+    // удалены в пользу bfs/ugrep через Bash на macOS/Linux. Под --bare физический
+    // потолок — Bash/Edit/Read/PowerShell. Задание BareTools=["Bash","Edit","Read"]
+    // регрессирует против дефолта (отнимает PowerShell) — НЕ делать так.
+    // Пусто — флаг --tools не ставится (CLI оставляет дефолтный набор --bare).
+    public string[] BareTools { get; set; } = [];
+
     public string EffectiveModelPrefix => string.IsNullOrWhiteSpace(ModelPrefix) ? Key : ModelPrefix;
 
     // Все префиксы для резолва по id модели (см. ModelPrefixes). Пустые строки

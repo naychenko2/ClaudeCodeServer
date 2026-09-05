@@ -152,7 +152,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         };
         var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
-            _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments, _fileChangeAttributor);
+            _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments, _fileChangeAttributor,
+            _log);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,

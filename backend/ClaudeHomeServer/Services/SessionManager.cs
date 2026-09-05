@@ -65,7 +65,7 @@ public class SessionManager : IDisposable
         // вытесняется самая старая запись (минимальный TurnSeq), не свежая — иначе бы запись
         // свежего хода вытеснила ещё не прочитанную запись предыдущего. См.
         // docs/research/session-core-split-2026-09.md, «План шага 1 / Слот».
-        public readonly Dictionary<int, string> LastTurnTexts = new();
+        // LastTurnTexts снят с шагом 1в: текст хода едет в LastTeamTurnEnds вместе с failed/asked.
         // Номер текущего хода, чей текст ляжет в LastTurnTexts по приходу result/error.
         // Обновляется на SessionStartedMessage: к этому моменту ClaudeSession уже инкрементировал
         // SubmittedTurnSeq в SubmitTurn (ClaudeSession.cs:2351), а SessionStartedMessage шлётся
@@ -84,15 +84,6 @@ public class SessionManager : IDisposable
         // пришёл готовый план). Память, а не стор: рестарт сервера убивает сам планировщик,
         // и «планирование живо» после него неправда по определению.
         public volatile bool TeamPlanningInFlight;
-        // Дубль уведомления эскалации (Minor, волна 3): ветка is_error в ClaudeSession шлёт
-        // синтетический ErrorMessage(ExpectResultFollows: true) И следом ResultMessage того же
-        // хода — оба матчили `msg is ResultMessage or ErrorMessage` и параллельно дёргали
-        // HandleTeamTurnEndAsync, давая гонку с двумя одинаковыми карточками/push. Разбираем
-        // ход по ErrorMessage (несёт верный failed=true), а спаренный ResultMessage — глушим.
-        // Под фолбэком пара доезжает только при настоящем провале (FailClosed/FailExhausted):
-        // если попытку сменила подмена, ни её ошибка, ни её result наружу не идут — флаг не
-        // взводится и не виснет, а конец хода разбирается по финальному result.
-        public volatile bool SkipNextTeamTurnEnd;
         // Текущий ход штаба поднят сообщением ЧЕЛОВЕКА (M7): авто-подтверждение добавочного
         // плана опирается на «вводная человека и есть точка контроля», поэтому инициатора
         // хода помечаем при запуске (SendDirectAsync / SendMessageAndWaitAsync) — классификация
@@ -206,57 +197,16 @@ public class SessionManager : IDisposable
         // не знает). Не персистится — рестарт сервера сводку теряет (v1, редкий кейс).
         public int LocalTurnsSinceCli;
 
-        // Потолок LastTurnTexts. 3 взято с запасом: в штатном ходу живёт ровно одна запись,
-        // вторая нужна на случай окна между сбросом _turn (FallbackLlmSessionAdapter.cs:943)
-        // и публикацией turn/completed (984), третья — гарантия, что шторм терминалов не
-        // поднимется выше и вытеснение сработает только на дефекте.
-        public const int MaxLastTurnTextEntries = 3;
-
-        // Положить текст осушенного буфера в слот по ключу turnSeq. Первая запись выигрывает:
-        // если ключ уже занят, текст не затирается (защита от двойного терминала одного хода —
-        // коммит ced28708, см. также docs/research/session-core-split-2026-09.md, вопрос 1).
-        // При превышении потолка вытесняется самая старая запись (минимальный TurnSeq), не
-        // самая свежая: между сбросом _turn и публикацией turn/completed на FallbackLlmSessionAdapter
-        // оркестрация завершена, но событие ещё не ушло — в этом окне свежая запись уже лежит,
-        // а старая всё ещё нужна подписчику. turnSeq <= 0 — невалидный ключ (синтетические ходы
-        // local voice, чей TurnSeq неизвестен), такие записи не кладём.
-        public void PutTurnText(int turnSeq, string text)
-        {
-            if (turnSeq <= 0) return;
-            lock (TeamTurnLock)
-            {
-                if (LastTurnTexts.ContainsKey(turnSeq)) return;
-                while (LastTurnTexts.Count >= MaxLastTurnTextEntries)
-                {
-                    int oldest = int.MaxValue;
-                    foreach (var k in LastTurnTexts.Keys)
-                        if (k < oldest) oldest = k;
-                    if (oldest == int.MaxValue) break;
-                    LastTurnTexts.Remove(oldest);
-                }
-                LastTurnTexts[turnSeq] = text;
-            }
-        }
-
-        // Изъять текст по ключу turnSeq. Возвращает true и заполняет text, если ключ найден
-        // (запись при этом удаляется). false и text == null — ключа нет. Чтение и удаление
-        // атомарны: подписчик turn/completed зовёт ровно один раз на ход, повторное чтение по
-        // тому же ключу возвращает false — это контракт, на котором держится защита от потери
-        // маркера при гонке «двойной терминал».
-        public bool TryTakeTurnText(int turnSeq, out string? text)
-        {
-            lock (TeamTurnLock)
-            {
-                if (LastTurnTexts.TryGetValue(turnSeq, out var existing))
-                {
-                    LastTurnTexts.Remove(turnSeq);
-                    text = existing;
-                    return true;
-                }
-            }
-            text = null;
-            return false;
-        }
+        // Этап 4 / шаг 1в: план вызова HandleTeamTurnEndAsync на сессии с ключом по TurnSeq.
+// OnMessageAsync кладёт план при терминале (ResultMessage/ErrorMessage) хода штаба,
+// подписчик turn/completed забирает план и зовёт HandleTeamTurnEndAsync асинхронно.
+// Текст+asked едут в записи, потому что шина их не несёт (публикатор — адаптер, текст
+// ему недоступен); failed пишется сюда, чтобы двойной терминал одного хода (ErrorMessage
+// + ResultMessage) давал один план по первой записи и дедуп SkipNextTeamTurnEnd в
+// OnMessageAsync стал не нужен. Правила симметричны прежнему LastTurnTexts (1а):
+// первая запись выигрывает, повторная не затирает непустую, потолок с вытеснением самой
+// старой записи. turnSeq <= 0 — невалидный ключ (синтетические ходы local voice),
+// turn/completed по ним не публикуется.
 
         // Этап 4 / шаг 1б: факт вызова старого пути HandleTeamTurnEndAsync — нужен теневому
         // подписчику turn/completed, чтобы свериться, что его симуляция совпадает с реально
@@ -268,23 +218,25 @@ public class SessionManager : IDisposable
         // терминалов, после которого шина подтянется не сразу.
         public const int MaxLastTeamTurnEndEntries = 8;
 
-        // Факт одного вызова HandleTeamTurnEndAsync: Failed и Asked — те самые аргументы,
-        // которыми OnMessageAsync звал старый путь. Подписчик turn/completed сравнивает их
-        // с тем, что диктует Outcome (success → ожидаем failed=false; failed/egress_down/
-        // local_down → ожидаем failed=true).
+        // Этап 4 / шаг 1в: план вызова HandleTeamTurnEndAsync. OnMessageAsync кладёт план при
+        // терминале хода штаба, подписчик turn/completed изымает и асинхронно зовёт
+        // HandleTeamTurnEndAsync. Текст+asked едут в записи, потому что шина их не несёт
+        // (публикатор — адаптер, текст ему недоступен); failed пишется сюда, чтобы двойной
+        // терминал одного хода давал один план по первой записи и дедуп SkipNextTeamTurnEnd
+        // в OnMessageAsync стал не нужен. Правила симметричны прежнему LastTurnTexts (1а).
         public readonly struct TeamTurnEndCall
         {
+            public string? Text { get; init; }
             public bool Failed { get; init; }
             public bool Asked { get; init; }
         }
 
         public readonly Dictionary<int, TeamTurnEndCall> LastTeamTurnEnds = new();
 
-        // Записать факт вызова HandleTeamTurnEndAsync по ключу turnSeq. Первая запись
-        // выигрывает — повторная не затирает (двойной терминал одного хода; защита та же,
-        // что у PutTurnText). turnSeq <= 0 — невалидный ключ (синтетические ходы local voice):
-        // для них turn/completed не публикуется и факт подписчику не нужен.
-        public void RecordTeamTurnEnd(int turnSeq, bool failed, bool asked)
+        // Положить план вызова HandleTeamTurnEndAsync по ключу turnSeq (text/failed/asked — все три
+        // аргумента HandleTeamTurnEndAsync). Первая запись выигрывает, повторная не затирается
+        // (двойной терминал одного хода). turnSeq <= 0 — невалидный ключ.
+        public void RecordTeamTurnEnd(int turnSeq, string? text, bool failed, bool asked)
         {
             if (turnSeq <= 0) return;
             lock (TeamTurnLock)
@@ -298,26 +250,25 @@ public class SessionManager : IDisposable
                     if (oldest == int.MaxValue) break;
                     LastTeamTurnEnds.Remove(oldest);
                 }
-                LastTeamTurnEnds[turnSeq] = new TeamTurnEndCall { Failed = failed, Asked = asked };
+                LastTeamTurnEnds[turnSeq] = new TeamTurnEndCall { Text = text, Failed = failed, Asked = asked };
             }
         }
 
-        // Изъять факт вызова по ключу turnSeq. Возвращает true и заполняет call, если ключ
-        // найден (запись при этом удаляется). false и call == null — ключа нет. Чтение и
-        // удаление атомарны, контракт симметричен TryTakeTurnText: подписчик turn/completed
-        // зовёт ровно один раз на ход, повторное чтение по тому же ключу возвращает false —
-        // на этом держится обнаружение двойного терминала одного хода.
-        public bool TryTakeTeamTurnEnd(int turnSeq, out TeamTurnEndCall? call)
+        // Изъять план по ключу turnSeq. Возвращает true и заполняет text + call (Failed, Asked),
+        // если ключ найден (запись при этом удаляется). Чтение и удаление атомарны.
+        public bool TryTakeTeamTurnEnd(int turnSeq, out string? text, out TeamTurnEndCall? call)
         {
             lock (TeamTurnLock)
             {
                 if (LastTeamTurnEnds.TryGetValue(turnSeq, out var existing))
                 {
                     LastTeamTurnEnds.Remove(turnSeq);
+                    text = existing.Text;
                     call = existing;
                     return true;
                 }
             }
+            text = null;
             call = null;
             return false;
         }
@@ -2136,60 +2087,66 @@ private Task HandleTurnCompleted(TurnCompleted e)
 //   что и осушение TeamTurnText; отсутствие — WARN, но не исключение;
 // 2) наличие факта вызова в LastTeamTurnEnds (TryTakeTeamTurnEnd) — кладётся OnMessageAsync
 //   рядом с вызовом HandleTeamTurnEndAsync; отсутствие — WARN;
-// 3) failed-флаг факта против Outcome: success → ожидаем false, иначе → ожидаем true.
-//   Расхождение — WARN. Asked сверять не пытаемся: его перенос на шину — отдельная развилка.
+// Этап 4 / шаг 1в: боевой подписчик turn/completed для штаба. Замещает прямой вызов
+// HandleTeamTurnEndAsync из OnMessageAsync: изымает план (text/failed/asked) из
+// LastTeamTurnEnds и асинхронно зовёт HandleTeamTurnEndAsync.
+//
+// Контракт фильтра по Outcome (docs/research/session-core-split-2026-09.md, вопрос 1):
+// - success | failed | egress_down | local_down — изымаем план и зовём штаб;
+// - interrupted | cancelled | crashed — молча возвращаемся: обе точки прерывания (Стоп,
+//   прерывание ради очереди) чистят буфер маркеров ради защиты от «волны-призрака».
+//   Если бы здесь сработал штаб, воспроизвёлся бы продовый дефект «фантомная эскалация».
+//
+// Двойной терминал одного хода (ErrorMessage{ExpectResultFollows=true} + ResultMessage) в
+// OnMessageAsync обе попытки кладут план по тому же TurnSeq; первая запись выигрывает
+// (RecordTeamTurnEnd внутри ContainsKey → return), вторая — no-op. Шина публикует
+// turn/completed строго ОДИН раз на ход, и подписчик забирает план ровно один раз —
+// поэтому дедуп SkipNextTeamTurnEnd в OnMessageAsync ушёл вместе с переключением.
 private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 {
     var outcome = e.Outcome;
     var turnSeq = e.Turn.TurnSeq;
     var sessionId = e.Turn.SessionId;
 
-    // interrupted/cancelled/crashed — НЕ конец хода штаба. Боевую логику не зовём; ни
-    // LastTurnTexts, ни LastTeamTurnEnds не трогаем: эти ключи могут понадобиться
-    // последующим сценариям (двойной терминал, шторм), а ключ TurnSeq у каждого хода
-    // свой — конкуренции нет.
+    // interrupted/cancelled/crashed — НЕ конец хода штаба. Боевую логику не зовём; план
+    // (если бы был) не трогаем: ключ TurnSeq у каждого хода свой, конкуренции нет.
     if (outcome is "interrupted" or "cancelled" or "crashed")
         return Task.CompletedTask;
 
     if (!_sessions.TryGetValue(sessionId, out var entry) || entry is null)
         return Task.CompletedTask;
-    // Без живого TeamImplement сравнивать не с чем — старый путь не вызывался и не должен.
+    // Без живого TeamImplement штаб не работает вовсе — гард нужен на случай терминала
+    // хода внешней персоны.
     if (entry.Info.TeamImplement is null)
         return Task.CompletedTask;
 
-    // Изъять текст из слота. Отсутствие — WARN: штатный путь кладёт текст в OnMessageAsync
-    // под тем же TeamTurnLock, что и осушение TeamTurnText (см. шаг 1а, коммит 9c7dce62);
-    // пустота — дефект проводки. Не бросаем — продолжаем и проверяем факт вызова.
-    var hasText = entry.TryTakeTurnText(turnSeq, out _);
-    if (!hasText)
+    // Изъять план из LastTeamTurnEnds. Отсутствие — WARN, не бросаем: запись могла быть
+    // вытеснена потолком (8 записей, шторм), либо OnMessageAsync не успел положить
+    // (невозможно по ордерингу: сначала OnMessageAsync, потом finally FallbackLlmSessionAdapter),
+    // либо TurnSeq чужой (публикация для другого хода той же сессии). Без плана штаб
+    // звать нечем.
+    if (!entry.TryTakeTeamTurnEnd(turnSeq, out var turnText, out var call) || call is null)
     {
         _log?.LogWarning(
-            "Теневой подписчик turn/completed: sessionId={SessionId}, turnSeq={TurnSeq}, outcome={Outcome} — в LastTurnTexts нет текста для этого хода",
-            sessionId, turnSeq, outcome);
-    }
-
-    // Изъять факт вызова HandleTeamTurnEndAsync. Отсутствие — WARN: штатный путь пишет
-    // факт ровно перед Task.Run в OnMessageAsync; пустота — дефект проводки (либо
-    // подписчик пришёл раньше, чем OnMessageAsync успел записать, что невозможно по
-    // ордерингу: сначала OnMessageAsync, потом finally FallbackLlmSessionAdapter).
-    var hasCall = entry.TryTakeTeamTurnEnd(turnSeq, out var call);
-    if (!hasCall || call is null)
-    {
-        _log?.LogWarning(
-            "Теневой подписчик turn/completed: sessionId={SessionId}, turnSeq={TurnSeq}, outcome={Outcome} — в LastTeamTurnEnds нет записи о вызове HandleTeamTurnEndAsync",
+            "Подписчик turn/completed: sessionId={SessionId}, turnSeq={TurnSeq}, outcome={Outcome} — в LastTeamTurnEnds нет плана вызова HandleTeamTurnEndAsync",
             sessionId, turnSeq, outcome);
         return Task.CompletedTask;
     }
 
-    // Сверяем failed-флаг факта с тем, что диктует Outcome. success → ожидаем false,
-    // иначе (failed/egress_down/local_down) → ожидаем true.
-    var expectedFailed = outcome != "success";
-    if (call.Value.Failed != expectedFailed)
+    var failed = call.Value.Failed;
+    var asked = call.Value.Asked;
+    var sessionIdLocal = sessionId;
+    // Task.Run — как и в прежнем OnMessageAsync: разбор маркеров и публикация карточек/WS —
+    // синхронные блокирующие вызовы, в read-loop шины им не место. Гонок нет: публикация
+    // turn/completed одна на ход, TryTakeTeamTurnEnd удаляет запись атомарно.
+    _ = Task.Run(async () =>
     {
-        _log?.LogWarning(
-            "Теневой подписчик turn/completed: sessionId={SessionId}, turnSeq={TurnSeq}, outcome={Outcome} — факт.failed={Actual} != ожидаемый {Expected} по исходу",
-            sessionId, turnSeq, outcome, call.Value.Failed, expectedFailed);
-    }
+        try { await HandleTeamTurnEndAsync(sessionIdLocal, turnText ?? string.Empty, failed, asked); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Конец хода штаба ({sessionIdLocal}): {ex.Message}");
+        }
+    });
 
     return Task.CompletedTask;
 }
@@ -4698,7 +4655,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             entry.TurnSawAngleBracket = false;
             entry.TeamTurnAsked = false;
         }
-        entry.SkipNextTeamTurnEnd = false;
         // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе он
         // заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
         entry.LoopTurnInFlight = false;
@@ -5724,7 +5680,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 entry.TurnSawAngleBracket = false;
                 entry.TeamTurnAsked = false;
             }
-            entry.SkipNextTeamTurnEnd = false;
             if (stuck)
                 ReviveStuckSession(sessionId, entry);
             else
@@ -5887,7 +5842,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 entry.TurnSawAngleBracket = false;
                 entry.TeamTurnAsked = false;
             }
-            entry.SkipNextTeamTurnEnd = false;
             // «Начать заново»: снимаем resume-якорь — следующий адаптер стартует без
             // --resume, CLI заведёт новую сессию и пришлёт новый id (init ниже допишет)
             if (startFresh && entry.Info.ClaudeSessionId is not null)
@@ -9761,12 +9715,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                     entry.TurnSawAngleBracket = false;
                     turnAsked = entry.TeamTurnAsked;
                     entry.TeamTurnAsked = false;
-                    // Этап 4 / шаг 1а: кладём осушенный текст в слот по ключу TurnSeq, чтобы
-                    // подписчик turn/completed получил его без расширения события. Под тем же
-                    // локом — без него вторая запись (двойной терминал) могла бы пройти между
-                    // ContainsKey и индексатором и затереть первый текст. PutTurnText сам
-                    // берёт TeamTurnLock: реентрантность lock() в C# спасает от двойного взятия.
-                    entry.PutTurnText(entry.LastTurnSeq, turnText);
+                    // Этап 4 / шаг 1в: текст и план вызова HandleTeamTurnEndAsync кладутся в LastTeamTurnEnds
+                    // ниже отдельным вызовом RecordTeamTurnEnd (эта функция сама берёт
+                    // TeamTurnLock через реентрантность lock()). Здесь — только осушение буфера.
                 }
                 if (!string.IsNullOrEmpty(catchUpDelta))
                     await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
@@ -9774,39 +9725,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
             if (msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
             {
-                // Пара ErrorMessage(ExpectResultFollows)+ResultMessage одного хода (см. комментарий
-                // у SessionEntry.SkipNextTeamTurnEnd) — обработали по ErrorMessage, спаренный
-                // ResultMessage только гасит флаг и второй раз ход не разбирает. Между ними может
-                // приехать ещё одна ошибка — итоговый текст исчерпания цепочки (FailExhaustedAsync
-                // шлёт «причина попытки» → «вердикт» → result): её тоже глушим, конец хода у него
-                // один. Флаг снимает только терминальный result, иначе он утёк бы в следующий ход.
-                if (entry.SkipNextTeamTurnEnd)
-                {
-                    if (msg is ResultMessage) entry.SkipNextTeamTurnEnd = false;
-                }
-                else
-                {
-                    if (msg is ErrorMessage { ExpectResultFollows: true }) entry.SkipNextTeamTurnEnd = true;
-                    var teamTurnText = turnText;
-                    var teamTurnAsked = turnAsked;
-                    var teamTurnFailed = msg is ErrorMessage or ResultMessage { Subtype: "error" };
-                    // Этап 4 / шаг 1б: фиксируем факт вызова HandleTeamTurnEndAsync для теневого
-                    // подписчика turn/completed. Подписчик зовёт ровно один раз на ход и
-                    // сверяет факт с тем, что диктует Outcome (success → failed=false; иначе →
-                    // failed=true). Без этой записи подписчик при живом TeamImplement на
-                    // success/failed/egress_down/local_down увидит пустой LastTeamTurnEnds и
-                    // даст WARN «ожидался вызов — его нет». RecordTeamTurnEnd сам берёт
-                    // TeamTurnLock: реентрантность lock() в C# спасает от двойного взятия.
-                    entry.RecordTeamTurnEnd(entry.LastTurnSeq, teamTurnFailed, teamTurnAsked);
-                    _ = Task.Run(async () =>
-                    {
-                        try { await HandleTeamTurnEndAsync(sessionId, teamTurnText, teamTurnFailed, teamTurnAsked); }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[SessionManager] Конец хода штаба ({sessionId}): {ex.Message}");
-                        }
-                    });
-                }
+                // Этап 4 / шаг 1в: кладём план вызова HandleTeamTurnEndAsync в LastTeamTurnEnds.
+                // Подписчик turn/completed изымает план и асинхронно зовёт HandleTeamTurnEndAsync
+                // ровно один раз на ход. Дедуп SkipNextTeamTurnEnd, стоявший здесь прежде, ушёл
+                // вместе с переключением: первая запись по ключу TurnSeq выигрывает (двойной
+                // терминал ErrorMessage{ExpectResultFollows=true} + ResultMessage того же хода
+                // даёт один план, второй no-op), а шина гарантирует единственность публикации
+                // turn/completed на ход — на этом держится защита от потери маркера.
+                var teamTurnFailed = msg is ErrorMessage or ResultMessage { Subtype: "error" };
+                entry.RecordTeamTurnEnd(entry.LastTurnSeq, turnText, teamTurnFailed, turnAsked);
             }
 
             // Сабагент этого хода оборвался на середине — добиваем его продолжением. Строго по

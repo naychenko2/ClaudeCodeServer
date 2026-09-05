@@ -62,7 +62,7 @@ public class LocalEndpointProbeTests
     {
         var handler = new StubHandler
         {
-            Responder = _ => Json("""{"data":[{"id":"qwen38-27b","status":{"value":"loaded","failed":false}}]}"""),
+            Responder = _ => Json("""{"data":[{"id":"qwen38-27b","max_model_len":65536,"status":{"value":"loaded","failed":false}}]}"""),
         };
         var probe = new LocalEndpointProbe(new StubFactory(handler));
 
@@ -70,6 +70,68 @@ public class LocalEndpointProbeTests
 
         outcome.Should().Be(LocalProbeOutcome.Alive);
         handler.Calls.Should().Be(1);
+    }
+
+    // max_model_len — живое окно стенда. Кладётся в параллельный кэш, отдаётся через
+    // TryGetKnownContextWindow без сетевого вызова (BuildCliEnv читает его синхронно).
+    [Fact]
+    public async Task TryGetKnownContextWindow_ПослеПроверкиВозвращаетMaxModelLen()
+    {
+        var handler = new StubHandler
+        {
+            Responder = _ => Json("""{"data":[{"id":"qwen38-27b","max_model_len":65536,"status":{"value":"loaded","failed":false}}]}"""),
+        };
+        var probe = new LocalEndpointProbe(new StubFactory(handler));
+
+        await probe.CheckAsync(LocalProvider());
+
+        probe.TryGetKnownContextWindow("local-qwen", out var window).Should().BeTrue();
+        window.Should().Be(65536);
+    }
+
+    [Fact]
+    public void TryGetKnownContextWindow_БезПроверкиВозвращаетFalse()
+    {
+        // Без предварительного CheckAsync кэш пуст — синхронный геттер возвращает false,
+        // и BuildCliEnv остаётся на конфигурационном ContextWindow (fail-open).
+        var probe = new LocalEndpointProbe(new StubFactory(new StubHandler
+        {
+            Responder = _ => Json("""{"data":[{"id":"qwen38-27b","max_model_len":65536,"status":{"value":"loaded","failed":false}}]}"""),
+        }));
+
+        probe.TryGetKnownContextWindow("local-qwen", out var window).Should().BeFalse();
+        window.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task TryGetKnownContextWindow_ПослеInvalidateВозвращаетFalse()
+    {
+        var handler = new StubHandler
+        {
+            Responder = _ => Json("""{"data":[{"id":"qwen38-27b","max_model_len":65536,"status":{"value":"loaded","failed":false}}]}"""),
+        };
+        var probe = new LocalEndpointProbe(new StubFactory(handler));
+
+        await probe.CheckAsync(LocalProvider());
+        probe.Invalidate("local-qwen");
+
+        probe.TryGetKnownContextWindow("local-qwen", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TryGetKnownContextWindow_БезMaxModelLenВозвращаетFalse()
+    {
+        // Сервер ответил без поля max_model_len (старый llama.cpp, чужая реализация) —
+        // кэш остаётся пустым, BuildCliEnv берёт значение из каталога провайдера.
+        var handler = new StubHandler
+        {
+            Responder = _ => Json("""{"data":[{"id":"qwen38-27b","status":{"value":"loaded","failed":false}}]}"""),
+        };
+        var probe = new LocalEndpointProbe(new StubFactory(handler));
+
+        await probe.CheckAsync(LocalProvider());
+
+        probe.TryGetKnownContextWindow("local-qwen", out _).Should().BeFalse();
     }
 
     [Fact]

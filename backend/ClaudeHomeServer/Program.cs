@@ -333,7 +333,15 @@ builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
 builder.Services.AddSingleton<UsageService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
+// LlmProviderRegistry зависит от ILocalEndpointProbe: подставляет живое max_model_len в
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS для локального провайдера. Цикла нет: проба живёт от
+// IHttpClientFactory, не от реестра. До этой правки конфиг жил руками — за сутки значение
+// 71 680 → 61 440 → 65 536, и CLI считал по объявленному (57345 + 8192 < 71680), не сжимал
+// вовремя и ход падал на одном токене.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(sp =>
+    new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<ClaudeHomeServer.Services.Llm.ILocalEndpointProbe>()));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
 // Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory наблюдение, без персиста и бэкапа
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderHealthRegistry>();

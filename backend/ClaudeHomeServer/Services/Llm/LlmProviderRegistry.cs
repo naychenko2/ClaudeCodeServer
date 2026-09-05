@@ -27,9 +27,13 @@ public class LlmProviderRegistry
     // Пользовательский профиль CLI (~/.claude) — источник общих настроек для профилей
     // провайдеров; переопределяется ключом ClaudeUserProfileDir (тесты, docker)
     private readonly string _userProfileDir;
+    // Проба локального эндпоинта для подстановки живого max_model_len (см. BuildCliEnv).
+    // null — старый конструктор без DI (тесты без проб); fail-open, поведение прежнее.
+    private readonly ILocalEndpointProbe? _localProbe;
 
-    public LlmProviderRegistry(IConfiguration config)
+    public LlmProviderRegistry(IConfiguration config, ILocalEndpointProbe? localProbe = null)
     {
+        _localProbe = localProbe;
         _providers = new Dictionary<string, LlmProviderConfig>(StringComparer.OrdinalIgnoreCase);
         foreach (var child in config.GetSection(Section).GetChildren())
         {
@@ -424,6 +428,18 @@ public class LlmProviderRegistry
         // Завышать значение нельзя: тогда CLI не сожмёт контекст вовремя и ход упадёт с
         // ошибкой лимита вместо компакта — числа каталога проверяются живой пробой.
         var contextWindow = p.FindModel(main)?.ContextWindow ?? 0;
+        // Локальный провайдер (vLLM/llama.cpp) — окно плавает по стенду (за сутки 71 680 →
+        // 61 440 → 65 536 на одной и той же модели), и ручная правка конфига не поспевает.
+        // LocalEndpointProbe уже ходит в /v1/models перед ходом и запоминает живое значение
+        // в кэше — берём его оттуда синхронно через TryGetKnownContextWindow. Проба не
+        // спрашивала / поле отсутствовало → fail-open на каталог (прежнее поведение). Облачных
+        // провайдеров (p.IsLocal=false) ветка не касается — там окно из конфига остаётся.
+        if (p.IsLocal && _localProbe is not null
+            && _localProbe.TryGetKnownContextWindow(p.Key, out var liveWindow)
+            && liveWindow > 0)
+        {
+            contextWindow = liveWindow;
+        }
         if (contextWindow > 0)
             env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = contextWindow.ToString(CultureInfo.InvariantCulture);
 

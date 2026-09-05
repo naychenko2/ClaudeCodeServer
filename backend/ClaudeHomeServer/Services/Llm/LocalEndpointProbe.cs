@@ -35,9 +35,12 @@ public enum LocalProbeOutcome
 ///
 /// ПРОТОКОЛ. HTTP GET {AnthropicBaseUrl}/v1/models с парсингом JSON: для каждой модели
 /// сервер отдаёт status.value ∈ {"loaded","unloaded"} и status.failed (bool). «Loaded»
-/// без «failed:true» — Alive; иначе Down. Таймаут 1.5 с: локальный llama.cpp с разогревом
-/// модели может отвечать дольше, чем EgressProbe.400ms. Кеш 5 с: за один ход фолбэк может
-/// спрашивать пробу дважды (pre-flight + на повторе), кеш гасит пачку.
+/// без «failed:true» — Alive; иначе Down. Дополнительно читается max_model_len на верхнем
+/// уровне записи (vLLM/llama.cpp кладут его рядом с id): это живое окно модели, которое
+/// LlmProviderRegistry.BuildCliEnv подставляет в CLAUDE_CODE_MAX_CONTEXT_TOKENS вместо
+/// ручного числа в каталоге. Таймаут 1.5 с: локальный llama.cpp с разогревом модели может
+/// отвечать дольше, чем EgressProbe.400ms. Кеш 5 с: за один ход фолбэк может спрашивать
+/// пробу дважды (pre-flight + на повторе), кеш гасит пачку.
 ///
 /// HTTP-уровень (а не TCP) — чтобы отличить «порт слушает, но модель unloaded» (TCP-коннект
 /// успешен) от полного отказа. Health endpoint llama.cpp отвергнут: /health отдаёт
@@ -48,6 +51,12 @@ public interface ILocalEndpointProbe
     Task<LocalProbeOutcome> CheckAsync(
         LlmProviderConfig provider,
         CancellationToken ct = default);
+
+    // Живое окно провайдера из последнего /v1/models (max_model_len). Синхронный доступ для
+    // LlmProviderRegistry.BuildCliEnv: проба в CheckAsync заполняет кэш, BuildCliEnv читает его
+    // без сетевого вызова. true + window — известное значение (>0); false — не спрашивали,
+    // ответ не пришёл или поле отсутствовало. Кеш общий с CheckAsync (тот же TTL).
+    bool TryGetKnownContextWindow(string providerKey, out int window);
 
     // Тёплый сброс кеша (для тестов и редких ручных сценариев)
     void Invalidate(string providerKey);
@@ -74,6 +83,13 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
     // Кеш по ключу провайдера: (когда проверяли, итог). Конкурентный доступ из разных
     // ходов — без блокировок на горячем пути.
     private readonly ConcurrentDictionary<string, (DateTime Until, LocalProbeOutcome Outcome)> _cache = new();
+
+    // Параллельный кэш max_model_len из последней успешной пробы (0 = не отдано, ключ кэша
+    // общий с _cache). Синхронный геттер TryGetKnownContextWindow отдаёт его без HTTP. TTL тот
+    // же, что у outcome: за ход фолбэк может спрашивать пробу дважды, и BuildCliEnv читает
+    // кэш в одном окне с CheckAsync — иначе первый ход после старта уйдёт на конфигурационном
+    // значении (см. FallbackLlmSessionAdapter блок (а1) — pre-flight проба ДО сборки env).
+    private readonly ConcurrentDictionary<string, (DateTime Until, int MaxModelLen)> _maxLenCache = new();
 
     public LocalEndpointProbe(IHttpClientFactory httpFactory,
         TimeSpan? timeout = null,
@@ -106,18 +122,38 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         if (_cache.TryGetValue(key, out var cached) && cached.Until > DateTime.UtcNow)
             return cached.Outcome;
 
-        var outcome = await CheckInternalAsync(provider, ct);
-        _cache[key] = (DateTime.UtcNow.Add(_cacheFor), outcome);
+        var (outcome, maxLen) = await CheckInternalAsync(provider, ct);
+        var until = DateTime.UtcNow.Add(_cacheFor);
+        _cache[key] = (until, outcome);
+        // max_model_len пишем в кэш независимо от исхода: если модель в ответе есть, число
+        // полезно даже при Down (конфиг по-прежнему возьмёт живое значение как запасное).
+        // 0 — поле отсутствовало, тогда запись не делаем (старая могла быть от прошлой пробы).
+        if (maxLen > 0)
+            _maxLenCache[key] = (until, maxLen);
         return outcome;
+    }
+
+    public bool TryGetKnownContextWindow(string providerKey, out int window)
+    {
+        window = 0;
+        if (string.IsNullOrWhiteSpace(providerKey)) return false;
+        if (!_maxLenCache.TryGetValue(providerKey, out var cached)) return false;
+        if (cached.Until <= DateTime.UtcNow) return false;
+        window = cached.MaxModelLen;
+        return window > 0;
     }
 
     public void Invalidate(string providerKey)
     {
         if (!string.IsNullOrWhiteSpace(providerKey))
+        {
             _cache.TryRemove(providerKey, out _);
+            _maxLenCache.TryRemove(providerKey, out _);
+        }
     }
 
-    private async Task<LocalProbeOutcome> CheckInternalAsync(LlmProviderConfig provider, CancellationToken ct)
+    private async Task<(LocalProbeOutcome Outcome, int MaxModelLen)> CheckInternalAsync(
+        LlmProviderConfig provider, CancellationToken ct)
     {
         // /v1/models — стандартный OpenAI-совместимый эндпоинт, llama.cpp/vLLM отдают его.
         // AnthropicBaseUrl у локального провайдера — база (например, http://127.0.0.1:8080);
@@ -132,7 +168,7 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         {
             // HttpClientName не зарегистрирован — это конфигурационная ошибка, не молчим:
             // возвращаем Down, чтобы pre-flight выдал понятную ошибку.
-            return LocalProbeOutcome.Down;
+            return (LocalProbeOutcome.Down, 0);
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -148,10 +184,10 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         {
             // Таймаут, ECONNREFUSED, TLS-обрыв, DNS-фейл — всё лечится одинаково: эндпоинт не
             // принял запрос вовремя. Возвращаем Down, без разделения причин.
-            return LocalProbeOutcome.Down;
+            return (LocalProbeOutcome.Down, 0);
         }
 
-        if (!resp.IsSuccessStatusCode) return LocalProbeOutcome.Down;
+        if (!resp.IsSuccessStatusCode) return (LocalProbeOutcome.Down, 0);
 
         JsonElement root;
         try
@@ -163,7 +199,7 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         catch (Exception)
         {
             // 200 OK, но мусор вместо JSON — llama.cpp с битой моделью или прокси. Down.
-            return LocalProbeOutcome.Down;
+            return (LocalProbeOutcome.Down, 0);
         }
 
         // Ищем модель по Id (из каталога провайдера). Если в каталоге несколько — Alive, если
@@ -172,7 +208,7 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         var wantedIds = provider.Models.Select(m => m.Id).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
 
         if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
-            return LocalProbeOutcome.Down;
+            return (LocalProbeOutcome.Down, 0);
 
         foreach (var entry in data.EnumerateArray())
         {
@@ -184,6 +220,15 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
             // Не наша модель — пропускаем. На одном llama.cpp-роутере может крутиться несколько
             // моделей; нас интересует только та, что в каталоге провайдера.
             if (!wantedIds.Contains(id, StringComparer.OrdinalIgnoreCase)) continue;
+
+            // max_model_len на верхнем уровне записи (vLLM: {"id":"…","max_model_len":65536,…},
+            // llama.cpp аналогично). Отсутствие поля — не ошибка: провайдер без него просто
+            // останется на конфигурационном ContextWindow (fail-open).
+            var maxLen = 0;
+            if (entry.TryGetProperty("max_model_len", out var mlEl) && mlEl.ValueKind == JsonValueKind.Number)
+            {
+                if (mlEl.TryGetInt32(out var v) && v > 0) maxLen = v;
+            }
 
             // Нашли нашу модель. Читаем status.value и status.failed.
             var loaded = true;
@@ -203,14 +248,17 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
                     failed = true;
                 }
             }
-            // Считаем модель живой только если явно loaded и НЕ failed.
-            return (loaded && !failed) ? LocalProbeOutcome.Alive : LocalProbeOutcome.Down;
+            // Считаем модель живой только если явно loaded и НЕ failed. max_model_len
+            // возвращаем независимо от итога: число полезно даже при Down (CLI всё равно
+            // отобьёт, но конфиг уже знает правду).
+            var outcome = (loaded && !failed) ? LocalProbeOutcome.Alive : LocalProbeOutcome.Down;
+            return (outcome, maxLen);
         }
 
         // Каталог провайдера не пуст, но /v1/models не вернул нужную модель — скорее всего
         // конфиг рассинхронизирован с реальным сервером. Считаем Down: безопаснее сказать
         // пользователю «не запущена», чем молча отдать ошибку лимита.
-        return LocalProbeOutcome.Down;
+        return (LocalProbeOutcome.Down, 0);
     }
 
     // AnthropicBaseUrl — база (без пути); llama.cpp/vLLM кладут /v1/models под ней.

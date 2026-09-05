@@ -16,14 +16,20 @@ public class FallbackLocalDownTests
 {
     private readonly List<ServerMessage> _downstream = [];
 
-    private sealed class FakeLocalProbe(LocalProbeOutcome outcome) : ILocalEndpointProbe
+    private sealed class FakeLocalProbe(LocalProbeOutcome outcome, int knownWindow = 0) : ILocalEndpointProbe
     {
         public LocalProbeOutcome Outcome { get; } = outcome;
+        public int KnownWindow { get; } = knownWindow;
         public int Calls { get; private set; }
         public Task<LocalProbeOutcome> CheckAsync(LlmProviderConfig provider, CancellationToken ct = default)
         {
             Calls++;
             return Task.FromResult(Outcome);
+        }
+        public bool TryGetKnownContextWindow(string providerKey, out int window)
+        {
+            window = KnownWindow;
+            return KnownWindow > 0;
         }
         public void Invalidate(string providerKey) { }
     }

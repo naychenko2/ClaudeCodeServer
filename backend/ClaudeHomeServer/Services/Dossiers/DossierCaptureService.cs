@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 

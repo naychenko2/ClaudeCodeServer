@@ -1,5 +1,5 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ProjectServices;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Moq;

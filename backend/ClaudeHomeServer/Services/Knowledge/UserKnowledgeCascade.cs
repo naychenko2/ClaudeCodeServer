@@ -1,3 +1,6 @@
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
+
 namespace ClaudeHomeServer.Services.Knowledge;
 
 // Каскадная уборка знаний при удалении пользователя: персоны (память: стор + Dify-датасет),

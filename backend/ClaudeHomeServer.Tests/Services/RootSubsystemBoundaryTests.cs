@@ -41,8 +41,12 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   по построению держит ссылки на все вертикали и сам перечислен в
 ///   <c>SharedAllowedPrefixes</c> или в точечных allow-list каждой вертикали
 ///   (<c>PersonaManager</c>, <c>ProjectManager</c>, <c>SessionManager</c>,
-///   <c>UserStore</c>, <c>TaskManager</c>, <c>ChatHistoryService</c>,
+///   <c>UserStore</c>, <c>ChatHistoryService</c>,
 ///   <c>FileService</c>, <c>NotificationService</c>, <c>NotificationStore</c>).
+///   <c>TaskManager</c> уехал в вертикаль <c>Services.Tasks</c> (волна 4C, шаг 1) —
+///   его держит собственный подсистемный сторож <c>SubsystemBoundaryTests</c>,
+///   а из root-исключений он снят, чтобы пустая запись не глушила проверку
+///   по <c>FullName</c> (комментарий у <c>ExcludedRootTypes</c>).
 ///   Исключены из проверки и сами, и как цели ссылок (defense-in-depth: даже
 ///   если правило для peer-root сломается, эти типы не флагаются).
 /// - Self-ссылки внутри класса: тип ссылается сам на себя, на свои
@@ -90,51 +94,104 @@ public class RootSubsystemBoundaryTests
     /// инфраструктурных под-вертикалей. Сознательно у́же, чем все
     /// существующие <c>Services.*</c>: новая под-вертикаль, на которую
     /// root начнёт ссылаться, БЕЗ записи здесь поймается сторожем —
-    /// и повод обсудить, действительно ли это инфраструктура или нет.</summary>
+    /// и повод обсудить, действительно ли это инфраструктура или нет.
+    ///
+    /// Сюда попадают только те под-вертикали, на которые root ссылается
+    /// МНОЖЕСТВОМ типов (3+). Точечные зависимости от единичных типов
+    /// (например, <c>FileWatcherService → CodeGraphService</c>) переехали в
+    /// <see cref="RootAllowedExactTypes"/> — префикс открывал бы всю вертикаль,
+    /// а реально нужен один тип.</summary>
     private static readonly string[] RootAllowedSubVerticalPrefixes =
     {
         // Модельный слой: дешёвые ходы (ICheapTextRunner), резолверы моделей
         // и слотов (LlmProviderRegistry, ModelAssignmentResolver, UserModelTierResolver),
         // one-shot раннеры (OneShotClaudeRunner, IOneShotRunner), каталог пресетов
-        // (TierMatrix) и логи ходов (SubagentRunLog).
+        // (TierMatrix) и логи ходов (SubagentRunLog). 33 пары root→Llm — это
+        // префикс-шов по прецеденту Git/Backgrounds/Deploy/Spend/Dossiers/Memory.
         "ClaudeHomeServer.Services.Llm",
         // Запуск процессов и песочница: ILauncherFactory, IProcessLauncher,
-        // SandboxManager. По прецеденту — SubsystemBoundaryTests разрешает
-        // это Git/Deploy/Watchdog как «вертикаль → спинка».
+        // SandboxManager. 9 пар root→Execution (DevServer*/Terminal*/SkillsCli/
+        // TaskExecution/PersonaAgentFileSync/UserHomeResolver).
         "ClaudeHomeServer.Services.Execution",
         // Память/Dify: MemoryWriteResolver, MemoryScoringOptions,
         // MemoryFusionOptions, MemoryDifyDebouncer. Общий слой дебаунса
-        // и записи в Dify-датасеты — знаниевая инфраструктура.
+        // и записи в Dify-датасеты — знаниевая инфраструктура. 10 пар.
         "ClaudeHomeServer.Services.Memory",
         // Знания: Dify RAG клиент (KnowledgeService), пути и нормализация
         // (WorkspaceKnowledgeStore), участник синка (ProjectKnowledgeSyncService),
-        // участник каскада (KnowledgeSyncTarget).
+        // участник каскада (KnowledgeSyncTarget). 9 пар.
         "ClaudeHomeServer.Services.Knowledge",
         // Генерация картинок и backfill: ImageGenerationService,
-        // ImageBackfillService, ImageModelInfo, GeneratedImage.
+        // ImageBackfillService, ImageModelInfo, GeneratedImage. 4 пары.
         "ClaudeHomeServer.Services.Images",
-        // Граф кода: CodeGraphService. Используется FileWatcherService
-        // для инвалидации графа при изменении файлов.
-        "ClaudeHomeServer.Services.CodeGraph",
-        // Паспорта изменений: DossierRecallService / DossierRecallRequest.
-        // Используются PersonaMemoryService для recall-фазы памяти.
-        "ClaudeHomeServer.Services.Dossiers",
-        // Метрики задач: TaskPromptMetricsStore (TaskExecutionService пишет
-        // в spend-стор).
-        "ClaudeHomeServer.Services.Spend",
         // Триггеры автоматизации: MentionTriggerSource, AutomationRootResolver,
         // ITriggerSource. PersonaAutomationService опирается на них напрямую.
+        // 3 пары — кандидат на сужение, оставлен префиксом ради новых источников.
         "ClaudeHomeServer.Services.TriggerSources",
-        // Внешние модули (YARP): ModuleRegistry. FeatureFlagService знает,
-        // активен ли модуль.
-        "ClaudeHomeServer.Services.Modules",
-        // Документация: DocsIndexService. ProjectPresetService использует
-        // для построения списка доступных пресетов.
-        "ClaudeHomeServer.Services.Docs",
-        // Desktop-капабилити: DesktopCaller (JwtService создаёт capability-токен
-        // для канала desktop MCP). Сознательная зависимость «корневой
-        // инфраструктуры от модуля, который сам по себе флагнутый».
-        "ClaudeHomeServer.Services.Desktop",
+    };
+
+    /// <summary>Точечные типы, на которые root-типы имеют право ссылаться,
+    /// когда префикс открывать не нужно — реально нужен один тип из под-вертикали.
+    /// По образцу <c>AllowedExactNamespaces</c> из <see cref="SubsystemBoundaryTests"/>:
+    /// сравнение по <c>FullName</c>, nested-типы (содержащие '+') тоже ловятся.
+    /// Раньше эти зависимости открывались целым префиксом в <see cref="RootAllowedSubVerticalPrefixes"/> —
+    /// и под-вертикаль могла незаметно наращивать зависимости, потому что сторож
+    /// пропускал всё, что под префиксом. Точечный допуск закрывает эту щель:
+    /// если завтра root начнёт ссылаться на ещё один тип из <c>Services.CodeGraph</c>
+    /// (не <c>CodeGraphService</c>), сторож покраснеет, и повод обсудить, нужна
+    /// ли зависимость или пора выделить шов.</summary>
+    private static readonly HashSet<string> RootAllowedExactTypes = new(StringComparer.Ordinal)
+    {
+        // Граф кода: FileWatcherService инвалидирует граф при изменении файлов
+        // (см. FileWatcherService — подписка на CodeGraphService).
+        "ClaudeHomeServer.Services.CodeGraph.CodeGraphService",
+        // Desktop-капабилити: JwtService создаёт capability-токен для канала
+        // desktop MCP через DesktopCaller (см. JwtService.cs:251,266 — формирование
+        // капабилити-токена).
+        "ClaudeHomeServer.Services.Desktop.DesktopCaller",
+        // Документация: DocsIndexService читается ProjectPresetService для
+        // построения списка доступных пресетов в композере онбординга v2.
+        "ClaudeHomeServer.Services.Docs.DocsIndexService",
+        // Внешние модули (YARP): ModuleRegistry знает, активен ли модуль —
+        // FeatureFlagService дёргает ModuleRegistry на каждый запрос.
+        "ClaudeHomeServer.Services.Modules.ModuleRegistry",
+        // Метрики задач: TaskExecutionService пишет метрики в spend-стор через
+        // TaskPromptMetricsStore. Единственный root→Spend переход.
+        "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore",
+        // ⚠ Волна 4C, шаг 1 — выделена вертикаль Tasks, но шесть root-типов держат
+        // `TaskManager` в конструкторе как «продуктовую зависимость», а не как
+        // инфраструктуру. Префикс `Services.Tasks` не открываем (Tasks — продуктовая
+        // вертикаль, а не «общий слой»): точечный допуск ровно на `TaskManager`,
+        // чтобы `NoteTaskSyncService`/`SessionContextResolver`/`SessionMessagingService`/
+        // `TaskExecutionService`/`TeamWaveService`/`UnifiedSearchService` могли держать
+        // его в сигнатуре. Если завтра root начнёт ссылаться ещё на `TaskAiService`/
+        // `BoardService`/`DailyBriefingService` и т.п., сторож покраснеет — повод
+        // пересмотреть, не вынести ли конкретный root-тип внутрь Tasks (или не выделить
+        // общий Tasks-интерфейс).
+        "ClaudeHomeServer.Services.Tasks.TaskManager",
+        // ⚠ Волна 4C, шаг 2 — выделена вертикаль Notes; пять root-типов держат
+        // `NotesService`/`NotesKnowledgeService` в конструкторе как «продуктовую
+        // зависимость» (Notes записывает события в журнал, генерирует теги,
+        // делает семантический поиск для recall-запросов). Префикс `Services.Notes`
+        // не открываем (Notes — продуктовая вертикаль, не «общий слой»):
+        // точечный допуск ровно на два типа, чтобы `PersonaBindingsService`/
+        // `PersonasCrudService`/`SessionSummaryService`/`TaskExecutionService`/
+        // `UnifiedSearchService` могли держать их в сигнатуре. Если завтра root
+        // начнёт ссылаться ещё на `NotesAiService`/`NoteTaskSyncService`/etc —
+        // сторож покраснеет, и повод пересмотреть, не выделить ли конкретный
+        // root-тип внутрь Notes.
+        "ClaudeHomeServer.Services.Notes.NotesService",
+        "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
+        // ⚠ Волна 4C, шаг 3 — выделена вертикаль Skills; известный шов
+        // `SessionManager → SkillsService` (InstalledSkillNames для блока
+        // «Командные механики» руководителя проекта) остаётся до этапа 4
+        // (расщепление SessionManager). Плюс `PersonaBindingsService`/
+        // `PersonasCrudService` дёргают `SkillsService` в ctor для валидации
+        // Skill-привязок персон и UI карточки персоны (список глобальных
+        // скиллов). Префикс `Services.Skills` не открываем (Skills — листовая
+        // продуктовая вертикаль): точечный допуск ровно на `SkillsService` (того
+        // же типа, что у `Llm`/`Turn` в их allow-list).
+        "ClaudeHomeServer.Services.Skills.SkillsService",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как
@@ -148,7 +205,9 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.ProjectManager",
         "ClaudeHomeServer.Services.SessionManager",
         "ClaudeHomeServer.Services.UserStore",
-        "ClaudeHomeServer.Services.TaskManager",
+        // TaskManager уехал в Services.Tasks.TasksSubsystem (волна 4C, шаг 1) —
+        // его границы ловит SubsystemBoundaryTests по строке `Tasks` в Boundaries,
+        // здесь он больше не исключение.
         "ClaudeHomeServer.Services.ChatHistoryService",
         "ClaudeHomeServer.Services.FileService",
         "ClaudeHomeServer.Services.NotificationService",
@@ -205,7 +264,7 @@ public class RootSubsystemBoundaryTests
             .ToList();
 
         rootTypes.Should().NotBeEmpty(
-            "в корне ClaudeHomeServer.Services должны найтись типы (ориентир замера — ~189) — " +
+            "в корне ClaudeHomeServer.Services должны найтись типы (ориентир замера — ~95 после волны 4) — " +
             "иначе проверка границ корня ничего не проверяет");
 
         var violations = new List<string>();
@@ -236,6 +295,13 @@ public class RootSubsystemBoundaryTests
                 // (RootAllowedSubVerticalPrefixes). По аналогии с per-vertical
                 // AllowedNamespacePrefixes — здесь «спинка» root-слоя.
                 if (IsRootAllowedSubVertical(referenced)) continue;
+
+                // Допустимая ссылка на конкретный тип из под-вертикали, открытый
+                // точечно (RootAllowedExactTypes). Закрывает щель, которая раньше
+                // требовала открывать префикс ради одного типа: теперь сторож
+                // видит «root ссылается на ещё один тип из Services.CodeGraph» и
+                // требует явного расширения allow-list (повод выделить шов).
+                if (IsRootAllowedExactType(referenced)) continue;
 
                 // Backbone root-типы: defense-in-depth. Peer-root ссылки
                 // (`SessionManager`, `TaskManager` и т.п.) уже отсекаются правилом
@@ -306,6 +372,11 @@ public class RootSubsystemBoundaryTests
         }
 
         return false;
+    }
+
+    private static bool IsRootAllowedExactType(Type type)
+    {
+        return RootAllowedExactTypes.Contains(type.FullName ?? string.Empty);
     }
 
     private static IEnumerable<Type> CollectReferencedTypes(Type type)

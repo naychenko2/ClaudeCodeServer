@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Changelog;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;

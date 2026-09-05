@@ -10,7 +10,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
     public bool IsSandboxed => false;
     public bool TargetIsWindows => OperatingSystem.IsWindows();
     public IPathMapper Paths => IdentityPathMapper.Instance;
-    public string ClaudeCliCommand => Llm.Claude.ClaudeCliLocator.FindClaudeExecutable();
+    public string ClaudeCliCommand => ClaudeCliLocator.FindClaudeExecutable();
     public string HostTempDir => Path.GetTempPath();
     public string? McpApiUrlOverride => null;
 

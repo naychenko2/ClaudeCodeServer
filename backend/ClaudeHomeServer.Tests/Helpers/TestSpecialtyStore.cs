@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 

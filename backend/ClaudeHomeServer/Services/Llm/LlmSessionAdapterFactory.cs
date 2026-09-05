@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Skills;
 
 namespace ClaudeHomeServer.Services.Llm;
 

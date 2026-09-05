@@ -1,9 +1,9 @@
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Images;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 

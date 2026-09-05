@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 

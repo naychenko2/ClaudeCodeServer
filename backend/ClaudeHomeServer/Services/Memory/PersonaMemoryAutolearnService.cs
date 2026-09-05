@@ -1,0 +1,287 @@
+using System.Text;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+
+namespace ClaudeHomeServer.Services.Memory;
+
+// Авто-память персоны (флаг persona-memory-autolearn): по завершении хода в персонной
+// сессии one-shot вызовом Claude извлекает из диалога факты о пользователе (semantic) и
+// краткий итог (episodic) и складывает их в долгую память персоны — без явной команды.
+// Подписывается на SessionManager.OnSessionMessage; тяжёлая работа — вне пайплайна хода.
+public sealed class PersonaMemoryAutolearnService : IHostedService
+{
+    private const int TranscriptBudget = 8_000;
+    private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
+
+    private readonly SessionManager _sessions;
+    private readonly PersonaManager _personas;
+    private readonly PersonaMemoryService _memory;
+    private readonly PersonaMemoryConsolidationService _consolidation;
+    private readonly Llm.ICheapTextRunner _cheap;
+    private readonly IConfiguration _config;
+    private readonly ILogger<PersonaMemoryAutolearnService> _log;
+    private readonly ProjectEventLogService? _events;
+    // Гейт содержательности хода (Memory-диета): порог длины реплик последнего хода — короче
+    // не стоит прогона LLM. Дефолт 400 — середина заданного диапазона 300-500 символов.
+    private readonly int _minTurnChars;
+    // Счётчик пропусков autolearn с момента старта процесса — в лог, чтобы видеть эффект гейта
+    private int _skipped;
+
+    public PersonaMemoryAutolearnService(SessionManager sessions, PersonaManager personas,
+        PersonaMemoryService memory, PersonaMemoryConsolidationService consolidation,
+        Llm.ICheapTextRunner cheap,
+        IConfiguration config, ILogger<PersonaMemoryAutolearnService> log,
+        ProjectEventLogService? events = null)
+    {
+        _sessions = sessions;
+        _personas = personas;
+        _memory = memory;
+        _consolidation = consolidation;
+        _cheap = cheap;
+        _config = config;
+        _log = log;
+        _events = events;
+        _minTurnChars = int.TryParse(config["Memory:AutolearnMinTurnChars"], out var mtc) && mtc > 0 ? mtc : 400;
+    }
+
+    public Task StartAsync(CancellationToken ct)
+    {
+        _sessions.OnSessionMessage += OnSessionMessageAsync;
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken ct)
+    {
+        _sessions.OnSessionMessage -= OnSessionMessageAsync;
+        return Task.CompletedTask;
+    }
+
+    private Task OnSessionMessageAsync(Session session, ServerMessage msg)
+    {
+        // Реагируем только на завершение хода в персонной сессии
+        if (msg is not ResultMessage || session.PersonaId is null) return Task.CompletedTask;
+
+        var persona = _personas.GetByIdInternal(session.PersonaId);
+        if (persona is null || !persona.MemoryEnabled) return Task.CompletedTask;
+
+        var skipReason = Memory.AutolearnGate.CheckSession(session);
+        if (skipReason != Memory.AutolearnSkipReason.None)
+        {
+            LogSkip(persona.Id, session.Id, skipReason);
+            return Task.CompletedTask;
+        }
+
+        // Извлечение не должно тормозить пайплайн хода/broadcast — уводим в фон
+        _ = Task.Run(() => LearnSafeAsync(session.Id, persona));
+        return Task.CompletedTask;
+    }
+
+    private void LogSkip(string personaId, string sessionId, Memory.AutolearnSkipReason reason)
+    {
+        var total = Interlocked.Increment(ref _skipped);
+        _log.LogDebug("autolearn: персона {Persona}, сессия {Session} — пропуск ({Reason}), всего пропусков {Total}",
+            personaId, sessionId, reason, total);
+    }
+
+    private async Task LearnSafeAsync(string sessionId, Persona persona)
+    {
+        try
+        {
+            var history = await _sessions.GetHistoryAsync(sessionId);
+            var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);
+            if (string.IsNullOrWhiteSpace(transcript)) return;
+
+            if (Memory.AutolearnGate.CheckContent(history, _minTurnChars) != Memory.AutolearnSkipReason.None)
+            {
+                LogSkip(persona.Id, sessionId, Memory.AutolearnSkipReason.LowContent);
+                return;
+            }
+
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
+                BuildPrompt(persona, transcript),
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", persona.OwnerId);
+
+            var result = Parse(raw);
+            var saved = 0;
+            foreach (var item in result.Items)
+            {
+                // Авто-путь с разрешением противоречий (Memory #2): дубль усилит существующую запись,
+                // конфликт с существующим фактом → LLM-резолвер (UPDATE/DELETE), иначе ADD/NOOP.
+                // Новые факты — pending (предложены), попадают в recall только после подтверждения (③-3.2)
+                if (await _memory.RememberWithResolutionAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
+                        null, sessionId, item.Salience, pending: true) is not null)
+                    saved++;
+            }
+            // Рабочий фокус: null от модели = разговор не про дело, фокус НЕ трогаем.
+            // P4: не затираем свежий фокус из ДРУГОЙ сессии (ручной/из параллельного диалога) —
+            // защитное окно Persona:FocusProtectMinutes; свой (та же сессия) и старый — обновляем.
+            if (result.Focus is not null)
+            {
+                var protectMin = double.TryParse(_config["Persona:FocusProtectMinutes"],
+                    System.Globalization.CultureInfo.InvariantCulture, out var pm) && pm > 0 ? pm : 30;
+                var current = _memory.GetFocus(persona.OwnerId, persona.Id);
+                var protectedFocus = current is not null
+                    && current.SourceSessionId != sessionId
+                    && (DateTime.UtcNow - current.UpdatedAt).TotalMinutes < protectMin;
+                if (!protectedFocus)
+                    _memory.SetFocus(persona.OwnerId, persona.Id,
+                        result.Focus.What, result.Focus.Status, result.Focus.NextStep, sessionId);
+            }
+
+            if (saved > 0)
+            {
+                _log.LogInformation("autolearn: персона {Persona}, сессия {Session} — сохранено {Count} записей памяти",
+                    persona.Id, sessionId, saved);
+                // Проектная персона, узнав факты, попадает в активность-ленту проекта
+                if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+                    _events?.Append(persona.ProjectId, persona.OwnerId, ProjectEventTypes.MemoryLearned,
+                        persona.Id, $"{PersonaManager.PersonaLabel(persona)}: узнал {saved} факт(ов)", sessionId);
+            }
+
+            // Потолок памяти (P0/P3): механическое вытеснение хвоста — сразу, НЕ за флагом
+            // консолидации. Так память не растёт неограниченно при одном лишь autolearn.
+            _memory.EnforceCap(persona.OwnerId, persona.Id);
+
+            // LLM-merge (умная уборка дублей) — заявка «пора», если записей много и включён
+            // флаг persona-memory-consolidation (сама уборка гейтится в консолидаторе)
+            var softLimit = int.TryParse(_config["Persona:MemorySoftLimit"], out var soft) ? soft : 100;
+            if (_memory.List(persona.OwnerId, persona.Id, null).Count > softLimit)
+                _consolidation.RequestConsolidation(persona.OwnerId, persona.Id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "autolearn: извлечение памяти персоны {Persona}", persona.Id);
+        }
+    }
+
+    // Запись памяти после one-shot консультации (persona_ask): тот же промпт/парсер, что у
+    // сессионного autolearn, но транскрипт — переданный вопрос + ответ персоны, а рабочий
+    // фокус НЕ трогается (консультация — побочный разговор, затирать «что я сейчас делаю»
+    // нельзя). Фон, best-effort: ошибки не влияют на уже отданный ответ.
+    public void LearnFromConsultation(Persona persona, string question, string answer)
+    {
+        if (!persona.MemoryEnabled) return;
+        _ = Task.Run(() => LearnConsultationSafeAsync(persona, question, answer));
+    }
+
+    private async Task LearnConsultationSafeAsync(Persona persona, string question, string answer)
+    {
+        try
+        {
+            // Тот же гейт содержательности, что у сессионного хода (Memory-диета) — короткая
+            // консультация жжёт тот же тег персона-memory-autolearn в спенд-логе
+            if (question.Trim().Length + answer.Trim().Length < _minTurnChars)
+            {
+                LogSkip(persona.Id, "консультация", Memory.AutolearnSkipReason.LowContent);
+                return;
+            }
+
+            var transcript = $"Ассистент (по поручению пользователя): {question}\n\n{persona.Name}: {answer}";
+            if (transcript.Length > TranscriptBudget) transcript = transcript[..TranscriptBudget];
+
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
+                BuildPrompt(persona, transcript),
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", persona.OwnerId);
+
+            var saved = 0;
+            foreach (var item in Parse(raw).Items)
+                if (await _memory.RememberWithResolutionAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
+                        null, null, item.Salience, pending: true) is not null)
+                    saved++;
+
+            if (saved > 0)
+                _log.LogInformation("autolearn: персона {Persona}, консультация — сохранено {Count} записей памяти",
+                    persona.Id, saved);
+            _memory.EnforceCap(persona.OwnerId, persona.Id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "autolearn: память после консультации персоны {Persona}", persona.Id);
+        }
+    }
+
+    private static string BuildPrompt(Persona persona, string transcript)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Ты ведёшь долгую память персоны-ассистента по имени {persona.Name}. " +
+                      "Ниже транскрипт её разговора с пользователем. Выпиши только то, что стоит запомнить надолго.");
+        sb.AppendLine("Типы записей:");
+        sb.AppendLine("- type=\"semantic\": устойчивый факт или предпочтение пользователя (имя, вкусы, контекст, " +
+                      "привычки, важные детали жизни/работы). До 5 штук.");
+        sb.AppendLine("- type=\"episodic\": один короткий итог этого разговора — что обсудили/решили.");
+        sb.AppendLine("- type=\"procedural\": выученный приём или правило работы с пользователем " +
+                      "(«как ему удобно», «что всегда делать/не делать»). До 2 штук.");
+        sb.AppendLine("У каждой записи укажи salience — важность 0..1 (1 = критично помнить, 0.3 = мелочь).");
+        sb.AppendLine("НЕ включай: мимолётное, гипотетическое, служебные/тестовые реплики, общие рассуждения без сути.");
+        sb.AppendLine("Пиши кратко, по-русски, о пользователе в третьем лице. Одна мысль — одна запись.");
+        sb.AppendLine("Отдельно поле focus — текущее незавершённое дело персоны (над чем работа продолжится): " +
+                      "{\"what\":\"…\",\"status\":\"…\",\"nextStep\":\"…\"}. Если разговор не про дело — focus: null.");
+        sb.AppendLine("Ответь ТОЛЬКО JSON-объектом вида " +
+                      "{\"items\":[{\"type\":\"semantic\",\"text\":\"…\",\"salience\":0.8}],\"focus\":null}. " +
+                      "Если запоминать нечего — items: [].");
+        sb.AppendLine();
+        sb.AppendLine("Транскрипт:");
+        sb.AppendLine(transcript);
+        return sb.ToString();
+    }
+
+    // Результат извлечения: записи памяти (с важностью) + опциональный рабочий фокус
+    internal sealed record AutolearnItem(PersonaMemoryType Type, string Text, double Salience);
+    internal sealed record AutolearnFocus(string What, string Status, string? NextStep);
+    internal sealed record AutolearnResult(IReadOnlyList<AutolearnItem> Items, AutolearnFocus? Focus);
+
+    // Парс ответа модели: новый формат — объект {items, focus}; fallback — legacy-массив
+    // [{type, text}] (старые модели/промпты). Мусор → пустой результат. Извлечение JSON и маппинг
+    // записей — общая MemoryLlmParsing; персона-специфичен только разбор рабочего фокуса.
+    internal static AutolearnResult Parse(string raw)
+    {
+        var empty = new AutolearnResult([], null);
+        if (string.IsNullOrWhiteSpace(raw)) return empty;
+
+        // Новый формат: первый сбалансированный JSON-объект с полем items
+        var objJson = MemoryLlmParsing.ExtractBalanced(raw, '{', '}');
+        if (objJson is not null)
+        {
+            ResponseRaw? parsed = null;
+            try { parsed = JsonSerializer.Deserialize<ResponseRaw>(objJson, JsonOpts); }
+            catch (JsonException) { /* не объект нового формата — пробуем legacy-массив */ }
+            if (parsed?.Items is not null)
+            {
+                var focus = ParseFocus(parsed.Focus);
+                return new AutolearnResult(MapItems(parsed.Items), focus);
+            }
+        }
+
+        // Legacy-fallback: JSON-массив [{type, text}]
+        var arrJson = MemoryLlmParsing.ExtractBalanced(raw, '[', ']');
+        if (arrJson is null) return empty;
+        List<MemoryLlmParsing.ItemRaw>? items;
+        try { items = JsonSerializer.Deserialize<List<MemoryLlmParsing.ItemRaw>>(arrJson, JsonOpts); }
+        catch (JsonException) { return empty; }
+        return items is null ? empty : new AutolearnResult(MapItems(items), null);
+    }
+
+    // Маппинг сырых записей в AutolearnItem — через общее ядро; специфичен только маппинг типа
+    private static IReadOnlyList<AutolearnItem> MapItems(List<MemoryLlmParsing.ItemRaw> parsed) =>
+        MemoryLlmParsing.MapItems(parsed, ParseType,
+            (type, text, salience) => new AutolearnItem(type, text, salience));
+
+    // Маппинг строки типа из ответа LLM в PersonaMemoryType (неизвестное → semantic)
+    private static PersonaMemoryType ParseType(string? s) => s?.Trim().ToLowerInvariant() switch
+    {
+        "episodic" => PersonaMemoryType.Episodic,
+        "procedural" => PersonaMemoryType.Procedural,
+        _ => PersonaMemoryType.Semantic,
+    };
+
+    private static AutolearnFocus? ParseFocus(FocusRaw? focus)
+    {
+        var what = focus?.What?.Trim();
+        if (string.IsNullOrWhiteSpace(what)) return null;
+        return new AutolearnFocus(what, focus!.Status?.Trim() ?? "", focus.NextStep?.Trim());
+    }
+
+    private sealed record FocusRaw(string? What, string? Status, string? NextStep);
+    private sealed record ResponseRaw(List<MemoryLlmParsing.ItemRaw>? Items, FocusRaw? Focus);
+}

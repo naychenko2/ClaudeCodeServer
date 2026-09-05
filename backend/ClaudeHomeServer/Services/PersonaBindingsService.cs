@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Skills;
 
 namespace ClaudeHomeServer.Services;
 

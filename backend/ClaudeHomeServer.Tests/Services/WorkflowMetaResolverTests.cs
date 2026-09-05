@@ -1,5 +1,5 @@
 using System.Text;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;

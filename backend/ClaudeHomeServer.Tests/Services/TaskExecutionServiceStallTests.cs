@@ -4,6 +4,10 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -139,7 +143,7 @@ public class TaskExecutionServiceStallTests : IDisposable
         }
     }
 
-    // ─── Предикат: три ветки решения ──────────────────────────────────────────
+    // --- Предикат: три ветки решения ------------------------------------------
 
     // Задача после успешного хода исполнителя, который её не закрыл
     private static TaskItem StaleTask(DateTime? nudgedAt = null, DateTime? alertedAt = null) => new()
@@ -290,7 +294,7 @@ public class TaskExecutionServiceStallTests : IDisposable
             .Should().Be(TaskExecutionService.ExecutorStallAction.None);
     }
 
-    // ─── Эффекты: оклик исполнителю и уведомление человеку ────────────────────
+    // --- Эффекты: оклик исполнителю и уведомление человеку --------------------
 
     // Живой чат-исполнитель с подставным процессом (иначе SendOrEnqueueAsync поднял бы CLI)
     private async Task<(TaskItem Task, Session Chat)> ArrangeExecutorChatAsync(TimeSpan silence)

@@ -7,6 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Telemetry;
 
@@ -4479,7 +4480,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (m.Success)
                 {
                     var transcriptDir = m.Groups[1].Value.Trim();
-                    Console.WriteLine($"[WorkflowWatcher] старт: dir={transcriptDir} allowed={WorkflowAgentParser.IsPathAllowed(transcriptDir)}");
+                    Console.WriteLine($"[WorkflowWatcher] старт: dir={transcriptDir} allowed={TranscriptRoots.IsPathAllowed(transcriptDir)}");
                     var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage) { Owner = run };
                     lock (_workflowWatchers)
                     {

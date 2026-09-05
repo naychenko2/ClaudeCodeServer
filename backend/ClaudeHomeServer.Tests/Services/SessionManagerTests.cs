@@ -5,8 +5,12 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.TriggerSources;
 using FluentAssertions;
@@ -9291,7 +9295,7 @@ public class SessionManagerTests : IDisposable
         Directory.CreateDirectory(projDir);
         var path = Path.Combine(projDir, csid + ".jsonl");
         File.WriteAllText(path, content);
-        ClaudeHomeServer.Services.WorkflowAgentParser.AddAllowedRoot(_tempDir);
+        TranscriptRoots.AddAllowedRoot(_tempDir);
         return path;
     }
 

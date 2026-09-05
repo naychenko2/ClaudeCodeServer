@@ -1,5 +1,5 @@
 using ClaudeHomeServer.Hubs;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Terminal;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;

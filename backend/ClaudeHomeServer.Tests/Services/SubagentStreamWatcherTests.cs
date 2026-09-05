@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
@@ -13,7 +14,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // sessionId уникален НА КАЖДЫЙ тест: фолбэк-поиск ватчера ищет папку по id сессии,
 // и общая константа позволяла одному тесту найти папку другого через утёкший в
-// статический WorkflowAgentParser._extraRoots корень (в проде id сессии уникален —
+// статический TranscriptRoots._extraRoots корень (в проде id сессии уникален —
 // сессия живёт ровно в одном проекте)
 public class SubagentStreamWatcherTests : IDisposable
 {
@@ -107,8 +108,8 @@ public class SubagentStreamWatcherTests : IDisposable
     public void ProfilesRoot_ВатчерНаходитПапкуИПарсит()
     {
         // Устанавливаем ProfilesRoot перед созданием ватчера
-        var originalProfilesRoot = WorkflowAgentParser.ProfilesRoot;
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        var originalProfilesRoot = TranscriptRoots.ProfilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
 
         try
         {
@@ -143,7 +144,7 @@ public class SubagentStreamWatcherTests : IDisposable
         }
         finally
         {
-            WorkflowAgentParser.ProfilesRoot = originalProfilesRoot;
+            TranscriptRoots.ProfilesRoot = originalProfilesRoot;
         }
     }
 
@@ -156,7 +157,7 @@ public class SubagentStreamWatcherTests : IDisposable
             ToolCall("2026-08-22T10:00:10.000Z", "Bash"),
             Report("2026-08-22T10:00:20.000Z"));
 
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             // Act: запускаем ватчер, но новых строк нет
@@ -172,7 +173,7 @@ public class SubagentStreamWatcherTests : IDisposable
         }
         finally
         {
-            WorkflowAgentParser.ProfilesRoot = null;
+            TranscriptRoots.ProfilesRoot = null;
         }
     }
 
@@ -185,7 +186,7 @@ public class SubagentStreamWatcherTests : IDisposable
             ToolCall("2026-08-22T10:00:10.000Z", "Bash"),
             Report("2026-08-22T10:00:20.000Z"));
 
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             // Act: стартуем ватчер, затем дописываем строки
@@ -212,7 +213,7 @@ public class SubagentStreamWatcherTests : IDisposable
         }
         finally
         {
-            WorkflowAgentParser.ProfilesRoot = null;
+            TranscriptRoots.ProfilesRoot = null;
         }
     }
 
@@ -231,7 +232,7 @@ public class SubagentStreamWatcherTests : IDisposable
     [Fact]
     public async Task BgDone_ФиналДоезжаетПозжеСигнала_ПаспортШтатныйИОдинРаз()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -263,13 +264,13 @@ public class SubagentStreamWatcherTests : IDisposable
             watcher.Dispose();
             _passports.Should().HaveCount(1);
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
     public async Task BgDone_ФиналТакИНеДоехал_ПаспортОборванныйПослеПерепроверки()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -293,13 +294,13 @@ public class SubagentStreamWatcherTests : IDisposable
             watcher.Dispose();
             _passports.Should().HaveCount(1);
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
     public async Task BgDone_ФиналДоехалПослеПерепроверки_УходитОпровержение()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -328,13 +329,13 @@ public class SubagentStreamWatcherTests : IDisposable
             watcher.Dispose();
             _passports.Should().HaveCount(2, "Dispose без новой активности паспорт не задваивает");
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
     public async Task BgDone_ВатчерУмерРаньшеПерепроверки_ПаспортОтдаётDisposeОдинРаз()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -357,7 +358,7 @@ public class SubagentStreamWatcherTests : IDisposable
             _passports[0].FinishedBy.Should().Be("bg_done");
             _passports[0].Truncated.Should().BeTrue();
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     // ─── Причина конца прогона: «убит прерыванием» vs «обычная смерть» ──────
@@ -374,7 +375,7 @@ public class SubagentStreamWatcherTests : IDisposable
         // Файл создаём ПОСЛЕ Start (как в проде — стартующий ватчер видит свежий транскрипт):
         // иначе Start выставлял бы офсет до конца существующего файла, и Dispose видел бы
         // его как «старый без новых строк».
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -393,7 +394,7 @@ public class SubagentStreamWatcherTests : IDisposable
             _passports[0].FinishedBy.Should().Be("run_end",
                 "без MarkRunInterrupted причина конца прогона — дефолтная run_end");
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
@@ -402,7 +403,7 @@ public class SubagentStreamWatcherTests : IDisposable
         // ClaudeSession перед Dispose ватчера ставит MarkRunInterrupted — паспорт
         // должен уйти с FinishedBy = "interrupted", ровно отличаясь от обычной смерти.
         // Файл — после Start, чтобы ватчер увидел новые строки.
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -428,7 +429,7 @@ public class SubagentStreamWatcherTests : IDisposable
             // и счётчик MaxSubagentNudges будет расходоваться на закономерном прерывании
             _passports[0].FinishedInBackground.Should().BeFalse();
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
@@ -437,7 +438,7 @@ public class SubagentStreamWatcherTests : IDisposable
         // bg_done — финал фонового агента по сигналу CLI; MarkRunInterrupted НЕ должен
         // перебивать эту ветку. Прерывание хода координатора не меняет класс фонового
         // агента, потому что для фона он уже завершён.
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -461,7 +462,7 @@ public class SubagentStreamWatcherTests : IDisposable
             _passports[0].FinishedBy.Should().Be("bg_done",
                 "bg_done-ветка эмитится как bg_done даже при MarkRunInterrupted");
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     // ─── «Свой» профиль первым ───────────────────────────────────────────────
@@ -472,7 +473,7 @@ public class SubagentStreamWatcherTests : IDisposable
     [Fact]
     public async Task PreferredConfigRoot_ПапкаСессииВДвухПрофилях_ЧитаетСвой()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -505,13 +506,13 @@ public class SubagentStreamWatcherTests : IDisposable
 
             _passports.Select(p => p.AgentId).Should().Equal("own");
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
     public async Task PreferredConfigRoot_ПапкиВНёмНет_ПереборПрофилейКакРаньше()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
         try
         {
             var cwd = Path.Combine(Path.GetTempPath(), "Ccs W test " + Guid.NewGuid().ToString("N"));
@@ -533,7 +534,7 @@ public class SubagentStreamWatcherTests : IDisposable
 
             _passports.Select(p => p.AgentId).Should().Equal("agent-swept");
         }
-        finally { WorkflowAgentParser.ProfilesRoot = null; }
+        finally { TranscriptRoots.ProfilesRoot = null; }
     }
 
     [Fact]
@@ -554,12 +555,12 @@ public class SubagentStreamWatcherTests : IDisposable
     [Fact]
     public void МножествоАгентов_ПрофильИДопКорень_НаходятсяВсе()
     {
-        WorkflowAgentParser.ProfilesRoot = _profilesRoot;
+        TranscriptRoots.ProfilesRoot = _profilesRoot;
 
         // Регистрируем дополнительный корень
         var extraRoot = Path.Combine(Path.GetTempPath(), "claude-extra-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(extraRoot);
-        WorkflowAgentParser.AddAllowedRoot(extraRoot);
+        TranscriptRoots.AddAllowedRoot(extraRoot);
 
         try
         {
@@ -623,7 +624,7 @@ public class SubagentStreamWatcherTests : IDisposable
         }
         finally
         {
-            WorkflowAgentParser.ProfilesRoot = null;
+            TranscriptRoots.ProfilesRoot = null;
             if (Directory.Exists(extraRoot))
                 Directory.Delete(extraRoot, recursive: true);
         }

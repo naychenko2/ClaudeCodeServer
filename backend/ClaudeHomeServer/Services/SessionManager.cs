@@ -6,7 +6,10 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Turn;
 using Microsoft.AspNetCore.SignalR;
 

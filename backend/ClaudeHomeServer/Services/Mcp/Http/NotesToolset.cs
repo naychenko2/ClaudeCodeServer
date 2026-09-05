@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;

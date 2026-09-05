@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;

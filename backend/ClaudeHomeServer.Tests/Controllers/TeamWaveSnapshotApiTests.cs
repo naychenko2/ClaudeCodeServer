@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;

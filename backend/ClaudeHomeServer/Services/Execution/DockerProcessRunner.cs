@@ -178,7 +178,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
 
             var projectsDir = Path.Combine(profileHostDir, "projects");
             Directory.CreateDirectory(projectsDir);
-            WorkflowAgentParser.AddAllowedRoot(projectsDir);
+            TranscriptRoots.AddAllowedRoot(projectsDir);
 
             // Сидинг поставляемых workflow-скриптов (как entrypoint основного контейнера).
             // ЛИЧНЫЕ настройки админа (~/.claude) в профили изолированных пользователей

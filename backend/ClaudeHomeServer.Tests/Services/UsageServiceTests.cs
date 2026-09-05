@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 

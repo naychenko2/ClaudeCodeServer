@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.Services.Turn;
 

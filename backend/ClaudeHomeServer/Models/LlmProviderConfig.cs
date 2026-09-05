@@ -56,8 +56,36 @@ public class LlmProviderConfig
     public string? TierMedium { get; set; }
     public string? TierWeak { get; set; }
 
+    // Локальный провайдер (vLLM/llama.cpp на своей машине) — без API-ключа.
+    // Признак используется не только для Enabled: этап 2 (проба живости эндпоинта,
+    // скрытие блока баланса, исключение из егресс-логики) повесит на него ещё три места.
+    public bool IsLocal { get; set; }
+
     public bool Enabled =>
-        !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
+        (IsLocal || !string.IsNullOrWhiteSpace(ApiKey)) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
+
+    // Список усилий рассуждений, которые Anthropic-совместимый эндпойнт провайдера реально
+    // принимает в поле effort. Пустой — реестр не трогает значение (fail-open для glm/kimi/
+    // minimax, у которых effort не валидируется). Заданный список срабатывает по правилу
+    // «ближайший поддерживаемый СНИЗУ» по шкале low < medium < high < xhigh < max: незнакомый
+    // провайдеру уровень (CLI заведёт новый) уедет как есть и вернёт 400, поэтому при
+    // отсутствии в списке подменяем ближайшим, который провайдер точно примет.
+    public List<string> SupportedEfforts { get; set; } = [];
+
+    // Явная карта подмены reasoning effort: EffortMap[запрошенный] → подменённое. Приоритет
+    // ВЫШЕ SupportedEfforts — конфигурация доверенная, и «high → medium» декларативнее правила
+    // «ближайший снизу» (тот же результат в большинстве случаев, но карта прозрачна при разборе
+    // инцидентов). Пустая — работает только SupportedEfforts. vLLM/llama.cpp принимают только
+    // low/medium/xhigh (high→400); у local-qwen карта сознательно жмёт high/medium → low:
+    // effort у Qwen3.8 управляет длиной размышлений, и на low ход отвечает за секунды.
+    public Dictionary<string, string> EffortMap { get; set; } = [];
+
+    // Лимит токенов на блок thinking (env MAX_THINKING_TOKENS — имя по документации CLI;
+    // CLAUDE_CODE_MAX_THINKING_TOKENS в бинарнике 2.1.241 отсутствует). null/0 — CLI решает
+    // сам. Оговорка: на стороннем провайдере CLI по этой переменной лишь убирает параметр
+    // thinking из запроса, бюджет сервером не режется — длиной размышлений у Qwen3.8 на деле
+    // управляет effort (см. EffortMap), а эта переменная только страхует от лишнего параметра.
+    public int? MaxThinkingTokens { get; set; }
 
     public string EffectiveModelPrefix => string.IsNullOrWhiteSpace(ModelPrefix) ? Key : ModelPrefix;
 

@@ -54,6 +54,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Проба выхода в сеть: отличает «эндпоинт вендора недоступен» от «канал наружу лёг».
     // null (тесты без DI) — прежнее поведение фолбэка.
     private readonly IEgressProbe? _egress;
+    // Pre-flight проба локального эндпоинта (LocalEndpointProbe): при выключенном llama.cpp/vLLM
+    // ход завершается сразу с понятной красной карточкой, без шагов цепочки. null (тесты) — выключена.
+    private readonly ILocalEndpointProbe? _localProbe;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
@@ -64,7 +67,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ContextCapacityRegistry? capacity = null,
         ChatHistoryService? chatHistory = null,
         ILogger<LlmSessionAdapterFactory>? log = null,
-        IEgressProbe? egress = null)
+        IEgressProbe? egress = null,
+        ILocalEndpointProbe? localProbe = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
@@ -74,6 +78,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _chatHistory = chatHistory;
         _log = log;
         _egress = egress;
+        _localProbe = localProbe;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
         _glifMcpToken = config["Glif:McpToken"];
@@ -155,7 +160,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             _capacity, BuildContextEstimate(claudeSession),
             context.EnqueueBypass, context.OrchestrationDone,
             contextSource: BuildContextSource(claudeSession),
-            egress: _egress, events: context.Events);
+            egress: _egress, events: context.Events,
+            localProbe: _localProbe);
         return fallback;
     }
 

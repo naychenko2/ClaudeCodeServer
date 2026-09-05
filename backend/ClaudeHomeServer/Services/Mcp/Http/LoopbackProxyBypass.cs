@@ -49,9 +49,9 @@ public static class LoopbackProxyBypass
     /// <summary>
     /// Значение NO_PROXY для хода или null — оверрайд не ставить вовсе. Развязывает три случая:
     /// <list type="bullet">
-    /// <item>транспорт не http (рубильник отката, негодная схема адреса) — в бэкенд по этому
-    /// адресу CLI не ходит, и env-оверрайд обязан откатиться ВМЕСТЕ с транспортом, иначе
-    /// «откат без выкатки кода» неполон;</item>
+    /// <item>транспорт не http (рубильник отката, негодная схема адреса) И ход не на локальном
+    /// провайдере — в бэкенд по этому адресу CLI не ходит, и env-оверрайд обязан откатиться
+    /// ВМЕСТЕ с транспортом, иначе «откат без выкатки кода» неполон;</item>
     /// <item>песочница (<paramref name="isSandboxed"/>) — хостовое НЕ наследуем: exec-переменная
     /// сильнее контейнерной и подменила бы узкий egress-whitelist песочницы
     /// (SandboxManager.BuildRunArgs) корпоративными исключениями хоста, а контейнеру обход
@@ -63,8 +63,15 @@ public static class LoopbackProxyBypass
     /// Адресов много, а не один: у хода бывают РАЗНЫЕ http-серверы (widgets, memory,
     /// pmem-консультанты), и «первый попавшийся URL» пропускал бы хосты остальных — их
     /// запросы уезжали бы в прокси вместе с открытым JWT из заголовка Authorization.
+    ///
+    /// <paramref name="localProvider"/> — ход идёт на ЛОКАЛЬНОГО LLM-провайдера (IsLocal,
+    /// эндпоинт на loopback). Тогда обход обязателен независимо от транспорта MCP: с HTTP_PROXY
+    /// в окружении CLI тащит в прокси даже 127.0.0.1 и падает «Connection refused — a firewall
+    /// or proxy may be blocking it» (§7б local-vllm-provider.md, грабля 1). Раньше обход стоял
+    /// только под http-MCP, и рубильник Mcp:HttpTransport=false уводил локальный ход в прокси.
+    /// Песочницы это не касается — там средой владеет контейнер (ветка выше).
     /// </summary>
-    internal static string? ForTurn(bool useHttp, bool isSandboxed, string? inherited,
-        params string?[] apiUrls) =>
-        !useHttp || isSandboxed ? null : Merge(inherited, apiUrls);
+    internal static string? ForTurn(bool useHttp, bool isSandboxed, bool localProvider,
+        string? inherited, params string?[] apiUrls) =>
+        (!useHttp && !localProvider) || isSandboxed ? null : Merge(inherited, apiUrls);
 }

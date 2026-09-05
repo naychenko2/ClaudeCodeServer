@@ -13,6 +13,14 @@ public class LlmProviderRegistry
 {
     public const string Section = "LlmProviders";
 
+    // Заглушка токена для локального провайдера (vLLM/llama.cpp). Локальный сервер
+    // авторизацию игнорирует, но claude CLI требует непустой ANTHROPIC_AUTH_TOKEN —
+    // иначе отбивает «Not logged in» ещё до запроса. Говорящее значение: при разборе
+    // инцидента сразу видно, что это авто-заглушка под IsLocal, а не забытый ключ.
+    // Явный ApiKey у локального провайдера (если хозяин всё-таки его задал)
+    // не перетирается — на случай прокси перед локальным сервером с реальной авторизацией.
+    internal const string LocalNoAuthToken = "local-no-auth";
+
     private readonly Dictionary<string, LlmProviderConfig> _providers;
     // Папка изолированных профилей CLI (CLAUDE_CONFIG_DIR) — по одному на провайдера
     private readonly string _profilesDir;
@@ -207,6 +215,67 @@ public class LlmProviderRegistry
     public const int ClaudeWindow1M = 1_000_000;
     public const int ClaudeWindowDefault = 200_000;
 
+    // Шкала усилий рассуждений (от самого лёгкого к самому тяжёлому). Используется в EffortFor
+    // для подмены неподдерживаемого провайдером значения на ближайшее СНИЗУ: так «max» у
+    // провайдера, который знает только [low, medium, xhigh], становится «xhigh», а не «low»
+    // (подмена «сверху» была бы агрессивнее заявленного пользователем уровня).
+    private static readonly string[] EffortScale = ["low", "medium", "high", "xhigh", "max"];
+
+    // Подобрать effort, который CLI передаст в --effort, с учётом SupportedEfforts провайдера
+    // модели. Точка подмены ОДНА — оба места (ClaudeSession, OneShotClaudeRunner) обязаны
+    // звать её, дублировать логику нельзя. Пустой effort / пустой SupportedEfforts / родной
+    // Claude (модель не резолвится) → отдаём как есть (fail-open, остальные провайдеры не
+    // задеты). Фактический блокер: API vLLM принимает только low/medium/xhigh и 400 на «high».
+    public string? EffortFor(string? model, string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort)) return effort;
+        var p = ResolveByModel(model);
+        if (p is null) return effort;
+        var supported = p.SupportedEfforts
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+        // Явная карта EffortMap приоритетнее SupportedEfforts: конфиг доверенный, и
+        // «high → medium» декларативнее правила «ближайший снизу». Без проверки значения
+        // карты на шкалу/SupportedEfforts: провайдер сам отвечает за корректность подмены
+        // (иначе вернётся 400, и фолбэк сам разберётся).
+        if (p.EffortMap is { Count: > 0 }
+            && p.EffortMap.TryGetValue(effort, out var mapped)
+            && !string.IsNullOrWhiteSpace(mapped))
+            return mapped;
+        if (supported.Count == 0) return effort;
+        // Точное совпадение (с учётом регистра) — не трогаем
+        foreach (var s in supported)
+            if (string.Equals(s, effort, StringComparison.OrdinalIgnoreCase))
+                return effort;
+
+        // Индекс запрошенного уровня в шкале; -1 — незнакомый CLI-уровень
+        // (CLI может завести новый, и значение уйдёт в API сырым — вернётся 400).
+        var requestedIdx = -1;
+        for (var i = 0; i < EffortScale.Length; i++)
+            if (string.Equals(EffortScale[i], effort, StringComparison.OrdinalIgnoreCase))
+            { requestedIdx = i; break; }
+
+        // Индексы поддерживаемых уровней в шкале. Усилия, которых в шкале нет
+        // (провайдер прислал что-то левое) — игнорируем: они не помогут подменой.
+        var supportedIdxs = supported
+            .Select(s => Array.FindIndex(EffortScale,
+                x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase)))
+            .Where(i => i >= 0)
+            .ToList();
+
+        // Незнакомый CLI-уровень: ближайший снизу — самый лёгкий из поддерживаемых,
+        // чтобы не превысить то, на что провайдер рассчитан.
+        if (requestedIdx < 0)
+            return supportedIdxs.Count > 0 ? EffortScale[supportedIdxs.Min()] : supported[0];
+
+        // Ближайший снизу: максимальный из supportedIdxs, не превышающий requestedIdx.
+        // Если все поддерживаемые «тяжелее» запроса — тоже берём самый лёгкий
+        // (а не возвращаем effort как есть: иначе он снова уедет в 400).
+        var pick = supportedIdxs.Where(i => i <= requestedIdx).DefaultIfEmpty(-1).Max();
+        if (pick < 0) return EffortScale[supportedIdxs.Min()];
+        return EffortScale[pick];
+    }
+
     public static int ClaudeContextWindow(string? cliModel) =>
         !string.IsNullOrWhiteSpace(cliModel)
         && cliModel.Contains("[1m]", StringComparison.OrdinalIgnoreCase)
@@ -259,6 +328,7 @@ public class LlmProviderRegistry
         "CLAUDE_CODE_SUBAGENT_MODEL",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
+        "MAX_THINKING_TOKENS", // лимит токенов на блок thinking (см. BuildCliEnv)
     ];
 
     // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true
@@ -281,6 +351,11 @@ public class LlmProviderRegistry
         var main = string.IsNullOrWhiteSpace(model) ? p.Models.FirstOrDefault()?.Id ?? "" : model!;
         var medium = string.IsNullOrWhiteSpace(p.MediumModel) ? main : p.MediumModel;
         var small = string.IsNullOrWhiteSpace(p.SmallModel) ? main : p.SmallModel;
+        // Локальный провайдер без ApiKey: подставляем заглушку (см. LocalNoAuthToken).
+        // CLI на пустой строке отбивает «Not logged in» — это и был блокер этапа 1.
+        var authToken = string.IsNullOrWhiteSpace(p.ApiKey) && p.IsLocal
+            ? LocalNoAuthToken
+            : p.ApiKey;
         var env = new Dictionary<string, string>
         {
             // Изолированный профиль CLI: при живом OAuth-логине по подписке CLI предпочитает
@@ -289,8 +364,8 @@ public class LlmProviderRegistry
             // транскрипты провайдера для --resume — консистентно, провайдер у сессии фиксирован)
             ["CLAUDE_CONFIG_DIR"] = ProfileDir(p.Key),
             ["ANTHROPIC_BASE_URL"] = p.AnthropicBaseUrl,
-            ["ANTHROPIC_AUTH_TOKEN"] = p.ApiKey,
-            ["ANTHROPIC_API_KEY"] = p.ApiKey,
+            ["ANTHROPIC_AUTH_TOKEN"] = authToken,
+            ["ANTHROPIC_API_KEY"] = authToken,
             ["ANTHROPIC_MODEL"] = main,
             ["ANTHROPIC_DEFAULT_OPUS_MODEL"] = main,
             // sonnet-слот — средняя модель провайдера: без неё алиас sonnet (тир-пин
@@ -312,6 +387,12 @@ public class LlmProviderRegistry
         var contextWindow = p.FindModel(main)?.ContextWindow ?? 0;
         if (contextWindow > 0)
             env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = contextWindow.ToString(CultureInfo.InvariantCulture);
+
+        // Лимит токенов на блок thinking. Только локальным/медленным провайдерам сейчас
+        // задаём явно (qwen3.8-27b на llama.cpp/vLLM без потолка уходит в минутные размышления);
+        // остальные провайдеры (glm/kimi/minimax) оставляем дефолт CLI — null/0.
+        if (p.MaxThinkingTokens is int mtt && mtt > 0)
+            env["MAX_THINKING_TOKENS"] = mtt.ToString(CultureInfo.InvariantCulture);
 
         foreach (var (k, v) in p.ExtraEnv)
             env[k] = v;

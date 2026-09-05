@@ -273,6 +273,15 @@ builder.Services.AddQuietHttpClient(
         Category: "ClaudeHomeServer.Llm.LlamaServer",
         Subject: "локальной моделью llama-server",
         Consequence: "Фоновые действия уйдут облачной модели."));
+// Pre-flight проба локального эндпоинта (LocalEndpointProbe): GET /v1/models с парсингом JSON
+// по статусу модели. Шум гасится — проба стоит на горячем пути каждого хода на локальной
+// модели, без тишины лог заспамит Error-ами «connection refused» за минуту.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Llm.LocalEndpointProbe.HttpClientName,
+    new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Llm.LocalEndpointProbe",
+        Subject: "локальным движком модели (vLLM/llama.cpp)",
+        Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
 // Прямой HTTP-адаптер бесплатных моделей OpenRouter для фоновых one-shot задач
 // (второй транспорт рядом с провайдером через claude CLI; модели — курируемый список
@@ -353,6 +362,10 @@ builder.Services.AddSingleton(sp => ClaudeHomeServer.Services.Llm.TurnRunLog.Cre
 // эндпоинта вендора — при первом смена модели не лечит ничего
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IEgressProbe>(sp =>
     new ClaudeHomeServer.Services.Llm.EgressProbe(sp.GetRequiredService<IConfiguration>()));
+// Pre-flight проба локального эндпоинта: при остановленном llama.cpp/vLLM ход завершится сразу
+// понятной ошибкой, без шагов цепочки (см. LocalEndpointProbe, FallbackLlmSessionAdapter).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILocalEndpointProbe>(sp =>
+    new ClaudeHomeServer.Services.Llm.LocalEndpointProbe(sp.GetRequiredService<IHttpClientFactory>()));
 // Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();

@@ -84,6 +84,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // «эндпоинт вендора недоступен» (лечится сменой пары) от «канал наружу лёг» (сменой пары не
     // лечится — соседняя модель пойдёт тем же путём). null (тесты/без DI) — прежнее поведение.
     private readonly IEgressProbe? _egress;
+    // Pre-flight проба локального эндпоинта (LocalEndpointProbe). Отличает «локальный
+    // llama.cpp/vLLM выключен» от «облачный провайдер упал»: локальный Down → сразу
+    // понятная красная карточка (TurnFailureText.LocalModelDown), без шагов цепочки —
+    // сосед-облако всё равно не починит мёртвый эндпоинт. null (тесты/без DI) — проба
+    // выключена, прежнее поведение (Unreachable → цепочка).
+    private readonly ILocalEndpointProbe? _localProbe;
     // Шина событий хода (ADR-013, этап 1): публикация turn/completed с TurnRunPassport
     // отсюда, запись в TurnRunLog — у подписчика SessionManager.HandleTurnCompleted.
     // null (тесты) — паспорт просто не публикуется, поведение прежнее.
@@ -130,7 +136,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Func<string>? contextSource = null,
         IEgressProbe? egress = null,
         Turn.ITurnEventBus? events = null,
-        TimeSpan? egressRetryDelay = null)
+        TimeSpan? egressRetryDelay = null,
+        ILocalEndpointProbe? localProbe = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -152,6 +159,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _orchestrationDone = orchestrationDone;
         _egress = egress;
         _events = events;
+        _localProbe = localProbe;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
@@ -482,6 +490,35 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
         try
         {
+            // (а1) Pre-flight проба локального эндпоинта: если стартовый провайдер локальный
+            // (IsLocal) и эндпоинт не отвечает или модель unloaded — НЕ тратим попытку.
+            // Шаг цепочки к облачному соседу всё равно не починит мёртвый llama.cpp/vLLM,
+            // только сожжёт лимит чужого провайдера и оставит пользователя без объяснения.
+            // Сразу финал с TurnFailureText.LocalModelDown, без подмены, без кулдауна (проба
+            // сама сказала состояние — нечего помечать). Down на облачном провайдере здесь
+            // невозможен: LocalEndpointProbe.CheckAsync возвращает NotApplicable для не-локальных,
+            // и мы проходим мимо.
+            if (_localProbe is not null && _providers is not null)
+            {
+                var probeProvider = _providers.GetByKey(currentKey);
+                if (probeProvider is { IsLocal: true })
+                {
+                    var probeOutcome = await _localProbe.CheckAsync(probeProvider, _cts.Token);
+                    if (probeOutcome == LocalProbeOutcome.Down)
+                    {
+                        LogWarn($"Pre-flight проба локального эндпоинта {probeProvider.AnthropicBaseUrl} показала Down — "
+                            + $"ход на «{currentModel}» / «{currentKey}» не стартует, шаги цепочки не идём.");
+                        turnOutcome = "local_down";
+                        await FailLocalDownAsync(turn, new AttemptEnd(
+                            Kind: AttemptEndKind.FatalError,
+                            Result: null,
+                            ErrorText: $"Локальный эндпоинт {probeProvider.AnthropicBaseUrl} не отвечает или модель не загружена",
+                            RateLimitResetsAt: null));
+                        return;
+                    }
+                }
+            }
+
             // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
             // недоступным (возвращал Unreachable/ProviderError в прошлых ходах либо исчерпал
             // квоту — UsageLimit), не тратим попытку на мёртвый/исчерпанный эндпоинт — стартуем
@@ -1428,6 +1465,37 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             await _downstream(m);
         await _downstream(result);
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
+            await _downstream(m);
+    }
+
+    /// <summary>
+    /// Финал «локальный эндпоинт не отвечает»: pre-flight проба LocalEndpointProbe сняла
+    /// состояние ДО первой попытки, поэтому перебирать цепочку не идём — сосед-облако всё
+    /// равно не починит мёртвый llama.cpp/vLLM. Без кулдауна провайдера: проба сама сказала
+    /// состояние эндпоинта, помечать нечего. Человек читает «локальная модель не запущена» —
+    /// это указывает на конкретное действие (поднять движок), а не на «сервис не отвечает»,
+    /// что толкало бы менять модель.
+    /// </summary>
+    private async Task FailLocalDownAsync(FallbackTurn turn, AttemptEnd end)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        var raw = end.ErrorText ?? HeldErrorDetails(held);
+        await _downstream(new ErrorMessage(TurnFailureText.LocalModelDown, ExpectResultFollows: true, Details: raw));
+
+        var orig = held.OfType<ResultMessage>().FirstOrDefault();
+        await _downstream(orig is { Subtype: "error" }
+            ? orig
+            : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
+                orig?.Usage, orig?.TotalCostUsd,
+                ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);
     }
 

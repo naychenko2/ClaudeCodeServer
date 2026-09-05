@@ -167,6 +167,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         model = ResolveWindowAlias(model);
 
         var withFlag = !_persistSessions && !_flagUnsupported;
+        // Подмена effort под SupportedEfforts провайдера — ДО BuildArgs, чтобы статический
+        // метод оставался чистой функцией от аргументов. Точка подмены одна — LlmProviderRegistry.
+        effort = llmProviders.EffortFor(model, effort);
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),
             safeMode: !launcher.IsSandboxed, persistSessions: !withFlag, model, effort);
 

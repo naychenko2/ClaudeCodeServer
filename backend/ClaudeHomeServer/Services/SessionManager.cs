@@ -10,12 +10,13 @@ using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
-public class SessionManager : IDisposable
+public class SessionManager : IDisposable, ITeamNotifier
 {
     private class SessionEntry
     {
@@ -530,6 +531,11 @@ public class SessionManager : IDisposable
     private readonly CodeGraph.CodeGraphService? _codeGraphs;
     // Watcher'ы файлов: снятие watcher'а отдельного дерева чата при его удалении; null — в тестах
     private readonly FileWatcherService? _fileWatchers;
+    // Шов «ядро → штаб» (этап 4, шаг 2б плана выноса штаба): четыре крючка уведомления
+    // и запрос IsSessionBusy, реализованные этим же классом как обёртка над прежними
+    // приватными методами (см. явные реализации ITeamNotifier ниже). В шаге 2г реализация
+    // переедет в вертикаль штаба целиком, а сюда будет приходить через DI.
+    private readonly ITeamNotifier _teamNotifier;
     // Личный реестр MCP-серверов владельца + значения их секретов (null — в тестах:
     // ход идёт только со встроенными серверами и наследством .mcp.json)
     private readonly Mcp.McpRegistry? _mcpRegistry;
@@ -704,6 +710,12 @@ public class SessionManager : IDisposable
         // Изменение персоны (профиль/возможности/привязки) — сбрасываем адаптеры её живых
         // сессий, чтобы Tool-рубильники и MCP-серверы перемонтировались со следующего хода
         _personas.OnPersonaChanged += p => InvalidatePersonaSessions(p.Id);
+
+        // Шов «ядро → штаб» смотрит на this через ITeamNotifier. Назначаем ПЕРВЫМ
+        // шагом конструктора, до LoadSessions: TrySweepStuckActive (а его зовёт SaveSessions)
+        // читает TeamPlanningInFlight через этот шов, а SaveSessions может сработать
+        // из конструктора через Llm.ChatTopicMigration.Apply.
+        _teamNotifier = this;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -1296,7 +1308,7 @@ public class SessionManager : IDisposable
         // grace, и ложный Finished мигнул бы «завершено» посреди цикла. Поэтому гейт — по включённому
         // циклу, а не по маркеру итерации: как только SetWorkLoopAsync обнулил WorkLoop (форма в),
         // сессия становится обычным кандидатом, и sweep её закрывает.
-        if (entry.TeamPlanningInFlight) return;
+        if (_teamNotifier.IsSessionBusy(entry.Info.Id)) return;
         if (entry.Info.WorkLoop is not null) return;
 
         // P28: в поддереве этой сессии есть живой исполнитель (прямой потомок или глубже) — sweep
@@ -2416,7 +2428,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // только тут применяется задним числом, когда план-фаза уже шла на другом провайдере.
         if (entry.Info.TeamImplement is { SavedMode: not null }
             && !_llmProviders.CapabilitiesFor(newModel).SupportsPlanMode)
-            RestoreUserMode(sessionId, entry);
+            _teamNotifier.RestoreUserMode(sessionId);
         SaveSessions();
 
         // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI».
@@ -3803,12 +3815,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             // Режим «Командная реализация» (Э5): вводная человека начинает новую итерацию —
             // бюджет с нуля. Делаем это на приёме сообщения, ДО очереди: иначе вводная,
             // постоявшая в очереди, доехала бы до координатора уже с исчерпанным потолком.
-            ResetTeamIterationOnUserInput(sessionId, entry);
+            _teamNotifier.OnHumanInput(sessionId, auto, systemDirective);
             // Э4/M3: ответ на карточку остановки обычным сообщением — равноправная замена
             // её кнопок (спека: «написал, что делать, координатор учёл и пошёл дальше с того
             // же места»). Стадию возвращаем ДО очереди, по тем же правилам, что решение по
             // карточке, — иначе текст человека упирался бы в гейты стадии «ждёт решения».
-            await ResumeTeamFromDecisionOnUserInput(sessionId, entry);
+            await _teamNotifier.OnHumanInputAsync(sessionId, auto, systemDirective);
 
             // Занятый чат (ход в полёте) ИЛИ активный цикл «до готово»: сообщение встаёт в
             // видимую очередь (pending_messages) и ждёт конца хода — разбор по result
@@ -8235,6 +8247,38 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 staffNote: TeamStaffNotes.InterviewReturn);
     }
 
+    // === Шов «ядро → штаб» (этап 4, шаг 2б плана выноса штаба) ===
+    // Явные реализации ITeamNotifier: наружу недоступны, наружу только через _teamNotifier.
+    // Тела повторяют прежние приватные методы один в один — поведение не меняется. В шаге 2г
+    // реализация переедет в вертикаль штаба целиком, эти методы уйдут вместе с телом.
+
+    void ITeamNotifier.OnHumanInput(string sessionId, bool auto, bool systemDirective)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        ResetTeamIterationOnUserInput(sessionId, entry);
+    }
+
+    async Task ITeamNotifier.OnHumanInputAsync(string sessionId, bool auto, bool systemDirective)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        await ResumeTeamFromDecisionOnUserInput(sessionId, entry);
+    }
+
+    Task ITeamNotifier.OnAskQuestionStabAsync(string sessionId)
+        => OnStabAskQuestionAsync(sessionId);
+
+    void ITeamNotifier.RestoreUserMode(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        RestoreUserMode(sessionId, entry);
+    }
+
+    bool ITeamNotifier.IsSessionBusy(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        return entry.TeamPlanningInFlight;
+    }
+
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не
     // больше двух на вводную — счёт ведёт бэкенд, модель своих раундов не помнит).
     // Вне интервью вопрос живёт внутри хода и практику НЕ останавливает (решение по запросу
@@ -9263,7 +9307,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                     {
                         // Ход задал вопросы — гард молчаливого тупика по его концу молчит (M9)
                         lock (entry.TeamTurnLock) entry.TeamTurnAsked = true;
-                        await OnStabAskQuestionAsync(sessionId);
+                        await _teamNotifier.OnAskQuestionStabAsync(sessionId);
                     }
                     break;
                 case PlanReviewMessage m:

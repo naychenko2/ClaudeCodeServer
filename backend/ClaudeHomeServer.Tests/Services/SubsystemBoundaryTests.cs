@@ -2017,4 +2017,58 @@ public class SubsystemBoundaryTests
             $"Core.dll должен ссылаться только на BCL/ASP.NET. " +
             $"Проектные ссылки (нарушение): {string.Join("; ", violations.Take(10))}");
     }
+
+    /// <summary>
+    /// Разрешённые неймспейсы спинки. Список закрытый: Core — общая инфраструктура
+    /// (контракт подсистем, файловый стор, http-обвязка, secret-стор, guard'ы) плюс
+    /// два перенесённых примитива в <c>Models</c>. Вертикалям тут места нет.
+    /// </summary>
+    private static readonly string[] CoreAllowedNamespaces =
+    [
+        "ClaudeHomeServer.Models",
+        "ClaudeHomeServer.Services",
+        "ClaudeHomeServer.Services.Composition",
+        "ClaudeHomeServer.Services.Http",
+        "ClaudeHomeServer.Services.Mcp",
+    ];
+
+    /// <summary>
+    /// Второй сторож состава Core, и он про ДРУГУЮ дверь, чем
+    /// <see cref="CoreDll_НеСодержитСсылокНаПроектныеАссембли"/>.
+    ///
+    /// Тот проверяет, что Core ни на кого не ссылается, — но покраснеть он может
+    /// только если кто-то допишет <c>ProjectReference</c> в <c>Core.csproj</c>:
+    /// без ссылки типы Main компилятору попросту не видны. Открытой оставалась
+    /// обратная дверь: тип ВЕРТИКАЛИ, положенный в Core «чтобы собиралось».
+    /// Внешних ссылок у него не будет (их неоткуда взять), первый сторож смолчит,
+    /// а <c>IsCoreAssembly</c> проверяется РАНЬШЕ exact/prefix — и тип станет
+    /// невидим обоим сторожам границ разом.
+    ///
+    /// Поэтому здесь список неймспейсов закрытый: новый неймспейс в Core — это
+    /// осознанное решение и правка этого списка, а не побочный эффект переноса файла.
+    /// </summary>
+    [Fact]
+    public void CoreDll_СодержитТолькоРазрешённыеНеймспейсы()
+    {
+        var asm = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => a.GetName().Name == CoreAssemblyName);
+        Assert.NotNull(asm);
+
+        var types = asm!.GetTypes()
+            .Where(t => !t.IsNested && t.Namespace is not null)
+            .ToArray();
+        Assert.NotEmpty(types); // защита от вакуумного прохода: пустой набор зеленит что угодно
+
+        var strays = types
+            .Where(t => !CoreAllowedNamespaces.Contains(t.Namespace!, StringComparer.Ordinal))
+            .Select(t => $"{t.FullName} (namespace {t.Namespace})")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(strays.Length == 0,
+            "В Core.dll появились типы вне разрешённых неймспейсов — такой тип невидим "
+            + "обоим сторожам границ (IsCoreAssembly срабатывает раньше allow-list). "
+            + "Либо ему не место в спинке, либо неймспейс добавляется в CoreAllowedNamespaces "
+            + "осознанно: " + string.Join("; ", strays.Take(10)));
+    }
 }

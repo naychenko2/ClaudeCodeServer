@@ -186,4 +186,17 @@ internal static class BoundaryIlScanner
             methods = methods.Concat(AllMethodsWithNested(n)).ToArray();
         return methods;
     }
+
+    /// <summary>Единая точка сбора типов, упомянутых в IL тел всех методов типа
+    /// (включая nested-типы). Используется ОДНОВРЕМЕННО из Theory-сторожей
+    /// (<see cref="SubsystemBoundaryTests"/>, <see cref="RootSubsystemBoundaryTests"/>)
+    /// и из регрессии (<see cref="IlBoundaryRegressionTests"/>): если сбор здесь
+    /// сломать (например, вернуть к <c>GetMethods(DeclaredOnly)</c> без nested),
+    /// регрессия покраснеет — гейт не декоративен.</summary>
+    public static IEnumerable<Type> CollectAllReferencedTypes(Type t)
+    {
+        foreach (var method in AllMethodsWithNested(t))
+            foreach (var referenced in TypesFromBody(method))
+                yield return referenced;
+    }
 }

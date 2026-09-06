@@ -316,11 +316,8 @@ public class SubsystemBoundaryTests
         //    раньше как «отдельный allow-list под static-вызов не нужен» — с IL-сканом
         //    шов стал видимым и нужен явный допуск. Префикс `Services.Knowledge`
         //    НЕ открываем: точечный допуск ровно на нужный тип.
-        // 3) Execution — LocalProcessRunner (инверсия стека, задача `8beee75e`):
-        //    `TypeScriptGraphProvider.cs:155` зовёт `LocalProcessRunner.ResolveExecutable("node")`
-        //    static-метод из тела метода. Это задача слоя Execution, и шов
-        //    требует выноса `ResolveExecutable` в спину (по образцу `TranscriptRoots`
-        //    из волны 4C). TODO: шаг 5 отдельной задачей.
+        // Примитив `ResolveExecutable("node")` был вынесен в `Services.ExecutableResolver`
+        // (шаг 5, задача `57b5e9bc`) — `CodeGraph` зовёт его через корень Services, шов снят.
         new object[]
         {
             new VerticalBoundary(
@@ -336,7 +333,13 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
-                    "ClaudeHomeServer.Services.Execution.LocalProcessRunner",
+                    // ExecutableResolver (шаг 5) — корневой примитив поиска по PATH+PATHEXT.
+                    // `TypeScriptGraphProvider.cs:154` зовёт `ResolveExecutable("node")`
+                    // из тела метода. До выноса шов шёл на `LocalProcessRunner` —
+                    // теперь на корневой `Services.ExecutableResolver`. По образцу
+                    // `TranscriptRoots` (волна 4C): корневой спин не входит в
+                    // `SharedAllowedPrefixes`, нужен точечный допуск.
+                    "ClaudeHomeServer.Services.ExecutableResolver",
                 }),
         },
         // Deploy — вертикаль выкатки прода (ADR-010 + трей-раннер из веб-морды).
@@ -352,16 +355,22 @@ public class SubsystemBoundaryTests
         //    (проба репозитория: `rev-parse HEAD` и `status --porcelain`). Это СОЗНАТЕЛЬНАЯ
         //    связь «вертикаль → вертикаль» (TODO на шов: завести `IGitGuard` в `Services.Git`
         //    и перевести `DeployHost` на него, тогда `Services.Git` уйдёт из allow-list);
-        // 4) `ClaudeHomeServer.Services.Backup` — статический класс `Backup.InstanceLock` с
-        //    методом `TryAcquireDeploy()`, через который `DeployHost.TryLockAgent` берёт
-        //    мьютекс `Global\ccs-deploy`. Это инфраструктурный примитив общего назначения
-        //    (мьютекс деплоя), а не зависимость от логики Backup, и СОЗНАТЕЛЬНО выходит
-        //    за рамки обычной рефлексии: доступ к статическому члену через точку не
-        //    попадает в поля/конструкторы/return-типы. После волны 1 IL-скан его видит,
-        //    поэтому допуск обязателен — сторож БОЛЬШЕ НЕ ПРОПУСТИТ этот шов молча.
-        //    TODO на шов: выделить мьютекс в отдельный примитив
-        //    (например, `DeployAgentLock` в `Services.Composition`) и убрать из allow-list
-        //    ссылку на `Services.Backup`.
+        //
+        // === Шов `Deploy → Backup.InstanceLock.TryAcquireDeploy` (шаг 5, задача `57b5e9bc`).
+        // `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через статику
+        // `Backup.InstanceLock.TryAcquireDeploy()`. Это инфраструктурный примитив
+        // (мьютекс с трей-раннером), а не логика Backup. Префиксный допуск `Backup`
+        // сужен до точечного `Backup.InstanceLock`: внутри Deploy-вертикали нет
+        // других Backup-типов, расширять префикс незачем.
+        // ВЫНОС НЕ СДЕЛАН, причины:
+        //   * `InstanceLock` живёт в Main (ClaudeHomeServer.dll), Core не имеет
+        //     ссылки на Main → обёртка в Core невозможна (направление `Main → Core`).
+        //   * Если делать примитив `DeployAgentLock.TryAcquire()` в root Services,
+        //     он тянет «одно и то же имя `Global\ccs-deploy`, один и тот же хелпер
+        //     `TryAcquire(name)` с обработкой AbandonedMutexException/
+        //     UnauthorizedAccessException» к трём разным классам — риск
+        //     рассинхронизации имени и поведения.
+        // Полумера (сужение префикса до точечного типа) лучше протащенной зависимости.
         new object[]
         {
             new VerticalBoundary(
@@ -373,13 +382,16 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Deploy",
                         "ClaudeHomeServer.Services.Execution",
                         "ClaudeHomeServer.Services.Git",
-                        "ClaudeHomeServer.Services.Backup",
                     })
                     .ToArray(),
                 new[]
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.NotificationService",
+                    // Точечный допуск `Deploy → Backup.InstanceLock` (шаг 5):
+                    // сузили прежний префикс `Backup`. Другого использования Backup
+                    // внутри Deploy-вертикали нет (`grep -rn 'Backup\.' Deploy/`).
+                    "ClaudeHomeServer.Services.Backup.InstanceLock",
                 }),
         },
         // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
@@ -411,11 +423,15 @@ public class SubsystemBoundaryTests
         // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
         //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
         // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
-        //    флаг `Icon.Glyph` в доменной модели проекта). `BackupCore.Snapshot` /
-        //    `BackupContext.FromConfiguration` в `ProjectIconMigration` — статические
-        //    вызовы из тел методов: прежде были невидимы рефлексии, после волны 1 их
-        //    видит IL-скан — отсюда допуски ниже. Выделение примитивов бэкапа в шов —
-        //    отдельная задача (инверсия стека, шаг 5).
+        //    флаг `Icon.Glyph` в доменной модели проекта).
+        //
+        // === Шов к Backup.{BackupCore, BackupContext, BackupResult} (IL-видимость).
+        // `ProjectIconMigration.cs:73` зовёт `BackupCore.Snapshot(BackupContext.FromConfiguration(config), log)`
+        // и получает `BackupResult`. Попытка вынести примитив «снимок data перед
+        // необратимой операцией» в Core блокируется направлением ссылок (`Main → Core`,
+        // Core не видит Main/Backup), а обёртка в root Services нарушает root-сторож.
+        // Допуск ОСТАВЛЕН с явной фиксацией причины — полумера лучше протащенной
+        // зависимости (отчёт шага 5, задача `57b5e9bc`).
         new object[]
         {
             new VerticalBoundary(
@@ -431,19 +447,7 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
-                    // `BackupResult` (тип возврата `BackupCore.Snapshot` в
-                    // `ProjectIconMigration.RunAsync`). IL-скан видит статический
-                    // вызов через declaring-тип `BackupCore`. Точечный FullName,
-                    // чтобы не открывать вертикаль Backup целиком: миграция значков
-                    // пользуется инфраструктурным примитивом снятия снимка, а не
-                    // логикой Backup.
                     "ClaudeHomeServer.Services.Backup.BackupResult",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `ProjectIconMigration.cs:73` ссылается на `BackupContext`
-                    // static-метод и `BackupCore.Snapshot(...)` (последний — через
-                    // declaring-тип `BackupCore`). Шов уже зафиксирован через
-                    // `BackupResult` (return-тип), теперь видим сами `BackupCore`
-                    // и `BackupContext`. TODO: вынести в спину (шаг 5).
                     "ClaudeHomeServer.Services.Backup.BackupContext",
                     "ClaudeHomeServer.Services.Backup.BackupCore",
                 }),
@@ -579,11 +583,11 @@ public class SubsystemBoundaryTests
                     // `DossierRecallService` материализует `SessionChangedPaths`
                     // (поле async-state-машины). Точечный допуск по образцу Git.
                     "ClaudeHomeServer.Services.SessionChangedPaths",
-                    // `InstanceSecretsProvider` ссылается на `BackupPaths` static-метод —
-                    // путь к секретам инстанса. Инфраструктурный примитив (как
-                    // `Backup.InstanceLock` для Deploy), а не логика Backup. TODO:
-                    // вынести в спину по образцу `TranscriptRoots` (шаг 5 отдельной задачей).
-                    "ClaudeHomeServer.Services.Backup.BackupPaths",
+                    // `InstanceSecretsProvider` ссылается на реестр имён секретов
+                    // `Services.InstanceSecretFiles.Names` (шаг 5). Примитив вынесен
+                    // из `Backup.BackupPaths` в спину — по образцу `TranscriptRoots`.
+                    // Допуск на `Backup.BackupPaths` снят (см. `p5-Dossiers`).
+                    "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
         // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Сторож проверяет
@@ -1228,6 +1232,11 @@ public class SubsystemBoundaryTests
                     // Шов Execution → TranscriptRoots: статический вызов из тела,
                     // IL-скан видит declaring-тип.
                     "ClaudeHomeServer.Services.TranscriptRoots",
+                    // Шов Execution → ExecutableResolver (шаг 5): `LocalProcessRunner.BuildStartInfo`
+                    // зовёт `ExecutableResolver.ResolveExecutable(spec.FileName)` из тела метода;
+                    // сам `LocalProcessRunner.ResolveExecutable` теперь — тонкая обёртка
+                    // над корневым примитивом. Допуск по образцу TranscriptRoots выше.
+                    "ClaudeHomeServer.Services.ExecutableResolver",
                 }),
         },
         // Auth — узкая вертикаль авторизации (AdminByStoreRequirement +
@@ -1262,6 +1271,11 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
+                    // Шов Backup → InstanceSecretFiles (шаг 5): `BackupPaths.SecretFileNames`
+                    // — тонкий алиас на `InstanceSecretFiles.Names`. IL-скан видит
+                    // declaring-тип как ссылку на спинку. Допуск по образцу
+                    // Execution → TranscriptRoots / ExecutableResolver.
+                    "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
         // Desktop — ручной агент песочницы (ADR-008). Префикс-шов Hubs (DeviceHub),
@@ -1800,14 +1814,14 @@ public class SubsystemBoundaryTests
             // методов. Обход nested-типов (async-state-машины `<...>d__NN`,
             // `<>c__DisplayClass`) обязателен — без него сторож видит 4 из 7
             // известных швов (docs/research/il-boundary-scan-2026-09.md, раздел про слепые пятна).
-            foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            // Сбор идёт через общий BoundaryIlScanner.CollectAllReferencedTypes — ту же
+            // точку, что и регрессия IlBoundaryRegressionTests; сломай обход там —
+            // краснеют оба гейта (закрывает дыру «сторож зовёт другой код»).
+            foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(type))
             {
-                foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
+                if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes, boundary.AllowedExactNamespaces))
                 {
-                    if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes, boundary.AllowedExactNamespaces))
-                    {
-                        seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
-                    }
+                    seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
                 }
             }
 
@@ -1845,101 +1859,16 @@ public class SubsystemBoundaryTests
         }
     }
 
-    private static IEnumerable<Type> CollectReferencedTypes(Type type)
-    {
-        // Поля: declared-only, чтобы не утонуть в чужом базовом классе; private тоже —
-        // границу нарушает любой член, а не только публичный контракт.
-        var memberBinding = BindingFlags.Public | BindingFlags.NonPublic
-                          | BindingFlags.Instance | BindingFlags.Static
-                          | BindingFlags.DeclaredOnly;
+    /// <summary>
+    /// Единственный путь сбора типов: <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>.
+    /// Прежде у сторожа было два независимых пути — IL-скан и собственная рефлексия полей,
+    /// и подмена вызова сканера в коде сторожа оставляла все тесты зелёными. Теперь оба
+    /// идут через ту же функцию: подмена реализации сканера роняет весь гейт единым
+    /// движением, в том числе регрессию <see cref="IlBoundaryRegressionTests"/>.
+    /// </summary>
+    private static IEnumerable<Type> CollectReferencedTypes(Type type) =>
+        BoundaryIlScanner.CollectAllReferencedTypes(type);
 
-        foreach (var field in type.GetFields(memberBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(field.FieldType))
-                yield return t;
-        }
-
-        foreach (var ctor in type.GetConstructors(memberBinding))
-        {
-            foreach (var parameter in ctor.GetParameters())
-            {
-                foreach (var t in EnumerateTypeAndArgs(parameter.ParameterType))
-                    yield return t;
-            }
-        }
-
-        // Публичные методы и свойства — все, включая унаследованные. Унаследованный
-        // метод с типом из запрещённой вертикали — это часть публичного контракта
-        // проверяемого типа (через него ссылка «торчит наружу»), и сторож должен
-        // её ловить. Обход свойств отдельным проходом: get/set не попадают в GetMethods
-        // под теми именами, по которым мы ищем нарушение.
-        var publicBinding = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
-
-        foreach (var property in type.GetProperties(publicBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(property.PropertyType))
-                yield return t;
-        }
-
-        foreach (var method in type.GetMethods(publicBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(method.ReturnType))
-                yield return t;
-
-            foreach (var parameter in method.GetParameters())
-            {
-                foreach (var t in EnumerateTypeAndArgs(parameter.ParameterType))
-                    yield return t;
-            }
-        }
-    }
-
-    private static IEnumerable<Type> EnumerateTypeAndArgs(Type? type)
-    {
-        if (type is null) yield break;
-
-        // Byref (ref/out/in SomeType) — ParameterType вернёт SomeType&, у которого
-        // Namespace = null и IsAllowed безусловно пропустит (не Services.*). Снимаем обёртку сразу.
-        if (type.IsByRef)
-        {
-            foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
-                yield return t;
-            yield break;
-        }
-
-        // Nullable<T> → T (System.Nullable<...> не интересует, зато интересует аргумент).
-        var underlying = Nullable.GetUnderlyingType(type);
-        if (underlying is not null)
-        {
-            yield return underlying;
-            yield break;
-        }
-
-        // Сам тип (например, List<DesktopFoo> сам по себе не из разрешённого неймспейса,
-        // но мы его всё равно отдаём — IsAllowed отфильтрует).
-        yield return type;
-
-        if (type.IsGenericType)
-        {
-            // Рекурсия: вложенные generic-аргументы тоже надо раскрыть, иначе тип вида
-            // Nested<Wrap<DesktopFoo>> пройдёт мимо стора (Namespace внешнего generic
-            // может быть «нейтральным»).
-            foreach (var arg in type.GetGenericArguments())
-            {
-                yield return arg;
-                foreach (var t in EnumerateTypeAndArgs(arg))
-                    yield return t;
-            }
-        }
-
-        // Массивы, указатели — раскрываем рекурсивно (на глубину 1 достаточно:
-        // массив массивов экзотика, на которую обопрёмся, если встретим).
-        if (type.HasElementType)
-        {
-            foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
-                yield return t;
-        }
-    }
 
     // Сначала проверяем точное совпадение FullName (одноуровневые синглтоны из
     // корня Services: PersonaManager, SessionManager и т.п., плюс nested-типы
@@ -2003,17 +1932,14 @@ public class SubsystemBoundaryTests
 
         foreach (var type in asm.GetTypes())
         {
-            foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(type))
             {
-                foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
+                var refAsm = referenced.Assembly.GetName().Name;
+                if (refAsm is not null && refAsm.StartsWith("ClaudeHomeServer", StringComparison.Ordinal)
+                    && refAsm != CoreAssemblyName)
                 {
-                    var refAsm = referenced.Assembly.GetName().Name;
-                    if (refAsm is not null && refAsm.StartsWith("ClaudeHomeServer", StringComparison.Ordinal)
-                        && refAsm != CoreAssemblyName)
-                    {
-                        violations.Add(
-                            $"{type.FullName} → {referenced.FullName} (asm: {refAsm})");
-                    }
+                    violations.Add(
+                        $"{type.FullName} → {referenced.FullName} (asm: {refAsm})");
                 }
             }
         }

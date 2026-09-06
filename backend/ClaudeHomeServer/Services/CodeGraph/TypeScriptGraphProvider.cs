@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Services.CodeGraph.Core;
-using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -152,7 +151,7 @@ public sealed class TypeScriptGraphProvider : ICodeGraphProvider
             var psi = new ProcessStartInfo
             {
                 // node без расширения не резолвится из PATH при UseShellExecute=false на Windows
-                FileName = LocalProcessRunner.ResolveExecutable("node"),
+                FileName = ExecutableResolver.ResolveExecutable("node"),
                 // ArgumentList, а не Arguments с ручным квотированием: путь с кавычкой
                 // внутри разорвал бы командную строку.
                 ArgumentList = { script, rootPath },

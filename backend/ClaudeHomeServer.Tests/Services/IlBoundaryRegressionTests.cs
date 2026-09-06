@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using Xunit.Abstractions;
+﻿using Xunit.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -53,21 +52,20 @@ public class IlBoundaryRegressionTests
             var t = Find(asms, typeName);
             if (t is null) { missed.Add($"{label}: тип {typeName} не найден"); continue; }
 
-            // Обход nested-типов выполняет AllMethodsWithNested: 3 из 7 швов
-            // живут во вложенных async-state-машинах и замыканиях. Если сломать
-            // обход в сканере, тест станет красным.
-            var hits = BoundaryIlScanner.AllMethodsWithNested(t)
-                .SelectMany(m => BoundaryIlScanner.TypesFromBody(m).Select(r => (m, r)))
-                .Where(x => x.r.FullName == needle || (x.r.FullName?.StartsWith(needle + "+", StringComparison.Ordinal) ?? false))
-                .Select(x => $"{x.m.DeclaringType?.Name}.{x.m.Name}")
+            // Единый сбор (CollectAllReferencedTypes) — тот же вызов, что и в
+            // Theory-сторожах: если обход nested-типов в нём сломать, тест станет
+            // красным. 3 из 7 швов живут во вложенных async-state-машинах и замыканиях.
+            var referenced = BoundaryIlScanner.CollectAllReferencedTypes(t)
+                .Where(r => r.FullName == needle || (r.FullName?.StartsWith(needle + "+", StringComparison.Ordinal) ?? false))
+                .Select(r => r.Name)
                 .Distinct().ToList();
 
-            if (hits.Count == 0)
+            if (referenced.Count == 0)
             {
                 missed.Add($"{label}: IL-скан НЕ видит");
                 continue;
             }
-            _out.WriteLine($"{label}: ВИДИТ — {string.Join(", ", hits.Take(3))}");
+            _out.WriteLine($"{label}: ВИДИТ — {string.Join(", ", referenced.Take(3))}");
         }
 
         Assert.True(missed.Count == 0,

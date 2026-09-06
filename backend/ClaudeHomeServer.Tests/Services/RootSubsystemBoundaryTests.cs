@@ -393,12 +393,13 @@ public class RootSubsystemBoundaryTests
 
     /// <summary>Типы, упомянутые в телах методов (включая nested-типы): статические
     /// вызовы, <c>sp.GetRequiredService&lt;T&gt;()</c>, generic-аргументы инстанцированных
-    /// методов. См. <see cref="BoundaryIlScanner"/>.</summary>
+    /// методов. Идёт через общий <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/> —
+    /// единую точку сбора для сторожей и регрессии, чтобы сломать обход nested-типов
+    /// в одном месте и сразу покраснели ОБЕ проверки.</summary>
     private static IEnumerable<Type> IlScanReferencedTypes(Type type)
     {
-        foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
-            foreach (var t in BoundaryIlScanner.TypesFromBody(method))
-                yield return t;
+        foreach (var t in BoundaryIlScanner.CollectAllReferencedTypes(type))
+            yield return t;
     }
 
     private static bool IsSharedAllowed(Type type)
@@ -446,82 +447,14 @@ public class RootSubsystemBoundaryTests
         return RootAllowedExactTypes.Contains(type.FullName ?? string.Empty);
     }
 
-    private static IEnumerable<Type> CollectReferencedTypes(Type type)
-    {
-        var memberBinding = BindingFlags.Public | BindingFlags.NonPublic
-                          | BindingFlags.Instance | BindingFlags.Static
-                          | BindingFlags.DeclaredOnly;
+    /// <summary>
+    /// Единственный путь сбора типов: <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>.
+    /// Прежде у сторожа было два независимых пути — IL-скан и собственная рефлексия полей,
+    /// и подмена вызова сканера в коде сторожа оставляла все тесты зелёными. Теперь оба
+    /// идут через ту же функцию: подмена реализации сканера роняет весь гейт единым
+    /// движением, в том числе регрессию <see cref="IlBoundaryRegressionTests"/>.
+    /// </summary>
+    private static IEnumerable<Type> CollectReferencedTypes(Type type) =>
+        BoundaryIlScanner.CollectAllReferencedTypes(type);
 
-        foreach (var field in type.GetFields(memberBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(field.FieldType))
-                yield return t;
-        }
-
-        foreach (var ctor in type.GetConstructors(memberBinding))
-        {
-            foreach (var parameter in ctor.GetParameters())
-            {
-                foreach (var t in EnumerateTypeAndArgs(parameter.ParameterType))
-                    yield return t;
-            }
-        }
-
-        var publicBinding = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
-
-        foreach (var property in type.GetProperties(publicBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(property.PropertyType))
-                yield return t;
-        }
-
-        foreach (var method in type.GetMethods(publicBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(method.ReturnType))
-                yield return t;
-
-            foreach (var parameter in method.GetParameters())
-            {
-                foreach (var t in EnumerateTypeAndArgs(parameter.ParameterType))
-                    yield return t;
-            }
-        }
-    }
-
-    private static IEnumerable<Type> EnumerateTypeAndArgs(Type? type)
-    {
-        if (type is null) yield break;
-
-        if (type.IsByRef)
-        {
-            foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
-                yield return t;
-            yield break;
-        }
-
-        var underlying = Nullable.GetUnderlyingType(type);
-        if (underlying is not null)
-        {
-            yield return underlying;
-            yield break;
-        }
-
-        yield return type;
-
-        if (type.IsGenericType)
-        {
-            foreach (var arg in type.GetGenericArguments())
-            {
-                yield return arg;
-                foreach (var t in EnumerateTypeAndArgs(arg))
-                    yield return t;
-            }
-        }
-
-        if (type.HasElementType)
-        {
-            foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
-                yield return t;
-        }
-    }
 }

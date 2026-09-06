@@ -6190,7 +6190,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // Обработчики волны переехали в вертикаль (шаг 2г-4, волна 1): их держит
     // TeamCoordinator, а ядро отдаёт его одной ссылкой вместо четырёх публичных
-    // Func-свойств. Ставит обработчики TeamWaveService, читают три сервиса вертикали и
+    // Func-свойств. Ставит обработчики TeamWaveService, читают четыре сервиса вертикали и
     // четыре ветки ядра ниже. Экземпляр координатора один — тот, что создан в конструкторе,
     // поэтому в тестах связь работает ровно как раньше (сборка объектов не менялась).
     // Прежние комментарии обещали здесь «разрыв цикла TaskExecutionService → SessionManager»;
@@ -6527,9 +6527,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Признак «у чата sessionId есть живая делегированная задача, по которой ждём доклада
     // исполнителя». Вешает сторона задач при регистрации (TaskManager.GetById и проверка
     // полей SourceSessionId/Status/CompletionDelivered/ClaudeStartedAt/ExecutorStoppedAt).
-    // Здесь Func остаётся осознанно, в отличие от четырёх штабных: ставит его ЧУЖАЯ сторона
-    // (TaskManager), а не сама вертикаль, и цикл в DI тут настоящий — SessionManager не может
-    // знать TaskManager. null — признак не задан (тесты, либо стора задач нет): ждать нечего.
+    // Здесь Func остаётся осознанно, в отличие от четырёх штабных, и по ДВУМ причинам, ни
+    // одна из которых не про «SessionManager не знает TaskManager» (тот про SessionManager и
+    // правда не знает, циклом это не делает). Первая: ставит хук TaskExecutionService
+    // (TaskExecutionService.cs:136) — сторона ЧУЖАЯ, а не сама вертикаль, и вот у неё
+    // зависимость на SessionManager есть, то есть цикл настоящий. Вторая: TaskManager живёт
+    // в вертикали Services.Tasks, и прямая ссылка на него из спины уронила бы сторож границ.
+    // null — признак не задан (тесты, либо стора задач нет): ждать нечего.
     public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
 
     // Тонкие обёртки на Core-хелпер TeamProtocolMarkers. Реализации уехали в спину

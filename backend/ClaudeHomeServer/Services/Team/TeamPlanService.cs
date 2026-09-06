@@ -35,7 +35,8 @@ namespace ClaudeHomeServer.Services.Team;
 // На этом шаге новых швов нет: вертикаль получает всё через заведённые интерфейсы
 // ITeamSessionDirectory/ITeamHistoryStore/ITeamRunState, доступ к Session — через публичный
 // API ядра (GetById/BroadcastAsync/ResolveOwnerId) и обработчики TeamCoordinator
-// (EscalationRaiser/WaveStarter через _sessions.TeamHandlers).
+// (EscalationRaiser/WaveStarter — через собственное поле _coordinator, ходить за ними
+// в ядро незачем: координатор уже инъектирован сюда).
 internal sealed class TeamPlanService
 {
     private readonly SessionManager _sessions;
@@ -225,13 +226,13 @@ internal sealed class TeamPlanService
             Wave = session.TeamImplement?.WaveNumber ?? 0,
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
         };
-        if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, card);
+        if (_coordinator.EscalationRaiser is { } raise) await raise(session, card);
         else await _sessions.PublishTeamEscalationAsync(sessionId, card);
 
         // Раздача — тем же путём, что «Запустить» и авто-волна: план у TeamWaveService.
         // Повод UserCommand: добавочная волна разворачивается вводной человека — точки
         // контроля уже пройдены, гейт авто-волн ей не нужен.
-        if (_sessions.TeamHandlers.WaveStarter is { } starter)
+        if (_coordinator.WaveStarter is { } starter)
         {
             try { await starter(session, plan, TeamWaveTrigger.UserCommand); }
             catch (Exception ex)
@@ -353,7 +354,7 @@ internal sealed class TeamPlanService
                 // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
                 Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
             };
-            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, failed);
+            if (_coordinator.EscalationRaiser is { } raise) await raise(session, failed);
             else await _sessions.PublishTeamEscalationAsync(sessionId, failed);
         }
         finally

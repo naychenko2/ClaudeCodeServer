@@ -378,8 +378,8 @@ internal sealed class TeamDecisionService
             resolved ? plan.Approved : null));
 
         // Раздача под-задач и пакетный запуск волны (Э3) — в TeamWaveService: он знает про
-        // задачи и исполнителей, которых SessionManager по построению не знает (цикл DI
-        // разорван хуком, как OnSessionMessage у TaskExecutionService). Повод UserCommand:
+        // задачи и исполнителей, которых SessionManager по построению не знает; обработчик
+        // берём у TeamCoordinator через TeamHandlers (шаг 2г-4). Повод UserCommand:
         // «Запустить» — явное решение человека, гейт авто-волн не нужен.
         if (decision == TeamPlanDecision.Run && _sessions.TeamHandlers.WaveStarter is { } starter)
         {

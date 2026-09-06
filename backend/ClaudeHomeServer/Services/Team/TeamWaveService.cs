@@ -98,8 +98,11 @@ public class TeamWaveService
             int.TryParse(config?["TeamImplement:QuietMinutes"], out var q) && q > 0 ? q : 15);
         _stalledThreshold = TimeSpan.FromMinutes(
             int.TryParse(config?["TeamImplement:StalledMinutes"], out var st) && st > 0 ? st : 30);
-        // Хук раздачи в SessionManager: цикл зависимостей (TaskExecutionService → SessionManager)
-        // разорван так же, как у подписки TaskExecutionService на OnSessionMessage
+        // Обработчики волны живут в TeamCoordinator — он принадлежит вертикали, а ядро лишь
+        // отдаёт его ссылкой TeamHandlers (шаг 2г-4). Прежде это были Func-свойства ядра, и
+        // объяснялись они «разрывом цикла TaskExecutionService → SessionManager»; разбор, почему
+        // это был круговой маршрут внутри одной вертикали, а не цикл, —
+        // docs/research/team-di-migration-2026-09.md §3.
         _sessions.TeamHandlers.WaveStarter = (session, plan, trigger) => StartWaveAsync(session, plan, trigger);
         // Э4: карточка остановки + уведомление с push — единая точка на все триггеры
         _sessions.TeamHandlers.EscalationRaiser = RaiseEscalationAsync;

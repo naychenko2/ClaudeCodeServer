@@ -163,7 +163,9 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
 - **Паспорта ходов** — `TurnRunLog` по образцу `SubagentRunLog`: исход (`success` | `failed` |
   `egress_down` | `interrupted` | `cancelled` | `crashed`), пары «модель × провайдер», попытки,
   подмены, класс ошибки. Память + `data/logs/turn-runs-*.jsonl`, отдаёт `GET /api/turns/runs`
-  (админ). Пишет ОДИН источник — `FallbackLlmSessionAdapter` в `finally` цикла.
+  (админ). `FallbackLlmSessionAdapter` в `finally` цикла только ПУБЛИКУЕТ событие
+  `turn/completed` с паспортом ([ADR-013](docs/adr/ADR-013-turn-event-bus.md)), а пишет
+  его единственный подписчик — `SessionManager.HandleTurnCompleted`.
 - **Красная карточка ошибки — только у хода, который реально не состоялся.** Промежуточная
   ошибка попытки задерживается вместе с её result: подмена состоялась → карточки нет,
   сырой текст сворачивается в «Подробности» маркера подмены; подмены не было → ошибка уходит

@@ -70,6 +70,18 @@ internal interface ITeamSessionDirectory
     /// метод в уже заведённый контракт, потребность «сохранить каталог» закрыта один раз.
     /// </summary>
     void Persist();
+
+    /// <summary>
+    /// Обновить <c>UpdatedAt</c> чата, сбросить каталог на диск и разослать состояние
+    /// режима. Достройка шага 2г-4 (волна 3): единый путь для точек «правка + бродкаст»
+    /// (TeamWaveService 5 вызов + TeamTurnCompletionService 1 вызов) — пять блоков
+    /// штаба из отчёта разведки идут через этот метод. Тело прежнего
+    /// <c>TeamStateService.SaveTeamImplementStateAsync</c> перенесено сюда, и обёртка
+    /// <c>SessionManager.SaveTeamImplementStateAsync</c> снята — она держалась
+    /// единственным способом дать публичному <c>TeamWaveService</c> доступ к
+    /// внутреннему телу (CS0051), а с методом шва нужен только upcast.
+    /// </summary>
+    Task PersistAndBroadcastAsync(string sessionId);
 }
 
 /// <summary>
@@ -117,6 +129,36 @@ internal interface ITeamHistoryStore
     /// false — чата нет, нет транскрипта или карточка не найдена (причина уходит в лог реализации).
     /// </summary>
     Task<bool> SavePlanCardAsync(string sessionId, PlanCardWriteRequest request);
+
+    /// <summary>
+    /// Публикация карточки остановки в ленту + история + WS + стадия «ждёт решения».
+    /// Переживает рестарт сервера. Единая точка публикации для штабных триггеров (блокер,
+    /// таймаут, отклонение плана) и кнопки «Остановить». Развилка «активный аккумулятор
+    /// против диска» спрятана внутри реализации — вертикаль не видит ни <c>SessionEntry</c>,
+    /// ни <c>Accumulator</c>, ни <c>_falPersistLock</c>.
+    /// </summary>
+    Task PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation);
+
+    /// <summary>
+    /// Открытые (не resolved) карточки остановки чата — для сторожа напоминаний
+    /// (TeamWaveService.CheckAwaitingEscalationsAsync). Та же скрытая развилка
+    /// Accumulator/диск, что у <see cref="PublishTeamEscalationAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId);
+
+    /// <summary>
+    /// Пометка отправленного напоминания по карточке остановки: счётчик и момент
+    /// последнего оклика пишутся на карточку в истории — переживают рестарт сервера,
+    /// чтобы после перезапуска не начать оклик заново. false — карточка уже закрыта
+    /// либо её нет.
+    /// </summary>
+    Task<bool> MarkTeamEscalationRemindedAsync(string sessionId, string escalationId);
+
+    /// <summary>
+    /// План итерации по id карточки. Accumulator.FindTeamPlanAny для активного чата,
+    /// TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
+    /// </summary>
+    Task<TeamImplementPlan?> GetTeamPlanAsync(string sessionId, string planId);
 }
 
 /// <summary>
@@ -252,57 +294,4 @@ internal interface ITeamTurnIntake
     /// сессия».
     /// </summary>
     void InterruptTurn(string sessionId);
-}
-
-/// <summary>
-/// Шов 5 — карточки штаба в истории чата: эскалации (публикация, чтение открытых,
-/// пометка оклика) и карточки плана (сохранение, чтение по id). Общее у всех пяти
-/// методов одно — развилка «активный чат → TurnAccumulator / неактивный → диск под
-/// локом», которая живёт в приватном состоянии ядра; наружу её не отдают, поэтому
-/// вертикаль спрашивает ядро.
-///
-/// Пятый шов заведён в шаге 2г-4 волны 2 — это отступление от правила «швов ровно
-/// четыре», которое держалось всю линию выноса штаба. Отступление осознанное:
-/// альтернатива — оставить пять публичных обёрток на ядре, а они хуже (обёртка сторожу
-/// границ не видна, реализация интерфейса видна Implements-ребром). Шестого шва быть
-/// не должно: если потребностей станет больше, это сигнал, что вертикаль просит у ядра
-/// слишком много, и лечится он переводом вертикали на DI, а не новым контрактом.
-///
-/// Реализация явная, на SessionManager (as ITeamCardStore), как у четырёх предыдущих.
-/// Разбор долга и порядок волн — docs/research/team-di-migration-2026-09.md.
-/// </summary>
-internal interface ITeamCardStore
-{
-    /// <summary>
-    /// Публикация карточки остановки в ленту + история + WS + стадия «ждёт решения».
-    /// Переживает рестарт сервера.
-    /// </summary>
-    Task PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation);
-
-    /// <summary>
-    /// Открытые (не resolved) карточки остановки чата — для сторожа напоминаний
-    /// (TeamWaveService.CheckAwaitingEscalationsAsync).
-    /// </summary>
-    Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId);
-
-    /// <summary>
-    /// Пометка отправленного напоминания по карточке остановки: счётчик и момент
-    /// последнего оклика пишутся на карточку в истории — переживают рестарт сервера,
-    /// чтобы после перезапуска не начать оклик заново. false — карточка уже закрыта
-    /// либо её нет.
-    /// </summary>
-    Task<bool> MarkTeamEscalationRemindedAsync(string sessionId, string escalationId);
-
-    /// <summary>
-    /// Сохранить/обновить карточку плана в истории. Э3 проставляет TaskId под-задачам.
-/// Активный чат → Accumulator.OnTeamPlan + SaveSnapshotAsync; неактивный →
-    /// LoadAsync + append/mutate + SaveAsync под _falPersistLock.
-    /// </summary>
-    Task SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan);
-
-    /// <summary>
-    /// План итерации по id карточки. Accumulator.FindTeamPlanAny для активного чата,
-    /// TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
-    /// </summary>
-    Task<TeamImplementPlan?> GetTeamPlanAsync(string sessionId, string planId);
 }

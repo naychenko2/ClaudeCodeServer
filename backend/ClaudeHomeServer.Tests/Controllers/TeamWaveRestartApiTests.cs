@@ -95,7 +95,7 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
             .GetValue(sessions)!;
         entries[session.Id]!.GetType().GetField("Accumulator")!
             .SetValue(entries[session.Id], null);
-        (sessions as ITeamRunState)!.WithTeamState(session.Id, t =>
+        ((ITeamRunState)sessions).WithTeamState(session.Id, t =>
         {
             t.Stage = TeamImplementStage.Wave;
             t.WaveNumber = 1;

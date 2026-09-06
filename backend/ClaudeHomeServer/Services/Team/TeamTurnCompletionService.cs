@@ -59,8 +59,6 @@ internal sealed class TeamTurnCompletionService
     private readonly ITeamSessionDirectory _dir;
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
-    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
-    private readonly ITeamCardStore _stopReport;
     private readonly ILogger<TeamTurnCompletionService> _log;
 
     internal TeamTurnCompletionService(SessionManager sessions, ITeamSessionDirectory dir,
@@ -70,7 +68,6 @@ internal sealed class TeamTurnCompletionService
         _dir = dir;
         _history = history;
         _run = run;
-        _stopReport = sessions;
         _log = log;
     }
 
@@ -264,7 +261,7 @@ internal sealed class TeamTurnCompletionService
                 }
                 : BuildSilentStallEscalation(team, turnText);
             if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, stalled);
-            else await _stopReport.PublishTeamEscalationAsync(sessionId, stalled);
+            else await _history.PublishTeamEscalationAsync(sessionId, stalled);
             return;
         }
 
@@ -290,7 +287,7 @@ internal sealed class TeamTurnCompletionService
                 t.WaveActivityAt = null;
                 return true;
             });
-            await _sessions.SaveTeamImplementStateAsync(sessionId);
+            await _dir.PersistAndBroadcastAsync(sessionId);
             _log.LogInformation("Итерация чата-штаба {SessionId} завершена — режим ждёт следующей вводной", sessionId);
         }
     }
@@ -340,7 +337,7 @@ internal sealed class TeamTurnCompletionService
                         : TeamEscalationKind.BudgetExhausted),
                 };
                 if (_sessions.TeamHandlers.EscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
-                else await _stopReport.PublishTeamEscalationAsync(parentId!, card);
+                else await _history.PublishTeamEscalationAsync(parentId!, card);
             }
             _log.LogWarning("Доклад-блокер из чата {SessionId}: ход штаба не запущен ({Reason})", sessionId, wake.Reason);
             return quiet;
@@ -368,7 +365,7 @@ internal sealed class TeamTurnCompletionService
                 Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
             };
             if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(stab, escalation);
-            else await _stopReport.PublishTeamEscalationAsync(parentId, escalation);
+            else await _history.PublishTeamEscalationAsync(parentId, escalation);
         }
         return result;
     }

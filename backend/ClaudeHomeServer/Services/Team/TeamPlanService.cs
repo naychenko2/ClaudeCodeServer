@@ -19,13 +19,12 @@ namespace ClaudeHomeServer.Services.Team;
 //   • SupersedeCurrentPlanCardAsync — гашение ТЕКУЩЕЙ карточки плана как заменённой версией
 //     nextVersion. Идемпотентна (уже разрешённую карточку не трогает).
 //   • ResolveStalePlanCardAsync — гашение клика по устаревшей карточке (M8) с разъяснением.
-//   • SaveTeamPlanCardAsync — простая правка карточки после простановки под-задачам TaskId
-//     (Э3). Карточка уже Resolved, поэтому обновляем её напрямую.
 //
-// Все пять методов из задачи плюс SaveTeamPlanCardAsync — содержат размазанную ранее
-// развилку «активный аккумулятор против диска» (шестая точка — это общая AppendStoredAsync
-// через шов AppendAsync, она в задачу не входит). Эта развилка спрятана внутри нового метода
-// ITeamHistoryStore.SavePlanCardAsync (волна В, единственный новый метод шва, не пятый).
+// Все четыре метода содержат размазанную ранее развилку «активный аккумулятор против диска»
+// (пятая точка — это общая AppendStoredAsync через шов AppendAsync, она в задачу не входит).
+// Эта развилка спрятана внутри метода ITeamHistoryStore.SavePlanCardAsync. Правка карточки
+// после простановки под-задачам TaskId (Э3) теперь идёт через этот же метод напрямую —
+// отдельного SaveTeamPlanCardAsync у вертикали больше нет.
 //
 // Owning-паттерн (как TeamCoordinator/TeamStateService): экземпляр создаётся в конструкторе
 // SessionManager, а не через DI. Так разорван цикл «SessionManager хочет TeamPlanService,
@@ -42,8 +41,6 @@ internal sealed class TeamPlanService
     private readonly SessionManager _sessions;
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
-    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
-    private readonly ITeamCardStore _stopReport;
     private readonly TeamPlanningService? _planning;
     private readonly TeamCoordinator _coordinator;
     private readonly PersonaManager _personas;
@@ -57,7 +54,6 @@ internal sealed class TeamPlanService
         _sessions = sessions;
         _history = history;
         _run = run;
-        _stopReport = sessions;
         _planning = planning;
         _coordinator = coordinator;
         _personas = personas;
@@ -98,7 +94,7 @@ internal sealed class TeamPlanService
         // из неё он и выводит блок «Что изменилось». Не нашли карточку (чат чистили) — строим
         // с нуля: план без «что изменилось» лучше, чем отсутствие плана.
         var previous = session.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
-            ? await _stopReport.GetTeamPlanAsync(sessionId, prevId)
+            ? await _history.GetTeamPlanAsync(sessionId, prevId)
             : null;
         // Планировщика резолвим тут же: фронту нужна его персона для карточки «Готовит план…»
         // в ленте. ResolvePlanner без побочных эффектов (тот же пул кандидатов, что уйдёт
@@ -230,7 +226,7 @@ internal sealed class TeamPlanService
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
         };
         if (_coordinator.EscalationRaiser is { } raise) await raise(session, card);
-        else await _stopReport.PublishTeamEscalationAsync(sessionId, card);
+        else await _history.PublishTeamEscalationAsync(sessionId, card);
 
         // Раздача — тем же путём, что «Запустить» и авто-волна: план у TeamWaveService.
         // Повод UserCommand: добавочная волна разворачивается вводной человека — точки
@@ -255,7 +251,7 @@ internal sealed class TeamPlanService
     {
         if (session.TeamImplement is not { PlanCardId: { } oldId }) return;
 
-        var plan = await _stopReport.GetTeamPlanAsync(sessionId, oldId);
+        var plan = await _history.GetTeamPlanAsync(sessionId, oldId);
         if (plan is null) return;
 
         // Сохранить новые поля карточки + SupersededBy внутри шова (развилка спрятана).
@@ -292,17 +288,6 @@ internal sealed class TeamPlanService
         var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await _history.AppendAsync(sessionId, new StoredTextMessage(text, personaId: personaId, timestamp: ts),
             new GuestTextMessage(text, personaId, ts));
-    }
-
-    // Сохранить карточку плана в историю чата после правки бэкендом (Э3 проставляет
-    // TeamImplementSubtask.TaskId). Карточка уже Resolved, поэтому обновляем её напрямую:
-    // шов SavePlanCardAsync сам находит карточку по PlanId и применяет мутатор под локом.
-    public async Task SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan)
-    {
-        // Молча выйти нельзя: раздача волны проставляет под-задачам TaskId, и без записи
-        // следующее чтение плана с диска увидело бы их нерозданными и создало дубли задач.
-        await _history.SavePlanCardAsync(sessionId, new PlanCardWriteRequest(plan,
-            Resolved: false, Approved: null, SupersededBy: null));
     }
 
     // Собственно планирование: вводная (и правка к плану) сохраняются для повтора, зовётся
@@ -358,7 +343,7 @@ internal sealed class TeamPlanService
                 Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
             };
             if (_coordinator.EscalationRaiser is { } raise) await raise(session, failed);
-            else await _stopReport.PublishTeamEscalationAsync(sessionId, failed);
+            else await _history.PublishTeamEscalationAsync(sessionId, failed);
         }
         finally
         {

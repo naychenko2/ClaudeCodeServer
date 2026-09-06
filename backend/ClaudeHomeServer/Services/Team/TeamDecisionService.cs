@@ -68,8 +68,6 @@ internal sealed class TeamDecisionService
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
     private readonly ITeamTurnIntake _intake;
-    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
-    private readonly ITeamCardStore _stopReport;
     private readonly PersonaManager _personas;
     private readonly ILogger<TeamDecisionService> _log;
 
@@ -82,7 +80,6 @@ internal sealed class TeamDecisionService
         _history = history;
         _run = run;
         _intake = intake;
-        _stopReport = sessions;
         _personas = personas;
         _log = log;
     }
@@ -232,7 +229,7 @@ internal sealed class TeamDecisionService
             && teamNow.PlanCardId is { } planId
             && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
-            var plan = await _stopReport.GetTeamPlanAsync(sessionId, planId);
+            var plan = await _history.GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
                 try { await starter(session, plan, TeamWaveTrigger.StateCatchUp); }
@@ -605,7 +602,7 @@ internal sealed class TeamDecisionService
             && teamNow.PlanCardId is { } planId
             && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
-            var plan = await _stopReport.GetTeamPlanAsync(sessionId, planId);
+            var plan = await _history.GetTeamPlanAsync(sessionId, planId);
             var trigger = actionId is "runNext" or "addBudget" or "resume" or "restart"
                 ? TeamWaveTrigger.UserCommand
                 : TeamWaveTrigger.StateCatchUp;

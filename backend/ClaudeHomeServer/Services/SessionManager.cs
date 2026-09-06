@@ -17,7 +17,7 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Services;
 
 public class SessionManager : IDisposable, ITeamNotifier,
-    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake, ITeamCardStore
+    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake
 {
     private class SessionEntry
     {
@@ -566,7 +566,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly ITeamHistoryStore _teamHistory;
     private readonly ITeamRunState _teamRunState;
     private readonly ITeamTurnIntake _teamIntake;
-    private readonly ITeamCardStore _teamStopAndReport;
     // Координатор решений по карточке плана (волна Г): запуск работы, закрытие интервью
     // и реакция на карточку плана. Owning-паттерн (создаётся в конструкторе, в DI
     // переедет на шаге 2г-4).
@@ -814,7 +813,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _teamHistory = this;
         _teamRunState = this;
         _teamIntake = this;
-        _teamStopAndReport = this;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
         // Изменение персоны (профиль/возможности/привязки) — сбрасываем адаптеры её живых
@@ -6145,7 +6143,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // --- Э2: планирование по компетенциям и карточка плана ---
     //
     // Тела RunTeamPlanningAsync/CreateTeamPlanAsync/PublishTeamPlanAsync/
-    // SupersedeCurrentPlanCardAsync/ResolveStalePlanCardAsync/SaveTeamPlanCardAsync переехали
+    // SupersedeCurrentPlanCardAsync/ResolveStalePlanCardAsync переехали
     // в TeamPlanService (волна В). Обёртки сохранены, чтобы не переписывать тесты:
     // 18 мест зовут _sut.CreateTeamPlanAsync через тот же контракт.
 
@@ -6194,11 +6192,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // забирала. Разбор — docs/research/team-di-migration-2026-09.md §3.
     // null-семантика прежняя: обработчик не назначен (тесты ядра без штаба) — ветка молчит.
     internal TeamCoordinator TeamHandlers => _teamCoordinator;
-
-    // Сохранить и разослать состояние режима после правки его полей снаружи (Э3 двигает
-    // номер волны и счётчики бюджета в точке запуска — счёт ведёт бэкенд, не модель).
-    public Task SaveTeamImplementStateAsync(string sessionId) =>
-        _teamState.SaveTeamImplementStateAsync(sessionId);
 
     // --- Э4: автономный цикл, бюджет и эскалации ---
 
@@ -6775,7 +6768,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             && teamNow.PlanCardId is { } planId
             && _teamCoordinator.WaveStarter is { } starter)
         {
-            var plan = await ((ITeamCardStore)this).GetTeamPlanAsync(sessionId, planId);
+            var plan = await ((ITeamHistoryStore)this).GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
                 try { await starter(entry.Info, plan, TeamWaveTrigger.StateCatchUp); }
@@ -6877,7 +6870,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Actions = TeamEscalationActions.For(TeamEscalationKind.NeedsClarification),
         };
         if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, card);
-        else await ((ITeamCardStore)this).PublishTeamEscalationAsync(sessionId, card);
+        else await ((ITeamHistoryStore)this).PublishTeamEscalationAsync(sessionId, card);
 
         if (withTurn)
             await _teamIntake.SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
@@ -7002,6 +6995,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // SaveSessions сериализует записи и под concurrent.
     void ITeamSessionDirectory.Persist() => SaveSessions();
 
+    // Точка «правка состояния режима + бродкаст»: тело прежнего
+    // TeamStateService.SaveTeamImplementStateAsync, перенесено в шов. public-обёртка
+    // SessionManager.SaveTeamImplementStateAsync снята вместе с методом TeamStateService —
+    // вертикаль (включая публичный TeamWaveService) ходит через _dir напрямую.
+    async Task ITeamSessionDirectory.PersistAndBroadcastAsync(string sessionId)
+    {
+        var session = GetById(sessionId);
+        if (session is null) return;
+        session.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        await BroadcastTeamImplementAsync(sessionId, session);
+    }
+
     IReadOnlyList<TeamSessionInfo> ITeamSessionDirectory.ListChildren(string parentSessionId) =>
         [.. _sessions.Values.Select(e => e.Info)
             .Where(s => s.ParentSessionId == parentSessionId)
@@ -7124,27 +7130,22 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     void ITeamTurnIntake.InterruptTurn(string sessionId) => Interrupt(sessionId);
 
-    // --- ITeamCardStore (шов 5) ---
     // Публикация карточки остановки: запись в ленту + WS + стадия «ждёт решения».
     // Тело в TeamDecisionService (волна Д).
-    Task ITeamCardStore.PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation) =>
+    Task ITeamHistoryStore.PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation) =>
         _teamDecision.PublishTeamEscalationAsync(sessionId, escalation);
 
     // Открытые (не resolved) карточки остановки чата.
-    Task<IReadOnlyList<TeamEscalation>> ITeamCardStore.GetOpenTeamEscalationsAsync(string sessionId) =>
+    Task<IReadOnlyList<TeamEscalation>> ITeamHistoryStore.GetOpenTeamEscalationsAsync(string sessionId) =>
         _teamDecision.GetOpenTeamEscalationsAsync(sessionId);
 
     // Пометка отправленного напоминания по карточке остановки.
-    Task<bool> ITeamCardStore.MarkTeamEscalationRemindedAsync(string sessionId, string escalationId) =>
+    Task<bool> ITeamHistoryStore.MarkTeamEscalationRemindedAsync(string sessionId, string escalationId) =>
         _teamDecision.MarkTeamEscalationRemindedAsync(sessionId, escalationId);
-
-    // Сохранить карточку плана в историю чата после правки бэкендом (Э3 проставляет TaskId).
-    Task ITeamCardStore.SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan) =>
-        _teamPlan.SaveTeamPlanCardAsync(sessionId, plan);
 
     // План итерации по id: Accumulator.FindTeamPlanAny для активного чата,
     // TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
-    async Task<TeamImplementPlan?> ITeamCardStore.GetTeamPlanAsync(string sessionId, string planId)
+    async Task<TeamImplementPlan?> ITeamHistoryStore.GetTeamPlanAsync(string sessionId, string planId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (entry.Accumulator is { } acc) return acc.FindTeamPlanAny(planId);
@@ -7220,7 +7221,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Actions = TeamEscalationActions.For(kind),
         };
         if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, escalation);
-        else await ((ITeamCardStore)this).PublishTeamEscalationAsync(sessionId, escalation);
+        else await ((ITeamHistoryStore)this).PublishTeamEscalationAsync(sessionId, escalation);
     }
 
     // Отдельное git worktree чата: вкл — создать дерево на новой ветке от HEAD проекта и

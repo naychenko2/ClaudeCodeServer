@@ -76,19 +76,8 @@ internal sealed class TeamStateService
         }
     }
 
-    // Сохранить и разослать состояние режима после правки его полей снаружи (Э3 двигает
-    // номер волны и счётчики бюджета в точке запуска — счёт ведёт бэкенд, не модель).
-    public async Task SaveTeamImplementStateAsync(string sessionId)
-    {
-        var session = _sessions.GetById(sessionId);
-        if (session is null) return;
-        session.UpdatedAt = DateTime.UtcNow;
-        _dir.Persist();
-        await BroadcastTeamImplementAsync(sessionId, session);
-    }
-
     // Рассылка TeamImplementMessage по группе чата: стадия, номер волны, состав команды,
-    // бюджет и флаги. Тело взято один в один из прежней SessionManager.BroadcastTeamImplementAsync.
+// бюджет и флаги. Тело взято один в один из прежней SessionManager.BroadcastTeamImplementAsync.
     public Task BroadcastTeamImplementAsync(string sessionId, Session session)
     {
         var ti = session.TeamImplement;

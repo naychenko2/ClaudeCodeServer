@@ -46,7 +46,7 @@ public class TeamWaveSnapshotApiTests : IClassFixture<TestWebApplicationFactory>
         var session = await sessions.CreateAsync(project.Id, ClaudeMode.Auto, personaId: coordinator.Id);
         await sessions.SetTeamImplementAsync(session.Id, enabled: true,
             coordinatorPersonaId: coordinator.Id, userId: ownerId);
-        (sessions as ITeamRunState)!.WithTeamState(session.Id, t =>
+        ((ITeamRunState)sessions).WithTeamState(session.Id, t =>
         {
             t.Stage = TeamImplementStage.Wave;
             t.WaveNumber = 1;
@@ -111,7 +111,7 @@ public class TeamWaveSnapshotApiTests : IClassFixture<TestWebApplicationFactory>
     {
         var (sessionId, _) = await MakeWaveAsync();
         var sessions = _factory.Services.GetRequiredService<SessionManager>();
-        (sessions as ITeamRunState)!.WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
+        ((ITeamRunState)sessions).WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
 
         var response = await _client.GetAsync($"/api/chats/{sessionId}/team-wave-snapshot");
 

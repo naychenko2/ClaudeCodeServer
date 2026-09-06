@@ -107,7 +107,9 @@ public class SubsystemBoundaryCoverageTests
             "каждая реализация IAppSubsystem в сборке должна быть в SubsystemBoundaryTests.Boundaries " +
             "(см. комментарий `// Reader/Images/Tts/Git/Deploy/...` в том файле). " +
             "Если подсистема новая — добавь её в Boundaries с собственным allow-list. " +
-            "Если это вертикаль БЕЗ IAppSubsystem — добавь её в `verticalOnlyNamespaces` ниже. " +
+            "Если это вертикаль БЕЗ IAppSubsystem — заведи строку в Boundaries всё равно: " +
+            "`verticalOnlyNamespaces` ниже оставлен пустым сознательно (см. там), " +
+            "чтобы не маскировать удаление строки из Boundaries. " +
             "Отсутствуют:\n" + string.Join("\n", missingSubsystems));
     }
 
@@ -197,14 +199,12 @@ public class SubsystemBoundaryCoverageTests
 
         // Дубль `verticalOnlyNamespaces` для Watchdog/Terminal убран (волна 4B шаг 1):
         // обе вертикали уже имеют строки в `Boundaries`, отдельная запись тут
-        // маскировала бы удаление строки из `Boundaries`. Пустой список ниже
-        // остаётся как явный сигнал «вертикалей без строки в Boundaries нет».
-        // Team (этап 4, шаг 2б): вертикаль штаба без IAppSubsystem, живёт в Main.
-        // ITeamNotifier уже лежит в Services.Team — шаг 2г перенесёт туда тело.
-        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "ClaudeHomeServer.Services.Team",
-        };
+        // маскировала бы удаление строки из `Boundaries`. То же для Team (этап 4,
+        // шаг 2в) — вертикаль штаба без IAppSubsystem получила собственную строку
+        // в `Boundaries`, и отдельная запись в этом списке маскировала бы её
+        // удаление. Пустой список остаётся как явный сигнал «вертикалей без
+        // строки в Boundaries нет».
+        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal);
 
         var coveredNamespaces = new HashSet<string>(StringComparer.Ordinal);
         foreach (var ns in boundaryRoots) coveredNamespaces.Add(ns);
@@ -229,8 +229,12 @@ public class SubsystemBoundaryCoverageTests
         uncovered.Should().BeEmpty(
             "каждый namespace ClaudeHomeServer.Services.* с типами обязан иметь строку в " +
             "SubsystemBoundaryTests.Boundaries (см. комментарии у Video/Reader/.../Llm). " +
-            "Если вертикаль новая — добавь её в Boundaries со своим allow-list. " +
-            "Если это вертикаль БЕЗ IAppSubsystem — добавь в `verticalOnlyNamespaces`. " +
+            "Если вертикаль новая — добавь её в Boundaries со своим allow-list " +
+            "(вертикаль без IAppSubsystem — тоже отдельная строка). " +
+            "`verticalOnlyNamespaces` ниже сознательно пуст и не для этого: он " +
+            "маскировал бы удаление строки из Boundaries, доказано мутацией в ревью " +
+            "этапа 4 (MAJOR 1, сентябрь 2026) — 36/36 зелёных при заведомом ребре " +
+            "`Services.Team → Services.Video`, default-deny не срабатывал. " +
             "Если namespace — общая «спинка» — добавь в `excludedNamespaces` (и подумай, " +
             "правда ли это спинка). Не покрыты:\n" + string.Join("\n", uncovered));
     }

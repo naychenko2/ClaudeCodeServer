@@ -735,6 +735,24 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SessionSummaryService",
                 }),
         },
+        // === Шаг 2б плана выноса штаба (этап 4): интерфейс-шов `ITeamNotifier`
+        // (Services/Team/) — единственный тип вертикали. Реализация пока внутри
+        // SessionManager обёрткой над прежними приватными методами; переезд тела (2г)
+        // добавит реализацию в новый класс и расширит allow-list по факту. Сейчас
+        // внешних зависимостей нет: сигнатуры только из примитивов (`string`, `bool`,
+        // `Task`). Запись заведена, чтобы сторож границ видел вертикаль штаба — иначе
+        // namespace Services.Team остаётся в `verticalOnlyNamespaces` Coverage-теста,
+        // который маскирует удаление строки из `Boundaries` (см. комментарий там).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Team",
+                "ClaudeHomeServer.Services.Team",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Team" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
         // каждый со своим allow-list строго по фактическим ссылкам (прогон probe — см.
         // отчёт шага 0). Префиксы-швы используются ТОЛЬКО там, где Llm/Turn реально

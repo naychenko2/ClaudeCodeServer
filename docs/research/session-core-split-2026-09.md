@@ -1362,13 +1362,22 @@ grep -n 'RestoreWaveWatchdogIfPaused' backend/ClaudeHomeServer/Services/SessionM
 нужен второй, узкий обработчик у **уже существующего** подписчика `turn/completed`.
 Инфраструктура на месте, добавляется одна ветка.
 
-**Что при этом надо сверить (не проверено):** соответствие «`ExitedMessage` при живом
-`TeamImplement`» ↔ «`outcome == interrupted`» точным не является. По таблице исходов из
-раздела шага 1: `cancelled` возвращается ДО `SettleAsync` и downstream не отдаёт ничего
-(значит `ExitedMessage` не придёт вовсе), а `crashed` идёт то по `FailClosedAsync`, то по
-`SettleAsync`. Прежде чем переносить ветку, надо перечислить, при каких исходах реально
-доезжает `ExitedMessage` — иначе сторож волн либо не восстановится, либо восстановится
-дважды.
+**Сверка выполнена в коммите `f049a593` (2026-09-06, шаг 2в).** При каких исходах реально
+доезжает `ExitedMessage`:
+
+- `success | failed | egress_down | local_down` — `ExitedMessage` доезжает downstream после
+  `result`/`error` (через `SettleAsync` либо `FailClosed/FailEgress/FailLocalDown` →
+  `await _downstream(...)`). Штаб идёт через `HandleTeamTurnEndAsync` (он зовёт
+  `RestoreWaveWatchdogIfPaused` на 7593), который восстанавливает отсечки.
+- `interrupted | crashed` — `ExitedMessage` доезжает (см. `SettleAsync`/`FailClosedAsync`),
+  штаб НЕ зовётся (был бы «фантомный ход»). Источник истины для восстановления отсечек —
+  ветка `interrupted | crashed` в `HandleTeamTurnCompletedShim`. В коммите `f049a593`
+  она зовёт `RestoreWaveWatchdogIfPaused` напрямую; бэкстоп в `OnMessageAsync` на
+  `ExitedMessage` (см. §6, бэкстоп после доработки швов) возвращён в MAJOR 1 этапа 4,
+  шаг 2в. Двойной вызов идемпотентен по конструкции (`WaveStartedAt = DateTime.UtcNow`
+  поверх себя — см. ниже подробности в коде `RestoreWaveWatchdogIfPaused`).
+- `cancelled` — `return` до `SettleAsync` (см. `FallbackLlmSessionAdapter.cs:618`),
+  downstream не получает ничего. Сторож не трогаем.
 
 **Отдельно про `TeamWaveService`: четыре делегата, которые исчезнут.** Сегодня
 `SessionManager` держит четыре публичных `Func`-свойства — `TeamWaveStarter` (6763),
@@ -1725,10 +1734,13 @@ grep -nE '(_personas|personas)\.[A-Za-z]+' /tmp/team.txt backend/ClaudeHomeServe
 
 ### 10. Открытые вопросы шага 2
 
-1. **Соответствие `ExitedMessage` ↔ исходов `turn/completed`** (под-шаг 2в): при
-   `cancelled` downstream не получает ничего, при `crashed` путь двоится. Точный список
-   исходов, при которых `ExitedMessage` доезжает, **не составлен**. Это блокер под-шага 2в,
-   а не всего разреза.
+1. ~~**Соответствие `ExitedMessage` ↔ исходов `turn/completed`** (под-шаг 2в).~~
+   Сверка выполнена в коммите `f049a593` (2026-09-06), перенесена в §4 выше. Выводы:
+   `success | failed | egress_down | local_down` — `ExitedMessage` доезжает, отсечки
+   возвращает `HandleTeamTurnEndAsync` (7593); `interrupted | crashed` — доезжает,
+   отсечки возвращает подписчик `HandleTeamTurnCompletedShim`, плюс бэкстоп в
+   `OnMessageAsync` (после MAJOR 1 этапа 4, шага 2в) — идемпотентный; `cancelled` —
+   downstream не получает ничего, сторож не трогаем. Блокер снят.
 2. **`RestoreUserMode` после миграции провайдера** (ребро №11): трогает живой процесс через
    `entry.Process.TrySetPermissionModeLive`, а после `MigrateProviderAsync` живого процесса
    может не быть. Как это работает сегодня — **не проверено**; от ответа зависит, полноценное

@@ -1,11 +1,11 @@
-using ClaudeHomeServer.Controllers;
+﻿using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Team;
 
 // Живость волны «Командной реализации» для человека: бейдж «КР · волна N» различает
 // работу и обвал (КР-наблюдаемость, этап 1). Wire-токен — TeamWaveService.LivenessToken.

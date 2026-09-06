@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services;
+﻿namespace ClaudeHomeServer.Services.Team;
 
 // Отказ включить режим «Командная реализация» (гард на входе, B2 приёмки): чат без
 // координатора или без состава исполнителей штабом не станет. Код отказа машинный —

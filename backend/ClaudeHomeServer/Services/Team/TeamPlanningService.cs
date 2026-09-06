@@ -1,9 +1,9 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Team;
 
 // Планирование режима «Командная реализация» (Э2): кто планирует, из кого выбирать и
 // как получить структурный план с исполнителем под каждой под-задачей.

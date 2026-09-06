@@ -1,9 +1,10 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -322,7 +323,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         }
         // Гард на входе (B2): нет координатора либо состава. Код отказа машинный — фронт по
         // нему показывает пикер и НЕ отправляет вводную обычным сообщением.
-        catch (Services.TeamImplementSetupException ex)
+        catch (TeamImplementSetupException ex)
         {
             return BadRequest(new { error = ex.Message, code = ex.Code });
         }

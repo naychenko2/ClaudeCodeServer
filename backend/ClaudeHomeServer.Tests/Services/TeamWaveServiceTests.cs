@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+﻿using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Skills;
@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Team;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;

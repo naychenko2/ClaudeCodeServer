@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -749,9 +749,34 @@ public class SubsystemBoundaryTests
                 "Team",
                 "ClaudeHomeServer.Services.Team",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Team" })
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Team",
+                        // Префиксы-швы по факту ссылок спутников (шаг 2г-1 этапа 4):
+                        // - Llm: ICheapTextRunner/LlmTimeoutException (TeamPlanningService);
+                        // - Tasks: TaskManager (TeamWaveService);
+                        // - Prompts: TeamImplementPrompts (TeamWaveService);
+                        // - Hubs: SessionHub (IHubContext<SessionHub> в TeamWaveService);
+                        // - Protocol: TeamWavePulseMessage (async-state-машина SendWavePulsesAsync).
+                        "ClaudeHomeServer.Services.Llm",
+                        "ClaudeHomeServer.Services.Tasks",
+                        "ClaudeHomeServer.Services.Prompts",
+                        "ClaudeHomeServer.Hubs",
+                        "ClaudeHomeServer.Protocol",
+                    })
                     .ToArray(),
-                Array.Empty<string>()),
+                new[]
+                {
+                    // Точечные допуски к корню `Services.*` — «вертикаль → спинка» (по образцу Skills):
+                    // PersonaManager/ProjectManager/TaskExecutionService/NotificationService —
+                    // параметры конструкторов TeamWaveService; SessionManager — там же,
+                    // для получения session id и публикации событий штаба.
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.TaskExecutionService",
+                    "ClaudeHomeServer.Services.NotificationService",
+                    "ClaudeHomeServer.Services.SessionManager",
+                }),
         },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
         // каждый со своим allow-list строго по фактическим ссылкам (прогон probe — см.

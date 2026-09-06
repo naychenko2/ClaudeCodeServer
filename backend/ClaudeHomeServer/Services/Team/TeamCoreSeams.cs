@@ -98,7 +98,36 @@ internal interface ITeamHistoryStore
     /// разъезжаются.
     /// </summary>
     Task AppendAsync(string sessionId, StoredMessage stored, ServerMessage broadcast);
+
+    /// <summary>
+    /// Сохранить или обновить карточку плана с правильным персистом в обеих ветках
+    /// «активный аккумулятор» против «диск». Это второй метод шва (волна В плана выноса
+    /// штаба): размазанная развилка из шести точек ушла внутрь реализации.
+    ///
+    /// Семантика <paramref name="request"/>:
+    /// <list type="bullet">
+    ///   <item><c>Resolved=false, SupersededBy=null</c> — append (публикация новой карточки).</item>
+    ///   <item><c>SupersededBy=X</c> — правка с <c>Resolved=true, Approved=false, SupersededBy=X</c>.</item>
+    ///   <item><c>Resolved=true, Approved=…</c> — правка с <c>Resolved=true, Approved=…</c>.</item>
+    ///   <item><c>Resolved=false</c> — простая правка <c>Plan</c>, флаг <c>Resolved</c> остаётся прежним.</item>
+    /// </list>
+    /// Активный чат → <c>Accumulator.OnTeamPlan/OnTeamPlanUpdated/OnTeamPlanSuperseded</c> +
+    /// FireAndForget <c>SaveSnapshotAsync</c>; неактивный → <c>LoadAsync</c> + append/mutate +
+    /// <c>SaveAsync</c> под <c>_falPersistLock</c>. true — карточка добавлена/найдена и обновлена,
+    /// false — чата нет, нет транскрипта или карточка не найдена (причина уходит в лог реализации).
+    /// </summary>
+    Task<bool> SavePlanCardAsync(string sessionId, PlanCardWriteRequest request);
 }
+
+/// <summary>
+/// Параметры правки карточки плана для <see cref="ITeamHistoryStore.SavePlanCardAsync"/>.
+/// Подробнее о комбинациях — в xml-комментарии к методу.
+/// </summary>
+internal sealed record PlanCardWriteRequest(
+    TeamImplementPlan Plan,
+    bool Resolved,
+    bool? Approved,
+    int? SupersededBy);
 
 /// <summary>
 /// Шов 3 — рантайм-состояние прогона и собственные рантайм-поля штаба. Живут они в приватном

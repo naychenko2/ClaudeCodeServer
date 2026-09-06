@@ -16,9 +16,12 @@ public static class BackupPaths
     // синканные plugins, кеши — осознанно за бортом: основной архив уезжает в облако.
     private static readonly string[] ProfileRoots = ["claude-profiles", "sandbox-profiles"];
 
-    // Секреты: в основной архив не попадают никогда, уезжают отдельным локальным архивом
-    public static readonly string[] SecretFileNames =
-        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json", "mcp-secrets.json"];
+    // Секреты: в основной архив не попадают никогда, уезжают отдельным локальным архивом.
+    // Реестр имён — примитив инфраструктуры, вынесен в `Services.InstanceSecretFiles`
+    // (задача `57b5e9bc`, шаг 5): общий источник для Backup и редактора секретов
+    // (`Dossiers.InstanceSecretsProvider`). Здесь оставлен тонкий алиас ради обратной
+    // совместимости внутренних вызовов Backup.
+    public static readonly string[] SecretFileNames = InstanceSecretFiles.Names;
 
     /// <summary>
     /// Брать ли файл в основной архив. <paramref name="relativePath"/> — путь относительно

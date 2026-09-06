@@ -1,11 +1,10 @@
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 
 // Собирает точные значения секретов ИНСТАНСА для SecretRedactor (ADR-004 §3-а): ключи
 // провайдеров/Dify, токены подписок Claude (конфиг + CLAUDE_CODE_OAUTH_TOKEN), содержимое
-// .credentials.json профилей CLI и файлов из BackupPaths.SecretFileNames (jwt-secret.txt,
+// .credentials.json профилей CLI и файлов из InstanceSecretFiles.Names (jwt-secret.txt,
 // vapid-keys.json, module-keys.json, mcp-secrets.json) — тот же перечень, что бэкап уводит
 // в отдельный локальный архив: один список секретов инстанса на обе подсистемы, расходиться
 // им нельзя. Перечитывается по времени (RefreshInterval) — читать файлы профилей на каждую
@@ -66,7 +65,7 @@ public sealed class InstanceSecretsProvider
         Add(_config["Dify:ApiKey"]);
         Add(Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN"));
 
-        foreach (var name in Backup.BackupPaths.SecretFileNames)
+        foreach (var name in InstanceSecretFiles.Names)
             AddFileStrings(Path.Combine(_dataDir, name), Add);
 
         foreach (var root in ProfileRoots)

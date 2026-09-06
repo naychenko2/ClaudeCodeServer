@@ -582,11 +582,11 @@ public class SubsystemBoundaryTests
                     // `DossierRecallService` материализует `SessionChangedPaths`
                     // (поле async-state-машины). Точечный допуск по образцу Git.
                     "ClaudeHomeServer.Services.SessionChangedPaths",
-                    // `InstanceSecretsProvider` ссылается на `BackupPaths` static-метод —
-                    // путь к секретам инстанса. Инфраструктурный примитив (как
-                    // `Backup.InstanceLock` для Deploy), а не логика Backup. TODO:
-                    // вынести в спину по образцу `TranscriptRoots` (шаг 5 отдельной задачей).
-                    "ClaudeHomeServer.Services.Backup.BackupPaths",
+                    // `InstanceSecretsProvider` ссылается на реестр имён секретов
+                    // `Services.InstanceSecretFiles.Names` (шаг 5). Примитив вынесен
+                    // из `Backup.BackupPaths` в спину — по образцу `TranscriptRoots`.
+                    // Допуск на `Backup.BackupPaths` снят (см. `p5-Dossiers`).
+                    "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
         // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Сторож проверяет
@@ -1270,6 +1270,11 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
+                    // Шов Backup → InstanceSecretFiles (шаг 5): `BackupPaths.SecretFileNames`
+                    // — тонкий алиас на `InstanceSecretFiles.Names`. IL-скан видит
+                    // declaring-тип как ссылку на спинку. Допуск по образцу
+                    // Execution → TranscriptRoots / ExecutableResolver.
+                    "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
         // Desktop — ручной агент песочницы (ADR-008). Префикс-шов Hubs (DeviceHub),

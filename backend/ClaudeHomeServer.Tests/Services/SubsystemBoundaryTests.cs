@@ -355,16 +355,22 @@ public class SubsystemBoundaryTests
         //    (проба репозитория: `rev-parse HEAD` и `status --porcelain`). Это СОЗНАТЕЛЬНАЯ
         //    связь «вертикаль → вертикаль» (TODO на шов: завести `IGitGuard` в `Services.Git`
         //    и перевести `DeployHost` на него, тогда `Services.Git` уйдёт из allow-list);
-        // 4) `ClaudeHomeServer.Services.Backup` — статический класс `Backup.InstanceLock` с
-        //    методом `TryAcquireDeploy()`, через который `DeployHost.TryLockAgent` берёт
-        //    мьютекс `Global\ccs-deploy`. Это инфраструктурный примитив общего назначения
-        //    (мьютекс деплоя), а не зависимость от логики Backup, и СОЗНАТЕЛЬНО выходит
-        //    за рамки обычной рефлексии: доступ к статическому члену через точку не
-        //    попадает в поля/конструкторы/return-типы. После волны 1 IL-скан его видит,
-        //    поэтому допуск обязателен — сторож БОЛЬШЕ НЕ ПРОПУСТИТ этот шов молча.
-        //    TODO на шов: выделить мьютекс в отдельный примитив
-        //    (например, `DeployAgentLock` в `Services.Composition`) и убрать из allow-list
-        //    ссылку на `Services.Backup`.
+        //
+        // === Шов `Deploy → Backup.InstanceLock.TryAcquireDeploy` (шаг 5, задача `57b5e9bc`).
+        // `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через статику
+        // `Backup.InstanceLock.TryAcquireDeploy()`. Это инфраструктурный примитив
+        // (мьютекс с трей-раннером), а не логика Backup. Префиксный допуск `Backup`
+        // сужен до точечного `Backup.InstanceLock`: внутри Deploy-вертикали нет
+        // других Backup-типов, расширять префикс незачем.
+        // ВЫНОС НЕ СДЕЛАН, причины:
+        //   * `InstanceLock` живёт в Main (ClaudeHomeServer.dll), Core не имеет
+        //     ссылки на Main → обёртка в Core невозможна (направление `Main → Core`).
+        //   * Если делать примитив `DeployAgentLock.TryAcquire()` в root Services,
+        //     он тянет «одно и то же имя `Global\ccs-deploy`, один и тот же хелпер
+        //     `TryAcquire(name)` с обработкой AbandonedMutexException/
+        //     UnauthorizedAccessException» к трём разным классам — риск
+        //     рассинхронизации имени и поведения.
+        // Полумера (сужение префикса до точечного типа) лучше протащенной зависимости.
         new object[]
         {
             new VerticalBoundary(
@@ -376,13 +382,16 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Deploy",
                         "ClaudeHomeServer.Services.Execution",
                         "ClaudeHomeServer.Services.Git",
-                        "ClaudeHomeServer.Services.Backup",
                     })
                     .ToArray(),
                 new[]
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.NotificationService",
+                    // Точечный допуск `Deploy → Backup.InstanceLock` (шаг 5):
+                    // сузили прежний префикс `Backup`. Другого использования Backup
+                    // внутри Deploy-вертикали нет (`grep -rn 'Backup\.' Deploy/`).
+                    "ClaudeHomeServer.Services.Backup.InstanceLock",
                 }),
         },
         // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
@@ -414,11 +423,15 @@ public class SubsystemBoundaryTests
         // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
         //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
         // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
-        //    флаг `Icon.Glyph` в доменной модели проекта). `BackupCore.Snapshot` /
-        //    `BackupContext.FromConfiguration` в `ProjectIconMigration` — статические
-        //    вызовы из тел методов: прежде были невидимы рефлексии, после волны 1 их
-        //    видит IL-скан — отсюда допуски ниже. Выделение примитивов бэкапа в шов —
-        //    отдельная задача (инверсия стека, шаг 5).
+        //    флаг `Icon.Glyph` в доменной модели проекта).
+        //
+        // === Шов к Backup.{BackupCore, BackupContext, BackupResult} (IL-видимость).
+        // `ProjectIconMigration.cs:73` зовёт `BackupCore.Snapshot(BackupContext.FromConfiguration(config), log)`
+        // и получает `BackupResult`. Попытка вынести примитив «снимок data перед
+        // необратимой операцией» в Core блокируется направлением ссылок (`Main → Core`,
+        // Core не видит Main/Backup), а обёртка в root Services нарушает root-сторож.
+        // Допуск ОСТАВЛЕН с явной фиксацией причины — полумера лучше протащенной
+        // зависимости (отчёт шага 5, задача `57b5e9bc`).
         new object[]
         {
             new VerticalBoundary(
@@ -434,19 +447,7 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
-                    // `BackupResult` (тип возврата `BackupCore.Snapshot` в
-                    // `ProjectIconMigration.RunAsync`). IL-скан видит статический
-                    // вызов через declaring-тип `BackupCore`. Точечный FullName,
-                    // чтобы не открывать вертикаль Backup целиком: миграция значков
-                    // пользуется инфраструктурным примитивом снятия снимка, а не
-                    // логикой Backup.
                     "ClaudeHomeServer.Services.Backup.BackupResult",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `ProjectIconMigration.cs:73` ссылается на `BackupContext`
-                    // static-метод и `BackupCore.Snapshot(...)` (последний — через
-                    // declaring-тип `BackupCore`). Шов уже зафиксирован через
-                    // `BackupResult` (return-тип), теперь видим сами `BackupCore`
-                    // и `BackupContext`. TODO: вынести в спину (шаг 5).
                     "ClaudeHomeServer.Services.Backup.BackupContext",
                     "ClaudeHomeServer.Services.Backup.BackupCore",
                 }),

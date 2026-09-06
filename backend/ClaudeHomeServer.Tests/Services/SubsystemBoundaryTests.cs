@@ -97,7 +97,40 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Mcp",
+        // Сборка `ClaudeHomeServer.Core` — спинка целиком: к ней допускаются все
+        // вертикали (SsrfGuard/JsonFileStore/PermissionModeGuard/TeamProtocolMarkers
+        // и Composition/Http/Mcp-узлы). Контроль на уровне сборки, не namespace:
+        // см. `CoreAssemblyName` ниже и `IsCoreAssembly`.
+        // Телеметрия (ClaudeHomeServer/Telemetry/) — observability-спинка: alert-digest,
+        // gauges, метрики, turn-telemetry. Пробрасывается через `SharedAllowedPrefixes`,
+        // чтобы не открывать префикс каждой вертикали вручную (Knowledge, Memory,
+        // Mcp, Llm используют DifyErrorCategorizer/ServerMetrics/TurnTelemetry).
+        "ClaudeHomeServer.Telemetry",
+        // `ClaudeHomeServer.Protocol` — WS-контракт с фронтом. Объявлен спиной по
+        // решению архитектора (задача `8beee75e`, ADR-014 §«Решение по Protocol»):
+        // record-DTO дискриминируются по `type` в едином потоке `ServerMessage`,
+        // разрезание по папкам не убирает ни одной рантайм-зависимости, а точечный
+        // allow-list разрастается до ~70 записей на каждое новое WS-событие.
+        // Честная цена: дублирующие сообщения остаются зоной ревью.
+        "ClaudeHomeServer.Protocol",
     };
+
+    /// <summary>Имя сборки «спинки» из общего кода: всё, что едет в
+    /// `ClaudeHomeServer.Core.dll`, — инфраструктурные примитивы, а не сервисная логика.
+    /// Допуск по сборке, а не по namespace: 4 типа (JsonFileStore/SsrfGuard/
+    /// PermissionModeGuard/TeamProtocolMarkers) физически живут в `Core.dll`, но
+    /// объявлены в namespace `ClaudeHomeServer.Services` (root) — namespace-фильтр
+    /// их не видит, а assembly-фильтр видит. Не путать с проверкой
+    /// <c>type.Namespace.StartsWith("ClaudeHomeServer.Core")</c> — namespace у этих
+    /// типов `ClaudeHomeServer.Services`.</summary>
+    private const string CoreAssemblyName = "ClaudeHomeServer.Core";
+
+    /// <summary>Является ли тип из сборки-спинки Core (assembly-based backbone check).</summary>
+    private static bool IsCoreAssembly(Type type)
+    {
+        var name = type.Assembly.GetName().Name;
+        return name == CoreAssemblyName;
+    }
 
     /// <summary>Таблица границ. Каждая подсистема добавляет ОДНУ строку: имя +
     /// корневой namespace + allow-list (по умолчанию shared-спинка + сама вертикаль)
@@ -135,7 +168,10 @@ public class SubsystemBoundaryTests
         // Сам класс `SsrfGuard` и его static-методы в полях/конструкторах/сигнатурах не
         // появляются (см. «Известное ограничение»), но nested enum появляется. Поэтому
         // ровно один точный тип в allow-list — `SsrfGuard+AddressCheck`.
-        // `AngleSharp.*` — third-party HTML-парсер (SmartReader + HtmlParser).
+        // `AngleSharp.*` — third-party HTML-парсер (ReaderService парсит DOM).
+        // `SmartReader.*` — third-party извлечение статьи (SmartReader.Reader/
+        // SmartReader.Article в `ReaderService.ReadImageCoreAsync`/WalkToFinalResponseAsync,
+        // статический вызов из тел async-методов — IL-скан ловит точно).
         new object[]
         {
             new VerticalBoundary(
@@ -146,6 +182,7 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Reader",
                         "AngleSharp",
+                        "SmartReader",
                     })
                     .ToArray(),
                 new[]
@@ -1145,10 +1182,12 @@ public class SubsystemBoundaryTests
                 Array.Empty<string>()),
         },
         // Modules — YARP-реверс-прокси для внешних модулей. Префикс-шов
-        // Yarp.ReverseProxy.Configuration (third-party, по прецеденту AngleSharp
-        // у Reader — открываем префиксом). Точечные: FeatureFlagService/JwtService
-        // (ModuleGatewayMiddleware знает владельца), Services.Llm.LocalAction
-        // (ModuleRegistry регистрирует LLM-действия модулей, тип едет в поле).
+        // Yarp.ReverseProxy целиком (third-party, по прецеденту AngleSharp у Reader —
+        // открываем префиксом; ModuleProxyConfigProvider ссылается на Configuration/
+        // Forwarder/Transforms, ModuleGatewayMiddleware — на Forwarder). Точечные:
+        // FeatureFlagService/JwtService (ModuleGatewayMiddleware знает владельца),
+        // Services.Llm.LocalAction (ModuleRegistry регистрирует LLM-действия
+        // модулей, тип едет в поле).
         new object[]
         {
             new VerticalBoundary(
@@ -1158,7 +1197,7 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Modules",
-                        "Yarp.ReverseProxy.Configuration",
+                        "Yarp.ReverseProxy",
                     })
                     .ToArray(),
                 new[]
@@ -1212,7 +1251,10 @@ public class SubsystemBoundaryTests
         //    что у `Git`/`Deploy`/`Backgrounds`/`Spend`/`Dossiers`).
         // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для рассылки
         //    вывода и статусов дев-серверов подписчикам группы (DevServerService:121).
-        // 3) Допуски к корню Services точечные:
+        // 3) Префикс-шов `Yarp.ReverseProxy` — `ExternalPreviewProxy` ссылается на
+        //    `Yarp.ReverseProxy.Forwarder.HttpTransformer` (статический вызов из тела
+        //    метода, IL-скан ловит).
+        // 4) Допуски к корню Services точечные:
         //    - `ProjectManager` — общая инфраструктура (`DevServerService`, `ExternalPreviewRouter`).
         //    - `JwtService` — формирование токена внешней ссылки (`ExternalPreviewRouter:38`).
         //    - `OutputRingBuffer` — общий примитив реплея вывода, общий с Terminal (шапка
@@ -1229,6 +1271,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.ProjectServices",
                         "ClaudeHomeServer.Services.Execution",
                         "ClaudeHomeServer.Hubs",
+                        "Yarp.ReverseProxy",
                     })
                     .ToArray(),
                 new[]
@@ -1747,6 +1790,12 @@ public class SubsystemBoundaryTests
     {
         var ns = type.Namespace;
         if (ns is null) return true; // Безымянный namespace — не Services.*, разрешаем.
+
+        // Сборка `ClaudeHomeServer.Core` — спинка по построению (Composition/Http/
+        // Mcp-узлы плюс JsonFileStore/SsrfGuard/PermissionModeGuard/TeamProtocolMarkers).
+        // assembly-проверка важнее namespace: 4 файла с namespace `ClaudeHomeServer.Services`
+        // (root) физически живут в Core.dll и не должны флагаться как cross-vertical.
+        if (IsCoreAssembly(type)) return true;
 
         foreach (var exact in allowedExact)
         {

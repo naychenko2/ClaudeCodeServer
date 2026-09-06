@@ -84,7 +84,17 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Mcp",
+        // Сборка `ClaudeHomeServer.Core` — спинка (assembly-based check в
+        // `IsSharedAllowed`); Telemetry — observability-спинка; Protocol — WS-контракт.
+        // См. комментарии в SubsystemBoundaryTests.
+        "ClaudeHomeServer.Telemetry",
+        "ClaudeHomeServer.Protocol",
     };
+
+    /// <summary>Сборка-спинка из общего кода. Любой тип из `ClaudeHomeServer.Core.dll`
+    /// — инфраструктурный примитив, не сервисная логика (см. подробности в
+    /// <see cref="SubsystemBoundaryTests.CoreAssemblyName"/>).</summary>
+    private const string CoreAssemblyName = "ClaudeHomeServer.Core";
 
     /// <summary>Под-вертикали, на которые root-типы имеют право ссылаться
     /// как на общую инфраструктуру. По аналогии с per-vertical
@@ -344,6 +354,12 @@ public class RootSubsystemBoundaryTests
     {
         var ns = type.Namespace;
         if (ns is null) return true;
+
+        // Сборка-спинка (см. CoreAssemblyName в SubsystemBoundaryTests): JsonFileStore/
+        // SsrfGuard/PermissionModeGuard/TeamProtocolMarkers живут в `Core.dll`, но их
+        // namespace = `ClaudeHomeServer.Services` (root). Без assembly-проверки они бы
+        // считались «root-типами с внешними ссылками» и ловились как нарушения.
+        if (type.Assembly.GetName().Name == CoreAssemblyName) return true;
 
         foreach (var prefix in SharedAllowedPrefixes)
         {

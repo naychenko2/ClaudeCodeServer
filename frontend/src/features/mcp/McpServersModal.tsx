@@ -24,6 +24,9 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
   // «Найти сервер» не светилась у тех, кому каталог ещё не включили. На бэке
   // соответствующий ключ в FeatureFlagCatalog.All (заводит Денис)
   const catalogOn = useFeature(FLAGS.mcpCatalog);
+  // Higgsfield (волна 1): карточка встроенной интеграции показывается только при
+  // включённом флаге — решение живёт здесь, McpServerList принимает готовый признак
+  const higgsfieldOn = useFeature(FLAGS.higgsfield);
   const [tab, setTab] = useState<TabKey>('servers');
   // Правка существующей записи открывается на вкладке «Добавить» той же формой
   const [editing, setEditing] = useState<McpServer | null>(null);
@@ -142,6 +145,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
                 onCatalog={catalogOn ? () => setTab('catalog') : undefined}
                 onOpenAccess={() => setTab('access')}
                 onDelete={setPendingDelete}
+                showHiggsfield={higgsfieldOn}
               />
             )}
             {tab === 'add' && (

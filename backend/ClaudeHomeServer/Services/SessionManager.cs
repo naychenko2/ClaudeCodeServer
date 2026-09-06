@@ -592,6 +592,8 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly Mcp.McpStatusStore? _mcpStatus;
     // OAuth внешних серверов: обновление протухшего токена перед сборкой конфига хода; null — в тестах
     private readonly Mcp.McpOAuthService? _mcpOAuth;
+    // Встроенная интеграция Higgsfield: null — в тестах
+    private readonly Mcp.HiggsfieldIntegration? _higgsfield;
     // Recall паспортов изменений (этап 2, ADR-004 §5); null — в тестах, секции паспортов нет
     private readonly Dossiers.DossierRecallService? _dossierRecall;
     // Резолвер секций промпта специальности (план «Секции промптов», флаг
@@ -664,6 +666,8 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // Опционально (в тестах не передаётся): OAuth внешних серверов — обновление
         // истекающего токена перед ходом, иначе инструменты сервера получали бы 401
         Mcp.McpOAuthService? mcpOAuth = null,
+        // Опционально (в тестах не передаётся): встроенная интеграция Higgsfield
+        Mcp.HiggsfieldIntegration? higgsfield = null,
         // Опционально (в тестах не передаётся): recall паспортов изменений (этап 2,
         // ADR-004 §5) — пассивная секция промпта персоны; без него ходы идут как раньше
         Dossiers.DossierRecallService? dossierRecall = null,
@@ -706,6 +710,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _mcpSecrets = mcpSecrets;
         _mcpStatus = mcpStatus;
         _mcpOAuth = mcpOAuth;
+        _higgsfield = higgsfield;
         _dossierRecall = dossierRecall;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
@@ -3587,6 +3592,46 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         fresh.AlwaysLoad,
                         fresh.AuthVersion));
                 }
+
+                // Встроенная интеграция Higgsfield: та же логика, что для реестровых записей.
+                // Запись НЕ создаём — только если уже есть (TryGetRecord). Флаг проверяется
+                // на каждый ход; IsEnabledForOwner -> flags.IsEnabled.
+                if (_higgsfield is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.Higgsfield))
+                {
+                    var hf = _higgsfield.TryGetRecord(ownerId);
+                    if (hf?.Enabled == true)
+                    {
+                        var granted = _bindings.McpServerGranted(persona, "mcp:" + hf.Key);
+                        if (Mcp.McpDelivery.ShouldDeliver(hf, onInProject, isProjectChat, granted, readOnly))
+                        {
+                            var fresh = hf.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
+                                ? _mcpOAuth.EnsureFresh(ownerId, hf) : hf;
+                            if (fresh is null)
+                            {
+                                _log.LogWarning("MCP-сервер Higgsfield снят с хода: нужен вход (OAuth)");
+                            }
+                            else
+                            {
+                                var env = ResolveValues(fresh.Env);
+                                var headers = ResolveValues(fresh.Headers);
+                                if (!ApplyAuthHeaders(fresh, headers))
+                                    _log.LogWarning("MCP-сервер Higgsfield снят с хода: не найдено значение авторизации");
+                                else
+                                    servers.Add(new ExternalMcpServer(
+                                        fresh.Key,
+                                        fresh.Transport.ToString().ToLowerInvariant(),
+                                        null,
+                                        fresh.Args ?? [],
+                                        env,
+                                        fresh.Url,
+                                        headers,
+                                        fresh.AlwaysLoad,
+                                        fresh.AuthVersion));
+                            }
+                        }
+                    }
+                }
+
                 return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
             }
             catch (Exception ex)

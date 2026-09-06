@@ -2085,7 +2085,23 @@ export const api = {
     // и тихо уводит панель в MD-режим.
     embedCheck: (url: string) => checkReaderEmbeddable(url),
   },
+
+  // Higgsfield (волна 1): отдельный контроллер, идёт вне реестра MCP-серверов.
+  // Запись в реестре mcp-servers.json создаётся автоматически при первом login.
+  higgsfield: {
+    status: () => request<HiggsfieldStatus>('/mcp/integrations/higgsfield'),
+    login: () => request<HiggsfieldLoginResult>('/mcp/integrations/higgsfield/login', { method: 'POST' }),
+    logout: () => request<{ ok: true }>('/mcp/integrations/higgsfield/logout', { method: 'POST' }),
+    completeOAuth: (state: string, code: string) =>
+      request<{ ok: boolean }>('/mcp/integrations/higgsfield/complete', {
+        method: 'POST',
+        body: JSON.stringify({ state, code }),
+      }),
+  },
 };
+
+export type HiggsfieldStatus = { flagOn: boolean; connected: boolean; expiresAt: string | null };
+export type HiggsfieldLoginResult = { authorizeUrl: string; state: string; redirectUri: string };
 
 async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
   try {

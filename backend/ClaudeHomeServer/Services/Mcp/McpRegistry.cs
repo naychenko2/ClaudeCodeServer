@@ -23,7 +23,7 @@ public class McpRegistry
     public static readonly string[] ReservedKeys =
     [
         "tasks", "notes", "memory", "personas", "wsp", "notifications",
-        "widgets", "codegraph", "dify", "fal-ai", "glif",
+        "widgets", "codegraph", "dify", "fal-ai", "glif", "higgsfield",
     ];
 
     // Префикс серверов памяти персон-консультантов (pmem_<handle>)
@@ -33,7 +33,7 @@ public class McpRegistry
     /// Ключи интеграций продукта с внешними сервисами: они тоже встроенные (часть
     /// ReservedKeys), но ходят во внешний мир — на экране помечаются отдельно.
     /// </summary>
-    public static readonly string[] IntegrationKeys = ["dify", "fal-ai", "glif"];
+    public static readonly string[] IntegrationKeys = ["dify", "fal-ai", "glif", "higgsfield"];
 
     /// <summary>
     /// Группа сервера на экране «MCP-серверы» — см. <see cref="McpBuiltinGroups"/>.

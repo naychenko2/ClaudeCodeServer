@@ -8,6 +8,7 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { accessSummaryOn, mcpAuthLine, mcpStatusTone, plural } from './useMcpData';
 import type { McpData } from './useMcpData';
 import type { McpBuiltinServer, McpCatalogRevision, McpServer } from '../../types';
+import { HiggsfieldCard } from './HiggsfieldCard';
 
 // Вкладка «Серверы»: свои записи полноразмерными карточками, всё остальное — компактными
 // плитками по группам. Ось группировки — кто подключил сервер и кто им управляет:
@@ -43,7 +44,7 @@ const hintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
 };
 
-export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, onDelete }: {
+export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, onDelete, showHiggsfield }: {
   data: McpData;
   onEdit: (server: McpServer) => void;
   onAdd: () => void;
@@ -53,6 +54,9 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
   onCatalog?: () => void;
   onOpenAccess: () => void;
   onDelete: (server: McpServer) => void;
+  // Карточка Higgsfield живёт под фич-флагом: решение «показывать ли» принимает
+  // родитель по тому же правилу, что и каталог (флаг знает только он)
+  showHiggsfield?: boolean;
 }) {
   const { servers, builtin } = data;
   const hasLegacy = servers?.some(s => s.source !== 'manual') ?? false;
@@ -122,27 +126,32 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
       )}
 
       <div style={groupHeaderStyle}>Сервисы AI Home</div>
-      {serviceTiles.length === 0 ? (
+      {serviceTiles.length === 0 && !showHiggsfield ? (
         <div style={hintStyle}>
           Пока ничего не наблюдалось: статус серверов приезжает из первого же хода в чате.
         </div>
       ) : (
         <>
-          <div style={tileGridStyle}>
-            {serviceTiles.map(tile => (
-              <Tile
-                key={tile.key}
-                tile={tile}
-                title={SERVICE_TITLES[tile.key] ?? tile.key}
-                subtitle={tile.key}
-                badge={tile.group === 'integration' ? 'через интернет' : undefined}
-              />
-            ))}
-          </div>
-          <div style={hintStyle}>
-            Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
-            Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
-          </div>
+          {showHiggsfield && <HiggsfieldCard />}
+          {serviceTiles.length > 0 && (
+            <div style={tileGridStyle}>
+              {serviceTiles.map(tile => (
+                <Tile
+                  key={tile.key}
+                  tile={tile}
+                  title={SERVICE_TITLES[tile.key] ?? tile.key}
+                  subtitle={tile.key}
+                  badge={tile.group === 'integration' ? 'через интернет' : undefined}
+                />
+              ))}
+            </div>
+          )}
+          {serviceTiles.length > 0 && (
+            <div style={hintStyle}>
+              Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
+              Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
+            </div>
+          )}
         </>
       )}
 

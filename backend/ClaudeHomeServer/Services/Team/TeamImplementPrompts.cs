@@ -1,8 +1,8 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services.Prompts;
+namespace ClaudeHomeServer.Services.Team;
 
 // Тексты режима «Командная реализация»: обвязка хода штаба и
 // постановка под-задачи исполнителю. Держим их в одном месте — правило «любая работа

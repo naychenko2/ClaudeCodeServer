@@ -995,6 +995,17 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Llm.RecallItem",
                     "ClaudeHomeServer.Services.Llm.TurnRunPassport",
                     "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // Этап 4, шаг 2г-2 — переезд промптов штаба: ClaudeSession
+                    // (DecidePermissionAsync) ссылается на `TeamImplementPrompts.MaxInterviewRounds`
+                    // и `InterviewRoundsExhausted` для гейта AskUserQuestion. До переезда
+                    // шёл через префикс `Services.Prompts` в SharedAllowedPrefixes, но
+                    // после переезда тип в `Services.Team` — точный допуск.
+                    "ClaudeHomeServer.Services.Team.TeamImplementPrompts",
+                    // Этап 4, шаг 2г-2 — PersonaLayerContributor (в Turn-boundary) вызывает
+                    // TeamMechanicsPromptCatalog.BuildPromptBlock через return-тип; до переезда
+                    // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
+                    // точный допуск.
+                    "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
                 }),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).

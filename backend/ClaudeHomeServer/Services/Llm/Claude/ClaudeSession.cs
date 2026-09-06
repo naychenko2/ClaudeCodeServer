@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Telemetry;
 

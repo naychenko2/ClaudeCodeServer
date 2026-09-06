@@ -1,6 +1,6 @@
-using System.Text;
+﻿using System.Text;
 
-namespace ClaudeHomeServer.Services.Prompts;
+namespace ClaudeHomeServer.Services.Team;
 
 // Серверный мини-каталог командных механик для промпт-блока руководителя проекта
 // (мост в механики). Id СТРОГО из union TeamMechanicId

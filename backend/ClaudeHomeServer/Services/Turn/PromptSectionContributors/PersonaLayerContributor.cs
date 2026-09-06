@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Team;
 
 namespace ClaudeHomeServer.Services.Turn;
 
@@ -147,7 +148,7 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
         var project = _projects.GetById(projectId);
         if (project is null || project.DefaultPersonaId != persona.Id) return null;
         if (_skills is null) return null;
-        return Prompts.TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
+        return TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
     }
 
     private IReadOnlySet<string> InstalledSkillNames()

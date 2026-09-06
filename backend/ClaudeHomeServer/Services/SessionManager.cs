@@ -2934,7 +2934,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         if (session.ProjectId is not { } projectId) return null;
         var project = _projects.GetById(projectId);
         if (project is null || project.DefaultPersonaId != persona.Id) return null;
-        return Prompts.TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
+        return TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
     }
 
     // Имена установленных скиллов (глобальные + workflow-скрипты + плагинные) для фильтра

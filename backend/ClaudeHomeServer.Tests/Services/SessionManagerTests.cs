@@ -4163,6 +4163,198 @@ public class SessionManagerTests : IDisposable
             "чужой ключ события не тронул план по своему ключу — изоляция по TurnSeq");
     }
 
+    // --- Этап 4 / шаг 2в: восстановление отсечек сторожа волн через шину turn/completed ---
+    // Хелпер: штаб в стадии Wave, волна открыта, отсечки сторожа погашены (WaveStartedAt=null).
+    // Это именно то состояние, которое погасил OnStabAskQuestionAsync: координатор задал
+    // вопрос ASK посреди волны, сторож отключён, и теперь ход оборвался — старая ветка в
+    // OnMessageAsync (9441) возвращала отсечки синхронно по ExitedMessage. Перенесли на шину.
+    private async Task<(Session Session, Persona Backend, Persona Frontend)> MakeStabInWaveWithPausedWatchdogAsync(
+        string suffix)
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync(suffix);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Wave;
+            t.WaveNumber = 1;
+            t.ClosedWave = 0; // волна открыта
+            t.WaveStartedAt = null; // отсечки погашены вопросом ASK
+            return true;
+        });
+        return (session, backend, frontend);
+    }
+
+    // Чтение WaveStartedAt после шины — асинхронное (шина — fire-and-forget), ждём момент.
+    private static async Task<DateTimeOffset?> GetWaveStartedAtAsync(SessionManager sut, string sessionId,
+        int attempts = 20)
+    {
+        for (var i = 0; i < attempts; i++)
+        {
+            var ti = sut.GetById(sessionId)?.TeamImplement;
+            if (ti is not null && ti.WaveStartedAt is not null)
+                return ti.WaveStartedAt;
+            await Task.Delay(25);
+        }
+        return sut.GetById(sessionId)?.TeamImplement?.WaveStartedAt;
+    }
+
+    // Хелпер: довести штабный чат до стадии Wave и опубликовать turn/completed без полного
+    // прохода через HandleTeamTurnEndAsync (на interrupted/crashed/cancelled шим не зовёт
+    // HandleTeamTurnEndAsync — план в LastTeamTurnEnds не изымается). Для interrupted/crashed
+    // достаточно установить LastTurnSeq, чтобы подписчик смог найти entry.
+    private async Task PublishTurnCompletedForWaveAsync(
+        SessionManager sut, string sessionId, int turnSeq, string outcome)
+    {
+        var entry = GetEntry(sessionId);
+        _sut.GetById(sessionId)!.Status = SessionStatus.Working;
+        SetLastTurnSeq(entry, turnSeq);
+        await PublishTurnCompletedAsync(sut, sessionId, turnSeq, outcome);
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeInterrupted_ВосстанавливаетОтсечкиСторожа()
+    {
+        // interrupted — ExitedMessage доезжает downstream (SettleAsync; fallback на 648
+        // для гонки), и шим обязан вернуть отсечки сторожа. Старая ветка в OnMessageAsync
+        // на 9441 делала это синхронно — теперь на шине.
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-interrupted");
+        var before = _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt;
+        before.Should().BeNull("предусловие: сторож погашен");
+
+        await PublishTurnCompletedForWaveAsync(_sut, session.Id, 7, "interrupted");
+
+        var after = await GetWaveStartedAtAsync(_sut, session.Id);
+        after.Should().NotBeNull(
+            "interrupted — ExitedMessage доезжает, шим должен восстановить отсечки сторожа");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeCrashed_ВосстанавливаетОтсечкиСторожа()
+    {
+        // crashed — путь двоится (SettleAsync vs FailClosedAsync), на шине различить нельзя,
+        // но RestoreWaveWatchdogIfPaused сам гейтится no-op по стадии/волне. Сторож должен
+        // восстановиться, потому что чаще всего crashed идёт через SettleAsync с задержанным
+        // ExitedMessage — а FailClosedAsync на этом стенде не воспроизвести без провальной
+        // попытки доставки. Этот тест проверяет, что шим НЕ молчит на crashed глобально:
+        // если восстановление не происходит — путь сломан.
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-crashed");
+
+        await PublishTurnCompletedForWaveAsync(_sut, session.Id, 7, "crashed");
+
+        var after = await GetWaveStartedAtAsync(_sut, session.Id);
+        after.Should().NotBeNull(
+            "crashed — ExitedMessage доезжает в SettleAsync-варианте, шим восстанавливает сторож; "
+            + "для FailClosedAsync-варианта сам RestoreWaveWatchdogIfPaused гейтится no-op");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeCancelled_СторожНеТрогает()
+    {
+        // cancelled — return до SettleAsync, downstream ничего не получает. Старая ветка на
+        // ExitedMessage здесь не срабатывала (ExitedMessage не приходил) — и новая не должна.
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-cancelled");
+
+        await PublishTurnCompletedForWaveAsync(_sut, session.Id, 7, "cancelled");
+
+        // Достаточно одной проверки после паузы — на cancelled шим молча возвращается.
+        await Task.Delay(500);
+        var after = _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt;
+        after.Should().BeNull(
+            "cancelled — downstream ничего не получает, отсечки сторожа восстанавливать нечем");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeSuccess_ВосстанавливаетОтсечкиСторожа()
+    {
+        // success — путь через HandleTeamTurnEndAsync, который и до этой правки звал
+        // RestoreWaveWatchdogIfPaused на 7593. Тест проверяет, что штатный путь жив.
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-success");
+
+        await DriveOneTeamTurnAsync(_sut, session.Id, 7, "success",
+            "Координатор ответил без маркера, волна не закрыта.", failed: false);
+
+        var after = await GetWaveStartedAtAsync(_sut, session.Id);
+        after.Should().NotBeNull(
+            "success — HandleTeamTurnEndAsync зовёт RestoreWaveWatchdogIfPaused на 7593; "
+            + "это поведение не должно было сломаться переездом");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeFailed_ВосстанавливаетОтсечкиСторожа()
+    {
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-failed");
+
+        await DriveOneTeamTurnAsync(_sut, session.Id, 7, "failed",
+            "Ход упал, координатор не смог ответить.", failed: true);
+
+        var after = await GetWaveStartedAtAsync(_sut, session.Id);
+        after.Should().NotBeNull("failed — путь через HandleTeamTurnEndAsync восстанавливает сторож");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeEgressDown_ВосстанавливаетОтсечкиСторожа()
+    {
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-egress");
+
+        await DriveOneTeamTurnAsync(_sut, session.Id, 7, "egress_down",
+            "Канал наружу недоступен.", failed: true);
+
+        var after = await GetWaveStartedAtAsync(_sut, session.Id);
+        after.Should().NotBeNull("egress_down — путь через HandleTeamTurnEndAsync восстанавливает сторож");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_OutcomeLocalDown_ВосстанавливаетОтсечкиСторожа()
+    {
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-local");
+
+        await DriveOneTeamTurnAsync(_sut, session.Id, 7, "local_down",
+            "Локальный движок не поднялся.", failed: true);
+
+        var after = await GetWaveStartedAtAsync(_sut, session.Id);
+        after.Should().NotBeNull("local_down — путь через HandleTeamTurnEndAsync восстанавливает сторож");
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_НетTeamImplement_InterruptedМолчит()
+    {
+        // Гард шима: без живого TeamImplement (чат вне режима «Командная реализация»)
+        // восстанавливать отсечки нечего — шим обязан тихо выйти.
+        var dir = MkProjectDir("rww-no-ti");
+        var project = _projectManager.Create("RWW-NTI", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Status = SessionStatus.Working;
+        session.TeamImplement.Should().BeNull("предусловие: чат без штаба");
+
+        // Публикуем turn/completed — шим не должен упасть на null TeamImplement.
+        await PublishTurnCompletedForWaveAsync(_sut, session.Id, 7, "interrupted");
+
+        // Если шим дёрнул что-то на null и упал, тест кинул бы исключение раньше.
+        await Task.Delay(200);
+    }
+
+    [Fact]
+    public async Task RestoreWaveWatchdog_ЗакрытаяВолна_InterruptedНеТрогает()
+    {
+        // Гард самого RestoreWaveWatchdogIfPaused: если волна уже закрыта
+        // (ClosedWave >= WaveNumber), отсечки возвращать нечего. interrupted приходит,
+        // шим зовёт метод, метод сам гейтится no-op.
+        var (session, _, _) = await MakeStabInWaveWithPausedWatchdogAsync("rww-closed");
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 2;
+            t.ClosedWave = 2; // волна уже закрыта
+            t.WaveStartedAt = null; // но отсечки всё ещё погашены
+            return true;
+        });
+
+        await PublishTurnCompletedForWaveAsync(_sut, session.Id, 7, "interrupted");
+
+        await Task.Delay(500);
+        var after = _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt;
+        after.Should().BeNull(
+            "ClosedWave >= WaveNumber — гард RestoreWaveWatchdogIfPaused не возвращает отсечки");
+    }
+
     // Ждём именно доставку (SendMessageAsync мока): drain — fire-and-forget Task.Run,
     // а Invocations целиком не годятся — там уже лежат Interrupt/Info этого же сценария
     private static async Task WaitForSendAsync(Mock<ILlmSessionAdapter> adapter, TimeSpan timeout)
@@ -7236,7 +7428,9 @@ public class SessionManagerTests : IDisposable
     public async Task ОбрывХодаБезResult_ПослеВопросаВВолне_ТожеВозвращаетОтсечкиСторожа()
     {
         // Прерывание или смерть процесса посреди ASK не шлёт result — HandleTeamTurnEndAsync
-        // по такому ходу не зовётся; без возврата отсечек волна осталась бы без надзора
+        // по такому ходу не зовётся; без возврата отсечек волна осталась бы без надзора.
+        // Этап 4 / шаг 2в: путь с ExitedMessage перенесён на шину turn/completed —
+        // публикуем Outcome=interrupted через PublishTurnCompletedAsync (а не InvokeOnMessageAsync).
         var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-ask-interrupted");
         await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
         _sut.WithTeamState(session.Id, t =>
@@ -7248,11 +7442,24 @@ public class SessionManagerTests : IDisposable
         await _sut.OnStabAskQuestionAsync(session.Id);
         _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().BeNull();
 
-        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
-            new ExitedMessage());
+        // Шина публикует turn/completed один раз на ход, подписчик HandleTeamTurnCompletedShim
+        // восстанавливает сторож на исходе interrupted. Перед публикацией — Working/LastTurnSeq,
+        // иначе подписчик не найдёт entry.
+        var entry = GetEntry(session.Id);
+        _sut.GetById(session.Id)!.Status = SessionStatus.Working;
+        SetLastTurnSeq(entry, 7);
+        await PublishTurnCompletedAsync(_sut, session.Id, 7, "interrupted");
+
+        // Шина — fire-and-forget, обработка асинхронная.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while (DateTime.UtcNow < deadline
+               && _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt is null)
+        {
+            await Task.Delay(25);
+        }
 
         _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().NotBeNull(
-            "обрыв хода возвращает сторожа зависших волн, как и штатный конец хода");
+            "обрыв хода возвращает сторожа зависших волн — теперь через подписку turn/completed");
     }
 
     // Фолбэк единого канала: маркер <escalate:decision> из протокола координатора ушёл, но

@@ -5159,9 +5159,9 @@ public class SessionManagerTests : IDisposable
         var (session, plan) = await MakeRestartedStabWithPlanAsync("ti-plan-save-disk");
         plan.Subtasks[0].TaskId = "task-42";
 
-        await (_sut as ITeamStopAndReport)!.SaveTeamPlanCardAsync(session.Id, plan);
+        await (_sut as ITeamCardStore)!.SaveTeamPlanCardAsync(session.Id, plan);
 
-        var reloaded = await (_sut as ITeamStopAndReport)!.GetTeamPlanAsync(session.Id, plan.Id);
+        var reloaded = await (_sut as ITeamCardStore)!.GetTeamPlanAsync(session.Id, plan.Id);
         reloaded!.Subtasks[0].TaskId.Should().Be("task-42");
     }
 
@@ -5976,7 +5976,7 @@ public class SessionManagerTests : IDisposable
             Title = "Бюджет итерации израсходован",
             Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, "addBudget",
             userId: TestUserId);
 
@@ -6000,7 +6000,7 @@ public class SessionManagerTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var card = Sent<TeamEscalationMessage>().Single();
         card.Type.Should().Be("team_escalation");
@@ -6025,7 +6025,7 @@ public class SessionManagerTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, oldCard);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, oldCard);
 
         await _sut.SetTeamImplementAsync(session.Id, enabled: true, coordinatorPersonaId: backend.Id,
             userId: TestUserId);
@@ -6036,7 +6036,7 @@ public class SessionManagerTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, newCard);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, newCard);
 
         var cards = Sent<TeamEscalationMessage>().ToList();
         cards.Single(c => c.Title == "Первая остановка").PersonaId.Should().Be(originalCoordinatorId,
@@ -6057,7 +6057,7 @@ public class SessionManagerTests : IDisposable
             Title = "Исполнитель застрял: нет доступа",
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, "answer",
             "доступ выдал, продолжай", TestUserId);
@@ -6110,7 +6110,7 @@ public class SessionManagerTests : IDisposable
             Title = "Исполнитель застрял: нет доступа",
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, null,
             "доступ выдал вручную, продолжай без кнопки", TestUserId);
@@ -6156,7 +6156,7 @@ public class SessionManagerTests : IDisposable
             Title = "Практика ждёт решения",
             Actions = TeamEscalationActions.For(kind),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, actionId, userId: TestUserId);
 
@@ -6175,7 +6175,7 @@ public class SessionManagerTests : IDisposable
             Title = "Бюджет израсходован",
             Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, "finish", userId: TestUserId);
 
@@ -6204,7 +6204,7 @@ public class SessionManagerTests : IDisposable
             Title = "Работа выходит за план",
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: TestUserId);
 
@@ -6225,7 +6225,7 @@ public class SessionManagerTests : IDisposable
             t.WaveNumber = 1; t.ClosedWave = 1; t.PlannedWaves = 2;
             return true;
         });
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, new TeamEscalation
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, new TeamEscalation
         {
             Kind = TeamEscalationKind.PlanDeviation,
             Title = "Работа выходит за план",
@@ -6245,7 +6245,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, _, _) = await MakeTeamStabAsync("ti-escalation-alien");
         var escalation = new TeamEscalation { Kind = TeamEscalationKind.Blocker, Title = "Застрял" };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, "answer",
             userId: "another-user");
@@ -6541,7 +6541,7 @@ public class SessionManagerTests : IDisposable
             Details = "нет доступа к API",
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, blocker);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, blocker);
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
 
         await _sut.HandleTeamTurnEndAsync(session.Id,
@@ -6567,7 +6567,7 @@ public class SessionManagerTests : IDisposable
             Details = "нет доступа к API",
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, blocker);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, blocker);
         (_sut as ITeamRunState)!.WithTeamState(session.Id, t =>
         {
             t.WaveNumber = 2; t.PlannedWaves = 2; t.ClosedWave = 2;
@@ -6596,7 +6596,7 @@ public class SessionManagerTests : IDisposable
             Details = "нет доступа к API",
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, blocker);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, blocker);
         (_sut as ITeamRunState)!.WithTeamState(session.Id, t =>
         {
             t.WaveNumber = 1; t.PlannedWaves = 2; t.ClosedWave = 0;
@@ -6626,7 +6626,7 @@ public class SessionManagerTests : IDisposable
             Details = "нет доступа к API",
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, blocker);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, blocker);
         (_sut as ITeamRunState)!.WithTeamState(session.Id, t =>
         {
             t.WaveNumber = 2; t.PlannedWaves = 2; t.ClosedWave = 2;
@@ -7293,7 +7293,7 @@ public class SessionManagerTests : IDisposable
         // Работа не возобновляется: карточка возврата штатно переводит практику в «ждёт
         // решения» — ровно как кнопка режима в ChatsController (единая точка остановки)
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
-        var stopCard = (await (_sut as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var stopCard = (await (_sut as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(e => e.Kind == TeamEscalationKind.Stopped);
         stopCard.Actions.Select(a => a.Id).Should().Equal(["resume", "finish"],
             "продолжить остановленную практику можно только по этой карточке");
@@ -7322,12 +7322,12 @@ public class SessionManagerTests : IDisposable
             Title = "Добавочная волна 2",
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
         };
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, second);
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, second);
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, second.Id, "stop", userId: TestUserId);
         ok.Should().BeTrue();
         await _sut.StopTeamImplementAsync(session.Id, TestUserId);
 
-        (await (_sut as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sut as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Count(e => e.Kind == TeamEscalationKind.Stopped)
             .Should().Be(1, "открытая карточка возврата уже висит — вторая была бы спамом");
         Sent<TeamEscalationMessage>()
@@ -7873,7 +7873,7 @@ public class SessionManagerTests : IDisposable
             t.Budget.TasksUsed = 3;
             return true;
         });
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, new TeamEscalation
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, new TeamEscalation
         {
             Kind = TeamEscalationKind.Blocker,
             Title = "Исполнитель встал",
@@ -7897,7 +7897,7 @@ public class SessionManagerTests : IDisposable
     public async Task ТекстВОжиданииРешения_ДоПервойВолны_ВозвращаетВСтадиюДоОжидания()
     {
         var (session, _, _) = await MakeInterviewStabAsync("ti-decision-text-early");
-        await (_sut as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, new TeamEscalation
+        await (_sut as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, new TeamEscalation
         {
             Kind = TeamEscalationKind.ProductDecision,
             Title = "Координатор не понял вводную",

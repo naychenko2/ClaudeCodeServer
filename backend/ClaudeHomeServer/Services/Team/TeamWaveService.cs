@@ -42,9 +42,9 @@ public class TeamWaveService
     private readonly ITeamRunState _run;
     private readonly ITeamTurnIntake _intake;
     // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2, docs/research/team-di-migration-2026-09.md §5):
-    // upcast из _sessions — добавлять параметр конструктора нельзя, ITeamStopAndReport
+    // upcast из _sessions — добавлять параметр конструктора нельзя, ITeamCardStore
     // internal (как и прочие швы), а TeamWaveService публичный.
-    private readonly ITeamStopAndReport _stopReport;
+    private readonly ITeamCardStore _stopReport;
     private readonly TaskManager _tasks;
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;

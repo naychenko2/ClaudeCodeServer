@@ -655,7 +655,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.TaskFailed),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "skip", userId: UserId);
 
@@ -681,7 +681,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "drop", userId: UserId);
 
@@ -711,7 +711,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveGate),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "editRest", userId: UserId);
 
@@ -742,7 +742,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
 
         // Волна закрылась, пока карточка ждала ответа: ClosedWave == WaveNumber, отсечка пуста
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
@@ -771,7 +771,7 @@ public class TeamWaveServiceTests : IDisposable
         var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
-        var gate = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var gate = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveGate);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, gate.Id, "runNext", userId: UserId);
@@ -791,7 +791,7 @@ public class TeamWaveServiceTests : IDisposable
         var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
-        var gate = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var gate = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveGate);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, gate.Id, "finish", userId: UserId);
@@ -820,7 +820,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 2,
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, info);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, info);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, info.Id, "stop", userId: UserId);
 
@@ -854,7 +854,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         // Волна закрылась, пока карточка ждала ответа: гейт-карточку закрытие не подняло
         // (практика ждёт человека) — форма мёртвой зоны при снятых авто-волнах
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
@@ -865,7 +865,7 @@ public class TeamWaveServiceTests : IDisposable
         ok.Should().BeTrue();
         _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
             .Should().BeEmpty("авто-волны сняты — «Разрешить» по чужой карточке не заменяет кнопку запуска");
-        var gate = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var gate = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveGate);
         gate.Title.Should().Be("Волна 1 закрыта. Запустить волну 2?",
             "вместо раздачи человек получает гейт-карточку");
@@ -888,7 +888,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
 
@@ -896,7 +896,7 @@ public class TeamWaveServiceTests : IDisposable
 
         _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
             .Should().BeEmpty("текстовый ответ — не кнопка «Запустить»: авто-волны сняты");
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Should().ContainSingle(c => c.Kind == TeamEscalationKind.WaveGate,
                 "человек получает гейт, а не молчаливую раздачу");
         Team(session.Id).Stage.Should().Be(TeamImplementStage.AwaitingDecision);
@@ -946,7 +946,7 @@ public class TeamWaveServiceTests : IDisposable
 
         _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
             .Should().BeEmpty("авто-волны сняты — выход из интервью не заменяет кнопку запуска");
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Should().ContainSingle(c => c.Kind == TeamEscalationKind.WaveGate);
         Team(session.Id).Stage.Should().Be(TeamImplementStage.AwaitingDecision);
     }
@@ -965,7 +965,7 @@ public class TeamWaveServiceTests : IDisposable
         var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
-        var gate = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var gate = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveGate);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, gate.Id, actionId, userId: UserId);
@@ -990,7 +990,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
 
@@ -1018,7 +1018,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         _sessions.GetById(session.Id)!.Status = SessionStatus.Working;
@@ -1047,7 +1047,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         // Итерация признана завершённой на первой волне
@@ -1080,7 +1080,7 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.CheckStalledWavesAsync();
 
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Where(c => c.Kind == TeamEscalationKind.WaveStalled).Should().BeEmpty(
                 $"в стадии «{stage}» работы и не должно быть — тревожить человека не за что");
     }
@@ -1104,7 +1104,7 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.CheckStalledWavesAsync();
 
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Where(c => c.Kind == TeamEscalationKind.WaveStalled).Should().BeEmpty(
                 "остановлено человеком — стоящий конвейер тут ожидаем");
     }
@@ -1281,7 +1281,7 @@ public class TeamWaveServiceTests : IDisposable
         await _sut.CheckStalledWavesAsync();
         await _sut.CheckStalledWavesAsync();
 
-        var open = await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id);
+        var open = await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id);
         open.Where(c => c.Kind == TeamEscalationKind.WaveStalled).Should().ContainSingle(
             "карточка о стоящем конвейере нужна ровно одна");
         Team(session.Id).Stage.Should().Be(TeamImplementStage.AwaitingDecision,
@@ -1301,7 +1301,7 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.CheckStalledWavesAsync();
 
-        var open = await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id);
+        var open = await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id);
         open.Where(c => c.Kind == TeamEscalationKind.WaveStalled).Should().BeEmpty(
             "порог мёртвой зоны ещё не вышел");
     }
@@ -1324,7 +1324,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         (_sessions as ITeamRunState)!.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Wave; return true; });
@@ -1332,7 +1332,7 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.CheckStalledWavesAsync();
 
-        var card = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var card = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveStalled);
         card.Actions.Select(a => a.Id).Should().NotContain("drop", "снимать с карточки мёртвой зоны нечего");
         card.Actions.Select(a => a.Id).Should().Equal("restart", "finish");
@@ -1570,7 +1570,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, budgetCard);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, budgetCard);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, budgetCard.Id, "addBudget",
             userId: UserId);
@@ -1596,7 +1596,7 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.Stopped),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, stopCard);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, stopCard);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, stopCard.Id, "resume", userId: UserId);
 
@@ -1624,7 +1624,7 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.CheckStalledWavesAsync();
 
-        var card = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var card = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveStalled);
         card.TaskId.Should().NotBeNull("иначе «Снять» нечего снимать — ветка drop не сработает");
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, card.Id, "drop", userId: UserId);
@@ -1649,13 +1649,13 @@ public class TeamWaveServiceTests : IDisposable
             Wave = 1,
             Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(session.Id, escalation);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(session.Id, escalation);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         (_sessions as ITeamRunState)!.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Wave; return true; });
         _sessions.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-1);
         await _sut.CheckStalledWavesAsync();
-        var card = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        var card = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Single(c => c.Kind == TeamEscalationKind.WaveStalled);
 
         var ok = await _sessions.RespondTeamEscalationAsync(session.Id, card.Id, "restart", userId: UserId);
@@ -1684,7 +1684,7 @@ public class TeamWaveServiceTests : IDisposable
         await _sessions.SendMessageAsync(session.Id, "да, поехали", []);
         await _sessions.SendMessageAsync(session.Id, "ну что там", []);
 
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Where(c => c.Kind == TeamEscalationKind.WaveGate)
             .Should().ContainSingle("на одну закрытую волну человеку показывают один гейт, "
                 + "а не по карточке на каждое его сообщение");
@@ -1819,8 +1819,8 @@ public class TeamWaveServiceTests : IDisposable
 
         // Независимые чтения — так же, как ResolveTeamEscalationAsync читает план заново
         // перед КАЖДЫМ вызовом WaveStarter на очередной клик по карточке
-        var snapshot1 = (await (_sessions as ITeamStopAndReport)!.GetTeamPlanAsync(session.Id, plan.Id))!;
-        var snapshot2 = (await (_sessions as ITeamStopAndReport)!.GetTeamPlanAsync(session.Id, plan.Id))!;
+        var snapshot1 = (await (_sessions as ITeamCardStore)!.GetTeamPlanAsync(session.Id, plan.Id))!;
+        var snapshot2 = (await (_sessions as ITeamCardStore)!.GetTeamPlanAsync(session.Id, plan.Id))!;
         snapshot1.Should().NotBeSameAs(snapshot2,
             "без аккумулятора план десериализуется заново на каждое чтение — предпосылка гонки");
 
@@ -1857,7 +1857,7 @@ public class TeamWaveServiceTests : IDisposable
 
         var team = Team(session.Id);
         team.Budget.RetriesUsed.Should().Be(2, "у каждой из двух под-задач — ровно одна перевыдача");
-        var reloaded = (await (_sessions as ITeamStopAndReport)!.GetTeamPlanAsync(session.Id, plan.Id))!;
+        var reloaded = (await (_sessions as ITeamCardStore)!.GetTeamPlanAsync(session.Id, plan.Id))!;
         reloaded.Subtasks.Should().OnlyContain(s => s.Attempts == 2,
             "провал соседней под-задачи не должен затирать Attempts++ на диске (m2)");
     }
@@ -2036,7 +2036,7 @@ public class TeamWaveServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow - age,
             Actions = TeamEscalationActions.For(kind),
         };
-        await (_sessions as ITeamStopAndReport)!.PublishTeamEscalationAsync(sessionId, card);
+        await (_sessions as ITeamCardStore)!.PublishTeamEscalationAsync(sessionId, card);
         return card;
     }
 
@@ -2055,7 +2055,7 @@ public class TeamWaveServiceTests : IDisposable
         n.Body.Should().Be("Бюджет итерации израсходован · без ответа 2 ч",
             "заголовок карточки и целые часы без ответа");
         n.SessionId.Should().Be(session.Id);
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id)
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id)
             .RemindersSent.Should().Be(1, "счётчик напоминаний живёт на карточке");
     }
 
@@ -2082,7 +2082,7 @@ public class TeamWaveServiceTests : IDisposable
         Notifications().Should().ContainSingle();
 
         // Состариваем первое напоминание на четыре часа: карточка — живой объект аккумулятора
-        var open = (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id);
+        var open = (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id);
         open.RemindersSent.Should().Be(1);
         open.LastReminderAt = DateTime.UtcNow.AddHours(-4);
 
@@ -2093,7 +2093,7 @@ public class TeamWaveServiceTests : IDisposable
         open.LastReminderAt = DateTime.UtcNow.AddHours(-25);
         await _sut.CheckAwaitingEscalationsAsync();
         Notifications().Should().HaveCount(2, "максимум два напоминания — навязчивость хуже пропущенного сигнала");
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id)
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id)
             .RemindersSent.Should().Be(2);
     }
 
@@ -2342,7 +2342,7 @@ public class TeamWaveServiceTests : IDisposable
 
         result.Outcome.Should().Be("escalated", "вторая перевыдача той же под-задачи не даётся");
         result.Message.Should().Contain("перевыдача не помогла");
-        (await (_sessions as ITeamStopAndReport)!.GetOpenTeamEscalationsAsync(session.Id))
+        (await (_sessions as ITeamCardStore)!.GetOpenTeamEscalationsAsync(session.Id))
             .Should().ContainSingle(c => c.Kind == TeamEscalationKind.TaskFailed);
     }
 

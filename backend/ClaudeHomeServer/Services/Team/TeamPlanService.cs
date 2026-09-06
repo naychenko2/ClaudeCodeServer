@@ -43,7 +43,7 @@ internal sealed class TeamPlanService
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
     // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
-    private readonly ITeamStopAndReport _stopReport;
+    private readonly ITeamCardStore _stopReport;
     private readonly TeamPlanningService? _planning;
     private readonly TeamCoordinator _coordinator;
     private readonly PersonaManager _personas;

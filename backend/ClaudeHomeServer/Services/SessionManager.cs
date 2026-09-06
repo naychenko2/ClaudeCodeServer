@@ -17,7 +17,7 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Services;
 
 public class SessionManager : IDisposable, ITeamNotifier,
-    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake, ITeamStopAndReport
+    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake, ITeamCardStore
 {
     private class SessionEntry
     {
@@ -566,7 +566,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly ITeamHistoryStore _teamHistory;
     private readonly ITeamRunState _teamRunState;
     private readonly ITeamTurnIntake _teamIntake;
-    private readonly ITeamStopAndReport _teamStopAndReport;
+    private readonly ITeamCardStore _teamStopAndReport;
     // Координатор решений по карточке плана (волна Г): запуск работы, закрытие интервью
     // и реакция на карточку плана. Owning-паттерн (создаётся в конструкторе, в DI
     // переедет на шаге 2г-4).
@@ -6775,7 +6775,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             && teamNow.PlanCardId is { } planId
             && _teamCoordinator.WaveStarter is { } starter)
         {
-            var plan = await ((ITeamStopAndReport)this).GetTeamPlanAsync(sessionId, planId);
+            var plan = await ((ITeamCardStore)this).GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
                 try { await starter(entry.Info, plan, TeamWaveTrigger.StateCatchUp); }
@@ -6877,7 +6877,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Actions = TeamEscalationActions.For(TeamEscalationKind.NeedsClarification),
         };
         if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, card);
-        else await ((ITeamStopAndReport)this).PublishTeamEscalationAsync(sessionId, card);
+        else await ((ITeamCardStore)this).PublishTeamEscalationAsync(sessionId, card);
 
         if (withTurn)
             await _teamIntake.SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
@@ -7124,27 +7124,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     void ITeamTurnIntake.InterruptTurn(string sessionId) => Interrupt(sessionId);
 
-    // --- ITeamStopAndReport (шов 5) ---
+    // --- ITeamCardStore (шов 5) ---
     // Публикация карточки остановки: запись в ленту + WS + стадия «ждёт решения».
     // Тело в TeamDecisionService (волна Д).
-    Task ITeamStopAndReport.PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation) =>
+    Task ITeamCardStore.PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation) =>
         _teamDecision.PublishTeamEscalationAsync(sessionId, escalation);
 
     // Открытые (не resolved) карточки остановки чата.
-    Task<IReadOnlyList<TeamEscalation>> ITeamStopAndReport.GetOpenTeamEscalationsAsync(string sessionId) =>
+    Task<IReadOnlyList<TeamEscalation>> ITeamCardStore.GetOpenTeamEscalationsAsync(string sessionId) =>
         _teamDecision.GetOpenTeamEscalationsAsync(sessionId);
 
     // Пометка отправленного напоминания по карточке остановки.
-    Task<bool> ITeamStopAndReport.MarkTeamEscalationRemindedAsync(string sessionId, string escalationId) =>
+    Task<bool> ITeamCardStore.MarkTeamEscalationRemindedAsync(string sessionId, string escalationId) =>
         _teamDecision.MarkTeamEscalationRemindedAsync(sessionId, escalationId);
 
     // Сохранить карточку плана в историю чата после правки бэкендом (Э3 проставляет TaskId).
-    Task ITeamStopAndReport.SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan) =>
+    Task ITeamCardStore.SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan) =>
         _teamPlan.SaveTeamPlanCardAsync(sessionId, plan);
 
     // План итерации по id: Accumulator.FindTeamPlanAny для активного чата,
     // TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
-    async Task<TeamImplementPlan?> ITeamStopAndReport.GetTeamPlanAsync(string sessionId, string planId)
+    async Task<TeamImplementPlan?> ITeamCardStore.GetTeamPlanAsync(string sessionId, string planId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (entry.Accumulator is { } acc) return acc.FindTeamPlanAny(planId);
@@ -7220,7 +7220,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Actions = TeamEscalationActions.For(kind),
         };
         if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, escalation);
-        else await ((ITeamStopAndReport)this).PublishTeamEscalationAsync(sessionId, escalation);
+        else await ((ITeamCardStore)this).PublishTeamEscalationAsync(sessionId, escalation);
     }
 
     // Отдельное git worktree чата: вкл — создать дерево на новой ветке от HEAD проекта и

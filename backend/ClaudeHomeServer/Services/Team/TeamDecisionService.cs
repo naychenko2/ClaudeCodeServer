@@ -69,7 +69,7 @@ internal sealed class TeamDecisionService
     private readonly ITeamRunState _run;
     private readonly ITeamTurnIntake _intake;
     // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
-    private readonly ITeamStopAndReport _stopReport;
+    private readonly ITeamCardStore _stopReport;
     private readonly PersonaManager _personas;
     private readonly ILogger<TeamDecisionService> _log;
 

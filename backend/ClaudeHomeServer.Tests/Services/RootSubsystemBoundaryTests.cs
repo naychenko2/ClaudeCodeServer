@@ -85,9 +85,8 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Mcp",
         // Сборка `ClaudeHomeServer.Core` — спинка (assembly-based check в
-        // `IsSharedAllowed`); Telemetry — observability-спинка; Protocol — WS-контракт.
+        // `IsSharedAllowed`); Protocol — WS-контракт.
         // См. комментарии в SubsystemBoundaryTests.
-        "ClaudeHomeServer.Telemetry",
         "ClaudeHomeServer.Protocol",
     };
 
@@ -235,6 +234,10 @@ public class RootSubsystemBoundaryTests
         // `TaskExecutionService` материализует nested `Spend.TaskPromptMetricsStore+Entry`
         // в async-state (поле state-машины). Точечный допуск на nested-тип.
         "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore+Entry",
+        // Telemetry (бывший префикс, заменён точечным допуском):
+        // `PersonasCrudService`/`OnboardingController`/`ProjectPresetsController`
+        // зовут `ServerMetrics.Record*` из тел методов.
+        "ClaudeHomeServer.Telemetry.ServerMetrics",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

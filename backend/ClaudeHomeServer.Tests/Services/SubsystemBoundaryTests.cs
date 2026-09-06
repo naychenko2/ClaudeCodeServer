@@ -101,11 +101,6 @@ public class SubsystemBoundaryTests
         // вертикали (SsrfGuard/JsonFileStore/PermissionModeGuard/TeamProtocolMarkers
         // и Composition/Http/Mcp-узлы). Контроль на уровне сборки, не namespace:
         // см. `CoreAssemblyName` ниже и `IsCoreAssembly`.
-        // Телеметрия (ClaudeHomeServer/Telemetry/) — observability-спинка: alert-digest,
-        // gauges, метрики, turn-telemetry. Пробрасывается через `SharedAllowedPrefixes`,
-        // чтобы не открывать префикс каждой вертикали вручную (Knowledge, Memory,
-        // Mcp, Llm используют DifyErrorCategorizer/ServerMetrics/TurnTelemetry).
-        "ClaudeHomeServer.Telemetry",
         // `ClaudeHomeServer.Protocol` — WS-контракт с фронтом. Объявлен спиной по
         // решению архитектора (задача `8beee75e`, ADR-014 §«Решение по Protocol»):
         // record-DTO дискриминируются по `type` в едином потоке `ServerMessage`,
@@ -669,6 +664,11 @@ public class SubsystemBoundaryTests
                     // (задача `8beee75e`): `ProjectKnowledgeSyncService` материализует
                     // enum в поле async-state-машины. Точечный допуск по образцу Git.
                     "ClaudeHomeServer.Services.FileMutationKind",
+                    // Telemetry (бывший префикс, заменён точечным допуском):
+                    // `ProjectKnowledgeSyncService` логирует Dify-ошибки через
+                    // ServerMetrics.RecordDifySyncError + DifyErrorCategorizer.
+                    "ClaudeHomeServer.Telemetry.ServerMetrics",
+                    "ClaudeHomeServer.Telemetry.DifyErrorCategorizer",
                 }),
         },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
@@ -828,6 +828,11 @@ public class SubsystemBoundaryTests
                     // PersonaMemoryAutolearnService.cs:92 и TeamMemoryAutolearnService.cs:106,
                     // рефлексией не ловится — зафиксирован для будущего IL-скана.
                     "ClaudeHomeServer.Services.SessionSummaryService",
+                    // Telemetry (бывший префикс, заменён точечным допуском):
+                    // `MemoryDify` логирует Dify-ошибки через
+                    // ServerMetrics.RecordDifySyncError + DifyErrorCategorizer.
+                    "ClaudeHomeServer.Telemetry.ServerMetrics",
+                    "ClaudeHomeServer.Telemetry.DifyErrorCategorizer",
                 }),
         },
         // === Шаг 2б плана выноса штаба (этап 4): интерфейс-шов `ITeamNotifier`
@@ -1036,6 +1041,10 @@ public class SubsystemBoundaryTests
                     // Spend — ISpendCollector пишут все четыре ход-раннера (cloud-cheap,
                     // Ollama/LlamaServer и OneShot-Claude). Префикс не открываем.
                     "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                    // Telemetry (бывший префикс, заменён точечным допуском):
+                    // `ClaudeSession` зовёт `TurnTelemetry.StartTurnSpan`/`RecordTurnResult`
+                    // и прочие методы из тел async-методов.
+                    "ClaudeHomeServer.Telemetry.TurnTelemetry",
                     // PromptSnapshotStore (Services/PromptSnapshotStore.cs) — ClaudeSession
                     // материализует тип в async-state `<RunTurnAsync>d__154.MoveNext`
                     // (статический вызов `PromptSnapshotStore.Save(...)` из тела метода).

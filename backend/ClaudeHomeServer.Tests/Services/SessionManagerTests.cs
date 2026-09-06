@@ -6640,6 +6640,104 @@ public class SessionManagerTests : IDisposable
             "стадия не ушла в AwaitingDecision по ложной тревоге");
     }
 
+    // Волна 2 задачи b63fd8ea (Major): хук на BgAgentDoneMessage(Aborted=true). Агент умер
+    // вместе с прогоном, HandleTeamTurnEndAsync никто не позовёт (следующего хода может
+    // не быть) — карточка молчаливого тупика должна прийти через OnMessageAsync →
+    // case BgAgentDoneMessage → публикация. Тест идёт реальным путём
+    // (InvokeOnMessageAsync + BgAgentDoneMessage), не прямой вызов HandleAsyncAgentAbortedAsync
+    // — иначе повторишь ошибку первой волны (покрываешь только публикацию, а не хук).
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_БезСледующегоХода_КарточкаМолчаливогоТупикаПриходит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-aborted");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // координатор запустил async-агента
+        SetProcess(entry, adapter.Object);
+
+        // Реальный путь: эмулируем смерть bg-агента вместе с прогоном через OnMessageAsync.
+        var acc = GetAccumulator(entry);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+
+        var cards = await WaitForEscalationCardsAsync(session.Id, minCount: 1);
+        cards.Should().ContainSingle(
+            "агент умер вместе с прогоном, нового хода нет — карточка молчаливого тупика обязана прийти через BgAgentDoneMessage");
+        cards[0].Title.Should().Be("Координатор не понял вводную",
+            "стадия Planning с WaveNumber == 0 — формулировка «Координатор не понял вводную»");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "публикация карточки молчаливого тупика переводит стадию в AwaitingDecision");
+    }
+
+    // Волна 2 / идемпотентность: повторный BgAgentDoneMessage(Aborted=true) с уже
+    // AwaitingDecision не дублирует карточку (карточка была поднята раньше через
+    // HandleTeamTurnEndAsync, стадия уже переведена публикацией).
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_СтадияУжеAwaitingDecision_НеДублируемКарточку()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-aborted-idem");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.AwaitingDecision; // карточка уже поднята раньше
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var acc = GetAccumulator(entry);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+
+        // Карточки нет и не будет: метод хука увидел AwaitingDecision и вышел.
+        // Ждём чуть-чуть на случай гонки с фоновыми обработчиками.
+        await Task.Delay(150);
+        Sent<TeamEscalationMessage>()
+            .Where(m => m.SessionId == session.Id && !m.Resolved)
+            .Should().BeEmpty(
+                "AwaitingDecision уже стоит — публикации не было, тест должен пройти без новых карточек");
+    }
+
+    // Волна 2 / Minor: AsyncAgentStallSince не должен унаследоваться при уходе bg-агента.
+    // Сценарий: координатор запустил async-агента в Interview/Planning, метка подавления
+    // установилась (HasAsyncAgent=true). Стадия ушла из Interview/Planning через любой путь
+    // (например, началась волна) и потом вернулась в Interview со свежим async-агентом.
+    // Без фикса старая метка могла остаться и на первом же ходу дать ложную карточку P16.
+    // Хук в case BgAgentDoneMessage сбрасывает метку при любом завершении bg-агента
+    // (хоть штатно, хоть абортивно), поэтому возврат в Interview со свежим агентом
+    // начинается с чистой метки.
+    [Fact]
+    public async Task BgAgentDoneMessage_МеткаПодавленияСбрасываетсяПриСмертиАгента()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-stallreset");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        // Ставим метку подавления «давно» — имитируем сценарий, где гард один раз уже видел
+        // подавление. Метка должна сброситься при BgAgentDoneMessage, чтобы следующий
+        // всплеск фона не унаследовал длительность от НЕсвязанного прошлого агента.
+        SetAsyncAgentStallSince(entry, DateTime.UtcNow - TimeSpan.FromMinutes(11));
+
+        var acc = GetAccumulator(entry);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+
+        var after = entry.GetType().GetField("AsyncAgentStallSince")!.GetValue(entry);
+        after.Should().BeNull(
+            "bg-агент завершился — метка подавления сбрасывается, иначе возврат в Interview со свежим агентом унаследует длительность");
+    }
+
     // Прод 2026-08-12 (P23): карточка блокера гаснет, когда координатор, разбуженный докладом,
     // продолжает работу маркером team:work — человека просить решения по решённому вопросу
     // не нужно. Стадия уходит из AwaitingDecision в перепланирование вводной.

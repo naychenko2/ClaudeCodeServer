@@ -391,4 +391,46 @@ internal sealed class TeamTurnCompletionService
             Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
         };
     }
+
+    // Хук на смерть фонового async-агента (волна 2 задачи b63fd8ea). Агент умер вместе с
+    // прогоном — следующего хода может не быть, и HandleTeamTurnEndAsync (единственная точка
+    // проверки гарда молчаливого тупика) никто не позовёт. Зеркалим ту же логику гарда,
+    // но БЕЗ 10-минутного суппрессирования (агент уже мёртв, ждать дальше нечего) — карточка
+    // поднимается сразу.
+    //
+    // Идемпотентность: гонка со следующим HandleTeamTurnEndAsync не страшна — проверка
+    // AwaitingDecision ниже + сам перевод стадии публикацией (TeamDecisionService.cs:435)
+    // гарантируют, что второй путь либо увидит уже переведённую стадию, либо опубликует
+    // другое сообщение (failed-ветка «Ход прервался» — другой сценарий, легитимный дубль).
+    //
+    // Это метод, а не шов: вертикаль TeamTurnCompletionService уже владеет гардом и его
+    // эскалацией (BuildSilentStallEscalation + EscalationRaiser/PublishTeamEscalationAsync),
+    // добавить сюда соседний путь публикации — естественное расширение, а не новая ось.
+    public async Task HandleAsyncAgentAbortedAsync(string sessionId, bool asked)
+    {
+        var session = _sessions.GetById(sessionId);
+        if (session is null) return;
+        if (session.TeamImplement is not { } team) return;
+
+        // Зеркало гарда из HandleTeamTurnEndAsync (строки 244–247), но без 10-минутного
+        // суппрессирования: HasAsyncAgent == false всегда на этом хуке (агент УЖЕ умер,
+        // иначе BgAgentDoneMessage(Aborted:true) бы не пришёл) — ShouldSuppress вернул бы
+        // false, и условие с порогом было бы избыточным.
+        var stalledStage = team.Stage == TeamImplementStage.Interview
+            || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
+        if (!stalledStage) return;
+        // Дубль: карточка молчаливого тупика уже поднималась раньше (HandleTeamTurnEndAsync
+        // перевёл стадию в AwaitingDecision). Публикация ниже тоже переводит стадию туда
+        // же, повторный вызов дал бы дубль карточки — выходим.
+        if (team.Stage == TeamImplementStage.AwaitingDecision) return;
+        if (asked) return;
+        if (_run.IsPlanningInFlight(sessionId)) return;
+
+        // turnText намеренно пуст: BgAgentDoneMessage не несёт координаторского текста,
+        // и цитировать в карточке нечего. Формулировка «Координатор не понял вводную» и
+        // так говорит, что текста-ответа не было.
+        var escalation = BuildSilentStallEscalation(team, turnText: string.Empty);
+        if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, escalation);
+        else await _history.PublishTeamEscalationAsync(sessionId, escalation);
+    }
 }

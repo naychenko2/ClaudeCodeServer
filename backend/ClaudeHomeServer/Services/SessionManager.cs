@@ -6564,6 +6564,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task HandleTeamTurnEndAsync(string sessionId, string turnText, bool failed, bool asked = false)
         => _teamTurnCompletion.HandleTeamTurnEndAsync(sessionId, turnText, failed, asked);
 
+    // Волна 2 задачи b63fd8ea: хук на смерть фонового async-агента. Внутри вертикали читается
+    // session, стадия, планирование — то, что вертикаль уже умеет. asked пробрасываем из ядра,
+    // потому что entry.TeamTurnAsked живёт в SessionEntry (волна 2 не открывала пятого шва).
+    public Task HandleAsyncAgentAbortedAsync(string sessionId, bool asked)
+        => _teamTurnCompletion.HandleAsyncAgentAbortedAsync(sessionId, asked);
+
     // P23: авто-гашение карточки блокера, когда координатор сам снял её предмет. Тело остаётся
     // в ядре (работает с приватным состоянием entry.Accumulator и приватным _history —
     // 40-польная персистентная модель, пять примитивов синхронизации), вертикаль получает
@@ -8208,6 +8214,31 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case BgAgentDoneMessage m:
                     acc.OnBgAgentsDone(m.ToolUseIds);
                     await acc.SaveSnapshotAsync(_history);
+                    // Волна 2 задачи b63fd8ea:
+                    //   1. bg-агент завершился (хоть штатно, хоть абортивно) — метка
+                    //      подавления AsyncAgentStallSince от НЕсвязанного прошлого агента
+                    //      больше не нужна, следующий всплеск фона должен считаться с нуля.
+                    //      Раньше сброс жил ТОЛЬКО внутри ShouldSuppressAsyncAgentStallGuard,
+                    //      и при уходе стадии из Interview/Planning через другой путь
+                    //      (например, началась волна) метка унаследовалась и давала ложную
+                    //      карточку P16 на возврате в Interview со свежим async-агентом.
+                    //   2. Если bg-агент УМЕР вместе с прогоном (Aborted=true),
+                    //      HandleTeamTurnEndAsync никто не позовёт (следующего хода может
+                    //      не быть) — публикуем карточку молчаливого тупика сами, на тех же
+                    //      условиях, что гард по концу хода, но без 10-минутного
+                    //      суппрессирования (агент уже мёртв, ждать дальше нечего).
+                    if (entry is not null)
+                    {
+                        bool asked;
+                        lock (entry.TeamTurnLock)
+                        {
+                            if (entry.AsyncAgentStallSince is not null)
+                                entry.AsyncAgentStallSince = null;
+                            asked = entry.TeamTurnAsked;
+                        }
+                        if (m.Aborted)
+                            await HandleAsyncAgentAbortedAsync(sessionId, asked);
+                    }
                     break;
                 // Присутствие фона — сигнал для СПИСКА чатов, а не для ленты: в историю не
                 // пишем (состояние живёт ровно столько, сколько процесс) и статус сессии не

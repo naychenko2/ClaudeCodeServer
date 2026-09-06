@@ -199,7 +199,12 @@ public class SubsystemBoundaryCoverageTests
         // обе вертикали уже имеют строки в `Boundaries`, отдельная запись тут
         // маскировала бы удаление строки из `Boundaries`. Пустой список ниже
         // остаётся как явный сигнал «вертикалей без строки в Boundaries нет».
-        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        // Team (этап 4, шаг 2б): вертикаль штаба без IAppSubsystem, живёт в Main.
+        // ITeamNotifier уже лежит в Services.Team — шаг 2г перенесёт туда тело.
+        var verticalOnlyNamespaces = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "ClaudeHomeServer.Services.Team",
+        };
 
         var coveredNamespaces = new HashSet<string>(StringComparer.Ordinal);
         foreach (var ns in boundaryRoots) coveredNamespaces.Add(ns);

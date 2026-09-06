@@ -433,6 +433,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
     : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} isMobile={isMobile}
+        filtered={results !== null}
         onMoved={(oldId, newId) => { if (selectedId === oldId) { setSelectedId(newId); navReplace({ screen: 'notes', note: newId }); } }}
         onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
         onDeleted={ids => { if (selectedId && ids.includes(selectedId)) clearNote(); }}

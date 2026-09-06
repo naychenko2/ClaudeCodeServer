@@ -1,8 +1,7 @@
 import type { Project } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { GLYPHS } from '../../lib/projectGlyphs';
+import { GlyphIcon, isLucideIconName } from '../../lib/projectGlyphs';
 import { projectInitials, projectMainColor } from './projectUtil';
-import type { LucideIcon } from 'lucide-react';
 
 // Глиф живёт на своей плитке: 60% стороны плитки (поля 20% со всех сторон). Люк-стандарт
 // требует strokeWidth = 2 в координатах viewBox 24 (≈8.3% от размера глифа), и 2.4
@@ -16,34 +15,33 @@ const STROKE_SMALL = 2.4;
 // читаются. Граница из макета §"Размеры по местам".
 const GLYPH_MIN_PX = 20;
 
-// Извлечь компонент значка из glyph.name. Имени в карте может не быть (старая запись
-// иконку уже убрали, или прислали левую строку) — в этом случае null и фронт
-// падает на инициалы (ADR-009 §7, «имя выпало из белого списка»).
-function componentForName(name: string | null | undefined): LucideIcon | null {
-  if (!name) return null;
-  return (GLYPHS as Record<string, LucideIcon | undefined>)[name] ?? null;
-}
-
-// Глиф берётся именем из белого списка lucide (ADR-009 §5) — путь проходит через lucide-компонент.
+// Глиф берётся именем из ПОЛНОГО набора lucide (ADR-009 §5) через GlyphIcon: бэкенд
+// подбирает имя из всех ~2000 имён пакета, и рукописная карта GLYPHS (89 имён) молча
+// съедала остальные — плитка выходила пустой (ни значка, ни букв). Проверка имени —
+// isLucideIconName по тому же набору, что у loader'ов DynamicIcon.
 function ProjectGlyph({ project, size }: { project: Project; size: number }) {
   const glyph = project.icon?.glyph;
   const inner = size * GLYPH_RATIO;
   const offset = (size - inner) / 2;
   const stroke = size < 16 ? STROKE_SMALL : STROKE_BIG;
-  const Named = componentForName(glyph?.name);
-  if (Named) {
-    return (
-      // Компонент не создаётся, а ВЫБИРАЕТСЯ по имени из белого списка lucide (ADR-009 §5):
-      // состояния у иконки нет, терять при пересоздании нечего
-      // eslint-disable-next-line react-hooks/static-components
-      <Named
-        size={inner}
-        strokeWidth={stroke}
-        style={{ position: 'absolute', left: offset, top: offset, color: 'currentColor' }}
-      />
-    );
-  }
-  return null;
+  if (!glyph?.name) return null;
+  // Пока чанк значка едет — и если он не доедет вовсе (офлайн, промах кеша после
+  // выкатки) — на плитке стоят инициалы: пустой плитки не бывает ни в одном состоянии
+  // (ADR-009 §7). Пропсы в fallback не передаются: DynamicIcon зовёт createElement(Fallback).
+  const Fallback = () => (
+    <span style={{ fontFamily: FONT.sans, fontWeight: 700, fontSize: Math.round(size * 0.38), lineHeight: 1 }}>
+      {projectInitials(project.name)}
+    </span>
+  );
+  return (
+    <GlyphIcon
+      name={glyph.name}
+      fallback={Fallback}
+      size={inner}
+      strokeWidth={stroke}
+      style={{ position: 'absolute', left: offset, top: offset, color: 'currentColor' }}
+    />
+  );
 }
 
 // Единая иконка проекта (по образцу PersonaAvatar, но КВАДРАТНАЯ со скруглением —
@@ -61,14 +59,16 @@ export function ProjectIcon({ project, size = 40, radius, muted }: { project: Pr
     position: 'relative',
   };
 
-  // Условие показа значка — положительное (kind === 'glyph' И имя есть в карте).
+  // Условие показа значка — положительное (kind === 'glyph' И имя есть в наборе lucide).
   // НИКОГДА !== 'initials': старая запись с числовым Kind = 1 (бывший Image) должна
-  // попасть в инициалы, а не в ветку значка, которого нет (ADR-009 §7).
+  // попасть в инициалы, а не в ветку значка, которого нет (ADR-009 §7). Имя вне набора
+  // (левая строка, снятое из пакета имя) уходит той же веткой на инициалы.
   const showGlyph = size >= GLYPH_MIN_PX
     && project.icon?.kind === 'glyph'
     && !!project.icon.glyph
     && project.icon.glyph.name != null
-    && project.icon.glyph.name !== '';
+    && project.icon.glyph.name !== ''
+    && isLucideIconName(project.icon.glyph.name);
 
   if (showGlyph && muted) {
     return (

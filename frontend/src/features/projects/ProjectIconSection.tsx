@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import type { ComponentType, SVGProps } from 'react';
 import { Pencil, Check, Sparkles } from 'lucide-react';
 import type { Project } from '../../types';
 import { api, type GlyphCandidate } from '../../lib/api';
@@ -8,7 +7,7 @@ import { Button } from '../../components/ui';
 import { Menu, MenuItem } from '../../components/ui/Menu';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { ProjectIcon } from './ProjectIcon';
-import { GLYPHS } from '../../lib/projectGlyphs';
+import { GlyphIcon } from '../../lib/projectGlyphs';
 import { invalidateProjectsCache } from './useAllProjects';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
@@ -432,18 +431,16 @@ function GlyphCandidates({ candidates, selected, projectColor, onChoose }: {
   );
 }
 
-// Миниатюра глифа в плитке-кандидате: имя lucide-значка из карты GLYPHS,
-// в крупном размере (60% от плитки-подложки, ~ 36% от плитки кандидата).
+// Миниатюра глифа в плитке-кандидате: имя lucide-значка из ПОЛНОГО набора пакета,
+// в крупном размере (60% от плитки-подложки, ~ 36% от плитки кандидата). Через карту
+// GLYPHS (89 имён) четыре разных кандидата показывались четырьмя одинаковыми искрами —
+// выбор шёл вслепую, потому что бэкенд подбирает имя из всех ~2000.
 function GlyphThumb({ candidate }: { candidate: GlyphCandidate }) {
   const stroke = 2;
-  if (candidate.name) {
-    const Named = GLYPHS[candidate.name as keyof typeof GLYPHS] as
-      | ComponentType<SVGProps<SVGSVGElement> & { size?: number; strokeWidth?: number }>
-      | undefined;
-    if (Named) {
-      return <Named size={Math.round(24 * 0.6)} strokeWidth={stroke} />;
-    }
-  }
-  // Имени нет в карте — миниатюрная пустышка со Sparkles, чтобы плитка не схлопнулась.
-  return <Sparkles size={Math.round(24 * 0.6)} strokeWidth={stroke} />;
+  const size = Math.round(24 * 0.6);
+  // Искра — ожидание чанка, а не «имени нет»: имя кандидата уже проверено белым списком
+  // на сервере. Плитка не схлопывается ни в одном состоянии.
+  const Pending = () => <Sparkles size={size} strokeWidth={stroke} />;
+  if (!candidate.name) return <Pending />;
+  return <GlyphIcon name={candidate.name} fallback={Pending} size={size} strokeWidth={stroke} />;
 }

@@ -2093,12 +2093,28 @@ private Task HandleTurnCompleted(TurnCompleted e)
 // Контракт фильтра по Outcome (сверка исходов живёт в коммите f049a593 и его переносе
 // в docs/research/session-core-split-2026-09.md, §4, шаг 2в):
 // - success | failed | egress_down | local_down — изымаем план и зовём штаб;
-// - interrupted | crashed — штаб НЕ зовём, но восстанавливаем отсечки сторожа волн
+// - crashed — решает НЕ исход, а факт «терминал хода дошёл downstream», материализованный
+//   планом в слоте (см. развилку ниже);
+// - interrupted — штаб НЕ зовём, но восстанавливаем отсечки сторожа волн
 //   (RestoreWaveWatchdogIfPaused) — здесь. На штатном ходе это no-op: HandleTeamTurnEndAsync
 //   вернёт отсечки сам (см. 7593), вызов здесь идемпотентен.
 // - cancelled — downstream ничего не получает (return до SettleAsync), сторож не трогаем.
-// Если бы на interrupted/crashed сработал штаб, воспроизвёлся бы продовый дефект «фантомная
-// эскалация».
+// Если бы на interrupted сработал штаб, воспроизвёлся бы продовый дефект «фантомная
+// эскалация»: обе точки прерывания чистят буфер маркеров (PreemptTurnForQueue, «Стоп»), но
+// НЕ слот — пришедший следом терминал положил бы план с пустым текстом, и разбор поднял бы
+// карточку молчаливого тупика поверх прерванного хода.
+//
+// Почему crashed разведён на два случая. Под одним исходом живут два разных пути финала
+// в FallbackLlmSessionAdapter, и различает их не Outcome, а то, увидела ли лента конец хода:
+// - сбой оркестрации ПОСЛЕ провальной попытки доставки → FailClosedAsync отдаёт downstream
+//   ErrorMessage(ExpectResultFollows=true) + ResultMessage("error"). OnMessageAsync видит
+//   терминал, осушает буфер маркеров и кладёт план — ход для человека состоялся, маркеры
+//   обязаны быть разобраны (до перевода на подписку это делал прямой вызов из OnMessageAsync);
+// - сбой ДО первой попытки (lastEnd=null, в hold'е пусто) → SettleAsync, downstream не
+//   получает ничего, плана нет — разбирать нечего.
+// Отсюда правило: на crashed пробуем ЗАБРАТЬ план и решаем по нему, а не по исходу. Отсутствие
+// плана здесь — штатный случай (не WARN), в отличие от success/failed/egress_down/local_down,
+// где терминал downstream гарантирован и его пропажа означает сбой проводки.
 //
 // Двойной терминал одного хода (ErrorMessage{ExpectResultFollows=true} + ResultMessage) в
 // OnMessageAsync обе попытки кладут план по тому же TurnSeq; первая запись выигрывает
@@ -2111,28 +2127,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     var turnSeq = e.Turn.TurnSeq;
     var sessionId = e.Turn.SessionId;
 
-    // Этап 4 / шаг 2в: interrupted/crashed — НЕ конец хода штаба, и это единственные исходы,
-    // где сторож волн после конца хода **больше никто** не восстановит
-    // (HandleTeamTurnEndAsync:7593 возвращает отсечки штатно на success | failed |
-    // egress_down | local_down; cancelled возвращается до SettleAsync и downstream
-    // не отдаёт ничего — сторож не трогаем). Ход оборвался без result, отсечки
-    // сторожа, погашенные вопросом ASK, возвращаем здесь. Эта ветка — подписчик на
-    // `turn/completed`; см. сверку исходов в коммите f049a593 и её перенос в
-    // docs/research/session-core-split-2026-09.md, §4.
-    if (outcome is "interrupted" or "crashed")
-    {
-        if (_sessions.TryGetValue(sessionId, out var interruptedEntry) && interruptedEntry is not null)
-            RestoreWaveWatchdogIfPaused(sessionId, interruptedEntry);
-        return Task.CompletedTask;
-    }
-
+    // cancelled — downstream не получает ничего (return до SettleAsync): ни плана, ни повода
+    // трогать сторож.
     if (outcome == "cancelled")
         return Task.CompletedTask;
 
     if (!_sessions.TryGetValue(sessionId, out var entry) || entry is null)
         return Task.CompletedTask;
+
+    // Этап 4 / шаг 2в: interrupted — НЕ конец хода штаба, но это исход, где сторож волн после
+    // конца хода **больше никто** не восстановит (HandleTeamTurnEndAsync:7593 возвращает
+    // отсечки штатно на success | failed | egress_down | local_down). Ход оборвался без
+    // result, отсечки сторожа, погашенные вопросом ASK, возвращаем здесь. См. сверку исходов
+    // в коммите f049a593 и её перенос в docs/research/session-core-split-2026-09.md, §4.
+    if (outcome == "interrupted")
+    {
+        RestoreWaveWatchdogIfPaused(sessionId, entry);
+        return Task.CompletedTask;
+    }
+
     // Без живого TeamImplement штаб не работает вовсе — гард нужен на случай терминала
-    // хода внешней персоны.
+    // хода внешней персоны. Сторож волн у такого чата тоже не заведён.
     if (entry.Info.TeamImplement is null)
         return Task.CompletedTask;
 
@@ -2143,6 +2158,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // звать нечем.
     if (!entry.TryTakeTeamTurnEnd(turnSeq, out var turnText, out var call) || call is null)
     {
+        // На crashed плана может не быть штатно (финал через SettleAsync — терминал downstream
+        // не дошёл): это не сбой проводки, а второй законный путь исхода. Сторож волн при этом
+        // восстановить всё равно надо — HandleTeamTurnEndAsync не позовут.
+        if (outcome == "crashed")
+        {
+            RestoreWaveWatchdogIfPaused(sessionId, entry);
+            return Task.CompletedTask;
+        }
         _log?.LogWarning(
             "Подписчик turn/completed: sessionId={SessionId}, turnSeq={TurnSeq}, outcome={Outcome} — в LastTeamTurnEnds нет плана вызова HandleTeamTurnEndAsync",
             sessionId, turnSeq, outcome);

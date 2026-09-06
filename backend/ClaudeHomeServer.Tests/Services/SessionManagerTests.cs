@@ -4113,22 +4113,67 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task TurnWire_OutcomeCrashed_ШтабНеРазбирает()
+    public async Task TurnWire_OutcomeCrashed_БезТерминалаDownstreamШтабНеРазбирает()
     {
-        // crashed: сюда попадают два пути — через FailClosedAsync (тогда старый путь
-        // звался) и через SettleAsync (тогда нет). На crashed оба варианта ожидаемы, и
-        // подписчик молчит: считать «концом хода штаба» здесь нельзя (та же защита, что для
-        // interrupted). Аналог бывшего теста TeamShadowSubscriber_Crashed_НеТрогаетСлотИФакт,
-        // но теперь проверка через поведение штаба, а не через side-effect изъятия.
-        var (session, _, _) = await MakeInterviewStabAsync("wire-crashed");
+        // crashed через SettleAsync: сбой оркестрации случился ДО первой попытки (lastEnd=null,
+        // в hold'е ещё ничего) — downstream не получил ни Error, ни Result, OnMessageAsync
+        // терминала не видел и плана в LastTeamTurnEnds не положил. Разбирать нечего: буфер
+        // маркеров этого хода никто не осушал, и «конец хода штаба» здесь не наступил.
+        var (session, _, _) = await MakeInterviewStabAsync("wire-crashed-no-plan");
+        var entry = GetEntry(session.Id);
+        _sut.GetById(session.Id)!.Status = SessionStatus.Working;
+        SetLastTurnSeq(entry, 7);
 
-        await DriveOneTeamTurnAsync(_sut, session.Id, 7, "crashed",
-            "упал процесс CLI", failed: true);
+        // Терминал downstream НЕ идёт — сразу шина.
+        await PublishTurnCompletedAsync(_sut, session.Id, 7, "crashed");
 
         await Task.Delay(2000);
         Sent<TeamEscalationMessage>()
             .Where(m => m.SessionId == session.Id && !m.Resolved).ToList()
-            .Should().BeEmpty("crashed — НЕ конец хода штаба");
+            .Should().BeEmpty("плана в слоте нет — терминал хода downstream не дошёл, разбирать нечего");
+    }
+
+    [Fact]
+    public async Task TurnWire_OutcomeCrashed_ПослеПровалаДоставкиШтабРазбирает()
+    {
+        // Регресс на дыру, внесённую переводом штаба на подписку (83e3cf78): ход упал как
+        // crashed, но ПЕРЕД этим была неудачная доставка — FallbackLlmSessionAdapter пошёл
+        // в FailClosedAsync и отдал downstream пару ErrorMessage(ExpectResultFollows=true)
+        // → ResultMessage("error"). Для ленты ход состоялся: текст осушен, план лёг в
+        // LastTeamTurnEnds. Значит маркеры этого хода обязаны быть разобраны — до 83e3cf78
+        // разбор шёл прямым вызовом из OnMessageAsync.
+        //
+        // Отличие от теста выше — ровно в факте «терминал дошёл downstream», и подписчик
+        // обязан решать по нему, а не по одному Outcome.
+        var (session, _, _) = await MakeInterviewStabAsync("wire-crashed-failclosed");
+        var entry = GetEntry(session.Id);
+        _sut.GetById(session.Id)!.Status = SessionStatus.Working;
+        SetLastTurnSeq(entry, 7);
+
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        await InvokeOnMessageAsync(session.Id, acc,
+            new TextDeltaMessage("Ход упал после провала доставки."));
+        // Ровно тот порядок, что шлёт FailClosedAsync: задержанная ошибка перед финальным result.
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ErrorMessage("не удалось выполнить", ExpectResultFollows: true));
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ResultMessage("error", 10, 1, null, null));
+
+        await PublishTurnCompletedAsync(_sut, session.Id, 7, "crashed");
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var cards = new List<TeamEscalationMessage>();
+        while (DateTime.UtcNow < deadline)
+        {
+            cards = Sent<TeamEscalationMessage>().Where(m => m.SessionId == session.Id && !m.Resolved).ToList();
+            if (cards.Count >= 1) { await Task.Delay(100); break; }
+            await Task.Delay(30);
+        }
+        cards.Should().ContainSingle(
+            "crashed после провала доставки — терминал ушёл downstream, план в слоте есть: штаб обязан разобрать ход");
+
+        GetLastTeamTurnEnds(entry).Contains(7).Should().BeFalse(
+            "план изъят из слота, а не висит до вытеснения потолком");
     }
 
     [Fact]

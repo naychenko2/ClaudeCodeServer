@@ -316,11 +316,8 @@ public class SubsystemBoundaryTests
         //    раньше как «отдельный allow-list под static-вызов не нужен» — с IL-сканом
         //    шов стал видимым и нужен явный допуск. Префикс `Services.Knowledge`
         //    НЕ открываем: точечный допуск ровно на нужный тип.
-        // 3) Execution — LocalProcessRunner (инверсия стека, задача `8beee75e`):
-        //    `TypeScriptGraphProvider.cs:155` зовёт `LocalProcessRunner.ResolveExecutable("node")`
-        //    static-метод из тела метода. Это задача слоя Execution, и шов
-        //    требует выноса `ResolveExecutable` в спину (по образцу `TranscriptRoots`
-        //    из волны 4C). TODO: шаг 5 отдельной задачей.
+        // Примитив `ResolveExecutable("node")` был вынесен в `Services.ExecutableResolver`
+        // (шаг 5, задача `57b5e9bc`) — `CodeGraph` зовёт его через корень Services, шов снят.
         new object[]
         {
             new VerticalBoundary(
@@ -336,7 +333,13 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
-                    "ClaudeHomeServer.Services.Execution.LocalProcessRunner",
+                    // ExecutableResolver (шаг 5) — корневой примитив поиска по PATH+PATHEXT.
+                    // `TypeScriptGraphProvider.cs:154` зовёт `ResolveExecutable("node")`
+                    // из тела метода. До выноса шов шёл на `LocalProcessRunner` —
+                    // теперь на корневой `Services.ExecutableResolver`. По образцу
+                    // `TranscriptRoots` (волна 4C): корневой спин не входит в
+                    // `SharedAllowedPrefixes`, нужен точечный допуск.
+                    "ClaudeHomeServer.Services.ExecutableResolver",
                 }),
         },
         // Deploy — вертикаль выкатки прода (ADR-010 + трей-раннер из веб-морды).
@@ -1228,6 +1231,11 @@ public class SubsystemBoundaryTests
                     // Шов Execution → TranscriptRoots: статический вызов из тела,
                     // IL-скан видит declaring-тип.
                     "ClaudeHomeServer.Services.TranscriptRoots",
+                    // Шов Execution → ExecutableResolver (шаг 5): `LocalProcessRunner.BuildStartInfo`
+                    // зовёт `ExecutableResolver.ResolveExecutable(spec.FileName)` из тела метода;
+                    // сам `LocalProcessRunner.ResolveExecutable` теперь — тонкая обёртка
+                    // над корневым примитивом. Допуск по образцу TranscriptRoots выше.
+                    "ClaudeHomeServer.Services.ExecutableResolver",
                 }),
         },
         // Auth — узкая вертикаль авторизации (AdminByStoreRequirement +

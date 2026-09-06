@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -94,7 +95,7 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
             .GetValue(sessions)!;
         entries[session.Id]!.GetType().GetField("Accumulator")!
             .SetValue(entries[session.Id], null);
-        sessions.WithTeamState(session.Id, t =>
+        (sessions as ITeamRunState)!.WithTeamState(session.Id, t =>
         {
             t.Stage = TeamImplementStage.Wave;
             t.WaveNumber = 1;

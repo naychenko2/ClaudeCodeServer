@@ -39,6 +39,8 @@ internal sealed class TeamBudgetService
     private readonly SessionManager _sessions;
     private readonly ITeamSessionDirectory _dir;
     private readonly ITeamRunState _run;
+    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
+    private readonly ITeamStopAndReport _stopReport;
     private readonly ILogger<TeamBudgetService> _log;
 
     internal TeamBudgetService(SessionManager sessions, ITeamSessionDirectory dir,
@@ -47,6 +49,7 @@ internal sealed class TeamBudgetService
         _sessions = sessions;
         _dir = dir;
         _run = run;
+        _stopReport = sessions;
         _log = log;
     }
 
@@ -144,7 +147,7 @@ internal sealed class TeamBudgetService
             Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
         };
         if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(stab, card);
-        else await _sessions.PublishTeamEscalationAsync(stabId, card);
+        else await _stopReport.PublishTeamEscalationAsync(stabId, card);
     }
 
     // Компенсация квоты запуска (m3, второй проход Глеба): TryConsumeTeamImplementRun списывает

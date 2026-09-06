@@ -253,3 +253,45 @@ internal interface ITeamTurnIntake
     /// </summary>
     void InterruptTurn(string sessionId);
 }
+
+/// <summary>
+/// Шов 5 — остановка и отчёт. Публикация карточек остановки, напоминания и сохранение
+/// карточек плана. Тела переехали в вертикаль (волна Д), но используются в тестах —
+/// через явную реализацию на SessionManager (as ITeamStopAndReport).
+/// docs/research/team-di-migration-2026-09.md §5, шаг 2г-4 волна 2 — 5-й шов СТОП и отчёт.
+/// </summary>
+internal interface ITeamStopAndReport
+{
+    /// <summary>
+    /// Публикация карточки остановки в ленту + история + WS + стадия «ждёт решения».
+    /// Переживает рестарт сервера.
+/// </summary>
+    Task PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation);
+
+    /// <summary>
+    /// Открытые (не resolved) карточки остановки чата — для сторожа напоминаний
+    /// (TeamWaveService.CheckAwaitingEscalationsAsync).
+    /// </summary>
+    Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId);
+
+    /// <summary>
+    /// Пометка отправленного напоминания по карточке остановки: счётчик и момент
+    /// последнего оклика пишутся на карточку в истории — переживают рестарт сервера,
+    /// чтобы после перезапуска не начать оклик заново. false — карточка уже закрыта
+    /// либо её нет.
+/// </summary>
+    Task<bool> MarkTeamEscalationRemindedAsync(string sessionId, string escalationId);
+
+    /// <summary>
+    /// Сохранить/обновить карточку плана в истории. Э3 проставляет TaskId под-задачам.
+/// Активный чат → Accumulator.OnTeamPlan + SaveSnapshotAsync; неактивный →
+    /// LoadAsync + append/mutate + SaveAsync под _falPersistLock.
+/// </summary>
+    Task SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan);
+
+    /// <summary>
+    /// План итерации по id карточки. Accumulator.FindTeamPlanAny для активного чата,
+    /// TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
+/// </summary>
+    Task<TeamImplementPlan?> GetTeamPlanAsync(string sessionId, string planId);
+}

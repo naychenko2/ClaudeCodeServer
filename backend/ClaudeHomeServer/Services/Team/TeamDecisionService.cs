@@ -68,6 +68,8 @@ internal sealed class TeamDecisionService
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
     private readonly ITeamTurnIntake _intake;
+    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
+    private readonly ITeamStopAndReport _stopReport;
     private readonly PersonaManager _personas;
     private readonly ILogger<TeamDecisionService> _log;
 
@@ -80,6 +82,7 @@ internal sealed class TeamDecisionService
         _history = history;
         _run = run;
         _intake = intake;
+        _stopReport = sessions;
         _personas = personas;
         _log = log;
     }
@@ -115,7 +118,7 @@ internal sealed class TeamDecisionService
         // стадии живут в одном непрерывном план-режиме.
         if (team.Stage == TeamImplementStage.Interview)
         {
-            _sessions.WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
+            _run.WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
             await _sessions.BroadcastTeamImplementAsync(sessionId, session);
@@ -127,7 +130,7 @@ internal sealed class TeamDecisionService
         if (team.Stage == TeamImplementStage.Confirming)
         {
             var nextVersion = team.PlanVersion + 1;
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Stage = TeamImplementStage.Planning;
                 t.Replanning = true;
@@ -147,7 +150,7 @@ internal sealed class TeamDecisionService
         // план-режим не навязывает и ложной эскалации не даёт.
         if (team.Stage == TeamImplementStage.Idle)
         {
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Budget = _sessions.NewTeamImplementBudget();
                 t.WaveNumber = 0;
@@ -190,7 +193,7 @@ internal sealed class TeamDecisionService
         if (session.TeamImplement is not { } team) return;
         if (team.Stage != TeamImplementStage.Interview) return;
 
-        _sessions.WithTeamState(sessionId, t =>
+        _run.WithTeamState(sessionId, t =>
         {
             if (t.WaveNumber > 0)
             {
@@ -229,7 +232,7 @@ internal sealed class TeamDecisionService
             && teamNow.PlanCardId is { } planId
             && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
-            var plan = await _sessions.GetTeamPlanAsync(sessionId, planId);
+            var plan = await _stopReport.GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
                 try { await starter(session, plan, TeamWaveTrigger.StateCatchUp); }
@@ -300,7 +303,7 @@ internal sealed class TeamDecisionService
                 new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
 
             var nextVersion = team.PlanVersion + 1;
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Stage = TeamImplementStage.Planning;
                 // Тот же контур, что у clarify (Э8): следующий план — версия vN+1,
@@ -344,7 +347,7 @@ internal sealed class TeamDecisionService
 
         if (resolved && session.TeamImplement is not null)
         {
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Stage = decision == TeamPlanDecision.Run
                     ? TeamImplementStage.Wave
@@ -425,7 +428,7 @@ internal sealed class TeamDecisionService
         // Тупик в волне (Э8) ведёт не в «ждёт решения», а в интервью: стадию ставит
         // EnterInterviewAsync — вместе с план-режимом и признаком перепланирования.
         if (escalation.Kind == TeamEscalationKind.NeedsClarification) return;
-        _sessions.WithTeamState(sessionId, t =>
+        _run.WithTeamState(sessionId, t =>
         {
             // Запоминаем, откуда практика пришла в ожидание: ответ человека до первой волны
             // вернёт её в эту стадию, а не в Wave. Повторная карточка поверх ожидания исходную
@@ -485,7 +488,7 @@ internal sealed class TeamDecisionService
         {
             // Всё состояние решения — одной транзакцией: потолки, «Стоп», стадия и отсечки
             // сторожа правятся из разных потоков (квота хода, раздача волны, колбэки задач).
-            _sessions.WithTeamState(sessionId, team =>
+            _run.WithTeamState(sessionId, team =>
             {
                 switch (actionId)
                 {
@@ -602,7 +605,7 @@ internal sealed class TeamDecisionService
             && teamNow.PlanCardId is { } planId
             && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
-            var plan = await _sessions.GetTeamPlanAsync(sessionId, planId);
+            var plan = await _stopReport.GetTeamPlanAsync(sessionId, planId);
             var trigger = actionId is "runNext" or "addBudget" or "resume" or "restart"
                 ? TeamWaveTrigger.UserCommand
                 : TeamWaveTrigger.StateCatchUp;
@@ -681,7 +684,7 @@ internal sealed class TeamDecisionService
         if (userId is not null && _sessions.ResolveOwnerId(session) != userId) return null;
         if (session.TeamImplement is null) return session;
 
-        var wave = _sessions.WithTeamState(sessionId, t =>
+        var wave = _run.WithTeamState(sessionId, t =>
         {
             t.Stopped = true;
             t.WaveStartedAt = null;

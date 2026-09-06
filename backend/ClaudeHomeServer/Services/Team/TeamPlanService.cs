@@ -42,6 +42,8 @@ internal sealed class TeamPlanService
     private readonly SessionManager _sessions;
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
+    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
+    private readonly ITeamStopAndReport _stopReport;
     private readonly TeamPlanningService? _planning;
     private readonly TeamCoordinator _coordinator;
     private readonly PersonaManager _personas;
@@ -55,6 +57,7 @@ internal sealed class TeamPlanService
         _sessions = sessions;
         _history = history;
         _run = run;
+        _stopReport = sessions;
         _planning = planning;
         _coordinator = coordinator;
         _personas = personas;
@@ -95,7 +98,7 @@ internal sealed class TeamPlanService
         // из неё он и выводит блок «Что изменилось». Не нашли карточку (чат чистили) — строим
         // с нуля: план без «что изменилось» лучше, чем отсутствие плана.
         var previous = session.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
-            ? await _sessions.GetTeamPlanAsync(sessionId, prevId)
+            ? await _stopReport.GetTeamPlanAsync(sessionId, prevId)
             : null;
         // Планировщика резолвим тут же: фронту нужна его персона для карточки «Готовит план…»
         // в ленте. ResolvePlanner без побочных эффектов (тот же пул кандидатов, что уйдёт
@@ -117,7 +120,7 @@ internal sealed class TeamPlanService
 
         // План построен — сохранённая вводная и правка отказа отработаны (повтор по кнопке
         // «Повторить планирование» после успеха не нужен)
-        _sessions.WithTeamState(sessionId, t => { t.LastPlanRequest = null; t.LastPlanFeedback = null; return true; });
+        _run.WithTeamState(sessionId, t => { t.LastPlanRequest = null; t.LastPlanFeedback = null; return true; });
         await _coordinator.BroadcastTeamPlanningFinishedAsync(sessionId, planning, plannerPersonaId);
         await PublishTeamPlanAsync(sessionId, session, planning.Plan, fromHuman);
         return (planning.Plan, null);
@@ -177,7 +180,7 @@ internal sealed class TeamPlanService
 
         if (session.TeamImplement is not null)
         {
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.PlanCardId = plan.Id;
                 t.PlanVersion = plan.Version;
@@ -227,7 +230,7 @@ internal sealed class TeamPlanService
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
         };
         if (_coordinator.EscalationRaiser is { } raise) await raise(session, card);
-        else await _sessions.PublishTeamEscalationAsync(sessionId, card);
+        else await _stopReport.PublishTeamEscalationAsync(sessionId, card);
 
         // Раздача — тем же путём, что «Запустить» и авто-волна: план у TeamWaveService.
         // Повод UserCommand: добавочная волна разворачивается вводной человека — точки
@@ -252,7 +255,7 @@ internal sealed class TeamPlanService
     {
         if (session.TeamImplement is not { PlanCardId: { } oldId }) return;
 
-        var plan = await _sessions.GetTeamPlanAsync(sessionId, oldId);
+        var plan = await _stopReport.GetTeamPlanAsync(sessionId, oldId);
         if (plan is null) return;
 
         // Сохранить новые поля карточки + SupersededBy внутри шова (развилка спрятана).
@@ -317,7 +320,7 @@ internal sealed class TeamPlanService
         // Вводная и правка сохраняются на состоянии ДО планировщика: при его отказе человек
         // сможет повторить планирование кнопкой карточки, не проходя интервью заново и не
         // теряя правку (повтор обязан пересобирать план по той же правке).
-        _sessions.WithTeamState(sessionId, t =>
+        _run.WithTeamState(sessionId, t =>
         {
             t.LastPlanRequest = request;
             t.LastPlanFeedback = feedback;
@@ -355,7 +358,7 @@ internal sealed class TeamPlanService
                 Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
             };
             if (_coordinator.EscalationRaiser is { } raise) await raise(session, failed);
-            else await _sessions.PublishTeamEscalationAsync(sessionId, failed);
+            else await _stopReport.PublishTeamEscalationAsync(sessionId, failed);
         }
         finally
         {

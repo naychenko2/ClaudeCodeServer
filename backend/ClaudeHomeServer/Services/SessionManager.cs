@@ -17,7 +17,7 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Services;
 
 public class SessionManager : IDisposable, ITeamNotifier,
-    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake
+    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake, ITeamStopAndReport
 {
     private class SessionEntry
     {
@@ -566,6 +566,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly ITeamHistoryStore _teamHistory;
     private readonly ITeamRunState _teamRunState;
     private readonly ITeamTurnIntake _teamIntake;
+    private readonly ITeamStopAndReport _teamStopAndReport;
     // Координатор решений по карточке плана (волна Г): запуск работы, закрытие интервью
     // и реакция на карточку плана. Owning-паттерн (создаётся в конструкторе, в DI
     // переедет на шаге 2г-4).
@@ -813,6 +814,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _teamHistory = this;
         _teamRunState = this;
         _teamIntake = this;
+        _teamStopAndReport = this;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
         // Изменение персоны (профиль/возможности/привязки) — сбрасываем адаптеры её живых
@@ -6154,12 +6156,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         bool fromHuman = true, string? feedback = null) =>
         _teamPlan.CreateTeamPlanAsync(sessionId, request, userId, ct, fromHuman, feedback);
 
-    // Сохранить карточку плана в историю чата после правки бэкендом (Э3 проставляет
-    // TeamImplementSubtask.TaskId). Тело — в TeamPlanService. Обёртка сохранена ради
-    // публичной сигнатуры (TeamWaveService и тесты зовут её).
-    public Task SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan) =>
-        _teamPlan.SaveTeamPlanCardAsync(sessionId, plan);
-
     // Ответ человека по карточке плана (SessionHub.RespondTeamPlan).
     // Тело переехало в TeamDecisionService (волна Г): решение по карточке — собственное
     // дело вертикали (включая развилку Accumulator/диск, которую спрятал
@@ -6209,20 +6205,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Сессии с включённым режимом — сторожу зависших волн (TeamWaveWatchdog) и сводкам.
     public IReadOnlyList<Session> GetTeamImplementSessions() =>
         [.. _sessions.Values.Select(e => e.Info).Where(s => s.TeamImplement is not null)];
-
-    // План итерации по id карточки — источник правды автономного цикла: раздача остатка
-    // волн и счётчик попыток под-задач живут в нём. В отличие от FindTeamPlan карточка
-    // уже разрешена («Запустить» нажали), поэтому ищем без фильтра по Resolved.
-    // Тело переехало в TeamStateService: поиск по аккумулятору остаётся здесь (Accumulator
-    // живёт в приватном SessionEntry), а read с диска для неактивного чата идёт через
-    // TeamStateService.GetTeamPlanFromHistoryAsync.
-    public async Task<TeamImplementPlan?> GetTeamPlanAsync(string sessionId, string planId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (entry.Accumulator is { } acc) return acc.FindTeamPlanAny(planId);
-        if (entry.Info.ClaudeSessionId is not string key) return null;
-        return await _teamState.GetTeamPlanFromHistoryAsync(key, planId);
-    }
 
     // Нерешённая карточка плана по id — путь для чата без аккумулятора (сервер перезапустился,
     // ход ещё не начинался). Фильтр по Resolved — тот же, что у Accumulator.FindTeamPlan у
@@ -6481,28 +6463,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Компенсация квоты пробуждения (m3, второй проход Глеба). Тело в TeamBudgetService.
     public void RefundTeamWakeup(string sessionId) =>
         _teamBudget.RefundTeamWakeup(sessionId);
-
-    // Публикация карточки остановки: запись в ленту (переживает рестарт) + WS + стадия
-    // «ждёт решения». Тело переехало в TeamDecisionService (волна Д): карточка и стадия —
-    // собственное дело вертикали. Обёртка сохранена ради публичной сигнатуры (ChatsController,
-    // SessionHub и TeamWaveService зовут её по этому контракту).
-    public Task PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation) =>
-        _teamDecision.PublishTeamEscalationAsync(sessionId, escalation);
-
-    // Открытые (не resolved) карточки остановки чата — сторожу повторных напоминаний
-    // (TeamWaveService.CheckAwaitingEscalationsAsync). Тело переехало в TeamDecisionService
-    // (волна Д). Обёртка сохранена ради публичной сигнатуры: TeamWaveService и тесты зовут
-    // её по тому же контракту.
-    public Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId) =>
-        _teamDecision.GetOpenTeamEscalationsAsync(sessionId);
-
-    // Отметить отправленное повторное напоминание по карточке остановки: счётчик и момент
-    // последнего оклика пишутся на карточку в истории — переживают рестарт сервера, чтобы
-    // после перезапуска не начать оклик заново. Тело переехало в TeamDecisionService
-    // (волна Д). Обёртка сохранена ради публичной сигнатуры: TeamWaveService и тесты зовут
-    // её по тому же контракту.
-    public Task<bool> MarkTeamEscalationRemindedAsync(string sessionId, string escalationId) =>
-        _teamDecision.MarkTeamEscalationRemindedAsync(sessionId, escalationId);
 
     // Решение человека по карточке остановки (SessionHub.RespondTeamEscalation).
     // Тело переехало в TeamDecisionService (волна Д): addBudget / runNext / resume / retryPlan
@@ -6815,7 +6775,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             && teamNow.PlanCardId is { } planId
             && _teamCoordinator.WaveStarter is { } starter)
         {
-            var plan = await GetTeamPlanAsync(sessionId, planId);
+            var plan = await ((ITeamStopAndReport)this).GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
                 try { await starter(entry.Info, plan, TeamWaveTrigger.StateCatchUp); }
@@ -6917,7 +6877,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Actions = TeamEscalationActions.For(TeamEscalationKind.NeedsClarification),
         };
         if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, card);
-        else await PublishTeamEscalationAsync(sessionId, card);
+        else await ((ITeamStopAndReport)this).PublishTeamEscalationAsync(sessionId, card);
 
         if (withTurn)
             await _teamIntake.SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
@@ -7164,6 +7124,34 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     void ITeamTurnIntake.InterruptTurn(string sessionId) => Interrupt(sessionId);
 
+    // --- ITeamStopAndReport (шов 5) ---
+    // Публикация карточки остановки: запись в ленту + WS + стадия «ждёт решения».
+    // Тело в TeamDecisionService (волна Д).
+    Task ITeamStopAndReport.PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation) =>
+        _teamDecision.PublishTeamEscalationAsync(sessionId, escalation);
+
+    // Открытые (не resolved) карточки остановки чата.
+    Task<IReadOnlyList<TeamEscalation>> ITeamStopAndReport.GetOpenTeamEscalationsAsync(string sessionId) =>
+        _teamDecision.GetOpenTeamEscalationsAsync(sessionId);
+
+    // Пометка отправленного напоминания по карточке остановки.
+    Task<bool> ITeamStopAndReport.MarkTeamEscalationRemindedAsync(string sessionId, string escalationId) =>
+        _teamDecision.MarkTeamEscalationRemindedAsync(sessionId, escalationId);
+
+    // Сохранить карточку плана в историю чата после правки бэкендом (Э3 проставляет TaskId).
+    Task ITeamStopAndReport.SaveTeamPlanCardAsync(string sessionId, TeamImplementPlan plan) =>
+        _teamPlan.SaveTeamPlanCardAsync(sessionId, plan);
+
+    // План итерации по id: Accumulator.FindTeamPlanAny для активного чата,
+    // TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
+    async Task<TeamImplementPlan?> ITeamStopAndReport.GetTeamPlanAsync(string sessionId, string planId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (entry.Accumulator is { } acc) return acc.FindTeamPlanAny(planId);
+        if (entry.Info.ClaudeSessionId is not string key) return null;
+        return await _teamState.GetTeamPlanFromHistoryAsync(key, planId);
+    }
+
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не
     // больше двух на вводную — счёт ведёт бэкенд, модель своих раундов не помнит).
     // Вне интервью вопрос живёт внутри хода и практику НЕ останавливает (решение по запросу
@@ -7232,7 +7220,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Actions = TeamEscalationActions.For(kind),
         };
         if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, escalation);
-        else await PublishTeamEscalationAsync(sessionId, escalation);
+        else await ((ITeamStopAndReport)this).PublishTeamEscalationAsync(sessionId, escalation);
     }
 
     // Отдельное git worktree чата: вкл — создать дерево на новой ветке от HEAD проекта и

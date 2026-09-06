@@ -59,6 +59,8 @@ internal sealed class TeamTurnCompletionService
     private readonly ITeamSessionDirectory _dir;
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
+    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2): upcast из _sessions.
+    private readonly ITeamStopAndReport _stopReport;
     private readonly ILogger<TeamTurnCompletionService> _log;
 
     internal TeamTurnCompletionService(SessionManager sessions, ITeamSessionDirectory dir,
@@ -68,6 +70,7 @@ internal sealed class TeamTurnCompletionService
         _dir = dir;
         _history = history;
         _run = run;
+        _stopReport = sessions;
         _log = log;
     }
 
@@ -261,7 +264,7 @@ internal sealed class TeamTurnCompletionService
                 }
                 : BuildSilentStallEscalation(team, turnText);
             if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, stalled);
-            else await _sessions.PublishTeamEscalationAsync(sessionId, stalled);
+            else await _stopReport.PublishTeamEscalationAsync(sessionId, stalled);
             return;
         }
 
@@ -337,7 +340,7 @@ internal sealed class TeamTurnCompletionService
                         : TeamEscalationKind.BudgetExhausted),
                 };
                 if (_sessions.TeamHandlers.EscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
-                else await _sessions.PublishTeamEscalationAsync(parentId!, card);
+                else await _stopReport.PublishTeamEscalationAsync(parentId!, card);
             }
             _log.LogWarning("Доклад-блокер из чата {SessionId}: ход штаба не запущен ({Reason})", sessionId, wake.Reason);
             return quiet;
@@ -365,7 +368,7 @@ internal sealed class TeamTurnCompletionService
                 Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
             };
             if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(stab, escalation);
-            else await _sessions.PublishTeamEscalationAsync(parentId, escalation);
+            else await _stopReport.PublishTeamEscalationAsync(parentId, escalation);
         }
         return result;
     }

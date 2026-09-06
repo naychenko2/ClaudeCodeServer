@@ -41,6 +41,10 @@ public class TeamWaveService
     private readonly ITeamSessionDirectory _dir;
     private readonly ITeamRunState _run;
     private readonly ITeamTurnIntake _intake;
+    // Шов 5 (остановка и отчёт, шаг 2г-4 волна 2, docs/research/team-di-migration-2026-09.md §5):
+    // upcast из _sessions — добавлять параметр конструктора нельзя, ITeamStopAndReport
+    // internal (как и прочие швы), а TeamWaveService публичный.
+    private readonly ITeamStopAndReport _stopReport;
     private readonly TaskManager _tasks;
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
@@ -80,6 +84,7 @@ public class TeamWaveService
         _dir = sessions;
         _run = sessions;
         _intake = sessions;
+        _stopReport = sessions;
         _tasks = tasks;
         _projects = projects;
         _hub = hub;
@@ -169,7 +174,7 @@ public class TeamWaveService
         // уже держим семафор (StartWaveAsync/CloseWaveIfDoneAsync), перечитываем канонический
         // план прямо тут: любой предыдущий держатель лока успел дописать его на диск, прежде
         // чем освободить семафор (SaveTeamPlanCardAsync ниже — синхронно до return/release).
-        plan = await _sessions.GetTeamPlanAsync(session.Id, plan.Id) ?? plan;
+        plan = await _stopReport.GetTeamPlanAsync(session.Id, plan.Id) ?? plan;
 
         var (wave, subtasks) = SelectWave(plan, id => _tasks.GetById(id)?.Status == TaskItemStatus.Done);
         if (subtasks.Count == 0)
@@ -186,7 +191,7 @@ public class TeamWaveService
         // Здесь же — стадия, номер волны и отсечки сторожа: одно состояние, одна запись.
         // Reserved=false у сессии без режима: WithTeamState отдаёт default, и молчаливое
         // «резерв прошёл» на выключенном режиме было бы худшим исходом.
-        var gate = _sessions.WithTeamState(session.Id, t =>
+        var gate = _run.WithTeamState(session.Id, t =>
         {
             // Человек нажал «Остановить»: текущие исполнители дорабатывают, новые не стартуют
             if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null, Held: (string?)null, Gate: false, ClosedWave: 0);
@@ -286,7 +291,7 @@ public class TeamWaveService
                 Labels: ["Командная реализация", $"волна {subtask.Wave}"]));
             // Поля под-задачи правит и перевыдача (OnTaskFailedAsync) — держим их под тем же
             // локом состояния, иначе на одном объекте плана было бы два разных лока
-            _sessions.WithTeamState(session.Id, _ =>
+            _run.WithTeamState(session.Id, _ =>
             {
                 subtask.TaskId = task.Id;
                 // Первая попытка по под-задаче: провал даст ровно одну перевыдачу (Э4)
@@ -299,7 +304,7 @@ public class TeamWaveService
 
         // Состояние и бюджет уже записаны транзакцией-резервом выше (счёт ведёт бэкенд
         // в точке запуска, а не модель) — здесь остаётся сохранить и разослать.
-        await _sessions.SaveTeamPlanCardAsync(session.Id, plan);
+        await _stopReport.SaveTeamPlanCardAsync(session.Id, plan);
         await _sessions.SaveTeamImplementStateAsync(session.Id);
 
         _log.LogInformation("Волна {Wave} плана {PlanId} роздана: {Count} задач (чат-штаб {SessionId})",
@@ -394,7 +399,7 @@ public class TeamWaveService
         if (session is null || team is null || plan is null) return;
         // Закрытая задача — активность волны: пока они закрываются, сторож молчит,
         // сколько бы волна ни шла (таймаут считается от последней активности).
-        _sessions.WithTeamState(session.Id, t =>
+        _run.WithTeamState(session.Id, t =>
         {
             if (t.WaveStartedAt is not null) t.WaveActivityAt = DateTime.UtcNow;
             return true;
@@ -410,7 +415,7 @@ public class TeamWaveService
         if (_sessions.GetById(stabId) is not { } session) return (null, null, null);
         if (session.TeamImplement is not { } team) return (null, null, null);
         if (team.PlanCardId is not { } planId) return (null, null, null);
-        var plan = await _sessions.GetTeamPlanAsync(stabId, planId);
+        var plan = await _stopReport.GetTeamPlanAsync(stabId, planId);
         // Задача могла прийти из этого же чата, но мимо плана (координатор завёл её руками)
         if (plan is null || !plan.Subtasks.Any(s => s.TaskId == task.Id)) return (null, null, null);
         return (session, team, plan);
@@ -439,7 +444,7 @@ public class TeamWaveService
             if (current.Count == 0) return;
             if (!current.All(s => IsDone(s.TaskId!))) return;
 
-            _sessions.WithTeamState(session.Id, t =>
+            _run.WithTeamState(session.Id, t =>
             {
                 t.ClosedWave = wave;
                 t.WaveStartedAt = null;
@@ -456,7 +461,7 @@ public class TeamWaveService
             // поверх стадий, ждущих человека, нельзя: следующая волна затирала бы интервью,
             // гейт-карточка и «проверка» подменяли бы стадию, в которой человек как раз
             // отвечает. Дождёмся его — он вернёт практику в работу (кнопкой или сообщением).
-            var waitsHuman = _sessions.WithTeamState(session.Id,
+            var waitsHuman = _run.WithTeamState(session.Id,
                 t => t.Stage is TeamImplementStage.Interview or TeamImplementStage.AwaitingDecision) is true;
             if (waitsHuman)
                 _log.LogInformation("Волна {Wave} чата-штаба {SessionId} закрыта, но конвейер стоит: " +
@@ -482,7 +487,7 @@ public class TeamWaveService
             else if (!hasNext)
             {
                 // Волны кончились — стадия проверки: сборка/тесты и итоговый отчёт
-                _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Checking; return true; });
+                _run.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Checking; return true; });
                 await _sessions.SaveTeamImplementStateAsync(session.Id);
             }
 
@@ -509,10 +514,10 @@ public class TeamWaveService
     // в «ждёт решения» — иначе докрут оставил бы практику «в волне» без идущей волны.
     private async Task RaiseWaveGateAsync(Session session, TeamImplementPlan plan, int closedWave, int nextWave)
     {
-        if ((await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+        if ((await _stopReport.GetOpenTeamEscalationsAsync(session.Id))
             .Any(c => c.Kind == TeamEscalationKind.WaveGate && c.Wave == closedWave))
         {
-            _sessions.WithTeamState(session.Id, t =>
+            _run.WithTeamState(session.Id, t =>
             {
                 if (t.Stage != TeamImplementStage.AwaitingDecision)
                     t.StageBeforeDecision = t.Stage;
@@ -578,7 +583,7 @@ public class TeamWaveService
         bool retry;
         try
         {
-            var plan = await _sessions.GetTeamPlanAsync(session.Id, planId)
+            var plan = await _stopReport.GetTeamPlanAsync(session.Id, planId)
                        ?? throw new InvalidOperationException("План практики не найден");
             subtask = plan.Subtasks.FirstOrDefault(s => s.TaskId == task.Id)
                       ?? throw new InvalidOperationException("Под-задача не найдена в плане практики");
@@ -586,7 +591,7 @@ public class TeamWaveService
             // Решение «перевыдать или звать человека» и расход перевыдачи — одной транзакцией:
             // иначе два параллельных провала волны прошли бы проверку потолка вдвоём и оба
             // перевыдали работу сверх квоты.
-            retry = _sessions.WithTeamState(session.Id, t =>
+            retry = _run.WithTeamState(session.Id, t =>
             {
                 var blocked = t.Stopped
                     || t.Budget.RetriesUsed >= t.Budget.MaxRetries
@@ -606,7 +611,7 @@ public class TeamWaveService
                 // «повтори то же самое» без контекста провала обычно даёт тот же результат.
                 // Счётчики уже израсходованы транзакцией выше. Сохраняем ПЕРЕЧИТАННЫЙ план —
                 // запись отражает актуальное состояние соседних под-задач, а не устаревший снимок.
-                await _sessions.SaveTeamPlanCardAsync(session.Id, plan);
+                await _stopReport.SaveTeamPlanCardAsync(session.Id, plan);
                 await _sessions.SaveTeamImplementStateAsync(session.Id);
             }
         }
@@ -809,7 +814,7 @@ public class TeamWaveService
             throw new InvalidOperationException("Волна уже перезапускается — дождитесь результата");
         try
         {
-            var plan = await _sessions.GetTeamPlanAsync(session.Id, planId)
+            var plan = await _stopReport.GetTeamPlanAsync(session.Id, planId)
                        ?? throw new InvalidOperationException("План практики не найден");
 
             // Несделанное текущей волны: розданные под-задачи не в Done
@@ -865,7 +870,7 @@ public class TeamWaveService
             }
 
             // Перезапуск — движение волны: сторож зависаний отсчитывает срок заново
-            _sessions.WithTeamState(session.Id, t =>
+            _run.WithTeamState(session.Id, t =>
             {
                 if (t.WaveStartedAt is not null) t.WaveActivityAt = DateTime.UtcNow;
                 return true;
@@ -947,12 +952,12 @@ public class TeamWaveService
         await gate.WaitAsync();
         try
         {
-            var fresh = _sessions.WithTeamState(session.Id,
+            var fresh = _run.WithTeamState(session.Id,
                 t => (Stage: t.Stage, StartedAt: t.WaveStartedAt, ClosedWave: t.ClosedWave, Stopped: t.Stopped));
             if (fresh.Stage != TeamImplementStage.Wave || fresh.StartedAt is not null
                 || fresh.ClosedWave != team.WaveNumber || fresh.Stopped)
                 return;
-            var plan = await _sessions.GetTeamPlanAsync(session.Id, planId);
+            var plan = await _stopReport.GetTeamPlanAsync(session.Id, planId);
             if (plan is null || !plan.Subtasks.Any(s => s.TaskId is null)) return;
 
             await RaiseEscalationAsync(session, new TeamEscalation
@@ -1140,7 +1145,7 @@ public class TeamWaveService
                 ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
             if (ownerId is null || _notif is null) continue;
 
-            foreach (var card in await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            foreach (var card in await _stopReport.GetOpenTeamEscalationsAsync(session.Id))
             {
                 if (!AwaitsHuman(card, team)) continue;
                 if (card.RemindersSent >= MaxReminders) continue;
@@ -1162,7 +1167,7 @@ public class TeamWaveService
                     ProjectId: session.ProjectId,
                     PersonaId: authorId,
                     Tag: "Командная реализация") { SessionId = session.Id }, sendPush: true);
-                await _sessions.MarkTeamEscalationRemindedAsync(session.Id, card.Id);
+                await _stopReport.MarkTeamEscalationRemindedAsync(session.Id, card.Id);
                 _log.LogInformation("Напоминание {Number} о карточке «{Title}» чата-штаба {SessionId} отправлено",
                     card.RemindersSent + 1, card.Title, session.Id);
             }
@@ -1184,7 +1189,7 @@ public class TeamWaveService
     // ещё и web push. Молчаливых остановок в режиме быть не должно.
     public async Task RaiseEscalationAsync(Session session, TeamEscalation escalation)
     {
-        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+        await _stopReport.PublishTeamEscalationAsync(session.Id, escalation);
 
         var ownerId = session.OwnerId
             ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);

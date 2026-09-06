@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
@@ -129,9 +129,10 @@ public class TaskExecutionService
         // Признак «у чата есть живая делегированная задача» (цикл «до готово» уходит в фазу
         // waiting, пока такие задачи не закроются). Один и тот же предикат использует и
         // SessionManager.ContinueWorkLoopAsync (точка ухода в waiting), и диагностика. Делегат,
-        // а не прямая зависимость SessionManager→TaskManager, по тому же приёму, что
-        // TeamEscalationRaiser/TeamWaveStarter (SessionManager по построению не знает TaskManager,
-        // иначе цикл в DI).
+        // а не прямая зависимость SessionManager→TaskManager: SessionManager по построению
+        // не знает TaskManager, иначе цикл в DI. Здесь цикл НАСТОЯЩИЙ, в отличие от четырёх
+        // штабных хуков, уехавших в TeamCoordinator (шаг 2г-4): те ставила и читала одна и та
+        // же вертикаль, а этот ставит чужая сторона.
         _sessions.HasLiveDelegatedTasks = HasLiveDelegatedTask;
         // Чат-исполнитель удалён/протух по TTL, не дождавшись result — снимаем накопленный
         // текст ошибки, чтобы буфер не жил дольше самой сессии
@@ -167,7 +168,7 @@ public class TaskExecutionService
     }
 
     // Хук провала хода исполнителя для режима «Командная реализация» (Э4): вешает
-    // TeamWaveService при старте — тем же приёмом, что SessionManager.TeamWaveStarter.
+    // TeamWaveService при старте — тем же приёмом, что обработчики TeamCoordinator.
     // null — режима нет либо сервис не поднят: провал остаётся обычным (тост владельцу).
     public Func<TaskItem, Task>? TeamTaskFailed { get; set; }
 

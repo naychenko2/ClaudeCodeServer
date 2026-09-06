@@ -41,16 +41,17 @@ namespace ClaudeHomeServer.Services.Team;
 //     в коде прямо называет их одной точкой (сбой 28.08.2026).
 //
 // Все восемь блоков работают с состоянием SessionTeamImplement (через шов WithTeamState) и
-// публичным API ядра (BroadcastAsync/ResolveOwnerId/GetById/TeamWaveStarter/FindActivePlanAsync/
+// публичным API ядра (BroadcastAsync/ResolveOwnerId/GetById/FindActivePlanAsync/
 // ListOpenEscalationsAsync/MarkEscalationRemindedAsync/ResolveEscalationAsync/RunTeamPlanningAsync/
 // EnterInterviewAsync/BroadcastTeamImplementAsync/SaveSessions). Развилки «Accumulator vs диск»
 // спрятаны внутри ядра — это не пятый шов, а новые методы в существующий контракт публичного API.
 //
 // Собственные помощники (IsStalePlanCard/WaveStartPendingAfterDecision/AllPlannedWavesClosed/
 // FireAndForget) живут private static внутри класса: они узкие и другому сервису вертикали
-// не нужны. Func-свойства TeamWaveStarter/TeamEscalationRaiser/TeamSubtaskDropHandler пока
-// остаются в SessionManager (не снимаем — TaskExecutionService по-прежнему ходит через них,
-// и разрыв снимается переездом тела, а не Func'а).
+// не нужны. Обработчики WaveStarter/EscalationRaiser/SubtaskDropHandler с шага 2г-4 живут
+// в TeamCoordinator и читаются через _sessions.TeamHandlers (прежде — Func-свойства ядра;
+// разбор, почему это был круговой маршрут, а не разрыв цикла, —
+// docs/research/team-di-migration-2026-09.md §3).
 //
 // Owning-паттерн (как TeamCoordinator/TeamStateService/TeamPlanService): экземпляр создаётся
 // в конструкторе SessionManager, а не через DI. Так разорван цикл «SessionManager хочет
@@ -114,7 +115,7 @@ internal sealed class TeamDecisionService
         // стадии живут в одном непрерывном план-режиме.
         if (team.Stage == TeamImplementStage.Interview)
         {
-            _sessions.WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
+            _run.WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
             await _sessions.BroadcastTeamImplementAsync(sessionId, session);
@@ -126,7 +127,7 @@ internal sealed class TeamDecisionService
         if (team.Stage == TeamImplementStage.Confirming)
         {
             var nextVersion = team.PlanVersion + 1;
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Stage = TeamImplementStage.Planning;
                 t.Replanning = true;
@@ -146,7 +147,7 @@ internal sealed class TeamDecisionService
         // план-режим не навязывает и ложной эскалации не даёт.
         if (team.Stage == TeamImplementStage.Idle)
         {
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Budget = _sessions.NewTeamImplementBudget();
                 t.WaveNumber = 0;
@@ -189,7 +190,7 @@ internal sealed class TeamDecisionService
         if (session.TeamImplement is not { } team) return;
         if (team.Stage != TeamImplementStage.Interview) return;
 
-        _sessions.WithTeamState(sessionId, t =>
+        _run.WithTeamState(sessionId, t =>
         {
             if (t.WaveNumber > 0)
             {
@@ -226,9 +227,9 @@ internal sealed class TeamDecisionService
         // TeamWaveService, как и везде.
         if (session.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
-            && _sessions.TeamWaveStarter is { } starter)
+            && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
-            var plan = await _sessions.GetTeamPlanAsync(sessionId, planId);
+            var plan = await _history.GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
                 try { await starter(session, plan, TeamWaveTrigger.StateCatchUp); }
@@ -299,7 +300,7 @@ internal sealed class TeamDecisionService
                 new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
 
             var nextVersion = team.PlanVersion + 1;
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Stage = TeamImplementStage.Planning;
                 // Тот же контур, что у clarify (Э8): следующий план — версия vN+1,
@@ -343,7 +344,7 @@ internal sealed class TeamDecisionService
 
         if (resolved && session.TeamImplement is not null)
         {
-            _sessions.WithTeamState(sessionId, t =>
+            _run.WithTeamState(sessionId, t =>
             {
                 t.Stage = decision == TeamPlanDecision.Run
                     ? TeamImplementStage.Wave
@@ -377,10 +378,10 @@ internal sealed class TeamDecisionService
             resolved ? plan.Approved : null));
 
         // Раздача под-задач и пакетный запуск волны (Э3) — в TeamWaveService: он знает про
-        // задачи и исполнителей, которых SessionManager по построению не знает (цикл DI
-        // разорван хуком, как OnSessionMessage у TaskExecutionService). Повод UserCommand:
+        // задачи и исполнителей, которых SessionManager по построению не знает; обработчик
+        // берём у TeamCoordinator через TeamHandlers (шаг 2г-4). Повод UserCommand:
         // «Запустить» — явное решение человека, гейт авто-волн не нужен.
-        if (decision == TeamPlanDecision.Run && _sessions.TeamWaveStarter is { } starter)
+        if (decision == TeamPlanDecision.Run && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
             try { await starter(session, plan, TeamWaveTrigger.UserCommand); }
             catch (Exception ex)
@@ -424,7 +425,7 @@ internal sealed class TeamDecisionService
         // Тупик в волне (Э8) ведёт не в «ждёт решения», а в интервью: стадию ставит
         // EnterInterviewAsync — вместе с план-режимом и признаком перепланирования.
         if (escalation.Kind == TeamEscalationKind.NeedsClarification) return;
-        _sessions.WithTeamState(sessionId, t =>
+        _run.WithTeamState(sessionId, t =>
         {
             // Запоминаем, откуда практика пришла в ожидание: ответ человека до первой волны
             // вернёт её в эту стадию, а не в Wave. Повторная карточка поверх ожидания исходную
@@ -484,7 +485,7 @@ internal sealed class TeamDecisionService
         {
             // Всё состояние решения — одной транзакцией: потолки, «Стоп», стадия и отсечки
             // сторожа правятся из разных потоков (квота хода, раздача волны, колбэки задач).
-            _sessions.WithTeamState(sessionId, team =>
+            _run.WithTeamState(sessionId, team =>
             {
                 switch (actionId)
                 {
@@ -599,9 +600,9 @@ internal sealed class TeamDecisionService
         // Раздавать нечего (волна уже идёт) — StartWave вернёт пустой список и не навредит.
         if (session.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
-            && _sessions.TeamWaveStarter is { } starter)
+            && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
-            var plan = await _sessions.GetTeamPlanAsync(sessionId, planId);
+            var plan = await _history.GetTeamPlanAsync(sessionId, planId);
             var trigger = actionId is "runNext" or "addBudget" or "resume" or "restart"
                 ? TeamWaveTrigger.UserCommand
                 : TeamWaveTrigger.StateCatchUp;
@@ -617,10 +618,10 @@ internal sealed class TeamDecisionService
         }
 
         // skip (TaskFailed) / drop (Blocker) — Minor, волна 3: под-задача помечается Done
-        // (хук TeamSubtaskDropHandler), тем же путём закрывая волну, что и обычный доклад —
+        // (хук SubtaskDropHandler), тем же путём закрывая волну, что и обычный доклад —
         // раньше кнопки ничего не делали, и волна не могла закрыться до ручного tasks_complete.
         if (actionId is "skip" or "drop" && escalation.TaskId is { } droppedTaskId
-            && _sessions.TeamSubtaskDropHandler is { } dropHandler)
+            && _sessions.TeamHandlers.SubtaskDropHandler is { } dropHandler)
         {
             try
             {
@@ -680,7 +681,7 @@ internal sealed class TeamDecisionService
         if (userId is not null && _sessions.ResolveOwnerId(session) != userId) return null;
         if (session.TeamImplement is null) return session;
 
-        var wave = _sessions.WithTeamState(sessionId, t =>
+        var wave = _run.WithTeamState(sessionId, t =>
         {
             t.Stopped = true;
             t.WaveStartedAt = null;
@@ -706,7 +707,7 @@ internal sealed class TeamDecisionService
         };
         // Через раизер — с уведомлением и push (TeamWaveService); без него карточка всё равно
         // публикуется: молчаливых остановок в режиме не бывает
-        if (_sessions.TeamEscalationRaiser is { } raise) await raise(session, card);
+        if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, card);
         else await PublishTeamEscalationAsync(sessionId, card);
         return session;
     }

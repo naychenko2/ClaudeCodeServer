@@ -64,12 +64,24 @@ internal interface ITeamSessionDirectory
     /// <summary>
     /// Сбросить каталог сессий на диск. Вызывающий код уже обновил нужные поля на
     /// снимке/через публичный API; метод только персистит (SaveSessions). Идемпотентен
-    /// и безопасен под concurrent: реализация сама держит свой лок. Достройка шага
-    /// 2г-3в (волна А): пять блоков штаба из отчёта разведки, включая SaveTeamImplementState
-    /// и будущие волны с правкой каталога, идут через этот метод. Шов не пятый — это
-    /// метод в уже заведённый контракт, потребность «сохранить каталог» закрыта один раз.
+    /// и безопасен под concurrent: реализация сама держит свой лок. Заведён достройкой
+    /// шага 2г-3в (волна А) под точки штаба, которые правят каталог и НЕ шлют состояние;
+    /// связки «правка + бродкаст» идут в PersistAndBroadcastAsync ниже. Шов не пятый —
+    /// это метод в уже заведённый контракт.
     /// </summary>
     void Persist();
+
+    /// <summary>
+    /// Обновить <c>UpdatedAt</c> чата, сбросить каталог на диск и разослать состояние
+    /// режима. Достройка шага 2г-4 (волна 3): единый путь для шести точек «правка +
+    /// бродкаст» (TeamWaveService — пять вызовов, TeamTurnCompletionService — один).
+    /// Тело прежнего
+    /// <c>TeamStateService.SaveTeamImplementStateAsync</c> перенесено сюда, и обёртка
+    /// <c>SessionManager.SaveTeamImplementStateAsync</c> снята — она держалась
+    /// единственным способом дать публичному <c>TeamWaveService</c> доступ к
+    /// внутреннему телу (CS0051), а с методом шва нужен только upcast.
+    /// </summary>
+    Task PersistAndBroadcastAsync(string sessionId);
 }
 
 /// <summary>
@@ -117,6 +129,36 @@ internal interface ITeamHistoryStore
     /// false — чата нет, нет транскрипта или карточка не найдена (причина уходит в лог реализации).
     /// </summary>
     Task<bool> SavePlanCardAsync(string sessionId, PlanCardWriteRequest request);
+
+    /// <summary>
+    /// Публикация карточки остановки в ленту + история + WS + стадия «ждёт решения».
+    /// Переживает рестарт сервера. Единая точка публикации для штабных триггеров (блокер,
+    /// таймаут, отклонение плана) и кнопки «Остановить». Развилка «активный аккумулятор
+    /// против диска» спрятана внутри реализации — вертикаль не видит ни <c>SessionEntry</c>,
+    /// ни <c>Accumulator</c>, ни <c>_falPersistLock</c>.
+    /// </summary>
+    Task PublishTeamEscalationAsync(string sessionId, TeamEscalation escalation);
+
+    /// <summary>
+    /// Открытые (не resolved) карточки остановки чата — для сторожа напоминаний
+    /// (TeamWaveService.CheckAwaitingEscalationsAsync). Та же скрытая развилка
+    /// Accumulator/диск, что у <see cref="PublishTeamEscalationAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId);
+
+    /// <summary>
+    /// Пометка отправленного напоминания по карточке остановки: счётчик и момент
+    /// последнего оклика пишутся на карточку в истории — переживают рестарт сервера,
+    /// чтобы после перезапуска не начать оклик заново. false — карточка уже закрыта
+    /// либо её нет.
+    /// </summary>
+    Task<bool> MarkTeamEscalationRemindedAsync(string sessionId, string escalationId);
+
+    /// <summary>
+    /// План итерации по id карточки. Accumulator.FindTeamPlanAny для активного чата,
+    /// TeamStateService.GetTeamPlanFromHistoryAsync для неактивного.
+    /// </summary>
+    Task<TeamImplementPlan?> GetTeamPlanAsync(string sessionId, string planId);
 }
 
 /// <summary>

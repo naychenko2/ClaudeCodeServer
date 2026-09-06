@@ -39,13 +39,13 @@ namespace ClaudeHomeServer.Services.Team;
 // Все шесть блоков работают через швы данных «штаб → ядро» (ITeamSessionDirectory/
 // ITeamHistoryStore/ITeamRunState) и публичный API ядра: GetById/GetOwned/ResolveOwnerId/
 // ReportUpAsync/BroadcastAsync/BroadcastTeamImplementAsync/EnterInterviewAsync/
-// StartTeamWorkAsync/CloseTeamTalkAsync/PublishTeamEscalationAsync/SaveTeamImplementStateAsync/
+// StartTeamWorkAsync/CloseTeamTalkAsync/
 // TryConsumeTeamWakeup/RefundTeamWakeup/RaiseCoordinatorEscalationAsync/TryAutoResolveTeamBlockerAsync/
 // RestoreWaveWatchdogIfPaused. Доступ к LastTeamTurnEnds идёт через достройку
 // ITeamRunState (RecordTeamTurnEnd/TryTakeTeamTurnEnd, волна Ж) — вертикаль не получает
 // SessionEntry, а ядро владеет единственным местом, где LastTeamTurnEnds живёт. Func-свойство
-// TeamEscalationRaiser сохранено в SessionManager (разрыв снимается переездом тела, а не Func'а,
-// та же логика, что в волне Д).
+// EscalationRaiser с шага 2г-4 живёт в TeamCoordinator и читается через _sessions.TeamHandlers
+// (прежде — Func-свойство ядра; разбор — docs/research/team-di-migration-2026-09.md §3).
 //
 // Owning-паттерн (как TeamDecisionService/TeamBudgetService/TeamEnableService): экземпляр
 // создаётся в конструкторе SessionManager, а не через DI. Так разорван цикл
@@ -260,8 +260,8 @@ internal sealed class TeamTurnCompletionService
                     Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
                 }
                 : BuildSilentStallEscalation(team, turnText);
-            if (_sessions.TeamEscalationRaiser is { } raise) await raise(session, stalled);
-            else await _sessions.PublishTeamEscalationAsync(sessionId, stalled);
+            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, stalled);
+            else await _history.PublishTeamEscalationAsync(sessionId, stalled);
             return;
         }
 
@@ -287,7 +287,7 @@ internal sealed class TeamTurnCompletionService
                 t.WaveActivityAt = null;
                 return true;
             });
-            await _sessions.SaveTeamImplementStateAsync(sessionId);
+            await _dir.PersistAndBroadcastAsync(sessionId);
             _log.LogInformation("Итерация чата-штаба {SessionId} завершена — режим ждёт следующей вводной", sessionId);
         }
     }
@@ -336,8 +336,8 @@ internal sealed class TeamTurnCompletionService
                         ? TeamEscalationKind.Stopped
                         : TeamEscalationKind.BudgetExhausted),
                 };
-                if (_sessions.TeamEscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
-                else await _sessions.PublishTeamEscalationAsync(parentId!, card);
+                if (_sessions.TeamHandlers.EscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
+                else await _history.PublishTeamEscalationAsync(parentId!, card);
             }
             _log.LogWarning("Доклад-блокер из чата {SessionId}: ход штаба не запущен ({Reason})", sessionId, wake.Reason);
             return quiet;
@@ -364,8 +364,8 @@ internal sealed class TeamTurnCompletionService
                 Wave = team.WaveNumber,
                 Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
             };
-            if (_sessions.TeamEscalationRaiser is { } raise) await raise(stab, escalation);
-            else await _sessions.PublishTeamEscalationAsync(parentId, escalation);
+            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(stab, escalation);
+            else await _history.PublishTeamEscalationAsync(parentId, escalation);
         }
         return result;
     }

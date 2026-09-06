@@ -46,8 +46,8 @@ namespace ClaudeHomeServer.Services.Team;
 // EnterInterviewAsync/BroadcastTeamImplementAsync/SaveSessions). Развилки «Accumulator vs диск»
 // спрятаны внутри ядра — это не пятый шов, а новые методы в существующий контракт публичного API.
 //
-// Собственные помощники (IsStalePlanCard/WaveStartPendingAfterDecision/AllPlannedWavesClosed/
-// FireAndForget) живут private static внутри класса: они узкие и другому сервису вертикали
+// Собственные помощники (IsStalePlanCard/WaveStartPendingAfterDecision/AllPlannedWavesClosed)
+// живут private static внутри класса: они узкие и другому сервису
 // не нужны. Обработчики WaveStarter/EscalationRaiser/SubtaskDropHandler с шага 2г-4 живут
 // в TeamCoordinator и читаются через _sessions.TeamHandlers (прежде — Func-свойства ядра;
 // разбор, почему это был круговой маршрут, а не разрыв цикла, —
@@ -729,14 +729,6 @@ internal sealed class TeamDecisionService
         && team.WaveNumber > 0
         && team.ClosedWave == team.WaveNumber
         && plan.Subtasks.Any(s => s.TaskId is null);
-
-    // Для fire-and-forget задач: ошибку логируем, а не теряем молча. Копия приватного
-    // хелпера SessionManager — у вертикали свой логгер, и тащить ради одной строчки
-    // отдельный шов нерационально.
-    private static void FireAndForget(Task task, string context) =>
-        task.ContinueWith(
-            t => Console.Error.WriteLine($"[TeamDecisionService] {context}: {t.Exception?.GetBaseException().Message}"),
-            TaskContinuationOptions.OnlyOnFaulted);
 
     // Все плановые волны закрыты — единственное условие перевода итерации в Idle
     // (RespondTeamEscalationAsync, P23 прод 2026-08-12). Узкий предикат, чужому сервису

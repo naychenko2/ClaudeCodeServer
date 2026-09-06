@@ -12,6 +12,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.TriggerSources;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;

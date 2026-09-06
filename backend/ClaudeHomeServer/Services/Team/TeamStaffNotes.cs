@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services;
+﻿namespace ClaudeHomeServer.Services.Team;
 
 // Подписи плашек ⚑ (staffNote) молчаливых ходов координатора в чате-штабе. Эти строки
 // шлются как user_message со staffNote=…; фронт гасит их в ленте набором suppressedByTeamNoise

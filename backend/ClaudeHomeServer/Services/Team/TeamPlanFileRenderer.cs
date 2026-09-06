@@ -1,8 +1,8 @@
-using System.Text;
+﻿using System.Text;
 using ClaudeHomeServer.Models;
 using Microsoft.Extensions.Logging;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Team;
 
 // Рендер полного плана «Командной реализации» в markdown-файл (решение владельца 2026-08-02,
 // docs/architecture/team-implement-mode.md, раздел «Замысел в карточке и полный план файлом»).

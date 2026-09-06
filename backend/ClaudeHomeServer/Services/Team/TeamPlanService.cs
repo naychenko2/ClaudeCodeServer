@@ -34,7 +34,8 @@ namespace ClaudeHomeServer.Services.Team;
 //
 // На этом шаге новых швов нет: вертикаль получает всё через заведённые интерфейсы
 // ITeamSessionDirectory/ITeamHistoryStore/ITeamRunState, доступ к Session — через публичный
-// API ядра (GetById/BroadcastAsync/ResolveOwnerId/TeamEscalationRaiser/TeamWaveStarter).
+// API ядра (GetById/BroadcastAsync/ResolveOwnerId) и обработчики TeamCoordinator
+// (EscalationRaiser/WaveStarter через _sessions.TeamHandlers).
 internal sealed class TeamPlanService
 {
     private readonly SessionManager _sessions;

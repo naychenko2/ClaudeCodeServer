@@ -1818,7 +1818,7 @@ public class TeamWaveServiceTests : IDisposable
         var (session, plan) = await MakeRestartedRunningStabAsync("wave-restart-race");
 
         // Независимые чтения — так же, как ResolveTeamEscalationAsync читает план заново
-        // перед КАЖДЫМ вызовом TeamWaveStarter на очередной клик по карточке
+        // перед КАЖДЫМ вызовом WaveStarter на очередной клик по карточке
         var snapshot1 = (await _sessions.GetTeamPlanAsync(session.Id, plan.Id))!;
         var snapshot2 = (await _sessions.GetTeamPlanAsync(session.Id, plan.Id))!;
         snapshot1.Should().NotBeSameAs(snapshot2,

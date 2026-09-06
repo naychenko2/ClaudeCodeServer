@@ -41,16 +41,17 @@ namespace ClaudeHomeServer.Services.Team;
 //     в коде прямо называет их одной точкой (сбой 28.08.2026).
 //
 // Все восемь блоков работают с состоянием SessionTeamImplement (через шов WithTeamState) и
-// публичным API ядра (BroadcastAsync/ResolveOwnerId/GetById/TeamWaveStarter/FindActivePlanAsync/
+// публичным API ядра (BroadcastAsync/ResolveOwnerId/GetById/FindActivePlanAsync/
 // ListOpenEscalationsAsync/MarkEscalationRemindedAsync/ResolveEscalationAsync/RunTeamPlanningAsync/
 // EnterInterviewAsync/BroadcastTeamImplementAsync/SaveSessions). Развилки «Accumulator vs диск»
 // спрятаны внутри ядра — это не пятый шов, а новые методы в существующий контракт публичного API.
 //
 // Собственные помощники (IsStalePlanCard/WaveStartPendingAfterDecision/AllPlannedWavesClosed/
 // FireAndForget) живут private static внутри класса: они узкие и другому сервису вертикали
-// не нужны. Func-свойства TeamWaveStarter/TeamEscalationRaiser/TeamSubtaskDropHandler пока
-// остаются в SessionManager (не снимаем — TaskExecutionService по-прежнему ходит через них,
-// и разрыв снимается переездом тела, а не Func'а).
+// не нужны. Обработчики WaveStarter/EscalationRaiser/SubtaskDropHandler с шага 2г-4 живут
+// в TeamCoordinator и читаются через _sessions.TeamHandlers (прежде — Func-свойства ядра;
+// разбор, почему это был круговой маршрут, а не разрыв цикла, —
+// docs/research/team-di-migration-2026-09.md §3).
 //
 // Owning-паттерн (как TeamCoordinator/TeamStateService/TeamPlanService): экземпляр создаётся
 // в конструкторе SessionManager, а не через DI. Так разорван цикл «SessionManager хочет
@@ -617,7 +618,7 @@ internal sealed class TeamDecisionService
         }
 
         // skip (TaskFailed) / drop (Blocker) — Minor, волна 3: под-задача помечается Done
-        // (хук TeamSubtaskDropHandler), тем же путём закрывая волну, что и обычный доклад —
+        // (хук SubtaskDropHandler), тем же путём закрывая волну, что и обычный доклад —
         // раньше кнопки ничего не делали, и волна не могла закрыться до ручного tasks_complete.
         if (actionId is "skip" or "drop" && escalation.TaskId is { } droppedTaskId
             && _sessions.TeamHandlers.SubtaskDropHandler is { } dropHandler)

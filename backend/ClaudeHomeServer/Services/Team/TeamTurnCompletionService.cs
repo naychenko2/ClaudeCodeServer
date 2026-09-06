@@ -44,8 +44,8 @@ namespace ClaudeHomeServer.Services.Team;
 // RestoreWaveWatchdogIfPaused. Доступ к LastTeamTurnEnds идёт через достройку
 // ITeamRunState (RecordTeamTurnEnd/TryTakeTeamTurnEnd, волна Ж) — вертикаль не получает
 // SessionEntry, а ядро владеет единственным местом, где LastTeamTurnEnds живёт. Func-свойство
-// TeamEscalationRaiser сохранено в SessionManager (разрыв снимается переездом тела, а не Func'а,
-// та же логика, что в волне Д).
+// EscalationRaiser с шага 2г-4 живёт в TeamCoordinator и читается через _sessions.TeamHandlers
+// (прежде — Func-свойство ядра; разбор — docs/research/team-di-migration-2026-09.md §3).
 //
 // Owning-паттерн (как TeamDecisionService/TeamBudgetService/TeamEnableService): экземпляр
 // создаётся в конструкторе SessionManager, а не через DI. Так разорван цикл

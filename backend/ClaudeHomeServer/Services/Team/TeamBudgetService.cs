@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.Team;
 //     хода координатора: списывает единицу бюджета RunsUsed/TasksUsed авансом, иначе
 //     цикл «доклад → запуск → доклад» уходил бы в бесконечный платный круг (Э4).
 //   • RaiseTeamBudgetExhaustedAsync — карточка «Бюджет итерации израсходован» с
-//     кнопкой «Добавить бюджет» (путь через TeamEscalationRaiser — push и уведомление,
+//     кнопкой «Добавить бюджет» (путь через EscalationRaiser — push и уведомление,
 //     иначе публикация без хука — молчаливая остановка). Блок отложен до волны Е
 //     сознательно: зовёт публикацию эскалации, а та уехала в волне Д — без обратного
 //     ребра в ядро.
@@ -27,7 +27,7 @@ namespace ClaudeHomeServer.Services.Team;
 //
 // Все шесть блоков работают через шов _teamState.WithTeamState (транзакция над
 // SessionTeamImplement) и публичный API ядра: GetById, GetOwned, BroadcastTeamImplementAsync,
-// SaveSessions и Func-свойство TeamEscalationRaiser. Owning-паттерн (экземпляр создаётся
+// SaveSessions и обработчик EscalationRaiser из TeamCoordinator. Owning-паттерн (экземпляр создаётся
 // в конструкторе SessionManager) разрывает цикл DI, как у TeamDecisionService — регистрация
 // переедет в Program.cs на шаге 2г-4, owning-обёртки в SessionManager будут сняты.
 //
@@ -127,7 +127,7 @@ internal sealed class TeamBudgetService
     // Карточка «Бюджет итерации израсходован» из точки отказа квоты: у человека появляется
     // кнопка «Добавить бюджет» — единственный способ поднять потолки (агенту он недоступен).
     // Публикация переводит практику в «ждёт решения», поэтому следующий отказ придёт уже с
-    // другой причиной и второй карточки не даст. Через TeamEscalationRaiser, когда он есть:
+    // другой причиной и второй карточки не даст. Через EscalationRaiser, когда он есть:
     // хук вдобавок шлёт уведомление и push, иначе остановка осталась бы только в ленте.
     private async Task RaiseTeamBudgetExhaustedAsync(string stabId, string reason)
     {

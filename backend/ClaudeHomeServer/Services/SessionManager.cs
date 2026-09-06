@@ -2105,9 +2105,12 @@ private Task HandleTurnCompleted(TurnCompleted e)
 //
 // Контракт фильтра по Outcome (docs/research/session-core-split-2026-09.md, вопрос 1):
 // - success | failed | egress_down | local_down — изымаем план и зовём штаб;
-// - interrupted | cancelled | crashed — молча возвращаемся: обе точки прерывания (Стоп,
-//   прерывание ради очереди) чистят буфер маркеров ради защиты от «волны-призрака».
-//   Если бы здесь сработал штаб, воспроизвёлся бы продовый дефект «фантомная эскалация».
+// - interrupted | crashed — ExitedMessage доезжает downstream, штаб НЕ зовём, но
+//   восстанавливаем отсечки сторожа волн (RestoreWaveWatchdogIfPaused). Старый путь в
+//   OnMessageAsync на 9441 делал это синхронно по ExitedMessage; здесь перенесено на шину.
+// - cancelled — downstream ничего не получает (return до SettleAsync), сторож не трогаем.
+// Если бы на interrupted/crashed сработал штаб, воспроизвёлся бы продовый дефект «фантомная
+// эскалация».
 //
 // Двойной терминал одного хода (ErrorMessage{ExpectResultFollows=true} + ResultMessage) в
 // OnMessageAsync обе попытки кладут план по тому же TurnSeq; первая запись выигрывает
@@ -2120,9 +2123,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     var turnSeq = e.Turn.TurnSeq;
     var sessionId = e.Turn.SessionId;
 
-    // interrupted/cancelled/crashed — НЕ конец хода штаба. Боевую логику не зовём; план
-    // (если бы был) не трогаем: ключ TurnSeq у каждого хода свой, конкуренции нет.
-    if (outcome is "interrupted" or "cancelled" or "crashed")
+    // Этап 4 / шаг 2в: interrupted/crashed — НЕ конец хода штаба, но это единственные исходы,
+    // при которых ExitedMessage реально доезжает downstream (см. сверку в
+    // docs/research/session-core-split-2026-09.md, §4 «Почему ребро №15 — не ребро»):
+    //   - interrupted: SettleAsync отдаёт задержанное, гонку лечит fallback на строке 648
+    //     (ExitedMessage кладётся в Held вручную, если inner не успел прислать);
+    //   - crashed: идёт либо по SettleAsync (тогда ExitedMessage доезжает), либо по
+    //     FailClosedAsync (тогда downstream получает Error+Result, ExitedMessage нет —
+    //     на шине различить нельзя, но RestoreWaveWatchdogIfPaused сам гейтится
+    //     no-op по стадии/волне);
+    //   - cancelled: return до SettleAsync, downstream ничего не получает — сторож не трогаем.
+    // Ход оборвался без result, отсечки сторожа, погашенные вопросом ASK, возвращаем здесь.
+    // Для штатного хода (success/failed/egress_down/local_down) это no-op: result уже отдал
+    // восстановление через HandleTeamTurnEndAsync, повтор идемпотентен.
+    if (outcome is "interrupted" or "crashed")
+    {
+        if (_sessions.TryGetValue(sessionId, out var interruptedEntry) && interruptedEntry is not null)
+            RestoreWaveWatchdogIfPaused(sessionId, interruptedEntry);
+        return Task.CompletedTask;
+    }
+
+    if (outcome == "cancelled")
         return Task.CompletedTask;
 
     if (!_sessions.TryGetValue(sessionId, out var entry) || entry is null)
@@ -9435,11 +9456,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             }
         }
 
-        // Ход оборвался без result (прерывание, смерть процесса посреди ASK): HandleTeamTurnEndAsync
-        // по такому ходу не зовётся, поэтому отсечки сторожа, погашенные вопросом, возвращаем здесь.
-        // Для штатного хода это no-op: result уже отдал восстановление ему, повтор идемпотентен.
-        if (entry is not null && msg is ExitedMessage && entry.Info.TeamImplement is not null)
-            RestoreWaveWatchdogIfPaused(sessionId, entry);
+        // Этап 4 / шаг 2в: восстановление отсечек сторожа волн после ExitedMessage переехало
+        // на подписку turn/completed (HandleTeamTurnCompletedShim, ветка interrupted/crashed).
+        // Прямой вызов снят: иначе одна и та же операция срабатывала бы дважды — раз при
+        // получении ExitedMessage здесь, второй в finally FallbackLlmSessionAdapter после
+        // await _downstream. Идемпотентность RestoreWaveWatchdogIfPaused защитила бы от
+        // двойной записи (WaveStartedAt — DateTime.UtcNow, поверх себя), но шина держит
+        // контракт «один исход — одна публикация — один подписчик», и место здесь ему не
+        // нужно. Для штатного хода восстановление уже отдано через HandleTeamTurnEndAsync.
 
         // Обновление статуса — всегда, независимо от аккумулятора; SessionManager —
         // ЕДИНСТВЕННЫЙ владелец переходов Session.Status (ClaudeSession статус не пишет).

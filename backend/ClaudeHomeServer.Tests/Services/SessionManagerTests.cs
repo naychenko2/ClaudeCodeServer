@@ -6844,6 +6844,97 @@ public class SessionManagerTests : IDisposable
             "агентов больше нет — метка сбрасывается, иначе возврат в Interview со свежим агентом унаследует длительность");
     }
 
+    // Волна 4 задачи b63fd8ea (Minor A): публикация карточки молчаливого тупика ПОСЛЕ
+    // успешного TryClaimSilentStall упала (AppendAsync бросил исключение / чат удалён).
+    // Клеймо обязано откатиться под WithTeamState, иначе чат навсегда в AwaitingDecision
+    // БЕЗ карточки: stalledStage для этой стадии больше не true, гард больше никогда
+    // не сработает. Проверяем (а) стадия вернулась в Planning, не застряла в
+    // AwaitingDecision, и (б) следующий TryClaimSilentStall снова может пройти.
+    [Fact]
+    public async Task МолчаливыйТупик_ПубликацияКарточкиУпала_КлеймоОткатывается()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-rollback-publish-fail");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+
+        // EscalationRaiser бросает исключение — имитируем сбой AppendAsync/пуш-нотификации.
+        // До фикса это исключение молча уходило в Console.Error (HandleTeamTurnCompletedAsync
+        // оборачивает Task.Run в try/catch), а стадия навсегда залипала в AwaitingDecision.
+        _sut.TeamHandlers.EscalationRaiser = (_, _) =>
+            throw new InvalidOperationException("симуляция сбоя публикации карточки");
+
+        // Никаких маркеров эскалации/работы/разговора — путь идёт через гард молчаливого
+        // тупика (строки HandleTeamTurnEndAsync 244–303): claim → publish → (исключение)
+        // → rollback. HandleTeamTurnCompletedAsync в проде оборачивает Task.Run в try/catch
+        // — имитируем это в тесте, чтобы проверить именно откат, а не исключение.
+        try
+        {
+            await _sut.HandleTeamTurnEndAsync(session.Id, "координатор молчит", failed: false);
+            throw new InvalidOperationException("сбой публикации должен пробрасываться — прод ловит в Task.Run-обёртке");
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("симуляция сбоя публикации карточки"))
+        {
+            // ожидаемо — исключение пробрасывается, клеймо уже откатилось внутри.
+        }
+
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "сбой публикации карточки откатывает клеймо, иначе гард больше никогда не сработает — "
+            + "stalledStage для AwaitingDecision ложно, а AwaitingDecision карточки не имеет");
+
+        // Следующая попытка: гард не «прилип», чат снова может поднять карточку.
+        var claim2 = ((ITeamRunState)_sut).TryClaimSilentStall(session.Id, out _);
+        claim2.Should().BeTrue("после отката чат снова в Planning && WaveNumber==0 — следующий claim обязан пройти");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+    }
+
+    // Тот же класс (Minor A), но через хук BgAgentDoneMessage(Aborted). Покрывает вторую
+    // публикационную точку (HandleBgAgentDoneAsync) и подтверждает, что и там сбой
+    // публикации откатывает клеймо. Без этого теста регрессия ограничилась бы
+    // HandleTeamTurnEndAsync, а хук остался бы без страховки.
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_ПубликацияУпала_КлеймоОткатывается()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-rollback-bg-fail");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        _sut.TeamHandlers.EscalationRaiser = (_, _) =>
+            throw new InvalidOperationException("симуляция сбоя публикации по хуку");
+
+        // InvokeOnMessageAsync прогоняет BgAgentDoneMessage через OnMessageAsync →
+        // HandleBgAgentDoneAsync. Исключение из EscalationRaiser НЕ вырывается наружу
+        // (текущая ветка в коде — через await без обёртки try/catch в OnMessageAsync, и
+        // тест ловит его наверху): для целей теста достаточно прогнать и проверить откат.
+        try
+        {
+            var acc = GetAccumulator(entry);
+            await InvokeOnMessageAsync(session.Id, acc,
+                new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("симуляция сбоя публикации по хуку"))
+        {
+            // ожидаемо — исключение пробросилось через OnMessageAsync, клеймо уже откатилось внутри.
+        }
+
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "и через хук BgAgentDoneMessage сбой публикации карточки откатывает клеймо");
+
+        var claim2 = ((ITeamRunState)_sut).TryClaimSilentStall(session.Id, out _);
+        claim2.Should().BeTrue("после отката чат снова в Planning && WaveNumber==0");
+    }
+
     // Прод 2026-08-12 (P23): карточка блокера гаснет, когда координатор, разбуженный докладом,
     // продолжает работу маркером team:work — человека просить решения по решённому вопросу
     // не нужно. Стадия уходит из AwaitingDecision в перепланирование вводной.

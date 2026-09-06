@@ -252,16 +252,16 @@ internal sealed class TeamTurnCompletionService
             // shared snapshot всё ещё показывал Planning, пока второй поток не мутировал
             // объект. Pre-claim атомарно резервирует AwaitingDecision; параллельный
             // путь увидит её в собственном TryClaimSilentStall и выйдет. Снимок для
-            // построения карточки (Stage/WaveNumber) берётся ДО мутации.
-            if (!_run.TryClaimSilentStall(sessionId, out var stageBefore, out var waveBefore))
+            // построения карточки (Stage/WaveNumber) и отката при сбое публикации берётся ДО мутации.
+            if (!_run.TryClaimSilentStall(sessionId, out var claim))
                 return;
 
             // Снимок для BuildSilentStallEscalation: оригинальный объект уже
             // AwaitingDecision внутри pre-claim, читать из него напрямую нельзя.
             var snapshot = new SessionTeamImplement
             {
-                Stage = stageBefore,
-                WaveNumber = waveBefore,
+                Stage = claim.Stage,
+                WaveNumber = claim.WaveNumber,
             };
             // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
             // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/
@@ -282,8 +282,24 @@ internal sealed class TeamTurnCompletionService
                     Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
                 }
                 : BuildSilentStallEscalation(snapshot, turnText);
-            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, stalled);
-            else await _history.PublishTeamEscalationAsync(sessionId, stalled);
+            // Публикация карточки ПОСЛЕ успешного claim: если она упадёт (AppendAsync бросил
+            // исключение, чат удалён — ранний return в PublishTeamEscalationAsync), клеймо
+            // откатывается через RollbackSilentStallClaim под тем же WithTeamState. Без отката
+            // чат зависнет в AwaitingDecision БЕЗ карточки: stalledStage для этой стадии больше
+            // не true, гард больше никогда не сработает, а исключение раньше молча уходило в
+            // Console.Error (см. ниже, обёртка HandleTeamTurnCompletedAsync).
+            try
+            {
+                if (_sessions.TeamHandlers.EscalationRaiser is { } raise)
+                    await raise(session, stalled);
+                else
+                    await _history.PublishTeamEscalationAsync(sessionId, stalled);
+            }
+            catch
+            {
+                _run.RollbackSilentStallClaim(sessionId, claim);
+                throw;
+            }
             return;
         }
 
@@ -410,44 +426,50 @@ internal sealed class TeamTurnCompletionService
     }
 
     // Хук на завершение фонового async-агента (волна 3 задачи b63fd8ea).
-//
-// Три инварианта — все на ОДНОЙ проверке HasAsyncAgent(sessionId) ПОСЛЕ учёта текущего
-// сообщения (снимок читает OnMessageAsync через entry.Process?.HasPendingBg; к этому
-// моменту HandleStructuredTaskNotification уже удалил задачу из run.PendingBg синхронно
-// — ClaudeSession.cs:5055 — и публикует BgAgentDoneMessage через Task.Run):
-//
-// 1. Major (регрессия P16): карточка «Координатор не понял вводную» поднимается
-//    ТОЛЬКО когда (а) bg-агент абортировался (Aborted=true) и (б) других живых
-//    async-агентов больше нет (HasAsyncAgent == false). Иначе структурный
-//    task_notification ставит Aborted = status != "completed" ДЛЯ ОДНОГО конкретного
-//    агента, даже если параллельно работает ДРУГОЙ — карточка сразу на первом аборте
-//    уводила стадию в AwaitingDecision, хотя координатор ЖИВ и второй агент ещё
-//    работает: дословный регресс P16 (Minor, найден ревью Глеба — тест Глеб уронил
-//    репро мутацией).
-//
-// 2. Minor 1 (идемпотентность): гонка с HandleTeamTurnEndAsync. Оба пути могут
-//    прийти к публикации почти одновременно (Task.Run штабного разбора идёт
-//    параллельно с read-loop OnMessageAsync); без атомарного pre-claim оба читали
-//    team.Stage == Planning (объект общий, между read и publish параллельный поток
-//    успевает мутировать) и публиковали карточку дважды. Закрывается через
-//    ITeamRunState.TryClaimSilentStall — общий лок TeamStateService.WithTeamState
-//    сериализует оба пути: первый переводит стадию в AwaitingDecision под локом,
-//    второй видит её в собственном TryClaimSilentStall и выходит. Снимок
-//    Stage/WaveNumber берётся ДО мутации (объект уже AwaitingDecision внутри лока)
-//    — BuildSilentStallEscalation читает их для заголовка.
-//
-// 3. Minor 2 (сброс метки AsyncAgentStallSince): метка на entry сбрасывается только
-//    когда после текущего done агентов больше нет вообще (HasAsyncAgent == false).
-//    Прежний безусловный сброс на ЛЮБОМ BgAgentDoneMessage перезапускал 10-минутный
-//    потолок подавления на КАЖДОМ агенте цепочки — суппрессия тянулась неограниченно,
-//    ровно против того, что баг b63fd8ea чинил. Этот сброс делает вызывающий код в
-//    OnMessageAsync (см. комментарий там) под TeamTurnLock, отдельным решением от
-//    публикации карточки — но на ТОЙ ЖЕ проверке HasAsyncAgent.
-//
-// Метод, а не шов: вертикаль TeamTurnCompletionService уже владеет гардом и его
-// эскалацией (BuildSilentStallEscalation + EscalationRaiser/PublishTeamEscalationAsync),
-// добавить сюда соседний путь публикации — естественное расширение, а не новая ось.
-public async Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked)
+    //
+    // Решает три задачи; первые две завязаны на ОДНУ проверку HasAsyncAgent ПОСЛЕ учёта
+    // текущего сообщения (снимок читает OnMessageAsync через entry.Process?.HasPendingBg; к
+    // этому моменту все четыре источника BgAgentDoneMessage — HandleStructuredTaskNotification,
+    // HandleTaskNotification, HandleTaskOutputCompletion, FinalizeRunAsync — уже удалили
+    // задачу из run.PendingBg синхронно, см. комментарий в OnMessageAsync на эту тему).
+    // Третья задача — про pre-claim, не про HasAsyncAgent, общего у них только лок
+    // WithTeamState:
+    //
+    // 1. Major (регрессия P16): карточка «Координатор не понял вводную» поднимается
+    //    ТОЛЬКО когда (а) bg-агент абортировался (Aborted=true) и (б) других живых
+    //    async-агентов больше нет (HasAsyncAgent == false). Иначе структурный
+    //    task_notification ставит Aborted = status != "completed" ДЛЯ ОДНОГО конкретного
+    //    агента, даже если параллельно работает ДРУГОЙ — карточка сразу на первом аборте
+    //    уводила стадию в AwaitingDecision, хотя координатор ЖИВ и второй агент ещё
+    //    работает: дословный регресс P16 (Major, найден ревью Глеба — тест Глеб уронил
+    //    репро мутацией).
+    //
+    // 2. Minor 2 (сброс метки AsyncAgentStallSince): метка на entry сбрасывается только
+    //    когда после текущего done агентов больше нет вообще (HasAsyncAgent == false).
+    //    Прежний безусловный сброс на ЛЮБОМ BgAgentDoneMessage перезапускал 10-минутный
+    //    потолок подавления на КАЖДОМ агенте цепочки — суппрессия тянулась неограниченно,
+    //    ровно против того, что баг b63fd8ea чинил. Этот сброс делает вызывающий код в
+    //    OnMessageAsync (см. комментарий там) под TeamTurnLock, отдельным решением от
+    //    публикации карточки — но на ТОЙ ЖЕ проверке HasAsyncAgent.
+    //
+    // 3. Minor 1 (идемпотентность против гонки с HandleTeamTurnEndAsync — НЕ про
+    //    HasAsyncAgent): оба пути могут прийти к публикации почти одновременно
+    //    (Task.Run штабного разбора идёт параллельно с read-loop OnMessageAsync);
+    //    без атомарного pre-claim оба читали team.Stage == Planning (объект общий,
+    //    между read и publish параллельный поток успевает мутировать) и публиковали
+    //    карточку дважды. Закрывается через ITeamRunState.TryClaimSilentStall — общий
+    //    лок TeamStateService.WithTeamState сериализует оба пути: первый переводит
+    //    стадию в AwaitingDecision под локом, второй видит её в собственном
+    //    TryClaimSilentStall и выходит. Снимок Stage/WaveNumber/StageBeforeDecision/
+    //    WaveStartedAt/WaveActivityAt берётся ДО мутации (объект уже AwaitingDecision
+    //    внутри лока) — BuildSilentStallEscalation читает первые два для заголовка,
+    //    а паре TryClaimSilentStall/RollbackSilentStallClaim нужен полный набор
+    //    для отката при сбое публикации карточки.
+    //
+    // Метод, а не шов: вертикаль TeamTurnCompletionService уже владеет гардом и его
+    // эскалацией (BuildSilentStallEscalation + EscalationRaiser/PublishTeamEscalationAsync),
+    // добавить сюда соседний путь публикации — естественное расширение, а не новая ось.
+    public async Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked)
 {
     var session = _sessions.GetById(sessionId);
     if (session is null) return;
@@ -471,21 +493,37 @@ public async Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool ha
     if (asked) return;
     if (_run.IsPlanningInFlight(sessionId)) return;
 
-    // 2. Minor 1: атомарный pre-claim. Снимок для заголовка карточки — ДО мутации.
-    if (!_run.TryClaimSilentStall(sessionId, out var stageBefore, out var waveBefore))
+    // 3. Minor 1: атомарный pre-claim. Снимок для заголовка карточки и для отката при сбое
+    // публикации берётся ДО мутации — полный набор, см. xml-doc TryClaimSilentStall.
+    if (!_run.TryClaimSilentStall(sessionId, out var claim))
         return;
 
     var snapshot = new SessionTeamImplement
     {
-        Stage = stageBefore,
-        WaveNumber = waveBefore,
+        Stage = claim.Stage,
+        WaveNumber = claim.WaveNumber,
     };
 
     // turnText намеренно пуст: BgAgentDoneMessage не несёт координаторского текста,
     // и цитировать в карточке нечего. Формулировка «Координатор не понял вводную» и
     // так говорит, что текста-ответа не было.
     var escalation = BuildSilentStallEscalation(snapshot, turnText: string.Empty);
-    if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, escalation);
-    else await _history.PublishTeamEscalationAsync(sessionId, escalation);
+    // Публикация карточки ПОСЛЕ успешного claim: если она упадёт (AppendAsync бросил
+    // исключение, чат удалён — ранний return в PublishTeamEscalationAsync), клеймо
+    // откатывается через RollbackSilentStallClaim под тем же WithTeamState. Без отката
+    // чат зависнет в AwaitingDecision БЕЗ карточки: stalledStage для этой стадии больше
+    // не true, гард больше никогда не сработает.
+    try
+    {
+        if (_sessions.TeamHandlers.EscalationRaiser is { } raise)
+            await raise(session, escalation);
+        else
+            await _history.PublishTeamEscalationAsync(sessionId, escalation);
+    }
+    catch
+    {
+        _run.RollbackSilentStallClaim(sessionId, claim);
+        throw;
+    }
 }
 }

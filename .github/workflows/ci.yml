@@ -64,10 +64,16 @@ jobs:
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
       - name: Test
-# Категории "Dns" (внешний резолв, ломается на Proxifier-машинах) и "Node"
-      # (нужен Node + frontend/node_modules, не ставим) — за бортом. Общий прогон по
-      # `.slnx`, а не по одному `.Tests.csproj`: вынесенные тестовые проекты
-      # (`.Video.Tests`/`.Yandex.Tests`/`.Reader.Tests`, после Этапа 3) собираются
+# Категория "Node" — за бортом: нужен Node + frontend/node_modules, не ставим.
+      # Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
+      # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её —
+      # потерять рабочие тесты, в т.ч. SSRF-страховку Reader (проверки приватных
+      # адресов/схем через редирект — `ReaderService_*`, `SsrfGuardTests.*DnsFailed`).
+      # На локальной Windows-машине с Proxifier Dns-категория падает средой, и там
+      # прогоняют с дополнительным `--filter "Category!=Dns"` (рекомендация в CLAUDE.md,
+      # раздел «Соглашения»); в CI этого фильтра быть НЕ должно.
+      # Общий прогон по `.slnx`, а не по одному `.Tests.csproj`: вынесенные тестовые
+      # проекты (`.Video.Tests`/`.Yandex.Tests`/`.Reader.Tests`, после Этапа 3) собираются
       # шагом Build выше и должны гоняться в том же гейте master — иначе их падения
       # пройдут мимо CI, ровно до первого прод-бага в перенесённом коде.
       # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
@@ -79,7 +85,7 @@ jobs:
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
         run: >
           dotnet test backend/ClaudeHomeServer.slnx --no-build
-          --filter "Category!=Dns&Category!=Node"
+          --filter "Category!=Node"
           --blame-hang-timeout 5m --blame-hang-dump-type full
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
       # иначе они умирают вместе с раннером. После Этапа 3 артефакты тестов идут

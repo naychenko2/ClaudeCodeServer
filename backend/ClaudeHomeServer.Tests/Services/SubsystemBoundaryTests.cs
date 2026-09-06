@@ -1782,8 +1782,14 @@ public class SubsystemBoundaryTests
         // Защита от вакуумного прохода: если фильтр сборок или порядок загрузки сломается,
         // набор станет пустым и сторож пройдёт зелёным, ничего не проверив (доказано мутацией
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(2,
-            "сторож должен видеть минимум ClaudeHomeServer и ClaudeHomeServer.Core");
+        // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
+        // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
+        // 5 = Main + Core + 3 вынесенные на Этапе 3 (Video/Yandex/Reader); при добавлении
+        // новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(5,
+            "после Этапа 3 сторож должен видеть 5 прод-сборок: ClaudeHomeServer, " +
+            "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
+            "ClaudeHomeServer.Reader");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

@@ -366,6 +366,10 @@ public class SessionManager : IDisposable, ITeamNotifier
     private readonly Llm.ILocalLlmClient? _ollama;
     // Планировщик режима «Командная реализация» (Э2); null — режим без планирования
     private readonly TeamPlanningService? _teamPlanning;
+    // Координатор режима «Командная реализация» (этап 4, шаг 2г-3а): owning — создаётся
+    // в конструкторе SessionManager, DI-регистрация придёт в шаге 2г-4. Owning разрывает
+    // цикл «ядро ↔ вертикаль штаба» без Lazy<T> и без нового Func-канала.
+    private readonly TeamCoordinator _teamCoordinator;
     // Платформа внешних модулей: реестр манифестов + выпуск модульных токенов (R7)
     private readonly Modules.ModuleRegistry? _modules;
     private readonly Modules.ModuleTokenService? _moduleTokens;
@@ -672,6 +676,7 @@ public class SessionManager : IDisposable, ITeamNotifier
         _sandbox = sandbox;
         _projects = projects;
         _hub = hub;
+        _teamCoordinator = new TeamCoordinator(hub);
         _history = history;
         _adapters = adapters;
         _llmProviders = llmProviders;
@@ -6368,13 +6373,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
     // Текст причины отказа для карточки (по Failure): разные советы под разные корни —
     // обрыв по токенам не то же, что «уточните задачу», и таймаут не вина человека.
-    private static string PlannerFailureReason(TeamPlanningService.Failure f) => f switch
-    {
-        TeamPlanningService.Failure.TimedOut => TeamPlanningService.PlannerTimeoutReason,
-        TeamPlanningService.Failure.Truncated => TeamPlanningService.PlannerTruncatedReason,
-        TeamPlanningService.Failure.InvalidJson => TeamPlanningService.PlannerInvalidJsonReason,
-        _ => "Планировщик не смог построить план — уточните задачу",
-    };
+    private static string PlannerFailureReason(TeamPlanningService.Failure f) =>
+        TeamCoordinator.PlannerFailureReason(f);
 
     // Событие жизненного цикла планировщика для ленты. Контракт (для Киры):
     //  • start=true  — планировщик запущен, фронт рисует «Штаб планирует…» и блокирует
@@ -6385,30 +6385,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // дублировать не надо), и при рестарте сервера не восстанавливается — спиннер просто
     // не показывается, карточка подтянется через /api/.../history.
     private Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
-        BroadcastAsync(sessionId, new TeamPlanningMessage(
-            Start: true,
-            Success: false,
-            SubtaskCount: 0,
-            WaveCount: 0,
-            ElapsedMs: 0,
-            Route: r.Route?.Model,
-            Failure: null,
-            PersonaId: plannerPersonaId,
-            PromptChars: r.PromptChars,
-            ResponseChars: 0));
+        _teamCoordinator.BroadcastTeamPlanningStartedAsync(sessionId, r, plannerPersonaId);
 
     private Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
-        BroadcastAsync(sessionId, new TeamPlanningMessage(
-            Start: false,
-            Success: r.Plan is not null,
-            SubtaskCount: r.Plan?.Subtasks.Count ?? 0,
-            WaveCount: r.Plan?.WaveCount ?? 0,
-            ElapsedMs: (long)r.Elapsed.TotalMilliseconds,
-            Route: r.Route?.Model,
-            Failure: r.Plan is null ? PlannerFailureReason(r.Failure) : null,
-            PersonaId: plannerPersonaId,
-            PromptChars: r.PromptChars,
-            ResponseChars: r.ResponseChars));
+        _teamCoordinator.BroadcastTeamPlanningFinishedAsync(sessionId, r, plannerPersonaId);
 
     // Публикация карточки плана: история (переживает рестарт) + WS + стадия «ждёт подтверждения».
     // Добавочный план (Э5) при включённых авто-волнах подтверждения не ждёт: первоначальный
@@ -8011,37 +7991,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // своё название и свой совет: таймаут «не ваша вина, повторите», обрыв «план не
     // уместился в лимит, попробуйте короче», невалидный JSON «повторите».
     private static (string Title, string Details) FreshFailureText(string request, string? reason) =>
-        reason switch
-        {
-            TeamPlanningService.PlannerTimeoutReason => (
-                "План не построился: планировщик не уложился во время",
-                TeamImplementPrompts.PlanTimeoutDetails(request)),
-            TeamPlanningService.PlannerTruncatedReason => (
-                "План не построился: планировщик не уместил план в лимит вывода",
-                TeamImplementPrompts.PlanTruncatedDetails(request)),
-            TeamPlanningService.PlannerInvalidJsonReason => (
-                "План не построился: планировщик вернул неразборчивый план",
-                TeamImplementPrompts.PlanInvalidJsonDetails(request)),
-            _ => (
-                "План по вашей вводной не построился",
-                TeamImplementPrompts.PlanFailedDetails(request, reason)),
-        };
+        TeamCoordinator.FreshFailureText(request, reason);
 
     // Заголовок и тело карточки отказа для ПРАВКИ: «Изменить план» отдельно от
     // первоначальной вводной, потому что старая карточка уже погашена.
     private static (string Title, string Details) EditFailureText(string feedback, string? reason) =>
-        reason switch
-        {
-            TeamPlanningService.PlannerTimeoutReason => (
-                "План не пересобрался: планировщик не уложился во время",
-                TeamImplementPrompts.PlanEditTimeoutDetails(feedback)),
-            TeamPlanningService.PlannerTruncatedReason => (
-                "План не пересобрался: планировщик не уместил правку в лимит вывода",
-                TeamImplementPrompts.PlanEditTruncatedDetails(feedback)),
-            _ => (
-                "Правка не привела к новой версии плана",
-                TeamImplementPrompts.PlanEditFailedDetails(feedback, reason)),
-        };
+        TeamCoordinator.EditFailureText(feedback, reason);
 
     // Выход из интервью без работы (M6, маркер `<team:talk/>`): координатор честно разобрал
     // сообщение — это разговор, практику на пустом месте не разворачиваем. Свежая «итерация»

@@ -181,6 +181,19 @@ internal interface ITeamRunState
     /// <c>entry.Process</c> (живой <c>ILlmSessionAdapter</c>).
     /// </summary>
     void TrySetPermissionModeLive(string sessionId, ClaudeMode mode);
+
+    /// <summary>
+    /// Транзакция над SessionTeamImplement (штабные рантайм-поля): единственный способ
+    /// править счётчики бюджета и попытки под-задач. Точки записи разнесены по потокам
+    /// (раздача волны из колбэка завершения задачи, перевыдача из колбэка провала хода,
+    /// квота из HTTP-фильтра), а <c>int++</c> не атомарен — частичный лок означал бы
+    /// потерянные инкременты и нечестный счёт ровно там, ради чего Э4 и делался.
+    /// Реализация хранит собственный лок-словарь и доступ к SessionTeamImplement через
+    /// снимок ядра — вертикаль не видит ни SessionEntry, ни ConcurrentDictionary, ни
+    /// сам объект блокировки. Достройка шага 2г-3з (волна Е): квоты бюджета практики
+    /// переехали в вертикаль, и шов нужен TeamBudgetService (TryConsume/Refund).
+    /// </summary>
+    T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate);
 }
 
 /// <summary>

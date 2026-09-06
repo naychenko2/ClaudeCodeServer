@@ -112,6 +112,26 @@ public enum TeamWaveTrigger
     StateCatchUp,
 }
 
+// Вердикт квоты запуска исполнителя со штабного хода-реакции (Э4). Enum в Models, а не в
+// ядре: вертикаль Team его принимает и возвращает, иначе сторож границ не пропускает ссылку
+// Services.Team → Services.SessionManager. NotTeamMode — чат не в режиме: работает прежний
+// запрет DenyOnDelegatedTurn.
+public enum TeamRunQuota
+{
+    NotTeamMode,
+    Allowed,
+    Exhausted,
+}
+
+// Вердикт квоты запуска задач в цикле «до готово» (work-loop-аналог командной Э4).
+// NotInLoop — чат не в цикле: работает прежний запрет DenyOnDelegatedTurn.
+public enum WorkLoopRunQuota
+{
+    NotInLoop,
+    Allowed,
+    Exhausted,
+}
+
 // Бюджет итерации режима «Командная реализация»: считается на одну вводную человека и
 // сбрасывается с каждой новой (см. docs/architecture/team-implement-mode.md, «Бюджет»).
 // Счётчики «израсходовано» инкрементирует бэкенд в точке запуска (Э3–Э4), НЕ модель.

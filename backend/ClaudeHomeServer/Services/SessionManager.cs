@@ -570,6 +570,10 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // и реакция на карточку плана. Owning-паттерн (создаётся в конструкторе, в DI
     // переедет на шаге 2г-4).
     private readonly TeamDecisionService _teamDecision;
+    // Квоты и бюджет практики (волна Е): гейт запуска исполнителей и пробуждения штаба
+    // агентом, подъём от чата исполнения к штабу, карточка «бюджет исрасходован».
+    // Owning-паттерн (создаётся в конструкторе, в DI переедет на шаге 2г-4).
+    private readonly TeamBudgetService _teamBudget;
     // Личный реестр MCP-серверов владельца + значения их секретов (null — в тестах:
     // ход идёт только со встроенными серверами и наследством .mcp.json)
     private readonly Mcp.McpRegistry? _mcpRegistry;
@@ -743,6 +747,12 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // RespondTeamPlanAsync в SessionManager будут сняты.
         _teamDecision = new TeamDecisionService(this, this, this, this, this, _personas,
             loggerFactory?.CreateLogger<TeamDecisionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamDecisionService>.Instance);
+        // Квоты и бюджет практики (волна Е). Owning-паттерн (создаётся в конструкторе,
+        // в DI переедет на шаге 2г-4) разрывает цикл «SessionManager хочет TeamBudgetService,
+        // TeamBudgetService хочет SessionManager» — вертикаль видит ядро по прямой ссылке,
+        // а ядро знает о вертикали через поле _teamBudget.
+        _teamBudget = new TeamBudgetService(this, this, this,
+            loggerFactory?.CreateLogger<TeamBudgetService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamBudgetService>.Instance);
         _history = history;
         _adapters = adapters;
         _llmProviders = llmProviders;
@@ -6595,139 +6605,31 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         return card?.Escalation;
     }
 
-    // Вердикт квоты запуска исполнителя со штабного хода-реакции (Э4).
-    // NotTeamMode — чат не в режиме: работает прежний запрет DenyOnDelegatedTurn.
+    // Вердикт квоты запуска исполнителя со штабного хода-реакции (Э4). Enum в Models
+    // (TeamRunQuota) живёт под тем же именем, что и nested SessionManager.TeamRunQuota:
+    // тесты и фильтр DenyOnDelegatedTurn пользуются nested (контракт публичной сигнатуры
+    // ядра), TeamBudgetService — Models (вертикаль не должна ссылаться на ядро через
+    // nested-тип). Каст через (int) безопасен: оба enum'а имеют одинаковые значения.
     public enum TeamRunQuota { NotTeamMode, Allowed, Exhausted }
 
     // Гейт лавины запусков: на реакционном ходу координатора (ответ на доклад исполнителя)
     // запуск задачи разрешён, ПОКА цел бюджет итерации — запрет заменён квотой, а не снят.
-    // Разрешение сразу же расходует единицу: счёт ведёт бэкенд в точке запуска, иначе
-    // координатор в цикле «доклад → запуск → доклад» уходит в бесконечный платный круг.
+    // Тело переехало в TeamBudgetService (волна Е). Обёртка сохранена ради публичной
+    // сигнатуры: DenyOnDelegatedTurn.Decide и фильтр OnActionExecuted зовут по этому контракту.
     public (TeamRunQuota Verdict, string? Reason) TryConsumeTeamImplementRun(string sessionId, string ownerId)
     {
-        // Запуск приходит не только из самого штаба, но и со второго уровня — из чата
-        // исполнения под ним: расход ложится на бюджет ЕГО штаба, иначе исполнитель заводит
-        // и запускает задачи мимо квоты (тот же обход, только этажом ниже).
-        if (ResolveTeamStabId(sessionId, ownerId) is not { } stabId) return (TeamRunQuota.NotTeamMode, null);
-        if (!_sessions.TryGetValue(stabId, out var entry)) return (TeamRunQuota.NotTeamMode, null);
-        if (entry.Info.TeamImplement is not { } team) return (TeamRunQuota.NotTeamMode, null);
-
-        string? reason;
-        // Причина именно из бюджета (а не «остановлено»/«ждёт решения»/«план не подтверждён») —
-        // по ней ниже поднимается карточка с кнопкой «Добавить бюджет»
-        string? budgetReason = null;
-        lock (entry.TeamLock)
-        {
-            // Стадия волны — вторая проверка после «Остановлено»: без неё квота честно
-            // считала расход, но разрешала запуск ДО публикации и подтверждения плана —
-            // единственное согласование (карточка плана) обходилось целиком (Э7-фикс).
-            if (team.Stopped)
-                reason = "практика остановлена человеком — новые запуски не идут, пока он не продолжит";
-            // M3: причина отказа обязана быть честной. Из «ждёт решения» ссылаться на
-            // неподтверждённый план — враньё: план как раз подтверждён, а ждём мы ответа
-            // человека по карточке остановки (кнопкой или обычным сообщением в чат).
-            else if (team.Stage == TeamImplementStage.AwaitingDecision)
-                reason = "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
-                         "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)";
-            else if (team.Stage != TeamImplementStage.Wave)
-                reason = "план ещё не подтверждён человеком — запуск исполнителей доступен только " +
-                         "в стадии волны, единственное согласование — карточка плана";
-            else
-                reason = budgetReason = team.Budget.ExceededReason();
-            if (reason is null)
-            {
-                team.Budget.RunsUsed++;
-                // Задача, запущенная руками координатора, — такая же задача итерации, как
-                // розданная волной: без этого счётчика потолок задач обходился ручной раздачей
-                team.Budget.TasksUsed++;
-            }
-        }
-        if (reason is not null)
-        {
-            // Исчерпанный бюджет — единственный отказ, о котором человек ещё НЕ знает:
-            // «остановлено» и «ждёт решения» уже висят карточкой, неподтверждённый план —
-            // карточкой плана. Без этой публикации выхода из тупика не было вовсе: потолки
-            // поднимает только кнопка «Добавить бюджет» карточки BudgetExhausted, а её
-            // публиковала раздача волны — не гейт ручного запуска; попросить карточку
-            // координатор тоже не мог (в протоколе лишь deviation/check/clarify), и штаб
-            // бесконечно упирался в отказ, пока человек жал «Разрешить» на чужой карточке
-            // расхождения с планом — та бюджет не трогает (прод 2026-08-08).
-            if (budgetReason is not null)
-                FireAndForget(RaiseTeamBudgetExhaustedAsync(stabId, budgetReason),
-                    $"карточка исчерпанного бюджета итерации ({stabId})");
-            return (TeamRunQuota.Exhausted, reason);
-        }
-
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        FireAndForget(BroadcastTeamImplementAsync(stabId, entry),
-            $"рассылка состояния режима после расхода квоты ({stabId})");
-        return (TeamRunQuota.Allowed, null);
+        var (v, r) = _teamBudget.TryConsumeTeamImplementRun(sessionId, ownerId);
+        return ((TeamRunQuota)(int)v, r);
     }
 
-    // Карточка «Бюджет итерации израсходован» из точки отказа квоты: у человека появляется
-    // кнопка «Добавить бюджет» — единственный способ поднять потолки (агенту он недоступен).
-    // Публикация переводит практику в «ждёт решения», поэтому следующий отказ придёт уже с
-    // другой причиной и второй карточки не даст. Через TeamEscalationRaiser, когда он есть:
-    // хук вдобавок шлёт уведомление и push, иначе остановка осталась бы только в ленте.
-    private async Task RaiseTeamBudgetExhaustedAsync(string stabId, string reason)
-    {
-        if (GetById(stabId) is not { TeamImplement: { } team } stab) return;
-        if (team.Stage == TeamImplementStage.AwaitingDecision) return;
+    // Компенсация квоты запуска (m3, второй проход Глеба). Тело в TeamBudgetService.
+    // Обёртка сохранена ради сигнатуры DenyOnDelegatedTurn.OnActionExecuted.
+    public void RefundTeamImplementRun(string sessionId, string ownerId) =>
+        _teamBudget.RefundTeamImplementRun(sessionId, ownerId);
 
-        var card = new TeamEscalation
-        {
-            Kind = TeamEscalationKind.BudgetExhausted,
-            Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.BudgetExhausted, reason),
-            Details = $"Запуск исполнителя отклонён: {reason}.\n\n"
-                      + TeamImplementPrompts.BudgetLine(team.Budget),
-            Wave = team.WaveNumber,
-            Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
-        };
-        if (TeamEscalationRaiser is { } raise) await raise(stab, card);
-        else await PublishTeamEscalationAsync(stabId, card);
-    }
-
-    // Компенсация квоты запуска (m3, второй проход Глеба): TryConsumeTeamImplementRun списывает
-    // единицу авансом, в точке РЕШЕНИЯ (до попытки запуска) — иначе гейт нечестно разрешал бы
-    // потратить лишнее между «проверить» и «списать». Но реальный запуск может не состояться
-    // (задача не найдена, неверное состояние) — тогда платить команде не с чего, и вызывающая
-    // сторона (фильтр DenyOnDelegatedTurn.OnActionExecuted) возвращает единицу сюда.
-    public void RefundTeamImplementRun(string sessionId, string ownerId)
-    {
-        if (ResolveTeamStabId(sessionId, ownerId) is not { } stabId) return;
-        if (!_sessions.TryGetValue(stabId, out var entry)) return;
-        if (entry.Info.TeamImplement is not { } team) return;
-
-        lock (entry.TeamLock)
-        {
-            if (team.Budget.RunsUsed > 0) team.Budget.RunsUsed--;
-            if (team.Budget.TasksUsed > 0) team.Budget.TasksUsed--;
-        }
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        FireAndForget(BroadcastTeamImplementAsync(stabId, entry),
-            $"рассылка состояния режима после возврата квоты ({stabId})");
-    }
-
-    // Чат-штаб для запроса: сам чат, если режим включён у него, иначе ближайший предок
-    // в режиме (чат исполнения висит под штабом через вычисляемый ParentSessionId).
-    // null — к режиму запрос отношения не имеет. Шагов немного: иерархия исполнения мелкая,
-    // а счётчик — страховка от кольца в данных (как в IsDescendantOf).
-    private string? ResolveTeamStabId(string sessionId, string ownerId)
-    {
-        var cur = GetOwned(sessionId, ownerId);
-        for (var steps = 0; cur is not null && steps < 8; steps++)
-        {
-            if (cur.TeamImplement is not null) return cur.Id;
-            if (cur.ParentSessionId is not { } parentId) return null;
-            cur = GetOwned(parentId, ownerId);
-        }
-        return null;
-    }
-
-    // Вердикт квоты запуска задач в цикле «до готово» (work-loop-аналог командной Э4).
-    // NotInLoop — чат не в цикле: работает прежний запрет DenyOnDelegatedTurn.
+    // Гейт лавины запусков в цикле «до готово» (work-loop-аналог командной Э4).
+    // Enum в Models (WorkLoopRunQuota) живёт под тем же именем, что и nested
+    // SessionManager.WorkLoopRunQuota: тесты и фильтр пользуются nested, вертикаль — Models.
     public enum WorkLoopRunQuota { NotInLoop, Allowed, Exhausted }
 
     // Гейт лавины запусков: на ходу доклада исполнителя (SuppressTasksExecute) чату
@@ -6777,58 +6679,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         SaveSessions();
     }
 
-    // Квота пробуждения штаба агентом (Э4): любой платный ход чата-штаба, поднятый НЕ
-    // человеком, а другим агентом (доклад-блокер, chats_send из чата исполнителя), считается
-    // против отдельного потолка. Без этого бюджет обходится соседним инструментом: запуск
-    // задач гейтит квота `TryConsumeTeamImplementRun`, а разбудить координатора можно было
-    // бесплатно и бесконечно.
+    // Квота пробуждения штаба агентом (Э4). Тело переехало в TeamBudgetService (волна Е):
+    // квота — собственное дело вертикали. Обёртки сохранены ради публичных сигнатур:
+    // ReportBlockerAsync (метод уезжает в волну Ж) и SessionMessagingService.SendAsync
+    // ходят по этому контракту.
     // TeamMode=false — чат не штаб: ограничение не наше дело, пропускаем как раньше.
-    public (bool TeamMode, bool Allowed, string? Reason) TryConsumeTeamWakeup(string sessionId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return (false, true, null);
-        if (entry.Info.TeamImplement is null) return (false, true, null);
+    public (bool TeamMode, bool Allowed, string? Reason) TryConsumeTeamWakeup(string sessionId) =>
+        _teamBudget.TryConsumeTeamWakeup(sessionId);
 
-        string? reason = null;
-        var allowed = WithTeamState(sessionId, t =>
-        {
-            reason = t.Stopped
-                ? "практика остановлена человеком — команда не будит координатора, пока он не продолжит"
-                : t.Budget.ExceededReason();
-            if (reason is not null) return false;
-            t.Budget.WakeupsUsed++;
-            return true;
-        }) is true;
-
-        if (allowed)
-        {
-            entry.Info.UpdatedAt = DateTime.UtcNow;
-            SaveSessions();
-            FireAndForget(BroadcastTeamImplementAsync(sessionId, entry),
-                $"рассылка состояния режима после расхода пробуждения ({sessionId})");
-        }
-        return (true, allowed, reason);
-    }
-
-    // Компенсация квоты пробуждения (m3, второй проход Глеба): TryConsumeTeamWakeup списывает
-    // единицу авансом, ДО того как сообщение реально дойдёт — ReportBlockerAsync может после
-    // этого упереться в TooDeep, а chats_send — в дубль/переполнение очереди/занятость
-    // (SessionMessagesController). Платить за несостоявшееся пробуждение команде не с чего —
-    // возвращаем единицу.
-    public void RefundTeamWakeup(string sessionId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        if (entry.Info.TeamImplement is null) return;
-
-        WithTeamState(sessionId, t =>
-        {
-            if (t.Budget.WakeupsUsed > 0) t.Budget.WakeupsUsed--;
-            return true;
-        });
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        FireAndForget(BroadcastTeamImplementAsync(sessionId, entry),
-            $"рассылка состояния режима после возврата пробуждения ({sessionId})");
-    }
+    // Компенсация квоты пробуждения (m3, второй проход Глеба). Тело в TeamBudgetService.
+    public void RefundTeamWakeup(string sessionId) =>
+        _teamBudget.RefundTeamWakeup(sessionId);
 
     // Публикация карточки остановки: запись в ленту (переживает рестарт) + WS + стадия
     // «ждёт решения». Тело переехало в TeamDecisionService (волна Д): карточка и стадия —
@@ -7432,6 +7293,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // потому, что именно ядро держит `entry.Process` (живой ILlmSessionAdapter).
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.TrySetPermissionModeLive(mode);
+    }
+
+    T? ITeamRunState.WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) where T : default
+    {
+        // Шов «вертикаль → ядро» для транзакции над SessionTeamImplement: TeamBudgetService
+        // (волна Е) правит счётчики бюджета из обёрток фильтра/контроллера, и единственный
+        // путь — через явную реализацию ITeamRunState. Сам лок-словарь живёт в TeamStateService
+        // (единственная транзакция), наружу выходит только операция целиком.
+        return _teamState.WithTeamState(sessionId, mutate);
     }
 
     bool ITeamNotifier.IsSessionBusy(string sessionId)

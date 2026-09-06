@@ -434,12 +434,27 @@ public class LlmProviderRegistry
         // в кэше — берём его оттуда синхронно через TryGetKnownContextWindow. Проба не
         // спрашивала / поле отсутствовало → fail-open на каталог (прежнее поведение). Облачных
         // провайдеров (p.IsLocal=false) ветка не касается — там окно из конфига остаётся.
+        var liveWindowUsed = false;
         if (p.IsLocal && _localProbe is not null
             && _localProbe.TryGetKnownContextWindow(p.Key, out var liveWindow)
             && liveWindow > 0)
         {
             contextWindow = liveWindow;
+            liveWindowUsed = true;
         }
+        // Фолбэк на каталог у ЛОКАЛЬНОГО провайдера — единственный путь, где окно можно
+        // объявить завышенным: каталожное число статично, а стенд меняет режим (CTX=fast/
+        // long/huge дают 65 536 / 98 304 / 245 760). Завышение не деградирует мягко — vLLM
+        // сверяет prompt + max_tokens с max_model_len ДО генерации и отвечает мгновенным
+        // HTTP 400, то есть ход падает вместо auto-compact. Путь редкий (пустой кэш пробы:
+        // первый ход после старта либо таймаут 1.5 с при холодном стенде, а холодный старт
+        // занимает минуты), потому и не виден в логах без этой строки — на её отсутствии
+        // разбор «какое окно реально объявили» упирался в тупик.
+        if (p.IsLocal && !liveWindowUsed && contextWindow > 0)
+            Console.Error.WriteLine(
+                $"[LlmProviders] {p.Key}: живое окно от пробы недоступно, объявляем каталожное "
+                + $"{contextWindow} токенов — если стенд поднят в другом режиме, ход упадёт "
+                + "«Prompt is too long» вместо сжатия контекста");
         if (contextWindow > 0)
             env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = contextWindow.ToString(CultureInfo.InvariantCulture);
 

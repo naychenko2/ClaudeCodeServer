@@ -3200,6 +3200,14 @@ public class ClaudeSession : ILlmSessionAdapter
         _turnContextWindow = envOverrides.TryGetValue("CLAUDE_CODE_MAX_CONTEXT_TOKENS", out var declaredWindow)
             && int.TryParse(declaredWindow, NumberStyles.Integer, CultureInfo.InvariantCulture, out var windowValue)
             ? windowValue : 0;
+        // Объявленное окно — оно же порог auto-compact у CLI, и до этой строки его нельзя
+        // было увидеть НИГДЕ: значение живёт только в env дочернего процесса и в паспортах
+        // сабагентов, которых у обычного хода нет. Разбор «какое окно реально ушло» упирался
+        // в тупик — приходилось выводить его из кода. 0 = не объявляли (родная модель без
+        // каталожного окна): CLI держит собственный дефолт, это штатный случай.
+        (_sessionLog ?? (ILogger?)_log)?.LogInformation(
+            "Окно контекста, объявленное CLI: {Window} токенов (модель {Model})",
+            _turnContextWindow, EffectiveModel);
         _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
             && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
 

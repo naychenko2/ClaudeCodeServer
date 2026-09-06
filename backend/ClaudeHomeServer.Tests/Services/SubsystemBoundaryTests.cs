@@ -763,6 +763,9 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Prompts",
                         "ClaudeHomeServer.Hubs",
                         "ClaudeHomeServer.Protocol",
+                        // Префикс-шов по факту ссылок спутников (волна Ж):
+                        // - Turn: TurnCompleted (подписчик шины turn/completed в TeamTurnCompletionService).
+                        "ClaudeHomeServer.Services.Turn",
                     })
                     .ToArray(),
                 new[]
@@ -770,12 +773,16 @@ public class SubsystemBoundaryTests
                     // Точечные допуски к корню `Services.*` — «вертикаль → спинка» (по образцу Skills):
                     // PersonaManager/ProjectManager/TaskExecutionService/NotificationService —
                     // параметры конструкторов TeamWaveService; SessionManager — там же,
-                    // для получения session id и публикации событий штаба.
+                    // для получения session id и публикации событий штаба; nested ReportUpResult
+                    // (enum, объявленный внутри SessionManager) — сигнал пробуждения штаба,
+                    // возвращается из SessionManager.ReportUpAsync, который TeamTurnCompletionService
+                    // зовёт при пробуждении через ReportBlockerAsync.
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.TaskExecutionService",
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.SessionManager+ReportUpResult",
                 }),
         },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,

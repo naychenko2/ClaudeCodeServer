@@ -574,6 +574,14 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // агентом, подъём от чата исполнения к штабу, карточка «бюджет исрасходован».
     // Owning-паттерн (создаётся в конструкторе, в DI переедет на шаге 2г-4).
     private readonly TeamBudgetService _teamBudget;
+    // Шапка разбора хода штаба и доклад о блокере (волна Ж): HandleTeamTurnCompletedShim
+    // (подписчик turn/completed), HandleTeamTurnEndAsync (тело разбора маркеров),
+    // RestoreWaveWatchdogIfPaused, TryAutoResolveTeamBlockerAsync, ReportBlockerAsync.
+    // Owning-паттерн по тому же рецепту, что у _teamDecision/_teamBudget.
+    private readonly TeamTurnCompletionService _teamTurnCompletion;
+    // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
+    // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту.
+    private readonly TeamEnableService _teamEnable;
     // Личный реестр MCP-серверов владельца + значения их секретов (null — в тестах:
     // ход идёт только со встроенными серверами и наследством .mcp.json)
     private readonly Mcp.McpRegistry? _mcpRegistry;
@@ -753,6 +761,15 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // а ядро знает о вертикали через поле _teamBudget.
         _teamBudget = new TeamBudgetService(this, this, this,
             loggerFactory?.CreateLogger<TeamBudgetService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamBudgetService>.Instance);
+        // Шапка разбора хода штаба и доклад о блокере (волна Ж): owning-паттерн по тому же
+        // рецепту, что у _teamDecision/_teamBudget. Подписчик turn/completed переехал в
+        // вертикаль — шинная подписка ниже регистрирует делегат на метод TeamTurnCompletionService.
+        _teamTurnCompletion = new TeamTurnCompletionService(this, this, this, this,
+            loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance);
+        // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
+        // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту, что и _teamBudget.
+        _teamEnable = new TeamEnableService(this, this, this, this,
+            loggerFactory?.CreateLogger<TeamEnableService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamEnableService>.Instance);
         _history = history;
         _adapters = adapters;
         _llmProviders = llmProviders;
@@ -2212,74 +2229,8 @@ private Task HandleTurnCompleted(TurnCompleted e)
 // (RecordTeamTurnEnd внутри ContainsKey → return), вторая — no-op. Шина публикует
 // turn/completed строго ОДИН раз на ход, и подписчик забирает план ровно один раз —
 // поэтому дедуп SkipNextTeamTurnEnd в OnMessageAsync ушёл вместе с переключением.
-private Task HandleTeamTurnCompletedShim(TurnCompleted e)
-{
-    var outcome = e.Outcome;
-    var turnSeq = e.Turn.TurnSeq;
-    var sessionId = e.Turn.SessionId;
-
-    // cancelled — downstream не получает ничего (return до SettleAsync): ни плана, ни повода
-    // трогать сторож.
-    if (outcome == "cancelled")
-        return Task.CompletedTask;
-
-    if (!_sessions.TryGetValue(sessionId, out var entry) || entry is null)
-        return Task.CompletedTask;
-
-    // Этап 4 / шаг 2в: interrupted — НЕ конец хода штаба, но это исход, где сторож волн после
-    // конца хода **больше никто** не восстановит (HandleTeamTurnEndAsync:7593 возвращает
-    // отсечки штатно на success | failed | egress_down | local_down). Ход оборвался без
-    // result, отсечки сторожа, погашенные вопросом ASK, возвращаем здесь. См. сверку исходов
-    // в коммите f049a593 и её перенос в docs/research/session-core-split-2026-09.md, §4.
-    if (outcome == "interrupted")
-    {
-        RestoreWaveWatchdogIfPaused(sessionId, entry);
-        return Task.CompletedTask;
-    }
-
-    // Без живого TeamImplement штаб не работает вовсе — гард нужен на случай терминала
-    // хода внешней персоны. Сторож волн у такого чата тоже не заведён.
-    if (entry.Info.TeamImplement is null)
-        return Task.CompletedTask;
-
-    // Изъять план из LastTeamTurnEnds. Отсутствие — WARN, не бросаем: запись могла быть
-    // вытеснена потолком (8 записей, шторм), либо OnMessageAsync не успел положить
-    // (невозможно по ордерингу: сначала OnMessageAsync, потом finally FallbackLlmSessionAdapter),
-    // либо TurnSeq чужой (публикация для другого хода той же сессии). Без плана штаб
-    // звать нечем.
-    if (!entry.TryTakeTeamTurnEnd(turnSeq, out var turnText, out var call) || call is null)
-    {
-        // На crashed плана может не быть штатно (финал через SettleAsync — терминал downstream
-        // не дошёл): это не сбой проводки, а второй законный путь исхода. Сторож волн при этом
-        // восстановить всё равно надо — HandleTeamTurnEndAsync не позовут.
-        if (outcome == "crashed")
-        {
-            RestoreWaveWatchdogIfPaused(sessionId, entry);
-            return Task.CompletedTask;
-        }
-        _log?.LogWarning(
-            "Подписчик turn/completed: sessionId={SessionId}, turnSeq={TurnSeq}, outcome={Outcome} — в LastTeamTurnEnds нет плана вызова HandleTeamTurnEndAsync",
-            sessionId, turnSeq, outcome);
-        return Task.CompletedTask;
-    }
-
-    var failed = call.Value.Failed;
-    var asked = call.Value.Asked;
-    var sessionIdLocal = sessionId;
-    // Task.Run — как и в прежнем OnMessageAsync: разбор маркеров и публикация карточек/WS —
-    // синхронные блокирующие вызовы, в read-loop шины им не место. Гонок нет: публикация
-    // turn/completed одна на ход, TryTakeTeamTurnEnd удаляет запись атомарно.
-    _ = Task.Run(async () =>
-    {
-        try { await HandleTeamTurnEndAsync(sessionIdLocal, turnText ?? string.Empty, failed, asked); }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[SessionManager] Конец хода штаба ({sessionIdLocal}): {ex.Message}");
-        }
-    });
-
-    return Task.CompletedTask;
-}
+private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
+        _teamTurnCompletion.HandleTeamTurnCompletedAsync(e);
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
@@ -4710,82 +4661,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     }
 
     // Доклад о блокере (Э4): в отличие от промежуточного отчёта БУДИТ постановщика — ход
-    // запускается сразу. Иначе «я застрял» лежит в ленте штаба до конца волны, а координатор
-    // всё это время ждёт докладов о завершении, которых не будет.
-    // Родитель — чат-штаб «Командной реализации» → человек дополнительно получает карточку
-    // остановки с кнопками (молчаливых остановок в режиме не бывает).
-    public async Task<ReportUpResult> ReportBlockerAsync(string sessionId, string text, string ownerId)
-    {
-        var chat = GetOwned(sessionId, ownerId);
-        var parentId = chat?.ParentSessionId;
-
-        // Пробуждение штаба — платный ход, инициированный агентом, поэтому оно под квотой:
-        // иначе исполнитель поднимал бы координатора докладом-блокером в бесконечном цикле,
-        // не расходуя ни одной другой единицы бюджета (та же лавина, только с другого входа).
-        var wake = parentId is null ? (true, true, null) : TryConsumeTeamWakeup(parentId);
-
-        if (!wake.Allowed)
-        {
-            // Квота выбрана либо практика остановлена — ход не поднимаем, НО молча не
-            // отходим: застрявший исполнитель без карточки означал бы ровно то зависание,
-            // которого в режиме быть не должно. Доклад ложится в ленту, человек — видит
-            // карточку и push, а координатор проснётся уже по его решению.
-            var quiet = await ReportUpAsync(sessionId, TeamImplementPrompts.BlockerReportText(text),
-                ownerId, withTurn: false);
-            // Карточку и push шлём ОДИН раз на остановку: практика уже ждёт решения человека
-            // (стадия awaitingDecision), и каждый следующий блокер волны добавлял бы к той же
-            // причине ещё одну карточку и ещё один push — спам вместо сигнала.
-            if (quiet is (ReportUpResult.Delivered or ReportUpResult.Queued)
-                && GetById(parentId!) is { TeamImplement: { } blockedTeam } blockedStab
-                && blockedTeam.Stage != TeamImplementStage.AwaitingDecision)
-            {
-                var card = new TeamEscalation
-                {
-                    Kind = blockedTeam.Stopped ? TeamEscalationKind.Stopped : TeamEscalationKind.BudgetExhausted,
-                    Title = blockedTeam.Stopped
-                        ? "Исполнитель застрял, а практика остановлена"
-                        : "Исполнитель застрял, а бюджет итерации израсходован",
-                    Details = $"{text.Trim()}\n\nКоординатор не разбужен: {wake.Reason}.\n\n"
-                              + TeamImplementPrompts.BudgetLine(blockedTeam.Budget),
-                    TaskId = chat?.TaskId,
-                    Wave = blockedTeam.WaveNumber,
-                    Actions = TeamEscalationActions.For(blockedTeam.Stopped
-                        ? TeamEscalationKind.Stopped
-                        : TeamEscalationKind.BudgetExhausted),
-                };
-                if (TeamEscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
-                else await PublishTeamEscalationAsync(parentId!, card);
-            }
-            _log.LogWarning("Доклад-блокер из чата {SessionId}: ход штаба не запущен ({Reason})", sessionId, wake.Reason);
-            return quiet;
-        }
-
-        var result = await ReportUpAsync(sessionId, TeamImplementPrompts.BlockerReportText(text), ownerId,
-            withTurn: true, reactionPrompt: TeamImplementPrompts.BlockerReactionTurn(chat?.Name));
-        if (result is not (ReportUpResult.Delivered or ReportUpResult.Queued))
-        {
-            // Пробуждение списано выше (wake.Allowed), а доклад не дошёл (TooDeep/NoParent/
-            // NotFound) — координатор фактически не разбужен, платить команде не за что (m3)
-            if (parentId is not null) RefundTeamWakeup(parentId);
-            return result;
-        }
-
-        if (parentId is not null && GetById(parentId) is { TeamImplement: { } team } stab)
-        {
-            var escalation = new TeamEscalation
-            {
-                Kind = TeamEscalationKind.Blocker,
-                Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.Blocker, text),
-                Details = text,
-                TaskId = chat?.TaskId,
-                Wave = team.WaveNumber,
-                Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
-            };
-            if (TeamEscalationRaiser is { } raise) await raise(stab, escalation);
-            else await PublishTeamEscalationAsync(parentId, escalation);
-        }
-        return result;
-    }
+    // запускается сразу. Тело переехало в TeamTurnCompletionService (волна Ж): пробуждение
+    // штаба через `TryConsumeTeamWakeup` с правильным шаблоном карточки при исчерпанной
+    // квоте (Stopped vs BudgetExhausted), компенсация квоты через `RefundTeamWakeup`,
+    // подъём от чата исполнителя к штабу — собственное дело штабного цикла «блокер»,
+    // и вертикаль владеет единым тестом, чтобы не размазывать развилку «квота выбрана
+    // vs практика остановлена» между ядром и обёрткой. Обёртка сохранена ради
+    // публичной сигнатуры (контроллеры и TaskExecutionService зовут по этому контракту).
+    public Task<ReportUpResult> ReportBlockerAsync(string sessionId, string text, string ownerId)
+        => _teamTurnCompletion.ReportBlockerAsync(sessionId, text, ownerId);
 
     // Снимок очереди для клиента и REST
     public IReadOnlyList<QueuedMessage> GetPending(string sessionId)
@@ -6193,130 +6077,33 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             loop?.WaitingReason, loop?.WaitingTicks ?? 0));
     }
 
-    // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении задаётся
-    // начальный состав (пустой список исполнителей = вся команда проекта) и стартовый
-    // бюджет итерации из дефолтов/конфига. Выкл обнуляет поле — как work-loop.
-    public async Task<Session?> SetTeamImplementAsync(string sessionId, bool enabled,
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба. Тело переехало в
+    // TeamEnableService (волна Ж): гарды B2/B4, снимок «оборванной волны», возврат режима
+    // человека при выключении, правка настроек поверх активного режима (M4), тройная
+    // синхронизация Mode/CLI/AdapterStale через шов — собственное дело вертикали,
+    // единое тело держит все развилки «выкл посреди интервью/волны/проверки». Обёртка
+    // сохранена ради публичной сигнатуры: контроллеры и тесты зовут по этому контракту.
+    public Task<Session?> SetTeamImplementAsync(string sessionId, bool enabled,
         bool autoWaves = true, string? coordinatorPersonaId = null, string? plannerPersonaId = null,
         IReadOnlyCollection<string>? executorPersonaIds = null, string? userId = null,
         bool coordinatorNoCode = true)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
-
-        // Гард B4 (симметрично SetWorkLoopAsync): автопилот и «Командная реализация» не
-        // сочетаются в одном чате — см. SessionModeConflictException.
-        if (enabled && entry.Info.WorkLoop is not null)
-            throw new SessionModeConflictException(
-                "Командная реализация недоступна, пока в чате активен Автопилот — сначала выключите цикл «до готово».");
-
-        // Гард на входе (B2 приёмки): чат без координатора или без состава исполнителей режимом
-        // не станет. Раньше те же проверки жили только в CreateTeamPlanAsync — отказ приходил
-        // ПОСЛЕ полного интервью, и вся постановка (десятки минут хода и токены) уходила впустую.
-        if (enabled && TeamImplementSetupError(entry.Info, coordinatorPersonaId, executorPersonaIds)
-            is { } setupError)
-            throw new TeamImplementSetupException(setupError.Code, setupError.Message);
-
-        // Minor (волна 3): выключение режима посреди незакрытой волны раньше не оставляло
-        // следа — задачи волны сиротели молча (доисполняются, но никто не подводит итог).
-        // Снимок ДО обнуления TeamImplement ниже.
-        var interruptedWave = !enabled && entry.Info.TeamImplement is { WaveNumber: > 0 } wi
-            && wi.WaveNumber > wi.ClosedWave ? wi.WaveNumber : (int?)null;
-        var interruptedWaveAuthor = interruptedWave is not null
-            ? entry.Info.TeamImplement!.CoordinatorPersonaId ?? entry.Info.PersonaId : null;
-
-        // Выключение режима посреди интервью/планирования: сначала вернуть человеку его
-        // режим прав, пока состояние с SavedMode ещё живо — иначе чат навсегда остался бы
-        // в план-режиме, который ему навязал штаб (Э8).
-        if (!enabled) RestoreUserMode(sessionId);
-
-        if (enabled && entry.Info.TeamImplement is { } active)
-        {
-            // M4: повторное включение поверх активного режима — правка настроек, а не рестарт.
-            // Пересоздание объекта стирало SavedMode, бюджет, стадию, PlanCardId и счёт волн:
-            // волна сиротела — задачи доисполнялись, а закрытия, сводки и проверки не было
-            // никогда (план по пустому PlanCardId не находился). Меняем только настраиваемое.
-            active.AutoWaves = autoWaves;
-            active.CoordinatorPersonaId = coordinatorPersonaId;
-            active.PlannerPersonaId = plannerPersonaId;
-            active.ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [];
-            active.CoordinatorNoCode = coordinatorNoCode;
-        }
-        else
-        {
-            entry.Info.TeamImplement = enabled
-                ? new SessionTeamImplement
-                {
-                    // Minor (волна 3): по спеке Э8 первая стадия итерации — интервью, а не
-                    // планирование (дефолт модели). До этой правки бейдж окно между включением
-                    // режима и первой вводной мог показать «планирование» — тексту спеки
-                    // соответствует только по совпадению (первая вводная тут же переводит
-                    // стадию через ResetTeamIterationOnUserInput).
-                    Stage = TeamImplementStage.Interview,
-                    AutoWaves = autoWaves,
-                    CoordinatorPersonaId = coordinatorPersonaId,
-                    PlannerPersonaId = plannerPersonaId,
-                    ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [],
-                    Budget = NewTeamImplementBudget(),
-                    CoordinatorNoCode = coordinatorNoCode,
-                }
-                : null;
-        }
-        // Гард «координатор не пишет код» (CoordinatorWriteGuard) проверяет команду Bash/
-        // PowerShell в момент permission-запроса — а CLI спрашивает разрешение не в любом
-        // --permission-mode: в acceptEdits/bypassPermissions запись через shell проходит мимо
-        // сервера целиком (проверено вживую той же командой из находки Веры). Default/Auto
-        // спрашивают всегда — переводим координатора туда, не трогая уже совместимые режимы.
-        if (enabled && PermissionModeGuard.GuardCompatibleMode(entry.Info.Mode, coordinatorNoCode) is var guarded
-            && guarded != entry.Info.Mode)
-        {
-            entry.Info.Mode = guarded;
-            entry.Process?.TrySetPermissionModeLive(guarded);
-        }
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        // Правило «координатор не пишет код» режет инструменты правки через --disallowedTools,
-        // а он запекается при создании адаптера — помечаем устаревшим, иначе гард применился бы
-        // только со следующего пересоздания процесса (уборка ленивая, как в SwitchSpeaker)
-        if (entry.Process is not null) entry.AdapterStale = true;
-        SaveSessions();
-        await BroadcastTeamImplementAsync(sessionId, entry);
-
-        // След «итерация оборвана» (Minor, волна 3): молчаливых пауз не бывает и у ручного
-        // выключения — задачи незакрытой волны продолжат исполняться сами по себе, но человек
-        // должен узнать об этом здесь и сейчас, а не догадываться по пропавшему бейджу режима.
-        if (interruptedWave is { } wave && interruptedWaveAuthor is { } author)
-        {
-            var text = $"Режим «Командная реализация» выключен посреди волны {wave} — " +
-                "задачи волны продолжат исполняться сами по себе, но закрытия волны, сводки и " +
-                "итога итерации больше не будет. Проверьте их вручную.";
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            await _teamHistory.AppendAsync(sessionId, new StoredTextMessage(text, personaId: author, timestamp: ts),
-                new GuestTextMessage(text, author, ts));
-        }
-        return entry.Info;
-    }
+        => _teamEnable.SetTeamImplementAsync(sessionId, enabled, autoWaves, coordinatorPersonaId,
+            plannerPersonaId, executorPersonaIds, userId, coordinatorNoCode);
 
     // Причина, по которой режим включать нельзя — до единого хода интервью (B2 приёмки).
     // Тело переехало в TeamStateService (волна А): тонкая обёртка сохраняет публичную
-    // сигнатуру для тестов и внешних вызывающих.
-    internal (string Code, string Message)? TeamImplementSetupError(Session session,
+    // сигнатуру для тестов и внешних вызывающих. Публичный (волна Ж): TeamEnableService
+    // зовёт при включении режима — гард B2 приёмки (нет координатора / пустой состав)
+    // должен срабатывать ДО того, как сессия становится режимной.
+    public (string Code, string Message)? TeamImplementSetupError(Session session,
         string? coordinatorPersonaId, IReadOnlyCollection<string>? executorPersonaIds) =>
         _teamState.TeamImplementSetupError(session, coordinatorPersonaId, executorPersonaIds);
 
     // Переключение авто-волн на ходу (из бейджа режима): не включает/выключает режим,
     // только флаг внутри. Режим не активен → поля не трогает, возвращает сессию как есть.
-    public async Task<Session?> SetTeamImplementAutoAsync(string sessionId, bool autoWaves, string? userId = null)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
-        if (entry.Info.TeamImplement is not { } ti) return entry.Info;
-
-        ti.AutoWaves = autoWaves;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        await BroadcastTeamImplementAsync(sessionId, entry);
-        return entry.Info;
-    }
+    // Тело в TeamEnableService (волна Ж); обёртка сохранена ради публичной сигнатуры.
+    public Task<Session?> SetTeamImplementAutoAsync(string sessionId, bool autoWaves, string? userId = null)
+        => _teamEnable.SetTeamImplementAutoAsync(sessionId, autoWaves, userId);
 
     // Режим прав, совместимый с гардом «координатор не пишет код», переехал в Core
     // (`ClaudeHomeServer.Services.PermissionModeGuard`) — там же, где тип `ClaudeMode`. Ядро
@@ -6798,6 +6585,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // возврата волна осталась бы без надзора: настоящий stall никто бы не поймал, а
     // «молчаливых пауз не бывает». Волна должна быть живой: закрытая
     // (ClosedWave == WaveNumber) или нулевая — не в счёт.
+    // Owning-обёртка для вертикали TeamTurnCompletionService: вертикаль зовёт с одним
+    // sessionId и не видит SessionEntry (40-польная персистентная модель с пятью
+    // примитивами синхронизации — общая память двух подсистем не нужна).
+    internal void RestoreWaveWatchdogIfPaused(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        RestoreWaveWatchdogIfPaused(sessionId, entry);
+    }
+
     private void RestoreWaveWatchdogIfPaused(string sessionId, SessionEntry entry)
     {
         if (entry.Info.TeamImplement is not { } team) return;
@@ -6814,216 +6610,46 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         SaveSessions();
     }
 
-    // Конец хода штаба (Э4 + Э5): маркеры координатора и переход в ожидание вводной.
-    // Приоритет — эскалация: она останавливает практику, и разворачивать волну поверх
-    // остановки незачем. Стадию «ожидание» ставим только на успешном ходу: упавший ход
-    // итог не подвёл, и «итерация завершена» было бы враньём.
-    // asked — в этом ходу координатор задал вопрос ASK-карточкой: тогда интервью работает,
-    // и гард молчаливого тупика молчит (иначе карточка «вопросов не будет» приходила бы
-    // ровно поверх пришедших вопросов).
-    internal async Task HandleTeamTurnEndAsync(string sessionId, string turnText, bool failed,
-        bool asked = false)
+    // Конец хода штаба (Э4 + Э5): тело переехало в TeamTurnCompletionService (волна Ж) —
+    // разбор маркеров координатора, гард молчаливого тупика, обработка проверки — всё это
+    // собственное дело штабного цикла, и вертикаль владеет единым тестом, чтобы не плодить
+    // отдельные развилки «Accumulator vs диск» и обратные рёбра в ядро. Обёртка сохранена
+    // ради публичной сигнатуры: HandleTeamTurnCompletedShim и тесты SessionManagerTests
+    // зовут HandleTeamTurnEndAsync напрямую.
+    public Task HandleTeamTurnEndAsync(string sessionId, string turnText, bool failed, bool asked = false)
+        => _teamTurnCompletion.HandleTeamTurnEndAsync(sessionId, turnText, failed, asked);
+
+    // P23: авто-гашение карточки блокера, когда координатор сам снял её предмет. Тело остаётся
+    // в ядре (работает с приватным состоянием entry.Accumulator и приватным _history —
+    // 40-польная персистентная модель, пять примитивов синхронизации), вертикаль получает
+    // только сессию/текст. Публичный owning-обёртка (волна Ж) для вертикали
+    // TeamTurnCompletionService.HandleTeamTurnEndAsync, которая зовёт после разбора
+    // маркера эскалации (P23).
+    public Task<bool> TryAutoResolveTeamBlockerAsync(string sessionId, string turnText)
     {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        if (entry.Info.TeamImplement is not { } team) return;
-
-        // Вопрос ASK в волне гасил отсечки сторожа (OnAskQuestionStabAsync): ход завершился —
-        // ответ получен или ход прерван, волна снова под надзором. Стадию не трогаем: если
-        // дальше по ходу маркер эскалации, публикация карточки сама переведёт практику в
-        // ожидание и снова обнулит отсечки.
-        RestoreWaveWatchdogIfPaused(sessionId, entry);
-
-        // P23 (прод 2026-08-12): практика в «ждёт решения» по карточке блокера, но координатор
-        // в этом ходе снял предмет блокера сам — продолжил работу маркером team:work или подвёл
-        // итог при закрытых волнах плана. Карточку не держать: иначе она висит по решённому
-        // вопросу, стадия сто́ит в AwaitingDecision, а человек отвечает кнопкой на уже ненужную
-        // эскалацию (прогон Веры P23: координатор сам закрыл задачу и подвёл итог, карточка
-        // осталась висеть). Если погасили — перечитываем состояние команды: стадия сменилась,
-        // и дальше HandleTeamTurnEndAsync идёт по ней (team:work разберёт StartTeamWorkAsync,
-        // Checking доводится до Idle ниже).
-        if (team.Stage == TeamImplementStage.AwaitingDecision
-            && await TryAutoResolveTeamBlockerAsync(sessionId, entry, turnText)
-            && entry.Info.TeamImplement is { } teamAfterResolve)
-        {
-            team = teamAfterResolve;
-        }
-
-        if (TeamProtocolMarkers.ParseEscalationMarker(turnText) is { } marker)
-        {
-            // Тупик в волне (Э8) — не «жду решения», а возврат в интервью: волны на паузе,
-            // карточка с push, следом ход с просьбой задать вопросы ASK-карточками.
-            if (marker.Kind == TeamEscalationKind.NeedsClarification)
-                await EnterInterviewAsync(sessionId, marker.Text, withTurn: true);
-            else
-                await RaiseCoordinatorEscalationAsync(sessionId, marker.Kind, marker.Text);
-            return;
-        }
-
-        if (TeamProtocolMarkers.ParseWorkMarker(turnText) is { } request)
-        {
-            await StartTeamWorkAsync(sessionId, request);
-            return;
-        }
-
-        // Разговорный ответ в интервью (M6): работы нет — закрываем интервью без плана
-        // и без ложной эскалации, практика возвращается в прежнее состояние.
-        if (TeamProtocolMarkers.HasTalkMarker(turnText))
-        {
-            await CloseTeamTalkAsync(sessionId);
-            return;
-        }
-
-        // Молчаливый тупик (Э7-фикс, находка Веры Major №3; Э8 расширил на Interview —
-        // ревью Глеба): координатор ни разу не довёл дело до волны (WaveNumber == 0) и
-        // закончил ход в planning или interview без маркера работы/эскалации — вводная, с
-        // которой начинается практика, повисла бы без следа: ход завершился, плана нет,
-        // карточки нет, бейдж «интервью»/«планирование» никогда не сдвинется. После первой
-        // волны (WaveNumber > 0) такой же ответ без маркера — легитимный разговор по
-        // WorkClassificationProtocol («что сейчас в работе?» и т.п.), эскалацию не поднимаем.
-        // M9: интервью, вызванное тупиком в волне, приходит с WaveNumber > 0 — на него гард
-        // «только до первой волны» не распространялся, и клятва карточки «сейчас придут
-        // вопросы» нарушалась молча: вопросов нет, маркера нет, сторож волн в Interview
-        // не тикает. Теперь стадия интервью под гардом при любом номере волны.
-        // Прод 2026-08-04: гард обязан молчать, пока живо планирование по этой вводной
-        // (TeamPlanningInFlight). Планировщик работает ДОЛЬШЕ хода (потолок 300 с), и за
-        // это время в чате спокойно заканчиваются другие ходы — их конец без маркера при
-        // Planning && WaveNumber == 0 не тупик координатора: план уже строится и придёт
-        // карточкой (а не построится — карточку даст сбой/таймаут планировщика). Без флага
-        // тревога «Координатор не понял вводную» поднималась на живой работе и висела
-        // красной рядом с пришедшим планом.
-        // Прод 2026-08-12 (P16): тот же аргумент — для async-субагента координатора. Ход,
-        // что закончился текстом «запустил разведку», но в фоновом Tool-вызове оставил живого
-        // агента (entry.Process.HasPendingBg), — НЕ тупик: координатор ждёт собственного
-        // результата, и следующий ход (пробуждение по task-notification) почти наверняка
-        // принесёт маркер team:work. Без исключения гард поднимал «Координатор не понял
-        // вводную» на живой работе и уводил стадию в AwaitingDecision — тогда штатный
-        // team:work уже не потреблялся (StartTeamWorkAsync её не принимает), и человеку
-        // приходилось отвечать на ложную карточку (прогон Веры P16).
-        var stalledStage = team.Stage == TeamImplementStage.Interview
-            || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
-        if (stalledStage && !asked && !_teamRunState.IsPlanningInFlight(sessionId)
-            && !_teamRunState.HasAsyncAgent(sessionId))
-        {
-            // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
-            // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/
-            // «Уточнения так и не пришли» — координатор ОТВЕТИЛ, но без маркера: это честная
-            // реакция на его текст (SilentPlanningStallDetails/ClarifyStallDetails цитируют
-            // turnText). А `failed` — ход оборван технически (рестарт сервера, упавший процесс,
-            // таймаут провайдера) ДО того, как координатор вообще успел ответить по существу:
-            // turnText в этом случае пуст или обрублен, и цитировать в карточке нечего, а текст
-            // «не понял вводную» отправляет человека переформулировать задачу, хотя проблема не
-            // в ней. Формулировка карточки-инфраструктурного обрыва согласована с владельцем.
-            var stalled = failed
-                ? new TeamEscalation
-                {
-                    Kind = TeamEscalationKind.ProductDecision,
-                    Title = "Ход прервался",
-                    Details = TeamImplementPrompts.TurnInterruptedDetails(),
-                    Wave = team.WaveNumber,
-                    Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
-                }
-                : BuildSilentStallEscalation(team, turnText);
-            if (TeamEscalationRaiser is { } raise) await raise(entry.Info, stalled);
-            else await PublishTeamEscalationAsync(sessionId, stalled);
-            return;
-        }
-
-        // Ход проверки упал (процесс умер, лимит провайдера, ошибка): итог не подведён, но и
-        // висеть в «проверке» вечно нельзя — сторож волн сюда не смотрит, а новая вводная
-        // из этой стадии не разворачивается. Зовём человека карточкой «проверка не прошла».
-        if (failed && team.Stage == TeamImplementStage.Checking)
-        {
-            await RaiseCoordinatorEscalationAsync(sessionId, TeamEscalationKind.CheckFailed,
-                "Ход проверки завершился ошибкой — итог итерации не подведён. "
-                + "Продолжить починку или закрыть итерацию с замечаниями?");
-            return;
-        }
-
-        // Проверка завершилась без эскалации — итерация закрыта, режим ждёт следующую вводную
-        // (сам режим при этом НЕ выключается: выключает его только человек из бейджа).
-        if (!failed && team.Stage == TeamImplementStage.Checking)
-        {
-            WithTeamState(sessionId, t =>
-            {
-                t.Stage = TeamImplementStage.Idle;
-                t.WaveStartedAt = null;
-                t.WaveActivityAt = null;
-                return true;
-            });
-            await SaveTeamImplementStateAsync(sessionId);
-            _log.LogInformation("Итерация чата-штаба {SessionId} завершена — режим ждёт следующей вводной", sessionId);
-        }
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return Task.FromResult(false);
+        return TryAutoResolveTeamBlockerInternalAsync(sessionId, entry, turnText);
     }
 
-    // Карточка молчаливого тупика (ход завершился штатно, но без маркера) — вынесено из
-    // HandleTeamTurnEndAsync, чтобы её не спутать с веткой инфраструктурного обрыва (см. там).
-    private static TeamEscalation BuildSilentStallEscalation(SessionTeamImplement team, string turnText)
+    // Тело в ядре — здесь лезем в Accumulator/History, а вертикаль видит только результат.
+    private Task<bool> TryAutoResolveTeamBlockerInternalAsync(string sessionId, SessionEntry entry, string turnText)
     {
-        var clarifyStall = team.Stage == TeamImplementStage.Interview && team.WaveNumber > 0;
-        return new TeamEscalation
-        {
-            Kind = TeamEscalationKind.ProductDecision,
-            Title = clarifyStall ? "Уточнения так и не пришли" : "Координатор не понял вводную",
-            Details = clarifyStall
-                ? TeamImplementPrompts.ClarifyStallDetails(turnText, team.WaveNumber)
-                : TeamImplementPrompts.SilentPlanningStallDetails(turnText),
-            Wave = team.WaveNumber,
-            Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
-        };
-    }
-
-    // Все плановые волны итерации закрыты — работа по плану закончена. P23: это сигнал того,
-    // что карточка блокера стала неактуальна финалом итерации (координатор подвёл итог, а
-    // стадия зависла в AwaitingDecision), и критерий терминального состояния при возврате из
-    // «ждёт решения» (RespondTeamEscalation / ResumeTeamFromDecisionOnUserInput) — иначе
-    // практика формально «в волне N из N» после полностью закрытых волн. PlannedWaves == 0
-    // (план не запускался) никогда не считаем закрытым набором.
-    private static bool AllPlannedWavesClosed(SessionTeamImplement team) =>
-        team.PlannedWaves > 0 && team.ClosedWave >= team.PlannedWaves;
-
-    // Мёртвая зона конвейера (прод 2026-08-17): карточка остановки висела ПОСЛЕ закрытия
-    // волны — авто-раздача следующей уже была подавлена («практика ждёт человека»), а белый
-    // список actionId ответа её не покрывал: конвейер замолкал до ручного «Остановить →
-    // Продолжить». Признак «раздачу нужно позвать» после решения человека: практика вернулась
-    // в Wave, все РОЗДАННЫЕ волны закрыты (ClosedWave == WaveNumber), а в плане есть
-    // нерозданные под-задачи. Решение «раздать или поднять карточку» остаётся за
-    // TeamWaveService (бюджет, версии плана, «Остановить») — здесь только «пора ли звать».
-    private static bool WaveStartPendingAfterDecision(SessionTeamImplement team, TeamImplementPlan plan) =>
-        team.Stage == TeamImplementStage.Wave
-        && team.WaveNumber > 0
-        && team.ClosedWave == team.WaveNumber
-        && plan.Subtasks.Any(s => s.TaskId is null);
-
-    // У координатора есть живый фоновый субагент (Tool Agent и т.п.) — ход, завершённый
-    // текстом без маркера, не тупик: координатор ждёт собственного результата. P16: по этому
-    // признаку гард молчаливого тупика молчит (аналог TeamPlanningInFlight). entry.Process —
-    // адаптер текущего прогона CLI; HasPendingBg истинно, пока прогон доживает фоновых агентов.
-    private static bool AsyncAgentInFlight(SessionEntry entry) => entry.Process?.HasPendingBg ?? false;
-
-    // P23: авто-гашение карточки блокера, когда координатор сам снял её предмет. Разбудившийся
-    // по докладу-блокеру координатор (BlockerReactionTurn) отвечает ходом — и если этот ход
-    // продолжает работу (маркер team:work) либо закрывает итерацию (все волны плана закрыты),
-    // карточку более не держать: звать человека по решённому вопросу не нужно (прогон P23:
-    // координатор сам закрыл задачу и подвёл итог, карточка висела в AwaitingDecision). true —
-    // погасил и сдвинул стадию; false — оснований для авто-резолва нет (ждём человека).
-    private async Task<bool> TryAutoResolveTeamBlockerAsync(string sessionId, SessionEntry entry, string turnText)
-    {
-        if (entry.Info.TeamImplement is not { } team) return false;
-        if (team.Stage != TeamImplementStage.AwaitingDecision) return false;
+        if (entry.Info.TeamImplement is not { } team) return Task.FromResult(false);
+        if (team.Stage != TeamImplementStage.AwaitingDecision) return Task.FromResult(false);
 
         // Последняя открытая карточка блокера в истории чата (вехи остановки живут дольше хода).
         var openBlocker = entry.Accumulator?.GetAll()
             .OfType<StoredTeamEscalationMessage>()
             .Where(m => !m.Escalation.Resolved && m.Escalation.Kind == TeamEscalationKind.Blocker)
             .LastOrDefault();
-        if (openBlocker is null) return false;
+        if (openBlocker is null) return Task.FromResult(false);
 
         // Координатор снял блокер действием, а не молчанием: либо продолжает работу маркером
-        // team:work, либо итерация финиширована (все плановые волны закрыты). Иначе карточка
+        // team:work, или итерация финиширована (все плановые волны закрыты). Иначе карточка
         // уместна — координатор реально ждёт решения человека, оставляем как есть.
         var hasWork = TeamProtocolMarkers.ParseWorkMarker(turnText) is not null;
         var allWavesClosed = AllPlannedWavesClosed(team);
-        if (!hasWork && !allWavesClosed) return false;
+        if (!hasWork && !allWavesClosed) return Task.FromResult(false);
 
         // Гасим карточку тем же путём, что кнопка человека (RespondTeamEscalationAsync):
         // помечаем Resolved, пишем снимок истории, рассылаем WS с resolved=true (иначе на F5
@@ -7035,7 +6661,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             FireAndForget(acc.SaveSnapshotAsync(_history),
                 $"сохранение истории после авто-гашения карточки блокера ({sessionId})");
         }
-        await BroadcastAsync(sessionId, new TeamEscalationMessage(openBlocker.EscalationId,
+        // Broadcast и финальные правки состояния — асинхронно: маркер гашения уже взведён,
+        // и обновления идут тем же путём, что у RespondTeamEscalationAsync (волна Д).
+        return CompleteAutoResolveAsync(sessionId, entry, openBlocker.EscalationId, card, hasWork, allWavesClosed);
+    }
+
+    private async Task<bool> CompleteAutoResolveAsync(string sessionId, SessionEntry entry,
+        string escalationId, TeamEscalation card, bool hasWork, bool allWavesClosed)
+    {
+        await BroadcastAsync(sessionId, new TeamEscalationMessage(escalationId,
             TeamEscalationKind.Blocker.ToWireToken(), card.Title, card.Details, card.Actions,
             card.TaskId, card.Wave, Resolved: true, ChosenActionId: "answer", card.PersonaId));
 
@@ -7059,18 +6693,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         SaveSessions();
         await BroadcastTeamImplementAsync(sessionId, entry);
         _log.LogInformation("Карточка блокера {CardId} чата-штаба {SessionId} погашена автоматически: " +
-            "координатор снял блокер сам ({Reason})", openBlocker.EscalationId, sessionId,
+            "координатор снял блокер сам ({Reason})", escalationId, sessionId,
             hasWork ? "team:work" : "все волны плана закрыты");
         return true;
     }
-
+﻿
     // Новая вводная разложена планировщиком и уходит в волну (Э5). Тело переехало в
     // TeamDecisionService (волна Г): подготовка состояния перед планированием —
     // собственное дело вертикали (гард по стадии, переключение Interview→Planning,
-    // открытие свежей итерации в Idle, погашение устаревшей карточки на Confirming).
-    // Обёртка сохранена ради приватной сигнатуры: HandleTeamTurnEndAsync вызывает её
-    // по тому же контракту.
-    private Task StartTeamWorkAsync(string sessionId, string request, string? feedback = null) =>
+    // открыление свежей итерации в Idle, погашение устаревшей карточки на Confirming).
+    // Owning-обёртка для вертикали TeamTurnCompletionService (волна Ж): HandleTeamTurnEndAsync
+    // вызывает из разбора маркера team:work по тому же контракту — internal, чтобы
+    // вертикаль звала, а снаружи API ядра не открывало.
+    internal Task StartTeamWorkAsync(string sessionId, string request, string? feedback = null) =>
         _teamDecision.StartTeamWorkAsync(sessionId, request, feedback);
 
     // Собственно планирование: вводная (и правка к плану) сохраняются для повтора, зовётся
@@ -7086,9 +6721,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // Выход из интервью без работы (M6, маркер `<team:talk/>`): координатор честно разобрал
     // сообщение — это разговор, практику на пустом месте не разворачиваем. Тело переехало
     // в TeamDecisionService (волна Г): выход из интервью и третья дверь в мёртвую зону
-    // конвейера — собственное дело вертикали. Обёртка сохранена ради приватной
-    // сигнатуры: HandleTeamTurnEndAsync вызывает её по тому же контракту.
-    private Task CloseTeamTalkAsync(string sessionId) =>
+    // конвейера — собственное дело вертикали. Owning-обёртка для вертикали
+    // TeamTurnCompletionService (волна Ж): HandleTeamTurnEndAsync вызывает из разбора
+    // маркера team:talk по тому же контракту — internal, чтобы вертикаль звала.
+    internal Task CloseTeamTalkAsync(string sessionId) =>
         _teamDecision.CloseTeamTalkAsync(sessionId);
 
     // Новая вводная человека (Э5): итерация начинается заново — бюджет обнуляется, счёт волн
@@ -7201,6 +6837,45 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         }
     }
 
+    // Все плановые волны итерации закрыты — работа по плану закончена. P23: это сигнал того,
+    // что карточка блокера стала неактуальна финалом итерации (координатор подвёл итог, а
+    // стадия зависла в AwaitingDecision), и критерий терминального состояния при возврате из
+    // «ждёт решения» (RespondTeamEscalation / ResumeTeamFromDecisionOnUserInput) — иначе
+    // практика формально «в волне N из N» после полностью закрытых волн. PlannedWaves == 0
+    // (план не запускался) никогда не считаем закрытым набором.
+    // Дубликат TeamDecisionService.AllPlannedWavesClosed: используется и ядром (в этой же
+    // функции для возврата стадии), и вертикалью (волна Г). Стадия по StageBeforeDecision
+    // зависит от вертикального решения о возврате в планирование, но критерий закрытия
+    // волн — чистая арифметика, и тащить ради неё шов нерационально.
+    private static bool AllPlannedWavesClosed(SessionTeamImplement team) =>
+        team.PlannedWaves > 0 && team.ClosedWave >= team.PlannedWaves;
+
+    // Мёртвая зона конвейера (прод 2026-08-17): карточка остановки висела ПОСЛЕ закрытия
+    // волны — авто-раздача следующей уже была подавлена («практика ждёт человека»), а белый
+    // список actionId ответа её не покрывал: конвейер замолкал до ручного «Остановить →
+    // Продолжить». Признак «раздачу нужно позвать» после решения человека: практика вернулась
+    // в Wave, все РОЗДАННЫЕ волны закрыты (ClosedWave == WaveNumber), а в плане есть
+    // нерозданные под-задачи. Решение «раздать или поднять карточку» остаётся за
+    // TeamWaveService (бюджет, версии плана, «Остановить») — здесь только «пора ли звать».
+    // Дубликат TeamDecisionService.WaveStartPendingAfterDecision: та же логика «пора ли
+    // звать» для текстового ответа (D1) и кнопок — вызывается и из ядра (здесь), и из
+    // вертикали (волна Г). Дубликат намеренный: это предикат без сайд-эффектов, и тащить
+    // ради него шов нерационально.
+    private static bool WaveStartPendingAfterDecision(SessionTeamImplement team, TeamImplementPlan plan) =>
+        team.Stage == TeamImplementStage.Wave
+        && team.WaveNumber > 0
+        && team.ClosedWave == team.WaveNumber
+        && plan.Subtasks.Any(s => s.TaskId is null);
+
+    // У координатора есть живой фоновый субагент (Tool Agent и т.п.) — ход, завершённый
+    // текстом без маркера, не тупик: координатор ждёт собственного результата. P16: по этому
+    // признаку гард молчаливого тупика молчит (аналог TeamPlanningInFlight). entry.Process —
+    // адаптер текущего прогона CLI; HasPendingBg истинно, пока прогон доживает фоновых агентов.
+    // Дубликат TeamDecisionService.AsyncAgentInFlight? Нет: вертикаль не ходит в entry.Process
+    // (40-польная персистентная модель). Ядро пользуется HasPendingBg из Process напрямую —
+    // приватное поле, и сюда шов не нужен.
+    private static bool AsyncAgentInFlight(SessionEntry entry) => entry.Process?.HasPendingBg ?? false;
+
     // Возврат в интервью (Э8). Два входа: координатор сказал маркером `clarify`, что дальше
     // действовать не может (тупик в волне), либо просто задал человеку вопрос ASK-карточкой —
     // и то и другое означает, что требования неясны. Волны встают на паузу, чат уходит в
@@ -7295,6 +6970,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         entry.Process?.TrySetPermissionModeLive(mode);
     }
 
+    void ITeamRunState.TrySetEntryModeLiveAndStaleAdapter(string sessionId, ClaudeMode mode)
+    {
+        // Шов «вертикаль → ядро» (достройка ITeamRunState, волна Ж): тройная синхронизация
+        // Mode/CLI/AdapterStale для SetTeamImplementAsync. Три поля лежат в SessionEntry
+        // (Info.Mode, Process?, AdapterStale), и вертикаль без этого шова получала бы
+        // доступ к 40-полейной персистентной модели. Гард «координатор не пишет код»
+        // режет Bash/PowerShell на приёме permission, --disallowedTools — на создании
+        // адаптера: без AdapterStale правка второго доехала бы только до следующего
+        // пересоздания, а живой ход остался бы с прежним набором инструментов.
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Info.Mode = mode;
+        entry.Process?.TrySetPermissionModeLive(mode);
+        if (entry.Process is not null) entry.AdapterStale = true;
+    }
+
     T? ITeamRunState.WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) where T : default
     {
         // Шов «вертикаль → ядро» для транзакции над SessionTeamImplement: TeamBudgetService
@@ -7302,6 +6992,42 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // путь — через явную реализацию ITeamRunState. Сам лок-словарь живёт в TeamStateService
         // (единственная транзакция), наружу выходит только операция целиком.
         return _teamState.WithTeamState(sessionId, mutate);
+    }
+
+    // Шов «вертикаль → ядро» для плана вызова штабного разбора хода (волна Ж). Подписчик
+    // turn/completed переехал в TeamTurnCompletionService и не должен видеть SessionEntry
+    // (40-польная персистентная модель с пятью примитивами синхронизации — общая память двух
+    // подсистем). Реализация делегирует в entry — это всё ещё в ядре, потому что OnMessageAsync
+    // (ядро) пишет план по тому же ключу и без этого шва держал бы LastTeamTurnEnds приватным
+    // полем класса. Без явной реализации вертикаль не нашла бы точку для записи.
+    void ITeamRunState.RecordTeamTurnEnd(string sessionId, int turnSeq,
+        string? text, bool failed, bool asked)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.RecordTeamTurnEnd(turnSeq, text, failed, asked);
+    }
+
+    bool ITeamRunState.TryTakeTeamTurnEnd(string sessionId, int turnSeq,
+        out string? text, out bool failed, out bool asked)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+        {
+            text = null;
+            failed = asked = false;
+            return false;
+        }
+        // Делегируем в entry.TryTakeTeamTurnEnd: внутри — TeamTurnLock вокруг ContainsKey
+        // + Remove, чтобы забор был атомарен с публикацией turn/completed в шине.
+        if (entry.TryTakeTeamTurnEnd(turnSeq, out var t, out var call))
+        {
+            text = t;
+            failed = call is not null && call.Value.Failed;
+            asked = call is not null && call.Value.Asked;
+            return true;
+        }
+        text = null;
+        failed = asked = false;
+        return false;
     }
 
     bool ITeamNotifier.IsSessionBusy(string sessionId)
@@ -7499,7 +7225,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // Эскалация, поднятая самим координатором маркером в ходе (расхождение с планом, красная
     // проверка; продуктовый вопрос ушёл в ASK — маркер decision здесь только фолбэк).
     // Заголовки — из таблицы «Эскалация и остановки».
-    private async Task RaiseCoordinatorEscalationAsync(string sessionId, TeamEscalationKind kind, string details)
+    // Публичный (волна Ж): TeamTurnCompletionService.HandleTeamTurnEndAsync вызывает при
+    // разборе маркера эскалации из turnText и при инфраструктурном обрыве хода проверки —
+    // тонкая публикация карточки по TeamEscalationRaiser (иначе без push/уведомления).
+    internal async Task RaiseCoordinatorEscalationAsync(string sessionId, TeamEscalationKind kind, string details)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.TeamImplement is not { } team) return;

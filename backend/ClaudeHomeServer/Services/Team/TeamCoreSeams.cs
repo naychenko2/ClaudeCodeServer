@@ -183,6 +183,18 @@ internal interface ITeamRunState
     void TrySetPermissionModeLive(string sessionId, ClaudeMode mode);
 
     /// <summary>
+    /// Установить <c>entry.Info.Mode = mode</c>, отправить <c>set_permission_mode</c>
+    /// живому процессу и взвести <c>entry.AdapterStale</c> при его наличии — тройная
+    /// синхронизация для включения режима штаба (волна Ж, достройка ITeamRunState).
+    /// Гард «координатор не пишет код» (CoordinatorWriteGuard) пересекается с
+    /// <c>--disallowedTools</c>: первый режет на приёме permission, второй — на
+    /// создании адаптера. Без AdapterStale правка доехала бы только до следующего
+    /// пересоздания процесса, а живой ход остался бы с прежним набором инструментов.
+    /// Реализация — обёртка над entry, потому что три поля лежат в SessionEntry.
+    /// </summary>
+    void TrySetEntryModeLiveAndStaleAdapter(string sessionId, ClaudeMode mode);
+
+    /// <summary>
     /// Транзакция над SessionTeamImplement (штабные рантайм-поля): единственный способ
     /// править счётчики бюджета и попытки под-задач. Точки записи разнесены по потокам
     /// (раздача волны из колбэка завершения задачи, перевыдача из колбэка провала хода,
@@ -194,6 +206,28 @@ internal interface ITeamRunState
     /// переехали в вертикаль, и шов нужен TeamBudgetService (TryConsume/Refund).
     /// </summary>
     T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate);
+
+    /// <summary>
+    /// Положить план вызова штабного разбора по ключу turnSeq (text/failed/asked).
+    /// Достройка шага 2г-3и (волна Ж): подписчик turn/completed переехал в вертикаль
+    /// TeamTurnCompletionService, и ему нужен доступ к LastTeamTurnEnds без прямого
+    /// входа в SessionEntry (это утечка 40-полейной персистентной модели). Ядро
+    /// пишет план на терминале хода (ResultMessage/ErrorMessage), подписчик забирает
+    /// — оба идут через этот шов, чтобы вертикаль не видела SessionEntry.
+    /// Потолок 8 записей, ключ TurnSeq, симметричные LastTurnTexts правила (первая
+    /// запись выигрывает, повторная не затирает непустую). turnSeq &lt;= 0 — невалидный
+    /// ключ, метод no-op.
+    /// </summary>
+    void RecordTeamTurnEnd(string sessionId, int turnSeq, string? text, bool failed, bool asked);
+
+    /// <summary>
+    /// Изъять план вызова штабного разбора по ключу turnSeq. true и заполненные out'ы —
+    /// ключ найден (запись при этом удаляется атомарно, под TeamTurnLock). false — записи
+    /// нет (потолок вытеснил, либо OnMessageAsync ещё не положил). Достройка шага 2г-3и
+    /// (волна Ж) — парный к RecordTeamTurnEnd.
+    /// </summary>
+    bool TryTakeTeamTurnEnd(string sessionId, int turnSeq,
+        out string? text, out bool failed, out bool asked);
 }
 
 /// <summary>

@@ -3979,6 +3979,12 @@ public class SessionManagerTests : IDisposable
     private static void SetTeamTurnFromHuman(object entry, bool value) =>
         entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
 
+    // Баг b63fd8ea: метка подавления гарда живёт на SessionEntry. Для теста «дольше порога»
+    // сдвигаем её в прошлое через рефлексию — ShouldSuppressAsyncAgentStallGuard её
+    // потом прочитает и решит, что подавление истекло.
+    private static void SetAsyncAgentStallSince(object entry, DateTime? value) =>
+        entry.GetType().GetField("AsyncAgentStallSince")!.SetValue(entry, value);
+
     // --- Этап 4 / шаг 1в: тесты проводки turn/completed для HandleTeamTurnEndAsync ---
     // Каждый тест идёт полным продовым путём: InvokeOnMessageAsync кладёт план в
     // LastTeamTurnEnds при терминале хода, PublishTurnCompletedAsync публикует событие на
@@ -6579,6 +6585,57 @@ public class SessionManagerTests : IDisposable
 
         _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
             "ход, оставивший живого async-субагента, — это работа, а не тупик координатора");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "стадия не ушла в AwaitingDecision по ложной тревоге");
+    }
+
+    // Задача b63fd8ea: тот же класс молчаливого тупика, что и P16, но дыра была не в условии,
+    // а в его потолке длительности. Подавление через HasAsyncAgent висело бессрочно —
+    // фоновый агент с heartbeat'ами мог не доводить координатора до маркера часами, и
+    // BgLingerTimeout грейс тишины не лечил (это не потолок длительности). Должно быть
+    // наоборот: async-агент живёт дольше своего окна подавления (10 мин) → гард поднимает
+    // карточку молчаливого тупика и уводит стадию в AwaitingDecision, чтобы человек мог
+    // вмешаться.
+    [Fact]
+    public async Task КонецХода_AsyncСубагентВиситДольшеПорога_КарточкаМолчаливогоТупикаПриходит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-async-agent-stalled");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // координатор всё ещё ждёт агента
+        SetProcess(entry, adapter.Object);
+        // Метка подавления проставлена давно — окно 10 мин истекло. Без этого фикса гард
+        // молчал бы бессрочно и интервью висело часами без карточки и push.
+        SetAsyncAgentStallSince(entry, DateTime.UtcNow - TimeSpan.FromMinutes(11));
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Всё ещё жду результат.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().ContainSingle(
+            "async-агент молчит дольше окна подавления — карточка молчаливого тупика обязана прийти");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "гард перевёл стадию, чтобы человек мог вмешаться");
+    }
+
+    // Регрессия P16 с новой логикой: подавление в окне порога (метка 5 минут назад) —
+    // гард молчит. Это не дубль существующего теста P16 (там метки нет вообще — первый вызов):
+    // здесь мы явно проверяем, что окно порога работает в ОБЕ стороны.
+    [Fact]
+    public async Task КонецХода_AsyncСубагентВиситВНачалеОкна_ГардМолчит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-async-agent-fresh-stall");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true);
+        SetProcess(entry, adapter.Object);
+        // Подавление началось 5 минут назад — глубоко внутри окна 10 мин.
+        SetAsyncAgentStallSince(entry, DateTime.UtcNow - TimeSpan.FromMinutes(5));
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Жду результат.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "подавление ещё в окне порога — гард обязан молчать, как при P16");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
             "стадия не ушла в AwaitingDecision по ложной тревоге");
     }

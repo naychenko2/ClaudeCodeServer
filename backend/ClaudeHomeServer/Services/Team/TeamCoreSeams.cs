@@ -216,6 +216,18 @@ internal interface ITeamRunState
     void SetPlanningInFlight(string sessionId, bool inFlight);
 
     /// <summary>
+    /// true, если гард молчаливого тупика по концу хода должен молчать из-за живого
+    /// async-субагента координатора (entry.Process.HasPendingBg == true). Подавление
+    /// ограничено собственным потолком длительности (см. <see cref="TeamAsyncAgentStallGuard"/>):
+    /// async-агент, который молчит дольше порога, тупиком считается — иначе гард молчал бы
+    /// бессрочно (баг b63fd8ea, фоновый агент с heartbeat'ами не доводил координатора до
+    /// маркера часами). Метод сам ведёт метку начала подавления на SessionEntry и сбрасывает
+    /// её, когда async-агент уходит — следующий всплеск считается с нуля, а не копит
+    /// длительность от НЕсвязанного прошлого агента.
+    /// </summary>
+    bool ShouldSuppressAsyncAgentStallGuard(string sessionId);
+
+    /// <summary>
     /// Сменить permission-mode живому CLI-прогону (control-протокол set_permission_mode).
     /// Зовётся из вертикали штаба при входе в план-фазу (Э5) и при возврате режима
     /// человека после согласования плана — без него режим применился бы только к

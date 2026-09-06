@@ -86,6 +86,15 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // пришёл готовый план). Память, а не стор: рестарт сервера убивает сам планировщик,
         // и «планирование живо» после него неправда по определению.
         public volatile bool TeamPlanningInFlight;
+        // Момент, когда гард молчаливого тупика (TeamTurnCompletionService) ВПЕРВЫЕ увидел
+        // подавление из-за живого async-субагента для текущего захода в stalledStage
+        // (Interview или Planning && WaveNumber == 0). Задача b63fd8ea: без потолка длительности
+        // подавление висело бессрочно — фоновый агент с heartbeat'ами мог не доводить
+        // координатора до маркера часами. Метка сбрасывается, как только async-агент уходит
+        // (HasPendingBg == false): следующий всплеск фоновой активности считается с нуля,
+        // а не копит время от НЕсвязанного прошлого агента. Под TeamTurnLock (та же дисциплина,
+        // что у TeamTurnText/TeamTurnShownLength/TurnSawAngleBracket/TeamTurnAsked рядом).
+        public DateTime? AsyncAgentStallSince;
         // Текущий ход штаба поднят сообщением ЧЕЛОВЕКА (M7): авто-подтверждение добавочного
         // плана опирается на «вводная человека и есть точка контроля», поэтому инициатора
         // хода помечаем при запуске (SendDirectAsync / SendMessageAndWaitAsync) — классификация
@@ -7114,6 +7123,32 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     void ITeamRunState.SetPlanningInFlight(string sessionId, bool inFlight)
     {
         if (_sessions.TryGetValue(sessionId, out var entry)) entry.TeamPlanningInFlight = inFlight;
+    }
+
+    bool ITeamRunState.ShouldSuppressAsyncAgentStallGuard(string sessionId)
+    {
+        // Баг b63fd8ea: голое HasAsyncAgent подавляло гард молчаливого тупика бессрочно,
+        // пока async-агент писал хоть что-то в stdout (BgLingerTimeout — грейс тишины,
+        // а не потолок длительности). Метка подавления AsyncAgentStallSince на SessionEntry
+        // живёт под TeamTurnLock (дисциплина, что у TeamTurnText/TeamTurnAsked/TeamTurnFromHuman
+        // рядом). entry.Process не лочим: он меняется в других точках ядра, и AsyncAgentInFlight
+        // даёт согласованный снимок через HasPendingBg (lock в CliRun).
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        var hasAsync = AsyncAgentInFlight(entry);
+        var now = DateTime.UtcNow;
+        lock (entry.TeamTurnLock)
+        {
+            if (!hasAsync)
+            {
+                // Async-агент ушёл — метку обнуляем, чтобы следующий всплеск не унаследовал
+                // длительность от НЕсвязанного прошлого агента.
+                if (entry.AsyncAgentStallSince is not null) entry.AsyncAgentStallSince = null;
+                return false;
+            }
+            if (entry.AsyncAgentStallSince is null) entry.AsyncAgentStallSince = now;
+            return TeamAsyncAgentStallGuard.ShouldSuppress(true, entry.AsyncAgentStallSince, now,
+                TeamAsyncAgentStallGuard.DefaultSuppressionTimeout);
+        }
     }
 
     Task<bool> ITeamTurnIntake.SendOrEnqueueAsync(string sessionId, string text,

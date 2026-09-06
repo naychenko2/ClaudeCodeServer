@@ -236,10 +236,15 @@ internal sealed class TeamTurnCompletionService
         // вводную» на живой работе и уводил стадию в AwaitingDecision — тогда штатный
         // team:work уже не потреблялся (StartTeamWorkAsync её не принимает), и человеку
         // приходилось отвечать на ложную карточку (прогон Веры P16).
+        // Задача b63fd8ea: голое HasAsyncAgent держало подавление бессрочно — фоновый агент
+        // с heartbeat'ами мог не доводить координатора до маркера часами, и BgLingerTimeout
+        // грейс тишины тут не лечит (это не потолок длительности). ShouldSuppressAsyncAgentStallGuard
+        // подавляет гард ТОЛЬКО пока длительность подавления в окне порога (10 мин, см.
+        // TeamAsyncAgentStallGuard); дольше — гард поднимает карточку молчаливого тупика.
         var stalledStage = team.Stage == TeamImplementStage.Interview
             || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
         if (stalledStage && !asked && !_run.IsPlanningInFlight(sessionId)
-            && !_run.HasAsyncAgent(sessionId))
+            && !_run.ShouldSuppressAsyncAgentStallGuard(sessionId))
         {
             // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
             // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/

@@ -8,8 +8,8 @@ namespace ClaudeHomeServer.Services.Mcp;
 /// инжект в конфиг хода.
 ///
 /// Запись заводится <b>только</b> при явном действии человека (POST login) — не при
-/// проверке флага и не при просмотре настроек. <see cref="TryGetRecordAsync"/> возвращает
-/// существующую запись или null без создания; <see cref="EnsureRecordAsync"/> создаёт
+/// проверке флага и не при просмотре настроек. <see cref="TryGetRecord"/> возвращает
+/// существующую запись или null без создания; <see cref="EnsureRecord"/> создаёт
 /// черновик для старта OAuth.
 /// </summary>
 public sealed class HiggsfieldIntegration(
@@ -50,7 +50,9 @@ public sealed class HiggsfieldIntegration(
             Enabled = true,
             Source = McpServerSource.Manual,
         };
-        return registry.Create(ownerId, draft);
+        // CreateBuiltIn: ключ «higgsfield» в ReservedKeys, обычный Create его отвергнет —
+        // а нам нужна запись реестра (через неё идут OAuth, секреты, статус, конфиг хода).
+        return registry.CreateBuiltIn(ownerId, draft);
     }
 
     /// <summary>Старт OAuth-входа: создаёт запись и запускает discovery + DCR.</summary>

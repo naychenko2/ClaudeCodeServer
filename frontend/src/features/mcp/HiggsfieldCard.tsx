@@ -92,7 +92,9 @@ export function HiggsfieldCard() {
       }, 500);
       oauthRef.current = { win, state, timer };
     } catch (e) {
-      scheduleErrorClear(setLoginError, 'Войти в Higgsfield не удалось. Попробуйте ещё раз или проверьте, действует ли подписка.');
+      // Сбой старта (наш 4xx/5xx): обычно наша сторона — старт OAuth провалился
+      // раньше, чем провайдер успел что-то сделать. Подписка тут ни при чём.
+      scheduleErrorClear(setLoginError, 'Не удалось начать вход в Higgsfield. Это сбой на нашей стороне — попробуйте позже.');
     }
   };
 
@@ -107,7 +109,8 @@ export function HiggsfieldCard() {
       if (result.ok) loadStatus();
       else scheduleErrorClear(setManualError, 'Код не принят — попробуйте ещё раз');
     } catch {
-      scheduleErrorClear(setManualError, 'Не удалось завершить вход. Попробуйте ещё раз.');
+      // Обмен кода на токены не прошёл: токен-эндпоинт провайдера отверг код.
+      scheduleErrorClear(setManualError, 'Higgsfield не принял код входа. Попробуйте войти заново.');
     } finally {
       setCompletingManual(false);
     }
@@ -216,7 +219,7 @@ export function HiggsfieldCard() {
       {showManual && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           <span style={{ fontSize: FS.sm, color: C.textMuted }}>
-            Окно закрылось, не завершив вход. Вставьте код из адресной строки окна входа.
+            Вход не завершён — окно закрылось раньше времени. Вставьте код из адресной строки окна входа.
           </span>
           {manualError && (
             <div style={{ fontSize: FS.xs, color: C.dangerText }}>{manualError}</div>

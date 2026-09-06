@@ -48,8 +48,8 @@ public class HiggsfieldAuthController(
 
         try
         {
-            var redirectUri = higgsfield.LoginAsync(UserId,
-                $"{Request.Scheme}://{Request.Host}{McpOAuthService.CallbackPath}", ct).Result;
+            var redirectUri = await higgsfield.LoginAsync(UserId,
+                $"{Request.Scheme}://{Request.Host}{McpOAuthService.CallbackPath}", ct);
             return Ok(new
             {
                 authorizeUrl = redirectUri.AuthorizeUrl,
@@ -58,6 +58,7 @@ public class HiggsfieldAuthController(
             });
         }
         catch (McpOAuthException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     /// <summary>Завершение OAuth-входа: обмен кода на токены.</summary>

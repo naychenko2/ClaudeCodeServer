@@ -1859,101 +1859,16 @@ public class SubsystemBoundaryTests
         }
     }
 
-    private static IEnumerable<Type> CollectReferencedTypes(Type type)
-    {
-        // Поля: declared-only, чтобы не утонуть в чужом базовом классе; private тоже —
-        // границу нарушает любой член, а не только публичный контракт.
-        var memberBinding = BindingFlags.Public | BindingFlags.NonPublic
-                          | BindingFlags.Instance | BindingFlags.Static
-                          | BindingFlags.DeclaredOnly;
+    /// <summary>
+    /// Единственный путь сбора типов: <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>.
+    /// Прежде у сторожа было два независимых пути — IL-скан и собственная рефлексия полей,
+    /// и подмена вызова сканера в коде сторожа оставляла все тесты зелёными. Теперь оба
+    /// идут через ту же функцию: подмена реализации сканера роняет весь гейт единым
+    /// движением, в том числе регрессию <see cref="IlBoundaryRegressionTests"/>.
+    /// </summary>
+    private static IEnumerable<Type> CollectReferencedTypes(Type type) =>
+        BoundaryIlScanner.CollectAllReferencedTypes(type);
 
-        foreach (var field in type.GetFields(memberBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(field.FieldType))
-                yield return t;
-        }
-
-        foreach (var ctor in type.GetConstructors(memberBinding))
-        {
-            foreach (var parameter in ctor.GetParameters())
-            {
-                foreach (var t in EnumerateTypeAndArgs(parameter.ParameterType))
-                    yield return t;
-            }
-        }
-
-        // Публичные методы и свойства — все, включая унаследованные. Унаследованный
-        // метод с типом из запрещённой вертикали — это часть публичного контракта
-        // проверяемого типа (через него ссылка «торчит наружу»), и сторож должен
-        // её ловить. Обход свойств отдельным проходом: get/set не попадают в GetMethods
-        // под теми именами, по которым мы ищем нарушение.
-        var publicBinding = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
-
-        foreach (var property in type.GetProperties(publicBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(property.PropertyType))
-                yield return t;
-        }
-
-        foreach (var method in type.GetMethods(publicBinding))
-        {
-            foreach (var t in EnumerateTypeAndArgs(method.ReturnType))
-                yield return t;
-
-            foreach (var parameter in method.GetParameters())
-            {
-                foreach (var t in EnumerateTypeAndArgs(parameter.ParameterType))
-                    yield return t;
-            }
-        }
-    }
-
-    private static IEnumerable<Type> EnumerateTypeAndArgs(Type? type)
-    {
-        if (type is null) yield break;
-
-        // Byref (ref/out/in SomeType) — ParameterType вернёт SomeType&, у которого
-        // Namespace = null и IsAllowed безусловно пропустит (не Services.*). Снимаем обёртку сразу.
-        if (type.IsByRef)
-        {
-            foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
-                yield return t;
-            yield break;
-        }
-
-        // Nullable<T> → T (System.Nullable<...> не интересует, зато интересует аргумент).
-        var underlying = Nullable.GetUnderlyingType(type);
-        if (underlying is not null)
-        {
-            yield return underlying;
-            yield break;
-        }
-
-        // Сам тип (например, List<DesktopFoo> сам по себе не из разрешённого неймспейса,
-        // но мы его всё равно отдаём — IsAllowed отфильтрует).
-        yield return type;
-
-        if (type.IsGenericType)
-        {
-            // Рекурсия: вложенные generic-аргументы тоже надо раскрыть, иначе тип вида
-            // Nested<Wrap<DesktopFoo>> пройдёт мимо стора (Namespace внешнего generic
-            // может быть «нейтральным»).
-            foreach (var arg in type.GetGenericArguments())
-            {
-                yield return arg;
-                foreach (var t in EnumerateTypeAndArgs(arg))
-                    yield return t;
-            }
-        }
-
-        // Массивы, указатели — раскрываем рекурсивно (на глубину 1 достаточно:
-        // массив массивов экзотика, на которую обопрёмся, если встретим).
-        if (type.HasElementType)
-        {
-            foreach (var t in EnumerateTypeAndArgs(type.GetElementType()))
-                yield return t;
-        }
-    }
 
     // Сначала проверяем точное совпадение FullName (одноуровневые синглтоны из
     // корня Services: PersonaManager, SessionManager и т.п., плюс nested-типы

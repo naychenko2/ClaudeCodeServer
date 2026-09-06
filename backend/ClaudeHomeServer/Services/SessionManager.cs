@@ -371,6 +371,12 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // в конструкторе SessionManager, DI-регистрация придёт в шаге 2г-4. Owning разрывает
     // цикл «ядро ↔ вертикаль штаба» без Lazy<T> и без нового Func-канала.
     private readonly TeamCoordinator _teamCoordinator;
+    // Хранитель состояния режима (этап 4, шаг 2г-3в, волна А): owning по тому же шаблону,
+    // что _teamCoordinator. Семь блоков тела штаба (WithTeamState, SaveTeamImplementStateAsync,
+    // BroadcastTeamImplementAsync, NewTeamImplementBudget, TeamImplementSetupError,
+    // ResolveTeamPlanRoot, GetTeamPlanAsync) переехали сюда; SessionManager держит тонкие
+    // обёртки-делегаты, чтобы не переписывать тесты.
+    private readonly TeamStateService _teamState;
     // Платформа внешних модулей: реестр манифестов + выпуск модульных токенов (R7)
     private readonly Modules.ModuleRegistry? _modules;
     private readonly Modules.ModuleTokenService? _moduleTokens;
@@ -688,6 +694,11 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _projects = projects;
         _hub = hub;
         _teamCoordinator = new TeamCoordinator(hub);
+        // Хранитель состояния режима (волна А): создаётся ДО _teamNotifier/teamHistory
+        // и до LoadSessions, чтобы восстановление состояния режима после рестарта
+        // (через публичные обёртки WithTeamState) могло идти через TeamStateService
+        // сразу. Owning по тому же шаблону, что _teamCoordinator.
+        _teamState = new TeamStateService(this, _teamPlanning, _projects, _config);
         _history = history;
         _adapters = adapters;
         _llmProviders = llmProviders;
@@ -2218,13 +2229,34 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     internal static string EffectiveRoot(Session session, string fallbackRoot) =>
         session.WorktreePath ?? fallbackRoot;
 
+    // Доступ к ChatHistoryService для вертикали Services.Team через шов: TeamStateService
+    // читает историю неактивного чата в GetTeamPlanFromHistoryAsync, но идёт через этот
+    // метод, а не через прямую ссылку на ChatHistoryService — иначе сторож границ краснеет
+    // (ChatHistoryService живёт в корне Services, это «спинка», а не Team-вертикаль).
+    // Тот же шаблон, что и у прочих internal-обёрток: минимум публичной поверхности при
+    // максимуме гибкости реализации.
+    internal async Task<TeamImplementPlan?> ReadStoredTeamPlanAsync(string claudeSessionId, string planId)
+    {
+        if (claudeSessionId is null) return null;
+        try
+        {
+            var stored = await _history.LoadAsync(claudeSessionId);
+            return stored.OfType<StoredTeamPlanMessage>().LastOrDefault(m => m.PlanId == planId)?.Plan;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Чтение карточки плана {PlanId} с диска ({SessionId}) не удалось",
+                planId, claudeSessionId);
+            return null;
+        }
+    }
+
     // Корень, куда «Командная реализация» пишет файл полного плана (Э8-доп., 2026-08-02):
     // worktree штаба, если он в нём работает, иначе корень проекта. null — чат вне проекта,
     // писать план некуда (глобальный чат — раздел «Состав команды» продуктового плана).
-    private string? ResolveTeamPlanRoot(Session session) =>
-        session.ProjectId is { } pid && _projects.GetById(pid) is { } project
-            ? EffectiveRoot(session, project.RootPath)
-            : null;
+    // Тело переехало в TeamStateService (волна А); обёртка сохранена, потому что вызов
+    // идёт из PublishTeamPlanAsync ниже в этом же классе.
+    private string? ResolveTeamPlanRoot(Session session) => _teamState.ResolveTeamPlanRoot(session);
 
     // Уборка за удалённым деревом чата (ADR-003): снимаем watcher его файлов и выбрасываем
     // снимок графа из data/code-graphs — иначе он остался бы сиротой на диске, а watcher
@@ -6203,46 +6235,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     }
 
     // Причина, по которой режим включать нельзя — до единого хода интервью (B2 приёмки).
-    // Порядок проверок совпадает с CreateTeamPlanAsync: сначала координатор, затем состав.
-    // null — включать можно. Состав проверяем по БУДУЩЕМУ состоянию (пробный объект), чтобы
-    // не дублировать логику подбора — она живёт в TeamPlanningService.
+    // Тело переехало в TeamStateService (волна А): тонкая обёртка сохраняет публичную
+    // сигнатуру для тестов и внешних вызывающих.
     internal (string Code, string Message)? TeamImplementSetupError(Session session,
-        string? coordinatorPersonaId, IReadOnlyCollection<string>? executorPersonaIds)
-    {
-        // Координатор = собеседник чата, если явно не выбран другой (см. ResolveCoordinator)
-        var coordinatorId = coordinatorPersonaId ?? session.PersonaId;
-        if (string.IsNullOrWhiteSpace(coordinatorId))
-            return (TeamImplementSetupException.NoCoordinator,
-                "Выберите координатора — чат без персоны штабом быть не может. "
-                + "Назначьте собеседника чата или укажите координатора при включении режима.");
-
-        var ownerId = ResolveOwnerId(session);
-        if (_teamPlanning is null || ownerId is null) return null;
-
-        var probe = new Session
-        {
-            Id = session.Id,
-            ProjectId = session.ProjectId,
-            OwnerId = session.OwnerId,
-            PersonaId = session.PersonaId,
-            TeamImplement = new SessionTeamImplement
-            {
-                CoordinatorPersonaId = coordinatorPersonaId,
-                ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [],
-            },
-        };
-
-        if (_teamPlanning.ResolveCoordinator(probe, ownerId) is null)
-            return (TeamImplementSetupException.NoCoordinator,
-                "Координатор не найден — выберите персону-собеседника чата, которая будет штабом.");
-
-        if (_teamPlanning.ResolveCandidates(probe, ownerId).Count == 0)
-            return (TeamImplementSetupException.NoExecutors, session.ProjectId is null
-                ? "Выберите исполнителей — вне проекта команды нет, и подбирать не из кого"
-                : "В команде проекта нет персон — выберите исполнителей явно");
-
-        return null;
-    }
+        string? coordinatorPersonaId, IReadOnlyCollection<string>? executorPersonaIds) =>
+        _teamState.TeamImplementSetupError(session, coordinatorPersonaId, executorPersonaIds);
 
     // Переключение авто-волн на ходу (из бейджа режима): не включает/выключает режим,
     // только флаг внутри. Режим не активен → поля не трогает, возвращает сессию как есть.
@@ -6295,34 +6292,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     }
 
     // Бюджет итерации из дефолтов плана с optional override из конфига TeamImplement:Max*
-    private TeamImplementBudget NewTeamImplementBudget() => new()
-    {
-        MaxTasks = int.TryParse(_config["TeamImplement:MaxTasks"], out var t) ? t : 12,
-        MaxWaves = int.TryParse(_config["TeamImplement:MaxWaves"], out var w) ? w : 4,
-        MaxRuns = int.TryParse(_config["TeamImplement:MaxRuns"], out var r) ? r : 20,
-        MaxRetries = int.TryParse(_config["TeamImplement:MaxRetries"], out var rt) ? rt : 3,
-        MaxWakeups = int.TryParse(_config["TeamImplement:MaxWakeups"], out var wu) ? wu : 10,
-    };
+    private TeamImplementBudget NewTeamImplementBudget() => _teamState.NewTeamImplementBudget();
 
-    private Task BroadcastTeamImplementAsync(string sessionId, SessionEntry entry)
-    {
-        var ti = entry.Info.TeamImplement;
-        return BroadcastAsync(sessionId, new TeamImplementMessage(
-            ti is not null,
-            ti?.Stage.ToWireToken(),
-            ti?.WaveNumber ?? 0,
-            ti?.AutoWaves ?? true,
-            ti?.CoordinatorPersonaId,
-            ti?.PlannerPersonaId,
-            ti?.ExecutorPersonaIds,
-            ti?.Budget,
-            ti?.PlanCardId,
-            ti?.PlannedWaves ?? 0,
-            ti?.CoordinatorNoCode ?? true,
-            ti?.Stopped ?? false,
-            ti?.SavedMode is not null,
-            ti?.PlanVersion ?? 0));
-    }
+    private Task BroadcastTeamImplementAsync(string sessionId, SessionEntry entry) =>
+        _teamState.BroadcastTeamImplementAsync(sessionId, entry.Info);
 
     // --- Э2: планирование по компетенциям и карточка плана ---
 
@@ -6837,13 +6810,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
     // Сохранить и разослать состояние режима после правки его полей снаружи (Э3 двигает
     // номер волны и счётчики бюджета в точке запуска — счёт ведёт бэкенд, не модель).
-    public async Task SaveTeamImplementStateAsync(string sessionId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        await BroadcastTeamImplementAsync(sessionId, entry);
-    }
+    public Task SaveTeamImplementStateAsync(string sessionId) =>
+        _teamState.SaveTeamImplementStateAsync(sessionId);
 
     // --- Э4: автономный цикл, бюджет и эскалации ---
 
@@ -6854,22 +6822,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // План итерации по id карточки — источник правды автономного цикла: раздача остатка
     // волн и счётчик попыток под-задач живут в нём. В отличие от FindTeamPlan карточка
     // уже разрешена («Запустить» нажали), поэтому ищем без фильтра по Resolved.
-    // Неактивный чат (аккумулятора нет) — читаем историю с диска.
+    // Тело переехало в TeamStateService: поиск по аккумулятору остаётся здесь (Accumulator
+    // живёт в приватном SessionEntry), а read с диска для неактивного чата идёт через
+    // TeamStateService.GetTeamPlanFromHistoryAsync.
     public async Task<TeamImplementPlan?> GetTeamPlanAsync(string sessionId, string planId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (entry.Accumulator is { } acc) return acc.FindTeamPlanAny(planId);
         if (entry.Info.ClaudeSessionId is not string key) return null;
-        try
-        {
-            var stored = await _history.LoadAsync(key);
-            return stored.OfType<StoredTeamPlanMessage>().LastOrDefault(m => m.PlanId == planId)?.Plan;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Чтение карточки плана {PlanId} с диска ({SessionId}) не удалось", planId, sessionId);
-            return null;
-        }
+        return await _teamState.GetTeamPlanFromHistoryAsync(key, planId);
     }
 
     // Правка карточки истории у НЕактивного чата (аккумулятора нет): загрузить, изменить,
@@ -6905,12 +6866,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // завершения задачи, перевыдача из колбэка провала хода, квота из HTTP-фильтра), а
     // `int++` не атомарен — частичный лок означал бы потерянные инкременты и нечестный счёт
     // ровно там, ради чего Э4 и делался. Внутри — только синхронная работа с моделью.
-    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return default;
-        if (entry.Info.TeamImplement is not { } team) return default;
-        lock (entry.TeamLock) return mutate(team);
-    }
+    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) =>
+        _teamState.WithTeamState(sessionId, mutate);
 
     // Вердикт квоты запуска исполнителя со штабного хода-реакции (Э4).
     // NotTeamMode — чат не в режиме: работает прежний запрет DenyOnDelegatedTurn.
@@ -8294,6 +8251,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
     TeamSessionInfo? ITeamSessionDirectory.Get(string sessionId) =>
         _sessions.TryGetValue(sessionId, out var entry) ? Snapshot(entry.Info) : null;
+
+    // Сброс каталога на диск. Вызывается из TeamStateService после правки полей режима
+    // (SaveTeamImplementStateAsync, будущие блоки штаба). Идемпотентен — внутренний лок
+    // SaveSessions сериализует записи и под concurrent.
+    void ITeamSessionDirectory.Persist() => SaveSessions();
 
     IReadOnlyList<TeamSessionInfo> ITeamSessionDirectory.ListChildren(string parentSessionId) =>
         [.. _sessions.Values.Select(e => e.Info)
@@ -10093,7 +10055,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         GC.SuppressFinalize(this);
     }
 
-    private Task BroadcastAsync(string sessionId, ServerMessage msg) =>
+    // Рассылка в session-группу. Внутренний канал штабных обновлений вертикали Services.Team:
+    // TeamStateService.BroadcastTeamImplementAsync идёт через этот метод, чтобы не плодить
+    // параллельный IHubContext<SessionHub> внутри вертикали (см. комментарий TeamCoordinator).
+    // Снаружи (из контроллеров/хаба) используется публичный BroadcastSessionMessageAsync,
+    // который дополнительно вещает в project_/user_-группу — для чат-карточек в списке.
+    internal Task BroadcastAsync(string sessionId, ServerMessage msg) =>
         _hub.Clients.Group(sessionId).SendAsync("message", msg with { SessionId = sessionId });
 
     // Публичный broadcast внеходового сообщения сессии: session-группа + project_/user_-группа

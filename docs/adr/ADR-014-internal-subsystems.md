@@ -762,7 +762,17 @@ Desktop выделяется **отдельной цепочкой задач** 
 дублирующее чужое по семантике (например, `VideoStreamMessage` рядом с
 уже существующим `VideoStatusMessage`). Это остаётся зоной ревью.
 Префикс в SharedAllowedPrefixes — осознанный «спина по построению», не
-просто удобство. Существующие точечные `AllowedExactNamespaces` для
+просто удобство.
+
+**Состав Protocol:** протокол — чистый лист (leaf): ноль
+`ProjectReference` и `PackageReference` в `.csproj`, единственный
+`using` — `System.Text.Json` (для сериализации `ServerMessage`).
+Это не «чистые DTO без зависимостей» в строгом смысле:
+`ServerMessage` и его record-варианты используют
+`[JsonPolymorphic]`/`[JsonDerivedType]` из `System.Text.Json`,
+что делает Protocol зависимым от BCL-сериализации. Но от проектных
+сборок Protocol не зависит ни в одну сторону — он лист DAG
+зависимостей, а не узел. Существующие точечные `AllowedExactNamespaces` для
 `Protocol.*` у каждой вертикали оставлены как документация явных швов
 (невидимая работа для рефлексии, видимая для IL-скана — после волны 1).
 

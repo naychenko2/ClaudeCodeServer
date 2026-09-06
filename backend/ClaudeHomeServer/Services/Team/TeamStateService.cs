@@ -77,7 +77,8 @@ internal sealed class TeamStateService
     }
 
     // Рассылка TeamImplementMessage по группе чата: стадия, номер волны, состав команды,
-// бюджет и флаги. Тело взято один в один из прежней SessionManager.BroadcastTeamImplementAsync.
+    // бюджет и флаги. Тело взято один в один из прежней
+    // SessionManager.BroadcastTeamImplementAsync.
     public Task BroadcastTeamImplementAsync(string sessionId, Session session)
     {
         var ti = session.TeamImplement;

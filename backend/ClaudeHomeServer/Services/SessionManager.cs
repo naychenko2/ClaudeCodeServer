@@ -372,10 +372,12 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // цикл «ядро ↔ вертикаль штаба» без Lazy<T> и без нового Func-канала.
     private readonly TeamCoordinator _teamCoordinator;
     // Хранитель состояния режима (этап 4, шаг 2г-3в, волна А): owning по тому же шаблону,
-    // что _teamCoordinator. Семь блоков тела штаба (WithTeamState, SaveTeamImplementStateAsync,
+    // что _teamCoordinator. Шесть блоков тела штаба (WithTeamState,
     // BroadcastTeamImplementAsync, NewTeamImplementBudget, TeamImplementSetupError,
     // ResolveTeamPlanRoot, GetTeamPlanAsync) переехали сюда; SessionManager держит тонкие
-    // обёртки-делегаты, чтобы не переписывать тесты.
+    // обёртки-делегаты, чтобы не переписывать тесты. Седьмой блок,
+    // SaveTeamImplementStateAsync, снят в шаге 2г-4 волны 3 — его тело живёт
+    // в ITeamSessionDirectory.PersistAndBroadcastAsync.
     private readonly TeamStateService _teamState;
     // Планирование штаба (этап 4, шаг 2г-3д, волна В): owning по тому же шаблону, что
     // _teamCoordinator/_teamState. Пять блоков тела штаба (RunTeamPlanningAsync,
@@ -6990,9 +6992,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     TeamSessionInfo? ITeamSessionDirectory.Get(string sessionId) =>
         _sessions.TryGetValue(sessionId, out var entry) ? Snapshot(entry.Info) : null;
 
-    // Сброс каталога на диск. Вызывается из TeamStateService после правки полей режима
-    // (SaveTeamImplementStateAsync, будущие блоки штаба). Идемпотентен — внутренний лок
-    // SaveSessions сериализует записи и под concurrent.
+    // Сброс каталога на диск. Зовёт вертикаль штаба после правки полей режима.
+    // Идемпотентен — внутренний лок SaveSessions сериализует записи и под concurrent.
+    // Связки «правка + бродкаст» идут не сюда, а в PersistAndBroadcastAsync того же шва.
     void ITeamSessionDirectory.Persist() => SaveSessions();
 
     // Точка «правка состояния режима + бродкаст»: тело прежнего

@@ -22,9 +22,11 @@ namespace ClaudeHomeServer.Services.Team;
 //
 // Все четыре метода содержат размазанную ранее развилку «активный аккумулятор против диска»
 // (пятая точка — это общая AppendStoredAsync через шов AppendAsync, она в задачу не входит).
-// Эта развилка спрятана внутри метода ITeamHistoryStore.SavePlanCardAsync. Правка карточки
-// после простановки под-задачам TaskId (Э3) теперь идёт через этот же метод напрямую —
-// отдельного SaveTeamPlanCardAsync у вертикали больше нет.
+// Эта развилка спрятана внутри метода ITeamHistoryStore.SavePlanCardAsync. Запись карточки
+// после простановки под-задачам TaskId (Э3) идёт через этот же метод напрямую — отдельного
+// SaveTeamPlanCardAsync у вертикали больше нет. Именно ЗАПИСЬ, а не правка на месте:
+// с Resolved=false и SupersededBy=null путь ведёт в append (SessionManager.cs, ветка
+// добавления; TurnAccumulator тоже добавляет), и читатель не должен ждать мутации.
 //
 // Owning-паттерн (как TeamCoordinator/TeamStateService): экземпляр создаётся в конструкторе
 // SessionManager, а не через DI. Так разорван цикл «SessionManager хочет TeamPlanService,

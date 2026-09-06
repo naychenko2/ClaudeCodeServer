@@ -613,7 +613,7 @@ public class TeamWaveService
                 // Счётчики уже израсходованы транзакцией выше. Сохраняем ПЕРЕЧИТАННЫЙ план —
                 // запись отражает актуальное состояние соседних под-задач, а не устаревший снимок.
                 await _history.SavePlanCardAsync(session.Id, new PlanCardWriteRequest(plan,
-                Resolved: false, Approved: null, SupersededBy: null));
+                    Resolved: false, Approved: null, SupersededBy: null));
                 await _dir.PersistAndBroadcastAsync(session.Id);
             }
         }

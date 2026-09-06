@@ -39,7 +39,7 @@ namespace ClaudeHomeServer.Services.Team;
 // Все шесть блоков работают через швы данных «штаб → ядро» (ITeamSessionDirectory/
 // ITeamHistoryStore/ITeamRunState) и публичный API ядра: GetById/GetOwned/ResolveOwnerId/
 // ReportUpAsync/BroadcastAsync/BroadcastTeamImplementAsync/EnterInterviewAsync/
-// StartTeamWorkAsync/CloseTeamTalkAsync/PublishTeamEscalationAsync/SaveTeamImplementStateAsync/
+// StartTeamWorkAsync/CloseTeamTalkAsync/
 // TryConsumeTeamWakeup/RefundTeamWakeup/RaiseCoordinatorEscalationAsync/TryAutoResolveTeamBlockerAsync/
 // RestoreWaveWatchdogIfPaused. Доступ к LastTeamTurnEnds идёт через достройку
 // ITeamRunState (RecordTeamTurnEnd/TryTakeTeamTurnEnd, волна Ж) — вертикаль не получает

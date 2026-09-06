@@ -53,10 +53,10 @@ public class IlBoundaryRegressionTests
             var t = Find(asms, typeName);
             if (t is null) { missed.Add($"{label}: тип {typeName} не найден"); continue; }
 
-            // Обход nested-типов обязателен: 5 из 7 швов живут во вложенных типах.
-            var family = new[] { t }.Concat(t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)).ToList();
-            var hits = family
-                .SelectMany(t2 => BoundaryIlScanner.AllMethodsWithNested(t2))
+            // Обход nested-типов выполняет AllMethodsWithNested: 5 из 7 швов
+            // живут во вложенных async-state-машинах и замыканиях. Если сломать
+            // обход в сканере, тест станет красным.
+            var hits = BoundaryIlScanner.AllMethodsWithNested(t)
                 .SelectMany(m => BoundaryIlScanner.TypesFromBody(m).Select(r => (m, r)))
                 .Where(x => x.r.FullName == needle || (x.r.FullName?.StartsWith(needle + "+", StringComparison.Ordinal) ?? false))
                 .Select(x => $"{x.m.DeclaringType?.Name}.{x.m.Name}")

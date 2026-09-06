@@ -1151,7 +1151,8 @@ public class SessionManager : IDisposable
             sid, adapter is { HasLiveTurn: true }, adapter is { HasPendingBg: true }, adapter is { IsContinuationInFlight: true });
         _ = Task.Run(async () =>
         {
-            try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished); }
+            // Доводка: содержимого за ней нет — прочитанный чат не должен стать непрочитанным
+            try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished, touchUpdatedAt: false); }
             catch (Exception ex) { _log.LogError(ex, "[SessionManager] Sweep ApplyStatus не удался ({Sid})", sid); }
         });
     }
@@ -9134,7 +9135,10 @@ public class SessionManager : IDisposable
                 // struct DateTimeOffset? читает sweep под тем же локом; lock короткий, без await.
                 lock (entry.PendingLock)
                     entry.LastTurnEndedAt = newStatus == SessionStatus.Active ? DateTimeOffset.UtcNow : null;
-                await ApplyStatusAsync(sessionId, entry, newStatus.Value);
+                // exited — та же доводка, что у sweep: содержимое хода пришло раньше
+                // (result/сообщения), а обрыв без result его не добавляет
+                await ApplyStatusAsync(sessionId, entry, newStatus.Value,
+                    touchUpdatedAt: msg is not ExitedMessage);
             }
 
             // Цикл «до готово»: решение о продолжении — по result/error хода, нёсшего
@@ -9631,17 +9635,25 @@ public class SessionManager : IDisposable
 
     // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам.
     //
-    // Архивный чат сменой статуса из архива НЕ выводим (как RetitleAsync/UpdateAsync): статус
-    // доводится и после того, как ход кончился, — sweep-терминус Active→Finished ждёт grace и
-    // срабатывает на ближайшем SaveSessions, то есть до минуты спустя. Чат, убранный в архив
-    // сразу после ответа, эта доводка возвращала обратно (UpdatedAt > ArchivedAt) и метила
-    // непрочитанным (UpdatedAt > LastReadAt) — инцидент 06.09.2026. Настоящая активность
-    // архива не теряет: отметку времени ставит приём сообщения (адаптер SendMessageAsync,
-    // локальный голосовой ход — SendDirectAsync), и до статусов чат уже не архивный.
-    private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status)
+    // touchUpdatedAt = false у ДОВОДКИ статуса — перехода, за которым не стоит нового
+    // содержимого: exited прогона и sweep-терминус Active→Finished приходят уже после ответа
+    // (sweep — спустя grace, на ближайшем SaveSessions, то есть до минуты). UpdatedAt несёт
+    // непрочитанность (updatedAt > lastReadAt), поэтому такая доводка метила прочитанный чат
+    // непрочитанным заново: точка на кнопке проекта и стены гасла при открытии чата и через
+    // полминуты возвращалась (инцидент 06.09.2026). Новое содержимое отмечают переходы, за
+    // которыми оно есть: Working (ход пошёл), Active по result (ответ готов), Waiting
+    // (карточка ждёт человека), Error.
+    //
+    // Архивный чат сменой статуса из архива не выводим вовсе (как RetitleAsync/UpdateAsync):
+    // признак архива производный (UpdatedAt <= ArchivedAt), и любая отметка возвращала бы его.
+    // Настоящая активность архива не теряет: отметку ставит приём сообщения (адаптер
+    // SendMessageAsync, локальный голосовой ход — SendDirectAsync), и до смены статуса чат
+    // уже не архивный.
+    private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status,
+        bool touchUpdatedAt = true)
     {
         entry.Info.Status = status;
-        if (!entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
+        if (touchUpdatedAt && !entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastStatusChangeAsync(sessionId, entry.Info,
             status, entry.Info.LastMessage, entry.Info.MessageCount);

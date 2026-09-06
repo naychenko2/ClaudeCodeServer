@@ -2192,6 +2192,44 @@ public class SessionManagerTests : IDisposable
         _sut.GetPending(session.Id).Should().BeEmpty("очередь разобрана по exited убитого хода");
     }
 
+    // --- Непрочитанность: доводка статуса не воскрешает точку у прочитанного чата ---
+
+    [Fact]
+    public async Task Exited_ПослеПрочтения_НеДелаетЧатНепрочитанным()
+    {
+        // Инцидент 06.09.2026: чат открыли (LastReadAt догнал UpdatedAt), ушли из него, а
+        // спустя секунды пришла доводка exited — безусловный UpdatedAt снова обгонял отметку
+        // прочтения, и серая точка на кнопках проекта и стены возвращалась сама собой
+        var session = await MkBusySessionAsync("unread-exited", SessionStatus.Active);
+        session.UpdatedAt = DateTime.UtcNow.AddMinutes(-1);
+        session.LastReadAt = session.UpdatedAt;
+        var updatedAt0 = session.UpdatedAt;
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+
+        session.Status.Should().Be(SessionStatus.Finished, "статус доводится как раньше");
+        session.UpdatedAt.Should().Be(updatedAt0, "за exited нового содержимого нет");
+        session.LastReadAt.Should().Be(session.UpdatedAt, "чат остаётся прочитанным");
+    }
+
+    [Fact]
+    public async Task Result_ДвигаетUpdatedAt_ОтветЭтоНовоеСодержимое()
+    {
+        // Контроль пары к предыдущему: ответ хода обязан помечать чат непрочитанным —
+        // иначе на другом устройстве ход прошёл бы вовсе незаметно
+        var session = await MkBusySessionAsync("unread-result", SessionStatus.Working);
+        session.UpdatedAt = DateTime.UtcNow.AddMinutes(-1);
+        session.LastReadAt = session.UpdatedAt;
+        var updatedAt0 = session.UpdatedAt;
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        session.Status.Should().Be(SessionStatus.Active);
+        session.UpdatedAt.Should().BeAfter(updatedAt0);
+    }
+
     [Fact]
     public async Task Exited_БезResult_ПриНепустойОчереди_РазбираетЕё()
     {

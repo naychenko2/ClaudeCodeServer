@@ -172,22 +172,22 @@ public class ChatArchiveFlagTests : IDisposable
     [Fact]
     public async Task СменаСтатусаПослеАрхивации_НеВыводитЧатИзАрхива()
     {
-        // Инцидент 06.09.2026: чат убрали в архив сразу после ответа, а через полминуты
-        // статус доводится до терминального (exited прогона либо sweep-терминус
-        // Active→Finished по grace) — безусловный UpdatedAt возвращал чат из архива и метил
-        // его непрочитанным (UpdatedAt > LastReadAt), хотя в чат ничего не писалось
+        // Инцидент 06.09.2026: чат убрали в архив сразу после ответа, а следом пришёл
+        // result доживающего хода — безусловный UpdatedAt возвращал чат из архива и метил
+        // его непрочитанным (UpdatedAt > LastReadAt). Берём именно result: доводку exited
+        // и sweep гасит отдельный флаг ApplyStatusAsync, здесь проверяется гейт архива
         var (sut, projects) = BuildSut();
         var chat = NewChat(sut, projects);
         chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
         chat.LastReadAt = chat.UpdatedAt;
-        chat.Status = SessionStatus.Active; // result хода уже пришёл, exited — ещё нет
+        chat.Status = SessionStatus.Working;
         sut.SetArchived(chat.Id, archived: true, by: "user");
         var updatedAt0 = chat.UpdatedAt;
 
-        await InvokeOnMessageAsync(sut, chat.Id, new ExitedMessage());
+        await InvokeOnMessageAsync(sut, chat.Id, new ResultMessage("success", 10, 1, null, null));
 
-        chat.Status.Should().Be(SessionStatus.Finished, "статус доводится и у архивного чата");
-        chat.UpdatedAt.Should().Be(updatedAt0, "доводка статуса — не активность разговора");
+        chat.Status.Should().Be(SessionStatus.Active, "статус меняется и у архивного чата");
+        chat.UpdatedAt.Should().Be(updatedAt0, "смена статуса — не активность разговора");
         chat.IsArchived.Should().BeTrue("архив держится, пока в чат не написали");
         chat.LastReadAt.Should().Be(chat.UpdatedAt, "чат не становится непрочитанным сам собой");
     }
@@ -196,16 +196,16 @@ public class ChatArchiveFlagTests : IDisposable
     public async Task СменаСтатуса_ОбычныйЧат_ДвигаетUpdatedAt()
     {
         // Контроль гейта: у неархивного чата отметка времени обязана двигаться — по ней
-        // идут сортировка списка и непрочитанность идущего хода
+        // идут сортировка списка и непрочитанность пришедшего ответа
         var (sut, projects) = BuildSut();
         var chat = NewChat(sut, projects);
         chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
-        chat.Status = SessionStatus.Active;
+        chat.Status = SessionStatus.Working;
         var updatedAt0 = chat.UpdatedAt;
 
-        await InvokeOnMessageAsync(sut, chat.Id, new ExitedMessage());
+        await InvokeOnMessageAsync(sut, chat.Id, new ResultMessage("success", 10, 1, null, null));
 
-        chat.Status.Should().Be(SessionStatus.Finished);
+        chat.Status.Should().Be(SessionStatus.Active);
         chat.UpdatedAt.Should().BeAfter(updatedAt0);
     }
 

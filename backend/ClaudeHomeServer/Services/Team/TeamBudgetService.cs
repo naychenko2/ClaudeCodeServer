@@ -143,7 +143,7 @@ internal sealed class TeamBudgetService
             Wave = team.WaveNumber,
             Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
         };
-        if (_sessions.TeamEscalationRaiser is { } raise) await raise(stab, card);
+        if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(stab, card);
         else await _sessions.PublishTeamEscalationAsync(stabId, card);
     }
 

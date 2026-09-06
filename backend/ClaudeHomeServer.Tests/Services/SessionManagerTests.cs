@@ -5040,7 +5040,7 @@ public class SessionManagerTests : IDisposable
         var (plan, _) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
         // Хук раздачи (в бою его вешает TeamWaveService — цикл DI разорван им же)
         TeamImplementPlan? handed = null;
-        _sut.TeamWaveStarter = (_, p, _) => { handed = p; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, p, _) => { handed = p; return Task.CompletedTask; };
 
         await _sut.RespondTeamPlanAsync(session.Id, plan!.Id, TeamPlanDecision.Run, userId: TestUserId);
 
@@ -5054,7 +5054,7 @@ public class SessionManagerTests : IDisposable
         SetPlannerAnswer(backend, frontend);
         var (plan, _) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
         var called = false;
-        _sut.TeamWaveStarter = (_, _, _) => { called = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { called = true; return Task.CompletedTask; };
 
         await _sut.RespondTeamPlanAsync(session.Id, plan!.Id, TeamPlanDecision.Cancel, userId: TestUserId);
 
@@ -5127,7 +5127,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, plan) = await MakeRestartedStabWithPlanAsync("ti-plan-restart");
         TeamImplementPlan? handed = null;
-        _sut.TeamWaveStarter = (_, p, _) => { handed = p; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, p, _) => { handed = p; return Task.CompletedTask; };
 
         var updated = await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run,
             userId: TestUserId);
@@ -5486,7 +5486,7 @@ public class SessionManagerTests : IDisposable
         // Ждём СОБЫТИЕ, а не время: карточка публикуется фоновой задачей (FireAndForget),
         // и на голодном раннере CI пауза фиксированной длины давала бы плавающий провал
         var raised = new TaskCompletionSource<TeamEscalation>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _sut.TeamEscalationRaiser = (_, card) => { raised.TrySetResult(card); return Task.CompletedTask; };
+        _sut.TeamHandlers.EscalationRaiser = (_, card) => { raised.TrySetResult(card); return Task.CompletedTask; };
 
         var (verdict, _) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
 
@@ -5509,7 +5509,7 @@ public class SessionManagerTests : IDisposable
         _sut.WithTeamState(session.Id, t => { t.Stopped = true; return true; });
 
         var raised = new TaskCompletionSource<TeamEscalation>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _sut.TeamEscalationRaiser = (_, card) => { raised.TrySetResult(card); return Task.CompletedTask; };
+        _sut.TeamHandlers.EscalationRaiser = (_, card) => { raised.TrySetResult(card); return Task.CompletedTask; };
 
         var (verdict, _) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
 
@@ -6129,7 +6129,7 @@ public class SessionManagerTests : IDisposable
         var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
         reason.Should().BeNull();
         TeamImplementPlan? handed = null;
-        _sut.TeamWaveStarter = (s, p, _) =>
+        _sut.TeamHandlers.WaveStarter = (s, p, _) =>
         {
             handed = p;
             // Как настоящая раздача (TeamWaveService.StartWaveCore): реально стартовавшая
@@ -7129,7 +7129,7 @@ public class SessionManagerTests : IDisposable
         var (session, backend, _) = await MakeIdleStabAsync("ti-additional");
         SetAdditionalPlannerAnswer(backend);
         TeamImplementPlan? handed = null;
-        _sut.TeamWaveStarter = (_, p, _) => { handed = p; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, p, _) => { handed = p; return Task.CompletedTask; };
         // Вводная человека: классификация работой открыла новую итерацию (бюджет и счёт волн
         // с нуля — M6: сброс по маркеру, а не по приёму сообщения)
         session.Status = SessionStatus.Working;
@@ -7167,7 +7167,7 @@ public class SessionManagerTests : IDisposable
         SetAdditionalPlannerAnswer(backend);
         await _sut.SetTeamImplementAutoAsync(session.Id, autoWaves: false, userId: TestUserId);
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить выгрузку в XLSX</team>", failed: false);
 
@@ -7181,7 +7181,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, _, _) = await MakeIdleStabAsync("ti-talk");
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
 
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "Киру выбрал планировщик: фронтовая часть — её зона.", failed: false);
@@ -7280,7 +7280,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, backend, _) = await MakeIdleStabAsync("ti-additional-stop");
         SetAdditionalPlannerAnswer(backend);
-        _sut.TeamWaveStarter = (_, _, _) => Task.CompletedTask;
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => Task.CompletedTask;
         SetTeamTurnFromHuman(GetEntry(session.Id), true);
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить XLSX</team>", failed: false);
         var info = Sent<TeamEscalationMessage>().Last();
@@ -7309,7 +7309,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, backend, _) = await MakeIdleStabAsync("ti-additional-stop-twice");
         SetAdditionalPlannerAnswer(backend);
-        _sut.TeamWaveStarter = (_, _, _) => Task.CompletedTask;
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => Task.CompletedTask;
         SetTeamTurnFromHuman(GetEntry(session.Id), true);
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить XLSX</team>", failed: false);
         var info = Sent<TeamEscalationMessage>().Last();
@@ -7554,7 +7554,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, backend, frontend) = await MakeInterviewStabAsync("ti-interview-run");
         SetPlannerAnswer(backend, frontend);
-        _sut.TeamWaveStarter = (_, _, _) => Task.CompletedTask;
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => Task.CompletedTask;
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт</team>", failed: false);
         var planId = Sent<TeamPlanMessage>().Last().PlanId;
 
@@ -7631,7 +7631,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "<escalate:clarify>неясен формат</escalate>", failed: false);
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
         _plannerAnswer = $$"""
             {"summary":"Экспорт в XLSX","assumptions":["формат — XLSX, как в соседнем модуле"],
              "changes":["CSV заменён на XLSX","под-задача про кнопку убрана"],
@@ -7675,7 +7675,7 @@ public class SessionManagerTests : IDisposable
         var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-plan");
         SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано из плана");
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
 
         var updated = await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
             feedback: "убери ревью из плана", userId: TestUserId);
@@ -7714,7 +7714,7 @@ public class SessionManagerTests : IDisposable
         await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
             feedback: "убери ревью", userId: TestUserId);
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
 
         var result = await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run,
             userId: TestUserId);
@@ -7948,7 +7948,7 @@ public class SessionManagerTests : IDisposable
             .SupersededBy.Should().Be(2, "устаревшая карточка помечена версией-заменой");
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт, но в XLSX</team>", failed: false);
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
 
         var result = await _sut.RespondTeamPlanAsync(session.Id, stale, TeamPlanDecision.Run,
             userId: TestUserId);
@@ -8234,7 +8234,7 @@ public class SessionManagerTests : IDisposable
         var (session, backend, _) = await MakeIdleStabAsync("ti-agent-input");
         SetAdditionalPlannerAnswer(backend);
         var started = false;
-        _sut.TeamWaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
+        _sut.TeamHandlers.WaveStarter = (_, _, _) => { started = true; return Task.CompletedTask; };
         // Ход агента: флаг «вводная от человека» не выставлен (по умолчанию false)
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить выгрузку в XLSX</team>", failed: false);

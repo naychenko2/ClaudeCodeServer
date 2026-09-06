@@ -226,7 +226,7 @@ internal sealed class TeamDecisionService
         // TeamWaveService, как и везде.
         if (session.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
-            && _sessions.TeamWaveStarter is { } starter)
+            && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
             var plan = await _sessions.GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
@@ -380,7 +380,7 @@ internal sealed class TeamDecisionService
         // задачи и исполнителей, которых SessionManager по построению не знает (цикл DI
         // разорван хуком, как OnSessionMessage у TaskExecutionService). Повод UserCommand:
         // «Запустить» — явное решение человека, гейт авто-волн не нужен.
-        if (decision == TeamPlanDecision.Run && _sessions.TeamWaveStarter is { } starter)
+        if (decision == TeamPlanDecision.Run && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
             try { await starter(session, plan, TeamWaveTrigger.UserCommand); }
             catch (Exception ex)
@@ -599,7 +599,7 @@ internal sealed class TeamDecisionService
         // Раздавать нечего (волна уже идёт) — StartWave вернёт пустой список и не навредит.
         if (session.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
-            && _sessions.TeamWaveStarter is { } starter)
+            && _sessions.TeamHandlers.WaveStarter is { } starter)
         {
             var plan = await _sessions.GetTeamPlanAsync(sessionId, planId);
             var trigger = actionId is "runNext" or "addBudget" or "resume" or "restart"
@@ -620,7 +620,7 @@ internal sealed class TeamDecisionService
         // (хук TeamSubtaskDropHandler), тем же путём закрывая волну, что и обычный доклад —
         // раньше кнопки ничего не делали, и волна не могла закрыться до ручного tasks_complete.
         if (actionId is "skip" or "drop" && escalation.TaskId is { } droppedTaskId
-            && _sessions.TeamSubtaskDropHandler is { } dropHandler)
+            && _sessions.TeamHandlers.SubtaskDropHandler is { } dropHandler)
         {
             try
             {
@@ -706,7 +706,7 @@ internal sealed class TeamDecisionService
         };
         // Через раизер — с уведомлением и push (TeamWaveService); без него карточка всё равно
         // публикуется: молчаливых остановок в режиме не бывает
-        if (_sessions.TeamEscalationRaiser is { } raise) await raise(session, card);
+        if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, card);
         else await PublishTeamEscalationAsync(sessionId, card);
         return session;
     }

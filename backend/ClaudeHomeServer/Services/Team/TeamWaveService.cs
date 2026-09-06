@@ -100,14 +100,14 @@ public class TeamWaveService
             int.TryParse(config?["TeamImplement:StalledMinutes"], out var st) && st > 0 ? st : 30);
         // Хук раздачи в SessionManager: цикл зависимостей (TaskExecutionService → SessionManager)
         // разорван так же, как у подписки TaskExecutionService на OnSessionMessage
-        _sessions.TeamWaveStarter = (session, plan, trigger) => StartWaveAsync(session, plan, trigger);
+        _sessions.TeamHandlers.WaveStarter = (session, plan, trigger) => StartWaveAsync(session, plan, trigger);
         // Э4: карточка остановки + уведомление с push — единая точка на все триггеры
-        _sessions.TeamEscalationRaiser = RaiseEscalationAsync;
+        _sessions.TeamHandlers.EscalationRaiser = RaiseEscalationAsync;
         // Э8: ASK-вопрос интервью тоже будит человека уведомлением и push
-        _sessions.TeamQuestionNotifier = OnStabQuestionAsync;
+        _sessions.TeamHandlers.QuestionNotifier = OnStabQuestionAsync;
         // Minor (волна 3): кнопки skip/drop карточки эскалации закрывают под-задачу тем же
         // путём, что доклад исполнителя — иначе волна не закрывалась до ручного tasks_complete
-        _sessions.TeamSubtaskDropHandler = DropSubtaskAsync;
+        _sessions.TeamHandlers.SubtaskDropHandler = DropSubtaskAsync;
         // Закрытие волны ловим на переходе задачи в Done — единственном пути в Done (Update)
         _tasks.TaskCompleted += OnTaskDone;
         // Провал хода исполнителя: одна перевыдача, второй провал — эскалация

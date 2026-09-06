@@ -260,7 +260,7 @@ internal sealed class TeamTurnCompletionService
                     Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
                 }
                 : BuildSilentStallEscalation(team, turnText);
-            if (_sessions.TeamEscalationRaiser is { } raise) await raise(session, stalled);
+            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, stalled);
             else await _sessions.PublishTeamEscalationAsync(sessionId, stalled);
             return;
         }
@@ -336,7 +336,7 @@ internal sealed class TeamTurnCompletionService
                         ? TeamEscalationKind.Stopped
                         : TeamEscalationKind.BudgetExhausted),
                 };
-                if (_sessions.TeamEscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
+                if (_sessions.TeamHandlers.EscalationRaiser is { } raiseBlocked) await raiseBlocked(blockedStab, card);
                 else await _sessions.PublishTeamEscalationAsync(parentId!, card);
             }
             _log.LogWarning("Доклад-блокер из чата {SessionId}: ход штаба не запущен ({Reason})", sessionId, wake.Reason);
@@ -364,7 +364,7 @@ internal sealed class TeamTurnCompletionService
                 Wave = team.WaveNumber,
                 Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
             };
-            if (_sessions.TeamEscalationRaiser is { } raise) await raise(stab, escalation);
+            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(stab, escalation);
             else await _sessions.PublishTeamEscalationAsync(parentId, escalation);
         }
         return result;

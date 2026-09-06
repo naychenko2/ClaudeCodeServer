@@ -1,4 +1,5 @@
 ﻿using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 
@@ -26,6 +27,36 @@ internal sealed class TeamCoordinator
     {
         _hub = hub;
     }
+
+    // === Обработчики волны: собственность вертикали, а не ядра (шаг 2г-4, волна 1) ===
+    // Ставит их TeamWaveService (синглтон DI), читают TeamDecisionService, TeamPlanService,
+    // TeamBudgetService и четыре ветки самого SessionManager. Раньше все четыре жили
+    // публичными Func-свойствами НА ЯДРЕ, и вертикаль ходила в ядро за собственным
+    // обработчиком: TeamWaveService клал — TeamDecisionService забирал. Круговой маршрут
+    // через чужой объект, а не разрыв цикла, как утверждали комментарии (они писались до
+    // переезда тела штаба и устарели; разбор — docs/research/team-di-migration-2026-09.md §3).
+    //
+    // Почему держатель именно здесь, а не в DI: TeamWaveService приходит из DI, а три
+    // читающих сервиса создаёт SessionManager в своём конструкторе — общего адреса, кроме
+    // ядра, у них пока нет. Координатор доступен обеим сторонам (ядро отдаёт его через
+    // TeamHandlers), поэтому экземпляр гарантированно один и в бою, и в тестах. Полный
+    // переезд на DI — следующая волна; тогда TeamHandlers уйдёт вместе с owning-паттерном.
+    //
+    // Nullable по-прежнему: TeamWaveService может не создаваться вовсе (тесты ядра без
+    // штаба), и тогда ветки волны просто не срабатывают — как и раньше.
+
+    // Раздача волны исполнителям по подтверждённому плану.
+    internal Func<Session, TeamImplementPlan, TeamWaveTrigger, Task>? WaveStarter { get; set; }
+
+    // Карточка эскалации + уведомление с push: единая точка на все триггеры (Э4).
+    internal Func<Session, TeamEscalation, Task>? EscalationRaiser { get; set; }
+
+    // ASK-вопрос интервью будит человека уведомлением и push (Э8).
+    internal Func<Session, Task>? QuestionNotifier { get; set; }
+
+    // Кнопки skip/drop карточки эскалации закрывают под-задачу тем же путём, что доклад
+    // исполнителя — иначе волна не закрывалась до ручного tasks_complete (Minor, волна 3).
+    internal Func<string, string, Task>? SubtaskDropHandler { get; set; }
 
     // Текст причины отказа для карточки (по Failure): разные советы под разные корни —
     // обрыв по токенам не то же, что «уточните задачу», и таймаут не вина человека.

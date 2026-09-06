@@ -224,13 +224,13 @@ internal sealed class TeamPlanService
             Wave = session.TeamImplement?.WaveNumber ?? 0,
             Actions = TeamEscalationActions.For(TeamEscalationKind.WaveAdded),
         };
-        if (_sessions.TeamEscalationRaiser is { } raise) await raise(session, card);
+        if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, card);
         else await _sessions.PublishTeamEscalationAsync(sessionId, card);
 
         // Раздача — тем же путём, что «Запустить» и авто-волна: план у TeamWaveService.
         // Повод UserCommand: добавочная волна разворачивается вводной человека — точки
         // контроля уже пройдены, гейт авто-волн ей не нужен.
-        if (_sessions.TeamWaveStarter is { } starter)
+        if (_sessions.TeamHandlers.WaveStarter is { } starter)
         {
             try { await starter(session, plan, TeamWaveTrigger.UserCommand); }
             catch (Exception ex)
@@ -352,7 +352,7 @@ internal sealed class TeamPlanService
                 // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
                 Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
             };
-            if (_sessions.TeamEscalationRaiser is { } raise) await raise(session, failed);
+            if (_sessions.TeamHandlers.EscalationRaiser is { } raise) await raise(session, failed);
             else await _sessions.PublishTeamEscalationAsync(sessionId, failed);
         }
         finally

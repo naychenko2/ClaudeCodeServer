@@ -6188,12 +6188,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task SupersedeCurrentPlanCardAsync(string sessionId, Session session, int nextVersion) =>
         _teamPlan.SupersedeCurrentPlanCardAsync(sessionId, session, nextVersion);
 
-    // Хук раздачи волны (Э3): назначается TeamWaveService при старте — так разрывается
-    // цикл зависимостей (TaskExecutionService → SessionManager). null — раздача недоступна
-    // (юнит-тесты без полного DI, инспекционный режим): режим тогда лишь меняет стадию.
-    // Повод вызова (D1, ревью 2026-08-17) решает судьбу гейта авто-волн в TeamWaveService:
-    // SessionManager лишь честно говорит, кнопка это была или докрут по состоянию.
-    public Func<Session, TeamImplementPlan, TeamWaveTrigger, Task>? TeamWaveStarter { get; set; }
+    // Обработчики волны переехали в вертикаль (шаг 2г-4, волна 1): их держит
+    // TeamCoordinator, а ядро отдаёт его одной ссылкой вместо четырёх публичных
+    // Func-свойств. Ставит обработчики TeamWaveService, читают три сервиса вертикали и
+    // четыре ветки ядра ниже. Экземпляр координатора один — тот, что создан в конструкторе,
+    // поэтому в тестах связь работает ровно как раньше (сборка объектов не менялась).
+    // Прежние комментарии обещали здесь «разрыв цикла TaskExecutionService → SessionManager»;
+    // фактически цикла не было — вертикаль клала обработчик в ядро и сама же его оттуда
+    // забирала. Разбор — docs/research/team-di-migration-2026-09.md §3.
+    // null-семантика прежняя: обработчик не назначен (тесты ядра без штаба) — ветка молчит.
+    internal TeamCoordinator TeamHandlers => _teamCoordinator;
 
     // Сохранить и разослать состояние режима после правки его полей снаружи (Э3 двигает
     // номер волны и счётчики бюджета в точке запуска — счёт ведёт бэкенд, не модель).
@@ -6520,31 +6524,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task<Session?> StopTeamImplementAsync(string sessionId, string? userId = null) =>
         _teamDecision.StopTeamImplementAsync(sessionId, userId);
 
-    // Хук эскалации (Э4): вешает TeamWaveService — он публикует карточку и шлёт уведомление
-    // с push. Как TeamWaveStarter, разрывает цикл зависимостей (уведомления и задачи
-    // SessionManager по построению не знает). null — эскалация деградирует до карточки.
-    public Func<Session, TeamEscalation, Task>? TeamEscalationRaiser { get; set; }
-
     // Признак «у чата sessionId есть живая делегированная задача, по которой ждём доклада
     // исполнителя». Вешает сторона задач при регистрации (TaskManager.GetById и проверка
-    // полей SourceSessionId/Status/CompletionDelivered/ClaudeStartedAt/ExecutorStoppedAt) —
-    // тот же приём разрыва зависимостей, что у TeamEscalationRaiser, иначе SessionManager
-    // пришлось бы знать TaskManager, а это цикл в DI (см. комментарий у TeamWaveStarter).
-    // null — признак не задан (тесты, либо стора задач нет): ждать нечего, поведение прежнее.
+    // полей SourceSessionId/Status/CompletionDelivered/ClaudeStartedAt/ExecutorStoppedAt).
+    // Здесь Func остаётся осознанно, в отличие от четырёх штабных: ставит его ЧУЖАЯ сторона
+    // (TaskManager), а не сама вертикаль, и цикл в DI тут настоящий — SessionManager не может
+    // знать TaskManager. null — признак не задан (тесты, либо стора задач нет): ждать нечего.
     public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
-
-    // Хук уведомления о вопросе интервью (Э8): вешает TeamWaveService — он шлёт уведомление
-    // «ждёт ответов» и push, когда человека нет в чате. Тот же приём разрыва зависимостей,
-    // что у TeamEscalationRaiser: NotificationService SessionManager по построению не знает.
-    public Func<Session, Task>? TeamQuestionNotifier { get; set; }
-
-    // Хук «снять под-задачу» (Minor, волна 3): кнопки skip (TaskFailed)/drop (Blocker) карточки
-    // эскалации раньше не двигали бэкенд вовсе — под-задача оставалась незакрытой, и волна не
-    // могла закрыться до ручного tasks_complete. Вешает TeamWaveService — он один знает
-    // TaskManager (SessionManager по построению не знает, как и TeamWaveStarter/Raiser).
-    // Помечает задачу Done с пояснением — тот же путь, что закрывает волну обычным докладом
-    // исполнителя (TaskManager.TaskCompleted → TeamWaveService.OnTaskDone).
-    public Func<string, string, Task>? TeamSubtaskDropHandler { get; set; }
 
     // Тонкие обёртки на Core-хелпер TeamProtocolMarkers. Реализации уехали в спину
     // (`ClaudeHomeServer.Core.Services.TeamProtocolMarkers`): их зовёт и ядро SessionManager,
@@ -6823,7 +6809,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // при снятых авто-волнах человек получает гейт-карточку, а не молчаливую раздачу.
         if (entry.Info.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
-            && TeamWaveStarter is { } starter)
+            && _teamCoordinator.WaveStarter is { } starter)
         {
             var plan = await GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
@@ -6926,7 +6912,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Wave = wave,
             Actions = TeamEscalationActions.For(TeamEscalationKind.NeedsClarification),
         };
-        if (TeamEscalationRaiser is { } raise) await raise(entry.Info, card);
+        if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, card);
         else await PublishTeamEscalationAsync(sessionId, card);
 
         if (withTurn)
@@ -7212,7 +7198,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         // Вопрос ждёт человека: уведомление и push, если его нет в чате — звать человека
         // надо в любой стадии, иначе ход молча ждёт клика («молчаливых пауз не бывает»).
-        if (TeamQuestionNotifier is { } notify)
+        if (_teamCoordinator.QuestionNotifier is { } notify)
         {
             try { await notify(entry.Info); }
             catch (Exception ex)
@@ -7227,7 +7213,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Заголовки — из таблицы «Эскалация и остановки».
     // Публичный (волна Ж): TeamTurnCompletionService.HandleTeamTurnEndAsync вызывает при
     // разборе маркера эскалации из turnText и при инфраструктурном обрыве хода проверки —
-    // тонкая публикация карточки по TeamEscalationRaiser (иначе без push/уведомления).
+    // тонкая публикация карточки по EscalationRaiser координатора (иначе без push/уведомления).
     internal async Task RaiseCoordinatorEscalationAsync(string sessionId, TeamEscalationKind kind, string details)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
@@ -7241,7 +7227,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Wave = team.WaveNumber,
             Actions = TeamEscalationActions.For(kind),
         };
-        if (TeamEscalationRaiser is { } raise) await raise(entry.Info, escalation);
+        if (_teamCoordinator.EscalationRaiser is { } raise) await raise(entry.Info, escalation);
         else await PublishTeamEscalationAsync(sessionId, escalation);
     }
 

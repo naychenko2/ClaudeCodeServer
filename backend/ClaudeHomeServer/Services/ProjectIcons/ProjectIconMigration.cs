@@ -69,7 +69,14 @@ public sealed class ProjectIconMigration(
                 return IconMigrationSummary.Empty;
 
             // Порядок обязателен (ADR-009 §10): замена необратима, прогон не начинается,
-            // пока не снят свежий бэкап штатным механизмом
+            // пока не снят свежий бэкап штатным механизмом.
+            // Шов `ProjectIcons → Backup.{BackupCore, BackupContext, BackupResult}`
+            // (IL-видимость, задача `8beee75e`) ОСТАВЛЕН допуском: попытка выноса
+            // примитива «снимок data перед необратимой операцией» в Core блокируется
+            // направлением ссылок (`Main → Core`, Core не видит Main/Backup), а обёртка
+            // в root-Services нарушает root-сторож (`Services.*` в root не должны
+            // зависеть от подсистемной вертикали). Полумера лучше протащенной
+            // зависимости (см. отчёт шага 5).
             var backup = BackupCore.Snapshot(BackupContext.FromConfiguration(config), log);
             if (!backup.Ok)
             {

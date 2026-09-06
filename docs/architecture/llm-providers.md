@@ -218,11 +218,11 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 
 Для локальных моделей с маленьким окном (vLLM/llama.cpp/qwen3.8-27b на 65–245 КБ)
 полная автозагрузка CLAUDE.md проекта съедает десятки тысяч входных токенов
-(замер 2026-09-05: 95 070 токенов при полной CLAUDE.md против 2 392 при
-`BareMode` + краткой карте — файл `SystemPrompts/CLAUDE-local.md`, 4 419 байт,
-~4.3 КБ) и тормозит ход. Провайдер с `LlmProviderConfig:BareMode=true` запускает
-CLI с `--bare` (отключает автозагрузку CLAUDE.md, хуков, LSP, плагинов и
-авто-памяти) и `--system-prompt-file <путь>` (явная короткая карта проекта).
+(замер 2026-09-05: 95 070 токенов при полной CLAUDE.md против ~2 400 при
+`BareMode` + краткой карте в SystemPrompts/CLAUDE-local.md) и тормозит ход.
+Провайдер с `LlmProviderConfig:BareMode=true` запускает CLI с `--bare` (отключает
+автозагрузку CLAUDE.md, хуков, LSP, плагинов и авто-памяти) и
+`--system-prompt-file <путь>` (явная короткая карта проекта).
 
 **`--tools` только сужает набор, расширять нельзя.** Замерено на qwen3.8-27b
 локально (2026-09-05):
@@ -241,9 +241,9 @@ CLI с `--bare` (отключает автозагрузку CLAUDE.md, хуко
 (явный список задан только для документирования состава, --bare без --tools даёт
 тот же набор).
 
-**Файл карты** — `backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md` (~4.3 КБ,
-4 419 байт; замер 2026-09-05). Поставляется
-с продуктом, лежит в репозитории/публикации бэкенда. В `appsettings.json` —
+**Файл карты** — `backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md` (несколько
+килобайт; замер 2026-09-05). Поставляется с продуктом, лежит в
+репозитории/публикации бэкенда. В `appsettings.json` —
 `LlmProviders:local-qwen:SystemPromptFile: "SystemPrompts/CLAUDE-local.md"`.
 `<None>` в csproj копирует файл и в `bin/` (для `dotnet run`), и в `/app/` для
 Docker-публикации (`CopyToOutputDirectory` + `CopyToPublishDirectory`).
@@ -282,6 +282,26 @@ Docker-публикации (`CopyToOutputDirectory` + `CopyToPublishDirectory`)
 Условие `bareProvider is { BareMode: true }` для OAuth-чата не выполнится.
 Защита держится структурой — добавлять рантайм-чек «BareMode у OAuth-провайдера»
 не нужно.
+
+**Контейнерная нога: пара «bind-mount ↔ правило маппера».** У container-владельцев
+CLI живёт в песочнице, а карта — на хосте, поэтому файл обязан быть виден изнутри
+по тому же пути, который бэкенд отдаёт в `--system-prompt-file`. Держится это ДВУМЯ
+местами, которые обязаны совпадать:
+
+| Сторона | Где | Что делает |
+|---|---|---|
+| Монтирование | `SandboxManager.BuildRunArgsForHost` | `-v <AppContext.BaseDirectory>/SystemPrompts:/app/SystemPrompts` (хост даёт `DefaultSystemPromptsHost()`) |
+| Перевод пути | `DockerPathMapper` (правило `/app/SystemPrompts`) | `paths.ToRuntime(resolved)` в `BuildBareModeArgs` переводит хостовый путь карты в контейнерный |
+
+Каталога нет на хосте — mount подавляется (иначе контейнер тащит пустой
+`/app/SystemPrompts`), и факт его наличия входит в `ConfigHashForHost`: иначе
+появление карты не пересоздаст живой контейнер. **Расхождение сторон рантайм не
+ловит**: `ToRuntime` не бросит, mount отработает, а CLI получит путь, которого в
+контейнере нет → `System prompt file not found`, exit=1, ноль событий stream-json →
+`Unreachable` → ложная цепочка фолбэка у КАЖДОГО container-владельца при зелёных
+тестах. Поэтому пара связана тестом
+`DockerPathMapperTests.ХостПравилаSystemPrompts_СовпадаетСМонтируемымSandboxManager`
+(ревью 2026-09-06, M-1), а `DefaultSystemPromptsHost` для этого сделан `internal`.
 
 **Снимок промпта** при BareMode не показывает CLAUDE.md (`BuildCliLayerFiles`):
 кладёт короткое пояснение «карта подаётся через --system-prompt-file», чтобы

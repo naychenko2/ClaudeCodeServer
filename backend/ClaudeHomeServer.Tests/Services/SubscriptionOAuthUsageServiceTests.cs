@@ -12,10 +12,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // Поллер api/oauth/usage: статусы неуспеха per-аккаунт (setup-токен → 403 → «токен
 // не подходит», лог один раз) и динамический разбор окон ответа (включая незнакомые
 // per-model окна вроде seven_day_fable).
-// Коллекция SystemEnv — общая с Local/DockerProcessRunnerEnvTests: EnvVarScope ниже
-// мутирует process-global CLAUDE_CODE_OAUTH_TOKEN, xunit не должен гонять эти классы
-// параллельно (гонка с любым спавном процесса, читающим env).
-[Collection("SystemEnv")]
+// Коллекция процесс-глобального состояния — общая с Local/DockerProcessRunnerEnvTests и
+// со stderr-классами: EnvVarScope ниже мутирует process-global CLAUDE_CODE_OAUTH_TOKEN,
+// а тесты класса перехватывают Console.SetError; xunit не должен гонять эти классы
+// параллельно (гонка с любым спавном процесса, читающим env, и перехват чужого stderr).
+[Collection(TestCollections.ProcessGlobalState)]
 public class SubscriptionOAuthUsageServiceTests : IDisposable
 {
     private readonly string _tempDir;

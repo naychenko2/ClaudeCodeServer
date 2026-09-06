@@ -52,6 +52,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
     // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
     private readonly ILogger? _log;
+    // Категоризированный логгер сессии ClaudeSession — для BareMode-диагностики
+    // под своей категорией (раньше лог «BareMode: взята карта» шёл под категорией
+    // фабрики, см. L-6 ревью 2026-09-05). null (тесты без DI) — ClaudeSession
+    // использует свой `_log` как fallback.
+    private readonly ILogger<Claude.ClaudeSession>? _sessionLog;
     // Проба выхода в сеть: отличает «эндпоинт вендора недоступен» от «канал наружу лёг».
     // null (тесты без DI) — прежнее поведение фолбэка.
     private readonly IEgressProbe? _egress;
@@ -69,7 +74,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ChatHistoryService? chatHistory = null,
         ILogger<LlmSessionAdapterFactory>? log = null,
         IEgressProbe? egress = null,
-        ILocalEndpointProbe? localProbe = null)
+        ILocalEndpointProbe? localProbe = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
@@ -80,6 +86,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _log = log;
         _egress = egress;
         _localProbe = localProbe;
+        _sessionLog = loggerFactory?.CreateLogger<Claude.ClaudeSession>();
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
         _glifMcpToken = config["Glif:McpToken"];
@@ -153,7 +160,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
             _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments, _fileChangeAttributor,
-            _log);
+            _log, _sessionLog);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,

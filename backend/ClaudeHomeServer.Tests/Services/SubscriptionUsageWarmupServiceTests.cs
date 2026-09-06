@@ -11,6 +11,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // OAuth-снимки таймер простоя не сбрасывают, пинг идёт --model haiku, IdlePingMinutes=0
 // выключает механизм. Реальный запуск claude.exe тестами не проверяется (нечем подменить
 // процесс) — тестируем вынесенные для этого чистые методы, как OneShotClaudeRunner.BuildArgs.
+// Часть тестов перехватывает Console.SetError (процесс-глобален) — класс идёт в коллекции
+// процесс-глобального состояния (см. TestCollections.cs).
+[Collection(TestCollections.ProcessGlobalState)]
 public class SubscriptionUsageWarmupServiceTests : IDisposable
 {
     private readonly string _tempDir;

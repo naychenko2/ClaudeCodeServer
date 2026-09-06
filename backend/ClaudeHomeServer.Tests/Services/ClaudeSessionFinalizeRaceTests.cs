@@ -19,6 +19,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // Тест гоняет fake-CLI, который печатает result и завершается — это естественный
 // сценарий FinalizeRunAsync на КАЖДОМ завершении хода. Захватывает Console.Error и
 // проверяет, что при срабатывании гонки в логе появляется диагностическая строка.
+// Захват Console.Error процесс-глобален — класс идёт в коллекции процесс-глобального
+// состояния, чтобы параллельный сосед не отдал ему свой поток (см. TestCollections.cs).
+[Collection(TestCollections.ProcessGlobalState)]
 public class ClaudeSessionFinalizeRaceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(),

@@ -15,21 +15,31 @@ namespace ClaudeHomeServer.Tests.Services;
 // `_lastBareModeApplied` (ClaudeSession.cs:3948) должны краснеть на своих мутациях,
 // иначе «облачные не задеты» и «снимок не врёт» — фикция.
 //
+// Класс перехватывает stderr (Console.SetError) — а он процесс-глобален: параллельный
+// сосед со своим SetError/восстановлением в finally отдал бы нам чужой поток посреди
+// ассерта. Лечится КОЛЛЕКЦИЕЙ (TestCollections.ProcessGlobalState), а не глобальным
+// parallelizeTestCollections=false: сериализуются только классы, трогающие
+// процесс-глобальное состояние, остальной набор идёт параллельно (ревью 2026-09-06, M-3).
+//
 // Чистая функция BuildBareModeArgs покрывает резолв пути и снятие обоих флагов
 // (SafeJoin, отсутствие файла, bareTools=null/[]/заполненный); её контракт
 // проверяется отдельно в нижней части файла.
-[CollectionDefinition("BareModeConsoleError")]
-public sealed class BareModeConsoleErrorCollection { }
-
-[Collection("BareModeConsoleError")]
+[Collection(TestCollections.ProcessGlobalState)]
 public class ClaudeSessionBareArgsTests : IDisposable
 {
-    // Коллекция фиксирует запуск этого класса как serial: тесты ниже перехватывают
-    // Console.SetError (глобальное состояние). xUnit по умолчанию запускает классы
-    // параллельно — тогда один тест может перехватить stderr соседа и поймать чужой
-    // вывод. Имя коллекции — просто якорь: одновременно с этой коллекцией xUnit
-    // может гнать тесты из других коллекций, но не из этой же.
     private readonly List<Process> _processes = [];
+    // Временные каталоги, созданные ЭТИМ тестом (корни ходов и проектов). Чистятся в
+    // Dispose — иначе копятся в %TEMP% десятками за прогон (ревью 2026-09-06, L).
+    private readonly List<string> _tempDirs = [];
+
+    // Создать временный каталог и поставить его на учёт для уборки в Dispose.
+    private string NewTempDir(string prefix)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        lock (_tempDirs) _tempDirs.Add(dir);
+        return dir;
+    }
 
     public void Dispose()
     {
@@ -38,6 +48,18 @@ public class ClaudeSessionBareArgsTests : IDisposable
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
             p.Dispose();
         }
+        // Временные каталоги тестов чистим при выходе — иначе накапливаются в %TEMP%
+        // (см. ревью 2026-09-05, L-7). ServerRoot общий для всех тестов класса
+        // (static readonly), удаляется здесь; корни ходов и проектов — из _tempDirs.
+        lock (_tempDirs)
+        {
+            foreach (var dir in _tempDirs)
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* уже удалён/занят */ }
+            }
+            _tempDirs.Clear();
+        }
+        try { Directory.Delete(ServerRoot, recursive: true); } catch { /* уже удалён */ }
     }
 
     // Локальный серверный корень: в нём лежит SystemPrompts/CLAUDE-local.md для BareMode.
@@ -117,6 +139,13 @@ public class ClaudeSessionBareArgsTests : IDisposable
             ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
             ["LlmProviders:deepseek:ApiKey"] = "sk-test",
             ["LlmProviders:deepseek:Models:0:Id"] = CloudModelId,
+            // У облачного провайдера BareMode НЕ включён, но карта задана и файл существует
+            // (ok.md кладёт конструктор класса). Без этой строки сторож изоляции инертен:
+            // под мутацией гейта `is { BareMode: true }` → `is not null` BuildBareModeArgs
+            // получил бы пустой SystemPromptFile, сам снял бы оба флага (ранний возврат по
+            // string.IsNullOrWhiteSpace) и тест остался бы ЗЕЛЁНЫМ — мутация прошла бы молча
+            // (ревью 2026-09-06, H-1). С существующей картой мутация даёт --bare → честный RED.
+            ["LlmProviders:deepseek:SystemPromptFile"] = "SystemPrompts/ok.md",
         });
         if (localSystemPromptFile is not null)
             cfg["LlmProviders:local-qwen:SystemPromptFile"] = localSystemPromptFile;
@@ -134,8 +163,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         string model, LlmProviderRegistry providers, string? effort = null)
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var root = Path.Combine(Path.GetTempPath(), "ccs-bare-args-tests-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = NewTempDir("ccs-bare-args-tests-");
 
         var launcher = new ArgsCapturingLauncher(_processes, started);
         var context = new LlmSessionContext(
@@ -188,7 +216,10 @@ public class ClaudeSessionBareArgsTests : IDisposable
     /// СТОРОЖ ГЕЙТА: при BareMode=false у локального провайдера CLI НЕ получает --bare,
     /// _lastBareModeApplied=false. Мутация `is { BareMode: true }` → `is not null` сломает
     /// ход на deepseek-v4-pro (облачный провайдер, без BareMode вовсе): BareArgs подключатся
-    /// → args будут содержать --bare → RED.
+    /// → args будут содержать --bare → RED. Сторож ДЕРЖИТСЯ на строке фикстуры
+    /// `LlmProviders:deepseek:SystemPromptFile` (существующий ok.md): без неё
+    /// BuildBareModeArgs снял бы оба флага сам, по пустому пути карты, и мутация прошла
+    /// бы молча — так и было до круга 8.
     /// </summary>
     [Fact]
     public async Task ХодНаОблачномПровайдере_BareModeОтсутствует_ФлагаBareНет()
@@ -276,8 +307,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     private async Task<(IReadOnlyList<string>? Args, ClaudeSession Session)> RunTurnAsyncWithLauncher(
         string model, LlmProviderRegistry providers, IProcessLauncher launcher)
     {
-        var root = Path.Combine(Path.GetTempPath(), "ccs-bare-throwing-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = NewTempDir("ccs-bare-throwing-");
 
         var context = new LlmSessionContext(
             RootPath: root,
@@ -494,16 +524,20 @@ public class ClaudeSessionBareArgsTests : IDisposable
     }
 
     [Fact]
-    public void BareMode_SystemPromptFileПустой_ТолькоBareФлаг()
+    public void BareMode_SystemPromptFileПустой_СнимаетBareИWarning()
     {
-        // SystemPromptFile пустой — BareMode без явной карты: CLI сам подтянет
-        // CLAUDE.md проекта; --bare ставится, --tools только если bareTools задан.
+        // SystemPromptFile пустой: --bare без --system-prompt-file оставил бы модель
+        // без контекста, т.к. --bare отключает автозагрузку CLAUDE.md и CLI ничего
+        // своего не подтянет. Асимметрия с веткой «файл не найден» неоправданна —
+        // теперь единое поведение: пустой SystemPromptFile = BareMode снят с warning,
+        // ход в обычном режиме с полной CLAUDE.md.
         var args = Build("", bareTools: null, serverRoot: ServerRoot,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare");
-        warning.Should().BeNull();
-        effective.Should().BeTrue();
+        args.Should().BeEmpty();
+        warning.Should().NotBeNullOrEmpty();
+        warning.Should().Contain("SystemPromptFile не задан");
+        effective.Should().BeFalse();
     }
 
     [Fact]
@@ -569,19 +603,22 @@ public class ClaudeSessionBareArgsTests : IDisposable
     }
 
     [Fact]
-    public void BareMode_SystemPromptFileПустой_BareToolsЗаданы_ТолькоBareИTools()
+    public void BareMode_SystemPromptFileПустой_BareToolsЗаданы_ТожеСнимает()
     {
-        // Сознательный сценарий: bareTools без явной карты. CLI получает --bare + --tools,
-        // свой CLAUDE.md проекта подтянет сам.
+        // Пустой SystemPromptFile + любой bareTools: BareMode всё равно снимается
+        // с warning. --bare без карты оставил бы модель без контекста — --tools тут
+        // не спасает.
         var tools = new[] { "Bash", "Edit", "Read", "PowerShell" };
 
         var args = Build("", bareTools: tools, serverRoot: ServerRoot,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--tools", string.Join(' ', tools));
-        warning.Should().BeNull();
-        effective.Should().BeTrue();
-        args.Should().NotContain("--system-prompt-file");
+        args.Should().BeEmpty();
+        warning.Should().NotBeNullOrEmpty();
+        warning.Should().Contain("SystemPromptFile не задан");
+        effective.Should().BeFalse();
+        args.Should().NotContain("--bare");
+        args.Should().NotContain("--tools");
     }
 
     [Fact]
@@ -590,7 +627,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         // Per-project lookup: docs/CLAUDE-local.md в корне проекта чата перебивает серверный
         // SystemPrompts/CLAUDE-local.md. Сторож: мутация приоритета (убрать File.Exists
         // проверку) → тест зелёный НЕ пройдёт (вернётся серверный путь, текст другой).
-        var projectRoot = Path.Combine(Path.GetTempPath(), "ccs-bare-perproject-" + Guid.NewGuid().ToString("N"));
+        var projectRoot = NewTempDir("ccs-bare-perproject-");
         Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
         var projectLocal = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
         File.WriteAllText(projectLocal, "# per-project map");
@@ -613,8 +650,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     public void BareMode_ВПроектеНетDocsCLAUDELocal_БерётсяСерверныйДефолт()
     {
         // Контракт fallback: проектного файла нет → серверный SystemPrompts/CLAUDE-local.md.
-        var projectRoot = Path.Combine(Path.GetTempPath(), "ccs-bare-noproj-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(projectRoot);
+        var projectRoot = NewTempDir("ccs-bare-noproj-");
 
         var args = ClaudeSession.BuildBareModeArgs(
             projectRoot, ServerRoot,
@@ -633,7 +669,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     [Fact]
     public void BareMode_ПроектнаяКартаБольшеПотолка_ОтступКСерверной()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), "ccs-bare-bigproj-" + Guid.NewGuid().ToString("N"));
+        var projectRoot = NewTempDir("ccs-bare-bigproj-");
         Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
         var projectLocal = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
         // Пишем файл явно > 16 КБ
@@ -655,7 +691,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     [Fact]
     public void BareMode_ПроектнаяКартаРовноПотолок_БерётсяПроектная()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), "ccs-bare-edgeproj-" + Guid.NewGuid().ToString("N"));
+        var projectRoot = NewTempDir("ccs-bare-edgeproj-");
         Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
         var projectLocal = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
         File.WriteAllText(projectLocal, new string('x', 16 * 1024));
@@ -676,7 +712,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     [Fact]
     public void BareMode_ЛогРазмера_СодержитИсточникИБайты()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), "ccs-bare-log-" + Guid.NewGuid().ToString("N"));
+        var projectRoot = NewTempDir("ccs-bare-log-");
         Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
         var projectLocal = Path.Combine(projectRoot, "docs", "CLAUDE-local.md");
         File.WriteAllText(projectLocal, "# per-project\nmap body");

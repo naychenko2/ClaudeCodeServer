@@ -5,15 +5,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Общая коллекция с LocalProcessRunnerEnvTests: оба манипулируют process-global
-// Environment.SetEnvironmentVariable, параллельный прогон дал бы флаки.
-[CollectionDefinition("SystemEnv")]
-public class SystemEnvCollection;
-
+// Коллекция процесс-глобального состояния (объявление — в TestCollections.cs): классы
+// внутри неё манипулируют Environment.SetEnvironmentVariable и Console.SetError,
+// параллельный прогон дал бы флаки.
+//
 // Правило сборки env хода песочницы (DockerProcessRunner.BuildTurnEnv). Как и в
 // LocalProcessRunnerEnvTests, процессы/docker здесь не запускаются — проверяем только
 // сборку словаря, поэтому тесты гоняются и на linux-раннере CI без настоящего docker CLI.
-[Collection("SystemEnv")]
+[Collection(TestCollections.ProcessGlobalState)]
 public class DockerProcessRunnerEnvTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "ccs-docker-env-tests-" + Guid.NewGuid().ToString("N"));

@@ -7,7 +7,6 @@ using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
-using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Team;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;

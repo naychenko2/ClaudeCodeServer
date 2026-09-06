@@ -1,5 +1,5 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Team;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;

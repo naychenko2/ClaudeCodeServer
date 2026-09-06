@@ -1,7 +1,6 @@
 ﻿using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.SignalR;
 
@@ -34,6 +33,14 @@ internal enum WaveLiveness
 public class TeamWaveService
 {
     private readonly SessionManager _sessions;
+    // Швы данных «штаб → ядро» (этап 4, шаг 2г-3б; объявления — TeamCoreSeams.cs). Пока
+    // приходят upcast'ом из того же SessionManager: конструктор не меняется, чтобы шов не
+    // потянул за собой правку тестов (их 116, и переезд их arrange — работа шага 2г). Через
+    // швы идёт всё, что штаб спрашивает у ЯДРА; штабной API (WithTeamState, GetTeamPlanAsync
+    // и компания) остаётся на _sessions и снимается переездом тела, а не швом.
+    private readonly ITeamSessionDirectory _dir;
+    private readonly ITeamRunState _run;
+    private readonly ITeamTurnIntake _intake;
     private readonly TaskManager _tasks;
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
@@ -70,6 +77,9 @@ public class TeamWaveService
         IConfiguration? config = null)
     {
         _sessions = sessions;
+        _dir = sessions;
+        _run = sessions;
+        _intake = sessions;
         _tasks = tasks;
         _projects = projects;
         _hub = hub;
@@ -480,7 +490,7 @@ public class TeamWaveService
         finally { gate.Release(); }
 
         if (summaryTurn is not null)
-            await _sessions.SendOrEnqueueAsync(session.Id, summaryTurn,
+            await _intake.SendOrEnqueueAsync(session.Id, summaryTurn,
                 senderPersonaId: null, silent: true, suppressTasksExecute: true,
                 staffNote: summaryNote);
     }
@@ -686,7 +696,7 @@ public class TeamWaveService
     private TimeSpan TaskQuiet(TaskItem task)
     {
         var last = task.UpdatedAt;
-        if (task.LinkedSessionId is { } sid && _sessions.GetById(sid) is { } s && s.UpdatedAt > last)
+        if (task.LinkedSessionId is { } sid && _dir.Get(sid) is { } s && s.UpdatedAt > last)
             last = s.UpdatedAt;
         return DateTime.UtcNow - last;
     }
@@ -695,7 +705,7 @@ public class TeamWaveService
     // зависший Working без процесса тоже занят — и его надо реанимировать перед перевыдачей)
     private bool IsExecutorBusy(TaskItem task) =>
         task.LinkedSessionId is { } sid
-        && _sessions.GetById(sid) is { Status: SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting };
+        && _dir.Get(sid) is { Status: SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting };
 
     // Занят ли исполнитель задачи по id: задачу могли удалить за окно ожидания останова
     // (NRE ревью этапа 3) — удалённая задача занятым исполнителем не считается
@@ -738,7 +748,7 @@ public class TeamWaveService
         {
             // Живой прогон CLI (или ход, вот-вот стартующий) с недавней активностью — это
             // работа, а не зависание: тот же порог тишины, что у пульса волны
-            if (task.LinkedSessionId is { } sid && _sessions.HasLiveTurnProcess(sid))
+            if (task.LinkedSessionId is { } sid && _run.HasLiveTurn(sid))
             {
                 var quiet = TaskQuiet(task);
                 if (quiet < _stalledThreshold)
@@ -751,7 +761,7 @@ public class TeamWaveService
             // живой зависший прогон убивается — иначе перевыдача упрётся в гейт задачи
             if (IsExecutorBusy(task) && task.LinkedSessionId is { } linkedId)
             {
-                _sessions.Interrupt(linkedId);
+                _intake.InterruptTurn(linkedId);
                 await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
             }
 
@@ -828,7 +838,7 @@ public class TeamWaveService
             foreach (var s in undone)
             {
                 if (_tasks.GetById(s.TaskId!) is not { } t || !IsExecutorBusy(t)) continue;
-                _sessions.Interrupt(t.LinkedSessionId!);
+                _intake.InterruptTurn(t.LinkedSessionId!);
                 await WaitExecutorIdleAsync(() => ExecutorBusyById(t.Id), TimeSpan.FromSeconds(10));
             }
 
@@ -991,14 +1001,14 @@ public class TeamWaveService
     // дешевле один проход по всем чатам на весь тик (SendWavePulsesAsync), одиночному
     // вызову (REST-снапшот) дешевле достать их самому.
     internal WaveSnapshot? BuildWaveSnapshot(Session session) =>
-        BuildWaveSnapshot(session, _sessions.GetAll().Where(s => s.ParentSessionId == session.Id));
+        BuildWaveSnapshot(session, _dir.ListChildren(session.Id));
 
-    internal WaveSnapshot? BuildWaveSnapshot(Session session, IEnumerable<Session> childSessions)
+    internal WaveSnapshot? BuildWaveSnapshot(Session session, IEnumerable<TeamSessionInfo> childSessions)
     {
         if (session.TeamImplement is not { } team) return null;
         if (team.Stage is not (TeamImplementStage.Wave or TeamImplementStage.Checking)) return null;
 
-        var children = childSessions as IReadOnlyList<Session> ?? childSessions.ToList();
+        var children = childSessions as IReadOnlyList<TeamSessionInfo> ?? childSessions.ToList();
         var waveTasks = WaveTasks(session, team.WaveNumber);
         var now = DateTime.UtcNow;
         // Последняя активность волны: старт/закрытие/перевыдача её задач (их UpdatedAt —
@@ -1014,7 +1024,7 @@ public class TeamWaveService
         var anchors = waveTasks.Select(t => t.UpdatedAt)
             .Concat(children.Select(s => s.UpdatedAt))
             .Append(team.WaveStartedAt ?? session.UpdatedAt);
-        if (_sessions.HasLiveTurnProcess(session.Id) || children.Any(c => _sessions.HasLiveTurnProcess(c.Id)))
+        if (_run.HasLiveTurn(session.Id) || children.Any(c => _run.HasLiveTurn(c.Id)))
             anchors = anchors.Append(now);
         var lastActivityAt = anchors.Max();
         var quiet = now - lastActivityAt;
@@ -1051,7 +1061,7 @@ public class TeamWaveService
     // не зависит от quietSeconds и значит большее — обвал, а не пауза.
     private WaveLiveness ClassifyLiveness(Session session, TimeSpan quiet) =>
         session.Status is SessionStatus.Working or SessionStatus.Waiting
-            && !_sessions.HasLiveTurnProcess(session.Id)
+            && !_run.HasLiveTurn(session.Id)
             ? WaveLiveness.Dead
         : quiet > _stalledThreshold ? WaveLiveness.Stalled
         : quiet > _quietThreshold ? WaveLiveness.Quiet
@@ -1075,11 +1085,9 @@ public class TeamWaveService
     public async Task SendWavePulsesAsync()
     {
         // Дети всех штабов — одним проходом на тик: собирать их внутри каждого снапшота
-        // значило бы полный GetAll() на каждый штаб (O(N×M), растёт с числом чатов).
-        // ParentSessionId вычисляемый, поэтому фильтруем по нему всех сразу.
-        var childrenByParent = _sessions.GetAll()
-            .Where(s => s.ParentSessionId is not null)
-            .ToLookup(s => s.ParentSessionId!);
+        // значило бы полный перебор чатов на каждый штаб (O(N×M), растёт с числом чатов).
+        // ParentSessionId вычисляемый, поэтому фильтр живёт в реализации шва-каталога.
+        var childrenByParent = _dir.ChildrenByParent();
         foreach (var session in _sessions.GetTeamImplementSessions())
         {
             try
@@ -1123,7 +1131,7 @@ public class TeamWaveService
         {
             if (session.TeamImplement is not { } team) continue;
             // Человек прямо сейчас в этом чате — он и так видит карточку в ленте
-            if (_sessions.HasViewers(session.Id)) continue;
+            if (_run.HasViewers(session.Id)) continue;
 
             var ownerId = session.OwnerId
                 ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
@@ -1180,7 +1188,7 @@ public class TeamWaveService
         if (ownerId is null || _notif is null) return;
 
         // Push — только когда человека нет в этом чате: он и так видит карточку в ленте
-        var away = !_sessions.HasViewers(session.Id);
+        var away = !_run.HasViewers(session.Id);
         var authorId = escalation.PersonaId
             ?? session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
         // Заголовок от имени персоны (Э8) и по виду карточки: остановка, гейт волны и
@@ -1220,7 +1228,7 @@ public class TeamWaveService
             Kind: "claude",
             ProjectId: session.ProjectId,
             PersonaId: authorId,
-            Tag: "Командная реализация") { SessionId = session.Id }, sendPush: !_sessions.HasViewers(session.Id));
+            Tag: "Командная реализация") { SessionId = session.Id }, sendPush: !_run.HasViewers(session.Id));
     }
 
     private static string ChatUrl(Session session) => string.IsNullOrEmpty(session.ProjectId)

@@ -763,6 +763,9 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Prompts",
                         "ClaudeHomeServer.Hubs",
                         "ClaudeHomeServer.Protocol",
+                        // Префикс-шов по факту ссылок спутников (волна Ж):
+                        // - Turn: TurnCompleted (подписчик шины turn/completed в TeamTurnCompletionService).
+                        "ClaudeHomeServer.Services.Turn",
                     })
                     .ToArray(),
                 new[]
@@ -770,12 +773,16 @@ public class SubsystemBoundaryTests
                     // Точечные допуски к корню `Services.*` — «вертикаль → спинка» (по образцу Skills):
                     // PersonaManager/ProjectManager/TaskExecutionService/NotificationService —
                     // параметры конструкторов TeamWaveService; SessionManager — там же,
-                    // для получения session id и публикации событий штаба.
+                    // для получения session id и публикации событий штаба; nested ReportUpResult
+                    // (enum, объявленный внутри SessionManager) — сигнал пробуждения штаба,
+                    // возвращается из SessionManager.ReportUpAsync, который TeamTurnCompletionService
+                    // зовёт при пробуждении через ReportBlockerAsync.
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.TaskExecutionService",
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.SessionManager+ReportUpResult",
                 }),
         },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
@@ -995,6 +1002,17 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Llm.RecallItem",
                     "ClaudeHomeServer.Services.Llm.TurnRunPassport",
                     "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // Этап 4, шаг 2г-2 — переезд промптов штаба: ClaudeSession
+                    // (DecidePermissionAsync) ссылается на `TeamImplementPrompts.MaxInterviewRounds`
+                    // и `InterviewRoundsExhausted` для гейта AskUserQuestion. До переезда
+                    // шёл через префикс `Services.Prompts` в SharedAllowedPrefixes, но
+                    // после переезда тип в `Services.Team` — точный допуск.
+                    "ClaudeHomeServer.Services.Team.TeamImplementPrompts",
+                    // Этап 4, шаг 2г-2 — PersonaLayerContributor (в Turn-boundary) вызывает
+                    // TeamMechanicsPromptCatalog.BuildPromptBlock через return-тип; до переезда
+                    // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
+                    // точный допуск.
+                    "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
                 }),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).

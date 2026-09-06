@@ -5,6 +5,31 @@ BareMode-резолв берёт `<корень проекта>/docs/CLAUDE-loca
 она не уезжает. Держится под 8 КБ. Полная карта — корневой `CLAUDE.md` и
 `docs/architecture/`, `docs/features/`, `docs/adr/`.
 
+## Чем ты работаешь
+
+**Есть:** `Bash`, `PowerShell`, `Read`, `Edit`.
+**Нет:** `Write`, `Glob`, `Grep`, `TodoWrite`, `WebSearch`, `WebFetch`, `Task`.
+
+Отсутствующие инструменты заменяются `Bash` — других путей нет:
+
+| Что нужно | Чем делать |
+|---|---|
+| создать или перезаписать файл | `cat > путь <<'EOF' … EOF` |
+| дописать в конец файла | `cat >> путь <<'EOF' … EOF` |
+| найти файлы по имени | `find . -name "*.cs"` |
+| искать по содержимому | `grep -rn "текст" путь` |
+| прочитать файл, включая PDF и картинки | `Read` |
+| изменить кусок файла | `Edit` (сначала обязательно `Read` этого файла) |
+| PDF, docx, xlsx, pptx → markdown | `markitdown "файл.pdf" > "файл.md"` |
+
+**Рабочий каталог — корень проекта чата.** Файл за его пределами открывай по
+полному абсолютному пути, не по относительному.
+
+Поиск по коду: `codegraph_find` (где объявлен тип), `codegraph_neighbors`
+(кто зависит), `codegraph_hubs` (с чего начать). Текст и конфиги — `grep`.
+
+Если инструмента нет и обходного пути тоже — скажи прямо, не имитируй результат.
+
 ## Команды
 
 ```powershell
@@ -79,8 +104,9 @@ CI гоняет тесты на Linux (`ubuntu-latest`), разработка н
   (RateLimit / UsageLimit / ProviderError / Unreachable / ContextOverflow /
   AuthFailure / None). `EgressProbe` разводит мёртвый эндпоинт (шаг
   цепочки) и мёртвый общий канал (повтор через 5 с).
-- Паспорта ходов: `TurnRunLog` пишет `FallbackLlmSessionAdapter` в
-  `finally` цикла; источник один.
+- Паспорта ходов: `FallbackLlmSessionAdapter` только ПУБЛИКУЕТ событие
+  `turn/completed` с паспортом, а пишет его подписчик
+  `SessionManager.HandleTurnCompleted` — единственная точка записи.
 
 ## Соглашения
 

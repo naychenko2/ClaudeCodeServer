@@ -257,13 +257,14 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
   открывает поддеревья (`X.` и `X`), `AllowedExactNamespaces` — ровно
   указанный тип по `FullName` (полезно для nested-типов вроде
   `SsrfGuard+AddressCheck` и для точечных синглтонов из корня `Services`
-  типа `PersonaManager`/`SessionManager`). Покрытие — все 33 записи в
-  `Boundaries` после волны 4: 20 реализаций `IAppSubsystem`
+  типа `PersonaManager`/`SessionManager`). Покрытие — все 34 записи в
+  `Boundaries` после волны 4 и выноса штаба: 20 реализаций `IAppSubsystem`
   (`Backgrounds, Changelog, CodeGraph, Deploy, Dossiers, Git, Images,
   Knowledge, Llm, Memory, Notes, ProjectIcons, ProjectServices, Reader,
-  Skills, Spend, Tasks, Tts, Video, Yandex`) плюс `Watchdog` и 12 других
+  Skills, Spend, Tasks, Tts, Video, Yandex`) плюс `Watchdog` и 13 других
   вертикалей без подсистемы (`Auth, Backup, Desktop, Diagnostics, Docs,
-  Execution, Modules, Personas, Prompts, Terminal, TriggerSources, Turn`).
+  Execution, Modules, Personas, Prompts, Team, Terminal, TriggerSources,
+  Turn`).
 - `SubsystemBoundaryCoverageTests`: каждая реализация `IAppSubsystem` в
   сборке должна иметь строку в `Boundaries`; вертикали без подсистемы
   перечисляются явно — список выше. Ловит «новая подсистема/вертикаль
@@ -285,6 +286,38 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
 а цикл/зависимость по факту есть»). Плановое решение — задача `8beee75e`
 (перевод сторожа на IL): когда она закроется, швы из тел методов будут
 видны сторожу, а ручной скан перестанет быть частью регламента выделения.
+
+**Вертикаль `Services/Team` (штаб, «Командная реализация») — вынесена из
+`SessionManager` 2026-09-06**, семью волнами переезда: `TeamCoordinator`,
+`TeamStateService`, `TeamPlanService`, `TeamDecisionService`,
+`TeamBudgetService`, `TeamEnableService`, `TeamTurnCompletionService` плюс
+спутники (`TeamWaveService`, промпты, сторож волны). Ядро **10 124 → 8 999
+строк**; штабного кода в нём не осталось — только owning-обёртки.
+
+Швов ровно **четыре** (`ITeamSessionDirectory`, `ITeamHistoryStore`,
+`ITeamRunState`, `ITeamTurnIntake` в `Services/Team/TeamCoreSeams.cs`): новые
+не заводим, достраиваем существующие. Правило пережило проверку: в шаге 2г-4
+пятый шов завели, ревью показало, что он дублирует `ITeamHistoryStore` — четыре
+метода вернули туда, пятый выбросили как дубликат уже имевшегося. Цена
+решения — **10 фасадных обёрток** в ядре (их зовут `ChatsController`,
+`SessionHub`, `SessionMessagingService`, `DenyOnDelegatedTurnAttribute`) и пять
+публичных методов ядра (`GetById`, `GetOwned`, `ResolveOwnerId`,
+`ReportUpAsync`, `BroadcastAsync`).
+
+**Шаг 2г-4 (обёртки → DI):** четыре `Func`-свойства штаба с ядра сняты —
+обработчики волны живут в `TeamCoordinator`, ядро отдаёт его одной ссылкой.
+Обёрток в ядре 27 → 21. `HasLiveDelegatedTasks` осознанно остаётся `Func`:
+его ставит `TaskExecutionService` (чужая сторона, цикл настоящий), а прямая
+ссылка на `TaskManager` из спины уронила бы сторож границ.
+
+**Отдельным `.csproj` Team не выносится** (проверено по критерию ADR-014):
+73 обращения к типу `SessionManager` из вертикали, швы тянут `Models` и
+`Protocol` из Main, на `InternalsVisibleTo` стоят все тесты. Остаток обёрток
+снимается только вместе с переводом вертикали на DI: `TeamWaveService` —
+синглтон DI, а читающие сервисы создаёт ядро в своём конструкторе, и общего
+адреса, кроме `SessionManager`, у них нет. Фактура и разбивка шага 2г-4 —
+[docs/research/team-di-migration-2026-09.md](docs/research/team-di-migration-2026-09.md),
+план выноса — [session-core-split-2026-09.md](docs/research/session-core-split-2026-09.md).
 
 **Разведка по кандидатам** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md)):
 **Video — пилот** ✅ (`VideoSubsystem`, 1 контроллер, 0 hosted, 1 исходящая
@@ -312,10 +345,11 @@ Microsoft DI не выгружает контейнер по конструкц�
   Считается так: `wc -l backend/ClaudeHomeServer/Program.cs` для строк и
   `grep -c 'builder\.Services\.Add' backend/ClaudeHomeServer/Program.cs`
   для регистраций.
-- **`Services/*.cs` (верхний уровень, без подкаталогов) = 27 724 строк
-  / 69 файлов.** Было после волны 3 43 482 / 123, merge-base `b8ce8f85`
+- **`Services/*.cs` (верхний уровень, без подкаталогов) = 24 704 строк
+  / 63 файла** (после выноса штаба, 2026-09-06; сразу после волны 4 было
+  27 724 / 69). Было после волны 3 43 482 / 123, merge-base `b8ce8f85`
   от `master` давал те же 43 482 / 123 (метрика корня в эту базу не
-  измерялась ранее). Δ от «после волны 3» = −15 758 строк, −54 файла.
+  измерялась ранее). Δ от «после волны 3» = −18 778 строк, −60 файлов.
   Считается так:
   `find backend/ClaudeHomeServer/Services -maxdepth 1 -name '*.cs' | wc -l`
   для числа файлов и

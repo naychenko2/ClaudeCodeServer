@@ -133,7 +133,14 @@
 [local-vllm-provider.md](research/local-vllm-provider.md) (локальная Qwen3.8-27B как
 CLI-провайдер: проверенная конфигурация стенда с замерами, грабли подключения —
 прокси съедает loopback, `--effort high` не принимается, провал кэша промпта
-на `mamba-cache-mode align`). Читать как «так было тогда».
+на `mamba-cache-mode align`),
+[services-root-inventory-2026-09.md](research/services-root-inventory-2026-09.md)
+(инвентарь корня `Services` и вердикт архитектора перед волной 4),
+[session-core-split-2026-09.md](research/session-core-split-2026-09.md)
+(разведка разреза `SessionManager` и план выноса штаба вертикалью),
+[team-di-migration-2026-09.md](research/team-di-migration-2026-09.md)
+(что реально снимается при переводе штаба на DI: 17 обёрток против 10 фасадных,
+почему Team не выносится отдельным `.csproj`). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

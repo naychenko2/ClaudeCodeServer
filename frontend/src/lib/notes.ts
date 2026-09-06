@@ -154,3 +154,83 @@ export function useNotesByFile(projectId: string): Map<string, NoteSummary[]> {
 
 // Локально применить изменения после собственных мутаций (realtime продублирует).
 export function bumpNotes(): void { void reloadNotes(); }
+
+// --- Избранное: тег #избранное в самой заметке, без отдельного хранилища ---
+// Звёздочка в списке и в просмотре дописывает/убирает этот тег в тексте, поэтому
+// избранное переживает синк с Obsidian и ищется обычным оператором tag:.
+
+export const FAVORITE_TAG = 'избранное';
+
+export function isFavorite(tags: string[]): boolean {
+  return tags.some(t => t.trim().toLowerCase() === FAVORITE_TAG);
+}
+
+// Граница тега — как у разбора на бэкенде; хвостовой пробел съедаем, чтобы не оставалось двойных
+const FAV_INLINE = new RegExp(`(?<=^|\\s)#${FAVORITE_TAG}(?![\\p{L}\\p{N}_/-])[ \\t]*`, 'giu');
+
+export function withFavoriteTag(content: string): string {
+  return isFavoriteContent(content) ? content : `${content.trimEnd()} #${FAVORITE_TAG}\n`;
+}
+
+// Тег мог попасть и в тело, и во frontmatter — снимаем из обоих мест, иначе
+// звёздочка гаснет в интерфейсе, а список тегов её возвращает.
+export function withoutFavoriteTag(content: string): string {
+  const fm = splitFrontmatter(content);
+  const body = fm.body.replace(FAV_INLINE, '').replace(/[ \t]+$/gm, '');
+  return fm.head === null ? body : `${stripFavoriteFromFrontmatter(fm.head)}${body}`;
+}
+
+// Есть ли тег в тексте (а не в разобранном списке note.tags) — для идемпотентности
+function isFavoriteContent(content: string): boolean {
+  const fm = splitFrontmatter(content);
+  FAV_INLINE.lastIndex = 0;
+  if (FAV_INLINE.test(fm.body)) return true;
+  return fm.head !== null && stripFavoriteFromFrontmatter(fm.head) !== fm.head;
+}
+
+// head — frontmatter вместе с обрамляющими «---» (null, если его нет)
+function splitFrontmatter(content: string): { head: string | null; body: string } {
+  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content);
+  return m ? { head: m[0], body: content.slice(m[0].length) } : { head: null, body: content };
+}
+
+// tags: [a, избранное] и список в столбик «  - избранное»; опустевший ключ убираем
+function stripFavoriteFromFrontmatter(head: string): string {
+  const eq = (s: string) => s.trim().replace(/^#+/, '').replace(/^["']|["']$/g, '').toLowerCase() === FAVORITE_TAG;
+  const lines = head.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const inline = /^(\s*tags:\s*)\[(.*)\]\s*$/i.exec(line);
+    if (inline) {
+      const rest = inline[2].split(',').map(x => x.trim()).filter(x => x.length > 0 && !eq(x));
+      if (rest.length > 0) out.push(`${inline[1]}[${rest.join(', ')}]`);
+      continue;
+    }
+    if (/^\s*tags:\s*$/i.test(line)) {
+      const items: string[] = [];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const item = /^\s*-\s*(.+?)\s*$/.exec(lines[j]);
+        if (!item) break;
+        if (!eq(item[1])) items.push(lines[j]);
+      }
+      if (items.length > 0) { out.push(line, ...items); }
+      i = j - 1;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+// Переключение звёздочки: список отдаёт только NoteSummary, поэтому тело
+// дочитываем перед правкой. Возвращает новое состояние избранности.
+export async function toggleFavorite(id: string): Promise<boolean> {
+  const note = await api.notes.get(id);
+  const fav = isFavorite(note.tags);
+  const content = fav ? withoutFavoriteTag(note.content) : withFavoriteTag(note.content);
+  await api.notes.update(id, { content });
+  bumpNotes();
+  return !fav;
+}

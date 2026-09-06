@@ -29,8 +29,7 @@ public class IlBoundaryRegressionTests
         var asms = AppDomain.CurrentDomain.GetAssemblies()
             .Where(a => a.GetName().Name is { } n
                 && (n == "ClaudeHomeServer" || n.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
-                && n != "ClaudeHomeServer.Tests"
-                && !n.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal))
+                && !n.EndsWith(".Tests", StringComparison.Ordinal))
             .ToList();
 
         // 7 известных швов из CLAUDE.md «Известное ограничение», которые раньше

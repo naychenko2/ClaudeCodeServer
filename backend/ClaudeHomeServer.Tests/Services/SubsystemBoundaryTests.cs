@@ -49,23 +49,18 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class SubsystemBoundaryTests
 {
-    // До multi-assembly-фикса typeof(VideoSubsystem).Assembly форсировал загрузку Main —
-    // сторож получал ровно её типы и не задумывался о lazy-load. После фикса сторож
-    // перебирает AppDomain.CurrentDomain.GetAssemblies(): если ни один тест в этом
-    // testhost до сих пор не тронул Main, она не загружена, и сторож проходит
-    // вакуумно — выборка по любой вертикали в Main будет пустой. Статический
-    // конструктор гарантирует загрузку Main при первом обращении к типу этого класса,
-    // и сторож видит обе сборки (Core + Main).
+    // Форс-загрузка всех вертикальных сборок (Main плюс вынесенные .Reader/.Yandex/.Video):
+    // сторож перебирает AppDomain.CurrentDomain.GetAssemblies(), и без явного
+    // референса сборка-точка-точка ленивая — если ни один тест в этом testhost до
+    // теста сторожа её не тронул, она не загружена, и сторож проходит вакуумно
+    // по целым вертикалям. Раньше типы всех вертикалей жили в Main, и одного
+    // typeof(VideoSubsystem).Assembly хватало на всё; теперь у каждой вертикали
+    // своя сборка, и форс-референс нужен на каждую.
     static SubsystemBoundaryTests()
     {
-        // До multi-assembly-фикса typeof(...).Assembly форсировал загрузку Main
-        // и сторож получал её типы по умолчанию. После фикса сторож перебирает
-        // AppDomain.CurrentDomain.GetAssemblies() с фильтром по имени —
-        // без явного форс-референса Main не загружается, если её никто не тронул
-        // до этого теста (сборка-точка-точка ленивая), и сторож проходит
-        // вакуумно по всем вертикалям в Main. Этот статический конструктор
-        // гарантирует загрузку Main при первом обращении к типу этого класса.
         _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1767,17 +1762,18 @@ public class SubsystemBoundaryTests
         //  - `ClaudeHomeServer` — главная сборка (этап 0/1 не выносил вертикали, она
         //    ещё содержит все `Services.*`, и её имя НЕ имеет точки в имени сборки);
         //  - `ClaudeHomeServer.<X>` — Core и будущие вертикальные сборки.
-        // Исключение `ClaudeHomeServer.Tests` гарантирует, что тестовая сборка с её
+        // Исключение `*.Tests` гарантирует, что любая тестовая сборка (сейчас их
+        // четыре: `ClaudeHomeServer.Tests`, `ClaudeHomeServer.Video.Tests`,
+        // `ClaudeHomeServer.Yandex.Tests`, `ClaudeHomeServer.Reader.Tests`) с её
         // стабами не путается с продовыми типами. Статический конструктор форсирует
-        // загрузку Main до этого момента (см. комментарий там).
+        // загрузку всех вертикальных сборок до этого момента (см. комментарий там).
         var assemblies = AppDomain.CurrentDomain.GetAssemblies()
             .Where(a =>
             {
                 var name = a.GetName().Name;
                 return name is not null
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
-                    && name != "ClaudeHomeServer.Tests"
-                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+                    && !name.EndsWith(".Tests", StringComparison.Ordinal);
             })
             .ToList();
 

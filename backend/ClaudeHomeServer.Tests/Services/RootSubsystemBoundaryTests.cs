@@ -1,5 +1,4 @@
-﻿using System.Reflection;
-using FluentAssertions;
+﻿using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -65,11 +64,13 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class RootSubsystemBoundaryTests
 {
-    // Загрузка Main — иначе AppDomain.CurrentDomain.GetAssemblies() её не увидит
-    // (см. комментарий в SubsystemBoundaryTests).
+    // Форс-загрузка всех вертикальных сборок (Main плюс вынесенные .Reader/.Yandex/.Video).
+    // Подробности см. в комментарии к статическому конструктору SubsystemBoundaryTests.
     static RootSubsystemBoundaryTests()
     {
         _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
     }
 
     /// <summary>Неймспейсы, на которые ЛЮБОЙ root-тип имеет право ссылаться
@@ -287,8 +288,7 @@ public class RootSubsystemBoundaryTests
                 var name = a.GetName().Name;
                 return name is not null
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
-                    && name != "ClaudeHomeServer.Tests"
-                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+                    && !name.EndsWith(".Tests", StringComparison.Ordinal);
             })
             .ToList();
 

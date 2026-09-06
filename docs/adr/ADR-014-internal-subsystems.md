@@ -8,7 +8,7 @@
 **Реализация:** Денис (бэкенд)
 **Связанные артефакты:**
 [IAppSubsystem.cs](../../backend/ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs),
-[VideoSubsystem.cs](../../backend/ClaudeHomeServer/Services/Video/VideoSubsystem.cs),
+[VideoSubsystem.cs](../../backend/ClaudeHomeServer.Video/VideoSubsystem.cs),
 [SubsystemBoundaryTests.cs](../../backend/ClaudeHomeServer.Tests/Services/SubsystemBoundaryTests.cs)
 (новый — рефлексия границ вертикалей)
 

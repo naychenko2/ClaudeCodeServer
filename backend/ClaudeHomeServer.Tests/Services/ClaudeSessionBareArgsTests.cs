@@ -730,6 +730,26 @@ public class ClaudeSessionBareArgsTests : IDisposable
             .Which.Should().Be(("info", $"BareMode: взята проектная карта {projectLocal} (22 байт)"));
     }
 
+    // СТОРОЖ УНИКАЛЬНОСТИ: флаг --system-prompt-file обязан идти в аргументах CLI
+    // ровно один раз. Мутация: добавить второй args.Add("--system-prompt-file") в
+    // BuildBareModeArgs → count = 2 → RED.
+    [Fact]
+    public void BareMode_ФлагSystemPromptFile_ИдётРовноОдинРаз()
+    {
+        var (full, rel) = CreateServerPromptFile();
+
+        var args = Build(rel, bareTools: null, serverRoot: ServerRoot,
+            out var warning, out var effective);
+
+        // Флаг --system-prompt-file обязан присутствовать ровно один раз (не дублироваться)
+        var count = args.Count(a => a == "--system-prompt-file");
+        count.Should().Be(1,
+            "--system-prompt-file не должен дублироваться в аргументах CLI (факт: {0})", count);
+        // Путь карты также обязан встретиться ровно один раз
+        args.Count(a => a == full).Should().Be(1,
+            "путь карты не должен дублироваться в аргументах CLI");
+    }
+
     // Тестовый logger, копит сообщения в список — для проверки логирования размера.
     private sealed class ListLogger(List<(string Category, string Message)> sink) : ILogger
     {

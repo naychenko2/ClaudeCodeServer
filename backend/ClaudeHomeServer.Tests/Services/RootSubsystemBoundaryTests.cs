@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -234,7 +234,10 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore+Entry",
         // Telemetry (бывший префикс, заменён точечным допуском):
         // `PersonasCrudService`/`OnboardingController`/`ProjectPresetsController`
-        // зовут `ServerMetrics.Record*` из тел методов.
+        // зовут `ServerMetrics.Record*` из тел методов. Запись ДЕКОРАТИВНА и оставлена
+        // как документация: финальное правило сторожа ниже флагает только
+        // `ClaudeHomeServer.Services.*`, поэтому `ClaudeHomeServer.Telemetry` не гейтится
+        // здесь вовсе — как `Hubs`/`Protocol`/`Controllers`. Гейт живёт в сторожа вертикалей.
         "ClaudeHomeServer.Telemetry.ServerMetrics",
     };
 
@@ -318,8 +321,8 @@ public class RootSubsystemBoundaryTests
             var seen = new HashSet<(string, string)>();
 
             // Сначала рефлексия (поля/конструкторы/сигнатуры), затем IL-скан тел
-            // методов. Обход nested-типов обязателен: без него сторож видит 2 из 7
-            // известных швов (см. docs/research/il-boundary-scan-2026-09.md §«Критично»).
+            // методов. Обход nested-типов обязателен: без него сторож видит 4 из 7
+            // известных швов (docs/research/il-boundary-scan-2026-09.md, раздел про слепые пятна).
             foreach (var referenced in CollectReferencedTypes(type)
                 .Concat(IlScanReferencedTypes(type)))
             {
@@ -380,7 +383,7 @@ public class RootSubsystemBoundaryTests
 
         violations.Should().BeEmpty(
             "типы из корня ClaudeHomeServer.Services должны ссылаться только на спинку " +
-            "(System.*, Microsoft.*, Models, Services.Http/Composition/Mcp/Telemetry/Protocol) или на другие " +
+            "(System.*, Microsoft.*, Models, Services.Http/Composition/Mcp, Protocol) или на другие " +
             "top-level root-типы. Любая ссылка на подсистемные вертикали " +
             "(Services.Knowledge, Services.Llm, Services.Dossiers и т.д.) — нарушение " +
             "архитектурного правила (см. CLAUDE.md/ADR-014). " +

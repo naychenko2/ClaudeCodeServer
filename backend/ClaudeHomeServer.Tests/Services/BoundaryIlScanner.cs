@@ -20,8 +20,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// (async-state-машины <c>Foo+&lt;BarAsync&gt;d__12</c>, замыкания
 /// <c>Foo+&lt;&gt;c__DisplayClass3_0</c>) попадают в выборку автоматически,
 /// потому что у них тот же <c>Namespace</c>, что у родителя. Без обхода nested-типов
-/// сторож видит 2 из 7 известных швов и выглядит декоративным — см. разведку
-/// `docs/research/il-boundary-scan-2026-09.md` §«Критично».
+/// сторож видит 4 из 7 известных швов и выглядит рабочим — см. разведку
+/// `docs/research/il-boundary-scan-2026-09.md`, раздел про слепые пятна CLAUDE.md.
 /// </summary>
 internal static class BoundaryIlScanner
 {

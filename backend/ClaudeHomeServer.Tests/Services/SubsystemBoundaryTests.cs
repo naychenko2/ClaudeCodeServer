@@ -42,7 +42,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// публичных методов И тела методов (IL-скан через <see cref="BoundaryIlScanner"/>).
 /// Поэтому видны: статические вызовы, резолвы <c>sp.GetRequiredService&lt;T&gt;()</c>,
 /// вызовы из async-state-машинок и замыканий. Обход вложенных типов обязателен:
-/// без него 5 из 7 известных швов остаются невидимыми.
+/// без него 3 из 7 известных швов остаются невидимыми.
 ///
 /// Что НЕ проверяется осознанно: интерфейсы и базовые классы (за пределами четырёх мест
 /// ниже). Если потребуется — расширим в следующем шаге.
@@ -185,8 +185,9 @@ public class SubsystemBoundaryTests
         // `ImageBackfillService.cs:34-37`.
         // Прочие соседи по корню (`FalImageService`, `ImageAssetHelper`) — отдельные
         // единицы из корня, но ImagesSubsystem ссылается на них через интерфейс
-        // `IImageGenerator` (своя вертикаль) и через static-вызовы; рефлексия их не
-        // видит как ссылки из Images-типов.
+        // `IImageGenerator` (своя вертикаль) и через static-вызовы. Прежде рефлексия их
+        // не видела; после волны 1 IL-скан видит — потому `ImageAssetHelper` и стоит
+        // в допуске ниже, а не держится на слепоте сторожа.
         // `ClaudeHomeServer.Hubs` — нужен `IHubContext<SessionHub>` (событие
         // `image_backfilled` едет в ленту персоны).
         // Точечный допуск к `ClaudeHomeServer.Protocol`: `ImageBackfilledMessage`
@@ -291,8 +292,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ProjectFileSessionsIndex",
                     // Точечные зависимости из тел методов (IL-видимость, задача `8beee75e`):
-                    // `GitService.cs:72` зовёт `FileService.SafeJoin(...)` static-метод,
-                    // `GitServerService.cs:212` резолвит `PersonaManager` для автора коммита,
+                    // `GitService.cs:73` зовёт `FileService.SafeJoinPublic(...)` static-метод,
+                    // `GitServerService.cs:213` зовёт `PersonaManager.Slugify(name)` — имя репозитория,
+                    //    а не автор коммита (обоснование выправлено по факту, ревью 894e3ec9),
                     // `CommitAttributionService` материализует `SessionChangedPaths`
                     // в поле async-state-машины. Все три — «вертикаль → спинка»
                     // (root-инфраструктура), по аналогии с `Memory`/`Tasks`/`Dossiers`.
@@ -315,7 +317,7 @@ public class SubsystemBoundaryTests
         //    шов стал видимым и нужен явный допуск. Префикс `Services.Knowledge`
         //    НЕ открываем: точечный допуск ровно на нужный тип.
         // 3) Execution — LocalProcessRunner (инверсия стека, задача `8beee75e`):
-        //    `TypeScriptGraphProvider.cs:149` зовёт `LocalProcessRunner.ResolveExecutable("node")`
+        //    `TypeScriptGraphProvider.cs:155` зовёт `LocalProcessRunner.ResolveExecutable("node")`
         //    static-метод из тела метода. Это задача слоя Execution, и шов
         //    требует выноса `ResolveExecutable` в спину (по образцу `TranscriptRoots`
         //    из волны 4C). TODO: шаг 5 отдельной задачей.
@@ -355,8 +357,9 @@ public class SubsystemBoundaryTests
         //    мьютекс `Global\ccs-deploy`. Это инфраструктурный примитив общего назначения
         //    (мьютекс деплоя), а не зависимость от логики Backup, и СОЗНАТЕЛЬНО выходит
         //    за рамки обычной рефлексии: доступ к статическому члену через точку не
-        //    попадает в поля/конструкторы/return-типы, и без явного allow-list сторож
-        //    этот шов пропустит. TODO на шов: выделить мьютекс в отдельный примитив
+        //    попадает в поля/конструкторы/return-типы. После волны 1 IL-скан его видит,
+        //    поэтому допуск обязателен — сторож БОЛЬШЕ НЕ ПРОПУСТИТ этот шов молча.
+        //    TODO на шов: выделить мьютекс в отдельный примитив
         //    (например, `DeployAgentLock` в `Services.Composition`) и убрать из allow-list
         //    ссылку на `Services.Backup`.
         new object[]
@@ -410,8 +413,9 @@ public class SubsystemBoundaryTests
         // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
         //    флаг `Icon.Glyph` в доменной модели проекта). `BackupCore.Snapshot` /
         //    `BackupContext.FromConfiguration` в `ProjectIconMigration` — статические
-        //    вызовы из тел методов; рефлексия стражей их НЕ видит (см. «Известное
-        //    ограничение»), выделение мьютекса бэкапа в шов — отдельная задача.
+        //    вызовы из тел методов: прежде были невидимы рефлексии, после волны 1 их
+        //    видит IL-скан — отсюда допуски ниже. Выделение примитивов бэкапа в шов —
+        //    отдельная задача (инверсия стека, шаг 5).
         new object[]
         {
             new VerticalBoundary(
@@ -435,7 +439,7 @@ public class SubsystemBoundaryTests
                     // логикой Backup.
                     "ClaudeHomeServer.Services.Backup.BackupResult",
                     // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `ProjectIconMigration.cs:55` ссылается на `BackupContext`
+                    // `ProjectIconMigration.cs:73` ссылается на `BackupContext`
                     // static-метод и `BackupCore.Snapshot(...)` (последний — через
                     // declaring-тип `BackupCore`). Шов уже зафиксирован через
                     // `BackupResult` (return-тип), теперь видим сами `BackupCore`
@@ -1794,8 +1798,8 @@ public class SubsystemBoundaryTests
             // IL-скан тел методов (см. BoundaryIlScanner): ловит статические вызовы,
             // DI-резолвы `sp.GetRequiredService<T>()`, generic-аргументы инстанцированных
             // методов. Обход nested-типов (async-state-машины `<...>d__NN`,
-            // `<>c__DisplayClass`) обязателен — без него сторож видит 2 из 7
-            // известных швов (см. docs/research/il-boundary-scan-2026-09.md §«Критично»).
+            // `<>c__DisplayClass`) обязателен — без него сторож видит 4 из 7
+            // известных швов (docs/research/il-boundary-scan-2026-09.md, раздел про слепые пятна).
             foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
             {
                 foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
@@ -1818,7 +1822,8 @@ public class SubsystemBoundaryTests
         violations.Should().BeEmpty(
             $"типы из {boundary.NamespaceRoot} должны ссылаться только на спинку " +
             "(System.*, Microsoft.*, Models) и явно разрешённые служебные вертикали " +
-            "(Services.Http/Composition/Mcp/Telemetry/Protocol) либо на самих себя. " +
+            "(Services.Http/Composition/Mcp, Protocol; Telemetry — только тремя точечными "
+            + "допусками, префикса у неё нет) либо на самих себя. " +
             "Любая ссылка на прочие Services.* — нарушение архитектурного правила " +
             "(см. CLAUDE.md/ADR-014). Найденные нарушения:\n" +
             string.Join("\n", violations));
@@ -2023,13 +2028,31 @@ public class SubsystemBoundaryTests
     /// (контракт подсистем, файловый стор, http-обвязка, secret-стор, guard'ы) плюс
     /// два перенесённых примитива в <c>Models</c>. Вертикалям тут места нет.
     /// </summary>
+    /// <remarks>
+    /// Корневого <c>ClaudeHomeServer.Services</c> здесь НЕТ намеренно: под ним в Main
+    /// живут вертикали, и одного этого неймспейса хватило бы, чтобы спрятать вертикаль
+    /// в спинке уровнем выше (ревью 894e3ec9 доказало мутацией — сторож молчал).
+    /// Четыре корневых примитива Core пришпилены поимённо в <see cref="CoreAllowedRootTypes"/>.
+    /// </remarks>
     private static readonly string[] CoreAllowedNamespaces =
     [
         "ClaudeHomeServer.Models",
-        "ClaudeHomeServer.Services",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Mcp",
+    ];
+
+    /// <summary>
+    /// Единственные типы, которым позволено лежать в Core прямо в корневом
+    /// <c>ClaudeHomeServer.Services</c>. Список закрытый и поимённый: пятый примитив
+    /// здесь — осознанное решение, а не побочный эффект переноса файла.
+    /// </summary>
+    private static readonly string[] CoreAllowedRootTypes =
+    [
+        "ClaudeHomeServer.Services.JsonFileStore",
+        "ClaudeHomeServer.Services.PermissionModeGuard",
+        "ClaudeHomeServer.Services.SsrfGuard",
+        "ClaudeHomeServer.Services.TeamProtocolMarkers",
     ];
 
     /// <summary>
@@ -2060,7 +2083,8 @@ public class SubsystemBoundaryTests
         Assert.NotEmpty(types); // защита от вакуумного прохода: пустой набор зеленит что угодно
 
         var strays = types
-            .Where(t => !CoreAllowedNamespaces.Contains(t.Namespace!, StringComparer.Ordinal))
+            .Where(t => !CoreAllowedNamespaces.Contains(t.Namespace!, StringComparer.Ordinal)
+                     && !CoreAllowedRootTypes.Contains(t.FullName ?? "", StringComparer.Ordinal))
             .Select(t => $"{t.FullName} (namespace {t.Namespace})")
             .Distinct(StringComparer.Ordinal)
             .ToArray();

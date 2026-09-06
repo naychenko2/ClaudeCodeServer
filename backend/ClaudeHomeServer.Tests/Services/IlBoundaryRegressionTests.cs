@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// волна 1) IL-скан ОБЯЗАН находить 7 известных швов, которые прежние рефлексионные
 /// сторожа не видели. Без этого теста свежее изменение логики обхода тел методов
 /// или вложенных типов могло бы пройти молча — сторож выглядел бы работающим,
-/// но фактически стал декоративным (5 из 7 швов живут во вложенных типах:
+/// но фактически стал декоративным (3 из 7 швов живут во вложенных типах:
 /// async-state-машинах <c>Foo+&lt;BarAsync&gt;d__12</c>, замыканиях
 /// <c>Foo+&lt;&gt;c__DisplayClass3_0</c>).
 ///
@@ -53,7 +53,7 @@ public class IlBoundaryRegressionTests
             var t = Find(asms, typeName);
             if (t is null) { missed.Add($"{label}: тип {typeName} не найден"); continue; }
 
-            // Обход nested-типов выполняет AllMethodsWithNested: 5 из 7 швов
+            // Обход nested-типов выполняет AllMethodsWithNested: 3 из 7 швов
             // живут во вложенных async-state-машинах и замыканиях. Если сломать
             // обход в сканере, тест станет красным.
             var hits = BoundaryIlScanner.AllMethodsWithNested(t)

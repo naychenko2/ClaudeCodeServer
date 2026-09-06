@@ -1,3 +1,4 @@
+using System.Reflection;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -166,6 +167,67 @@ public class ChatArchiveFlagTests : IDisposable
         chat.Topic.Should().Be("Cat");
     }
 
+    // --- Сторож: доводка статуса не выводит чат из архива ---
+
+    [Fact]
+    public async Task СменаСтатусаПослеАрхивации_НеВыводитЧатИзАрхива()
+    {
+        // Инцидент 06.09.2026: чат убрали в архив сразу после ответа, а через полминуты
+        // статус доводится до терминального (exited прогона либо sweep-терминус
+        // Active→Finished по grace) — безусловный UpdatedAt возвращал чат из архива и метил
+        // его непрочитанным (UpdatedAt > LastReadAt), хотя в чат ничего не писалось
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        chat.LastReadAt = chat.UpdatedAt;
+        chat.Status = SessionStatus.Active; // result хода уже пришёл, exited — ещё нет
+        sut.SetArchived(chat.Id, archived: true, by: "user");
+        var updatedAt0 = chat.UpdatedAt;
+
+        await InvokeOnMessageAsync(sut, chat.Id, new ExitedMessage());
+
+        chat.Status.Should().Be(SessionStatus.Finished, "статус доводится и у архивного чата");
+        chat.UpdatedAt.Should().Be(updatedAt0, "доводка статуса — не активность разговора");
+        chat.IsArchived.Should().BeTrue("архив держится, пока в чат не написали");
+        chat.LastReadAt.Should().Be(chat.UpdatedAt, "чат не становится непрочитанным сам собой");
+    }
+
+    [Fact]
+    public async Task СменаСтатуса_ОбычныйЧат_ДвигаетUpdatedAt()
+    {
+        // Контроль гейта: у неархивного чата отметка времени обязана двигаться — по ней
+        // идут сортировка списка и непрочитанность идущего хода
+        var (sut, projects) = BuildSut();
+        var chat = NewChat(sut, projects);
+        chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        chat.Status = SessionStatus.Active;
+        var updatedAt0 = chat.UpdatedAt;
+
+        await InvokeOnMessageAsync(sut, chat.Id, new ExitedMessage());
+
+        chat.Status.Should().Be(SessionStatus.Finished);
+        chat.UpdatedAt.Should().BeAfter(updatedAt0);
+    }
+
+    // --- Сторож: одиночный подбор значка ---
+
+    [Fact]
+    public async Task SetChatIconAsync_АрхивныйЧат_СтавитЗначок_НеВыводяИзАрхива()
+    {
+        // Пакетный прогон архивные отсекает предфильтром, а одиночный вызов («Подобрать
+        // значок» у конкретного чата) доходил до записи UpdatedAt и возвращал чат из архива
+        var (sut, projects) = BuildSut(new CountingCheapRunner("{\"iconName\": \"Cat\"}"));
+        var chat = NewChatWithHistory(sut, projects);
+        sut.SetArchived(chat.Id, archived: true, by: "user");
+        var updatedAt0 = chat.UpdatedAt;
+
+        var updated = await sut.SetChatIconAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        updated!.Topic.Should().Be("Cat");
+        updated.UpdatedAt.Should().Be(updatedAt0, "значок — не активность разговора");
+        updated.IsArchived.Should().BeTrue();
+    }
+
     // --- RetitleAsync и UpdateAsync у архивного чата ---
 
     [Fact]
@@ -257,6 +319,15 @@ public class ChatArchiveFlagTests : IDisposable
     // История последней сборки BuildSut: тестам RetitleAsync нужна для записи переписки.
     // Каждый тест зовёт BuildSut ровно раз, поэтому «последняя» здесь = «своя».
     private ChatHistoryService? _historyForBuild;
+
+    // Событие хода мимо живого процесса CLI: OnMessageAsync — единственный путь к
+    // ApplyStatusAsync, а он private (тот же приём, что в SessionManagerTests)
+    private static async Task InvokeOnMessageAsync(SessionManager sut, string sessionId, ServerMessage msg)
+    {
+        var method = typeof(SessionManager).GetMethod("OnMessageAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)method.Invoke(sut, [sessionId, new TurnAccumulator(new List<StoredMessage>()), msg, 0L])!;
+    }
 
     private (SessionManager Sut, ProjectManager Projects) BuildSut(ICheapTextRunner? cheap = null)
     {

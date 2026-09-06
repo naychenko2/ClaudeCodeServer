@@ -3706,6 +3706,10 @@ public class SessionManager : IDisposable
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
         if (localVoice)
         {
+            // Отметка активности: у CLI-ветки её ставит адаптер (SendMessageAsync), а
+            // локальный ход идёт мимо него — без явной записи архивный чат остался бы в
+            // архиве (ApplyStatusAsync его больше не двигает)
+            entry.Info.UpdatedAt = DateTime.UtcNow;
             _ = Task.Run(async () =>
             {
                 try { await RunLocalVoiceTurnAsync(sessionId, entry); }
@@ -5025,7 +5029,9 @@ public class SessionManager : IDisposable
         // чата — не перезаписываем то, что уже стоит
         if (!string.IsNullOrEmpty(entry.Info.Topic)) return entry.Info;
         entry.Info.Topic = iconName;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Архивный чат из архива не выводим — зеркало гейта в RetitleAsync и предфильтра
+        // пакетного прогона (SetChatIconsAsync): значок — не активность разговора
+        if (!entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         // Имя не менялось — шлём его же: событие переносит и значок, отдельного не заводим
         await BroadcastChatRenamedAsync(sessionId, entry.Info, entry.Info.Name ?? "");
@@ -9623,11 +9629,19 @@ public class SessionManager : IDisposable
         await BroadcastSessionMessageAsync(sessionId, broadcast);
     }
 
-    // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам
+    // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам.
+    //
+    // Архивный чат сменой статуса из архива НЕ выводим (как RetitleAsync/UpdateAsync): статус
+    // доводится и после того, как ход кончился, — sweep-терминус Active→Finished ждёт grace и
+    // срабатывает на ближайшем SaveSessions, то есть до минуты спустя. Чат, убранный в архив
+    // сразу после ответа, эта доводка возвращала обратно (UpdatedAt > ArchivedAt) и метила
+    // непрочитанным (UpdatedAt > LastReadAt) — инцидент 06.09.2026. Настоящая активность
+    // архива не теряет: отметку времени ставит приём сообщения (адаптер SendMessageAsync,
+    // локальный голосовой ход — SendDirectAsync), и до статусов чат уже не архивный.
     private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status)
     {
         entry.Info.Status = status;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        if (!entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastStatusChangeAsync(sessionId, entry.Info,
             status, entry.Info.LastMessage, entry.Info.MessageCount);

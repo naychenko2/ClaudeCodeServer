@@ -682,9 +682,10 @@ public class SubsystemBoundaryTests
         //    `watchdogs_changed` (WatchdogNotifier.cs:22-23);
         // 3) Точечный допуск к `ClaudeHomeServer.Protocol`: `WatchdogsChangedMessage`
         //    (WatchdogNotifier.cs:3) — единственный тип протокола, на который ссылается
-        //    вертикаль. Префикс `ClaudeHomeServer.Protocol` снят (волна 3), чтобы
-        //    сторож ловил новые зависимости от любых из ~105 публичных типов протокола
-        //    (включая десктопный `DesktopCallCommand`/`DeviceHello`).
+        //    вертикаль. Префикс `ClaudeHomeServer.Protocol` возвращён в
+        //    `SharedAllowedPrefixes` (волна 1 IL-сторожа, 2026-09-06, задача `8beee75e`;
+        //    решение зафиксировано в ADR-014 §«Решение по Protocol`), точечный допуск
+        //    оставлен как документация явного шва для будущих ревью.
         // 4) Допуски к корню Services — точные: серверные сторожа должны знать про чаты,
         //    проекты, юзеров и домашние папки, чтобы гаситься при удалении/архивации
         //    и резолвить рабочий каталог опроса. Это «вертикаль → спинка» (общая
@@ -1664,8 +1665,10 @@ public class SubsystemBoundaryTests
         //    `{username}:notes`).
         // 7) Точечный допуск к `ClaudeHomeServer.Protocol` — `NotesChangedMessage` в
         //    `NoteTaskSyncService.BroadcastNoteChangedAsync` (материал-аргумент `SendAsync`,
-        //    поле state-машины). Префикс `ClaudeHomeServer.Protocol` снят (волна 3),
-        //    оставлен точный тип по образцу швов у `Spend`/`Memory`/`Dossiers`/`Watchdog`/`Terminal`.
+        //    поле state-машины). Префикс `ClaudeHomeServer.Protocol` возвращён в
+        //    `SharedAllowedPrefixes` (волна 1 IL-сторожа, 2026-09-06, задача `8beee75e`;
+        //    решение зафиксировано в ADR-014 §«Решение по Protocol»), оставлен точный
+        //    тип как документация явного шва по образцу `Spend`/`Memory`/`Dossiers`/`Watchdog`/`Terminal`.
         // 8) `FileService` (Services/ корень) — `NotesService` зовёт
         //    `FileService.SafeJoinPublic(...)` из 12 мест тел методов
         //    (NotesService.cs:128,133,498,653,660,724,767,780,814,815,874,889,903,920,1005

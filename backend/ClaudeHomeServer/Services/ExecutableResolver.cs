@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services;
+﻿namespace ClaudeHomeServer.Services;
 
 // Поиск команды по PATH с подстановкой расширений PATHEXT — как это делает cmd:
 // в каждом каталоге перебираются все расширения, и лишь потом берётся следующий.
@@ -9,9 +9,13 @@ namespace ClaudeHomeServer.Services;
 // был швом между вертикалями; теперь TypeScriptGraphProvider берёт примитив из
 // спинки `Services.ExecutableResolver` и `CodeGraph` зависит только от корня Services.
 //
-// Тесты, которые гоняли правило через `LocalProcessRunner.FindInPath(...)`, переехали
-// на `ExecutableResolver.FindInPath(...)` (старое имя оставлено тонкой обёрткой в
-// LocalProcessRunner ради совместимости существующих внешних вызовов).
+// Тесты правила живут на `LocalProcessRunner.FindInPath(...)` и
+// `LocalProcessRunner.ResolveExecutable(...)` в `LocalProcessRunnerPathTests`.
+// Сам `LocalProcessRunner` — тонкая обёртка над `ExecutableResolver`
+// (`LocalProcessRunner.cs:65+`), и обе функции тестов проверяют контракт
+// сквозь неё; правки в `ExecutableResolver` сразу видны по красным тестам.
+// Отдельный `ExecutableResolverTests` не заведён — тесты проверяют контракт
+// через обёртку, как и для большинства других примитивов спинки.
 public static class ExecutableResolver
 {
     /// <summary>Развернуть имя исполняемого файла в полный путь по PATH+PATHEXT.

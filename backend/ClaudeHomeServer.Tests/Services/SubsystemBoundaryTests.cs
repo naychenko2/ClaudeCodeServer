@@ -225,6 +225,12 @@ public class SubsystemBoundaryTests
                     // ImageBackfilledMessage (объявлен в самой вертикали,
                     // ImageBackfillService.cs:21).
                     "ClaudeHomeServer.Protocol.ServerMessage",
+                    // ImageAssetHelper (Services/ImageAssetHelper.cs) — IL-видимость
+                    // (задача `8beee75e`): `ImageBackfillService` зовёт
+                    // `ImageAssetHelper.SaveAsync(...)` static-метод из тела метода
+                    // (видимо IL-сканом). Точечный допуск по образцу `Tasks → FileService`:
+                    // «вертикаль → спинка» (root-инфраструктура).
+                    "ClaudeHomeServer.Services.ImageAssetHelper",
                 }),
         },
         // Tts — вертикаль озвучки голосового режима чата. Допуск к корню Services
@@ -297,6 +303,15 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ProjectFileSessionsIndex",
+                    // Точечные зависимости из тел методов (IL-видимость, задача `8beee75e`):
+                    // `GitService.cs:72` зовёт `FileService.SafeJoin(...)` static-метод,
+                    // `GitServerService.cs:212` резолвит `PersonaManager` для автора коммита,
+                    // `CommitAttributionService` материализует `SessionChangedPaths`
+                    // в поле async-state-машины. Все три — «вертикаль → спинка»
+                    // (root-инфраструктура), по аналогии с `Memory`/`Tasks`/`Dossiers`.
+                    "ClaudeHomeServer.Services.FileService",
+                    "ClaudeHomeServer.Services.PersonaManager",
+                    "ClaudeHomeServer.Services.SessionChangedPaths",
                 }),
         },
         // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
@@ -305,12 +320,18 @@ public class SubsystemBoundaryTests
         // Допуски к корню Services — точечные:
         // 1) `ProjectManager` (Services/ корень) — граф зависит от проектов
         //    (`CodeGraphService.cs:43` параметр ctor и поле `_projects:15`).
-        // `WorkspaceKnowledgeStore.NormalizePath` — статический вызов из тел методов
-        // `CodeGraphService`/`/QueryService`/`/PromptProvider` (невидим рефлексии,
-        // см. «Известное ограничение» в шапке файла); шов через `WorkspaceKnowledgeStore`
-        // оставляем как есть, отдельный allow-list под static-вызов не нужен.
-        // `LocalProcessRunner.ResolveExecutable("node")` в `TypeScriptGraphProvider:155` —
-        // аналогичный static-вызов из `Services.Execution`, рефлексия его не видит.
+        // 2) Knowledge — WorkspaceKnowledgeStore: IL-видимость (задача `8beee75e`).
+        //    `CodeGraphService`/`QueryService`/`PromptProvider` зовут
+        //    `WorkspaceKnowledgeStore.NormalizePath(...)` static-метод из тел методов
+        //    (все три класса, видимо IL-сканом). Шов был задокументирован в комментарии
+        //    раньше как «отдельный allow-list под static-вызов не нужен» — с IL-сканом
+        //    шов стал видимым и нужен явный допуск. Префикс `Services.Knowledge`
+        //    НЕ открываем: точечный допуск ровно на нужный тип.
+        // 3) Execution — LocalProcessRunner (инверсия стека, задача `8beee75e`):
+        //    `TypeScriptGraphProvider.cs:149` зовёт `LocalProcessRunner.ResolveExecutable("node")`
+        //    static-метод из тела метода. Это задача слоя Execution, и шов
+        //    требует выноса `ResolveExecutable` в спину (по образцу `TranscriptRoots`
+        //    из волны 4C). TODO: шаг 5 отдельной задачей.
         new object[]
         {
             new VerticalBoundary(
@@ -325,6 +346,8 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
+                    "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
+                    "ClaudeHomeServer.Services.Execution.LocalProcessRunner",
                 }),
         },
         // Deploy — вертикаль выкатки прода (ADR-010 + трей-раннер из веб-морды).
@@ -425,6 +448,14 @@ public class SubsystemBoundaryTests
                     // открывать вертикаль Backup целиком: миграция значков пользуется
                     // инфраструктурным примитивом снятия снимка, а не логикой Backup.
                     "ClaudeHomeServer.Services.Backup.BackupResult",
+                    // === IL-видимость (задача `8beee75e`, волна 1).
+                    // `ProjectIconMigration.cs:55` ссылается на `BackupContext`
+                    // static-метод и `BackupCore.Snapshot(...)` (последний — через
+                    // declaring-тип `BackupCore`). Шов уже зафиксирован через
+                    // `BackupResult` (return-тип), теперь видим сами `BackupCore`
+                    // и `BackupContext`. TODO: вынести в спину (шаг 5).
+                    "ClaudeHomeServer.Services.Backup.BackupContext",
+                    "ClaudeHomeServer.Services.Backup.BackupCore",
                 }),
         },
         // Spend — аналитика расхода токенов (Spend Analytics v2). Самая «толстая» по
@@ -549,6 +580,20 @@ public class SubsystemBoundaryTests
                     // Knowledge (Program.cs:~688) — кросс-вертикальный клей.
                     "ClaudeHomeServer.Services.Knowledge.KnowledgeSyncTarget",
                     "ClaudeHomeServer.Protocol.StoredMessage",
+                    // === Точечные допуски IL-видимости (задача `8beee75e`, волна 1).
+                    // `DossierCaptureService` материализует `SessionSummaryService`
+                    // (статический вызов `SessionSummaryService.BuildTranscript` из тела
+                    // метода — по аналогии с `Memory → SessionSummaryService`, который
+                    // уже был зафиксирован; теперь Dossiers — второй потребитель).
+                    "ClaudeHomeServer.Services.SessionSummaryService",
+                    // `DossierRecallService` материализует `SessionChangedPaths`
+                    // (поле async-state-машины). Точечный допуск по образцу Git.
+                    "ClaudeHomeServer.Services.SessionChangedPaths",
+                    // `InstanceSecretsProvider` ссылается на `BackupPaths` static-метод —
+                    // путь к секретам инстанса. Инфраструктурный примитив (как
+                    // `Backup.InstanceLock` для Deploy), а не логика Backup. TODO:
+                    // вынести в спину по образцу `TranscriptRoots` (шаг 5 отдельной задачей).
+                    "ClaudeHomeServer.Services.Backup.BackupPaths",
                 }),
         },
         // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Сторож проверяет
@@ -620,6 +665,10 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Controllers.KnowledgeBaseSummary",
                     "ClaudeHomeServer.Controllers.KnowledgeBaseDetail",
                     "ClaudeHomeServer.Controllers.KnowledgeDocumentDto",
+                    // FileMutationKind (Services/FileService.cs) — IL-видимость
+                    // (задача `8beee75e`): `ProjectKnowledgeSyncService` материализует
+                    // enum в поле async-state-машины. Точечный допуск по образцу Git.
+                    "ClaudeHomeServer.Services.FileMutationKind",
                 }),
         },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
@@ -672,6 +721,14 @@ public class SubsystemBoundaryTests
                     // WatchdogNotifier.cs:3 — поле async-state-машины
                     // WatchdogNotifier+<BroadcastAsync>d__8 (локал msg переживает await).
                     "ClaudeHomeServer.Protocol.WatchdogsChangedMessage",
+                    // SendOutcome nested-типы (задача `8beee75e`): `WatchdogAlarm`
+                    // материализует `Completed`/`Queued`/`Running` в async-state-машине
+                    // (поле `<DeliverAsync>d__N`). Раньше сторож видел только `SendOutcome`
+                    // (базовый record), nested-варианты — нет, теперь видит.
+                    // Шов уже зафиксирован через `+SendOutcome`, дописываем nested-типы.
+                    "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Completed",
+                    "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Queued",
+                    "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Running",
                 }),
         },
         // Memory — долгая память персон и общая память команды проекта. Подсистема
@@ -820,6 +877,27 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.SessionManager+ReportUpResult",
+                    // === IL-видимость (задача `8beee75e`, волна 1).
+                    // `TeamPlanFileRenderer.cs:112` зовёт `FileService.SafeJoin(...)`
+                    // static-метод из тела метода — точечный допуск по образцу
+                    // `Tasks → FileService` (вертикаль → спинка).
+                    "ClaudeHomeServer.Services.FileService",
+                    // `TeamPlanningService.cs:146` материализует `SpecialtyCatalog`
+                    // (статический класс из корня) в async-state. По прецеденту Llm
+                    // (тоже `SpecialtyCatalog`) — фиксируем шов явно, иначе IL-скан
+                    // поймает как нарушение.
+                    "ClaudeHomeServer.Services.SpecialtyCatalog",
+                    // `TeamEnableService.cs:69`/`TeamStateService.cs:196` зовут
+                    // `SessionModeConflictException` static-метод из тел методов
+                    // (permission-гард, шаг 2г-3 этапа 4). Точечный допуск.
+                    "ClaudeHomeServer.Services.SessionModeConflictException",
+                    // ⚠ ИНВЕРСИЯ СЛОЁВ `Team → Controllers` через extension-метод
+                    // `TaskHubExtensions` (TaskWaveService.cs:165,370,649 — `DropSubtaskAsync`,
+                    // `LaunchReissueAsync`, `StartWaveCoreAsync`). Брат-двойник
+                    // `Tasks → TaskHubExtensions` (уже в Tasks allow-list с пометкой
+                    // «⚠ ИНВЕРСИЯ СЛОЁВ, разбор — этап 4»). Тот же extension-метод,
+                    // тот же диагноз — разбор той же задачей.
+                    "ClaudeHomeServer.Controllers.TaskHubExtensions",
                 }),
         },
         // === Шаг 0 волны 4: пять целевых + семь найденных Coverage-тестом неймспейсов,
@@ -914,6 +992,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
+                    "ClaudeHomeServer.Services.FileService",
+                    "ClaudeHomeServer.Services.SessionSummaryService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.SessionManager",
@@ -938,6 +1018,7 @@ public class SubsystemBoundaryTests
                     //    `Knowledge`/`Deploy`).
                     "ClaudeHomeServer.Services.SpecialtyTemplate",
                     "ClaudeHomeServer.Services.SpecialtyPromptPresets+SectionMeta",
+                    "ClaudeHomeServer.Services.SpecialtyCatalog+Entry",
                     // Шов на статические классы каталога специальностей — см. комментарий
                     // выше перед Allow-list Llm. Сейчас `SpecialtySettingsStore.cs:185,195,222,
                     // 240,268,271-275,309-312,483,496,512,542,573,616,620-626,637-638,651,691,
@@ -954,6 +1035,10 @@ public class SubsystemBoundaryTests
                     // Spend — ISpendCollector пишут все четыре ход-раннера (cloud-cheap,
                     // Ollama/LlamaServer и OneShot-Claude). Префикс не открываем.
                     "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                    // PromptSnapshotStore (Services/PromptSnapshotStore.cs) — ClaudeSession
+                    // материализует тип в async-state `<RunTurnAsync>d__154.MoveNext`
+                    // (статический вызов `PromptSnapshotStore.Save(...)` из тела метода).
+                    "ClaudeHomeServer.Services.PromptSnapshotStore",
                     // TranscriptRoots — реестр корней транскриптов (волна 4C, шаг 4).
                     // Вынесен из WorkflowAgentParser в спину `Services.TranscriptRoots`,
                     // чтобы устранить цикл Llm ⇄ Execution. Llm держит шов
@@ -961,6 +1046,32 @@ public class SubsystemBoundaryTests
                     // через вызовы `TranscriptRoots.IsPathAllowed/DefaultRoot/ProfilesRoot/
                     // AllowedRoots` (поля и параметры public-методов — рефлексия видит).
                     "ClaudeHomeServer.Services.TranscriptRoots",
+                    // === Циклы, объявленные по IL-видимости (задача `8beee75e`, волна 1).
+                    // Раньше сторож не видел статические вызовы из тел методов, и эти
+                    // циклы существовали «вслепую». После включения IL-скана они пойманы
+                    // и объявлены явно с TODO на шов.
+                    //
+                    // `Llm ⇄ Prompts`: ClaudeSession ссылается на статические
+                    // классы `CoordinatorWriteGuard` (DecidePermissionAsync),
+                    // `ChatContextPrompts`/`VoicePrompts` (RunTurnAsync). Все три —
+                    // статические вызовы из тел методов, теперь видимые. Префикс-шов
+                    // через `Services.Prompts` НЕ открываем: Prompts — каталожная
+                    // вертикаль, узкие зависимости объявляем точечно.
+                    "ClaudeHomeServer.Services.Prompts.CoordinatorWriteGuard",
+                    "ClaudeHomeServer.Services.Prompts.ChatContextPrompts",
+                    "ClaudeHomeServer.Services.Prompts.VoicePrompts",
+                    // `Llm ⇄ Team`: ClaudeSession.HandleControlRequestAsync ссылается
+                    // на `TeamImplementPrompts.MaxInterviewRounds`/`InterviewRoundsExhausted`
+                    // через static-вызов (видимо IL-сканером в `<HandleControlRequestAsync>d__144`).
+                    // Шов уже частично объявлен у Turn (TeamImplementPrompts/TeamMechanicsPromptCatalog),
+                    // здесь — точный для Llm.
+                    "ClaudeHomeServer.Services.Team.TeamImplementPrompts",
+                    // `Git ⇄ Llm`: ClaudeSession.RunTurnAsync ссылается на
+                    // `GitService` (статический вызов `GitService.IsPathSafe` из тела
+                    // метода, виден IL-сканером в `<RunTurnAsync>d__154`). Обратная
+                    // сторона (`Git → Llm` через `ICheapTextRunner` в `GitAiService`)
+                    // уже объявлена префиксом `ClaudeHomeServer.Services.Llm` у Git.
+                    "ClaudeHomeServer.Services.Git.GitService",
                 }),
         },
         // Docs — индекс документации (ADR) + ИИ-помощь по документам (волна 4A, шаг 2).
@@ -1050,6 +1161,19 @@ public class SubsystemBoundaryTests
                     // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
                     // точный допуск.
                     "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
+                    // === IL-видимость (задача `8beee75e`, волна 1).
+                    // `Turn → Knowledge`: NotesRecallContributor (`<BuildAsync>d__13`)
+                    // и PersonaRecallContributor (`<BuildAsync>d__19`) материализуют
+                    // `KnowledgeService` в async-state. НЕ цикл (Knowledge на Turn
+                    // не смотрит), но новое межвертикальное ребро — фиксируем.
+                    "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
+                    // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
+                    // (статический каталог в `Services.Prompts`). Префикс Prompts
+                    // НЕ открываем: точечный допуск ровно на нужный тип.
+                    "ClaudeHomeServer.Services.Prompts.OnboardingPrompts",
+                    // `PersonaRecallContributor` материализует `SessionChangedPaths`
+                    // в async-state `<LastTurnChangedFilesAsync>d__21.MoveNext`.
+                    "ClaudeHomeServer.Services.SessionChangedPaths",
                 }),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).
@@ -1067,6 +1191,10 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // `OmcPersonaRouting.cs:114` зовёт `PersonaConsultantToolset`
+                    // static-метод из тела метода (IL-видимость, задача `8beee75e`).
+                    // Точечный допуск по образцу `Llm → SpecialtyCatalog`/`SpecialtyPromptPresets`.
+                    "ClaudeHomeServer.Services.PersonaConsultantToolset",
                 }),
         },
         // Execution — запуск процессов и песочница (LauncherFactory/SandboxManager/
@@ -1205,6 +1333,21 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.FeatureFlagService",
                     "ClaudeHomeServer.Services.JwtService",
                     "ClaudeHomeServer.Services.Llm.LocalAction",
+                    // === IL-видимость (задача `8beee75e`, волна 1).
+                    // `ModuleGatewayMiddleware.cs:84` (`<Invoke>d__2`) резолвит
+                    // `UserStore` через `sp.GetRequiredService<UserStore>()` —
+                    // generic-аргумент виден IL-сканом как `Modules → UserStore`.
+                    // Точечный допуск по образцу `Llm → SessionSummaryService`.
+                    "ClaudeHomeServer.Services.UserStore",
+                    // `ModuleRegistry` (`<>c__DisplayClass7_0`) материализует
+                    // `ModelTier` в generic-аргументе. Точечный допуск.
+                    "ClaudeHomeServer.Services.ModelTier",
+                    // `ModuleRegistry` ссылается на `LocalActionCatalog` и
+                    // `CheapProfile` статические классы из `Services.Llm` —
+                    // аналогично `Llm.LocalAction` (уже в списке), но шире.
+                    // Префикс `Services.Llm` НЕ открываем: точечные допуски.
+                    "ClaudeHomeServer.Services.Llm.LocalActionCatalog",
+                    "ClaudeHomeServer.Services.Llm.CheapProfile",
                 }),
         },
         // Personas — черновик персоны по промпту (PersonaDraftService, 1 файл).
@@ -1243,6 +1386,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.RuleRuntimeState",
+                    // `MentionTriggerSource.cs:18` ссылается на `GroupChatRouter`
+                    // (IL-видимость, задача `8beee75e`). Точечный допуск.
+                    "ClaudeHomeServer.Services.GroupChatRouter",
                 }),
         },
         // ProjectServices — вертикаль раздела «Сервисы проекта» (волна 4A). Допуски:
@@ -1279,6 +1425,11 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.JwtService",
                     "ClaudeHomeServer.Services.OutputRingBuffer",
+                    // FileService (IL-видимость, задача `8beee75e`): `DevServerService`/
+                    // `LaunchConfigService`/`ProjectServiceDiscovery`/`DevServerService.<StartAsync>d__17`
+                    // зовут `FileService.SafeJoin(...)` static-метод из тел методов.
+                    // Точечный допуск по образцу `Tasks → FileService` (вертикаль → спинка).
+                    "ClaudeHomeServer.Services.FileService",
                 }),
         },
         // Changelog — «Что нового» (волна 4A, шаг 2): продуктовая история по коммитам всех
@@ -1472,6 +1623,10 @@ public class SubsystemBoundaryTests
                     // (root-статика, см. комментарий выше). Пока объявляем как точечные
                     // имена; возможный путь — отдельный мини-шейп вроде `ITaskModelTierPolicy`.
                     "ClaudeHomeServer.Services.ModelTiers",
+                    // ⚠ IL-видимость (задача `8beee75e`): `ModelTier` enum
+                    // материализуется в поле async-state-машины `TaskManager`
+                    // через `ModelTiers.TryParse`. Точечный допуск.
+                    "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ExecutorStopClassifier",
                     // ⚠ ИНВЕРСИЯ СЛОЁВ `Tasks → Controllers` через extension-метод
                     // `TaskHubExtensions.BroadcastTaskChangedAsync` (см. комментарий выше;
@@ -1643,6 +1798,22 @@ public class SubsystemBoundaryTests
                 }
             }
 
+            // IL-скан тел методов (см. BoundaryIlScanner): ловит статические вызовы,
+            // DI-резолвы `sp.GetRequiredService<T>()`, generic-аргументы инстанцированных
+            // методов. Обход nested-типов (async-state-машины `<...>d__NN`,
+            // `<>c__DisplayClass`) обязателен — без него сторож видит 2 из 7
+            // известных швов (см. docs/research/il-boundary-scan-2026-09.md §«Критично»).
+            foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            {
+                foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
+                {
+                    if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes, boundary.AllowedExactNamespaces))
+                    {
+                        seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
+                    }
+                }
+            }
+
             foreach (var (owner, forbidden) in seen)
             {
                 violations.Add(
@@ -1654,7 +1825,7 @@ public class SubsystemBoundaryTests
         violations.Should().BeEmpty(
             $"типы из {boundary.NamespaceRoot} должны ссылаться только на спинку " +
             "(System.*, Microsoft.*, Models) и явно разрешённые служебные вертикали " +
-            "(Services.Http/Composition/Mcp) либо на самих себя. " +
+            "(Services.Http/Composition/Mcp/Telemetry/Protocol) либо на самих себя. " +
             "Любая ссылка на прочие Services.* — нарушение архитектурного правила " +
             "(см. CLAUDE.md/ADR-014). Найденные нарушения:\n" +
             string.Join("\n", violations));

@@ -202,6 +202,39 @@ public class RootSubsystemBoundaryTests
         // продуктовая вертикаль): точечный допуск ровно на `SkillsService` (того
         // же типа, что у `Llm`/`Turn` в их allow-list).
         "ClaudeHomeServer.Services.Skills.SkillsService",
+        // === IL-видимость (задача `8beee75e`, волна 1).
+        // `PersonaAgentFileGenerator` резолвит `Prompts.OmcPersonaRouting` через
+        // `sp.GetRequiredService<OmcPersonaRouting>()` (generic-аргумент виден
+        // IL-скану). Точечный допуск на конкретный тип.
+        "ClaudeHomeServer.Services.Prompts.OmcPersonaRouting",
+        // `PersonaAutomationService` зовёт `Tasks.TaskDueCalculator.ResolveTimeZone(...)`
+        // static-метод из тела метода. Точечный допуск.
+        "ClaudeHomeServer.Services.Tasks.TaskDueCalculator",
+        // `PersonaBindingsService`/`PersonasCrudService`/`TaskExecutionService`/
+        // `UnifiedSearchService` материализуют `Notes.NoteSemanticHit` в async-state
+        // (статический вызов `NotesSemanticSearch.Search` из тел методов).
+        // Точечный допуск ровно на нужный тип.
+        "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
+        // `PersonaBindingsService`/`PersonasCrudService` резолвят `Skills.SkillInfo`
+        // через `sp.GetRequiredService<SkillInfo>()` (generic-аргумент виден
+        // IL-скану). Точечный допуск.
+        "ClaudeHomeServer.Services.Skills.SkillInfo",
+        // `PersonasCrudService` ссылается на `Personas.PersonaDraftService`
+        // (черновик персоны по промпту, тот же namespace — но это другой тип
+        // внутри root-неймспейса `ClaudeHomeServer.Services.Personas`).
+        // Префикс-шов не открываем: точечный допуск.
+        "ClaudeHomeServer.Services.Personas.PersonaDraftService",
+        // `ProjectPresetService` материализует nested-типы `DocsIndexService` в
+        // async-state (статический вызов `DocsIndexService.Scan(...)` из тела метода).
+        "ClaudeHomeServer.Services.Docs.DocsIndexService+ScopeFileResult",
+        "ClaudeHomeServer.Services.Docs.DocsIndexService+ScopeFileWriteStatus",
+        // `TaskExecutionService` зовёт `Tasks.TaskSchedulerService.TaskUrl(...)`
+        // static-метод из тела метода — аналогично задокументированному шву
+        // `Tasks → TaskHubExtensions` (см. комментарий у Tasks allow-list).
+        "ClaudeHomeServer.Services.Tasks.TaskSchedulerService",
+        // `TaskExecutionService` материализует nested `Spend.TaskPromptMetricsStore+Entry`
+        // в async-state (поле state-машины). Точечный допуск на nested-тип.
+        "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore+Entry",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как
@@ -283,7 +316,11 @@ public class RootSubsystemBoundaryTests
         {
             var seen = new HashSet<(string, string)>();
 
-            foreach (var referenced in CollectReferencedTypes(type))
+            // Сначала рефлексия (поля/конструкторы/сигнатуры), затем IL-скан тел
+            // методов. Обход nested-типов обязателен: без него сторож видит 2 из 7
+            // известных швов (см. docs/research/il-boundary-scan-2026-09.md §«Критично»).
+            foreach (var referenced in CollectReferencedTypes(type)
+                .Concat(IlScanReferencedTypes(type)))
             {
                 if (referenced.Namespace is null) continue; // Безымянный namespace — не Services.*.
 
@@ -342,12 +379,22 @@ public class RootSubsystemBoundaryTests
 
         violations.Should().BeEmpty(
             "типы из корня ClaudeHomeServer.Services должны ссылаться только на спинку " +
-            "(System.*, Microsoft.*, Models, Services.Http/Composition/Mcp) или на другие " +
+            "(System.*, Microsoft.*, Models, Services.Http/Composition/Mcp/Telemetry/Protocol) или на другие " +
             "top-level root-типы. Любая ссылка на подсистемные вертикали " +
             "(Services.Knowledge, Services.Llm, Services.Dossiers и т.д.) — нарушение " +
             "архитектурного правила (см. CLAUDE.md/ADR-014). " +
             "Найденные нарушения:\n" +
             string.Join("\n", violations));
+    }
+
+    /// <summary>Типы, упомянутые в телах методов (включая nested-типы): статические
+    /// вызовы, <c>sp.GetRequiredService&lt;T&gt;()</c>, generic-аргументы инстанцированных
+    /// методов. См. <see cref="BoundaryIlScanner"/>.</summary>
+    private static IEnumerable<Type> IlScanReferencedTypes(Type type)
+    {
+        foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            foreach (var t in BoundaryIlScanner.TypesFromBody(method))
+                yield return t;
     }
 
     private static bool IsSharedAllowed(Type type)

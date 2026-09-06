@@ -60,9 +60,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>KnowledgeService</c> давало зелёный boundary-тест, потому что
 /// <c>KnowledgeService</c> жил в корне Services и его не видел ни один страж.
 ///
-/// Известное ограничение (как у основного стражa): читаются поля, параметры
-/// конструкторов, публичные свойства и сигнатуры публичных методов — тела
-/// методов и IL НЕ читаются.
+/// Сторож читает: поля, параметры конструкторов, публичные свойства, сигнатуры
+/// публичных методов И тела методов (IL-скан через <see cref="BoundaryIlScanner"/>).
 /// </summary>
 public class RootSubsystemBoundaryTests
 {
@@ -202,17 +201,16 @@ public class RootSubsystemBoundaryTests
         // же типа, что у `Llm`/`Turn` в их allow-list).
         "ClaudeHomeServer.Services.Skills.SkillsService",
         // === IL-видимость (задача `8beee75e`, волна 1).
-        // `PersonaAgentFileGenerator` резолвит `Prompts.OmcPersonaRouting` через
-        // `sp.GetRequiredService<OmcPersonaRouting>()` (generic-аргумент виден
-        // IL-скану). Точечный допуск на конкретный тип.
+        // `PersonaAgentFileGenerator` зовёт `OmcPersonaRouting.AgentTypesFor(...)`
+        // (static-метод, PersonaAgentFileGenerator.cs:148-149). IL-скан видит
+        // declaring-тип. Точечный допуск на конкретный тип.
         "ClaudeHomeServer.Services.Prompts.OmcPersonaRouting",
         // `PersonaAutomationService` зовёт `Tasks.TaskDueCalculator.ResolveTimeZone(...)`
         // static-метод из тела метода. Точечный допуск.
         "ClaudeHomeServer.Services.Tasks.TaskDueCalculator",
         // `PersonaBindingsService`/`PersonasCrudService`/`TaskExecutionService`/
-        // `UnifiedSearchService` материализуют `Notes.NoteSemanticHit` в async-state
-        // (статический вызов `NotesSemanticSearch.Search` из тел методов).
-        // Точечный допуск ровно на нужный тип.
+        // `UnifiedSearchService` материализуют `Notes.NoteSemanticHit` (record,
+        // return-тип `NotesKnowledgeService.SearchAsync`). Точечный допуск.
         "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
         // `PersonaBindingsService`/`PersonasCrudService` резолвят `Skills.SkillInfo`
         // через `sp.GetRequiredService<SkillInfo>()` (generic-аргумент виден

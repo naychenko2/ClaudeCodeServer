@@ -25,6 +25,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("mcp")]
 [Authorize]
 public sealed class McpTransportController(McpToolsetRegistry registry,
+    McpToolWhitelist whitelist,
     ILogger<McpTransportController> logger) : ControllerBase
 {
     // Потолок тела запроса: аргументы инструментов несопоставимо меньше (html виджета ≤64 КБ,
@@ -191,14 +192,21 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                             $"Тулсет «{toolset.Name}» не реализует контракт состава "
                             + "(IMcpStaticToolset или IMcpParameterizedToolset) — tools/list невозможен"),
                     };
+                    // Белый список инструментов профиля провайдера (KeepMcpTools) — ЕДИНСТВЕННАЯ
+                    // точка фильтрации состава: оба контракта уже сошлись в schemas, а тулсеты о
+                    // профиле не знают вовсе. null — списка нет, сервер отдаётся целиком
+                    var allowed = whitelist.AllowedTools(toolset.Name, context);
                     var tools = new JsonArray();
                     foreach (var tool in schemas)
+                    {
+                        if (allowed is not null && !allowed.Contains(tool.Name)) continue;
                         tools.Add(new JsonObject
                         {
                             ["name"] = tool.Name,
                             ["description"] = tool.Description,
                             ["inputSchema"] = tool.InputSchema.DeepClone(),
                         });
+                    }
                     return Ok(id, new JsonObject { ["tools"] = tools });
                 }
 
@@ -207,6 +215,18 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                     var toolName = parms?["name"] is JsonValue n && n.TryGetValue<string>(out var tn)
                         ? tn : null;
                     if (toolName is null) return Error(id, -32602, "Не указано имя инструмента");
+                    // Второй гейт белого списка, fail-closed: инструмент, вырезанный из
+                    // tools/list, обязан ОТКАЗЫВАТЬ, а не выполняться — иначе фильтр
+                    // косметический (имя модель знает из прошлого опыта или угадывает).
+                    // Отказ — content-ошибкой, как у самих тулсетов: модели нужен читаемый
+                    // текст, а не разрыв протокола
+                    if (!whitelist.Allows(toolset.Name, toolName, context))
+                    {
+                        var denied = Telemetry.MetricTagGuard.IsToolShape(toolName)
+                            ? $"Инструмент «{toolName}» недоступен в этом чате"
+                            : "Запрошенный инструмент недоступен в этом чате";
+                        return Ok(id, ToolContent(denied, isError: true));
+                    }
                     var args = parms?["arguments"]?.DeepClone() as JsonObject ?? [];
                     try
                     {

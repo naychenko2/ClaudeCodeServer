@@ -393,6 +393,34 @@ public class McpToolsetStabilityTests
             + "персоне владельца, тогда как persona_ask остаётся");
     }
 
+    /// <summary>
+    /// Белый список инструментов профиля провайдера (KeepMcpTools) режет состав tools/list —
+    /// значит обязан решаться ТОЛЬКО по свойствам сессии: сессия-вызыватель → её эффективная
+    /// модель → провайдер. Любое обращение к состоянию хода здесь означало бы мерцание состава
+    /// между ходами и перезапуск процесса CLI со всеми MCP-серверами.
+    /// </summary>
+    [SkippableFact]
+    public void ФильтрKeepMcpTools_РешаетсяПоСессииАНеПоХоду()
+    {
+        var path = FindSource("Services", "Mcp", "Http", "McpToolWhitelist.cs");
+        Skip.If(path is null, "McpToolWhitelist.cs не найден (сборка вне дерева репозитория)");
+
+        var code = string.Join('\n', File.ReadAllText(path!).Split('\n')
+            .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)
+                && !l.TrimStart().StartsWith("///", StringComparison.Ordinal)));
+
+        code.Should().Contain("GetOwned(",
+            "профиль резолвится по сессии-вызывателю, изолированной по владельцу токена");
+        code.Should().Contain("ResolveByModel(",
+            "провайдер выводится из эффективной модели сессии — той же формулой, что в бою");
+        code.Should().NotContain("GetActiveTurnDelegation",
+            "глубина делегирования — свойство ХОДА: гейт делегирования живёт отдельно");
+        code.Should().NotContain("TurnDelegation",
+            "состояние делегирования не смеет влиять на состав инструментов");
+        code.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав инструментов");
+    }
+
     // Каталог по пути от корня репозитория (FindSource ищет файл — этот ищет папку)
     private static DirectoryInfo? FindDir(params string[] relative)
     {

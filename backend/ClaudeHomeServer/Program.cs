@@ -270,6 +270,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
 // токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
+// Встроенная интеграция Higgsfield (волна 1): запись реестра + OAuth-вход + инжект в ход
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldIntegration>();
 // Продуктовые MCP-серверы поверх HTTP (ADR-012): тулсет отдаёт схемы, общий контроллер
 // McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
@@ -310,6 +312,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WatchToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
+// Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
+// на tools/list и tools/call, сами тулсеты о нём не знают
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolWhitelist>();
 // BoardService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 // Шина событий хода (ADR-013): один экземпляр на инстанс, изоляция владельцев — через
 // TurnContext события. На этапе 0 подписчиков нет; этап 2 — реестр секций промпта

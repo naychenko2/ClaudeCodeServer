@@ -48,6 +48,12 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     // хост собирается как обычно. Применяется после встроенных регистраций, поэтому может их перетереть.
     public Action<IServiceCollection>? ExtraServices { get; set; }
 
+    // Точка подмены КОНФИГА для конкретного теста (напр. секция LlmProviders): источник
+    // добавляется после встроенных ключей фабрики, поэтому перетирает их. Нужен там, где
+    // сервис читает IConfiguration в конструкторе (LlmProviderRegistry) и подменять его
+    // целиком через ExtraServices значило бы собирать его руками мимо боевой регистрации.
+    public Dictionary<string, string?> ExtraConfig { get; } = [];
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Создаём users.json до старта хоста — UserStore прочитает его при инициализации
@@ -101,6 +107,7 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 // Telemetry:Backends:*:Enabled из файла разработчика сильнее.
                 // Экспорт глушится переменной окружения — см. TestTelemetryGuard.
             });
+            if (ExtraConfig.Count > 0) config.AddInMemoryCollection(ExtraConfig);
         });
 
         // Negotiate требует Kestrel и несовместим с TestServer — заменяем на no-op заглушку

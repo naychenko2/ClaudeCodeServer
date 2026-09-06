@@ -1800,14 +1800,14 @@ public class SubsystemBoundaryTests
             // методов. Обход nested-типов (async-state-машины `<...>d__NN`,
             // `<>c__DisplayClass`) обязателен — без него сторож видит 4 из 7
             // известных швов (docs/research/il-boundary-scan-2026-09.md, раздел про слепые пятна).
-            foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            // Сбор идёт через общий BoundaryIlScanner.CollectAllReferencedTypes — ту же
+            // точку, что и регрессия IlBoundaryRegressionTests; сломай обход там —
+            // краснеют оба гейта (закрывает дыру «сторож зовёт другой код»).
+            foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(type))
             {
-                foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
+                if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes, boundary.AllowedExactNamespaces))
                 {
-                    if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes, boundary.AllowedExactNamespaces))
-                    {
-                        seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
-                    }
+                    seen.Add((type.FullName ?? type.Name, referenced.FullName ?? referenced.Name));
                 }
             }
 
@@ -2003,17 +2003,14 @@ public class SubsystemBoundaryTests
 
         foreach (var type in asm.GetTypes())
         {
-            foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(type))
             {
-                foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
+                var refAsm = referenced.Assembly.GetName().Name;
+                if (refAsm is not null && refAsm.StartsWith("ClaudeHomeServer", StringComparison.Ordinal)
+                    && refAsm != CoreAssemblyName)
                 {
-                    var refAsm = referenced.Assembly.GetName().Name;
-                    if (refAsm is not null && refAsm.StartsWith("ClaudeHomeServer", StringComparison.Ordinal)
-                        && refAsm != CoreAssemblyName)
-                    {
-                        violations.Add(
-                            $"{type.FullName} → {referenced.FullName} (asm: {refAsm})");
-                    }
+                    violations.Add(
+                        $"{type.FullName} → {referenced.FullName} (asm: {refAsm})");
                 }
             }
         }

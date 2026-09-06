@@ -393,12 +393,13 @@ public class RootSubsystemBoundaryTests
 
     /// <summary>Типы, упомянутые в телах методов (включая nested-типы): статические
     /// вызовы, <c>sp.GetRequiredService&lt;T&gt;()</c>, generic-аргументы инстанцированных
-    /// методов. См. <see cref="BoundaryIlScanner"/>.</summary>
+    /// методов. Идёт через общий <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/> —
+    /// единую точку сбора для сторожей и регрессии, чтобы сломать обход nested-типов
+    /// в одном месте и сразу покраснели ОБЕ проверки.</summary>
     private static IEnumerable<Type> IlScanReferencedTypes(Type type)
     {
-        foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
-            foreach (var t in BoundaryIlScanner.TypesFromBody(method))
-                yield return t;
+        foreach (var t in BoundaryIlScanner.CollectAllReferencedTypes(type))
+            yield return t;
     }
 
     private static bool IsSharedAllowed(Type type)

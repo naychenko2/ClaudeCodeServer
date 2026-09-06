@@ -7485,30 +7485,25 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Заодно обнуляем счётчик тиков и причину: новая фаза waiting (если будет) стартует
         // с чистого счётчика, а старая причина в логе/бейдже «ожидание» уже неактуальна.
         //
-        // ИНВАРИАНТ: ровно здесь (и только здесь) тратится Iteration. Ждать — бесплатно
-        // (тики ожидания НЕ считаются итерациями), но круг «запуск исполнителя → доклад →
-        // продолжение» засчитывается. Раньше инкремент жил после блока waiting/promise/blocked
-        // и срабатывал на КАЖДОМ ходе цикла — при MaxIterations=20 это делало невозможной
-        // длинную работу без ожидания. Теперь чистые working-ходы итерацию не жгут: считаются
-        // только возвраты из ожидания, что и закрывает исходную дыру (бесконечный «запуск →
-        // доклад» круг). Проверка лимита — здесь же: возврат ровно один раз на «круг».
+        // ИНВАРИАНТ: ++ за result хода тратится РОВНО ОДИН РАЗ — здесь (если был возврат
+        // waiting→working) ИЛИ в конце метода (если блок не сработал). Две точки кода,
+        // взаимоисключающие по флагу wasReturnFromWaiting: иначе result после возврата
+        // засчитывался бы дважды. Тики ожидания НЕ считаются итерациями — сама фаза
+        // waiting бесплатна по счёту. Проверка лимита — общий хелпер
+        // StopIfWorkLoopLimitReachedAsync: один текст остановки и один путь reason="limit",
+        // без двух копий.
+        var wasReturnFromWaiting = false;
         if (loop.Phase == "waiting")
         {
             loop.Phase = "working";
             loop.WaitingTicks = 0;
             loop.WaitingReason = null;
             loop.WaitingSince = null;
+            wasReturnFromWaiting = true;
             loop.Iteration++;
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
-            if (loop.Iteration >= loop.MaxIterations)
-            {
-                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
-                    $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} возвратов из ожидания. " +
-                    "Работа могла остаться незавершённой — проверьте результат.");
-                await SetWorkLoopAsync(sessionId, false);
-                return;
-            }
+            if (await StopIfWorkLoopLimitReachedAsync(sessionId, entry, loop)) return;
         }
 
         // Без двойной отправки (гонка «result → директива продолжения» vs «очередь доставляет
@@ -7629,12 +7624,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 return;
             }
 
-            // Чистый working-ход (без возврата из ожидания): Iteration не тратится — он учтён выше
-            // при переходе waiting→working. Здесь же шлём директиву продолжения, чтобы координатор
-            // продолжил работать; дальше либо модель сама уйдёт в waiting (этот же блок ниже),
-            // либо выведет <promise>/<blocked>, либо придёт новый turn с новым return-from-waiting.
+            // Чистый working-ход (без возврата из ожидания): Iteration тратится здесь — счётчик
+            // считает все ходы цикла. Возврат из ожидания уже инкрементировал выше (флаг
+            // wasReturnFromWaiting=true), так что ++ здесь срабатывает ТОЛЬКО для обычных
+            // ходов. Тики ожидания бесплатны — они не доходят до этой ветки. Проверка лимита
+            // и текст остановки — общий хелпер.
+            if (!wasReturnFromWaiting) loop.Iteration++;
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
+            if (await StopIfWorkLoopLimitReachedAsync(sessionId, entry, loop)) return;
             if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
             await SendMessageAsync(sessionId,
                 OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
@@ -7650,6 +7648,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.LoopTurnInFlight = false;
             throw;
         }
+    }
+
+    // Общая проверка лимита итераций для цикла «до готово». Вызывается ПОСЛЕ каждого
+    // инкремента Iteration (в блоке возврата waiting→working и в конце обычного working-хода) —
+    // одна точка правды для reason="limit" и текста остановки. Возвращает true, если лимит
+    // достигнут и цикл остановлен (вызывающий обязан сделать return). Хелпер общий, а не
+    // две копии, чтобы текст и путь стопа не разъехались при будущих правках.
+    private async Task<bool> StopIfWorkLoopLimitReachedAsync(string sessionId, SessionEntry entry, SessionWorkLoop loop)
+    {
+        if (loop.Iteration < loop.MaxIterations) return false;
+        await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
+            $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
+            "Работа могла остаться незавершённой — проверьте результат.");
+        await SetWorkLoopAsync(sessionId, false);
+        return true;
     }
 
     // Маркер завершения ищем вне код-блоков и с точным регистром: модель часто цитирует

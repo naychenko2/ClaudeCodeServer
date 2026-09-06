@@ -2669,7 +2669,7 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
         var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
         msg.Reason.Should().Be("limit");
-        msg.Text.Should().Contain("3 возвратов");
+        msg.Text.Should().Contain("3 ходов");
     }
 
     [Fact]
@@ -3047,13 +3047,13 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task ContinueWorkLoop_ДелегатНеЗадан_ЧистыйWorking_БезВозвратаИтерацияНеТратится()
+    public async Task ContinueWorkLoop_ДелегатНеЗадан_ЧистыйWorking_БезВозвратаТратитИтерацию()
     {
         // Без делегата HasLiveDelegatedTasks (тесты без DI к TaskManager) ждать нечего —
-        // цикл НЕ уходит в waiting, значит нет возврата, значит Iteration не растёт
-        // (новая семантика: инкремент ровно один раз на возврат waiting→working). Чистый
-        // working-ход шлёт директиву продолжения, но счётчика не трогает — пока модель
-        // работает и не выводит <promise>/<blocked>/<waiting>, цикл живёт бесплатно по счёту.
+        // цикл НЕ уходит в waiting, значит нет возврата. Но счётчик всё равно растёт:
+        // инкремент живёт в двух точках — блок возврата waiting→working (здесь не сработает)
+        // и конец ContinueWorkLoopAsync (сработает на обычном ходе). Смысл теста: проверить,
+        // что счётчик не привязан жёстко к ожиданию — обычная работа тоже его крутит.
         var session = await MkBusySessionAsync("loop-waiting-nodelegate", SessionStatus.Working);
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
         _sut.HasLiveDelegatedTasks.Should().BeNull("санити: делегат не задан");
@@ -3069,8 +3069,8 @@ public class SessionManagerTests : IDisposable
 
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается");
         _sut.GetById(session.Id)!.WorkLoop!.Phase.Should().Be("working");
-        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(iterBefore,
-            "чистый working-ход — нет возврата → инкремент не происходит");
+        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(iterBefore + 1,
+            "чистый working-ход без возврата — инкремент в конце ContinueWorkLoopAsync");
     }
 
     [Fact]
@@ -5781,9 +5781,8 @@ public class SessionManagerTests : IDisposable
     }
 
     // Контракт: серия «запуск исполнителя → доклад → продолжение → запуск → доклад …»
-    // упирается в MaxIterations и останавливает цикл с reason="limit". Раньше лимитом был
-    // счётчик запусков (тоже 20), теперь — счётчик возвратов. Тот же потолок 20 = то же
-    // число «кругов запуск→доклад» на остановку, но без второго независимого счётчика.
+    // упирается в MaxIterations и останавливает цикл с reason="limit". Счётчик считает
+    // ВСЕ ходы цикла (рабочие + возвраты из ожидания), текст об этом — единый.
     [Fact]
     public async Task ContinueWorkLoop_СерияВозвратовУпираетсяВЛимит_СтопСReasonLimit()
     {
@@ -5803,18 +5802,19 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
         var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
         msg.Reason.Should().Be("limit");
-        msg.Text.Should().Contain("2 возвратов");
+        msg.Text.Should().Contain("2 ходов");
     }
 
-    // Контракт: чистый working-ход (без prior waiting) Iteration НЕ тратит.
-    // Это отличие от прежней семантики, где инкремент жил после блока waiting/promise/blocked
-    // и срабатывал на КАЖДОМ ходе цикла. Чистые working-итерации теперь бесплатны по счёту.
+    // Контракт: чистый working-ход (без prior waiting) Iteration тратит. Это закрывает
+    // регрессию 0c7d43ff — цикл без делегирования должен останавливаться по лимиту,
+    // а не крутиться вечно с Iteration=0. Раньше (до регрессии) этот контракт держался
+    // инкрементом в конце ContinueWorkLoopAsync; сейчас — там же, плюс точка на возврате.
     [Fact]
-    public async Task ContinueWorkLoop_ЧистыйWorkingХод_ИтерацияНеТратится()
+    public async Task ContinueWorkLoop_ЧистыйWorkingХод_ТратитИтерацию()
     {
         var session = await MkBusySessionAsync("loop-no-return", SessionStatus.Working);
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
-        // По умолчанию Phase=working, HasLiveDelegatedTasks=null — никакого возврата
+        // По умолчанию Phase=working, HasLiveDelegatedTasks=null — никакого возврата из ожидания
         var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
         var entry = GetEntry(session.Id);
         var adapter = StubAdapter(entry);
@@ -5827,14 +5827,122 @@ public class SessionManagerTests : IDisposable
 
         var loop = _sut.GetById(session.Id)!.WorkLoop!;
         loop.Should().NotBeNull("цикл продолжается — нет блокера/промиса/waiting");
-        loop.Iteration.Should().Be(iterBefore,
-            "чистый working-ход (нет возврата из ожидания) итерацию не жжёт");
+        loop.Iteration.Should().Be(iterBefore + 1,
+            "чистый working-ход тратит итерацию — иначе цикл без делегирования не остановится");
     }
 
-    // Старый тест «ДелегатНеЗадан_ПоведениеПрежнее» утверждал Iteration.Should().Be(iterBefore + 1).
-    // Новая семантика: без делегата (нет возврата) итерация не растёт. Тест переименован и
-    // отражает новый контракт — ищем «ожидание делегата» через _liveDelegated=false.
-    // Старая семантика переехала в ContinueWorkLoop_ЧистыйWorkingХод_ИтерацияНеТратится выше.
+    // Ключевой регресс-тест: серия чистых working-ходов БЕЗ ухода в ожидание упирается
+    // в MaxIterations и останавливает цикл с reason="limit". Именно отсутствие такого
+    // теста и пропустило регрессию 0c7d43ff — цикл без делегирования крутился вечно.
+    [Fact]
+    public async Task ContinueWorkLoop_СерияЧистыхWorkingХодовУпираетсяВЛимит_СтопСReasonLimit()
+    {
+        var session = await MkBusySessionAsync("loop-pure-working-limit", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.MaxIterations = 2; // потолок низкий — прогон короткий, а смысл тот же
+        var entry = GetEntry(session.Id);
+        // HasLiveDelegatedTasks не задан — цикл НЕ уходит в waiting, значит каждый result —
+        // это чистый working-ход, который должен тратить итерацию в конце метода.
+        _sut.HasLiveDelegatedTasks.Should().BeNull("санити: делегат не задан");
+
+        // Первый ход: Iteration 0 → 1, цикл живёт, директива уходит.
+        SetLoopTurnInFlight(entry, true);
+        var adapter1 = StubAdapter(entry);
+        SetProcess(entry, adapter1.Object);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter1, TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(1,
+            "первый чистый working-ход тратит итерацию");
+
+        // Второй ход: Iteration 1 → 2, упёрлись в лимит → стоп reason="limit".
+        SetLoopTurnInFlight(entry, true);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null,
+            TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull(
+            "чистые working-ходы без делегирования тоже обязаны упереться в лимит");
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("limit");
+        msg.Text.Should().Contain("2 ходов");
+    }
+
+    // Смешанный сценарий: обычный рабочий ход + возврат из ожидания суммарно дают +2.
+    // Подтверждает, что ОБЕ точки инкремента живы одновременно и считают независимо.
+    [Fact]
+    public async Task ContinueWorkLoop_СмешанныйСценарий_РабочийХодПлюсВозврат_ДаютДва()
+    {
+        var session = await MkBusySessionAsync("loop-mixed", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
+
+        // Шаг 1: чистый working-ход (Phase=working, делегат не задан) — инкремент в конце метода.
+        SetLoopTurnInFlight(entry, true);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(iterBefore + 1,
+            "чистый working-ход даёт +1");
+
+        // Шаг 2: возврат из ожидания (Phase=waiting руками) — инкремент в блоке waiting→working.
+        _sut.GetById(session.Id)!.WorkLoop!.Phase = "waiting";
+        SetLoopTurnInFlight(entry, true);
+        var adapter2 = StubAdapter(entry);
+        SetProcess(entry, adapter2.Object);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter2, TimeSpan.FromSeconds(2));
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.Phase.Should().Be("working", "возврат из ожидания перевёл фазу");
+        loop.Iteration.Should().Be(iterBefore + 2,
+            "рабочий ход + возврат из ожидания суммарно дают +2");
+    }
+
+    // Фаза ожидания сама по себе (тики, пока доклад не пришёл) итерацию НЕ тратит.
+    // Проверяем через прямой путь TickWaitingLoopsAsync: цикл в waiting по маркеру
+    // (WaitingReason != null — НЕ живая делегированная задача), один тик, и убеждаемся,
+    // что Iteration не сдвинулся. Используем существующие помощники SetWaitingTickInterval
+    // и SetMaxWaitingTicks (тесту выше — TickWaitingLoops_СвободныйЧат_*), плюс
+    // BackdateWaitingSince — тик ждёт ≥ интервала с WaitingSince.
+    [Fact]
+    public async Task ContinueWorkLoop_ФазаОжиданияБезДоклада_ИтерациюНеТратит()
+    {
+        var session = await MkBusySessionAsync("loop-waiting-ticks", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // свободный чат — иначе тик не пройдёт
+        SetProcess(entry, adapter.Object);
+
+        var loop0 = _sut.GetById(session.Id)!.WorkLoop!;
+        var iterBefore = loop0.Iteration;
+        loop0.Phase = "waiting";
+        loop0.WaitingReason = "тестовый доклад";
+        loop0.WaitingTicks = 0;
+        session.Status = SessionStatus.Active;
+        SetLoopTurnInFlight(entry, false);
+        SetWaitingTickInterval(TimeSpan.Zero);
+        SetMaxWaitingTicks(5); // потолок большой — тест не про стоп, а про счёт
+        BackdateWaitingSince(session.Id, TimeSpan.FromMinutes(10));
+
+        ClearSent();
+        await _sut.TickWaitingLoopsAsync();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        var after = _sut.GetById(session.Id)!.WorkLoop!;
+        after.Iteration.Should().Be(iterBefore,
+            "тики фазы ожидания итерацию не тратят — бесплатны по счёту");
+        after.WaitingTicks.Should().Be(1, "счётчик тиков ожидания растёт независимо от Iteration");
+        after.Phase.Should().Be("waiting",
+            "после первого тика цикл ещё в ожидании (потолок тиков не достигнут)");
+    }
 
     // Minor (ревью work-loop): невалидное значение лимита в конфиге (≤0 / не число) не должно
     // молча отрубать цикл — сваливаемся в дефолт. LoopLimitOrDefault internal — покрыт напрямую.

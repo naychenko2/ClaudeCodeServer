@@ -871,8 +871,8 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // выполняют произвольный код в произвольный момент и между ассертами теста гонят
         // директиву и сбрасывают счётчики (та же причина, что у _autoSaveTimer). Дефолты
         // подхватываются из Loop:* если ключ не задан или мусор — см. ParsePositiveSeconds/
-        // ParsePositiveInt (Loop:MaxIterations/MaxTaskExecutions ходят через LoopLimitOrDefault
-        // со своей семантикой «<=0 = дефолт 20», не трогаем).
+        // ParsePositiveInt (Loop:MaxIterations ходит через LoopLimitOrDefault со своей
+        // семантикой «<=0 = дефолт 20», не трогаем).
         _waitingTickInterval = ParsePositiveSeconds(config["Loop:WaitingTickSeconds"], 300);
         _maxWaitingTicks = ParsePositiveInt(config["Loop:MaxWaitingTicks"], 20);
         if (autoSave > TimeSpan.Zero && _waitingTickInterval > TimeSpan.Zero)
@@ -5941,15 +5941,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             : null;
 
     // Дефолт лимитов цикла «до готово». Невалидное значение конфига (не число или ≤ 0)
-    // сваливается в дефолт, а не молча отрубает цикл: MaxTaskExecutions=0 иначе даёт
-    // Exhausted с первой попытки, MaxIterations=0 — немедленную остановку по лимиту.
-    // internal — тестируется напрямую (SessionManagerTests).
+    // сваливается в дефолт, а не молча отрубает цикл: MaxIterations=0 иначе даёт
+    // немедленную остановку по лимиту. internal — тестируется напрямую (SessionManagerTests).
     internal static int LoopLimitOrDefault(string? raw, int defaultValue = 20) =>
         int.TryParse(raw, out var v) && v > 0 ? v : defaultValue;
 
     // Включение/выключение цикла «до готово» (флаг work-loop). Включение сбрасывает
-    // счётчик итераций и счётчик запусков задач; лимиты — из конфига Loop:MaxIterations
-    // и Loop:MaxTaskExecutions (дефолт 20, при ≤0 — тоже дефолт, см. LoopLimitOrDefault).
+    // счётчик итераций; лимит — из конфига Loop:MaxIterations (дефолт 20, при ≤0 — тоже
+    // дефолт, см. LoopLimitOrDefault).
     // userId задан (вызов из API) — сверяется с владельцем; null — внутренний вызов.
     // Режим прав, выбранный в Composer. Раньше он доезжал до сессии только вместе с
     // сообщением (см. SendMessageAsync), и выбор, сделанный до первого хода, терялся при
@@ -6015,13 +6014,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         var wasEnabled = entry.Info.WorkLoop is not null;
         // Присвоение WorkLoop и очистку буфера хода держим под одним локом: иначе обнуление
-        // поля состязается с чтением в TryConsumeWorkLoopRun/RefundWorkLoopRun/ContinueWorkLoopAsync,
-        // и потребитель может инкрементировать уже выключенный объект (мусорный Allowed).
+        // поля состязается с чтением в ContinueWorkLoopAsync (там же инкремент Iteration
+        // под локом), и потребитель мог бы увидеть уже выключенный объект и уйти в мусор.
         var newLoop = enabled
             ? new SessionWorkLoop
             {
                 MaxIterations = LoopLimitOrDefault(_config["Loop:MaxIterations"]),
-                MaxExecutions = LoopLimitOrDefault(_config["Loop:MaxTaskExecutions"]),
             }
             : null;
         lock (entry.LoopTurnLock)
@@ -6413,58 +6411,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Обёртка сохранена ради сигнатуры DenyOnDelegatedTurn.OnActionExecuted.
     public void RefundTeamImplementRun(string sessionId, string ownerId) =>
         _teamBudget.RefundTeamImplementRun(sessionId, ownerId);
-
-    // Гейт лавины запусков в цикле «до готово» (work-loop-аналог командной Э4).
-    // Enum в Models (WorkLoopRunQuota) живёт под тем же именем, что и nested
-    // SessionManager.WorkLoopRunQuota: тесты и фильтр пользуются nested, вертикаль — Models.
-    public enum WorkLoopRunQuota { NotInLoop, Allowed, Exhausted }
-
-    // Гейт лавины запусков: на ходу доклада исполнителя (SuppressTasksExecute) чату
-    // с включённым циклом запуск разрешён, ПОКА цел лимит — запрет заменён квотой, а не
-    // снят, иначе «доклад → запуск → доклад» уходит в бесконечный платный круг.
-    // Разрешение сразу расходует единицу: счёт ведёт бэкенд в точке запуска. Квота
-    // принадлежит самой сессии цикла — в отличие от командной, вверх по родителям не
-    // поднимаемся: чат исполнения под циклом не живёт (Guard B4).
-    public (WorkLoopRunQuota Verdict, string? Reason) TryConsumeWorkLoopRun(string sessionId, string ownerId)
-    {
-        // Владельческую проверку (сессия существует + владелец тот) держим до лока: она не
-        // зависит от WorkLoop. Но сам loop достаём под локом — иначе обнуление поля в
-        // SetWorkLoopAsync оставит нас со ссылкой на уже выключенный объект, инкремент уйдёт
-        // в мусор, а вердикт будет Allowed у чата, где цикл уже погашен.
-        if (GetOwned(sessionId, ownerId) is null) return (WorkLoopRunQuota.NotInLoop, null);
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return (WorkLoopRunQuota.NotInLoop, null);
-
-        lock (entry.LoopTurnLock)
-        {
-            if (entry.Info.WorkLoop is not { } loop) return (WorkLoopRunQuota.NotInLoop, null);
-            if (loop.ExecutionsStarted >= loop.MaxExecutions)
-                return (WorkLoopRunQuota.Exhausted,
-                    $"запуски задач в цикле исчерпаны: {loop.ExecutionsStarted} из {loop.MaxExecutions}");
-            loop.ExecutionsStarted++;
-        }
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        return (WorkLoopRunQuota.Allowed, null);
-    }
-
-    // Компенсация квоты запуска цикла: TryConsumeWorkLoopRun списывает единицу авансом,
-    // ДО реальной попытки запуска. Если запуск не состоялся (404/400, исключение), платить
-    // не за что — фильтр DenyOnDelegatedTurn.OnActionExecuted возвращает единицу сюда.
-    public void RefundWorkLoopRun(string sessionId, string ownerId)
-    {
-        // Симметрично TryConsumeWorkLoopRun: loop достаём под локом, чтобы возврат не ушёл
-        // в обнулённый SetWorkLoopAsync'ом объект.
-        if (GetOwned(sessionId, ownerId) is null) return;
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-
-        lock (entry.LoopTurnLock)
-        {
-            if (entry.Info.WorkLoop is not { } loop) return;
-            if (loop.ExecutionsStarted > 0) loop.ExecutionsStarted--;
-        }
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-    }
 
     // Квота пробуждения штаба агентом (Э4). Тело переехало в TeamBudgetService (волна Е):
     // квота — собственное дело вертикали. Обёртки сохранены ради публичных сигнатур:
@@ -7538,14 +7484,31 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // продолжает работу. Снимаем фазу ДО гейтов, чтобы фаза не «застряла» при уступке.
         // Заодно обнуляем счётчик тиков и причину: новая фаза waiting (если будет) стартует
         // с чистого счётчика, а старая причина в логе/бейдже «ожидание» уже неактуальна.
+        //
+        // ИНВАРИАНТ: ровно здесь (и только здесь) тратится Iteration. Ждать — бесплатно
+        // (тики ожидания НЕ считаются итерациями), но круг «запуск исполнителя → доклад →
+        // продолжение» засчитывается. Раньше инкремент жил после блока waiting/promise/blocked
+        // и срабатывал на КАЖДОМ ходе цикла — при MaxIterations=20 это делало невозможной
+        // длинную работу без ожидания. Теперь чистые working-ходы итерацию не жгут: считаются
+        // только возвраты из ожидания, что и закрывает исходную дыру (бесконечный «запуск →
+        // доклад» круг). Проверка лимита — здесь же: возврат ровно один раз на «круг».
         if (loop.Phase == "waiting")
         {
             loop.Phase = "working";
             loop.WaitingTicks = 0;
             loop.WaitingReason = null;
             loop.WaitingSince = null;
+            loop.Iteration++;
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
+            if (loop.Iteration >= loop.MaxIterations)
+            {
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
+                    $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} возвратов из ожидания. " +
+                    "Работа могла остаться незавершённой — проверьте результат.");
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
         }
 
         // Без двойной отправки (гонка «result → директива продолжения» vs «очередь доставляет
@@ -7666,16 +7629,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 return;
             }
 
-            loop.Iteration++;
-            if (loop.Iteration >= loop.MaxIterations)
-            {
-                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
-                    $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
-                    "Работа могла остаться незавершённой — проверьте результат.");
-                await SetWorkLoopAsync(sessionId, false);
-                return;
-            }
-
+            // Чистый working-ход (без возврата из ожидания): Iteration не тратится — он учтён выше
+            // при переходе waiting→working. Здесь же шлём директиву продолжения, чтобы координатор
+            // продолжил работать; дальше либо модель сама уйдёт в waiting (этот же блок ниже),
+            // либо выведет <promise>/<blocked>, либо придёт новый turn с новым return-from-waiting.
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
             if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём

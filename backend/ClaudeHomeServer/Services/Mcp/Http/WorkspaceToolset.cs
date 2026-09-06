@@ -261,7 +261,7 @@ public sealed partial class WorkspaceToolset(
     // (ветка формально недостижима — сессию резолвит TryResolve раньше; защита на будущее).
     private string? DelegatedDenied(McpToolCallContext context, Session callerSession, string action) =>
         DelegatedTurnGate.Decide(sessions, context.OwnerId, callerSession.Id, action,
-            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false, allowInWorkLoop: false,
+            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
             failOpenWhenUnknown: false) is { Allowed: false } gate
             ? gate.DenyText
             : null;

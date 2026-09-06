@@ -1101,7 +1101,7 @@ awk 'match($0,/^    (public|private|internal|protected|static|async)/){print NR"
 
 | Кусок | Строки | Объём | Чей |
 |---|---|---:|---|
-| `WorkLoopRunQuota` + `TryConsumeWorkLoopRun` + `RefundWorkLoopRun` | 7015–7069 | 55 | цикл «до готово»; зовут `DenyOnDelegatedTurnAttribute:120,206,236` и `SetWorkLoopAsync` (5976) |
+| ~~`WorkLoopRunQuota` + `TryConsumeWorkLoopRun` + `RefundWorkLoopRun`~~ | ~~7015–7069~~ | — | снят 2026-09-06: цикл «до готово» теперь несёт только Iteration; `DenyOnDelegatedTurn` зовётся по командной квоте |
 | `Func<string,bool>? HasLiveDelegatedTasks` | 7497–7501 | 5 | ставит `TaskExecutionService:135`, читает ядро (8938, 9030, 9057) |
 | Инструментарий разбора маркеров | 7519–7787 | 269 | **общий**, см. поправку вторую |
 

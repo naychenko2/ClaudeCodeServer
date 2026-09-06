@@ -167,7 +167,7 @@ public sealed partial class PersonasToolset(
                 var gate = DelegatedTurnGate.Decide(sessions, ownerId, session.Id,
                     "Назначение дефолт-персоны",
                     alsoWhenExecutorSuppressed: false,
-                    allowInTeamImplement: false, allowInWorkLoop: false,
+                    allowInTeamImplement: false,
                     failOpenWhenUnknown: false);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
                 return Unwrap(await crud.MakeDefaultAsync(ownerId,
@@ -387,7 +387,7 @@ public sealed partial class PersonasToolset(
                 var gate = DelegatedTurnGate.Decide(sessions, ownerId, session.Id,
                     "Вопрос другой персоне",
                     alsoWhenExecutorSuppressed: false,
-                    allowInTeamImplement: false, allowInWorkLoop: false,
+                    allowInTeamImplement: false,
                     failOpenWhenUnknown: false);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
 

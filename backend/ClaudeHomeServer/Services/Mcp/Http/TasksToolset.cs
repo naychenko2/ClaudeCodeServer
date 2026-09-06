@@ -428,15 +428,17 @@ public sealed class TasksToolset(
             {
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на TasksController.
                 // Execute: fail-closed без вызывателя, запрет на делегированном и реакционном
-                // ходу, квоты team-implement/work-loop вместо запрета. Сессия — из хвоста
-                // (уже изолирована по владельцу), заголовку от клиента доверять нельзя.
-                // failOpenWhenUnknown: false формально недостижим (сессию резолвит TryResolve
-                // выше, пустого id сюда не доезжает) — fail-closed защита на будущее
+                // ходу, квота team-implement вместо запрета. Для обычного чата с циклом
+                // «до готово» квоты больше нет: лимит возвратов держит Iteration в
+                // ContinueWorkLoopAsync. Сессия — из хвоста (уже изолирована по владельцу),
+                // заголовку от клиента доверять нельзя. failOpenWhenUnknown: false формально
+                // недостижим (сессию резолвит TryResolve выше, пустого id сюда не доезжает)
+                // — fail-closed защита на будущее
                 var gate = DelegatedTurnGate.Decide(
                     sessions, context.OwnerId, session.Id,
                     "Запуск задачи на исполнение",
                     alsoWhenExecutorSuppressed: true,
-                    allowInTeamImplement: true, allowInWorkLoop: true,
+                    allowInTeamImplement: true,
                     failOpenWhenUnknown: false);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
 

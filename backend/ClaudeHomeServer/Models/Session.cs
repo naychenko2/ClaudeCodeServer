@@ -27,15 +27,11 @@ public class SessionWorkLoop
     public int MaxIterations { get; set; } = 20;
     // working — рабочие итерации; waiting — координатор ждёт доклада исполнителя по делегированной
     // задаче ИЛИ ответил `<waiting>` (ждёт внешнего события, о котором система знать не может);
-    // цикл не шлёт директиву продолжения, итерации не тратятся, LoopTurnInFlight снят — иначе
-    // drain вечно уступает. verifying — финальный верификационный ход после маркера.
+    // цикл не шлёт директиву продолжения, ожидание бесплатно (Iteration не растёт), LoopTurnInFlight
+    // снят — иначе drain вечно уступает. verifying — финальный верификационный ход после маркера.
+    // Iteration++ происходит РОВНО НА ВОЗВРАТЕ waiting→working в ContinueWorkLoopAsync:
+    // ждать — бесплатно, но круг «запуск исполнителя → доклад → продолжение» учитывается.
     public string Phase { get; set; } = "working";
-    // Сколько раз в цикле уже запущены задачи на исполнение: счёт ведёт бэкенд в точке
-    // запуска (гейт DenyOnDelegatedTurn), а не модель — как у TeamImplementBudget. Квота
-    // заменяет запрет на ходу доклада, иначе «доклад → запуск → доклад» — бесконечный цикл.
-    public int ExecutionsStarted { get; set; }
-    // Потолок запусков задач за цикл (дефолт из конфига Loop:MaxTaskExecutions)
-    public int MaxExecutions { get; set; } = 20;
     // Счётчик тиков ожидания по маркеру `<waiting>` (задача придёт сама докладом — её НЕ тикаем).
     // WaitingTicks++ в фоне (TickWaitingLoopsAsync) раз в Loop:WaitingTickSeconds, до лимита
     // Loop:MaxWaitingTicks. На потолке — стоп с reason="waiting_timeout". Сбрасывается
@@ -119,15 +115,6 @@ public enum TeamWaveTrigger
 public enum TeamRunQuota
 {
     NotTeamMode,
-    Allowed,
-    Exhausted,
-}
-
-// Вердикт квоты запуска задач в цикле «до готово» (work-loop-аналог командной Э4).
-// NotInLoop — чат не в цикле: работает прежний запрет DenyOnDelegatedTurn.
-public enum WorkLoopRunQuota
-{
-    NotInLoop,
     Allowed,
     Exhausted,
 }

@@ -219,10 +219,15 @@ public class ChatArchiveFlagTests : IDisposable
     // --- Формат стора ---
 
     [Fact]
-    public void BackupSchema_ВерсияНеИзменена()
+    public void BackupSchema_ВерсияНеНижеДевятой()
     {
-        // Поля архива аддитивны (nullable с дефолтом) — версию формата не двигаем
-        BackupSchema.Version.Should().Be(8);
+        // Бамп 8→9 (вынос квоты цикла «до готово», удаление ExecutionsStarted/MaxExecutions
+        // и enum WorkLoopRunQuota) был необходим — старые сессии с этими полями читаются
+        // штатно через System.Text.Json (лишние поля тихо игнорируются), но BackupSchema
+        // обязательно двигается по правилу «удаление поля = ломающее изменение». Сторож тут
+        // ловит откат инкремента вниз, а конкретные числа версий живут в комментариях
+        // BackupSchema.
+        BackupSchema.Version.Should().BeGreaterThanOrEqualTo(9);
     }
 
     // --- Подключение стора копий: SetArchived копирует и возвращает транскрипт ---

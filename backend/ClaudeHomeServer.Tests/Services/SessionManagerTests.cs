@@ -2649,11 +2649,16 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task ContinueWorkLoop_ЛимитИтераций_ЯвноеСообщениеИСниманиеЦикла()
     {
+        // Имитируем возврат из waiting: Phase=waiting руками, после return ContinueWorkLoopAsync
+        // инкрементирует Iteration, проверяет MaxIterations и стопит. До правки цикл жёг
+        // итерации на КАЖДОМ ходе — Phase=working+Iteration=2 хватало. Теперь инкремент
+        // привязан к возврату, поэтому нужен явный Phase=waiting, иначе счётчик не сдвинется.
         var session = await MkBusySessionAsync("loop-limit", SessionStatus.Working);
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
         var loop = _sut.GetById(session.Id)!.WorkLoop!;
         loop.MaxIterations = 3;
-        loop.Iteration = 2; // следующая итерация (после ++) упрётся в лимит
+        loop.Iteration = 2; // следующий возврат из waiting (++ → 3) упрётся в лимит
+        loop.Phase = "waiting";
         var entry = GetEntry(session.Id);
         SetLoopTurnInFlight(entry, true);
 
@@ -2664,7 +2669,7 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
         var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
         msg.Reason.Should().Be("limit");
-        msg.Text.Should().Contain("3 ходов");
+        msg.Text.Should().Contain("3 возвратов");
     }
 
     [Fact]
@@ -3042,10 +3047,13 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task ContinueWorkLoop_ДелегатНеЗадан_ПоведениеПрежнее()
+    public async Task ContinueWorkLoop_ДелегатНеЗадан_ЧистыйWorking_БезВозвратаИтерацияНеТратится()
     {
         // Без делегата HasLiveDelegatedTasks (тесты без DI к TaskManager) ждать нечего —
-        // цикл не уходит в waiting, итерация растёт как раньше. Покрывает явный null-контракт.
+        // цикл НЕ уходит в waiting, значит нет возврата, значит Iteration не растёт
+        // (новая семантика: инкремент ровно один раз на возврат waiting→working). Чистый
+        // working-ход шлёт директиву продолжения, но счётчика не трогает — пока модель
+        // работает и не выводит <promise>/<blocked>/<waiting>, цикл живёт бесплатно по счёту.
         var session = await MkBusySessionAsync("loop-waiting-nodelegate", SessionStatus.Working);
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
         _sut.HasLiveDelegatedTasks.Should().BeNull("санити: делегат не задан");
@@ -3061,7 +3069,8 @@ public class SessionManagerTests : IDisposable
 
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается");
         _sut.GetById(session.Id)!.WorkLoop!.Phase.Should().Be("working");
-        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(iterBefore + 1);
+        _sut.GetById(session.Id)!.WorkLoop!.Iteration.Should().Be(iterBefore,
+            "чистый working-ход — нет возврата → инкремент не происходит");
     }
 
     [Fact]
@@ -5429,13 +5438,14 @@ public class SessionManagerTests : IDisposable
             new Dictionary<string, object?>(), controller: new object());
     }
 
-    // Фильтр запуска задачи ровно с теми настройками, что стоят на TasksController.Execute
+    // Фильтр запуска задачи ровно с теми настройками, что стоят на TasksController.Execute.
+    // Цикл «до готово» больше НЕ несёт отдельной квоты запусков: чистый рабочий ход
+    // координатора пропускается, лавину возвратов держит Iteration в ContinueWorkLoopAsync.
     private static ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute ExecuteFilter() =>
         new("Запуск задачи на исполнение")
         {
             AlsoWhenExecutorSuppressed = true,
             AllowInTeamImplement = true,
-            AllowInWorkLoop = true,
         };
 
     [Fact]
@@ -5629,7 +5639,7 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.TeamImplement!.Budget.RunsUsed.Should().Be(0);
     }
 
-    // --- Квота запусков задач цикла «до готово» (work-loop: тот же паттерн Э4 для обычного чата) ---
+    // --- Цикл «до готово»: лимит Iteration на возвраты из ожидания (work-loop, ЕДИНСТВЕННЫЙ лимит) ---
 
     // Чат с включённым циклом «до готово» (work-loop-аналог MakeTeamStabAsync)
     private async Task<Session> MakeWorkLoopChatAsync(string suffix)
@@ -5641,62 +5651,60 @@ public class SessionManagerTests : IDisposable
         return _sut.GetById(session.Id)!;
     }
 
+    // Регресс: приёмка «один лимит». У SessionWorkLoop больше НЕТ полей квоты запусков.
+    // Старые записи data/sessions.json содержали executionsStarted/maxExecutions — System.Text.Json
+    // по умолчанию молча игнорирует лишние поля, новая схема должна прочитать штатно.
     [Fact]
-    public async Task КвотаЦикла_РежимВключён_РазрешаетИСразуСчитаетРасход()
+    public void WorkLoop_КвотыЗапусковБольшеНет_СтараяЗаписьДесериализуется()
     {
-        var session = await MakeWorkLoopChatAsync("quota-ok");
+        var legacy = @"{
+            ""Promise"": ""ГОТОВО"",
+            ""Iteration"": 4,
+            ""MaxIterations"": 20,
+            ""Phase"": ""waiting"",
+            ""ExecutionsStarted"": 17,
+            ""MaxExecutions"": 20,
+            ""WaitingTicks"": 0
+        }";
+        var opts = new System.Text.Json.JsonSerializerOptions
+        {
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        };
+        var roundTripped = System.Text.Json.JsonSerializer.Deserialize<SessionWorkLoop>(legacy, opts);
 
-        var (verdict, reason) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
-
-        verdict.Should().Be(SessionManager.WorkLoopRunQuota.Allowed,
-            "в цикле запрет хода доклада заменён квотой — иначе автономное продолжение невозможно");
-        reason.Should().BeNull();
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1,
-            "счёт ведёт бэкенд в точке запуска, а не модель");
+        roundTripped.Should().NotBeNull();
+        roundTripped!.Iteration.Should().Be(4, "значение из JSON сохранено");
+        roundTripped.MaxIterations.Should().Be(20);
+        roundTripped.Phase.Should().Be("waiting");
+        roundTripped.Promise.Should().Be("ГОТОВО");
+        // Лишние поля JSON с ExecutionsStarted/MaxExecutions теперь тихо игнорируются —
+        // System.Text.Json по умолчанию не падает на unknown fields, поэтому старая запись
+        // sessions.json читается новым кодом без миграции.
     }
 
+    // Регресс: запуск задачи из чата с включённым циклом на ОБЫЧНОМ ходу — разрешён (без
+    // отдельной квоты цикла). Лавину возвратов держит Iteration в ContinueWorkLoopAsync.
     [Fact]
-    public async Task КвотаЦикла_ВнеЦикла_ГейтРаботаетКакРаньше()
+    public async Task ГейтЗапуска_ОбычныйХодВЧатеСЦиклом_РазрешёнБезСписания()
     {
-        var dir = MkProjectDir("wl-plain");
-        var project = _projectManager.Create("WL-P", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var session = await MakeWorkLoopChatAsync("human-turn");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.CurrentTurnSuppressTasksExecute).Returns(false);
+        SetProcess(entry, adapter.Object);
+        var context = MakeMcpCallContext(session.Id);
 
-        var (verdict, _) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+        ExecuteFilter().OnActionExecuting(context);
 
-        verdict.Should().Be(SessionManager.WorkLoopRunQuota.NotInLoop,
-            "обычный чат без цикла остаётся под прежним запретом");
+        context.Result.Should().BeNull("чистый рабочий ход координатора — без квоты и без запрета");
     }
 
+    // Регресс: запуск задачи из чата с включённым циклом на ходу ДОКЛАДА исполнителя —
+    // по-прежнему запрещён (тоже AlsoWhenExecutorSuppressed, иначе «доклад → запуск →
+    // доклад» → бесконечный круг). Защиту держит счётчик Iteration, не квота.
     [Fact]
-    public async Task КвотаЦикла_ЧужойВладелец_НеРаспознаётРежим()
+    public async Task ГейтЗапуска_ХодДокладаВЧатеСЦиклом_ЗапретКакРаньше()
     {
-        var session = await MakeWorkLoopChatAsync("quota-alien");
-
-        var (verdict, _) = _sut.TryConsumeWorkLoopRun(session.Id, "another-user");
-
-        verdict.Should().Be(SessionManager.WorkLoopRunQuota.NotInLoop);
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task КвотаЦикла_ИсчерпанныйЛимит_ОтказСПричиной()
-    {
-        var session = await MakeWorkLoopChatAsync("quota-out");
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted = 20;
-
-        var (verdict, reason) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
-
-        verdict.Should().Be(SessionManager.WorkLoopRunQuota.Exhausted);
-        reason.Should().Contain("исчерпаны");
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(20, "отказ ничего не расходует");
-    }
-
-    [Fact]
-    public async Task ГейтЦикла_ХодДоклада_РазрешёнПокаЦелЛимит()
-    {
-        // Случай, ради которого делается фича: ход доклада (SuppressTasksExecute) в чате
-        // с включённым циклом раньше давал 403 и ломал автономное продолжение
         var session = await MakeWorkLoopChatAsync("report-turn");
         var entry = GetEntry(session.Id);
         var adapter = StubAdapter(entry);
@@ -5706,25 +5714,13 @@ public class SessionManagerTests : IDisposable
 
         ExecuteFilter().OnActionExecuting(context);
 
-        context.Result.Should().BeNull("цикл заменяет запрет хода доклада квотой запусков");
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1);
+        var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
+        result.StatusCode.Should().Be(403, "доклад → запуск → доклад кольцо держит AlsoWhenExecutorSuppressed");
     }
 
+    // Регресс: ход доклада вне цикла — запрет как раньше.
     [Fact]
-    public async Task ГейтЦикла_ОбычныйХод_ТожеРасходуетКвоту()
-    {
-        var session = await MakeWorkLoopChatAsync("human-turn");
-        var context = MakeMcpCallContext(session.Id);
-
-        ExecuteFilter().OnActionExecuting(context);
-
-        context.Result.Should().BeNull();
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1,
-            "квота расходуется на любом неделегированном ходу чата с циклом — иначе обход по «чистому» ходу");
-    }
-
-    [Fact]
-    public async Task ГейтЦикла_ХодДокладаВнеЦикла_ЗапретКакРаньше()
+    public async Task ГейтЗапуска_ХодДокладаВнеЦикла_ЗапретКакРаньше()
     {
         var dir = MkProjectDir("wl-report-plain");
         var project = _projectManager.Create("WL-RP", dir, TestUserId, TestUsername);
@@ -5741,8 +5737,9 @@ public class SessionManagerTests : IDisposable
         result.StatusCode.Should().Be(403, "без цикла запрет хода доклада сохраняется");
     }
 
+    // Регресс: делегированный ход в чате с циклом — запрет как раньше.
     [Fact]
-    public async Task ГейтЦикла_ДелегированныйХод_ОтказКакРаньше()
+    public async Task ГейтЗапуска_ДелегированныйХодВЧатеСЦиклом_ОтказКакРаньше()
     {
         var session = await MakeWorkLoopChatAsync("delegated");
         var entry = GetEntry(session.Id);
@@ -5755,138 +5752,89 @@ public class SessionManagerTests : IDisposable
 
         var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
         result.StatusCode.Should().Be(403, "цепочка делегирования не идёт дальше независимо от режима");
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0);
     }
 
+    // Ядро новой механики: возврат из waiting в working инкрементирует Iteration РОВНО ОДИН РАЗ.
+    // Тест от обратного к имитации drain → ContinueWorkLoopAsync: ставим Phase=waiting руками,
+    // эмулируем result хода-реакции и ждём директиву продолжения. Подробный сценарий — в
+    // ContinueWorkLoop_ПриходДоклада_ВозвращаетWorkingИПродолжаетЦикл; здесь — короткий контракт.
     [Fact]
-    public async Task ГейтЦикла_ДействиеВернуло404_ВозвращаетСписаннуюКвоту()
+    public async Task ContinueWorkLoop_ВозвратИзWaiting_ИнкрементируетНаОдин()
     {
-        var session = await MakeWorkLoopChatAsync("refund-404");
-        var context = MakeMcpCallContext(session.Id);
-        var filter = ExecuteFilter();
-        filter.OnActionExecuting(context);
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "квота списана авансом");
+        var session = await MkBusySessionAsync("loop-return-iter", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        _sut.GetById(session.Id)!.WorkLoop!.Phase = "waiting";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+        var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
 
-        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
-            context, [], controller: new object())
-        { Result = new Microsoft.AspNetCore.Mvc.NotFoundResult() };
-        filter.OnActionExecuted(executed);
-
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
-            "действие не состоялось (404) — впустую списанная единица вернулась");
-    }
-
-    [Fact]
-    public async Task ГейтЦикла_ДействиеУспешно_КвотаОстаётсяСписанной()
-    {
-        var session = await MakeWorkLoopChatAsync("refund-ok");
-        var context = MakeMcpCallContext(session.Id);
-        var filter = ExecuteFilter();
-        filter.OnActionExecuting(context);
-
-        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
-            context, [], controller: new object())
-        { Result = new Microsoft.AspNetCore.Mvc.OkObjectResult(new { }) };
-        filter.OnActionExecuted(executed);
-
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "успех — единица расходуется честно");
-    }
-
-    // Регресс Major (ревью Глеба, страховочное 07.08.2026): квота списана авансом, а вернуть
-    // её обязан детерминированный путь Refund при ЛЮБОМ неуспехе. Действие выбросило — единица
-    // обязана вернуться, иначе session-abort/exception между TryConsume и Refund вешает её навсегда.
-    [Fact]
-    public async Task ГейтЦикла_ДействиеВыбросилоИсключение_ВозвращаетСписаннуюКвоту()
-    {
-        var session = await MakeWorkLoopChatAsync("refund-exc");
-        var context = MakeMcpCallContext(session.Id);
-        var filter = ExecuteFilter();
-        filter.OnActionExecuting(context);
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "квота списана авансом");
-
-        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
-            context, [], controller: new object())
-        { Exception = new System.InvalidOperationException("действие упало") };
-        filter.OnActionExecuted(executed);
-
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
-            "исключение в действии — запуск не состоялся, единица вернулась");
-    }
-
-    // Регресс Major (тот же ревью): до правки refund смотрел только на Exception и статус
-    // результата — и промахивался на замыкании хода другим фильтром ДО запуска действия
-    // (Canceled=true без результата-ошибки): квота списана, запуск не шёл, а возврата нет.
-    [Fact]
-    public async Task ГейтЦикла_ХодЗамкнутДоЗапуска_ВозвращаетСписаннуюКвоту()
-    {
-        var session = await MakeWorkLoopChatAsync("refund-canceled");
-        var context = MakeMcpCallContext(session.Id);
-        var filter = ExecuteFilter();
-        filter.OnActionExecuting(context);
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "квота списана авансом");
-
-        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
-            context, [], controller: new object())
-        { Canceled = true }; // другой фильтр замкнул пайплайн до действия — результата-ошибки нет
-        filter.OnActionExecuted(executed);
-
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
-            "действие не запускалось (Canceled) — платить не за что, единица вернулась");
-    }
-
-    [Fact]
-    public async Task КвотаЦикла_ВыключитьИВключить_СчётчикиОбнуляются()
-    {
-        var session = await MakeWorkLoopChatAsync("reset");
-        _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1);
-
-        await _sut.SetWorkLoopAsync(session.Id, enabled: false, TestUserId);
-        await _sut.SetWorkLoopAsync(session.Id, enabled: true, TestUserId);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
 
         var loop = _sut.GetById(session.Id)!.WorkLoop!;
-        loop.ExecutionsStarted.Should().Be(0, "новый цикл — новая квота");
-        loop.MaxExecutions.Should().Be(20);
+        loop.Phase.Should().Be("working", "ожидание сменилось работой");
+        loop.Iteration.Should().Be(iterBefore + 1,
+            "ровно ОДИН инкремент на ВОЗВРАТ из ожидания — НЕ на каждом ходе цикла");
     }
 
-    // Регресс Major (ревью work-loop): ссылку на WorkLoop фильтр брал ДО входа в лок, а
-    // SetWorkLoopAsync обнулял поле без лока — в окне между ними инкремент уходил в мусорный
-    // объект, вердикт Allowed у чата с уже выключенным циклом. Симуляция последовательностью
-    // вызовов (без потоков): consume → отключение → consume должен дать NotInLoop, а счётчик
-    // обнулённого объекта не дорасти.
+    // Контракт: серия «запуск исполнителя → доклад → продолжение → запуск → доклад …»
+    // упирается в MaxIterations и останавливает цикл с reason="limit". Раньше лимитом был
+    // счётчик запусков (тоже 20), теперь — счётчик возвратов. Тот же потолок 20 = то же
+    // число «кругов запуск→доклад» на остановку, но без второго независимого счётчика.
     [Fact]
-    public async Task КвотаЦикла_ВыключениеПослеРасхода_ЗапрещаетИНеНакручиваетСчётчик()
+    public async Task ContinueWorkLoop_СерияВозвратовУпираетсяВЛимит_СтопСReasonLimit()
     {
-        var session = await MakeWorkLoopChatAsync("race-off");
-        _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
-        var loopBefore = _sut.GetById(session.Id)!.WorkLoop!;
-        loopBefore.ExecutionsStarted.Should().Be(1);
+        var session = await MkBusySessionAsync("loop-exhaust-limit", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.MaxIterations = 2;
+        loop.Iteration = 1; // следующий возврат (++ → 2) упрётся в лимит
+        loop.Phase = "waiting";
+        var entry = GetEntry(session.Id);
+        SetLoopTurnInFlight(entry, true);
 
-        // UI гасит цикл; к этому моменту потребитель уже мог держать ссылку на старый объект
-        await _sut.SetWorkLoopAsync(session.Id, enabled: false, TestUserId);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
 
-        var (verdict, _) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
-        verdict.Should().Be(SessionManager.WorkLoopRunQuota.NotInLoop,
-            "после отключения цикла расход невозможен — мусорная ссылка не даёт Allowed");
-        loopBefore.ExecutionsStarted.Should().Be(1,
-            "обнулённый в сессии объект цикла не получил инкремент");
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("limit");
+        msg.Text.Should().Contain("2 возвратов");
     }
 
+    // Контракт: чистый working-ход (без prior waiting) Iteration НЕ тратит.
+    // Это отличие от прежней семантики, где инкремент жил после блока waiting/promise/blocked
+    // и срабатывал на КАЖДОМ ходе цикла. Чистые working-итерации теперь бесплатны по счёту.
     [Fact]
-    public async Task КвотаЦикла_НулевойЛимитЗапусков_СразуИсчерпанБезРасхода()
+    public async Task ContinueWorkLoop_ЧистыйWorkingХод_ИтерацияНеТратится()
     {
-        // MaxExecutions мог оказаться 0 через протухшие данные/миграцию (валидация конфига
-        // в SetWorkLoopAsync тут ни при чём) — квота должна честно отчитать исчерпание.
-        var session = await MakeWorkLoopChatAsync("zero-max");
-        _sut.GetById(session.Id)!.WorkLoop!.MaxExecutions = 0;
+        var session = await MkBusySessionAsync("loop-no-return", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        // По умолчанию Phase=working, HasLiveDelegatedTasks=null — никакого возврата
+        var iterBefore = _sut.GetById(session.Id)!.WorkLoop!.Iteration;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
 
-        var (verdict, reason) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
 
-        verdict.Should().Be(SessionManager.WorkLoopRunQuota.Exhausted);
-        reason.Should().Contain("исчерпаны");
-        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
-            "отказ при исчерпанной квоте ничего не расходует");
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.Should().NotBeNull("цикл продолжается — нет блокера/промиса/waiting");
+        loop.Iteration.Should().Be(iterBefore,
+            "чистый working-ход (нет возврата из ожидания) итерацию не жжёт");
     }
+
+    // Старый тест «ДелегатНеЗадан_ПоведениеПрежнее» утверждал Iteration.Should().Be(iterBefore + 1).
+    // Новая семантика: без делегата (нет возврата) итерация не растёт. Тест переименован и
+    // отражает новый контракт — ищем «ожидание делегата» через _liveDelegated=false.
+    // Старая семантика переехала в ContinueWorkLoop_ЧистыйWorkingХод_ИтерацияНеТратится выше.
 
     // Minor (ревью work-loop): невалидное значение лимита в конфиге (≤0 / не число) не должно
     // молча отрубать цикл — сваливаемся в дефолт. LoopLimitOrDefault internal — покрыт напрямую.

@@ -80,9 +80,12 @@ public class BackupValidationTests : IDisposable
     // ImageFile/OriginalFile/Crop и значения enum Image (ADR-009 §6) — архивы,
     // снятые новой версией, обязаны отвергаться старым кодом с внятной ошибкой
     [Fact]
-    public void ВерсияСхемы_Поднята8_ПослеУдаленияРастровыхИконокПроекта()
+    public void ВерсияСхемы_НеОткатиласьНижеПоследнегоБампа()
     {
-        BackupSchema.Version.Should().Be(8);
+        // Бампы 8→9 (вынос квоты цикла) идемпотентны: тест не привязан к конкретному числу,
+        // а проверяет, что счётчик не откатили. Точные числа версий живут в комментариях
+        // BackupSchema и в ревью задач, их тут дублировать не нужно.
+        BackupSchema.Version.Should().BeGreaterThanOrEqualTo(9);
     }
 
     [Fact]

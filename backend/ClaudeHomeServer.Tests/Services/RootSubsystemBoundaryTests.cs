@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -60,9 +60,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>KnowledgeService</c> давало зелёный boundary-тест, потому что
 /// <c>KnowledgeService</c> жил в корне Services и его не видел ни один страж.
 ///
-/// Известное ограничение (как у основного стражa): читаются поля, параметры
-/// конструкторов, публичные свойства и сигнатуры публичных методов — тела
-/// методов и IL НЕ читаются.
+/// Сторож читает: поля, параметры конструкторов, публичные свойства, сигнатуры
+/// публичных методов И тела методов (IL-скан через <see cref="BoundaryIlScanner"/>).
 /// </summary>
 public class RootSubsystemBoundaryTests
 {
@@ -84,7 +83,16 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Mcp",
+        // Сборка `ClaudeHomeServer.Core` — спинка (assembly-based check в
+        // `IsSharedAllowed`); Protocol — WS-контракт.
+        // См. комментарии в SubsystemBoundaryTests.
+        "ClaudeHomeServer.Protocol",
     };
+
+    /// <summary>Сборка-спинка из общего кода. Любой тип из `ClaudeHomeServer.Core.dll`
+    /// — инфраструктурный примитив, не сервисная логика (см. подробности в
+    /// <see cref="SubsystemBoundaryTests.CoreAssemblyName"/>).</summary>
+    private const string CoreAssemblyName = "ClaudeHomeServer.Core";
 
     /// <summary>Под-вертикали, на которые root-типы имеют право ссылаться
     /// как на общую инфраструктуру. По аналогии с per-vertical
@@ -192,6 +200,45 @@ public class RootSubsystemBoundaryTests
         // продуктовая вертикаль): точечный допуск ровно на `SkillsService` (того
         // же типа, что у `Llm`/`Turn` в их allow-list).
         "ClaudeHomeServer.Services.Skills.SkillsService",
+        // === IL-видимость (задача `8beee75e`, волна 1).
+        // `PersonaAgentFileGenerator` зовёт `OmcPersonaRouting.AgentTypesFor(...)`
+        // (static-метод, PersonaAgentFileGenerator.cs:148-149). IL-скан видит
+        // declaring-тип. Точечный допуск на конкретный тип.
+        "ClaudeHomeServer.Services.Prompts.OmcPersonaRouting",
+        // `PersonaAutomationService` зовёт `Tasks.TaskDueCalculator.ResolveTimeZone(...)`
+        // static-метод из тела метода. Точечный допуск.
+        "ClaudeHomeServer.Services.Tasks.TaskDueCalculator",
+        // `PersonaBindingsService`/`PersonasCrudService`/`TaskExecutionService`/
+        // `UnifiedSearchService` материализуют `Notes.NoteSemanticHit` (record,
+        // return-тип `NotesKnowledgeService.SearchAsync`). Точечный допуск.
+        "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
+        // `PersonaBindingsService`/`PersonasCrudService` резолвят `Skills.SkillInfo`
+        // через `sp.GetRequiredService<SkillInfo>()` (generic-аргумент виден
+        // IL-скану). Точечный допуск.
+        "ClaudeHomeServer.Services.Skills.SkillInfo",
+        // `PersonasCrudService` ссылается на `Personas.PersonaDraftService`
+        // (черновик персоны по промпту, тот же namespace — но это другой тип
+        // внутри root-неймспейса `ClaudeHomeServer.Services.Personas`).
+        // Префикс-шов не открываем: точечный допуск.
+        "ClaudeHomeServer.Services.Personas.PersonaDraftService",
+        // `ProjectPresetService` материализует nested-типы `DocsIndexService` в
+        // async-state (статический вызов `DocsIndexService.Scan(...)` из тела метода).
+        "ClaudeHomeServer.Services.Docs.DocsIndexService+ScopeFileResult",
+        "ClaudeHomeServer.Services.Docs.DocsIndexService+ScopeFileWriteStatus",
+        // `TaskExecutionService` зовёт `Tasks.TaskSchedulerService.TaskUrl(...)`
+        // static-метод из тела метода — аналогично задокументированному шву
+        // `Tasks → TaskHubExtensions` (см. комментарий у Tasks allow-list).
+        "ClaudeHomeServer.Services.Tasks.TaskSchedulerService",
+        // `TaskExecutionService` материализует nested `Spend.TaskPromptMetricsStore+Entry`
+        // в async-state (поле state-машины). Точечный допуск на nested-тип.
+        "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore+Entry",
+        // Telemetry (бывший префикс, заменён точечным допуском):
+        // `PersonasCrudService`/`OnboardingController`/`ProjectPresetsController`
+        // зовут `ServerMetrics.Record*` из тел методов. Запись ДЕКОРАТИВНА и оставлена
+        // как документация: финальное правило сторожа ниже флагает только
+        // `ClaudeHomeServer.Services.*`, поэтому `ClaudeHomeServer.Telemetry` не гейтится
+        // здесь вовсе — как `Hubs`/`Protocol`/`Controllers`. Гейт живёт в сторожа вертикалей.
+        "ClaudeHomeServer.Telemetry.ServerMetrics",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как
@@ -273,7 +320,11 @@ public class RootSubsystemBoundaryTests
         {
             var seen = new HashSet<(string, string)>();
 
-            foreach (var referenced in CollectReferencedTypes(type))
+            // Сначала рефлексия (поля/конструкторы/сигнатуры), затем IL-скан тел
+            // методов. Обход nested-типов обязателен: без него сторож видит 4 из 7
+            // известных швов (docs/research/il-boundary-scan-2026-09.md, раздел про слепые пятна).
+            foreach (var referenced in CollectReferencedTypes(type)
+                .Concat(IlScanReferencedTypes(type)))
             {
                 if (referenced.Namespace is null) continue; // Безымянный namespace — не Services.*.
 
@@ -332,7 +383,7 @@ public class RootSubsystemBoundaryTests
 
         violations.Should().BeEmpty(
             "типы из корня ClaudeHomeServer.Services должны ссылаться только на спинку " +
-            "(System.*, Microsoft.*, Models, Services.Http/Composition/Mcp) или на другие " +
+            "(System.*, Microsoft.*, Models, Services.Http/Composition/Mcp, Protocol) или на другие " +
             "top-level root-типы. Любая ссылка на подсистемные вертикали " +
             "(Services.Knowledge, Services.Llm, Services.Dossiers и т.д.) — нарушение " +
             "архитектурного правила (см. CLAUDE.md/ADR-014). " +
@@ -340,10 +391,26 @@ public class RootSubsystemBoundaryTests
             string.Join("\n", violations));
     }
 
+    /// <summary>Типы, упомянутые в телах методов (включая nested-типы): статические
+    /// вызовы, <c>sp.GetRequiredService&lt;T&gt;()</c>, generic-аргументы инстанцированных
+    /// методов. См. <see cref="BoundaryIlScanner"/>.</summary>
+    private static IEnumerable<Type> IlScanReferencedTypes(Type type)
+    {
+        foreach (var method in BoundaryIlScanner.AllMethodsWithNested(type))
+            foreach (var t in BoundaryIlScanner.TypesFromBody(method))
+                yield return t;
+    }
+
     private static bool IsSharedAllowed(Type type)
     {
         var ns = type.Namespace;
         if (ns is null) return true;
+
+        // Сборка-спинка (см. CoreAssemblyName в SubsystemBoundaryTests): JsonFileStore/
+        // SsrfGuard/PermissionModeGuard/TeamProtocolMarkers живут в `Core.dll`, но их
+        // namespace = `ClaudeHomeServer.Services` (root). Без assembly-проверки они бы
+        // считались «root-типами с внешними ссылками» и ловились как нарушения.
+        if (type.Assembly.GetName().Name == CoreAssemblyName) return true;
 
         foreach (var prefix in SharedAllowedPrefixes)
         {

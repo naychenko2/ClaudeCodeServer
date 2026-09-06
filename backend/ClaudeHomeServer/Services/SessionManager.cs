@@ -16,7 +16,8 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
-public class SessionManager : IDisposable, ITeamNotifier
+public class SessionManager : IDisposable, ITeamNotifier,
+    ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake
 {
     private class SessionEntry
     {
@@ -540,6 +541,16 @@ public class SessionManager : IDisposable, ITeamNotifier
     // приватными методами (см. явные реализации ITeamNotifier ниже). В шаге 2г реализация
     // переедет в вертикаль штаба целиком, а сюда будет приходить через DI.
     private readonly ITeamNotifier _teamNotifier;
+    // Четыре шва данных «штаб → ядро» (этап 4, шаг 2г-3б; объявления — Services/Team/
+    // TeamCoreSeams.cs). Направление обратное ITeamNotifier: здесь вертикаль спрашивает ядро.
+    // Реализация — этот же класс явными реализациями ниже (обёртки над прежними приватными
+    // методами, поведение один в один). Поля нужны, чтобы штабной блок ходил в ядро уже через
+    // контракт: в шаге 2г тело уедет в вертикаль, и вызовы менять не придётся — только
+    // источник интерфейсов (DI вместо this). Каталога сессий среди полей нет намеренно: его
+    // спрашивает только вертикаль (у тела штаба, пока оно здесь, entry уже на руках).
+    private readonly ITeamHistoryStore _teamHistory;
+    private readonly ITeamRunState _teamRunState;
+    private readonly ITeamTurnIntake _teamIntake;
     // Личный реестр MCP-серверов владельца + значения их секретов (null — в тестах:
     // ход идёт только со встроенными серверами и наследством .mcp.json)
     private readonly Mcp.McpRegistry? _mcpRegistry;
@@ -723,6 +734,11 @@ public class SessionManager : IDisposable, ITeamNotifier
         // и `_personas.OnPersonaChanged` — порядок между ними значения не имеет, оба
         // простые подписки на события без зависимости от шва штаба.
         _teamNotifier = this;
+        // Швы данных «штаб → ядро» — тем же приёмом и в той же точке: их читает штабной блок,
+        // который может сработать уже из LoadSessions (восстановление состояния режима).
+        _teamHistory = this;
+        _teamRunState = this;
+        _teamIntake = this;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -6180,7 +6196,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 "задачи волны продолжат исполняться сами по себе, но закрытия волны, сводки и " +
                 "итога итерации больше не будет. Проверьте их вручную.";
             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            await AppendStoredAsync(sessionId, new StoredTextMessage(text, personaId: author, timestamp: ts),
+            await _teamHistory.AppendAsync(sessionId, new StoredTextMessage(text, personaId: author, timestamp: ts),
                 new GuestTextMessage(text, author, ts));
         }
         return entry.Info;
@@ -6596,7 +6612,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             // координатору не выдаётся, и без записи текст человека исчез бы из чата
             // (раньше кнопка слала его обычным сообщением).
             var editTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            await AppendStoredAsync(sessionId,
+            await _teamHistory.AppendAsync(sessionId,
                 new StoredUserMessage(feedback.Trim(), timestamp: editTs),
                 new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
 
@@ -6644,7 +6660,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // Аккумулятора нет — решение ложится прямо в историю на диске. Фильтр по Resolved
         // делает путь идемпотентным: двойной клик по карточке (обычное дело сразу после
         // рестарта) второй раз не пройдёт и волну дважды не раздаст.
-        else if (!await MutateStoredAsync<StoredTeamPlanMessage>(entry, sessionId,
+        else if (!await _teamHistory.MutateCardAsync<StoredTeamPlanMessage>(sessionId,
             m => m.PlanId == planId && !m.Resolved,
             m => { m.Plan = plan; m.Resolved = resolved; if (resolved) m.Approved = plan.Approved; }))
             return null;
@@ -6721,7 +6737,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
                 $"сохранение истории после гашения устаревшей карточки плана ({sessionId})");
         }
         else
-            await MutateStoredAsync<StoredTeamPlanMessage>(entry, sessionId,
+            await _teamHistory.MutateCardAsync<StoredTeamPlanMessage>(sessionId,
                 m => m.PlanId == planId && !m.Resolved,
                 m => { m.Plan = plan; m.Resolved = true; m.Approved = false; });
 
@@ -6737,7 +6753,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             "в чате {SessionId} отклонено", planId, plan.Version, team.PlanVersion, sessionId);
         if (personaId is null) return;
         var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await AppendStoredAsync(sessionId, new StoredTextMessage(text, personaId: personaId, timestamp: ts),
+        await _teamHistory.AppendAsync(sessionId, new StoredTextMessage(text, personaId: personaId, timestamp: ts),
             new GuestTextMessage(text, personaId, ts));
     }
 
@@ -6763,7 +6779,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         }
         else
         {
-            changed = await MutateStoredAsync<StoredTeamPlanMessage>(entry, sessionId,
+            changed = await _teamHistory.MutateCardAsync<StoredTeamPlanMessage>(sessionId,
                 m => m.PlanId == oldId && !m.Resolved,
                 m => { m.Resolved = true; m.Approved = false; m.SupersededBy = nextVersion; });
         }
@@ -6795,7 +6811,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // Чат неактивен (после рестарта аккумулятор ещё не оживлён) — пишем прямо в историю.
         // Молча выйти нельзя: раздача волны проставляет под-задачам TaskId, и без записи
         // следующее чтение плана с диска увидело бы их нерозданными и создало дубли задач.
-        await MutateStoredAsync<StoredTeamPlanMessage>(entry, sessionId,
+        await _teamHistory.MutateCardAsync<StoredTeamPlanMessage>(sessionId,
             m => m.PlanId == plan.Id, m => m.Plan = plan);
     }
 
@@ -7151,7 +7167,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // трогаем: карточку мог составить другой участник штаба (например планировщик).
         escalation.PersonaId ??= entry.Info.TeamImplement?.CoordinatorPersonaId ?? entry.Info.PersonaId;
 
-        await AppendStoredAsync(sessionId,
+        await _teamHistory.AppendAsync(sessionId,
             new StoredTeamEscalationMessage { EscalationId = escalation.Id, Escalation = escalation },
             new TeamEscalationMessage(escalation.Id, escalation.Kind.ToWireToken(), escalation.Title,
                 escalation.Details, escalation.Actions, escalation.TaskId, escalation.Wave,
@@ -7226,7 +7242,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             return true;
         }
         // Чат неактивен (после рестарта аккумулятор ещё не оживлён) — правим историю на диске
-        return await MutateStoredAsync<StoredTeamEscalationMessage>(entry, sessionId,
+        return await _teamHistory.MutateCardAsync<StoredTeamEscalationMessage>(sessionId,
             m => m.EscalationId == escalationId && !m.Escalation.Resolved,
             m =>
             {
@@ -7259,7 +7275,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         {
             // Чат неактивен — карточка лежит только на диске
             StoredTeamEscalationMessage? card = null;
-            var ok = await MutateStoredAsync<StoredTeamEscalationMessage>(entry, sessionId,
+            var ok = await _teamHistory.MutateCardAsync<StoredTeamEscalationMessage>(sessionId,
                 m => m.EscalationId == escalationId && !m.Escalation.Resolved,
                 m => { m.Escalation.Resolved = true; m.Escalation.ChosenActionId = actionId; card = m; });
             if (!ok) return false;
@@ -7443,7 +7459,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             var teamState = entry.Info.TeamImplement;
             if (!string.IsNullOrWhiteSpace(teamState?.LastPlanRequest))
                 await RunTeamPlanningAsync(sessionId, teamState.LastPlanRequest,
-                    teamState.LastPlanFeedback, entry.TeamTurnFromHuman);
+                    teamState.LastPlanFeedback, _teamRunState.TurnStartedByHuman(sessionId));
             else
                 _log.LogWarning("Повтор планирования в чате {SessionId}: сохранённая вводная пуста", sessionId);
             return true;
@@ -7451,7 +7467,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
         // Координатор узнаёт решение обычным ходом — как если бы человек написал его текстом.
         // В ленте — плашка механики, а не пузырь «Автоматически» с сырым текстом директивы.
-        await SendOrEnqueueAsync(sessionId,
+        await _teamIntake.SendOrEnqueueAsync(sessionId,
             TeamImplementPrompts.EscalationResolvedTurn(escalation, actionId, label, comment),
             senderPersonaId: null, silent: true, suppressTasksExecute: true,
             staffNote: TeamStaffNotes.EscalationResolved);
@@ -7668,7 +7684,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // приходилось отвечать на ложную карточку (прогон Веры P16).
         var stalledStage = team.Stage == TeamImplementStage.Interview
             || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
-        if (stalledStage && !asked && !entry.TeamPlanningInFlight && !AsyncAgentInFlight(entry))
+        if (stalledStage && !asked && !_teamRunState.IsPlanningInFlight(sessionId)
+            && !_teamRunState.HasAsyncAgent(sessionId))
         {
             // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
             // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/
@@ -7921,7 +7938,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             await BroadcastTeamImplementAsync(sessionId, entry);
         }
 
-        await RunTeamPlanningAsync(sessionId, request, feedback, entry.TeamTurnFromHuman);
+        await RunTeamPlanningAsync(sessionId, request, feedback, _teamRunState.TurnStartedByHuman(sessionId));
     }
 
     // Собственно планирование: вводная (и правка к плану) сохраняются для повтора, зовётся
@@ -7949,7 +7966,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         var isEdit = !string.IsNullOrWhiteSpace(feedback);
         // Флаг живого планирования: гард молчаливого тупика по концу хода (см.
         // HandleTeamTurnEndAsync) не поднимает тревогу, пока планировщик реально строит план.
-        entry.TeamPlanningInFlight = true;
+        _teamRunState.SetPlanningInFlight(sessionId, true);
         try
         {
             var (plan, reason) = await CreateTeamPlanAsync(sessionId, request,
@@ -7981,7 +7998,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         }
         finally
         {
-            entry.TeamPlanningInFlight = false;
+            // Сброс идёт по sessionId, а не по захваченному entry: если чат удалили за время
+            // планирования (потолок 300 с), сбрасывать нечего и не нужно — удалённый entry в
+            // словарь уже не вернётся (создание всегда new SessionEntry), а флаг читают ТОЛЬКО
+            // через него (гард тупика, sweep через IsSessionBusy). Прежняя запись на
+            // entry-сироту была не наблюдаема, поведение не изменилось.
+            _teamRunState.SetPlanningInFlight(sessionId, false);
         }
     }
 
@@ -8225,7 +8247,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         else await PublishTeamEscalationAsync(sessionId, card);
 
         if (withTurn)
-            await SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
+            await _teamIntake.SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason, team),
                 senderPersonaId: null, silent: true, suppressTasksExecute: true,
                 staffNote: TeamStaffNotes.InterviewReturn);
     }
@@ -8261,6 +8283,62 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
         return entry.TeamPlanningInFlight;
     }
+
+    // === Четыре шва данных «штаб → ядро» (этап 4, шаг 2г-3б) ===
+    // Явные реализации контрактов из Services/Team/TeamCoreSeams.cs: наружу недоступны, штаб
+    // ходит через поля-интерфейсы. Тела — обёртки над прежними методами ядра, поведение один
+    // в один; в шаге 2г тело штаба уедет в вертикаль, и эти реализации останутся ЕДИНСТВЕННЫМ
+    // местом, где вертикаль касается SessionEntry и словаря сессий.
+    // ITeamRunState.HasViewers отдельной обёртки не имеет: публичный HasViewers ядра совпадает
+    // с контрактом по сигнатуре и реализует его неявно.
+
+    TeamSessionInfo? ITeamSessionDirectory.Get(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? Snapshot(entry.Info) : null;
+
+    IReadOnlyList<TeamSessionInfo> ITeamSessionDirectory.ListChildren(string parentSessionId) =>
+        [.. _sessions.Values.Select(e => e.Info)
+            .Where(s => s.ParentSessionId == parentSessionId)
+            .Select(Snapshot)];
+
+    ILookup<string, TeamSessionInfo> ITeamSessionDirectory.ChildrenByParent() =>
+        _sessions.Values.Select(e => e.Info)
+            .Where(s => s.ParentSessionId is not null)
+            .ToLookup(s => s.ParentSessionId!, Snapshot);
+
+    // Снимок под нужды штаба: узкий набор полей вместо 40-польной Session (см. TeamSessionInfo)
+    private static TeamSessionInfo Snapshot(Session s) =>
+        new(s.Id, s.ParentSessionId, s.ProjectId, s.OwnerId, s.Status, s.UpdatedAt);
+
+    Task<bool> ITeamHistoryStore.MutateCardAsync<T>(string sessionId, Func<T, bool> match, Action<T> mutate)
+        => _sessions.TryGetValue(sessionId, out var entry)
+            ? MutateStoredAsync(entry, sessionId, match, mutate)
+            : Task.FromResult(false);
+
+    Task ITeamHistoryStore.AppendAsync(string sessionId, StoredMessage stored, ServerMessage broadcast)
+        => AppendStoredAsync(sessionId, stored, broadcast);
+
+    bool ITeamRunState.HasLiveTurn(string sessionId) => HasLiveTurnProcess(sessionId);
+
+    bool ITeamRunState.HasAsyncAgent(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && AsyncAgentInFlight(entry);
+
+    bool ITeamRunState.TurnStartedByHuman(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && entry.TeamTurnFromHuman;
+
+    bool ITeamRunState.IsPlanningInFlight(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && entry.TeamPlanningInFlight;
+
+    void ITeamRunState.SetPlanningInFlight(string sessionId, bool inFlight)
+    {
+        if (_sessions.TryGetValue(sessionId, out var entry)) entry.TeamPlanningInFlight = inFlight;
+    }
+
+    Task<bool> ITeamTurnIntake.SendOrEnqueueAsync(string sessionId, string text,
+        string? senderPersonaId, bool silent, bool suppressTasksExecute, string? staffNote)
+        => SendOrEnqueueAsync(sessionId, text, senderPersonaId,
+            silent: silent, suppressTasksExecute: suppressTasksExecute, staffNote: staffNote);
+
+    void ITeamTurnIntake.InterruptTurn(string sessionId) => Interrupt(sessionId);
 
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не
     // больше двух на вводную — счёт ведёт бэкенд, модель своих раундов не помнит).

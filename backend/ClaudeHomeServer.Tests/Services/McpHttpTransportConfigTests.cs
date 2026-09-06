@@ -17,6 +17,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Сторожа стабильности состава (McpToolsetStabilityTests) это не заменяет и не трогает:
 /// там инвариант «состав не зависит от хода», здесь — форма объявления сервера.
 /// </summary>
+// Часть тестов перехватывает Console.SetError (процесс-глобален) — класс идёт в коллекции
+// процесс-глобального состояния (см. TestCollections.cs).
+[Collection(TestCollections.ProcessGlobalState)]
 public class McpHttpTransportConfigTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(),

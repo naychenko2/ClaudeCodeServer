@@ -70,6 +70,13 @@ public class ClaudeSession : ILlmSessionAdapter
     // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
     // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
     private readonly ILogger? _log;
+    // Категоризированный логгер сессии — отдельный канал для BareMode-диагностики.
+    // Раньше лог «BareMode: взята карта» шёл под категорией фабрики
+    // (LlmSessionAdapterFactory прокидывал свой ILogger в ClaudeSession): в логах
+    // фильтр по ClaudeSession не видел диагностику карты, фильтр по фабрике — ловил
+    // лишнее. Через ILoggerFactory.CreateLogger<ClaudeSession>() лог пишется под
+    // своей категорией.
+    private readonly ILogger<ClaudeSession>? _sessionLog;
     // Корень сервера (AppContext.BaseDirectory, прокинут через LlmSessionContext.ContentRootPath) —
     // от него резолвится SystemPromptFile BareMode, а не от _rootPath (корень ПРОЕКТА чата).
     // Файл поставляется с продуктом и существует ровно в одном месте — в репозитории/публикации
@@ -705,9 +712,11 @@ public class ClaudeSession : ILlmSessionAdapter
         string? glifMcpToken = null,
         ModelAssignmentResolver? assignments = null,
         FileChangeAttributor? fileChangeAttributor = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ILogger<ClaudeSession>? sessionLogger = null)
     {
         _log = logger;
+        _sessionLog = sessionLogger;
         _providers = providers;
         _assignments = assignments;
         _subscriptionPool = subscriptionPool;
@@ -2442,12 +2451,11 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Режим bare отключает автозагрузку CLAUDE.md, хуков, LSP, плагинов и авто-памяти.
         // У локальных моделей полная карта проекта съедает контекст и тормозит ход (замер
-        // 2026-09-05: 95 070 токенов при полной CLAUDE.md против 2 392 при --bare + краткой
-        // карте в SystemPromptFile — файл 5 521 байт, ~5.4 КБ). Вместо неё подаём явную
-        // короткую карту. Признак берётся от свойств СЕССИИ (EffectiveModel → провайдер),
-        // не хода: сигнатура запуска стабильна в пределах сессии, McpToolsetStabilityTests
-        // остаётся зелёным. Состав MCP задаётся через --mcp-config ниже — --bare его НЕ
-        // трогает (проверено отдельно).
+        // 2026-09-05: ~95 000 токенов при полной CLAUDE.md против ~2 400 при --bare +
+        // краткой карте в SystemPromptFile). Вместо неё подаём явную короткую карту.
+        // Признак берётся от свойств СЕССИИ (EffectiveModel → провайдер), не хода:
+        // сигнатура запуска стабильна в пределах сессии, McpToolsetStabilityTests остаётся
+        // зелёным. Состав MCP задаётся через --mcp-config ниже — --bare его НЕ трогает.
         //
         // OAuth-инвариант: --bare ломает OAuth-авторизацию CLI (пропускает чтение кредов
         // ~/.claude/.credentials.json, см. OneShotClaudeRunner.cs:299). Здесь это безопасно
@@ -2466,7 +2474,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     bareProvider.SystemPromptFile ?? "",
                     bareProvider.BareTools,
                     _launcher.Paths,
-                    _log,
+                    // BareMode-диагностика — под категорией ClaudeSession, не фабрики
+                    // (см. поле _sessionLog). Тесты без DI передают null — fallback на _log.
+                    _sessionLog ?? (ILogger?)_log,
                     out var bareWarning,
                     out _lastBareModeApplied);
                 if (bareWarning is not null)
@@ -2477,13 +2487,17 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 // SafeJoin бросает на пути ЗА корень (FileService.cs:74). Раньше вылетало
                 // из BuildArgs без диагностики и валило ход — теперь ловится тут.
+                // Явный сброс _lastBareModeApplied — обязателен: out-параметр в
+                // BuildBareModeArgs мог остаться не присвоенным (исключение прилетает
+                // ДО bareModeEffective = true), иначе поле несёт значение предыдущего хода.
                 Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile за пределами корня, ход без BareMode: {ex.Message}");
                 _lastBareModeApplied = false;
             }
             catch (InvalidOperationException ex)
             {
                 // ToRuntime: путь не входит в монтирование песочницы (путь есть на хосте,
-                // но bind-mount в container его не показывает).
+                // но bind-mount в container его не показывает). См. примечание выше
+                // про явный сброс _lastBareModeApplied.
                 Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile недоступен в песочнице, ход без него: {ex.Message}");
                 _lastBareModeApplied = false;
             }
@@ -2493,7 +2507,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // неполную поставку (bin/SystemPrompts положили не в тот каталог), но видимое
             // предупреждение в логе хода ускоряет диагностику — иначе единственный сигнал
             // это «модель уехала по полной CLAUDE.md», а почему — непонятно.
-            if (bareProvider.BareMode && !_lastBareModeApplied)
+            if (!_lastBareModeApplied)
             {
                 Console.Error.WriteLine(
                     $"[ClaudeSession] BareMode НЕ применён (провайдер {bareProvider.Key}, " +
@@ -4119,13 +4133,16 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         warning = null;
         bareModeEffective = false;
-        // BareMode без файла карты: --bare работает, но без явной карты модель
-        // останется без контекста. Это сознательный сценарий "только без CLAUDE.md"
-        // (CLI сам подтянет проектный, если есть) — НЕ снимаем флаг.
+        // BareMode без файла карты: --bare без --system-prompt-file оставил бы модель
+        // БЕЗ контекста, потому что --bare отключает автозагрузку CLAUDE.md и CLI
+        // ничего своего не подтянет. Асимметрия с веткой «файл не найден» ниже
+        // (она снимает оба флага с warning) была неоправданна — модель идёт без
+        // карты молча. Теперь единое поведение: пустой SystemPromptFile =
+        // BareMode снят с warning, ход в обычном режиме с полной CLAUDE.md.
         if (string.IsNullOrWhiteSpace(promptFilePath))
         {
-            bareModeEffective = true;
-            return BuildToolsArg(bareTools, "--bare");
+            warning = "SystemPromptFile не задан — BareMode снят, ход в обычном режиме";
+            return [];
         }
 
         var resolved = ResolvePromptPath(promptFilePath, serverContentRoot, projectRoot,
@@ -4154,20 +4171,20 @@ public class ClaudeSession : ILlmSessionAdapter
         // проверены на 2.1.241/2.1.261 — набор идентичен, CLI принимает любой. Текущий
         // порядок (--bare → --tools → --system-prompt-file) оставлен как наиболее читаемый.
         if (bareTools is { Length: > 0 })
-            args.AddRange(BuildToolsArg(bareTools, null));
+            args.AddRange(BuildToolsArg(bareTools));
         args.Add("--system-prompt-file");
         args.Add(paths.ToRuntime(resolved));
         bareModeEffective = true;
         return args;
     }
 
-    // Сборка цепочки ["--tools", "Bash Edit Read"]. Если tools пустой/null — возвращает
-    // либо только ["--bare"], либо пустой список. lead служит для случая "только --bare"
-    // когда нужно вернуть базовый токен (плюс возможный --tools).
-    private static List<string> BuildToolsArg(string[]? bareTools, string? lead)
+    // Сборка цепочки ["--tools", "Bash Edit Read"]; пустой/null список — пустой результат.
+    // Параметр lead («вернуть ещё и базовый токен») убран в круге 8: единственная точка
+    // вызова всегда передавала null, ветка была мёртвой, а комментарий обещал возврат
+    // ["--bare"], которого функция не делала.
+    private static List<string> BuildToolsArg(string[]? bareTools)
     {
-        var result = new List<string>(capacity: lead is null ? 2 : 4);
-        if (lead is not null) result.Add(lead);
+        var result = new List<string>(capacity: 2);
         if (bareTools is { Length: > 0 })
         {
             result.Add("--tools");

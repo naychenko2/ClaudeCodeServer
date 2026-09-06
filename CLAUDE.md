@@ -119,7 +119,7 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
   хуков, LSP, плагинов и авто-памяти; CLI получает ТОЛЬКО короткую карту через
   `--system-prompt-file`. Для локальных моделей с малым окном это снижает вход с ~95 000 до
   ~2 400 токенов (замер 2026-09-05). Файл карты (`backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md`,
-  4 419 байт / ~4.3 КБ) поставляется с продуктом. **Цепочка резолва** per-project:
+  несколько КБ) поставляется с продуктом. **Цепочка резолва** per-project:
   `<корень проекта>/docs/CLAUDE-local.md` (приоритет, потолок 16 КБ — выше
   отступаем к серверной) → серверный дефолт от `AppContext.BaseDirectory` (прокинут
   через `LlmSessionContext.ContentRootPath`) → оба флага снимаются с warning. Резолв от
@@ -130,7 +130,11 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
   OAuth-авторизацию CLI, но это безопасно СТРУКТУРНО: BareMode включается только для
   не-родного провайдера (реестр находит через `ResolveByModel`), а у не-родных OAuth нет
   (ставят `ANTHROPIC_API_KEY` из `BuildCliEnv`). Состав стабилен в пределах сессии
-  (`McpToolsetStabilityTests`).
+  (`McpToolsetStabilityTests`). **У container-владельцев карта живёт на паре, которую
+  обязаны держать синхронно:** bind-mount `<BaseDirectory>/SystemPrompts:/app/SystemPrompts`
+  (`SandboxManager`, факт наличия каталога входит в `ConfigHash`) и одноимённое правило
+  `DockerPathMapper` — расхождение рантайм не ловит, оно даёт exit=1 и ложный `Unreachable`
+  у каждого container-владельца; связаны тестом в `DockerPathMapperTests`.
   Тесты — `ClaudeSessionBareArgsTests`.
 - **Три слота моделей (strong/medium/weak) + глобальная таблица назначений.** Слот личный
   per-user поверх глобального инстанса; каждое МЕСТО применения модели — строка каталога

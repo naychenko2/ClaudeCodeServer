@@ -1,4 +1,3 @@
-using System.Reflection;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -9,14 +8,24 @@ namespace ClaudeHomeServer.Tests.Services;
 // СТОРОЖ container-фиксов BareMode в SandboxManager: bind-mount каталога SystemPrompts
 // (чтобы файл карты был виден в /app/SystemPrompts) и его учёт в ConfigHash (иначе смена
 // карты не пересоздаст контейнер). Оба пункта добавлены в ревью 2026-09-05 без тестов;
-// здесь — тесты через рефлексию, т.к. BuildRunArgs/ConfigHash приватные.
+// здесь — тесты через internal pure-функции BuildRunArgsForHost / ConfigHashForHost,
+// которые принимают systemPromptsHost параметром.
+//
+// Раньше тесты гоняли приватные методы через рефлексию и переименовывали общий
+// bin/SystemPrompts через Directory.Move (BuildRunArgs/ConfigHash брали путь от
+// AppContext.BaseDirectory). Окно между Move и finally при прерывании оставляло
+// SystemPrompts.bak_<guid>, и все последующие --no-build прогоны краснели до ручного
+// восстановления — блокер CI по H-3 ревью 2026-09-05. Тесты теперь работают в своих
+// временных каталогах (CreateDirectory/Delete в finally), build output не трогают.
 //
 // Мутация удаления блока bind-mount (`if (systemPromptsExists) args.AddRange(["-v", ...])`)
-// → тест ToRuntime_SystemPromptsBindMount_AddRangeMount красный.
-// Мутация снятия systemPromptsHost из ConfigHash → тест ConfigHash_УчитываетНаличиеSystemPrompts красный.
+// → тест BuildRunArgs_SystemPromptsСуществует_ДобавляетсяBindMount красный.
+// Мутация снятия systemPromptsHost из ConfigHash → тест ConfigHash_РазличаетНаличиеКаталога красный.
 public class SandboxManagerBareModeMountTests
 {
-    private static (SandboxManager Manager, string TmpDir) Make()
+    // Локальная подделка под bin/SystemPrompts: создаётся/удаляется в try/finally теста.
+    // Это РАЗРЕШЕНО потому, что каталог — собственный теста, не общий build output.
+    private static (SandboxManager Manager, string SystemPromptsHost) Make(string? createSystemPrompts = "yes")
     {
         var tmp = Path.Combine(Path.GetTempPath(), "sbx_baremode_" + Guid.NewGuid().ToString("N"));
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -24,148 +33,89 @@ public class SandboxManagerBareModeMountTests
             ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
             ["Sandbox:ProjectsRoot"] = Path.Combine(tmp, "ClaudeSandbox"),
         }).Build();
-        return (new SandboxManager(config, NullLogger<SandboxManager>.Instance), tmp);
+        var mgr = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
+        // Хост кладём в tmp, а не в AppContext.BaseDirectory — чтобы тесты не трогали
+        // build output (см. комментарий выше). Внутри tmp это дочерний каталог, его
+        // судьба — за тестом: создал при createSystemPrompts="yes", не создал при "no",
+        // удалил весь tmp в finally.
+        var host = Path.Combine(tmp, "SystemPrompts");
+        if (createSystemPrompts == "yes")
+            Directory.CreateDirectory(host);
+        return (mgr, host);
     }
 
-    private static string InvokeBuildRunArgs(SandboxManager m, string confHash)
+    private static string CleanTmp(string tmp)
     {
-        var method = typeof(SandboxManager).GetMethod(
-            "BuildRunArgs", BindingFlags.Instance | BindingFlags.NonPublic);
-        method.Should().NotBeNull("BuildRunArgs обязан быть в SandboxManager");
-        var result = method!.Invoke(m, new object[] { confHash });
-        var args = result.Should().BeAssignableTo<IEnumerable<string>>().Subject;
-        return string.Join(' ', args.Select(a =>
-            a.Contains(' ') ? "\"" + a + "\"" : a));
-    }
-
-    private static string InvokeConfigHash(SandboxManager m, string imageId)
-    {
-        var method = typeof(SandboxManager).GetMethod(
-            "ConfigHash", BindingFlags.Instance | BindingFlags.NonPublic);
-        method.Should().NotBeNull("ConfigHash обязан быть в SandboxManager");
-        return (string)method!.Invoke(m, new object[] { imageId })!;
+        try { Directory.Delete(tmp, recursive: true); } catch { /* каталог мог уже не быть */ }
+        return tmp;
     }
 
     [Fact]
-    public void ToRuntime_SystemPromptsBindMount_AddRangeMount_КогдаКаталогЕсть()
+    public void BuildRunArgs_SystemPromptsСуществует_ДобавляетсяBindMount()
     {
-        var (m, tmp) = Make();
-        var baseDir = AppContext.BaseDirectory;
-        var sysPrompts = Path.Combine(baseDir, "SystemPrompts");
-        var existed = Directory.Exists(sysPrompts);
-        if (!existed) Directory.CreateDirectory(sysPrompts);
+        var (mgr, host) = Make("yes");
         try
         {
-            var argsLine = InvokeBuildRunArgs(m, "test-hash");
+            var argsLine = string.Join(' ', SandboxManager.BuildRunArgsForHost(
+                host, mgr.Options, mgr.ProfilesHostDir, mgr.TmpHostDir, "test-hash")
+                .Select(a => a.Contains(' ') ? "\"" + a + "\"" : a));
+
             argsLine.Should().Contain(SandboxManager.SystemPromptsMount,
                 "при наличии каталога SystemPrompts рядом с бэкендом bind-mount в args обязан быть — " +
                 "иначе внутри контейнера файл карты не виден, ToRuntime в DockerPathMapper бросает, " +
                 "второй catch в ClaudeSession.BuildArgs снимает BareMode тихо");
-        }
-        finally
-        {
-            if (!existed) Directory.Delete(sysPrompts);
-        }
-    }
-
-    [Fact]
-    public void ToRuntime_SystemPromptsBindMount_ЕстьКогдаКаталогЕсть()
-    {
-        // Контракт: при наличии каталога SystemPrompts bind-mount добавляется в args —
-        // иначе внутри контейнера файл карты не виден, ToRuntime в DockerPathMapper
-        // бросает, второй catch в ClaudeSession.BuildArgs снимает BareMode тихо.
-        var (m, tmp) = Make();
-        var baseDir = AppContext.BaseDirectory;
-        var sysPrompts = Path.Combine(baseDir, "SystemPrompts");
-        var existed = Directory.Exists(sysPrompts);
-        if (!existed) Directory.CreateDirectory(sysPrompts);
-        try
-        {
-            var argsLine = InvokeBuildRunArgs(m, "test-hash");
             argsLine.Should().Contain("/projects");
             argsLine.Should().Contain("/sandbox-profiles");
             argsLine.Should().Contain("/turn-tmp");
-            argsLine.Should().Contain(SandboxManager.SystemPromptsMount);
         }
-        finally
-        {
-            if (!existed) Directory.Delete(sysPrompts);
-        }
+        finally { CleanTmp(Path.GetDirectoryName(host)!); }
     }
 
     [Fact]
-    public void ToRuntime_SystemPromptsBindMount_НетКогдаКаталогаНет()
+    public void BuildRunArgs_SystemPromptsОтсутствует_BindMountПодавлен()
     {
-        // Контракт: пустой каталог в контейнере не плодим (SandboxManager.BuildRunArgs
-        // подавляет bind-mount при systemPromptsExists=false). AppContext.BaseDirectory
-        // нельзя подменить из теста, поэтому временно ПЕРЕИМЕНОВЫВАЕМ bin/SystemPrompts
-        // (он всегда есть после билда — csproj копирует CLAUDE-local.md). Перемещение
-        // обратимо через try/finally + явная проверка восстановления в финале.
-        // Мутация удаления `if (systemPromptsExists)` → RED по любому каналу.
-        var (m, _) = Make();
-        var baseDir = AppContext.BaseDirectory;
-        var sysPrompts = Path.Combine(baseDir, "SystemPrompts");
-        Directory.Exists(sysPrompts).Should().BeTrue(
-            "тест ожидает, что bin/SystemPrompts создан при сборке (csproj копирует CLAUDE-local.md)");
-
-        var backup = sysPrompts + ".bak_" + Guid.NewGuid().ToString("N");
-        Directory.Move(sysPrompts, backup);
+        // Каталог не создаём — bind-mount должен подавиться (иначе контейнер тащит
+        // пустой /app/SystemPrompts).
+        var (mgr, host) = Make("no");
         try
         {
-            var argsLine = InvokeBuildRunArgs(m, "test-hash");
+            var argsLine = string.Join(' ', SandboxManager.BuildRunArgsForHost(
+                host, mgr.Options, mgr.ProfilesHostDir, mgr.TmpHostDir, "test-hash")
+                .Select(a => a.Contains(' ') ? "\"" + a + "\"" : a));
+
             argsLine.Should().Contain("/projects");
             argsLine.Should().Contain("/sandbox-profiles");
             argsLine.Should().Contain("/turn-tmp");
             argsLine.Should().NotContain(SandboxManager.SystemPromptsMount,
                 "при отсутствии каталога bind-mount подавляется — иначе контейнер тащит пустой /app/SystemPrompts");
         }
-        finally
-        {
-            if (Directory.Exists(backup))
-                Directory.Move(backup, sysPrompts);
-            // Если восстановление упало — фейлим тест явно, иначе BareMode молча
-            // выключится на дев-стенде (csproj копирует CLAUDE-local.md только если
-            // каталог существует, а после `dotnet build` он появится снова).
-            Directory.Exists(sysPrompts).Should().BeTrue(
-                $"тест обязан восстановить {sysPrompts}; иначе следующая сборка не скопирует CLAUDE-local.md");
-        }
+        finally { CleanTmp(Path.GetDirectoryName(host)!); }
     }
 
     [Fact]
-    public void ConfigHash_УчитываетНаличиеSystemPrompts()
+    public void ConfigHash_РазличаетНаличиеКаталога()
     {
-        // Тест проверяет, что ConfigHash РАЗЛИЧАЕТ состояния «каталог есть» и
-        // «каталога нет» (мутация снятия `systemPromptsExists ? systemPromptsHost : ""`
-        // из payload сделает хеш одинаковым с обеими ветками → RED). Хеш учитывает
-        // ТОЛЬКО факт наличия каталога, не его содержимое — изменение CLAUDE-local.md
-        // без пересоздания bin/SystemPrompts хеш не двигает (см. поведение ниже).
-        //
-        // Тест работает переименованием: каталог в bin/ уже есть после билда
-        // (csproj копирует CLAUDE-local.md), удалять его нельзя — он часть билд-вывода.
-        // Переименовываем в уникальное имя → ConfigHash видит отсутствие → переименовываем обратно.
-        var (m, _) = Make();
-        var baseDir = AppContext.BaseDirectory;
-        var sysPrompts = Path.Combine(baseDir, "SystemPrompts");
-        Directory.Exists(sysPrompts).Should().BeTrue(
-            "тест ожидает, что bin/SystemPrompts создан при сборке (csproj копирует CLAUDE-local.md)");
-
-        var hashWith = InvokeConfigHash(m, "img-1");
-
-        var backup = sysPrompts + ".bak_" + Guid.NewGuid().ToString("N");
-        Directory.Move(sysPrompts, backup);
+        // Хеш РАЗЛИЧАЕТ состояния «каталог есть» и «каталога нет» (мутация снятия
+        // `systemPromptsExists ? systemPromptsHost : ""` из payload сделает хеш
+        // одинаковым с обеими ветками → RED). Хеш учитывает ТОЛЬКО факт наличия каталога,
+        // не его содержимое — изменение CLAUDE-local.md без пересоздания каталога
+        // хеш не двигает.
+        var (mgr, host) = Make("yes");
         try
         {
-            var hashWithout = InvokeConfigHash(m, "img-1");
+            var hashWith = SandboxManager.ConfigHashForHost(
+                host, mgr.Options, mgr.ProfilesHostDir, mgr.TmpHostDir, "img-1");
+
+            // Удаляем каталог внутри tmp (НЕ в build output — см. комментарий класса).
+            Directory.Delete(host, recursive: true);
+            Directory.Exists(host).Should().BeFalse("каталог удалён внутри теста");
+
+            var hashWithout = SandboxManager.ConfigHashForHost(
+                host, mgr.Options, mgr.ProfilesHostDir, mgr.TmpHostDir, "img-1");
 
             hashWith.Should().NotBe(hashWithout,
                 "ConfigHash обязан учитывать наличие SystemPrompts — иначе смена карты не пересоздаст контейнер");
         }
-        finally
-        {
-            if (Directory.Exists(backup))
-                Directory.Move(backup, sysPrompts);
-            Directory.Exists(sysPrompts).Should().BeTrue(
-                $"тест обязан восстановить {sysPrompts}; иначе следующая сборка не скопирует CLAUDE-local.md");
-        }
+        finally { CleanTmp(Path.GetDirectoryName(host)!); }
     }
 }

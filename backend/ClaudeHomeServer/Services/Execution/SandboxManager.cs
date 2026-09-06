@@ -142,26 +142,31 @@ public sealed class SandboxManager
         finally { _lock.Release(); }
     }
 
-    private List<string> BuildRunArgs(string confHash)
+    // Pure-вариант для тестов: путь к SystemPrompts задаётся параметром, чтобы тесты
+    // работали во временном каталоге и не трогали общий bin/SystemPrompts (см. ревью
+    // 2026-09-05, H-3). Прод-код идёт через приватную BuildRunArgs ниже.
+    internal static List<string> BuildRunArgsForHost(
+        string systemPromptsHost,
+        SandboxOptions opts,
+        string profilesHostDir,
+        string tmpHostDir,
+        string confHash)
     {
-        var portEnd = Options.PortRangeStart + Options.PortRangeSize - 1;
-        // Хостовый путь краткой карты BareMode (SystemPrompts/): берём от BaseDirectory
-        // бэкенда, как и mcp/mcp-dify (остальные mount'ы — от data dir, не BaseDirectory).
+        var portEnd = opts.PortRangeStart + opts.PortRangeSize - 1;
         // Каталога нет (поставка без карты — bareProvider.SystemPromptFile пустой или
         // BareMode не используется) — bind-mount подавляем, чтобы не плодить пустой
         // каталог в контейнере.
-        var systemPromptsHost = Path.Combine(AppContext.BaseDirectory, "SystemPrompts");
         var systemPromptsExists = Directory.Exists(systemPromptsHost);
         var args = new List<string>
         {
             "run", "-d",
-            "--name", Options.ContainerName,
+            "--name", opts.ContainerName,
             "--restart", "unless-stopped",
             "--label", $"cc.sandbox.config={confHash}",
-            "-v", $"{Options.ProjectsRoot}:{ProjectsMount}",
-            "-v", $"{ProfilesHostDir}:{ProfilesMount}",
-            "-v", $"{TmpHostDir}:{TmpMount}",
-            "-p", $"{Options.PortRangeStart}-{portEnd}:{Options.PortRangeStart}-{portEnd}",
+            "-v", $"{opts.ProjectsRoot}:{ProjectsMount}",
+            "-v", $"{profilesHostDir}:{ProfilesMount}",
+            "-v", $"{tmpHostDir}:{TmpMount}",
+            "-p", $"{opts.PortRangeStart}-{portEnd}:{opts.PortRangeStart}-{portEnd}",
             "--add-host", "host.docker.internal:host-gateway",
         };
         if (systemPromptsExists)
@@ -169,37 +174,56 @@ public sealed class SandboxManager
         // Токен подписки в контейнер здесь НЕ кладём: он запёкся бы в момент создания и не
         // обновлялся бы после — единая точка правды теперь DockerProcessRunner.BuildTurnEnv
         // (доставка per-exec, на каждый docker exec заново).
-        if (!string.IsNullOrWhiteSpace(Options.Proxy))
+        if (!string.IsNullOrWhiteSpace(opts.Proxy))
         {
             foreach (var key in new[] { "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy" })
             {
                 args.Add("-e");
-                args.Add($"{key}={Options.Proxy}");
+                args.Add($"{key}={opts.Proxy}");
             }
             args.Add("-e");
             args.Add("NO_PROXY=localhost,127.0.0.1,::1,host.docker.internal");
             args.Add("-e");
             args.Add("no_proxy=localhost,127.0.0.1,::1,host.docker.internal");
         }
-        if (!string.IsNullOrWhiteSpace(Options.Memory)) { args.Add("--memory"); args.Add(Options.Memory); }
-        if (!string.IsNullOrWhiteSpace(Options.Cpus)) { args.Add("--cpus"); args.Add(Options.Cpus); }
-        args.Add(Options.Image);
+        if (!string.IsNullOrWhiteSpace(opts.Memory)) { args.Add("--memory"); args.Add(opts.Memory); }
+        if (!string.IsNullOrWhiteSpace(opts.Cpus)) { args.Add("--cpus"); args.Add(opts.Cpus); }
+        args.Add(opts.Image);
         return args;
     }
 
+    // Хостовый путь краткой карты BareMode (SystemPrompts/) — от AppContext.BaseDirectory
+    // бэкенда, как и mcp/mcp-dify (остальные mount'ы — от data dir, не BaseDirectory).
+    // internal: путь ОБЯЗАН совпадать с хостом правила /app/SystemPrompts в DockerPathMapper.
+    // Расхождение молча ломает container-владельцев (mount ведёт в одно место, --system-prompt-file
+    // указывает в другое → «System prompt file not found», exit=1, ноль событий stream-json →
+    // ложный Unreachable и цепочка фолбэка). Связку держит DockerPathMapperTests.
+    internal static string DefaultSystemPromptsHost() =>
+        Path.Combine(AppContext.BaseDirectory, "SystemPrompts");
+
+    private List<string> BuildRunArgs(string confHash) =>
+        BuildRunArgsForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, confHash);
+
     // Хеш параметров запуска: несовпадение метки на контейнере → пересоздать
     // (смена диапазона портов/mount'ов/прокси не применяется к живому контейнеру)
-    private string ConfigHash(string imageId)
+    internal static string ConfigHashForHost(
+        string systemPromptsHost,
+        SandboxOptions opts,
+        string profilesHostDir,
+        string tmpHostDir,
+        string imageId)
     {
-        var systemPromptsHost = Path.Combine(AppContext.BaseDirectory, "SystemPrompts");
         var systemPromptsExists = Directory.Exists(systemPromptsHost);
         var payload = string.Join("\n",
-            imageId, Options.ProjectsRoot, ProfilesHostDir, TmpHostDir,
-            Options.PortRangeStart.ToString(), Options.PortRangeSize.ToString(),
-            Options.Proxy, Options.Memory, Options.Cpus,
+            imageId, opts.ProjectsRoot, profilesHostDir, tmpHostDir,
+            opts.PortRangeStart.ToString(), opts.PortRangeSize.ToString(),
+            opts.Proxy, opts.Memory, opts.Cpus,
             systemPromptsExists ? systemPromptsHost : "");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..16];
     }
+
+    private string ConfigHash(string imageId) =>
+        ConfigHashForHost(DefaultSystemPromptsHost(), Options, ProfilesHostDir, TmpHostDir, imageId);
 
     private async Task<(int Code, string Stdout, string Stderr)> DockerAsync(CancellationToken ct, params string[] args)
     {

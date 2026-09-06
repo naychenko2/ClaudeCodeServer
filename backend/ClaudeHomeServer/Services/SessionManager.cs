@@ -697,8 +697,10 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // Хранитель состояния режима (волна А): создаётся ДО _teamNotifier/teamHistory
         // и до LoadSessions, чтобы восстановление состояния режима после рестарта
         // (через публичные обёртки WithTeamState) могло идти через TeamStateService
-        // сразу. Owning по тому же шаблону, что _teamCoordinator.
-        _teamState = new TeamStateService(this, _teamPlanning, _projects, _config);
+        // сразу. Owning по тому же шаблону, что _teamCoordinator. Волна Б: в
+        // конструктор добавлен LlmProviderRegistry — вертикаль сама проверяет
+        // CapabilitiesFor(model).SupportsPlanMode при входе в план-фазу.
+        _teamState = new TeamStateService(this, _teamPlanning, _projects, _config, llmProviders);
         _history = history;
         _adapters = adapters;
         _llmProviders = llmProviders;
@@ -6166,7 +6168,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // Выключение режима посреди интервью/планирования: сначала вернуть человеку его
         // режим прав, пока состояние с SavedMode ещё живо — иначе чат навсегда остался бы
         // в план-режиме, который ему навязал штаб (Э8).
-        if (!enabled) RestoreUserMode(sessionId, entry);
+        if (!enabled) RestoreUserMode(sessionId);
 
         if (enabled && entry.Info.TeamImplement is { } active)
         {
@@ -6260,36 +6262,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
     // (`ClaudeHomeServer.Services.PermissionModeGuard`) — там же, где тип `ClaudeMode`. Ядро
     // SessionManager и штаб TeamWaveService зовут его из Core по новому пути.
 
-    // Вход в план-режим стадий интервью и планирования (Э8): запоминаем режим прав человека
-    // и переводим чат в Plan — на этих стадиях правки запрещает сама permission-механика CLI,
-    // а не только список инструментов. Живому ходу режим меняем на лету (control-протокол
-    // set_permission_mode), как это делает SetMode.
-    // Провайдер без поддержки плана — деградируем молча: чат остаётся в прежнем режиме
-    // (гард «координатор не пишет код» продолжает работать), стадия при этом штатная.
-    private void EnterPlanPhaseMode(string sessionId, SessionEntry entry)
-    {
-        if (entry.Info.TeamImplement is null) return;
-        if (entry.Info.Mode == ClaudeMode.Plan) return;
-        if (!_llmProviders.CapabilitiesFor(entry.Info.Model).SupportsPlanMode) return;
-        // Сохранённый режим НЕ перезаписываем: цикл «интервью → волна → снова интервью»
-        // обязан вернуть исходный выбор человека, а не Plan, поставленный прошлым заходом.
-        WithTeamState(sessionId, t => { t.SavedMode ??= entry.Info.Mode; return true; });
-        entry.Info.Mode = ClaudeMode.Plan;
-        entry.Process?.TrySetPermissionModeLive(ClaudeMode.Plan);
-    }
+    // Вход в план-режим стадий интервью и планирования (Э8). Тело переехало в
+    // TeamStateService (волна Б): управление режимом хода — собственное дело вертикали,
+    // а ядро держит только рантайм-поля и доступ к Process. Обёртка сохранена ради
+    // сигнатуры (вызовы идут из нескольких точек этого класса).
+    private void EnterPlanPhaseMode(string sessionId)
+        => _teamState.EnterPlanPhaseMode(sessionId);
 
-    // Возврат режима человека после согласования плана (Confirming → Wave) либо при
-    // выключении режима. Выбор пользователя не затирается: после планирования чат работает
-    // в том режиме, в котором был — с поправкой на гард «координатор не пишет код».
-    private void RestoreUserMode(string sessionId, SessionEntry entry)
-    {
-        if (entry.Info.TeamImplement is not { SavedMode: { } saved } team) return;
-        var restored = PermissionModeGuard.GuardCompatibleMode(saved, team.CoordinatorNoCode);
-        WithTeamState(sessionId, t => { t.SavedMode = null; return true; });
-        if (entry.Info.Mode == restored) return;
-        entry.Info.Mode = restored;
-        entry.Process?.TrySetPermissionModeLive(restored);
-    }
+    // Возврат режима человека после согласования плана (Confirming → Wave), при
+    // выключении режима и в добавочном плане авто-волн (B1). Тело переехало в
+    // TeamStateService (волна Б); обёртка сохранена по тем же причинам, что
+    // EnterPlanPhaseMode.
+    private void RestoreUserMode(string sessionId)
+        => _teamState.RestoreUserMode(sessionId);
 
     // Бюджет итерации из дефолтов плана с optional override из конфига TeamImplement:Max*
     private TeamImplementBudget NewTeamImplementBudget() => _teamState.NewTeamImplementBudget();
@@ -6492,7 +6477,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             // входом в интервью по этой же вводной, снять было бы негде (RestoreUserMode звался
             // только по клику «Запустить» и при выключении режима), и селектор оставался бы
             // залоченным «Штаб планирует…» до конца жизни чата.
-            if (additional) RestoreUserMode(sessionId, entry);
+            if (additional) RestoreUserMode(sessionId);
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastTeamImplementAsync(sessionId, entry);
@@ -6664,7 +6649,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             // Э8: «Запустить» закрывает стадии интервью и планирования — человеку возвращается
             // его режим прав (селектор снова разблокирован). «Отменить» возвращает штаб в
             // планирование, поэтому план-режим там остаётся.
-            if (decision == TeamPlanDecision.Run) RestoreUserMode(sessionId, entry);
+            if (decision == TeamPlanDecision.Run) RestoreUserMode(sessionId);
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastTeamImplementAsync(sessionId, entry);
@@ -7889,7 +7874,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             });
             // План-режим — с классификации, а не с приёма сообщения: разговорный ход в
             // ожидании идёт в режиме человека, селектор не лочится.
-            EnterPlanPhaseMode(sessionId, entry);
+            EnterPlanPhaseMode(sessionId);
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastTeamImplementAsync(sessionId, entry);
@@ -8011,7 +7996,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
             }
             return true;
         });
-        RestoreUserMode(sessionId, entry);
+        RestoreUserMode(sessionId);
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastTeamImplementAsync(sessionId, entry);
@@ -8086,7 +8071,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // План-режим ставим ПОСЛЕ смены стадии: ход по этой самой вводной уже уйдёт в CLI
         // с --permission-mode plan, а не со следующего сообщения (ResetTeamIterationOnUserInput
         // зовётся на приёме сообщения, до очереди и до запуска процесса).
-        EnterPlanPhaseMode(sessionId, entry);
+        EnterPlanPhaseMode(sessionId);
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         FireAndForget(BroadcastTeamImplementAsync(sessionId, entry),
@@ -8184,7 +8169,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
         // План в итерации уже был — его карточка гаснет как заменённая: пока готовится версия
         // vN+1, по старой нельзя ни запустить волну, ни решить что-либо (кнопок у неё нет).
         if (hadPlan) await SupersedeCurrentPlanCardAsync(sessionId, entry, nextVersion);
-        EnterPlanPhaseMode(sessionId, entry);
+        EnterPlanPhaseMode(sessionId);
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastTeamImplementAsync(sessionId, entry);
@@ -8231,8 +8216,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e)
 
     void ITeamNotifier.RestoreUserMode(string sessionId)
     {
+        // Волна Б: реализация переехала в TeamStateService, шов развернулся в
+        // правильную сторону — ядро делегирует в вертикаль, а не наоборот.
+        _teamState.RestoreUserMode(sessionId);
+    }
+
+    void ITeamRunState.TrySetPermissionModeLive(string sessionId, ClaudeMode mode)
+    {
+        // Шов «вертикаль → ядро» для смены режима живому CLI-прогону: реализация в ядре
+        // потому, что именно ядро держит `entry.Process` (живой ILlmSessionAdapter).
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        RestoreUserMode(sessionId, entry);
+        entry.Process?.TrySetPermissionModeLive(mode);
     }
 
     bool ITeamNotifier.IsSessionBusy(string sessionId)

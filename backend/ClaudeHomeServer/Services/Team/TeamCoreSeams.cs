@@ -143,6 +143,15 @@ internal interface ITeamRunState
     /// <see cref="ITeamNotifier.IsSessionBusy"/>.
     /// </summary>
     void SetPlanningInFlight(string sessionId, bool inFlight);
+
+    /// <summary>
+    /// Сменить permission-mode живому CLI-прогону (control-протокол set_permission_mode).
+    /// Зовётся из вертикали штаба при входе в план-фазу (Э5) и при возврате режима
+    /// человека после согласования плана — без него режим применился бы только к
+    /// следующему ходу, а идущий остался бы в прежнем. Реализация в ядре: оно знает про
+    /// <c>entry.Process</c> (живой <c>ILlmSessionAdapter</c>).
+    /// </summary>
+    void TrySetPermissionModeLive(string sessionId, ClaudeMode mode);
 }
 
 /// <summary>

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Team;
 
@@ -35,22 +36,26 @@ internal sealed class TeamStateService
 {
     private readonly SessionManager _sessions;
     private readonly ITeamSessionDirectory _dir;
+    private readonly ITeamRunState _run;
     private readonly TeamPlanningService? _teamPlanning;
     private readonly ProjectManager _projects;
     private readonly IConfiguration? _config;
+    private readonly LlmProviderRegistry _llmProviders;
     // Лок-словарь штаба по sessionId: единственный держатель блокировки для мутаций
     // SessionTeamImplement. Инициализируется по требованию, GC подберёт объект, когда
     // режим выключат и ссылок не останется.
     private readonly ConcurrentDictionary<string, object> _teamLocks = new();
 
     internal TeamStateService(SessionManager sessions, TeamPlanningService? teamPlanning,
-        ProjectManager projects, IConfiguration? config)
+        ProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
     {
         _sessions = sessions;
         _dir = sessions;
+        _run = sessions;
         _teamPlanning = teamPlanning;
         _projects = projects;
         _config = config;
+        _llmProviders = llmProviders;
     }
 
     // Транзакция над состоянием режима: ЕДИНСТВЕННЫЙ способ править счётчики бюджета и
@@ -171,4 +176,40 @@ internal sealed class TeamStateService
     // чтобы вертикаль не тянула прямую ссылку на ChatHistoryService (общий ресурс ядра).
     public Task<TeamImplementPlan?> GetTeamPlanFromHistoryAsync(string claudeSessionId, string planId) =>
         _sessions.ReadStoredTeamPlanAsync(claudeSessionId, planId);
+
+    // План-режим при входе в план-фазу штаба (Э5). Тело переехало из SessionManager
+    // (волна Б плана выноса штаба): управление режимом хода — собственное дело вертикали,
+    // а ядро держит только рантайм-поля и доступ к Process. Поведение один в один:
+    // деградация провайдера без «План» — молчаливая (план-режим не навязывается),
+    // SavedMode сохраняется через WithTeamState (НЕ перезаписывается — цикл «интервью
+    // → волна → снова интервью» обязан вернуть исходный выбор человека, а не Plan,
+    // поставленный прошлым заходом), живой прогон CLI получает set_permission_mode
+    // на лету через шов ITeamRunState.TrySetPermissionModeLive.
+    public void EnterPlanPhaseMode(string sessionId)
+    {
+        var session = _sessions.GetById(sessionId);
+        if (session?.TeamImplement is null) return;
+        if (session.Mode == ClaudeMode.Plan) return;
+        if (!_llmProviders.CapabilitiesFor(session.Model).SupportsPlanMode) return;
+        WithTeamState(sessionId, t => { t.SavedMode ??= session.Mode; return true; });
+        session.Mode = ClaudeMode.Plan;
+        _run.TrySetPermissionModeLive(sessionId, ClaudeMode.Plan);
+    }
+
+    // Возврат режима человека после согласования плана (Confirming → Wave), при
+    // выключении режима, после миграции на провайдера без поддержки «План» и при
+    // добавочном плане авто-волн (B1). Тело переехало из SessionManager (волна Б).
+    // Гард «координатор не пишет код» сохраняется: восстановленный режим прогоняется
+    // через PermissionModeGuard.GuardCompatibleMode. Выбор пользователя не затирается:
+    // после планирования чат работает в том режиме, в котором был, с поправкой на гард.
+    public void RestoreUserMode(string sessionId)
+    {
+        var session = _sessions.GetById(sessionId);
+        if (session?.TeamImplement is not { SavedMode: { } saved } team) return;
+        var restored = PermissionModeGuard.GuardCompatibleMode(saved, team.CoordinatorNoCode);
+        WithTeamState(sessionId, t => { t.SavedMode = null; return true; });
+        if (session.Mode == restored) return;
+        session.Mode = restored;
+        _run.TrySetPermissionModeLive(sessionId, restored);
+    }
 }

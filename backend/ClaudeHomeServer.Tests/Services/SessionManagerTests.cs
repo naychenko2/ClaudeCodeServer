@@ -4165,7 +4165,7 @@ public class SessionManagerTests : IDisposable
 
     // --- Этап 4 / шаг 2в: восстановление отсечек сторожа волн через шину turn/completed ---
     // Хелпер: штаб в стадии Wave, волна открыта, отсечки сторожа погашены (WaveStartedAt=null).
-    // Это именно то состояние, которое погасил OnStabAskQuestionAsync: координатор задал
+    // Это именно то состояние, которое погасил OnAskQuestionStabAsync: координатор задал
     // вопрос ASK посреди волны, сторож отключён, и теперь ход оборвался — старая ветка в
     // OnMessageAsync (9441) возвращала отсечки синхронно по ExitedMessage. Перенесли на шину.
     private async Task<(Session Session, Persona Backend, Persona Frontend)> MakeStabInWaveWithPausedWatchdogAsync(
@@ -7363,8 +7363,8 @@ public class SessionManagerTests : IDisposable
     {
         var (session, _, _) = await MakeInterviewStabAsync("ti-interview-round");
 
-        await _sut.OnStabAskQuestionAsync(session.Id);
-        await _sut.OnStabAskQuestionAsync(session.Id);
+        await _sut.OnAskQuestionStabAsync(session.Id);
+        await _sut.OnAskQuestionStabAsync(session.Id);
 
         _sut.GetById(session.Id)!.TeamImplement!.InterviewRounds.Should().Be(2,
             "протокол разрешает не больше двух раундов на вводную — счёт ведёт бэкенд");
@@ -7387,7 +7387,7 @@ public class SessionManagerTests : IDisposable
             return true;
         });
 
-        await _sut.OnStabAskQuestionAsync(session.Id);
+        await _sut.OnAskQuestionStabAsync(session.Id);
 
         var after = _sut.GetById(session.Id)!.TeamImplement!;
         after.Stage.Should().Be(TeamImplementStage.Wave, "вопрос не останавливает волну");
@@ -7413,7 +7413,7 @@ public class SessionManagerTests : IDisposable
             t.WaveStartedAt = DateTime.UtcNow;
             return true;
         });
-        await _sut.OnStabAskQuestionAsync(session.Id);
+        await _sut.OnAskQuestionStabAsync(session.Id);
         _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().BeNull();
 
         // Человек ответил ASK-карточкой, ход продолжился и завершился без маркера
@@ -7439,7 +7439,7 @@ public class SessionManagerTests : IDisposable
             t.WaveStartedAt = DateTime.UtcNow;
             return true;
         });
-        await _sut.OnStabAskQuestionAsync(session.Id);
+        await _sut.OnAskQuestionStabAsync(session.Id);
         _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().BeNull();
 
         // Шина публикует turn/completed один раз на ход, подписчик HandleTeamTurnCompletedShim

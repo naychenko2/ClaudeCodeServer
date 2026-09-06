@@ -6564,11 +6564,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task HandleTeamTurnEndAsync(string sessionId, string turnText, bool failed, bool asked = false)
         => _teamTurnCompletion.HandleTeamTurnEndAsync(sessionId, turnText, failed, asked);
 
-    // Волна 2 задачи b63fd8ea: хук на смерть фонового async-агента. Внутри вертикали читается
-    // session, стадия, планирование — то, что вертикаль уже умеет. asked пробрасываем из ядра,
-    // потому что entry.TeamTurnAsked живёт в SessionEntry (волна 2 не открывала пятого шва).
-    public Task HandleAsyncAgentAbortedAsync(string sessionId, bool asked)
-        => _teamTurnCompletion.HandleAsyncAgentAbortedAsync(sessionId, asked);
+    // Волна 3 задачи b63fd8ea: хук на завершение фонового async-агента (BgAgentDoneMessage).
+    // Внутри вертикали читается session, стадия, планирование — то, что вертикаль уже умеет.
+    // asked и hasAsync пробрасываем из ядра, потому что entry.TeamTurnAsked живёт в
+    // SessionEntry (нового шва не открываем — hasAsync считается через AsyncAgentInFlight
+    // прямо на entry.Process?.HasPendingBg в OnMessageAsync, чтобы избежать лишнего
+    // захода в вертикаль без данных). Решения по hasAsync (Major + Minor 2) описаны
+    // в шапке HandleBgAgentDoneAsync.
+    public Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked)
+        => _teamTurnCompletion.HandleBgAgentDoneAsync(sessionId, aborted, hasAsync, asked);
 
     // P23: авто-гашение карточки блокера, когда координатор сам снял её предмет. Тело остаётся
     // в ядре (работает с приватным состоянием entry.Accumulator и приватным _history —
@@ -6979,6 +6983,48 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         text = null;
         failed = asked = false;
         return false;
+    }
+
+    // Атомарный pre-claim публикации карточки молчаливого тупика (волна 3 задачи b63fd8ea).
+    // Под TeamStateService.WithTeamState (тот же лок, что в PublishTeamEscalationAsync,
+    // TeamDecisionService.cs:428) проверяем stalledStage и AwaitingDecision; если оба
+    // выполнены — переводим стадию в AwaitingDecision (побочный эффект) и отдаём снимок
+    // стадии/волны ДО мутации. Возвращаемый bool — единственный источник правды: либо
+    // вызывающий код публикует карточку, либо уже опубликовал параллельный путь.
+    // Снимок нужен BuildSilentStallEscalation (читает Stage/WaveNumber), а сам объект
+    // уже мутирован внутри лока — снапшот берётся до мутации и возвращается через out.
+    // out-параметры нельзя писать внутри лямбды (CS1628), поэтому захватываем через
+    // локальный массив из одного элемента: внутри лямбды — присвоение по индексу,
+    // снаружи — чтение после возврата.
+    bool ITeamRunState.TryClaimSilentStall(string sessionId,
+        out TeamImplementStage stageBefore, out int waveBefore)
+    {
+        stageBefore = default;
+        waveBefore = 0;
+        var captured = new SessionTeamImplement?[] { null };
+        var claimed = _teamState.WithTeamState(sessionId, t =>
+        {
+            var stalledStage = t.Stage == TeamImplementStage.Interview
+                || (t.Stage == TeamImplementStage.Planning && t.WaveNumber == 0);
+            if (!stalledStage || t.Stage == TeamImplementStage.AwaitingDecision)
+                return false;
+            captured[0] = new SessionTeamImplement
+            {
+                Stage = t.Stage,
+                WaveNumber = t.WaveNumber,
+            };
+            t.StageBeforeDecision = t.Stage;
+            t.Stage = TeamImplementStage.AwaitingDecision;
+            t.WaveStartedAt = null;
+            t.WaveActivityAt = null;
+            return true;
+        });
+        if (claimed && captured[0] is { } snap)
+        {
+            stageBefore = snap.Stage;
+            waveBefore = snap.WaveNumber;
+        }
+        return claimed;
     }
 
     bool ITeamNotifier.IsSessionBusy(string sessionId)
@@ -8214,30 +8260,55 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case BgAgentDoneMessage m:
                     acc.OnBgAgentsDone(m.ToolUseIds);
                     await acc.SaveSnapshotAsync(_history);
-                    // Волна 2 задачи b63fd8ea:
-                    //   1. bg-агент завершился (хоть штатно, хоть абортивно) — метка
-                    //      подавления AsyncAgentStallSince от НЕсвязанного прошлого агента
-                    //      больше не нужна, следующий всплеск фона должен считаться с нуля.
-                    //      Раньше сброс жил ТОЛЬКО внутри ShouldSuppressAsyncAgentStallGuard,
-                    //      и при уходе стадии из Interview/Planning через другой путь
-                    //      (например, началась волна) метка унаследовалась и давала ложную
-                    //      карточку P16 на возврате в Interview со свежим async-агентом.
-                    //   2. Если bg-агент УМЕР вместе с прогоном (Aborted=true),
-                    //      HandleTeamTurnEndAsync никто не позовёт (следующего хода может
-                    //      не быть) — публикуем карточку молчаливого тупика сами, на тех же
-                    //      условиях, что гард по концу хода, но без 10-минутного
-                    //      суппрессирования (агент уже мёртв, ждать дальше нечего).
+                    // Волна 3 задачи b63fd8ea: хук на завершение фонового async-агента.
+                    //
+                    // Снимок «есть ли ещё живой async-агент» берётся ПОСЛЕ учёта текущего
+                    // сообщения: HandleStructuredTaskNotification (ClaudeSession.cs:5055)
+                    // синхронно удаляет задачу из run.PendingBg ДО отправки BgAgentDoneMessage
+                    // через Task.Run — гонки «читаем старое состояние» нет.
+                    //
+                    // Решения (Major + Minor 2, оба на одной проверке HasAsyncAgent):
+                    //   • Метка AsyncAgentStallSince сбрасывается ТОЛЬКО когда после
+                    //     текущего done агентов больше нет вообще (HasAsyncAgent == false).
+                    //     Безусловный сброс (как в волне 2) перезапускал 10-минутный
+                    //     потолок подавления на каждом агенте цепочки — суппрессия
+                    //     тянулась неограниченно, ровно против того, что баг b63fd8ea
+                    //     чинил.
+                    //   • Карточка молчаливого тупика поднимается ТОЛЬКО когда (а) агент
+                    //     умер абортивно (Aborted=true) и (б) других живых async-агентов
+                    //     больше нет (HasAsyncAgent == false). Иначе — структурный
+                    //     task_notification ставит Aborted для ОДНОГО агента, пока
+                    //     параллельно работает ДРУГОЙ: карточка «Координатор не понял
+                    //     вводную» сразу на первом аборте уводила стадию в AwaitingDecision,
+                    //     хотя координатор ЖИВ — дословный регресс P16 (Minor, найден
+                    //     ревью Глеба).
+                    //
+                    // Карточка публикуется через TeamTurnCompletionService.HandleBgAgentDoneAsync
+                    // — та же точка, что HandleTeamTurnEndAsync, и обе сериализуются на
+                    // общем локе TeamStateService.WithTeamState через TryClaimSilentStall
+                    // (Minor 1, идемпотентность): гонка «оба пути публикуют одновременно»
+                    // закрывается атомарным pre-claim — первый путь переводит стадию в
+                    // AwaitingDecision под локом, второй видит её и выходит.
                     if (entry is not null)
                     {
+                        // Снимок HasAsyncAgent — ПОСЛЕ учёта текущего сообщения (см. шапку):
+                        // HandleStructuredTaskNotification (ClaudeSession.cs:5055) уже удалил
+                        // задачу из run.PendingBg синхронно до публикации BgAgentDoneMessage,
+                        // entry.Process?.HasPendingBg отражает обновлённое состояние.
+                        var hasAsync = AsyncAgentInFlight(entry);
                         bool asked;
                         lock (entry.TeamTurnLock)
                         {
-                            if (entry.AsyncAgentStallSince is not null)
+                            // Minor 2: метка сбрасывается ТОЛЬКО когда после текущего done
+                            // других async-агентов больше нет. Безусловный сброс перезапускал
+                            // бы 10-минутный потолок подавления на КАЖДОМ агенте цепочки —
+                            // суппрессия тянулась бы неограниченно (ровно то, против чего
+                            // баг b63fd8ea был написан).
+                            if (!hasAsync && entry.AsyncAgentStallSince is not null)
                                 entry.AsyncAgentStallSince = null;
                             asked = entry.TeamTurnAsked;
                         }
-                        if (m.Aborted)
-                            await HandleAsyncAgentAbortedAsync(sessionId, asked);
+                        await HandleBgAgentDoneAsync(sessionId, m.Aborted, hasAsync, asked);
                     }
                     break;
                 // Присутствие фона — сигнал для СПИСКА чатов, а не для ленты: в историю не

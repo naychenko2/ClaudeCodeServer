@@ -282,6 +282,27 @@ internal interface ITeamRunState
     /// </summary>
     bool TryTakeTeamTurnEnd(string sessionId, int turnSeq,
         out string? text, out bool failed, out bool asked);
+
+    /// <summary>
+    /// Атомарный pre-claim публикации карточки молчаливого тупика (волна 3 задачи b63fd8ea).
+    /// Под локом <see cref="WithTeamState{T}"/> проверяет stalledStage (Interview или Planning
+    /// с WaveNumber == 0) и не-AwaitingDecision; если условия выполнены — переводит стадию
+    /// в AwaitingDecision (как побочный эффект), отдаёт снимок <paramref name="stageBefore"/>
+    /// и <paramref name="waveBefore"/> ДО мутации (для построения заголовка карточки) и
+    /// возвращает true. Иначе — false без побочных эффектов.
+    ///
+    /// Назначение: оба пути публикации молчаливого тупика (хук <c>BgAgentDoneMessage</c> и
+    /// обычный <c>HandleTeamTurnEndAsync</c>) могут прийти в почти одновременную попытку
+    /// публикации; без pre-claim оба пройдут через собственные проверки стадии (snapshot
+    /// один и тот же объект, но между read и publish успевает второй поток). Pre-claim
+    /// атомарно резервирует стадию AwaitingDecision, и второй путь видит её в собственном
+    /// проходе — <c>HandleTeamTurnEndAsync</c> через line 244 (stalledStage == false), хук
+    /// через свой TryClaimSilentStall возвращает false и выходит.
+    ///
+    /// Достройка шва <see cref="ITeamRunState"/> (метод, не новый интерфейс) — общее число
+    /// швов Team остаётся прежним.
+    /// </summary>
+    bool TryClaimSilentStall(string sessionId, out TeamImplementStage stageBefore, out int waveBefore);
 }
 
 /// <summary>

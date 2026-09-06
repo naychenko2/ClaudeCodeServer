@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, FileText, FolderPlus, MessageCircle, Timer, X } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
-import { bumpNotes, useNoteFolders } from '../../lib/notes';
+import { bumpNotes, isFavorite, toggleFavorite, useNoteFolders } from '../../lib/notes';
 import { C, FONT, FS, R, SHADOW } from '../../lib/design';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { ConfirmDialog, IconButton } from '../../components/ui';
-import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
+import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconStar, IconTrash } from './shared';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 // Форматирует остаток времени от ISO-строки expiresAt
 const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {
@@ -322,6 +322,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
           padding: `0 6px 0 ${24 + depth * 14}px`, borderRadius: R.sm, marginBottom: 1,
           background: active ? C.accentMuted : (hovered && !isMobile ? C.bgSelected : 'transparent'),
           WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
+    const fav = isFavorite(n.tags);
         }}
       >
         <span style={{
@@ -378,6 +379,13 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
     | { kind: 'folder'; source: string; node: FolderNode }
     | null
   >(null);
+        {/* Избранное: у отмеченной звезда видна всегда, у прочих — при ховере */}
+        {(fav || (!isMobile && hovered)) && (
+          <IconButton size="xs" tone={fav ? 'accent' : 'muted'} title={fav ? 'Убрать из избранного' : 'В избранное'}
+            onClick={e => { e.stopPropagation(); void toggleFavorite(n.id); }}>
+            <IconStar filled={fav} />
+          </IconButton>
+        )}
 
   const deleteNote = (n: NoteSummary) => setConfirmTarget({ kind: 'note', note: n });
   const doDeleteNote = async (n: NoteSummary) => {
@@ -720,6 +728,10 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
             </>
           )}
         </div>
+                  {/* На мобиле ховера нет — избранное переключается только отсюда */}
+                  {menuItem(<IconStar filled={isFavorite(ctxMenu.note.tags)} />,
+                    isFavorite(ctxMenu.note.tags) ? 'Убрать из избранного' : 'В избранное',
+                    () => { void toggleFavorite(ctxMenu.note.id); })}
       )}
 
       {/* Подтверждение удаления заметки/папки */}

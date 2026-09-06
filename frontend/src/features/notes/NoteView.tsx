@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
 import { api } from '../../lib/api';
-import { bumpNotes, useNotesVersion } from '../../lib/notes';
+import { bumpNotes, isFavorite, useNotesVersion, withFavoriteTag, withoutFavoriteTag } from '../../lib/notes';
 import { C, FONT, ISLAND, R, TB } from '../../lib/design';
 import { lazy, Suspense } from 'react';
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
@@ -28,7 +28,7 @@ import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selec
 import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import {
   SourceBadge,
-  IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
+  IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove, IconStar,
 } from './shared';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
@@ -242,6 +242,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     const updated = await api.notes.update(note.id, { content });
     setNote(updated);
     patchAiJobResult<{ title: string; why: string }[]>(linksKey, prev => prev.filter(l => l.title !== title));
+    bumpNotes();
+  };
+  // Избранное — тот же тег в тексте: тело уже загружено, дочитывать не надо
+  const toggleFav = async () => {
+    if (!note) return;
+    const content = isFavorite(note.tags) ? withoutFavoriteTag(note.content) : withFavoriteTag(note.content);
+    setNote(await api.notes.update(note.id, { content }));
     bumpNotes();
   };
   // Принять тег (ИИ-предложение или ручной ввод): inline #тег в конец заметки
@@ -498,6 +505,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           ) : (
             <>
               {/* AI-действия (связи, теги, конспект дня, «спросить Claude») — только через AI-палитру (⌘/Ctrl+K) */}
+              <IconButton title={isFavorite(note.tags) ? 'Убрать из избранного' : 'В избранное'}
+                tone={isFavorite(note.tags) ? 'accent' : undefined} onClick={() => { void toggleFav(); }}>
+                <IconStar size={ICON_SIZE.sm} filled={isFavorite(note.tags)} />
+              </IconButton>
               <IconButton title={copied ? 'Скопировано' : 'Скопировать Markdown (Shift — с форматированием)'} onClick={copyNote}>
                 {copied ? <Check size={ICON_SIZE.sm} color={C.success} strokeWidth={2.5} /> : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               </IconButton>

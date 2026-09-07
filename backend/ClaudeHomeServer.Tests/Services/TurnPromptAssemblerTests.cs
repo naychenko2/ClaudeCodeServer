@@ -295,30 +295,186 @@ public class TurnPromptAssemblerTests
     [Fact]
     public void ApplyBudget_УчитываетРабочийКаталогИИмяCli()
     {
-        // Увеличим cli-путь и рабочий каталог так, чтобы они САМИ съели приличный кусок
-        // бюджета. Один длинный стабильный блок сверху вытолкнет за порог, и мы увидим,
-        // что Estimate учитывает и cli, и cwd.
+        // workingDir — параметр ProcessStartInfo.WorkingDirectory, НЕ часть командной строки.
+        // Поэтому Estimate НЕ учитывает workingDir. cli влияет: это начало командной строки.
         var sections = new List<PromptSectionDto>
         {
             StableSec("mcp-tasks", new string('a', 10_000)),
         };
         var longCli = new string('C', 5_000);
-        var longCwd = new string('D', 5_000);
+        var longCwd = new string('D', 5_000); // NOT counted — это WorkingDirectory, не cmdline
         var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, longCli, longCwd);
 
-        // 10 000 + 5 000 + 5 000 + (TinyArgs суммарно < 100) ≈ 20 100 символов, в пороге.
-        // Конкретная цифра не важна — нам важно, что оценка учитывает оба компонента, иначе
-        // на проде (cwd = "C:\Sources\ClaudeCodeServer" плюс имя cli) мы бы считали меньше
-        // и резали в момент, когда реальный cmdline бы и так влез.
-        r.TotalCmdlineChars.Should().BeGreaterThan(15_000);
+        // 10 000 + 5 000 cli + TinyArgs с экранированием ≈ 10 150+, в пороге.
+        // Конкретная цифра не важна — нам важно, что cwd НЕ считается в оценке.
+        r.TotalCmdlineChars.Should().BeGreaterThan(10_000);
+    }
+
+    // M5, главная регрессия ревью: чат со стабильной обвязкой в зоне 30 000–32 767 и пустыми
+    // нестабильными секциями до фикса ходил нормально, а после фикса получал
+    // PromptOverflowException. Порог 30 000 — ТРИГГЕР срезки, отказ ставится по CmdlineLimit.
+    [Fact]
+    public void ApplyBudget_Зона30к32к_НеОтказывает()
+    {
+        // 31 000 стабильной обвязки: срезать нечего (нестабильных секций нет), порог
+        // срезки перейдён, но в лимит командной строки Windows мы укладываемся.
+        var sections = new List<PromptSectionDto>
+        {
+            StableSec("project-builtin", new string('Z', 31_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+
+        r.TotalCmdlineChars.Should().BeInRange(30_001, TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeFalse(
+            "оценка ВЕРХНЯЯ и укладывается в 32 767 — ход обязан стартовать, "
+            + "иначе это регрессия против поведения до фикса dc641949");
+        r.CombinedPrompt.Should().Contain(new string('Z', 31_000));
     }
 
     [Fact]
-    public void TruncationOrder_СодержитТолькоСтабильныеFalseКлючи()
+    public void ApplyBudget_ЗаCmdlineLimit_Отказывает()
     {
-        // Регрессия: TruncationOrder — единственный источник правды для порядка срезания.
-        // Ключи должны совпадать с теми, что ClaudeSession помечает stable: false.
-        TurnPromptAssembler.TruncationOrder.Should().Equal(
+        // Та же обвязка, но за жёстким лимитом Windows: доказать безопасность старта
+        // нельзя, отказываем сразу — перебор шагов фолбэка тут бесполезен.
+        var sections = new List<PromptSectionDto>
+        {
+            StableSec("project-builtin", new string('Z', 33_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+
+        r.TotalCmdlineChars.Should().BeGreaterThan(TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeTrue();
+    }
+
+    // H1: снимок промпта строится из Sections. После срезки там не должно остаться секции,
+    // которая в модель не ушла, — иначе шторка «что ушло модели» противоречит сама себе
+    // (MaskArgs уже показывал урезанный --append-system-prompt).
+    [Fact]
+    public void ApplyBudget_Sections_НеСодержатСрезанное()
+    {
+        var bigBlock = new string('a', 35_000);
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", bigBlock),
+            Sys("recall-memory", "короткая память"),
+            StableSec("mcp-tasks", "короткие таски"),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, TinyCli, TinyCwd);
+
+        r.TruncatedSections.Should().ContainSingle()
+            .Which.Key.Should().Be("(truncated:code-graph)");
+        r.Sections.Should().NotContain(s => s.Key == "code-graph",
+            "срезанная секция обязана исчезнуть из итогового списка для снимка");
+        r.Sections.Should().Contain(s => s.Key == "recall-memory");
+        r.Sections.Should().Contain(s => s.Key == "mcp-tasks");
+        // Входной список не мутируем: у вызывающего своя модель памяти
+        sections.Should().HaveCount(3, "ApplyBudget не меняет переданный список");
+    }
+
+    [Fact]
+    public void ApplyBudget_БезСрезки_SectionsРавныИсходным()
+    {
+        var sections = new List<PromptSectionDto> { Sys("code-graph", "граф"), StableSec("mcp-tasks", "таски") };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, TinyCli, TinyCwd);
+
+        r.Sections.Should().HaveCount(2);
+        r.Sections.Select(s => s.Key).Should().Equal("code-graph", "mcp-tasks");
+    }
+
+    // L8: слагаемое args в Estimate. Меряем РАЗНИЦУ двух оценок на одних и тех же секциях —
+    // так тест ловит мутацию «не считать args» точной цифрой, а не порогом «больше чем».
+    [Fact]
+    public void Estimate_УчитываетДлинуArgs()
+    {
+        var sections = new List<PromptSectionDto> { StableSec("mcp-tasks", "коротко") };
+
+        var without = TurnPromptAssembler.ApplyBudget(sections, null, [], TinyCli, TinyCwd);
+        var with = TurnPromptAssembler.ApplyBudget(
+            sections, null, ["--mcp-config", "C:/some/long/path.json"], TinyCli, TinyCwd);
+
+        // Стоимость аргумента = длина + 2 (кавычки) + 2 × число кавычек внутри + 1 (пробел).
+        // "--mcp-config" = 12 → 15; "C:/some/long/path.json" = 22 → 25.
+        var expected = (12 + 2 + 1) + (22 + 2 + 1);
+        (with.TotalCmdlineChars - without.TotalCmdlineChars).Should().Be(expected,
+            "args входят в командную строку и обязаны учитываться в оценке");
+    }
+
+    [Fact]
+    public void Estimate_КавычкиВнутриАргумента_УдваиваютЗапас()
+    {
+        var sections = new List<PromptSectionDto> { StableSec("mcp-tasks", "коротко") };
+
+        var plain = TurnPromptAssembler.ApplyBudget(sections, null, ["abcd"], TinyCli, TinyCwd);
+        var quoted = TurnPromptAssembler.ApplyBudget(sections, null, ["a\"cd"], TinyCli, TinyCwd);
+
+        // Та же длина 4, но одна кавычка внутри: .NET экранирует её (" → \"), и верхняя
+        // оценка обязана быть больше на 2 — иначе занизим и пропустим ход в Win32 206.
+        (quoted.TotalCmdlineChars - plain.TotalCmdlineChars).Should().Be(2,
+            "каждая внутренняя кавычка удорожает аргумент в экранированном виде");
+    }
+
+    // M4: пятый шаг срезки — persona-mentions, и это СТАБИЛЬНАЯ секция. Тест сверяет
+    // фактический флаг Stable у секции, которую ApplyBudget реально удаляет на пятом шаге,
+    // а не список строк (прежняя редакция сверяла строки и мимо флагов проходила молча).
+    [Fact]
+    public void TruncationOrder_ПервыеЧетыреНестабильны_ПятаяСтабильнаОсознанно()
+    {
+        var order = TurnPromptAssembler.TruncationOrder;
+        order.Should().Equal(
             "code-graph", "dossier-recall", "recall-notes", "recall-memory", "persona-mentions");
+        order[^1].Should().Be(TurnPromptAssembler.StableLastResortKey,
+            "последний шаг вынесен именованной константой — это исключение из правила");
+
+        // Заводим секции с ТЕМИ ЖЕ флагами, что ставит ClaudeSession: четыре первые
+        // stable: false (Add(..., stable: false)), persona-mentions — по дефолту stable: true.
+        var byKey = new Dictionary<string, PromptSectionDto>
+        {
+            ["code-graph"] = Sys("code-graph", new string('a', 9_000)),
+            ["dossier-recall"] = Sys("dossier-recall", new string('b', 9_000)),
+            ["recall-notes"] = Sys("recall-notes", new string('c', 9_000)),
+            ["recall-memory"] = Sys("recall-memory", new string('d', 9_000)),
+            ["persona-mentions"] = StableSec("persona-mentions", new string('e', 9_000)),
+        };
+
+        foreach (var key in order.Take(4))
+            byKey[key].Stable.Should().BeFalse(
+                $"«{key}» заводится stable: false — срезка по ней не бьёт по cache_read");
+
+        byKey[TurnPromptAssembler.StableLastResortKey].Stable.Should().BeTrue(
+            "persona-mentions стабильна: флаг НЕ меняем — stable: false удешевил бы аварийный "
+            + "случай ценой инвалидации кэша у каждого хода всех чатов. Пятый шаг срезки "
+            + "действительно бьёт по кэшируемому префиксу, и оправдан только тем, что "
+            + "альтернатива — несостоявшийся ход");
+    }
+
+    // M4: текст пометки о срезке обязан говорить правду про кэш. Для четырёх нестабильных —
+    // «stable: false, кэш не держит»; для persona-mentions — что кэш ПОСТРАДАЕТ.
+    [Fact]
+    public void ПометкаОСрезке_ПроPersonaMentions_НеВрётПроКэш()
+    {
+        // Стабильный балласт 25 000 подобран так, чтобы после срезки первых ЧЕТЫРЁХ
+        // (36 000) сумма 25 000 + 9 000 всё ещё была за порогом — тогда цикл дойдёт до
+        // пятого шага и реально снимет persona-mentions, а без балласта остановился бы
+        // на четвёртом, и пометки про пятый ключ в снимке просто не было бы.
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", new string('a', 9_000)),
+            Sys("dossier-recall", new string('b', 9_000)),
+            Sys("recall-notes", new string('c', 9_000)),
+            Sys("recall-memory", new string('d', 9_000)),
+            StableSec("persona-mentions", new string('e', 9_000)),
+            StableSec("project-builtin", new string('Z', 25_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+
+        var note = r.TruncatedSections.Single(s => s.Key == "(truncated:persona-mentions)");
+        note.Text.Should().NotContain("stable: false",
+            "секция стабильная — прежний текст утверждал обратное для всех пяти ключей");
+        note.Text.Should().Contain("кэшируемому префиксу",
+            "говорим честно: срезка по стабильной секции бьёт по кэшу");
+
+        var plain = r.TruncatedSections.Single(s => s.Key == "(truncated:code-graph)");
+        plain.Text.Should().Contain("stable: false",
+            "для нестабильных прежняя формулировка верна и остаётся");
     }
 }

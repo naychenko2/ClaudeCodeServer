@@ -433,8 +433,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         if (string.IsNullOrEmpty(details) || !details.StartsWith("[Win32:", StringComparison.Ordinal))
             return null;
         var end = details.IndexOf(']');
-        if (end < 0 || end <= 6) return null;
-        var span = details.AsSpan(6, end - 6);
+        if (end < 0 || end <= 7) return null; // длина префикса "[Win32:" = 7
+        var span = details.AsSpan(7, end - 7); // начинаем с '2' в "206]"
         return int.TryParse(span, System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null;
     }

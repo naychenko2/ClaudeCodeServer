@@ -3108,4 +3108,56 @@ public class FallbackLlmSessionAdapterTests
         // Итог: попытка ровно одна — подмены быть не должно (Interrupt = не ошибка доставки)
         inner.Attempts.Should().ContainSingle("остановка пользователем — не ошибка доставки, фолбэка нет");
     }
+
+    // ===== ExtractWin32Code: разбор маркера "[Win32:NNN]" из Details (ревью dc641949, M3) =====
+
+    // Метод приватный: он шов между Details ErrorMessage и Win32Code паспорта хода,
+    // публиковать его наружу ради теста незачем — зовём рефлексией.
+    private static int? CallExtractWin32Code(string? details)
+    {
+        var m = typeof(FallbackLlmSessionAdapter).GetMethod(
+            "ExtractWin32Code",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        m.Should().NotBeNull("ExtractWin32Code — шов паспорта хода, переименование ломает разбор маркера");
+        return (int?)m!.Invoke(null, [details]);
+    }
+
+    [Fact]
+    public void ExtractWin32Code_МаркерПервым_ДаётКод()
+    {
+        // Штатный случай: ClaudeSession ставит маркер первым токеном Details.
+        // Регрессия off-by-one: AsSpan(6, …) отдавал ":206" — int.TryParse возвращал false,
+        // и паспорт хода терял Win32Code (перерасход cmdline выглядел безымянным сбоем).
+        CallExtractWin32Code("[Win32:206] Слишком длинное имя файла").Should().Be(206);
+        CallExtractWin32Code("[Win32:2] коротко").Should().Be(2);
+        CallExtractWin32Code("[Win32:206]").Should().Be(206);
+    }
+
+    [Fact]
+    public void ExtractWin32Code_МаркерНеПервым_НеРазбирается()
+    {
+        // Склейка через \n от HeldErrorDetails: ошибка попытки задержана и приклеена к
+        // «Подробностям» маркера подмены. Маркер уехал с начала строки — по контракту
+        // (StartsWith) разбирать нечего, и это правильно: код относится к ДРУГОЙ попытке.
+        CallExtractWin32Code("ошибка первой попытки\n[Win32:206] вторая").Should().BeNull();
+        CallExtractWin32Code(" [Win32:206]").Should().BeNull();
+    }
+
+    [Fact]
+    public void ExtractWin32Code_БезМаркера_Null()
+    {
+        CallExtractWin32Code(null).Should().BeNull();
+        CallExtractWin32Code("").Should().BeNull();
+        CallExtractWin32Code("Модель перегружена, попробуйте позже").Should().BeNull();
+        CallExtractWin32Code("[Win32 206]").Should().BeNull("нет двоеточия — это не наш маркер");
+    }
+
+    [Fact]
+    public void ExtractWin32Code_НекорректныйКод_Null()
+    {
+        CallExtractWin32Code("[Win32:]").Should().BeNull("пустой код");
+        CallExtractWin32Code("[Win32:abc] текст").Should().BeNull("не число");
+        CallExtractWin32Code("[Win32:206 текст").Should().BeNull("нет закрывающей скобки");
+        CallExtractWin32Code("[Win32:2 06]").Should().BeNull("пробел внутри числа");
+    }
 }

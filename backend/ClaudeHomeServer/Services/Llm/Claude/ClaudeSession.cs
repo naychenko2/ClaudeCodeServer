@@ -3148,14 +3148,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 sections, agentPrompt, args, _launcher.ClaudeCliCommand, _rootPath);
             var combinedPrompt = budget.CombinedPrompt;
             truncatedSections = budget.TruncatedSections;
+            // Срезку применяем к самому списку секций: снимок промпта строится из него, и
+            // оставить там секции, которые в модель НЕ ушли, значит показать пользователю
+            // не тот промпт, что отправлен (ревью dc641949: H1 — MaskArgs уже маскировал
+            // урезанный --append-system-prompt, а список секций оставался полным).
+            // Именно замена содержимого, а не публикация budget.Sections отдельной
+            // переменной: ниже в sections добавляются persona-layer и turn-text, и они
+            // обязаны доехать до шторки.
+            sections.Clear();
+            sections.AddRange(budget.Sections);
             if (budget.Overflowed)
             {
                 // Не влезает даже после срезки всех нестабильных секций. Не стартуем процесс
                 // (Process.Start гарантированно бросил бы Win32Exception с кодом 206 —
                 // мы знаем причину заранее). Бросаем наружу — общий catch в RunTurnAsync
                 // обработает и сформирует [Win32:206]-префикс в Details ErrorMessage.
+                // Лимит в сообщении — CmdlineLimit: именно он перейдён, порог срезки
+                // (BudgetThreshold) отказом не является.
                 throw new PromptOverflowException(budget.TotalCmdlineChars,
-                    TurnPromptAssembler.BudgetThreshold);
+                    TurnPromptAssembler.CmdlineLimit);
             }
 
             if (!string.IsNullOrWhiteSpace(combinedPrompt))

@@ -26,24 +26,50 @@ public static class TurnPromptAssembler
     // Порог, при котором запускаем срезку. 30 000 из задачи dc641949: между 30 000 и 32 767
     // живёт escape-сериализация .NET (" → \", переводы строк), и небольшой запас на дрейф
     // от длин других аргументов. Все 48 чатов из зоны 30–32к уходят вниз за 30к после срезки
-    // пяти нестабильных секций (~5 КБ суммарно). Ниже 30к — обычный ход, никакой срезки.
+    // нестабильных секций (~5 КБ суммарно). Ниже 30к — обычный ход, никакой срезки.
+    //
+    // ВАЖНО, чем этот порог НЕ является: это триггер срезки, а не отказ. Ход, у которого
+    // после срезки осталось 30–32к, стартует штатно — Overflowed ставится по CmdlineLimit.
+    // Прежняя версия отказывала уже на 30 000 и роняла PromptOverflowException у чатов,
+    // которые до фикса ходили нормально (регрессия, ревью dc641949: M5).
     public const int BudgetThreshold = 30_000;
 
+    // Пятый и последний шаг срезки. Вынесен именем, потому что он — исключение из правила
+    // «режем только stable: false»: секция persona-mentions заводится в ClaudeSession
+    // стабильной (дефолт stable: true), и срезка по ней инвалидирует кэшируемый префикс.
+    //
+    // Флаг НЕ меняем осознанно: stable: false удешевил бы аварийный случай ценой
+    // инвалидации кэша у КАЖДОГО хода ВСЕХ чатов — размен неверный. Правда в том, что
+    // пятый шаг действительно бьёт по кэшируемому префиксу, и оправдан он ровно одним:
+    // альтернатива — несостоявшийся ход.
+    public const string StableLastResortKey = "persona-mentions";
+
+    // Имя флага, под которым собранный промпт уезжает в CLI. Держим здесь, потому что
+    // Estimate обязан учесть и сам флаг: ClaudeSession добавляет пару
+    // ["--append-system-prompt", combined] уже ПОСЛЕ вызова ApplyBudget, и в args её нет.
+    private const string AppendSystemPromptFlag = "--append-system-prompt";
+
     // Приоритеты срезки в указанном порядке. Каждое имя — ключ секции (PromptSectionDto.Key),
-    // которую ClaudeSession добавляет через Add("...", ...). Все пятеро помечены stable: false
-    // — кэш промпта их не держит, срезка не бьёт по cache_read. Слой персоны и stable-секции
-    // (project-builtin, mcp-tasks, voice-mode, mcp-memory, images, mcp-workspace, mcp-personas,
-    // persona-bindings, prompt-sections, recall-notes для проектов, dossier-trailer) НЕ
-    // трогаем: это контрактная обвязка, которую пользователь ожидает увидеть в каждом ходе.
-    // Если после срезания ВСЕХ пяти строка всё равно > 30 000 — ApplyBudget возвращает
-    // Overflowed=true, ClaudeSession кидает PromptOverflowException.
+    // которую ClaudeSession добавляет через Add("...", ...).
+    //
+    // ПЕРВЫЕ ЧЕТЫРЕ помечены stable: false — кэш промпта их не держит, срезка не бьёт
+    // по cache_read: code-graph, dossier-recall, recall-notes (ClaudeSession.cs, Add(...,
+    // stable: false) — она НЕ из числа стабильных, вопреки прежней редакции этого
+    // комментария), recall-memory.
+    // ПЯТЫЙ — StableLastResortKey, см. выше: стабильная секция как последний шанс.
+    //
+    // Слой персоны и остальные stable-секции (project-builtin, mcp-tasks, voice-mode,
+    // mcp-memory, images, mcp-workspace, mcp-personas, persona-bindings, prompt-sections,
+    // dossier-trailer) НЕ трогаем: это контрактная обвязка, которую пользователь ожидает
+    // видеть в каждом ходе. Если после срезания ВСЕХ пяти оценка всё равно > CmdlineLimit
+    // — ApplyBudget возвращает Overflowed=true, ClaudeSession кидает PromptOverflowException.
     public static readonly IReadOnlyList<string> TruncationOrder = new[]
     {
         "code-graph",
         "dossier-recall",
         "recall-notes",
         "recall-memory",
-        "persona-mentions",
+        StableLastResortKey,
     };
 
     /// <summary>
@@ -61,20 +87,28 @@ public static class TurnPromptAssembler
     }
 
     /// <summary>
-    /// Бюджет промпта на склейке: считает сумму длин cli-команды, WorkingDirectory и всех
-    /// аргументов, плюс объединённый промпт. Если итог больше BudgetThreshold — срезает
-    /// секции в порядке TruncationOrder и возвращает урезанный список, пока не влезет
-    /// в бюджет или пока приоритеты не кончатся. TruncatedSections едут в
-    /// PromptSnapshotDraft.TruncatedSections — пометка в шторке "что ушло модели".
-    /// Combine секций из TruncatedSections НЕ делает (Kind="truncated"): они нужны
-    /// только для UI/диагностики, в модель не уходят.
+    /// Бюджет промпта на склейке: считает ВЕРХНЮЮ оценку длины командной строки,
+    /// которую соберёт .NET из ProcessStartInfo.ArgumentList (cli + каждый аргумент
+    /// в экранированном виде + пара --append-system-prompt со склеенным промптом).
+    ///
+    /// Две разные величины, их нельзя путать:
+    /// BudgetThreshold (30 000) — ТРИГГЕР срезки: превысили — режем секции в порядке
+    /// TruncationOrder, пока не уложимся или пока приоритеты не кончатся;
+    /// CmdlineLimit (32 767) — ОТКАЗ: Overflowed ставится только по нему. Ход, который
+    /// после срезки остался в зоне 30–32к, стартует штатно.
+    ///
+    /// TruncatedSections едут в PromptSnapshotDraft.TruncatedSections — пометка в шторке
+    /// "что ушло модели"; Combine их НЕ берёт (Kind="truncated"): они для UI/диагностики,
+    /// в модель не уходят. Sections — итоговый пул после срезки, его и надо публиковать
+    /// в снимок, иначе снимок разойдётся с отправленным промптом.
     /// </summary>
     /// <param name="sections">Список секций, подготовленный ClaudeSession (Kind="system" идут в склейку).</param>
     /// <param name="personaLayer">Слой персоны (PersonaLayerContributor) — отдельный аргумент, в sections не лежит.</param>
     /// <param name="args">Уже собранные аргументы CLI на момент склейки (без --append-system-prompt).</param>
     /// <param name="cliCommand">Имя/путь исполняемого файла (claude или fake-claude в тестах).</param>
-    /// <param name="workingDir">WorkingDirectory процесса — путь к корню проекта.</param>
-    /// <param name="threshold">Порог в символах; по умолчанию BudgetThreshold.</param>
+    /// <param name="workingDir">WorkingDirectory процесса — путь к корню проекта. Не входит в
+    /// командную строку (это отдельный параметр ProcessStartInfo.WorkingDirectory).</param>
+    /// <param name="threshold">Порог срезки; по умолчанию BudgetThreshold (30 000).</param>
     public static PromptBudgetResult ApplyBudget(
         IReadOnlyList<PromptSectionDto> sections,
         string? personaLayer,
@@ -83,23 +117,48 @@ public static class TurnPromptAssembler
         string? workingDir,
         int threshold = BudgetThreshold)
     {
-        // Считаем длину всей командной строки, которую соберёт .NET (path + " " + args). Это
-        // верхняя оценка: реальная строка после escape-сериализации может быть короче, но
-        // здесь нам важна верхняя граница — иначе мы решали бы по ложно-низкой цифре и
-        // резали в момент, когда реально процесс бы и так стартовал.
+        // ВЕРХНЯЯ оценка длины командной строки, которую соберёт .NET из ArgumentList:
+        // cliCommand + для каждого аргумента (пробел + экранированный аргумент).
+        //
+        // Экранирование .NET (ProcessStartInfo → PasteArguments): аргумент с пробелом или
+        // табом обрамляется кавычками (+2), а каждая внутренняя " экранируется обратным
+        // слэшем (+1 на кавычку); плюс слэши перед кавычкой удваиваются. Считать точно
+        // незачем — нам нужна ВЕРХНЯЯ граница, поэтому берём худший случай для каждого
+        // аргумента: длина + 2 (кавычки) + 2 * число кавычек внутри + 1 (пробел-разделитель).
+        // Занижать нельзя: по заниженной цифре мы бы пропустили ход, который Process.Start
+        // отвергнет с Win32 206.
+        //
+        // workingDir в оценку НЕ входит: это ProcessStartInfo.WorkingDirectory — отдельный
+        // параметр CreateProcess (lpCurrentDirectory), в lpCommandLine он не попадает
+        // (см. LocalProcessRunner.BuildStartInfo: psi.WorkingDirectory ставится отдельно
+        // от psi.ArgumentList). Прежняя версия считала его — завышала оценку на длину
+        // корня проекта и резала ходы, которые стартовали бы штатно (ревью dc641949: L7).
+        static int ArgCost(string a)
+        {
+            var quotes = 0;
+            foreach (var c in a) if (c == '"') quotes++;
+            return a.Length + 2 + 2 * quotes + 1;
+        }
+
         int Estimate(string combined)
         {
             var n = cliCommand?.Length ?? 0;
-            if (!string.IsNullOrEmpty(workingDir)) n += workingDir!.Length + 1;
-            foreach (var a in args) n += a.Length + 1; // +1 за пробел-разделитель
-            n += combined.Length;
+            foreach (var a in args) n += ArgCost(a);
+            // combined на момент вызова ещё НЕ в args: ClaudeSession добавляет
+            // --append-system-prompt уже после возврата ApplyBudget. Поэтому оба слагаемых
+            // (имя флага и его значение) считаем здесь руками, иначе самый длинный аргумент
+            // хода остался бы неучтённым.
+            if (!string.IsNullOrWhiteSpace(combined))
+                n += ArgCost(AppendSystemPromptFlag) + ArgCost(combined);
             return n;
         }
 
         var initialCombined = Combine(sections, personaLayer);
         var initialTotal = Estimate(initialCombined);
+
+        // Ниже порога срезки — обычный ход, ничего не трогаем.
         if (initialTotal <= threshold)
-            return new PromptBudgetResult(initialCombined, [], initialTotal, false);
+            return new PromptBudgetResult(initialCombined, [], initialTotal, false, sections.ToList());
 
         // Превышаем порог — срезаем в порядке TruncationOrder. Копию sections делаем потому,
         // что входной список менять нельзя (вызывающий может иметь свою модель памяти; на
@@ -127,7 +186,7 @@ public static class TurnPromptAssembler
                 // TruncationOrder, и ApplyBudget не должен ничего про них писать).
                 if (removed > 0)
                     truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, false));
-                return new PromptBudgetResult(currentCombined, truncated, totalAfter, false);
+                return new PromptBudgetResult(currentCombined, truncated, totalAfter, false, pool);
             }
 
             // Ещё не влезло. Секция действительно срезана (RemoveAll > 0) — пишем
@@ -138,11 +197,18 @@ public static class TurnPromptAssembler
                 truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, true));
         }
 
-        // Приоритеты кончились, и итог всё ещё больше порога. Не влезает — даже срезка
-        // не спасла. ClaudeSession бросит PromptOverflowException, адаптер увидит
-        // FallbackErrorClass.PromptOverflow и завершит ход без фолбэка.
+        // Приоритеты кончились, а порог срезки так и не взят. ОТКАЗ ставим не по нему:
+        // порог — триггер срезки, а настоящая граница одна — лимит командной строки
+        // Windows. Ход, оставшийся в зоне 30 000–32 767, стартует штатно: наша оценка
+        // ВЕРХНЯЯ, реальная строка после экранирования не длиннее (ревью dc641949: M5,
+        // регрессия у чатов со стабильной обвязкой 30–32к и пустыми нестабильными секциями).
+        //
+        // Если же оценка перевалила CmdlineLimit — отказываем сразу и честно: доказать
+        // безопасность старта мы не можем, а Process.Start отдал бы Win32 206, который
+        // классификатор увёл бы в бесполезный перебор мёртвых шагов цепочки.
         var finalTotal = Estimate(currentCombined);
-        return new PromptBudgetResult(currentCombined, truncated, finalTotal, true);
+        return new PromptBudgetResult(
+            currentCombined, truncated, finalTotal, finalTotal > CmdlineLimit, pool);
     }
 
     // Заметка в снимке промпта: ровно одна на каждый урезанный ключ. Текст содержит факт
@@ -153,14 +219,24 @@ public static class TurnPromptAssembler
         var verdict = stillOver
             ? $"После её удаления обвязка всё ещё превышает бюджет ({totalAfter}/{threshold})."
             : $"После её удаления обвязка уложилась в бюджет ({totalAfter}/{threshold}).";
+
+        // Про кэш промпта говорим по факту флага секции, а не одной фразой на всех:
+        // persona-mentions стабильна (stable: true) и стоит последней в очереди — срезка
+        // по ней РЕАЛЬНО инвалидирует кэшируемый префикс. Прежний текст утверждал
+        // «stable: false, кэш её не держит» для всех пяти ключей и для пятого врал.
+        var cacheNote = key == StableLastResortKey
+            ? "Секция стабильная: её срезка бьёт по кэшируемому префиксу. Это последний шаг "
+              + "перед отказом — потерять кэш лучше, чем не отправить ход."
+            : "Секция помечена stable: false, кэш промпта её не держит — "
+              + "срезка не бьёт по cache_read.";
+
         return new PromptSectionDto(
             Key: $"(truncated:{key})",
             Title: $"Секция «{key}» обрезана",
             Text:
                 $"Секция «{key}» удалена из системного промпта: итоговая командная строка " +
                 $"превысила порог {threshold} символов (лимит Windows {CmdlineLimit}). " +
-                $"{verdict} Секция помечена stable: false, кэш промпта её не держит — " +
-                $"срезка не бьёт по cache_read. Содержимое не выводится в этом снимке: " +
+                $"{verdict} {cacheNote} Содержимое не выводится в этом снимке: " +
                 $"секция удалена целиком и не уходила в модель этого хода.",
             Kind: "truncated");
     }
@@ -168,12 +244,14 @@ public static class TurnPromptAssembler
 
 /// <summary>
 /// Итог сборки промпта под бюджет. Overflowed=true означает, что после срезки ВСЕХ
-/// приоритетов строка всё равно длиннее BudgetThreshold — ClaudeSession кидает
+/// приоритетов строка всё равно длиннее CmdlineLimit — ClaudeSession кидает
 /// PromptOverflowException, адаптер получает FallbackErrorClass.PromptOverflow.
+/// Sections содержат итоговый пул секций после срезки (для согласованного снимка промпта).
 /// </summary>
 public sealed record PromptBudgetResult(
     string CombinedPrompt,
     IReadOnlyList<PromptSectionDto> TruncatedSections,
     int TotalCmdlineChars,
-    bool Overflowed);
+    bool Overflowed,
+    IReadOnlyList<PromptSectionDto> Sections);
 

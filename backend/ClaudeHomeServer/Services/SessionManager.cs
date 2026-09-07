@@ -97,8 +97,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // хода помечаем при запуске (SendDirectAsync / SendMessageAndWaitAsync) — классификация
         // агентской вводной как работы публикует план неподтверждённым и ждёт человека.
         public bool TeamTurnFromHuman;
-        // Счётчики бюджета итерации правит и раздача волны, и гейт запуска на ходу-реакции
-        public readonly object TeamLock = new();
         // Сабагент этого хода оборвался на середине (паспорт прогона с Truncated) — по концу
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
@@ -8093,7 +8091,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case ResultMessage m:
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
-                    RecordTurnSpend(entry, m);
+                    SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m);
                     break;
                 case ProviderSwitchedMessage m:
                     // Пометка автоподмены модели в историю — после F5/рестарта человек видит,
@@ -8463,27 +8461,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
     //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
-    private static string? TryExtractFalRequestId(string content)
-    {
-        if (string.IsNullOrEmpty(content)) return null;
-        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(content);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-            if (root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
-                return rid.GetString();
-            return null;
-        }
-        catch { return null; } // не JSON / не наш формат — это не fal-результат
-    }
+    // (см. SpendMapping.TryExtractFalRequestId)
 
     // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
     private void TryTrackFalCost(string sessionId, string content)
     {
         if (!_falCost.Enabled) return;
-        var requestId = TryExtractFalRequestId(content);
+        var requestId = SpendMapping.TryExtractFalRequestId(content);
         if (!string.IsNullOrEmpty(requestId))
             _falCost.Track(sessionId, requestId);
     }
@@ -8499,7 +8483,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         foreach (var m in history)
         {
             if (m is not StoredToolUseMessage t || t.IsError || string.IsNullOrEmpty(t.Result)) continue;
-            var rid = TryExtractFalRequestId(t.Result);
+            var rid = SpendMapping.TryExtractFalRequestId(t.Result);
             if (rid != null && !have.Contains(rid))
                 _falCost.Track(sessionId, rid);
         }
@@ -8573,26 +8557,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (duplicate) return;
 
         // Аналитика: генерация glif — счётчик операций, кредиты про запас, стоимость USD неизвестна.
-        if (_spend is not null)
-            try
-            {
-                var s = entry.Info;
-                _spend.Record(new SpendRecord
-                {
-                    OwnerId = ResolveOwnerId(s) ?? "",
-                    ProjectId = s.ProjectId,
-                    SessionId = s.Id,
-                    TaskId = s.TaskId,
-                    PersonaId = s.PersonaId,
-                    Provider = "glif",
-                    Model = msg.Model ?? msg.OutputType,
-                    Source = SpendSources.Glif,
-                    CostUsd = null,
-                    Generations = 1,
-                    Label = msg.OutputType,
-                });
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "spend: запись генерации glif не удалась"); }
+        SpendMapping.RecordGlifGeneration(_spend, ResolveOwnerId, _log, entry.Info, msg);
 
         await BroadcastAsync(sessionId, msg);
     }
@@ -8644,64 +8609,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         // Аналитика расхода: генерация fal.ai — счётчик операций (токенов у fal нет),
         // фактическая стоимость про запас. Дедуп выше гарантирует одну запись на request_id.
-        if (_spend is not null)
-            try
-            {
-                var s = entry.Info;
-                _spend.Record(new SpendRecord
-                {
-                    OwnerId = ResolveOwnerId(s) ?? "",
-                    ProjectId = s.ProjectId,
-                    SessionId = s.Id,
-                    TaskId = s.TaskId,
-                    PersonaId = s.PersonaId,
-                    Provider = "fal",
-                    Model = msg.EndpointId,
-                    Source = SpendSources.Fal,
-                    CostUsd = msg.CostUsd,
-                    Generations = 1,
-                    Label = msg.EndpointId,
-                });
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "spend: запись генерации fal не удалась"); }
+        SpendMapping.RecordFalGeneration(_spend, ResolveOwnerId, _log, entry.Info, msg);
 
         await BroadcastAsync(sessionId, msg);
     }
 
-    // Запись расхода штатного хода в аналитику (Spend Analytics): все разрезы из Session,
-    // модель — фактическая из modelUsage result'а (субагенты могли считать другой моделью),
-    // фолбэк — модель сессии. Ошибка записи ход не роняет.
-    private void RecordTurnSpend(SessionEntry? entry, ResultMessage m)
-    {
-        if (_spend is null || entry is null || m.Usage is null) return;
-        try
-        {
-            var s = entry.Info;
-            var provider = SpendSources.NormalizeProvider(s.Provider);
-            // Фактическая модель хода из modelUsage (субагенты могли считать другой), фолбэк —
-            // модель сессии; пустой результат резолвится в дефолт подписки, чтобы SpendRecord
-            // никогда не оставался без модели (иначе в аналитике копилась «Модель по умолчанию»).
-            var model = _llmProviders.ResolveModelOrDefault(m.UsageModel ?? s.Model, provider);
-            _spend.Record(new SpendRecord
-            {
-                OwnerId = ResolveOwnerId(s) ?? "",
-                ProjectId = s.ProjectId,
-                SessionId = s.Id,
-                TaskId = s.TaskId,
-                PersonaId = s.PersonaId,
-                Provider = provider,
-                Model = model,
-                Source = SpendSources.IsFree(provider, model) ? SpendSources.Free : SpendSources.ChatTurn,
-                InputTokens = m.Usage.InputTokens,
-                OutputTokens = m.Usage.OutputTokens,
-                CacheReadTokens = m.Usage.CacheReadTokens,
-                CacheCreationTokens = m.Usage.CacheCreationTokens,
-                CostUsd = m.TotalCostUsd,
-                DurationMs = m.DurationMs,
-            });
-        }
-        catch (Exception ex) { _log.LogWarning(ex, "spend: запись хода не удалась"); }
-    }
+    // Запись расхода штатного хода в аналитику — вынесена в SpendMapping.RecordTurnSpend
+    // (этап 4, волна 1 «приём хода», 2026-09-07): код спины, использующий обе стороны
+    // (ISpendCollector подсистемы Spend и LlmProviderRegistry слоя Llm), без состояния,
+    // держать его в ядре SessionManager было лишним весом.
 
     // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
     // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;

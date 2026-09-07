@@ -3,7 +3,6 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -577,7 +576,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
         // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.
-        try { GitService.EnsureAttachmentsExcluded(root); }
+        try { AttachmentsGitExclude.Ensure(root); }
         catch (Exception ex) { logger.LogWarning(ex, "Не удалось записать игнор вложений для {Root}", root); }
 
         using var ms = new MemoryStream();

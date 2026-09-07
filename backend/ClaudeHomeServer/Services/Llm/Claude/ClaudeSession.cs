@@ -663,6 +663,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // решает, клеить ли секцию промпта mcp-watch: рассинхрон обучал бы модель вызывать
     // watch_start при отсутствующем туле — «No such tool available» (блокер ревью)
     private bool WatchHttpOn() => _watchMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер веб-поиска (web_search/web_read): null — чат без владельца или пустой
+    // Perplexity:ApiKey (сервер не настроен)
+    private readonly WebSearchMcpContext? _webSearchMcp;
+    // Веб-поиск: условие ровно как у сторожей — схема адреса допускает http И рубильник
+    // включён. stdio-ветки отката нет, поэтому негодный адрес означает «сервера ходу нет»
+    private bool WebSearchHttpOn() => _webSearchMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -746,6 +752,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
         _watchMcp = context.WatchMcp;
+        _webSearchMcp = context.WebSearchMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -814,6 +821,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Сторожа чатов: stdio-ветки отката НЕТ (node-сервера не существовало) — при
         // негодном для http адресе или выключенном рубильнике тулсет ходу не объявляется
         var hasWatch = WatchHttpOn();
+        // Веб-поиск: та же история — stdio-ветки нет, контекста нет вовсе при пустом
+        // Perplexity:ApiKey (тогда схемы web_search/web_read не занимают окно модели)
+        var hasWebSearch = WebSearchHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -907,6 +917,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasCodeGraph = hasCodeGraph && Keep("codegraph");
             hasDify = hasDify && Keep("dify");
             hasWatch = hasWatch && Keep("watch");
+            hasWebSearch = hasWebSearch && Keep("websearch");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -918,7 +929,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
-            && !hasExternal && !hasWatch
+            && !hasExternal && !hasWatch && !hasWebSearch
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1544,6 +1555,28 @@ public class ClaudeSession : ILlmSessionAdapter
                     };
                 // Состав графа постоянный (3 чтения), в сигнатуру — только транспорт
                 shapes["codegraph"] = $"t:{(codeGraphHttp ? "http" : "stdio")}";
+            }
+
+            if (hasWebSearch)
+            {
+                // Веб-поиск (web_search + web_read): единственная ветка — http, stdio-отката
+                // нет (node-сервера не существовало), как у сторожей. Ключ Perplexity наружу
+                // не уезжает вовсе: тулсет ходит во внешний API сам, а ходу достаётся только
+                // адрес узла и сервисный токен владельца. Сессия-вызыватель едет хвостом URL —
+                // по ней тулсет проверяет право на чат и берёт разрезы траты.
+                servers["websearch"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = Services.Mcp.Http.WebSearchToolset.EndpointFor(_webSearchMcp!.ApiUrl, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_webSearchMcp.TokenFactory()}",
+                        [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (2 инструмента), вариативен только транспорт
+                shapes["websearch"] = "t:http";
             }
 
             if (hasDify && _difyMcp is not null)

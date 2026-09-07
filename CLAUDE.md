@@ -259,14 +259,14 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
   открывает поддеревья (`X.` и `X`), `AllowedExactNamespaces` — ровно
   указанный тип по `FullName` (полезно для nested-типов вроде
   `SsrfGuard+AddressCheck` и для точечных синглтонов из корня `Services`
-  типа `PersonaManager`/`SessionManager`). Покрытие — все 34 записи в
+  типа `PersonaManager`/`SessionManager`). Покрытие — все 35 записей в
   `Boundaries` после волны 4 и выноса штаба: 20 реализаций `IAppSubsystem`
   (`Backgrounds, Changelog, CodeGraph, Deploy, Dossiers, Git, Images,
   Knowledge, Llm, Memory, Notes, ProjectIcons, ProjectServices, Reader,
-  Skills, Spend, Tasks, Tts, Video, Yandex`) плюс `Watchdog` и 13 других
+  Skills, Spend, Tasks, Tts, Video, Yandex`) плюс `Watchdog` и 14 других
   вертикалей без подсистемы (`Auth, Backup, Desktop, Diagnostics, Docs,
   Execution, Modules, Personas, Prompts, Team, Terminal, TriggerSources,
-  Turn`).
+  Turn, WebSearch`).
 - `SubsystemBoundaryCoverageTests`: каждая реализация `IAppSubsystem` в
   сборке должна иметь строку в `Boundaries`; вертикали без подсистемы
   перечисляются явно — список выше. Ловит «новая подсистема/вертикаль
@@ -438,6 +438,20 @@ node-процесса нет вовсе (замер: 30 продуктовых n
 (http-узлы с сервисным JWT владельца в `Authorization`; у stdio-веток отката — прежний env
 `*_API_URL`/токен); данные per-owner — токен ограничивает доступ (эндпоинт под `[Authorize]`,
 владелец — из claim `sub`).
+
+Серверы, рождённые сразу в Kestrel (stdio-ветки отката нет вовсе, при негодном для http
+адресе или выключенном рубильнике ходу не объявляются): `watch` (сторожа чатов, ADR-013)
+и **`websearch`** — веб-поиск для чатов, заведён ради локальной модели: под `--bare` CLI
+не отдаёт ни `WebSearch`, ни `WebFetch`. Два инструмента, сознательно без третьего:
+`web_search` — запрос в Perplexity Sonar с ответом и ЦИТАТАМИ-ссылками (ключ живёт только
+в секции `Perplexity` appsettings и наружу не уезжает; замер 2026-09-06 показал, что через
+egress-прокси доступен только Perplexity, а google/bing/brave/SearXNG — нет, поэтому готовые
+MCP веб-поиска у нас молча не работают), `web_read` — чтение страницы существующим
+`ReaderService` вместе с его SsrfGuard и пер-владельческой квотой (ADR-005). Пустой
+`Perplexity:ApiKey` = сервера у хода нет (единственный рубильник, схемы окно не занимают);
+трата пишется источником `websearch` в токенах, деньги — только если в конфиге проставлены
+цены плана. Локальным профилям по умолчанию НЕ выдан: включается ключом `websearch`
+в `KeepMcpServers`.
 
 - **Правило именования:** не плодить однокоренные имена с пересекающейся семантикой
   (`execute` vs `complete` — LLM путает).

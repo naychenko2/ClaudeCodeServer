@@ -555,9 +555,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly SkillsService? _skills;
     // Аналитика расхода токенов (null — в тестах: сбор выключен)
     private readonly Spend.ISpendCollector? _spend;
-    // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A);
-    // null — в тестах, тогда блок графа в промпт не попадает
-    private readonly CodeGraph.CodeGraphPromptProvider? _codeGraphPrompt;
     // Граф кода: уборка снимка отдельного дерева чата при его удалении (ADR-003); null — в тестах
     private readonly CodeGraph.CodeGraphService? _codeGraphs;
     // Watcher'ы файлов: снятие watcher'а отдельного дерева чата при его удалении; null — в тестах
@@ -603,15 +600,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly Mcp.McpOAuthService? _mcpOAuth;
     // Встроенная интеграция Higgsfield: null — в тестах
     private readonly Mcp.HiggsfieldIntegration? _higgsfield;
-    // Recall паспортов изменений (этап 2, ADR-004 §5); null — в тестах, секции паспортов нет
-    private readonly Dossiers.DossierRecallService? _dossierRecall;
-    // Резолвер секций промпта специальности (план «Секции промптов», флаг
-    // specialty-prompt-sections); null — в тестах, секция prompt-sections в промпт не попадает
-    // (перестановка блока досье в dossier-recall от него не зависит — только от флага).
-    private readonly SpecialtySettingsStore? _specialtySettings;
-    // Кеш якорей «файлы предыдущего хода» для recall паспортов: sessionId → (отпечаток истории,
-    // файлы). Пересбор — только когда файл истории сменился (LastWriteUtc), не на каждый ход.
-    private readonly Dictionary<string, (DateTime? Stamp, List<string> Files)> _dossierAnchorCache = new();
     // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
     // потребление тут — проверка настроенности и строки stdio-ветки отката; вся работа с
     // Dify — в KnowledgeService со своей копией IOptions
@@ -646,8 +634,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // Опционально: резолвер моделей агентных мест (назначения + слоты тиров);
         // без него собирается локально от appSettings — слоты работают и в тестах
         Llm.ModelAssignmentResolver? assignments = null,
-        // Опционально (в тестах не передаётся): провайдер slice Code Graph в системный промпт
-        CodeGraph.CodeGraphPromptProvider? codeGraphPrompt = null,
         // Опционально (в тестах не передаётся): граф кода и watcher'ы файлов — нужны для уборки
         // за отдельным деревом чата (снимок графа + watcher его файлов), ADR-003
         CodeGraph.CodeGraphService? codeGraphs = null,
@@ -677,9 +663,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         Mcp.McpOAuthService? mcpOAuth = null,
         // Опционально (в тестах не передаётся): встроенная интеграция Higgsfield
         Mcp.HiggsfieldIntegration? higgsfield = null,
-        // Опционально (в тестах не передаётся): recall паспортов изменений (этап 2,
-        // ADR-004 §5) — пассивная секция промпта персоны; без него ходы идут как раньше
-        Dossiers.DossierRecallService? dossierRecall = null,
         // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
         // диагностики обрывов нет и автодобивание молчит — ходы идут как раньше.
         Llm.Claude.SubagentRunLog? subagentRuns = null,
@@ -692,9 +675,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // идёт через claude CLI как раньше.
         Llm.LocalActionRouter? router = null,
         Llm.ILocalLlmClient? ollama = null,
-        // Опционально (в тестах не передаётся): резолвер секций промпта специальности
-        // (план «Секции промптов») — без него секция prompt-sections не собирается
-        SpecialtySettingsStore? specialtySettings = null,
         // Опционально (в тестах не передаётся): реестр контрибьюторов секций промпта
         // (этап 2 плана «Шина событий хода»). Без DI бак пуст, шина работает как раньше.
         IEnumerable<Turn.IPromptSectionContributor>? promptSectionContributors = null,
@@ -712,7 +692,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _turnRuns = turnRuns;
         _router = router;
         _ollama = ollama;
-        _specialtySettings = specialtySettings;
 
         _skills = skills;
         _mcpRegistry = mcpRegistry;
@@ -720,13 +699,11 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _mcpStatus = mcpStatus;
         _mcpOAuth = mcpOAuth;
         _higgsfield = higgsfield;
-        _dossierRecall = dossierRecall;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
         _glif = glif;
         _spend = spend;
-        _codeGraphPrompt = codeGraphPrompt;
         _codeGraphs = codeGraphs;
         _fileWatchers = fileWatchers;
         _agentSync = agentSync;
@@ -864,7 +841,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
             // (под-шаг 3) снимет прямой вызов из OnMessageAsync и дедуп SkipNextTeamTurnEnd.
             bus.OnNotification<TurnCompleted>(HandleTeamTurnCompletedShim,
                 "SessionManager.TeamShadowSubscriber");
-            // Этап 2: реестр IPromptSectionContributor (6 провайдеров + DossierTrailerHint)
+            // Этап 2: реестр IPromptSectionContributor (7 контрибьюторов)
             // подключается к шине Filter-событием prompt/assembling. В тестах без DI бак
             // пуст — сборка секций остаётся на инлайне (он закрыт гейтами IsEnabled).
             if (promptSectionContributors is not null)
@@ -1096,7 +1073,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // rootPath — рабочее дерево сессии (EffectiveRoot): у чата с отдельным worktree свой граф,
     // иначе инструменты смотрели бы в основное дерево, а правки шли в другое (ADR-003).
     // Персона может выключить граф Off-привязкой tool:codegraph — тогда нет ни сервера,
-    // ни slice в промпте (BuildCodeGraphProvider).
+    // ни slice в промпте (CodeGraphContributor).
     private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId,
         string? rootPath, Persona? persona)
     {
@@ -1145,19 +1122,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
             _desktopTokens.TokenFor(ownerId, session.Id), session.Id);
     }
 
-    // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): только
-    // проектные сессии владельца — DossierCaptureService захватит коммит с этим трейлером.
-    private string? BuildDossierTrailerHint(string? ownerId, Session session)
-    {
-        if (ownerId is null || session.ProjectId is null) return null;
-        var taskLine = session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}";
-        return "Если делаешь `git commit` в этом проекте — добавь в сообщение коммита трейлер " +
-            $"отдельной строкой (рядом с Co-Authored-By):\nCCS-Session: {session.Id}{taskLine}\n" +
-            "Он привязывает коммит к этому чату/задаче для фичи «История решений» (паспорт изменения " +
-            "с выжимкой «зачем/решения/отказы/грабли») — без него автоматическая выжимка не соберётся. " +
-            "Не убирай и не меняй значение при amend/squash.";
-    }
-
     // Контекст MCP-сервера памяти персоны (та же фабрика сервисного токена, что у tasks/notes).
     // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
     // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
@@ -1183,158 +1147,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         ownerId is not null && !string.IsNullOrEmpty(projectId)
             ? BuildMemoryContext(ownerId, "", projectId)
             : null;
-
-    // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
-    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком, а вдобавок —
-    // айтемы манифеста (что реально подтянулось) для «использовано сейчас» (F3).
-    // Failsafe-таймаут; ошибки → null (ход без recall).
-    // session — для контекста паспортов изменений (этап 2, ADR-004 §5): проект/дерево чата,
-    // задача и якоря «файлы предыдущего хода». Гейт флага change-dossiers-recall — на каждый
-    // ход внутри (переключение действует сразу, как у заметок).
-    private Func<string, Task<RecallBlock?>> BuildPersonaRecallProvider(string ownerId, Session session, string personaId)
-    {
-        var topK = int.TryParse(_config["Persona:RecallTopK"], out var k) ? k : 5;
-        // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30;
-        // старый дефолт 0.02 относился к шкале произведения и больше не валиден
-        var minScore = double.TryParse(_config["Persona:RecallMinScore"],
-            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.30;
-        var timeoutMs = int.TryParse(_config["Persona:RecallTimeoutMs"], out var t) ? t : 2500;
-
-        return async text =>
-        {
-            var query = KnowledgeService.TrimQuery(text);
-            if (query.Length == 0) return null;
-            try
-            {
-                // Паспорта изменений: контекст проекта чата (не scope персоны — как team-memory),
-                // гейт по флагу владельца на каждый ход
-                Dossiers.DossierRecallRequest? dossier = null;
-                if (_dossierRecall is not null && session.ProjectId is { } dossierProjectId
-                    && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall))
-                {
-                    var prevTurnFiles = await LastTurnChangedFiles(session);
-                    dossier = new Dossiers.DossierRecallRequest(
-                        dossierProjectId,
-                        EffectiveRootOf(session),
-                        session.TaskId,
-                        [.. Dossiers.DossierRecallService.ExtractPathsFromText(text), .. prevTurnFiles],
-                        text);
-                }
-
-                // Перестановка блока досье в свою секцию (план «Секции промптов» этап 3) —
-                // за тем же флагом, что и вклейка prompt-sections (dark launch единым флагом):
-                // выключен — досье остаётся ВНУТРИ recall-memory, как до фичи.
-                var splitDossier = _flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections);
-                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore,
-                    dossier, splitDossier);
-                var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
-                if (completed != recallTask) return null;   // таймаут — ход без recall
-                var recall = await recallTask;
-                if (recall?.Text is null && recall?.DossierText is null) return null;
-                // Манифест: hits личной памяти + команды проекта + паспорта → айтемы (F3).
-                // Паспорта — видимость для человека: видно, какие записи истории решений
-                // реально учтены персоной в этом ходу.
-                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null))
-                    .Concat(recall.TeamHits.Select(e => new RecallItem("team", e.Id, e.Text, null)))
-                    .Concat(recall.DossierHits.Select(d => new RecallItem("dossier", d.Id,
-                        $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
-                    .ToList();
-                return new RecallBlock(recall.Text, items, recall.DossierText);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Persona memory recall для {Persona}", personaId);
-                return null;
-            }
-        };
-    }
-
-    // Рабочее дерево сессии (ADR-003): у чата с worktree своё дерево — паспорта и их статусы
-    // считаются по нему (HEAD и снимок графа у деревьев разные).
-    private string? EffectiveRootOf(Session session)
-    {
-        if (session.WorktreePath is { } wt) return wt;
-        return session.ProjectId is { } pid ? _projects.GetById(pid)?.RootPath : null;
-    }
-
-    // Якоря «файлы предыдущего хода этой сессии» (ADR-004 §5): write-инструменты последнего
-    // завершённого хода из истории. Перечитываем историю только когда её файл сменился
-    // (LastWriteUtc) — кеш не гоняет повторное чтение на каждом ходу персоны.
-    private async Task<IReadOnlyList<string>> LastTurnChangedFiles(Session session)
-    {
-        try
-        {
-            var stamp = session.ClaudeSessionId is null ? null : _history.LastWriteUtc(session.ClaudeSessionId);
-            lock (_saveLock)
-            {
-                if (_dossierAnchorCache.TryGetValue(session.Id, out var cached) && cached.Stamp == stamp)
-                    return cached.Files;
-            }
-            if (session.ClaudeSessionId is null) return [];
-
-            var history = await _history.LoadAsync(session.ClaudeSessionId);
-
-            // Хвост от предпоследнего сообщения пользователя: последнее — текущий ход (уже
-            // дописан к моменту сборки промпта) либо прошлый ход (если текущее ещё не в
-            // истории); в обоих случаях последний ЗАВЕРШЁННЫЙ ход попадает в диапазон.
-            var userIdx = new List<int>();
-            for (var i = 0; i < history.Count; i++)
-                if (history[i] is StoredUserMessage) userIdx.Add(i);
-            var start = userIdx.Count >= 2 ? userIdx[^2] : 0;
-            var root = EffectiveRootOf(session) ?? "";
-            List<string> files = root.Length == 0
-                ? []
-                : [.. SessionChangedPaths.Extract(history.Skip(start).ToList(), root).Keys];
-
-            lock (_saveLock) _dossierAnchorCache[session.Id] = (stamp, files);
-            return files;
-        }
-        catch (Exception ex)
-        {
-            _log.LogDebug(ex, "dossiers: якоря прошлого хода {Session}", session.Id);
-            return [];
-        }
-    }
-
-    // Провайдер auto-recall для сессии: по тексту хода ищет релевантные заметки и
-    // формирует markdown-блок для системного промпта. Флаги проверяются ВНУТРИ (на
-    // каждый ход — переключение действует без пересоздания процесса). null — если
-    // подмешивать нечего/некому. Ошибки и таймаут Dify → null (ход идёт без recall).
-    private Func<string, Task<RecallBlock?>>? BuildRecallProvider(string? ownerId)
-    {
-        if (ownerId is null) return null;
-        var topK = int.TryParse(_config["Notes:AutoRecallTopK"], out var k) ? k : 4;
-        var minScore = double.TryParse(_config["Notes:AutoRecallMinScore"],
-            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.35;
-        var timeoutMs = int.TryParse(_config["Notes:AutoRecallTimeoutMs"], out var t) ? t : 2500;
-
-        return async text =>
-        {
-            if (!_notesKb.Available || !_notesKb.HasIndex(ownerId)) return null;
-
-            var query = KnowledgeService.TrimQuery(text);
-            if (query.Length == 0) return null;
-
-            try
-            {
-                var searchTask = _notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8));
-                var completed = await Task.WhenAny(searchTask, Task.Delay(timeoutMs));
-                if (completed != searchTask) return null;   // таймаут — ход без recall
-                var hits = (await searchTask).Where(h => h.Score >= minScore).Take(topK).ToList();
-                if (hits.Count == 0) return null;
-                var blockText = NotesKnowledgeService.BuildRecallBlock(hits, minScore, topK);
-                if (string.IsNullOrWhiteSpace(blockText)) return null;
-                // Манифест: hits заметок → айтемы (F3)
-                var items = hits.Select(h => new RecallItem("note", h.Id, h.Title, h.Snippet)).ToList();
-                return new RecallBlock(blockText, items);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Auto-recall заметок для {Owner}", ownerId);
-                return null;
-            }
-        };
-    }
 
     // --- Персистентность сессий ---
 
@@ -2944,124 +2756,31 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private Func<Persona?> BuildPersonaProvider(Session session, string? ownerId) =>
         () => session.PersonaId is { } pid && ownerId is not null ? _personas.Get(pid, ownerId) : null;
 
-    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
-    // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
-    // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
-    // (контракт/характер), смена модели сессии и флаг PersonaSwitched применяются сразу.
-    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<RecallBlock?>>? Recall, Persona? Persona)
+    // Персона-слой сессии: контекст памяти (для долгой памяти персоны/команды) + сама персона
+    // для гейтов возможностей. Промпт характера + групповая надстройка + онбординг-оверлей —
+    // у IPromptSectionContributor (PersonaLayerContributor).
+    private (MemoryMcpContext? Memory, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
-        // Онбординг пользователя (знакомство): персоны у сессии ещё
-        // нет — слой ведёт системный «Мастер настройки» тем же каналом PersonaPromptProvider.
-        // После назначения дефолта персона садится в эту же сессию (SetPersona → AdapterStale),
-        // слой пересобирается и становится обычным персонным.
-        if (session.OnboardingKind == OnboardingKinds.User && session.PersonaId is null)
-        {
-            if (ownerId is null) return (null, null, null, null);
-            return (() =>
-            {
-                var owner = _users.GetById(ownerId);
-                // Резолв заготовки: id и имя подставляем ТОЛЬКО когда AssistantPersonaId резолвится
-                // в ЖИВУЮ персону. Мёртвый id (заготовку удалили) → промпт деградирует к «создай
-                // персону», и серверный предохранитель в этом состоянии create разрешает — план 2.9.
-                var assistantId = owner?.AssistantPersonaId;
-                if (assistantId is { } aid && _personas.Get(aid, ownerId) is { } draft)
-                    return Prompts.OnboardingPrompts.UserMaster(owner?.DisplayName ?? owner?.Username, draft.Id, draft.Name);
-                return Prompts.OnboardingPrompts.UserMaster(owner?.DisplayName ?? owner?.Username);
-            }, null, null, null);
-        }
-
-        if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
+        if (session.PersonaId is null || ownerId is null) return (null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
-        if (persona is null) return (null, null, null, null);
-        Func<string?> prompt = () =>
-        {
-            var p = session.PersonaId is { } pid ? _personas.Get(pid, ownerId) : null;
-            if (p is null) return null;
-            var built = _promptBuilder.Build(p, session.Model, session.PersonaSwitched,
-                greeted: !string.IsNullOrWhiteSpace(p.Greeting),
-                teamMechanicsBlock: BuildTeamMechanicsBlock(session, p),
-                // Стиль digest — только там, где секция формата тоже поедет (ClaudeSession,
-                // гейт «есть живой слушатель»). Иначе персона получила бы «пиши блок <voice>
-                // в конце» без самого формата и без того, кому это слушать: маркер засорил бы
-                // транскрипт исполнителя задачи ровно тем, что гейт и должен предотвращать.
-                // Делегированный ход (глубина агента) виден только внутри ClaudeSession —
-                // здесь отсекаем два признака из трёх, третий добирает сама секция
-                voiceMode: session.VoiceMode,
-                voiceStyle: session.TaskExecution || session.AutomationRuleId is not null
-                    ? VoiceStyles.Talk
-                    : session.VoiceStyle);
-            // Групповой чат: надстройка со списком участников и правилом «говори только за себя»
-            if (session.Participants is { Count: > 1 } memberIds)
-            {
-                var members = memberIds.Select(id => _personas.Get(id, ownerId))
-                    .OfType<Persona>().ToList();
-                if (members.Count > 1) built += "\n\n" + BuildGroupChatHint(p, members);
-            }
-            // Онбординг проекта: надстройка наставника поверх слоя личной дефолт-персоны.
-            // Живёт, пока нет руководителя ИЛИ пока каркас не развёрнут (PresetKey == "pending"):
-            // назначение руководителя в первом же ходе не должно гасить остаток сценария
-            // (знакомство v2, п.5) — иначе шаги каркаса и команды исчезали бы до их прохождения.
-            // Исчезает сама после применения/отказа каркаса — промпт пересобирается каждый ход.
-            if (session.OnboardingKind == OnboardingKinds.Project && session.ProjectId is { } prjId
-                && _projects.GetById(prjId) is { } prj
-                && Prompts.OnboardingPrompts.ProjectOverlayActive(prj))
-                built += "\n\n" + Prompts.OnboardingPrompts.ProjectOnboardingOverlay(
-                    prj.Name, prj.PresetKey, PersonasEnabled(ownerId, session, persona));
-            return built;
-        };
+        if (persona is null) return (null, null);
         // Долгая память — только если включена у персоны
-        if (persona.MemoryEnabled)
-        {
-            // team_memory_* (③-3.4, диета памяти команды ч.3) — по проекту ТЕКУЩЕГО чата, не по
-            // scope персоны: состав MCP-инструментов один и тот же у проектных и глобальных персон
-            // (инвариант «tools/list не зависит от хода» — тем более не от того, какая персона),
-            // а пишет ли персона в команду — решает бэкенд (ProjectsController.TeamMemoryWriteAllowed:
-            // Persona.Scope==Project && Persona.ProjectId==id проекта памяти). Глобальная персона в
-            // проектном чате получает team_memory_list/search (read-only), персона другого проекта —
-            // так же; вне проектного чата (session.ProjectId пуст) команды памяти нет вообще.
-            return (prompt, BuildMemoryContext(ownerId, persona.Id, session.ProjectId),
-                BuildPersonaRecallProvider(ownerId, session, persona.Id), persona);
-        }
-        return (prompt, null, null, persona);
+        if (!persona.MemoryEnabled) return (null, persona);
+        // team_memory_* (③-3.4, диета памяти команды ч.3) — по проекту ТЕКУЩЕГО чата, не по
+        // scope персоны: состав MCP-инструментов один и тот же у проектных и глобальных персон
+        // (инвариант «tools/list не зависит от хода» — тем более не от того, какая персона),
+        // а пишет ли персона в команду — решает бэкенд (ProjectsController.TeamMemoryWriteAllowed:
+        // Persona.Scope==Project && Persona.ProjectId==id проекта памяти). Глобальная персона в
+        // проектном чате получает team_memory_list/search (read-only), персона другого проекта —
+        // так же; вне проектного чата (session.ProjectId пуст) команды памяти нет вообще.
+        return (BuildMemoryContext(ownerId, persona.Id, session.ProjectId), persona);
     }
 
     // Блок «Командные механики» для руководителя проекта (мост в механики): добавляется,
     // только когда персона чата — дефолт-персона его проекта (Project.DefaultPersonaId).
     // Состав — по установленным скиллам
     // (TeamMechanicsPromptCatalog); без SkillsService (тесты) остаются механики без скилла.
-    // Только промпт: состав MCP-инструментов не меняется, зависимость от хода отсутствует.
-    private string? BuildTeamMechanicsBlock(Session session, Persona persona)
-    {
-        if (session.ProjectId is not { } projectId) return null;
-        var project = _projects.GetById(projectId);
-        if (project is null || project.DefaultPersonaId != persona.Id) return null;
-        return TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
-    }
-
-    // Имена установленных скиллов (глобальные + workflow-скрипты + плагинные) для фильтра
-    // каталога механик. Источник обязан совпадать с тем, по которому доступность механик
-    // считает фронт (GET /api/skills = скиллы + workflows + плагины): без workflow-скриптов
-    // руководитель проекта НИКОГДА не предлагал четыре механики на них — панель экспертов,
-    // командный спринт, ревью-консилиум и красную команду, — хотя в раскрывашке композера
-    // они доступны и запускаются руками.
-    // Ошибки чтения — пустой набор (блок сузится до механик без скилла, ход не падает).
-    private IReadOnlySet<string> InstalledSkillNames()
-    {
-        if (_skills is null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            return _skills.GetGlobalSkills().Select(s => s.Name)
-                .Concat(_skills.GetGlobalWorkflows().Select(s => s.Name))
-                .Concat(_skills.GetPluginSkills().Select(s => s.Name))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
-    }
-
     // Провайдер блока «Привязанные знания и правила» персоны (флаг persona-bindings):
     // на каждый ход перечитывает персону (привязки могли измениться) и собирает
     // индекс + always-выжимки. mountedSections — секции workspace, реально смонтированные
@@ -3082,44 +2801,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         };
     }
 
-    // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A). Per-owner
-    // автоматически: rootPath проекта однозначно принадлежит владельцу сессии. Текст хода
-    // god-узлам не нужен (они структурны) — замыкаем rootPath и игнорируем аргумент. null —
-    // провайдер не injecting (тесты) или сессия без rootPath (чат вне проекта).
-    // fallbackRoot — корень проекта у чата с отдельным worktree: пока свой граф дерева не
-    // построен, в промпт идёт slice главной ветки с пометкой (ADR-003), а не пустота.
-    private Func<string?, Task<string?>>? BuildCodeGraphProvider(string? ownerId, Persona? persona,
-        string? rootPath, string? fallbackRoot = null)
-    {
-        if (_codeGraphPrompt is null || string.IsNullOrWhiteSpace(rootPath)) return null;
-        // Off-привязка tool:codegraph убирает и выжимку графа из промпта — заодно с сервером
-        if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
-        return _ => _codeGraphPrompt.GetSliceAsync(rootPath, fallbackRoot);
-    }
-
-    // Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
-    // specialty-prompt-sections): сценарные инструкции «когда и как» по роли (история, граф
-    // кода, процессы, правила роли) — резолвер EffectivePromptSections (SpecialtySettingsStore,
-    // этап 2). Текст хода игнорируется (секции статичны для owner+специальности). null —
-    // провайдер не injecting (тесты), нет владельца/персоны, специальность none или групповой
-    // чат (несколько собеседников — контракт плана: секции только у персонных сессий).
-    // Гейт по флагу — ВНУТРИ, на каждый ход (переключение действует сразу, как у dossier).
-    private Func<string?, Task<string?>>? BuildPromptSectionsProvider(
-        string? ownerId, Session session, Persona? persona)
-    {
-        if (ownerId is null || _specialtySettings is null || persona is null) return null;
-        if (persona.Specialty == PersonaSpecialty.None) return null;
-        if (session.Participants is { Count: > 1 }) return null;
-        return _ =>
-        {
-            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.SpecialtyPromptSections))
-                return Task.FromResult<string?>(null);
-            var sections = _specialtySettings.EffectivePromptSections(ownerId, persona.Specialty);
-            var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
-            return Task.FromResult(text);
-        };
-    }
-
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
     // процесс пересоздаётся при следующем сообщении с актуальным контекстом,
     // транскрипт продолжается через --resume (паттерн SetPersona)
@@ -3128,26 +2809,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         foreach (var entry in _sessions.Values.Where(e => e.Info.PersonaId == personaId))
             // Ленивая уборка (см. SwitchSpeaker): не рвём активный ход и доживающих агентов
             if (entry.Process is not null) entry.AdapterStale = true;
-    }
-
-    // Групповая надстройка промпта: участники чата + дисциплина «отвечай только от своего
-    // лица». Добавляется к персона-слою активного спикера на каждый ход.
-    internal static string BuildGroupChatHint(Persona self, IReadOnlyList<Persona> participants)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Это ГРУППОВОЙ чат: пользователь общается сразу с несколькими персонами, " +
-                      "отвечает та, к кому обращаются (@handle). Участники:");
-        foreach (var p in participants)
-        {
-            var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
-            sb.AppendLine($"- @{p.Handle} — {title}{(p.Id == self.Id ? " (это ты)" : "")}");
-        }
-        sb.AppendLine("Сейчас отвечаешь ты. Отвечай ТОЛЬКО от своего лица и в своём характере — " +
-                      "НЕ сочиняй и не пиши реплики за других участников.");
-        sb.Append("Если пользователь обращается ко всем или просит мнение другого участника — " +
-                  "спроси его (способ указан в блоке о консультациях с персонами) и передай " +
-                  "суть ответа своими словами, явно указав автора.");
-        return sb.ToString();
     }
 
     // Кандидаты на консультацию: участники группового чата либо доступные в контексте
@@ -5243,7 +4904,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp);
-                // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
+                // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
         {

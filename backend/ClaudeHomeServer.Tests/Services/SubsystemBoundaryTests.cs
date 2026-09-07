@@ -1999,6 +1999,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.PermissionModeGuard",
         "ClaudeHomeServer.Services.SsrfGuard",
         "ClaudeHomeServer.Services.TeamProtocolMarkers",
+        // Этап 3, волна 1: чистые статики подняты в Core ради CodeGraph.
+        // PathNormalizer — нормализация корня, ExecutableResolver — поиск по PATH+PATHEXT.
+        "ClaudeHomeServer.Services.PathNormalizer",
+        "ClaudeHomeServer.Services.ExecutableResolver",
     ];
 
     /// <summary>

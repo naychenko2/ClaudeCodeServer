@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.CodeGraph.Core;
-using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -264,7 +263,7 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
     // сколь угодно долго. Ответ отдаётся из текущего снимка с пометкой isStale.
     private bool StaleAndRefresh(string rootPath, Index index)
     {
-        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var key = PathNormalizer.NormalizePath(rootPath);
         var now = DateTimeOffset.UtcNow;
 
         if (_staleCache.TryGetValue(key, out var cached) && now - cached.At < StaleCacheTtl)
@@ -281,7 +280,7 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
     // Индекс графа из кэша либо из снимка. null — граф ещё не построен.
     private async Task<Index?> GetIndexAsync(string rootPath, CancellationToken ct)
     {
-        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var key = PathNormalizer.NormalizePath(rootPath);
 
         var signature = graphs.GetCacheSignature(key);
         if (signature is null) return null;

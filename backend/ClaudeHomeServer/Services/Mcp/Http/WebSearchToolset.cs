@@ -120,7 +120,7 @@ public sealed class WebSearchToolset(
                         + $"{ReaderQuotaService.MaxConcurrentPerOwner} — дождитесь окончания предыдущего.");
 
                 var page = await reader.ReadAsync(url, ct);
-                if (!page.Success) return Deny(ReadErrorText(page.Error!.Value));
+                if (!page.Success) return Deny(ReadErrorText(page));
 
                 var markdown = page.Markdown ?? "";
                 var truncated = markdown.Length > MaxPageChars;
@@ -166,26 +166,60 @@ public sealed class WebSearchToolset(
     }
 
     // Коды ридера (ADR-005 §6) — текстом для модели: она должна понять, повторять ли попытку
-    // и стоит ли искать другой источник. Тексты для человека пишет фронт, у нас свои
-    private static string ReadErrorText(ReaderErrorCode code) => code switch
+    // и стоит ли искать другой источник. Тексты для человека пишет фронт, у нас свои.
+    //
+    // Классы отказа разведены сознательно, схлопывать обратно нельзя (дефект 2026-09-07):
+    //   1) сайт ОТВЕТИЛ и отверг — текст несёт HTTP-код («ответил HTTP 403»), по нему видно,
+    //      что канал жив и виноват сайт;
+    //   2) соединиться НЕ УДАЛОСЬ (сеть, DNS, TLS) — кода нет и быть не может;
+    //   3) таймаут — соединение было, ответа не дождались, повтор осмыслен;
+    //   4) страница получена, но не разобрана (PDF, не-страница, велика, нечитаема).
+    // По одинаковому тексту модель не отличала «сайт защищается» от «сеть лежит» и одинаково
+    // бросала источник.
+    //
+    // ИСКЛЮЧЕНИЕ из этой дробности — local-address и dns-failed: ОДИН текст на оба (ADR-005 §6).
+    // Разные тексты дали бы модели оракул внутренней сети: перебирая имена, она бы различала
+    // «имя есть и смотрит в приватную сеть» / «имени нет», а в чате на стороннем провайдере эта
+    // карта уезжает чужому вендору (и тот же оракул получает prompt injection с прочитанной
+    // страницы). В панели «Чтение» коды по-прежнему разные — там разницу видит только сам
+    // владелец. Схлопывать обратно нельзя.
+    internal static string ReadErrorText(ReaderOutcome outcome)
     {
-        ReaderErrorCode.InvalidUrl => "Некорректный адрес: нужен http(s)-URL на порт 80 или 443, без логина в адресе.",
-        ReaderErrorCode.LocalAddress => "Адрес ведёт во внутреннюю сеть — чтение таких адресов запрещено.",
-        ReaderErrorCode.DnsFailed => "Домен не резолвится.",
-        ReaderErrorCode.Unreachable => "Сайт недоступен.",
-        ReaderErrorCode.TlsInvalid => "Проблема с сертификатом сайта.",
-        ReaderErrorCode.Timeout => "Сайт не ответил вовремя.",
-        ReaderErrorCode.AuthRequired => "Страница требует входа.",
-        ReaderErrorCode.BlockedBySite => "Сайт заблокировал запрос (бот-щит или лимит).",
-        ReaderErrorCode.NotFound => "Страница не найдена.",
-        ReaderErrorCode.ServerError => "Сайт ответил ошибкой.",
-        ReaderErrorCode.TooManyRedirects => "Слишком много редиректов.",
-        ReaderErrorCode.NotAPage => "Это не текстовая страница.",
-        ReaderErrorCode.Pdf => "Это PDF — ридер его не разбирает.",
-        ReaderErrorCode.TooLarge => "Страница слишком велика.",
-        ReaderErrorCode.NotReadable => "Из страницы не удалось извлечь текст.",
-        _ => "Страницу прочитать не удалось.",
-    };
+        var code = outcome.Error ?? ReaderErrorCode.Unreachable;
+        var text = code switch
+        {
+            // Отказ адреса — до сети, кода нет
+            ReaderErrorCode.InvalidUrl => "Некорректный адрес: нужен http(s)-URL на порт 80 или 443, без логина в адресе.",
+
+            // Адрес не резолвится ЛИБО ведёт во внутреннюю сеть — модели это один исход
+            ReaderErrorCode.LocalAddress or ReaderErrorCode.DnsFailed => "Адрес недоступен для чтения.",
+
+            // Соединиться не удалось
+            ReaderErrorCode.Unreachable => "Не удалось соединиться с сайтом (сетевой сбой).",
+            ReaderErrorCode.TlsInvalid => "Не удалось соединиться: проблема с сертификатом сайта.",
+            ReaderErrorCode.TooManyRedirects => "Не удалось соединиться: слишком много редиректов.",
+
+            // Ответа не дождались
+            ReaderErrorCode.Timeout => "Сайт не ответил вовремя (таймаут) — можно повторить попытку.",
+
+            // Сайт ответил и отверг запрос
+            ReaderErrorCode.AuthRequired => "Сайт отказал: страница требует входа.",
+            ReaderErrorCode.BlockedBySite => "Сайт отклонил запрос (бот-щит или лимит).",
+            ReaderErrorCode.NotFound => "Сайт ответил: страница не найдена.",
+            ReaderErrorCode.ServerError => "Сайт ответил ошибкой.",
+
+            // Страница получена, но текста из неё нет
+            ReaderErrorCode.NotAPage => "Это не текстовая страница.",
+            ReaderErrorCode.Pdf => "Это PDF — ридер его не разбирает.",
+            ReaderErrorCode.TooLarge => "Страница слишком велика.",
+            ReaderErrorCode.NotReadable => "Из страницы не удалось извлечь текст.",
+            _ => "Страницу прочитать не удалось.",
+        };
+
+        // Код есть только там, где ответ реально пришёл — приписываем его к любому исходу
+        // с ответом, а не к избранным кодам: это и есть признак «канал жив, отказал сайт»
+        return outcome.HttpStatus is { } status ? $"{text} (HTTP {status})" : text;
+    }
 
     // --- Маршрут: /mcp/websearch/{sessionId} ---
 

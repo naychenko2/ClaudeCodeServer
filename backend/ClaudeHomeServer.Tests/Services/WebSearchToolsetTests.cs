@@ -205,7 +205,10 @@ public class WebSearchToolsetTests : IDisposable
             new JsonObject { ["url"] = "http://127.0.0.1/admin" }, env.Context, default);
 
         result.IsError.Should().BeTrue();
-        result.Text.Should().Contain("внутренню");
+        // Текст отказа — общий с «домен не резолвится» (ADR-005 §6): по нему модель не должна
+        // понять, что за адресом внутренняя сеть
+        result.Text.Should().Be(
+            WebSearchToolset.ReadErrorText(ReaderOutcome.Fail(ReaderErrorCode.DnsFailed)));
         env.Site.Calls.Should().Be(0, "SsrfGuard обязан отсечь адрес до запроса");
     }
 
@@ -246,6 +249,48 @@ public class WebSearchToolsetTests : IDisposable
 
         env.Spend.Records.Should().BeEmpty();
         env.Perplexity.Calls.Should().Be(0);
+    }
+
+    // ─── Классы отказа чтения разведены (дефект 2026-09-07) ──────────────────
+
+    [Fact]
+    public void ТекстОтказа_СайтОтветилИОтверг_НесётHttpКод()
+    {
+        var blocked = WebSearchToolset.ReadErrorText(
+            ReaderOutcome.Fail(ReaderErrorCode.BlockedBySite, 403));
+        var limited = WebSearchToolset.ReadErrorText(
+            ReaderOutcome.Fail(ReaderErrorCode.BlockedBySite, 429));
+
+        blocked.Should().Contain("HTTP 403");
+        limited.Should().Contain("HTTP 429");
+        blocked.Should().NotBe(limited, "по тексту должно быть видно, каким кодом отказал сайт");
+    }
+
+    [Fact]
+    public void ТекстОтказа_СетевойСбой_ОтличенОтОтказаСайта_ИБезКода()
+    {
+        var network = WebSearchToolset.ReadErrorText(ReaderOutcome.Fail(ReaderErrorCode.Unreachable));
+        var blocked = WebSearchToolset.ReadErrorText(ReaderOutcome.Fail(ReaderErrorCode.BlockedBySite, 403));
+        var timeout = WebSearchToolset.ReadErrorText(ReaderOutcome.Fail(ReaderErrorCode.Timeout));
+
+        network.Should().Contain("соединиться");
+        network.Should().NotContain("HTTP", "ответа не было — кода взяться неоткуда");
+        network.Should().NotBe(blocked, "«сеть лежит» и «сайт защищается» — разные решения для модели");
+        timeout.Should().NotBe(network);
+        timeout.Should().Contain("таймаут");
+    }
+
+    [Fact]
+    public void ТекстОтказа_ВнутреннийАдресИНерезолвДаютОдинТекст_БезОракулаСети()
+    {
+        // ADR-005 §6: разные тексты сделали бы инструмент оракулом внутренней сети — модель
+        // перебором имён отличала бы «имя есть и приватное» от «имени нет», и эта карта уезжала
+        // бы стороннему провайдеру. В панели «Чтение» коды остаются разными (их видит владелец).
+        var local = WebSearchToolset.ReadErrorText(ReaderOutcome.Fail(ReaderErrorCode.LocalAddress));
+        var dns = WebSearchToolset.ReadErrorText(ReaderOutcome.Fail(ReaderErrorCode.DnsFailed));
+
+        local.Should().Be(dns, "по тексту нельзя отличить внутреннее имя от несуществующего");
+        local.Should().NotContainAny("внутренн", "локальн", "резолв", "DNS");
     }
 
     // ─── Разбор ответа Sonar (без сети и сессий) ─────────────────────────────

@@ -102,7 +102,7 @@ public sealed partial class ReaderService(
 
     /// <summary>
     /// reason по статусу финального ответа — коды ADR-005 §6. Тело не читается принципиально,
-    /// поэтому маркеры бот-щита здесь — только заголовочные (cf-mitigated/cf-ray), без «Just a
+    /// поэтому маркер бот-щита здесь — только заголовочный (cf-mitigated), без «Just a
     /// moment» в теле.
     /// </summary>
     private static string StatusReason(int status, HttpResponseMessage response)
@@ -331,7 +331,10 @@ public sealed partial class ReaderService(
             using (response)
             {
                 var location = response.Headers.Location;
-                if (location is null) return WalkResult.Fail(ReaderErrorCode.Unreachable, (int)response.StatusCode);
+                // Редирект без разбираемого Location: сайт ОТВЕТИЛ, но ответ негодный — это
+                // server-error с кодом, а не «соединиться не удалось» (у сетевого сбоя кода нет
+                // и быть не может, иначе текст для модели противоречит сам себе)
+                if (location is null) return WalkResult.Fail(ReaderErrorCode.ServerError, (int)response.StatusCode);
 
                 redirects++;
                 if (redirects > maxRedirects) return WalkResult.Fail(ReaderErrorCode.TooManyRedirects);
@@ -460,10 +463,24 @@ public sealed partial class ReaderService(
         }
     }
 
+    /// <summary>
+    /// Заголовочный маркер бот-щита — РОВНО один: <c>cf-mitigated</c>. Он появляется только
+    /// когда Cloudflare сам погасил запрос (challenge/block). <c>cf-ray</c> сюда не годится
+    /// принципиально: это идентификатор запроса, он есть в КАЖДОМ ответе Cloudflare, включая
+    /// успешный 200, — а за Cloudflare стоит огромная доля интернета, и по нему ридер
+    /// отказывал в чтении почти всему вебу (дефект 2026-09-07, проверено на example.com).
+    /// </summary>
     private static bool HasBotShieldHeaders(HttpResponseMessage response) =>
-        response.Headers.Contains("cf-mitigated") || response.Headers.Contains("cf-ray");
+        response.Headers.Contains("cf-mitigated");
 
-    private static bool HasBotShieldBody(string snippet) => JustAMomentTitleRegex().IsMatch(snippet);
+    /// <summary>
+    /// Телесный маркер бот-щита — <c>&lt;title&gt;</c> страницы-заглушки. Кроме «Just a moment»
+    /// (challenge Cloudflare, приходит с кодом 200) сюда входят титулы блок-страниц: их отдают
+    /// и Cloudflare с action Block, и Akamai/DataDome/Imperva/PerimeterX — все под 403, который
+    /// иначе диагностировался бы как «требуется вход». Эти титулы встречаются только на
+    /// страницах отказа, поэтому ложных срабатываний на статьях не дают.
+    /// </summary>
+    private static bool HasBotShieldBody(string snippet) => BotShieldTitleRegex().IsMatch(snippet);
 
     private static async Task<(byte[] Bytes, bool Truncated)> ReadBoundedAsync(HttpContent content, int capBytes, CancellationToken ct)
     {
@@ -543,8 +560,10 @@ public sealed partial class ReaderService(
                 domain, outcome.Error!.Value.ToWireName(), outcome.HttpStatus, (int)elapsed.TotalMilliseconds);
     }
 
-    [GeneratedRegex(@"<title[^>]*>\s*just a moment", RegexOptions.IgnoreCase)]
-    private static partial Regex JustAMomentTitleRegex();
+    [GeneratedRegex(
+        @"<title[^>]*>\s*(just a moment|attention required|access denied|you have been blocked)",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex BotShieldTitleRegex();
 
     [GeneratedRegex("(login|signin|auth|session)", RegexOptions.IgnoreCase)]
     private static partial Regex LoginActionRegex();

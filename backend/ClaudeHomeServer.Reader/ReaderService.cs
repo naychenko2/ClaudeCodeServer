@@ -271,6 +271,14 @@ public sealed partial class ReaderService(
         var maxBodyBytes = config.GetValue("Reader:MaxBodyBytes", 2 * 1024 * 1024);
         var maxRedirects = config.GetValue("Reader:MaxRedirects", 5);
         var maxElemsToParse = config.GetValue("Reader:MaxElemsToParse", 100_000);
+        // Порог «сколько извлечённого текста уже считаем страницей» (см. ParseArticle — там же
+        // разбор, почему решение принимается по результату, а не по вердикту SmartReader).
+        // 150 — на уровне собственного порога библиотеки MinContentLengthReadearable (140),
+        // которым она решает, содержателен ли отдельный абзац: одного настоящего абзаца
+        // достаточно. Ниже опускаться нельзя — начнёт проходить навигационная обвязка
+        // (замер: страница-меню из семи пунктов даёт 99 символов текста); выше — снова
+        // отрежет одноэкранные страницы (у example.com их 175).
+        var charThreshold = config.GetValue("Reader:CharThreshold", 150);
 
         using var overallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         overallCts.CancelAfter(totalTimeout);
@@ -280,7 +288,7 @@ public sealed partial class ReaderService(
             return ReaderOutcome.Fail(walk.Error!.Value, walk.HttpStatus);
 
         using var response = walk.Response!;
-        return await HandleResponseAsync(walk.Uri, response, maxBodyBytes, maxElemsToParse, overallCts.Token);
+        return await HandleResponseAsync(walk.Uri, response, maxBodyBytes, maxElemsToParse, charThreshold, overallCts.Token);
     }
 
     /// <summary>
@@ -362,7 +370,8 @@ public sealed partial class ReaderService(
     }
 
     private async Task<ReaderOutcome> HandleResponseAsync(
-        Uri uri, HttpResponseMessage response, int maxBodyBytes, int maxElemsToParse, CancellationToken ct)
+        Uri uri, HttpResponseMessage response, int maxBodyBytes, int maxElemsToParse, int charThreshold,
+        CancellationToken ct)
     {
         var status = (int)response.StatusCode;
 
@@ -397,14 +406,15 @@ public sealed partial class ReaderService(
             return ReaderOutcome.Ok(title: uri.Host, siteName: uri.Host, byline: null, markdown: text);
 
         if (isHtml)
-            return ParseArticle(uri, text, maxElemsToParse, response, status);
+            return ParseArticle(uri, text, maxElemsToParse, charThreshold, response, status);
 
         // text/plain, прочие text/* и application/json: контент подконтролен чужому серверу,
         // без экранирования он миновал бы белый список тегов конвертера (см. ADR).
         return ReaderOutcome.Ok(title: uri.Host, siteName: uri.Host, byline: null, markdown: FencePlainText(text));
     }
 
-    private ReaderOutcome ParseArticle(Uri uri, string html, int maxElemsToParse, HttpResponseMessage response, int status)
+    private ReaderOutcome ParseArticle(
+        Uri uri, string html, int maxElemsToParse, int charThreshold, HttpResponseMessage response, int status)
     {
         if (HasBotShieldHeaders(response) || HasBotShieldBody(html.Length > 4096 ? html[..4096] : html))
             return ReaderOutcome.Fail(ReaderErrorCode.BlockedBySite, status);
@@ -412,7 +422,17 @@ public sealed partial class ReaderService(
         SmartReader.Article article;
         try
         {
-            var reader = new SmartReader.Reader(uri.ToString(), html) { MaxElemsToParse = maxElemsToParse };
+            var reader = new SmartReader.Reader(uri.ToString(), html)
+            {
+                MaxElemsToParse = maxElemsToParse,
+                // Тот же порог отдаём и самой библиотеке: её дефолт (500) означал бы, что её
+                // собственное «достаточно ли текста» расходится с нашим — при недоборе она
+                // переразбирает документ с ослабленными фильтрами очистки. На проверенных
+                // фикстурах присваивание разбор не меняет (замер 2026-09-07 при 100/150/500),
+                // так что дефект оно НЕ лечит — гейт ниже, в приёмке результата; здесь это
+                // согласование контрактов.
+                CharThreshold = charThreshold,
+            };
             article = reader.GetArticle();
         }
         catch (Exception ex)
@@ -421,12 +441,22 @@ public sealed partial class ReaderService(
             return ReaderOutcome.Fail(ReaderErrorCode.NotReadable, status);
         }
 
-        if (!article.IsReadable)
-        {
-            return LooksLikeLoginPage(html)
-                ? ReaderOutcome.Fail(ReaderErrorCode.AuthRequired, status)
-                : ReaderOutcome.Fail(ReaderErrorCode.NotReadable, status);
-        }
+        // Диагноз «нужен вход» ставится по тем же признакам и в тех же случаях, что и раньше:
+        // разведка сказала «не статья», а в разметке есть форма входа.
+        if (!article.IsReadable && LooksLikeLoginPage(html))
+            return ReaderOutcome.Fail(ReaderErrorCode.AuthRequired, status);
+
+        // А вот отвергать страницу по одному вердикту разведки нельзя: IsReadable — это
+        // ПРЕДсказание IsProbablyReaderable, набирающее баллы по длине ОТДЕЛЬНЫХ абзацев
+        // (абзац короче 140 символов не считается вовсе, сумма должна перевалить 20 — то есть
+        // одному абзацу нужно за 500 символов). Разбор при этом отрабатывает и текст извлекает:
+        // у example.com IsReadable = false при 175 символах готового текста. Так терялся целый
+        // класс живых страниц — одноэкранные лендинги, карточки товаров, страницы-указатели.
+        // Решаем по РЕЗУЛЬТАТУ разбора: сколько текста реально извлечено (замер 2026-09-07 на
+        // тех же фикстурах — страница-меню даёт 99 символов, заглушка 5, пустое тело 0).
+        var extractedText = (article.TextContent ?? "").Trim();
+        if (extractedText.Length < charThreshold)
+            return ReaderOutcome.Fail(ReaderErrorCode.NotReadable, status);
 
         var markdown = ConvertArticleContent(article.Content ?? "");
         if (string.IsNullOrWhiteSpace(markdown))

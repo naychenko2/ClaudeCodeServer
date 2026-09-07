@@ -259,11 +259,15 @@ public class SubsystemBoundaryTests
                 }),
         },
         // Git — НИЖНИЙ слой вертикалей (на него смотрят будущие Dossiers/Knowledge/Deploy,
-        // плюс hosted-сервисы SessionManager/ProjectManager). Допуск к корню Services
-        // точечный:
-        // 1) `SessionManager`, `ProjectManager`, `UserStore`, `ProjectFileSessionsIndex`
-        //    (Services/ корень) — общая инфраструктура (GitAutoCommitService:14-20,
-        //    CommitAttributionService:19-20, GitServerService:18).
+        // плюс hosted-сервисы SessionManager/ProjectManager). После Этапа 3
+        // (задача `4d044b22`) реакторы `GitAutoCommitService`/`CommitAttributionService`
+        // вынесены в корень `Services.*` — это «реакция на ход/статус» (прецедент
+        // `PersonaMemoryAutolearnService`), они ЗОВУТ `GitService`, а не принадлежат
+        // Git. Поэтому `SessionManager`/`ProjectManager`/`ProjectFileSessionsIndex`/
+        // `SessionChangedPaths` больше НЕ нужны Git-вертикали — допуски убраны.
+        // Допуск к корню Services точечный:
+        // 1) `UserStore` (Services/ корень) — `GitServerService:18` (Forgejo-клиент
+        //    резолвит креденшалы пользователя).
         // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory`, через который
         //    GitService запускает процессы git (источник истины, как в задаче).
         // 3) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для генерации сообщения
@@ -273,17 +277,14 @@ public class SubsystemBoundaryTests
         //    сводки, память...). Вынос Llm в отдельный allow-list вместо расширения
         //    SharedAllowedPrefixes — чтобы не открывать любой подсистеме весь
         //    `ClaudeHomeServer.Services.Llm`.
-        // 4) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации об
-        //    авто-коммите (GitAutoCommitService отправляет событие в ленту сессии).
-        // 5) `ClaudeHomeServer.Protocol` — префикс СНЯТ (волна 3) как полностью
-        //    избыточный: `GitTurnCommitMessage`/`GitStatusChangedMessage` создаются в
-        //    аргументах SendAsync и не переживают await (нет поля state-машины),
+        // 4) `ClaudeHomeServer.Protocol` — префикс СНЯТ (волна 3) как полностью
+        //    избыточный: `GitTurnCommitMessage`/`GitStatusChangedMessage` теперь создаются
+        //    в `Services.GitAutoCommitService` (root Services, не в Git-вертикали),
         //    а метод OnSessionMessageAsync с ServerMessage в сигнатуре — private,
         //    сторож читает только public-методы. Поэтому убираем префикс, а
         //    `AllowedExactNamespaces` для `ClaudeHomeServer.Protocol.*` оставляем
-        //    пустым — это сознательный нулевой allow-list (по аналогии со снятым
-        //    `Services.Llm` у Watchdog в волне 1): если вертикаль получит поле/параметр
-        //    типа из Protocol, сторож поймает это сразу.
+        //    пустым — это сознательный нулевой allow-list: если вертикаль получит
+        //    поле/параметр типа из Protocol, сторож поймает это сразу.
         new object[]
         {
             new VerticalBoundary(
@@ -295,25 +296,26 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Git",
                         "ClaudeHomeServer.Services.Execution",
                         "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.ProjectFileSessionsIndex",
                     // Точечные зависимости из тел методов (IL-видимость, задача `8beee75e`):
                     // `GitService.cs:73` зовёт `FileService.SafeJoinPublic(...)` static-метод,
                     // `GitServerService.cs:213` зовёт `PersonaManager.Slugify(name)` — имя репозитория,
-                    //    а не автор коммита (обоснование выправлено по факту, ревью 894e3ec9),
-                    // `CommitAttributionService` материализует `SessionChangedPaths`
-                    // в поле async-state-машины. Все три — «вертикаль → спинка»
-                    // (root-инфраструктура), по аналогии с `Memory`/`Tasks`/`Dossiers`.
+                    //    а не автор коммита (обоснование выправлено по факту, ревью 894e3ec9).
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.SessionChangedPaths",
+                    // === Этап 3, задача `4d044b22` — реакторы `GitAutoCommitService`/
+                    // `CommitAttributionService` переехали в корень `Services.*` (прецедент
+                    // `PersonaMemoryAutolearnService`). `GitSubsystem.Register` всё ещё
+                    // регистрирует их — это сознательная связь «вертикаль → root»,
+                    // подсистема знает, что регистрирует, и без точечного допуска сторож
+                    // ловит generic-аргументы `<GitAutoCommitService>`/`<CommitAttributionService>`.
+                    // Префикс `Services` целиком не открываем.
+                    "ClaudeHomeServer.Services.GitAutoCommitService",
+                    "ClaudeHomeServer.Services.CommitAttributionService",
                 }),
         },
         // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
@@ -1069,16 +1071,19 @@ public class SubsystemBoundaryTests
                     // в общий `Services.Composition`-тип (или `IClaudeHomeConstants`) и убрать
                     // зависимость Llm → Team; тогда цикл Llm ⇄ Team разрезается.)
                     "ClaudeHomeServer.Services.Team.TeamImplementPrompts",
-                    // `Git ⇄ Llm`: ClaudeSession.cs:2389 зовёт
-                    // `GitService.EnsureAttachmentsExcluded(_rootPath)` (static) из тела
+                    // `Git ⇄ Llm`: ClaudeSession.cs:2457 зовёт
+                    // `AttachmentsGitExclude.Ensure(_rootPath)` (static) из тела
                     // `RunTurnAsync`; IL-скан видит declaring-тип. Обратная сторона
                     // (`Git → Llm` через `ICheapTextRunner` в `GitAiService`) уже
                     // объявлена префиксом `ClaudeHomeServer.Services.Llm` у Git.
-                    // (TODO на шов: завести `IGitPathGuard` в `Services.Git` с методом
-                    // `EnsureAttachmentsExcluded(string rootPath)` и перевести `ClaudeSession`
-                    // на него, тогда `Services.Git` уйдёт из allow-list Llm и цикл
-                    // Git ⇄ Llm исчезнет.)
-                    "ClaudeHomeServer.Services.Git.GitService",
+                    // Цикл наполовину разрезан примитивом `AttachmentsGitExclude`
+                    // (задача `4d044b22`): `EnsureAttachmentsExcluded` вынесен
+                    // из `GitService` в `Services.AttachmentsGitExclude`, и Llm
+                    // больше не зависит от `Services.Git`. Префикс `Services.Git`
+                    // у Llm снят — `Services.Git` в целом не нужен. Обратное
+                    // ребро `Git → Llm` остаётся как сознательная зависимость
+                    // (префикс-шов `Services.Llm` у Git).
+                    "ClaudeHomeServer.Services.AttachmentsGitExclude",
                 }),
         },
         // Docs — индекс документации (ADR) + ИИ-помощь по документам (волна 4A, шаг 2).

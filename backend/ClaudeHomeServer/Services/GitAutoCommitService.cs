@@ -1,9 +1,10 @@
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services.Git;
+namespace ClaudeHomeServer.Services;
 
 // Режим документов: авто-commit (и опционально push) после каждого завершённого хода Claude
 // в проекте с GitAutoCommit. Подписка на SessionManager.OnSessionMessage — тот же хук, что

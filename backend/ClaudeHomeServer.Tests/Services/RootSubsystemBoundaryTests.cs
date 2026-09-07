@@ -243,6 +243,13 @@ public class RootSubsystemBoundaryTests
         // `ClaudeHomeServer.Services.*`, поэтому `ClaudeHomeServer.Telemetry` не гейтится
         // здесь вовсе — как `Hubs`/`Protocol`/`Controllers`. Гейт живёт в сторожа вертикалей.
         "ClaudeHomeServer.Telemetry.ServerMetrics",
+        // === Этап 3, задача `4d044b22` — реакторы вынесены в root Services.
+        // `GitAutoCommitService`/`CommitAttributionService` (root) держат `GitService`/
+        // `GitCredentials` в ctor и через вызовы статики. Префикс `Services.Git` не
+        // открываем: Git — продуктовая вертикаль, не «общий слой». Прецедент —
+        // `Dossiers → Git.GitService` в `SubsystemBoundaryTests.Boundaries`.
+        "ClaudeHomeServer.Services.Git.GitService",
+        "ClaudeHomeServer.Services.Git.GitCredentials",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

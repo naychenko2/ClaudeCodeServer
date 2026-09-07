@@ -5,7 +5,6 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
-using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
@@ -2454,7 +2453,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!_attachmentsExcludeEnsured && Info.ProjectId is not null)
         {
             _attachmentsExcludeEnsured = true;
-            try { GitService.EnsureAttachmentsExcluded(_rootPath); }
+            try { AttachmentsGitExclude.Ensure(_rootPath); }
             catch { /* игнор вложений — не критично для хода */ }
         }
 

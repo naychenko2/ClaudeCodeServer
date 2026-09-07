@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using FluentAssertions;
@@ -459,7 +460,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await WithOwnGitignoreAsync();
         var ownGitignore = await File.ReadAllTextAsync(Path.Combine(_repo, ".gitignore"));
 
-        GitService.EnsureAttachmentsExcluded(_repo);
+        AttachmentsGitExclude.Ensure(_repo);
         await AddAttachmentAsync(_repo);
 
         // Рабочее дерево чистое: вложения не видно в статусе
@@ -480,9 +481,9 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     {
         await WithOwnGitignoreAsync();
 
-        GitService.EnsureAttachmentsExcluded(_repo);
-        GitService.EnsureAttachmentsExcluded(_repo);
-        GitService.EnsureAttachmentsExcluded(_repo);
+        AttachmentsGitExclude.Ensure(_repo);
+        AttachmentsGitExclude.Ensure(_repo);
+        AttachmentsGitExclude.Ensure(_repo);
 
         var exclude = await File.ReadAllTextAsync(Path.Combine(_repo, ".git", "info", "exclude"));
         exclude.Split('\n').Count(l => l.Trim() == ".cc-attachments/").Should().Be(1);
@@ -496,7 +497,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await _git.WorktreeAddAsync(null, _repo, wt, "wt/вложения");
 
         // Вложения кладутся в рабочую папку сессии — у worktree-чата это сам worktree
-        GitService.EnsureAttachmentsExcluded(wt);
+        AttachmentsGitExclude.Ensure(wt);
         await AddAttachmentAsync(wt);
 
         var st = await _git.StatusAsync(null, wt);

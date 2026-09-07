@@ -701,6 +701,24 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         var snap = await _git.RepoSnapshotAsync(null, _repo);
         snap.DirtyPaths.Should().BeEmpty();
         snap.ShortHeadSha.Should().NotBeNullOrEmpty().And.HaveLength(7);
+        snap.Error.Should().BeNull("успешный git status — поле Error обязано быть пустым");
+    }
+
+    // Сценарий «git status упал»: выкатка обязана блокироваться гейтом GitFailed, а не
+    // считать дерево чистым по факту провала. Имитируем битый .git переключением core.bare=true
+    // — git отказывается выполнять status в bare-репозитории с «fatal: This operation must be
+    // run in a work tree». Конструктор теста создаёт свежий _repo на каждый прогон, поэтому
+    // config не утекает в другие тесты.
+    [Fact]
+    public async Task RepoSnapshot_GitStatusУпал_ErrorЗаполнен_ПутиНеДоверяем()
+    {
+        await RawGit("config", "core.bare", "true");
+
+        var snap = await _git.RepoSnapshotAsync(null, _repo);
+
+        snap.Error.Should().NotBeNullOrEmpty("падение git status обязано превращаться в Error");
+        snap.DirtyPaths.Should().BeEmpty("пустой список при сбое status — это НЕ чистое дерево");
+        // sha нерелевантен при сбое status; проверим только, что нет исключения и нет ложного «дерево чистое»
     }
 
     [Fact]

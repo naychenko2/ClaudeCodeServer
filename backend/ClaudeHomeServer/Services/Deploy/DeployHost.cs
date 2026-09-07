@@ -51,7 +51,10 @@ public sealed class DeployHost(
         {
             // ownerId=null — системный вызов, всегда локальная среда (см. LauncherFactory)
             var snap = await git.RepoSnapshotAsync(null, repoDir, ct);
-            return new DeployGitSnapshot(snap.ShortHeadSha, snap.DirtyPaths, null);
+            // Пробрасываем Error от RepoSnapshot (битый .git/лок/диск → git status упал) —
+            // иначе DeployService решил бы, что дерево чистое, и guard грязного дерева
+            // пропустил бы выкатку с непрочитанным состоянием.
+            return new DeployGitSnapshot(snap.ShortHeadSha, snap.DirtyPaths, snap.Error);
         }
         catch (GitCommandException ex)
         {

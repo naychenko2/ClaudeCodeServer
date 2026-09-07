@@ -21,10 +21,10 @@ public class WorkspaceKnowledgeStore
         Load();
     }
 
-    public static string NormalizePath(string path) =>
-        Path.GetFullPath(path)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .ToLowerInvariant();
+    // Примитив переехал в `Core.Services.PathNormalizer` (Этап 3, волна 1).
+    // Здесь — тонкий forwarding, чтобы существующие вызовы `WorkspaceKnowledgeStore.NormalizePath`
+    // в `ProjectManager`/`SessionManager`/`ClaudeSession`/контроллерах не ломались.
+    public static string NormalizePath(string path) => PathNormalizer.NormalizePath(path);
 
     public WorkspaceKnowledge? GetByPath(string rootPath) =>
         _store.GetValueOrDefault(NormalizePath(rootPath));

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Memory;
@@ -246,6 +247,9 @@ public class PromptSectionContributorsDiTests
             services.AddSingleton(appSettings);
             var projectManager = new ProjectManager(config, userStore, appSettings);
             services.AddSingleton(projectManager);
+            // Шов IProjectRootLookup зарегистрирован в Program.cs; в тесте регистрируем
+            // вручную (тот же ProjectRootLookup, что и в Main).
+            services.AddSingleton<IProjectRootLookup>(_ => new ProjectRootLookup(projectManager));
             var history = new ChatHistoryService(config);
             services.AddSingleton(history);
             var wkStore = new WorkspaceKnowledgeStore(config);
@@ -279,7 +283,7 @@ public class PromptSectionContributorsDiTests
             services.AddSingleton<CodeGraphService>(sp =>
                 new CodeGraphService(
                     NullLogger<CodeGraphService>.Instance,
-                    sp.GetRequiredService<ProjectManager>(),
+                    sp.GetRequiredService<IProjectRootLookup>(),
                     new GraphPersistence(Path.Combine(tempDir, "data"), NullLogger<GraphPersistence>.Instance),
                     sp.GetRequiredService<IConfiguration>()));
             services.AddSingleton<CodeGraphPromptProvider>(); // для CodeGraphContributor

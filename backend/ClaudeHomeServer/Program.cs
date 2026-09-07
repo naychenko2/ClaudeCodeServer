@@ -157,6 +157,10 @@ builder.Services.AddSingleton<AppSettingsService>();
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
+// Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
+// вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
+// над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.
+builder.Services.AddSingleton<IProjectRootLookup, ProjectRootLookup>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();

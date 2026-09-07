@@ -101,8 +101,9 @@ public sealed class LocalProcessRunner : IProcessLauncher
     /// Поиск команды по каталогам PATH с подстановкой расширений PATHEXT — как это делает
     /// cmd. Тонкая обёртка над <see cref="ExecutableResolver.FindInPath"/>, оставлена
     /// ради существующих вызовов и тестов, которые звали правило по короткому пути.
-    /// Сам примитив живёт в `Services.ExecutableResolver` (задача `57b5e9bc`, шаг 5):
-    /// чистая функция от fileName/path/pathext, без процессов и без DI.
+    /// Сам примитив живёт в `ClaudeHomeServer.Core.Services.ExecutableResolver`
+    /// (Этап 3, волна 1: поднят в Core ради CodeGraph; до этого — `Services.ExecutableResolver`,
+    /// задача `57b5e9bc` шаг 5): чистая функция от fileName/path/pathext, без процессов и без DI.
     /// </summary>
     public static string? FindInPath(string fileName, string? path, string? pathext) =>
         ExecutableResolver.FindInPath(fileName, path, pathext);

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.CodeGraph.Core;
 using ClaudeHomeServer.Services.CodeGraph.Roslyn;
-using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 public sealed class CodeGraphService : IDisposable
 {
     private readonly ILogger<CodeGraphService> _logger;
-    private readonly ProjectManager _projects;
+    private readonly IProjectRootLookup _projectRoots;
     private readonly GraphPersistence _persistence;
     private readonly int _rebuildDebounceMs;
 
@@ -41,12 +41,12 @@ public sealed class CodeGraphService : IDisposable
 
     public CodeGraphService(
         ILogger<CodeGraphService> logger,
-        ProjectManager projects,
+        IProjectRootLookup projectRoots,
         GraphPersistence persistence,
         IConfiguration config)
     {
         _logger = logger;
-        _projects = projects;
+        _projectRoots = projectRoots;
         _persistence = persistence;
         // Окно дебаунса rebuild: продолгое (15с, как NotesService), чтобы серия правок .cs
         // схлопнулась в одно перестроение; в тестах уменьшается через CodeGraph:RebuildDebounceMs.
@@ -84,7 +84,7 @@ public sealed class CodeGraphService : IDisposable
         _logger.LogInformation("Построение графа для {Path}", rootPath);
         var graph = await BuildInternalAsync(rootPath, changedByExtension: null, prevGraph: null, ct);
         await _persistence.SaveAsync(rootPath, graph, ct);
-        _lastGraphs[WorkspaceKnowledgeStore.NormalizePath(rootPath)] = graph;
+        _lastGraphs[PathNormalizer.NormalizePath(rootPath)] = graph;
         return graph;
     }
 
@@ -149,7 +149,7 @@ public sealed class CodeGraphService : IDisposable
     public void Invalidate(string rootPath)
     {
         _persistence.Delete(rootPath);
-        _lastGraphs.TryRemove(WorkspaceKnowledgeStore.NormalizePath(rootPath), out _);
+        _lastGraphs.TryRemove(PathNormalizer.NormalizePath(rootPath), out _);
     }
 
     /// <summary>
@@ -186,7 +186,7 @@ public sealed class CodeGraphService : IDisposable
     /// </summary>
     public async Task RebuildAsync(string rootPath, CancellationToken ct)
     {
-        var normalized = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var normalized = PathNormalizer.NormalizePath(rootPath);
 
         // Снимаем pending rebuild и гасим его таймер: фоновый дебаунс не должен
         // наложиться на явное построение дублирующим перестроением.
@@ -213,7 +213,7 @@ public sealed class CodeGraphService : IDisposable
     /// </summary>
     public bool StartRebuildIfIdle(string rootPath)
     {
-        var normalized = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var normalized = PathNormalizer.NormalizePath(rootPath);
 
         // Связанный CTS: отменяется при остановке сервиса — orphan-задача не переживёт Dispose.
         var cts = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token);
@@ -277,7 +277,7 @@ public sealed class CodeGraphService : IDisposable
             .ToList();
         if (files.Count == 0) return;
 
-        var normalized = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var normalized = PathNormalizer.NormalizePath(rootPath);
 
         // Дебаунс: накапливаем изменения, сбрасываем таймер на 15с
         if (_pendingRebuilds.TryGetValue(normalized, out var existing))
@@ -321,7 +321,7 @@ public sealed class CodeGraphService : IDisposable
             var ct = active.Token;
 
             // Находим проект по rootPath (если существует)
-            var project = _projects.GetByRootPath(normalizedPath).FirstOrDefault();
+            var project = _projectRoots.GetByRootPath(normalizedPath).FirstOrDefault();
             var rootPath = project?.RootPath ?? normalizedPath;
 
             // Группируем изменённые файлы по extension

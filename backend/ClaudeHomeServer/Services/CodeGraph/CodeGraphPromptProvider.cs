@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Services.CodeGraph.Core;
-using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -61,8 +60,8 @@ public sealed class CodeGraphPromptProvider
         if (slice is not null) return slice;
 
         if (string.IsNullOrWhiteSpace(fallbackRootPath)
-            || WorkspaceKnowledgeStore.NormalizePath(fallbackRootPath)
-               == WorkspaceKnowledgeStore.NormalizePath(rootPath))
+            || PathNormalizer.NormalizePath(fallbackRootPath)
+               == PathNormalizer.NormalizePath(rootPath))
             return null;
 
         var fromMain = await SliceForAsync(fallbackRootPath, ct);
@@ -72,7 +71,7 @@ public sealed class CodeGraphPromptProvider
     // Slice конкретного дерева; null — граф для него не построен либо god-узлов нет.
     private async Task<string?> SliceForAsync(string rootPath, CancellationToken ct)
     {
-        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var key = PathNormalizer.NormalizePath(rootPath);
 
         try
         {

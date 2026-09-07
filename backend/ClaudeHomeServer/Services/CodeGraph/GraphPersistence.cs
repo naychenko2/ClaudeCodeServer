@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Services.CodeGraph.Core;
 using ClaudeHomeServer.Services.CodeGraph.Roslyn;
-using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -149,7 +148,7 @@ public sealed class GraphPersistence
     /// </summary>
     private static string GetHash(string rootPath)
     {
-        var normalized = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var normalized = PathNormalizer.NormalizePath(rootPath);
         using var hash = System.Security.Cryptography.SHA256.Create();
         var bytes = System.Text.Encoding.UTF8.GetBytes(normalized);
         var hashBytes = hash.ComputeHash(bytes);

@@ -3293,9 +3293,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         _log.LogWarning("MCP-сервер «{Key}» снят с хода: нужен вход (OAuth)", record.Key);
                         continue;
                     }
-                    var env = ResolveValues(fresh.Env);
-                    var headers = ResolveValues(fresh.Headers);
-                    if (!stdio && !ApplyAuthHeaders(fresh, headers)) continue;
+                    var env = ResolveSecretValues(ownerId, fresh.Env);
+                    var headers = ResolveSecretValues(ownerId, fresh.Headers);
+                    if (!stdio && !TryApplyAuthHeaders(ownerId, fresh, headers)) continue;
                     servers.Add(new ExternalMcpServer(
                         fresh.Key,
                         fresh.Transport.ToString().ToLowerInvariant(),
@@ -3308,44 +3308,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         fresh.AuthVersion));
                 }
 
-                // Встроенная интеграция Higgsfield: та же логика, что для реестровых записей.
-                // Запись НЕ создаём — только если уже есть (TryGetRecord). Флаг проверяется
-                // на каждый ход; IsEnabledForOwner -> flags.IsEnabled.
-                if (_higgsfield is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.Higgsfield))
-                {
-                    var hf = _higgsfield.TryGetRecord(ownerId);
-                    if (hf?.Enabled == true)
-                    {
-                        var granted = _bindings.McpServerGranted(persona, "mcp:" + hf.Key);
-                        if (Mcp.McpDelivery.ShouldDeliver(hf, onInProject, isProjectChat, granted, readOnly))
-                        {
-                            var fresh = hf.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
-                                ? _mcpOAuth.EnsureFresh(ownerId, hf) : hf;
-                            if (fresh is null)
-                            {
-                                _log.LogWarning("MCP-сервер Higgsfield снят с хода: нужен вход (OAuth)");
-                            }
-                            else
-                            {
-                                var env = ResolveValues(fresh.Env);
-                                var headers = ResolveValues(fresh.Headers);
-                                if (!ApplyAuthHeaders(fresh, headers))
-                                    _log.LogWarning("MCP-сервер Higgsfield снят с хода: не найдено значение авторизации");
-                                else
-                                    servers.Add(new ExternalMcpServer(
-                                        fresh.Key,
-                                        fresh.Transport.ToString().ToLowerInvariant(),
-                                        null,
-                                        fresh.Args ?? [],
-                                        env,
-                                        fresh.Url,
-                                        headers,
-                                        fresh.AlwaysLoad,
-                                        fresh.AuthVersion));
-                            }
-                        }
-                    }
-                }
+                // Встроенная интеграция Higgsfield: продуктовая, не реестровая. Каскад
+                // «проект/персона» снят — запись заводится нашим же HiggsfieldIntegration
+                // по входу владельца, ключ в ReservedKeys, и не настраивается через UI.
+                // Гейт доставки — отдельная чистая функция McpDelivery.IsBuiltinDelivered.
+                TryAddHiggsfieldBuiltin(ownerId, readOnly, servers);
 
                 return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
             }
@@ -3355,25 +3322,71 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 return null;
             }
         };
+    }
 
-        Dictionary<string, string> ResolveValues(Dictionary<string, string>? map)
+    // Продуктовая встроенная интеграция Higgsfield (вынесено из лямбды
+    // BuildExternalMcpProvider, чтобы было отдельное тело для сторожа). Доставка:
+    // фич-флаг владельца → запись в реестре (TryGetRecord, не создаём) → рубильник Enabled
+    // и RO-гейт (McpDelivery.IsBuiltinDelivered) → живой OAuth-токен (EnsureFresh).
+    // Ни McpServersOn проекта, ни McpServerGranted персоны здесь НЕ читаются — это
+    // встроенная интеграция, а не запись личного реестра, и каскад доставки другой.
+    private void TryAddHiggsfieldBuiltin(string ownerId, bool readOnly, List<ExternalMcpServer> servers)
+    {
+        if (_higgsfield is null) return;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.Higgsfield)) return;
+        var hf = _higgsfield.TryGetRecord(ownerId);
+        if (hf is null || !Mcp.McpDelivery.IsBuiltinDelivered(hf, readOnly)) return;
+
+        var fresh = hf.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
+            ? _mcpOAuth.EnsureFresh(ownerId, hf)
+            : hf;
+        if (fresh is null)
         {
-            var result = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (name, value) in map ?? [])
-                result[name] = _mcpSecrets!.Resolve(ownerId, value) ?? "";
-            return result;
+            _log.LogWarning("MCP-сервер Higgsfield снят с хода: нужен вход (OAuth)");
+            return;
         }
+        // Секреты (secret:* в Env/Headers) разворачиваются на лету — отдельная точка
+        // с реестровым путём не нужна, у встроенной записи их нет по построению, но
+        // формальное API одно и то же.
+        var env = ResolveSecretValues(ownerId, fresh.Env);
+        var headers = ResolveSecretValues(ownerId, fresh.Headers);
+        // TryApplyAuthHeaders сам пишет WARN «не найдено значение авторизации» —
+        // дополнительный лог в Higgsfield-пути раньше дублировал строку (WARN печатался
+        // дважды), теперь один.
+        if (!TryApplyAuthHeaders(ownerId, fresh, headers)) return;
+        servers.Add(new ExternalMcpServer(
+            fresh.Key,
+            fresh.Transport.ToString().ToLowerInvariant(),
+            null,
+            fresh.Args ?? [],
+            env,
+            fresh.Url,
+            headers,
+            fresh.AlwaysLoad,
+            fresh.AuthVersion));
+    }
 
+    // Локальные обёртки вокруг Mcp.McpAuthHeaders / секрет-стора — нужны и в лямбде
+    // BuildExternalMcpProvider, и в TryAddHiggsfieldBuiltin, поэтому живут на классе.
+    // Поведение и сообщения логов совпадают с теми, что были внутри лямбды.
+    private Dictionary<string, string> ResolveSecretValues(string ownerId, Dictionary<string, string>? map)
+    {
+        if (_mcpSecrets is null) return new Dictionary<string, string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, value) in map ?? [])
+            result[name] = _mcpSecrets.Resolve(ownerId, value) ?? "";
+        return result;
+    }
+
+    private bool TryApplyAuthHeaders(string ownerId, McpServerRecord record, Dictionary<string, string> headers)
+    {
+        if (Mcp.McpAuthHeaders.TryApply(record, headers, r => _mcpSecrets?.Resolve(ownerId, r))) return true;
         // Заголовок авторизации http/sse-сервера (общая точка с пробой — Mcp.McpAuthHeaders).
         // Потерянный секрет (запись ссылается в пустоту) — не повод отдавать серверу заведомо
         // анонимный запрос: пропускаем сервер с предупреждением, иначе инструменты молча
         // отвечали бы 401.
-        bool ApplyAuthHeaders(McpServerRecord record, Dictionary<string, string> headers)
-        {
-            if (Mcp.McpAuthHeaders.TryApply(record, headers, r => _mcpSecrets!.Resolve(ownerId, r))) return true;
-            _log.LogWarning("MCP-сервер «{Key}» снят с хода: не найдено значение авторизации", record.Key);
-            return false;
-        }
+        _log.LogWarning("MCP-сервер «{Key}» снят с хода: не найдено значение авторизации", record.Key);
+        return false;
     }
 
     // Контекст MCP-сервера уведомлений: обычному чату — всегда, персоне — по роли

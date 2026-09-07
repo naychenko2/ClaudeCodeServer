@@ -229,6 +229,42 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Продуктовая встроенная интеграция Higgsfield доставляется НЕ по каскаду реестра
+    /// (McpServersOn/McpServerGranted), а собственной чистой формулой
+    /// McpDelivery.IsBuiltinDelivered: рубильник записи + RO-гейт. Возврат к
+    /// McpDelivery.ShouldDeliver в этой ветке был бы откатом заявки
+    /// «продуктовая интеграция, не запись реестра» и обязан ронять тест.
+    /// </summary>
+    [SkippableFact]
+    public void Хиггсфилд_ПродуктоваяИнтеграция_КаскадРеестраНеПрименяется()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!), "private void TryAddHiggsfieldBuiltin");
+
+        // Решение принимает отдельная точка — IsBuiltinDelivered
+        body.Should().Contain("IsBuiltinDelivered(",
+            "продуктовая интеграция: гейт — McpDelivery.IsBuiltinDelivered, без проекта/персоны");
+        // Каскад реестра (McpServersOn / McpServerGranted) здесь НЕ применяется
+        body.Should().NotContain("McpServerGranted(",
+            "выдача сервера персоне — каскад реестра, к встроенной интеграции не относится");
+        body.Should().NotContain("McpServersOn",
+            "McpServersOn — каскад реестра, к встроенной интеграции не относится");
+        body.Should().NotContain("Mcp.McpDelivery.ShouldDeliver(",
+            "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
+        // Флаг владельца и живой OAuth сохраняем
+        body.Should().Contain("FeatureFlagKeys.Higgsfield",
+            "фич-флаг higgsfield проверяется на каждый ход");
+        body.Should().Contain("EnsureFresh",
+            "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
+        // RO-гейт сохранён через IsBuiltinDelivered — на всякий случай проверяем,
+        // что readOnly доезжает до вызова
+        body.Should().Contain("readOnly",
+            "readOnly персона обязан резаться по AllowReadOnlyPersonas (IsBuiltinDelivered)");
+    }
+
+    /// <summary>
     /// Секции-надстройки с пресетом по роли (git/kb в workspace, manage/automation в сервере
     /// персон): решаются ТОЛЬКО по персоне через единую точку SectionEnabled. Свой набор
     /// инструментов у каждой, поэтому зависимость от хода тут так же смертельна.

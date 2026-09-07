@@ -3280,7 +3280,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // выключенном флаге. Сейчас записи dify/fal-ai/glif в реестре не заводятся
                     // (живут как HTTP-узлы Kestrel), условие держим общим — защита от случайного
                     // возврата в реестр.
-                    if (Array.IndexOf(Mcp.McpRegistry.IntegrationKeys, record.Key) >= 0) continue;
+                    if (Mcp.McpRegistry.IntegrationKeys.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
                     // allow-модель: сервер едет, если включён «здесь» (проект этого чата
                     // по McpServersOn либо, вне проектов, AllowOutsideProjects записи) ИЛИ
                     // выдан персоне (McpServerGranted). Чистое условие — McpDelivery.ShouldDeliver,

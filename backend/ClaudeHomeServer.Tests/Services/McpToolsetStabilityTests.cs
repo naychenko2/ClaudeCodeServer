@@ -288,6 +288,20 @@ public class McpToolsetStabilityTests
             "реестровый цикл BuildExternalMcpProvider обязан пропускать записи встроенных "
             + "интеграций — их доставляет TryAddHiggsfieldBuiltin по фич-флагу и RO-гейту, "
             + "а каскад «проект/персона» к ним не применяется");
+
+        // Гейт ОБЯЗАН сравнивать ключ без учёта регистра: McpRegistry грузит data/mcp-servers.json
+        // через JsonFileStore.Load как есть, минуя нормализацию Create/CreateBuiltIn/Update,
+        // и запись вроде «HIGGSFIELD» проскользнёт в реестр (ручная правка файла, восстановление
+        // из бэкапа, миграция). Array.IndexOf сравнивает по Ordinal — запись поедет реестровым
+        // путём мимо фич-флага, и мы получим ровно ту поломку, которую чинили волной 2.
+        body.Should().Contain("IntegrationKeys.Contains(",
+            "гейт должен использовать Contains, а не Array.IndexOf — последний case-sensitive "
+            + "и не ловит ключ, попавший в реестр мимо нормализации");
+        body.Should().Contain("StringComparer.OrdinalIgnoreCase",
+            "CompareMode OrdinalIgnoreCase — единственное правило, общее с McpRegistry.BuiltinGroupOf, "
+            + "иначе классификатор экрана «MCP-серверы» и гейт реестрового цикла разойдутся");
+        body.Should().NotContain("Array.IndexOf(Mcp.McpRegistry.IntegrationKeys",
+            "Array.IndexOf по Ordinal — возврат к поломке волны 2 через чёрный ход JsonFileStore.Load");
     }
 
     /// <summary>

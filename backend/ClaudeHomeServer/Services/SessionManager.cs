@@ -3272,6 +3272,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 foreach (var record in registry.GetByOwner(ownerId))
                 {
                     if (!record.Enabled) continue;
+                    // Встроенные интеграции (IntegrationKeys: dify/fal-ai/glif/higgsfield)
+                    // доставляются собственной веткой (TryAddHiggsfieldBuiltin) с проверкой
+                    // фич-флага владельца и RO-гейтом. Реестровый путь для них НЕ применяется:
+                    // иначе фич-флаг превращается во «вторую точку истины» — higgsfield, лежащий
+                    // в реестре и включённый в проекте (или выданный персоне), доедет и при
+                    // выключенном флаге. Сейчас записи dify/fal-ai/glif в реестре не заводятся
+                    // (живут как HTTP-узлы Kestrel), условие держим общим — защита от случайного
+                    // возврата в реестр.
+                    if (Array.IndexOf(Mcp.McpRegistry.IntegrationKeys, record.Key) >= 0) continue;
                     // allow-модель: сервер едет, если включён «здесь» (проект этого чата
                     // по McpServersOn либо, вне проектов, AllowOutsideProjects записи) ИЛИ
                     // выдан персоне (McpServerGranted). Чистое условие — McpDelivery.ShouldDeliver,

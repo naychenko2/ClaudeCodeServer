@@ -258,10 +258,36 @@ public class McpToolsetStabilityTests
             "фич-флаг higgsfield проверяется на каждый ход");
         body.Should().Contain("EnsureFresh",
             "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
-        // RO-гейт сохранён через IsBuiltinDelivered — на всякий случай проверяем,
-        // что readOnly доезжает до вызова
-        body.Should().Contain("readOnly",
-            "readOnly персона обязан резаться по AllowReadOnlyPersonas (IsBuiltinDelivered)");
+        // RO-гейт сохранён через IsBuiltinDelivered — требование точное: «readOnly» даёт
+        // и сигнатура bool readOnly, поэтому проверять «любое вхождение readOnly» бессмысленно,
+        // мутация «захардкодить readOnly: false на месте вызова» пройдёт. Требуем точный вызов
+        // IsBuiltinDelivered(hf, readOnly) — иначе проводка «RO персоны → гейт» не закрыта.
+        body.Should().Contain("IsBuiltinDelivered(hf, readOnly)",
+            "readOnly персоны обязан доезжать до гейта, а не гаситься литералом на месте вызова");
+    }
+
+    /// <summary>
+    /// Записи встроенных интеграций (IntegrationKeys, сейчас — dify/fal-ai/glif/higgsfield)
+    /// доставляются собственной веткой (TryAddHiggsfieldBuiltin и аналоги), а НЕ реестровым
+    /// циклом BuildExternalMcpProvider. Иначе фич-флаг higgsfield становится «второй точкой
+    /// истины»: higgsfield лежит в реестре и включён в проекте/персоне — выключение флага
+    /// сервер не снимет, он доедет реестровым путём.
+    /// </summary>
+    [SkippableFact]
+    public void Хиггсфилд_РеестровыйЦикл_ИсключаетВстроенныеИнтеграции()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        // Тело реестрового цикла обязано знать, что ключи из IntegrationKeys пропускаются —
+        // иначе путь «включено в проекте/персоне» доставляет higgsfield в обход фич-флага.
+        body.Should().Contain("IntegrationKeys",
+            "реестровый цикл BuildExternalMcpProvider обязан пропускать записи встроенных "
+            + "интеграций — их доставляет TryAddHiggsfieldBuiltin по фич-флагу и RO-гейту, "
+            + "а каскад «проект/персона» к ним не применяется");
     }
 
     /// <summary>

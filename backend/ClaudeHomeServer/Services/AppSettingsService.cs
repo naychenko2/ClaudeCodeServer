@@ -3,15 +3,13 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Слот тира модели: три именованные модели инстанса, на которые ссылаются
-// назначения мест («новый чат», «теги заметок»…) значением "tier:<slot>".
-public enum ModelTier { Strong, Medium, Weak }
-
 // Разбор уровня модели, пришедшего с провода (задача, персона): "strong|medium|weak",
 // регистр не важен. Только белый список трёх имён — Enum.TryParse сюда не годится: он
 // принимает индексы enum ("0" → Strong, со знаком "+0" мимо любого digit-guard) и списки
 // флагов ("strong,weak" → Weak) независимо от FlagsAttribute. Мусор от LLM должен давать
 // 400, а не молча уезжать на самую дорогую модель.
+// Сам `ModelTier` объявлен в `ClaudeHomeServer.Core.Services.ModelTier` — примитив
+// спинки, от него зависят и Core, и Main, и вертикали вроде Skills.
 public static class ModelTiers
 {
     // Текст ошибки 400 при неизвестном уровне — один на все точки входа (задачи, персоны)

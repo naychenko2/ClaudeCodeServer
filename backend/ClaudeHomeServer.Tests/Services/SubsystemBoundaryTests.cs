@@ -2012,6 +2012,10 @@ public class SubsystemBoundaryTests
         // (`PersonaManager`, `Dossiers/DossierGitExporter`, `Git/GitServerService`)
         // не принадлежали ни одной вертикали — чистый stateless-примитив спины.
         "ClaudeHomeServer.Services.Slugifier",
+        // Этап 3, волна 2 (Skills): `ModelTier` переехал в Core, чтобы `LocalActionCatalog`
+        // (тоже Core) мог ссылаться на слот без обратной ссылки на Main. Парсер
+        // `ModelTiers` остаётся в Main — он завязан на IConfiguration/JSON-стор.
+        "ClaudeHomeServer.Services.ModelTier",
     ];
 
     /// <summary>

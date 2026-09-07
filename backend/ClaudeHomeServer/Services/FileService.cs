@@ -394,19 +394,14 @@ public class FileService(
         NotifyMutated(rootPath, oldRelative, FileMutationKind.Rename, newRelative);
     }
 
-    public string? GetDiff(string rootPath, string relativePath)
+    public async Task<string?> GetDiffAsync(string rootPath, string relativePath, CancellationToken ct = default)
     {
         if (!IsGitRepo(rootPath)) return null;
         try
         {
             // Путь через SafeJoin — валидация до передачи в git
             SafeJoin(rootPath, relativePath);
-            // diff рабочего дерева vs HEAD (покрывает изменённые отслеживаемые файлы)
-            var output = RunGit(rootPath, "diff", "HEAD", "--", relativePath);
-            // Если пусто — файл может быть новым в индексе (git add, но ещё не commit)
-            if (string.IsNullOrWhiteSpace(output))
-                output = RunGit(rootPath, "diff", "--cached", "--", relativePath);
-            return string.IsNullOrWhiteSpace(output) ? null : output;
+            return await DiffFileVsHeadAsync(rootPath, relativePath, ct);
         }
         catch
         {
@@ -414,11 +409,21 @@ public class FileService(
         }
     }
 
-    // Запуск git с учётом среды владельца (Execution через GitService); без DI — прежний хостовый
-    private string RunGit(string rootPath, params string[] args) =>
+    // Единая точка входа: для владельца-через-Execution — типизированный метод GitService
+    // (внутри сам GitService валидирует путь, идёт через Execute/локальный git и собирает
+    // --cached как фолбэк), без DI — прежний хостовый путь через Process.Start.
+    private Task<string?> DiffFileVsHeadAsync(string rootPath, string relativePath, CancellationToken ct) =>
         git is not null
-            ? git.RunAsync(OwnerOf(rootPath), rootPath, args).GetAwaiter().GetResult().Stdout
-            : GitRun(rootPath, args);
+            ? git.DiffFileVsHeadAsync(OwnerOf(rootPath), rootPath, relativePath, ct)
+            : Task.FromResult<string?>(TryLocalDiff(rootPath, relativePath));
+
+    private static string? TryLocalDiff(string rootPath, string relativePath)
+    {
+        var head = GitRun(rootPath, "diff", "HEAD", "--", relativePath);
+        if (!string.IsNullOrWhiteSpace(head)) return head;
+        var cached = GitRun(rootPath, "diff", "--cached", "--", relativePath);
+        return string.IsNullOrWhiteSpace(cached) ? null : cached;
+    }
 
     /// <summary>
     /// Последние коммиты репозитория (сырье для продуктовой сводки). Алиасы авторов:

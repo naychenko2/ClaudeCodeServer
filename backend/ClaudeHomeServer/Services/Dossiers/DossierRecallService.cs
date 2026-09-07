@@ -407,16 +407,14 @@ public class DossierRecallService(
     protected virtual async Task<string?> ResolveHeadAsync(string ownerId, string root)
     {
         if (git is null || !Git.GitService.IsGitRepo(root)) return null;
-        var r = await git.RunAsync(ownerId, root, ["rev-parse", "HEAD"]);
-        return r.Ok ? r.Stdout.Trim() : null;
+        return await git.LocalTipAsync(ownerId, root, "HEAD");
     }
 
     protected virtual async Task<string?> GitLogNumstatAsync(
         string ownerId, string root, string sha, IReadOnlyList<string> files)
     {
-        var r = await git!.RunAsync(ownerId, root,
-            ["log", "--format=%H", "--numstat", $"{sha}..HEAD", "--", .. files]);
-        return r.Ok ? r.Stdout : null;
+        if (git is null || !Git.GitService.IsGitRepo(root)) return null;
+        return await git.LogNumstatRangeAsync(ownerId, root, sha, files);
     }
 
     // Живые FQN типов из снимка графа дерева; null — снимка нет (символьный статус не считаем)

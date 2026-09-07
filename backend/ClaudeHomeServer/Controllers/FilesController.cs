@@ -330,11 +330,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("diff")]
-    public IActionResult GetDiff(string projectId, [FromQuery] string path)
+    public async Task<IActionResult> GetDiff(string projectId, [FromQuery] string path)
     {
         try
         {
-            var diff = files.GetDiff(GetRoot(projectId), path);
+            var diff = await files.GetDiffAsync(GetRoot(projectId), path);
             return Ok(new { diff });
         }
         catch (KeyNotFoundException) { return NotFound(); }

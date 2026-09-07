@@ -219,6 +219,110 @@ public class McpOAuthServiceTests : IDisposable
         http.BodyOf("https://auth.example.com/register").Should().BeNull("DCR не нужен, client_id задан");
     }
 
+    // ── scope: источник правды — ответ DCR, не scopes_supported ─────────────────────
+
+    [Fact]
+    public async Task Вход_DcrВернулScope_ОнУходитВAuthorize()
+    {
+        var (service, registry, _, _, handler) = NewService();
+        handler.RegistrationScope = "openid profile email";
+
+        var record = NewRecord(registry);
+        var start = await service.StartAsync(Owner, record, Redirect, input: null);
+
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
+        query["scope"].Should().Be("openid profile email");
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.Scopes.Should().Equal("openid", "profile", "email");
+    }
+
+    [Fact]
+    public async Task Вход_DcrБезScope_ПараметрScopeВAuthorizeОтсутствует()
+    {
+        var (service, registry, _, _, _) = NewService();
+
+        var record = NewRecord(registry);
+        var start = await service.StartAsync(Owner, record, Redirect, input: null);
+
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
+        query["scope"].Should().BeNull(
+            "без ответа DCR слать scope в authorize нельзя: дефолт клиента заведомо разрешён");
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.Scopes.Should().BeNull(
+            "угаданного набора в записи быть не должно — иначе повторный вход упирается в то же");
+    }
+
+    [Fact]
+    public async Task Вход_ScopesSupportedВМетаданных_НеПопадаетВAuthorize()
+    {
+        // Имитируем Clerk (Higgsfield): сервер отдаёт богатый набор возможностей —
+        // именно этот случай ломал вход в Higgsfield.
+        var (service, registry, _, _, handler) = NewService();
+        handler.AuthorizationServerScopesSupported =
+        [
+            "openid", "profile", "email", "public_metadata", "private_metadata",
+            "offline_access", "user:org:read",
+        ];
+
+        var record = NewRecord(registry);
+        var start = await service.StartAsync(Owner, record, Redirect, input: null);
+
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
+        query["scope"].Should().BeNull(
+            "scopes_supported описывает возможности СЕРВЕРА, а не права КЛИЕНТА — провайдер отбил бы запрос");
+        query.AllKeys.Should().NotContain("scope");
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.Scopes.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Вход_РучнойScopeВInputs_ИдётВAuthorize()
+    {
+        var (service, registry, _, _, _) = NewService();
+        var record = NewRecord(registry);
+
+        var start = await service.StartAsync(Owner, record, Redirect,
+            new McpOAuthClientInput(null, null, ["custom:a", "custom:b"]));
+
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
+        query["scope"].Should().Be("custom:a custom:b");
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.Scopes.Should().Equal("custom:a", "custom:b");
+    }
+
+    [Fact]
+    public async Task Вход_РучнойClientIdИЧеловекЗадалScope_УходятВAuthorize()
+    {
+        // Ручной client_id — DCR не было; за scope отвечает человек.
+        var (service, registry, _, _, http) = NewService();
+
+        var start = await service.StartAsync(Owner, NewRecord(registry), Redirect,
+            new McpOAuthClientInput("client-руками", null, ["x", "y"]));
+
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
+        query["scope"].Should().Be("x y");
+        http.BodyOf("https://auth.example.com/register").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Вход_Неудачный_DcrБезScope_ЗаписьОстаётсяБезУгаданныхScope()
+    {
+        // Защита от отравления: scopes_supported в метаданных есть, DCR-ответа без scope —
+        // иначе одна неудачная попытка навсегда закрепит scopes_supported в записи,
+        // и повторный «Войти» упирается в то же самое. После фикса в записи null,
+        // повторный вход пройдёт с чистого DCR.
+        var (service, registry, _, _, handler) = NewService();
+        handler.AuthorizationServerScopesSupported = ["a", "b", "c"]; // провайдер расщедрился
+
+        var record = NewRecord(registry);
+        await service.StartAsync(Owner, record, Redirect, input: null);
+        // Без CompleteAsync — это и есть «неудачный вход» (человек закрыл окно).
+
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.Scopes.Should().BeNull(
+            "scopes_supported в запись копировать нельзя — иначе вход отравится навсегда");
+    }
+
     // ── таймаут discovery ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -415,6 +519,12 @@ public class McpOAuthServiceTests : IDisposable
         /// <summary>Тело запроса к адресу; null — обращения не было.</summary>
         public string? BodyOf(string url) => _bodies.GetValueOrDefault(url);
 
+        /// <summary>Scope, который вернёт /register. Пусто/null — поле scope отсутствует.</summary>
+        public string? RegistrationScope { get; set; }
+
+        /// <summary>Scopes_supported в метаданных authorization server. null — поля нет.</summary>
+        public IReadOnlyList<string>? AuthorizationServerScopesSupported { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
@@ -428,15 +538,9 @@ public class McpOAuthServiceTests : IDisposable
                 "https://mcp.example.com/.well-known/oauth-protected-resource/mcp" =>
                     Json("""{"resource":"https://mcp.example.com/mcp","authorization_servers":["https://auth.example.com"]}"""),
                 "https://auth.example.com/.well-known/oauth-authorization-server" =>
-                    Json("""
-                         {"issuer":"https://auth.example.com",
-                          "authorization_endpoint":"https://auth.example.com/authorize",
-                          "token_endpoint":"https://auth.example.com/token",
-                          "registration_endpoint":"https://auth.example.com/register",
-                          "code_challenge_methods_supported":["S256"]}
-                         """),
+                    Json(BuildAuthorizationServerMetadata()),
                 "https://auth.example.com/register" =>
-                    Json("""{"client_id":"client-from-dcr"}"""),
+                    Json(BuildRegistrationResponse()),
                 "https://auth.example.com/token" => tokenStatus == HttpStatusCode.OK
                     ? Json("""{"access_token":"access-1","refresh_token":"refresh-1","expires_in":3600,"token_type":"Bearer"}""")
                     : new HttpResponseMessage(tokenStatus)
@@ -458,6 +562,35 @@ public class McpOAuthServiceTests : IDisposable
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
+
+            // scopes_supported не обязаны быть в ответе — оставлены как опциональное поле,
+            // чтобы тесты могли убедиться: даже если провайдер их отдаёт, мы их в authorize
+            // не подставляем.
+            string BuildAuthorizationServerMetadata()
+            {
+                if (AuthorizationServerScopesSupported is null)
+                    return "{\"issuer\":\"https://auth.example.com\"," +
+                           "\"authorization_endpoint\":\"https://auth.example.com/authorize\"," +
+                           "\"token_endpoint\":\"https://auth.example.com/token\"," +
+                           "\"registration_endpoint\":\"https://auth.example.com/register\"," +
+                           "\"code_challenge_methods_supported\":[\"S256\"]}";
+                var scopes = string.Join(",",
+                    AuthorizationServerScopesSupported.Select(s => "\"" + s + "\""));
+                return "{\"issuer\":\"https://auth.example.com\"," +
+                       "\"authorization_endpoint\":\"https://auth.example.com/authorize\"," +
+                       "\"token_endpoint\":\"https://auth.example.com/token\"," +
+                       "\"registration_endpoint\":\"https://auth.example.com/register\"," +
+                       "\"code_challenge_methods_supported\":[\"S256\"]," +
+                       "\"scopes_supported\":[" + scopes + "]}";
+            }
+
+            // RFC 7591 §3.2.1: scope присутствует, если отличается от запрошенного.
+            string BuildRegistrationResponse()
+            {
+                if (RegistrationScope is null) return """{"client_id":"client-from-dcr"}""";
+                var encoded = RegistrationScope.Replace("\\", "\\\\").Replace("\"", "\\\"");
+                return "{\"client_id\":\"client-from-dcr\",\"scope\":\"" + encoded + "\"}";
+            }
         }
     }
 }

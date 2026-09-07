@@ -29,12 +29,15 @@ namespace ClaudeHomeServer.Tests.Services.Turn;
 //  1) Worktree-чат, граф ветки не построен → секция содержит slice главной ветки с пометкой;
 //  2) Worktree-чат, граф ветки построен → секция от своей ветки без пометки «ГЛАВНОЙ ветки»;
 //  3) Не-worktree чат (MainRootPath == RootPath) → fallback сводится к no-op, без пометки;
-//  4) Контрибьютор выключен гейтом → BuildAsync всё равно возвращает секцию code-navigation,
-//     но code-graph пустой (статичная подсказка едет всегда, когда провайдер активен).
+//  4) Worktree-чат, графа нет ни у одной ветки → секция code-graph пустая.
 //
 // Мутационная проверка: если убрать sessionContext.MainRootPath из вызова GetSliceAsync
 // в CodeGraphContributor.BuildAsync, тест 1 краснеет (нет ни «Demo.Hub», ни пометки
-// «ГЛАВНОЙ ветки»), а тесты 2–4 не задевают.
+// «ГЛАВНОЙ ветки»), а тесты 2–4 не задевает.
+//
+// Гейт IsEnabled (провайдер/rootPath/ServerToolEnabled, включая сценарий без персоны —
+// дефект fd2c29ff) покрыт отдельным классом CodeGraphContributorIsEnabledTests: разные
+// фикстуры (DI-контейнер здесь vs прямой конструктор там) для одного класса несовместимы.
 public class CodeGraphContributorTests
 {
     // Корневой каталог теста с двумя путями: главная ветка + worktree-ветка.

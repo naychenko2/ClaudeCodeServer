@@ -50,29 +50,14 @@ public sealed class DeployHost(
         try
         {
             // ownerId=null — системный вызов, всегда локальная среда (см. LauncherFactory)
-            var status = await git.RunAsync(null, repoDir, ["status", "--porcelain"], ct: ct);
-            if (!status.Ok)
-                return new DeployGitSnapshot(null, [], $"git status: {status.Stderr.Trim()}");
-
-            var head = await git.RunAsync(null, repoDir, ["rev-parse", "--short", "HEAD"], ct: ct);
-            var sha = head.Ok ? head.Stdout.Trim() : null;
-
-            return new DeployGitSnapshot(sha, ParseDirty(status.Stdout), null);
+            var snap = await git.RepoSnapshotAsync(null, repoDir, ct);
+            return new DeployGitSnapshot(snap.ShortHeadSha, snap.DirtyPaths, null);
         }
         catch (GitCommandException ex)
         {
             return new DeployGitSnapshot(null, [], ex.Message);
         }
     }
-
-    // Строка porcelain — «XY путь»: статус фиксированной ширины 2 + пробел.
-    // Переименование приходит как «old -> new» — оставляем как есть, читать это человеку.
-    internal static List<string> ParseDirty(string stdout) =>
-        [.. stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => l.TrimEnd('\r'))
-            .Where(l => l.Length > 3)
-            .Select(l => l[3..].Trim())
-            .Where(p => p.Length > 0)];
 
     public async Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default)
     {

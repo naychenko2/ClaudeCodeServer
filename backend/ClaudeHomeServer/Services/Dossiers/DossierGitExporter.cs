@@ -84,7 +84,7 @@ public sealed class DossierGitExporter
         // не нужен, сразу «нечего выгружать». Если ветка есть, а выгружаемого не осталось
         // (чаты ушли в opt-out или удалены) — наоборот, пишем опустевший снапшот: полный
         // снапшот обязан вычистить из ветки то, что больше не должно там жить.
-        if (files.Count == 2 && !await HasBranchAsync(ownerId, project.RootPath, ct))
+        if (files.Count == 2 && !await _git.HasDossiersBranchAsync(ownerId, project.RootPath, ct))
             return new DossiersExportResult(0, Committed: false, CommitSha: null);
 
         var message = dossiers > 0
@@ -407,17 +407,4 @@ public sealed class DossierGitExporter
         в приложении как «не сохранять решения», не выгружаются вовсе — ни записью, ни
         конспектом. Секреты вычищаются перед записью в ветку.
         """;
-
-    // Существует ли уже ветка паспортов в этом репозитории (тем же ключом, что и
-    // WriteDossiersBranchAsync). Ошибка git → консервативно «нет»: пустой коммит не создаём.
-    private async Task<bool> HasBranchAsync(string ownerId, string root, CancellationToken ct)
-    {
-        try
-        {
-            var r = await _git.RunAsync(ownerId, root,
-                ["rev-parse", "--quiet", GitService.DossiersRef], ct: ct);
-            return r.Ok;
-        }
-        catch { return false; }
-    }
 }

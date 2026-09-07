@@ -591,20 +591,8 @@ public class DeployServiceTests : IDisposable
     }
 
     // ---------- Разбор git status ----------
-
-    [Fact]
-    public void Разбор_porcelain_даёт_пути_без_кодов_статуса()
-    {
-        var files = DeployHost.ParseDirty(
-            " M frontend/src/lib/design.ts\n?? docs/adr/ADR-010-deploy-from-chat.md\nR  a.txt -> b.txt\n");
-
-        files.Should().BeEquivalentTo(
-            ["frontend/src/lib/design.ts", "docs/adr/ADR-010-deploy-from-chat.md", "a.txt -> b.txt"]);
-    }
-
-    [Fact]
-    public void Разбор_пустого_вывода_даёт_чистое_дерево() =>
-        DeployHost.ParseDirty("").Should().BeEmpty();
+    // Парсер выехал в GitService.ParseDirty (волна 1 типизации commit-inspection) — тесты
+    // лежат в GitServiceTests рядом с самим методом.
 
     private void WriteJournal(DeployState state)
     {

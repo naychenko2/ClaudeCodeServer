@@ -847,4 +847,165 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         (await _git.ParentCountAsync(null, _repo, mergeSha)).Should().Be(2);
         headBefore.Should().NotBe(mergeSha, "merge-коммит отличается от предыдущего HEAD");
     }
+
+    // ---------- DiffFileVsHeadAsync / LogNumstatRangeAsync (блокер ревью волны 3) ----------
+    //
+    // До этой правки оба метода ехали в прод без прямых тестов против настоящего git:
+    // - GitServiceTests.cs не содержал вызовов ни того, ни другого;
+    // - единственный HTTP-тест GetDiff падал на IsGitRepo() == false до DiffFileVsHeadAsync;
+    // - DossierRecallTests.FakeRecall подменял ResolveHeadAsync/GitLogNumstatAsync на уровне
+    //   protected virtual и реальных LocalTipAsync/LogNumstatRangeAsync не звал.
+    // Любая будущая правка git-флагов или регресс .Ok-проверки проходил CI незамеченным —
+    // эти тесты закрывают дыру.
+
+    // Tracked-файл с правкой: `git diff HEAD -- path` обязан вернуть непустой unified diff.
+    // Содержимое зависит от версии git (заголовки могут отличаться), контракт метода —
+    // стабильно отдавать КУСОК диффа, а не null и не пустую строку.
+    [Fact]
+    public async Task DiffFileVsHead_МодифицированныйTracked_НепустойDiff()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+
+        var diff = await _git.DiffFileVsHeadAsync(null, _repo, "a.txt");
+
+        diff.Should().NotBeNullOrEmpty();
+        diff.Should().Contain("a.txt", "путь обязан присутствовать в заголовке unified diff");
+        diff.Should().ContainAny("+правка", "-один", "-два", "-три",
+            "хотя бы одна строка помечена как +/- (added/removed)");
+    }
+
+    // Фолбэк на `git diff --cached`: сценарий, где working copy == HEAD, но индекс != HEAD
+    // (стейджили правку и вернули файл в исходное). `git diff HEAD` пуст → метод должен
+    // попасть во вторую ветку и вернуть staged-diff. Без этого UI теряет diff у staged-only
+    // файлов.
+    [Fact]
+    public async Task DiffFileVsHead_ТолькоStaged_ФолбэкНаCached()
+    {
+        // HEAD: b1 → правим → b2 → stage → правим обратно → b1.
+        // Результат: working copy == HEAD, индекс != HEAD.
+        await File.WriteAllTextAsync(Path.Combine(_repo, "b.txt"), "b2\n");
+        await _git.StageAsync(null, _repo, "b.txt");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "b.txt"), "b1\n");
+
+        // Sanity-check: head-diff пуст (working == HEAD), cached-diff не пуст
+        var headCheck = await _git.RunAsync(null, _repo, ["diff", "HEAD", "--", "b.txt"]);
+        headCheck.Ok.Should().BeTrue();
+        headCheck.Stdout.Should().BeNullOrWhiteSpace(
+            "working copy == HEAD — обычный diff обязан быть пуст");
+        var cachedCheck = await _git.RunAsync(null, _repo, ["diff", "--cached", "--", "b.txt"]);
+        cachedCheck.Ok.Should().BeTrue();
+        cachedCheck.Stdout.Should().NotBeNullOrWhiteSpace(
+            "индекс != HEAD — cached-diff обязан быть не пуст");
+
+        var diff = await _git.DiffFileVsHeadAsync(null, _repo, "b.txt");
+
+        diff.Should().NotBeNullOrEmpty(
+            "фолбэк на `git diff --cached` обязан сработать, иначе UI потеряет diff staged-only файла");
+        diff.Should().Contain("b.txt");
+        diff.Should().Contain("b2", "diff должен показать staged-версию (b2), а не текущее working (b1)");
+    }
+
+    // Untracked: файл НЕ в HEAD и НЕ в индексе. Оба diff пусты → метод возвращает null.
+    // В отличие от DiffFileAsync (там третий фолбэк на `diff --no-index`), контракт здесь
+    // жёстче — null честно говорит «нет изменений в git-плоскости».
+    [Fact]
+    public async Task DiffFileVsHead_Untracked_ВозвращаетNull()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "новый.txt"), "не в git\n");
+
+        (await _git.StatusAsync(null, _repo)).Untracked
+            .Should().ContainSingle(f => f.Path == "новый.txt");
+
+        var diff = await _git.DiffFileVsHeadAsync(null, _repo, "новый.txt");
+
+        diff.Should().BeNull("контракт DiffFileVsHeadAsync для untracked — null");
+    }
+
+    // Бинарный файл: заменяем tracked-файл на байты, не проходящие текстовый фильтр.
+    // Метод не должен падать; вернуть может либо текст с пометкой «Binary files ... differ»,
+    // либо null — обе формы легитимны, главное — отсутствие исключения и мусорных байт.
+    [Fact]
+    public async Task DiffFileVsHead_БинарныйФайл_НеПадаетИНеМусорит()
+    {
+        // a.txt уже tracked из InitializeAsync. Переписываем его бинарными байтами.
+        await File.WriteAllBytesAsync(Path.Combine(_repo, "a.txt"),
+            new byte[] { 0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xAA, 0xBB });
+
+        var diff = await _git.DiffFileVsHeadAsync(null, _repo, "a.txt");
+
+        // Метод обязан либо отдать git-овский «Binary files ...» маркер, либо null.
+        // Сырые нулевые байты в выводе — дефект (значит stdout не прошёл фильтр).
+        if (diff is not null)
+        {
+            diff.Should().NotContain("\0",
+                "сырые нулевые байты в diff означают, что git не распознал binary и отдал мусор");
+            diff.Should().Contain("Binary files",
+                "git для бинарей помечает diff как «Binary files ... differ»");
+        }
+    }
+
+    // Обычный коммит с изменёнными файлами: numstat в формате `<sha>\n<+N>\t<-N>\t<path>`.
+    // Метод пробрасывает сырой stdout — контракт на сохранение формата для вызывающего
+    // парсера. Проверяем: sha коммита присутствует, для обоих файлов — пары чисел и путь.
+    [Fact]
+    public async Task LogNumstatRange_ОбычныйКоммит_ОтдаётShaИПарыЧисел()
+    {
+        var headBefore = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "строка1\nстрока2\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "b.txt"), "b2\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "правки a и b");
+
+        var numstat = await _git.LogNumstatRangeAsync(null, _repo, headBefore, ["a.txt", "b.txt"]);
+
+        numstat.Should().NotBeNullOrEmpty();
+        var sha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+        numstat.Should().Contain(sha, "формат: %H на каждый коммит диапазона");
+        numstat.Should().MatchRegex(@"\d+\s*\t\s*\d+\s*\ta\.txt",
+            "для a.txt обязан быть numstat +N\\t-N\\ta.txt");
+        numstat.Should().MatchRegex(@"\d+\s*\t\s*\d+\s*\tb\.txt",
+            "для b.txt обязан быть numstat +N\\t-N\\tb.txt");
+    }
+
+    // Переименование: git mv + коммит. Без -M git покажет rename как delete + create
+    // (две отдельные записи), с rename detection — одной строкой `{a => z}` либо
+    // `a => z`. Наш метод пробрасывает stdout как есть, контракт — вызывающий парсер
+    // получает упоминание обоих имён. Проверяем, что код не падает и оба имени в выводе.
+    // Фильтр пустых pathspec, чтобы rename показался полностью (split delete+create тоже).
+    [Fact]
+    public async Task LogNumstatRange_Переименование_НеЛомаетВызывающийКод()
+    {
+        var headBefore = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+
+        await RawGit("mv", "a.txt", "z.txt");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "переименовали a в z");
+
+        // Пустой files — git log выводит все пути коммита (split или rename-формат).
+        var numstat = await _git.LogNumstatRangeAsync(null, _repo, headBefore, []);
+
+        numstat.Should().NotBeNullOrEmpty();
+        numstat.Should().Contain("a.txt").And.Contain("z.txt",
+            "rename обязан содержать оба имени — хоть split delete+create, хоть {a => z}");
+    }
+
+    // Бинарный файл в numstat: git не считает строки для бинарников и печатает
+    // `-\t-\tpath`. Проверяем, что наш метод пробрасывает этот формат без потерь.
+    [Fact]
+    public async Task LogNumstatRange_БинарныйФайл_ДаётМинусМинусПуть()
+    {
+        var headBefore = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+
+        await File.WriteAllBytesAsync(Path.Combine(_repo, "blob.bin"),
+            new byte[] { 0x00, 0x01, 0x02, 0xFF, 0xAA });
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "добавили бинарь");
+
+        var numstat = await _git.LogNumstatRangeAsync(null, _repo, headBefore, ["blob.bin"]);
+
+        numstat.Should().NotBeNullOrEmpty();
+        numstat.Should().Contain("-\t-\tblob.bin",
+            "git numstat для бинарного файла обязан вернуть прочерк-прочерк-путь");
+    }
 }

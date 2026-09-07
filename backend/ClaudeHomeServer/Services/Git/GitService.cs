@@ -87,7 +87,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
     // Низкоуровневый запуск git. args передаются раздельно (ArgumentList — без shell,
     // защита от инъекций); stdin — для commit-сообщений и патчей (не через argv).
-    public async Task<GitResult> RunAsync(
+    // internal: всё, что можно захотеть от git снаружи Services/Git/, должно идти через
+    // типизированные методы (см. IGitRefSnapshotStore и публичные методы GitService).
+    // Тесты — через InternalsVisibleTo("ClaudeHomeServer.Tests").
+    internal async Task<GitResult> RunAsync(
         string? ownerId, string root, IReadOnlyList<string> args,
         string? stdin = null, IReadOnlyDictionary<string, string>? env = null,
         int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default)
@@ -273,6 +276,36 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             if (!string.IsNullOrWhiteSpace(untracked.Stdout)) return untracked.Stdout;
         }
         return string.IsNullOrWhiteSpace(r.Stdout) ? null : r.Stdout;
+    }
+
+    // Diff файла vs HEAD: «что изменилось с последнего коммита». Сначала рабочее дерево
+    // vs HEAD, пусто — фолбэк на индекс vs HEAD (только что `git add`, ещё не коммит).
+    // Для FileService.GetDiff — сценарий «показать юзеру изменения в файле» (на UI
+    // нужен полный унифицированный diff, а не per-commit выборка).
+    public async Task<string?> DiffFileVsHeadAsync(string? ownerId, string root, string relPath, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        ValidateRel(root, relPath);
+        var head = await RunAsync(ownerId, root, ["diff", "HEAD", "--", relPath], ct: ct);
+        if (head.Ok && !string.IsNullOrWhiteSpace(head.Stdout)) return head.Stdout;
+        var cached = await RunAsync(ownerId, root, ["diff", "--cached", "--", relPath], ct: ct);
+        return cached.Ok && !string.IsNullOrWhiteSpace(cached.Stdout) ? cached.Stdout : null;
+    }
+
+    // numstat по диапазону коммитов (since..HEAD) с фильтром по путям: для восстановления
+    // статистики строк «как менялся файл между {sha} и HEAD». Формат сырого вывода
+    // (<sha>\n<+N>\t<-N>\t<path> на коммит) сохраняем: потребитель парсит построчно,
+    // без структурной перекодировки — иначе теряем точность (binary, rename).
+    // Для DossierRecallService.GitLogNumstatAsync.
+    public async Task<string?> LogNumstatRangeAsync(string? ownerId, string root, string since,
+        IReadOnlyList<string> files, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        ValidateRevision(since);
+        var validated = files.Select(f => ValidateRel(root, f)).ToArray();
+        var r = await RunAsync(ownerId, root,
+            ["log", "--format=%H", "--numstat", $"{since}..HEAD", "--", .. validated], ct: ct);
+        return r.Ok ? r.Stdout : null;
     }
 
     public async Task<IReadOnlyList<GitLogEntry>> LogAsync(string? ownerId, string root, int limit = 100, string? branch = null, CancellationToken ct = default)

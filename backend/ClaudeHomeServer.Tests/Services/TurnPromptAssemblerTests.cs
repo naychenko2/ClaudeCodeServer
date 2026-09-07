@@ -147,11 +147,21 @@ public class TurnPromptAssemblerTests
     private const string TinyCli = "claude";
     private const string TinyCwd = "C:\\proj";
 
+    // Тестовая имитация LocalProcessRunner.EstimateCommandLineLength: cli + сумма ArgCost по аргументам.
+    // Тесты намеренно НЕ проверяют обвязку раннера — это задача DockerProcessRunnerEnvTests,
+    // иначе мы смешаем два контракта в одном файле и потеряем причину правки (ревью dc641949, волна 3).
+    private static int FakeLocalLength(IReadOnlyList<string> finalArgs)
+    {
+        var total = TinyCli.Length;
+        foreach (var a in finalArgs) total += TurnPromptAssembler.ArgCost(a);
+        return total;
+    }
+
     [Fact]
     public void ApplyBudget_КороткийПромпт_НеРежет()
     {
         var sections = new List<PromptSectionDto> { Sys("code-graph", "граф"), Sys("recall-memory", "память") };
-        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
 
         r.Overflowed.Should().BeFalse();
         r.TruncatedSections.Should().BeEmpty();
@@ -172,7 +182,7 @@ public class TurnPromptAssemblerTests
             Sys("recall-memory", new string('d', 12_000)),
             Sys("persona-mentions", new string('e', 12_000)),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, "слой персоны", TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, "слой персоны", TinyArgs, FakeLocalLength);
 
         r.Overflowed.Should().BeFalse("срезка трёх секций уложила остаток в бюджет 30 000");
         r.TruncatedSections.Should().HaveCount(3,
@@ -202,7 +212,7 @@ public class TurnPromptAssemblerTests
             Sys("persona-mentions", new string('e', 10_000)),
             StableSec("project-builtin-0", new string('Z', 35_000)),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
 
         r.Overflowed.Should().BeTrue(
             "5 нестабильных срезаны, осталась 35 000 стабильных + cli/cwd — НЕ влезает " +
@@ -226,7 +236,7 @@ public class TurnPromptAssemblerTests
             Sys("recall-memory", "короткая память"),
             StableSec("mcp-tasks", "короткие таски"),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
 
         r.Overflowed.Should().BeFalse(
             "после срезания code-graph 35 000 символов + стабильные секции + personaLayer " +
@@ -254,7 +264,7 @@ public class TurnPromptAssemblerTests
             StableSec("voice-mode", new string('d', 5_000)),
             StableSec("images", new string('e', 5_000)),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
 
         r.TruncatedSections.Should().BeEmpty(
             "стабильные секции не в приоритете срезания — кэш промпта их держит, ими нельзя рубить");
@@ -274,7 +284,7 @@ public class TurnPromptAssemblerTests
             Sys("recall-memory", "mem"),
         };
         var bigPersona = "ты — " + new string('P', 5_000);
-        var r = TurnPromptAssembler.ApplyBudget(sections, bigPersona, TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, bigPersona, TinyArgs, FakeLocalLength);
 
         r.Overflowed.Should().BeFalse();
         r.CombinedPrompt.Should().Contain(bigPersona,
@@ -286,7 +296,7 @@ public class TurnPromptAssemblerTests
     {
         // Защита от регрессии: секций нет, personaLayer есть — порция промпта идёт
         // от персоны, порог не превышен, TruncatedSections пуст.
-        var r = TurnPromptAssembler.ApplyBudget([], "Только персона", TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget([], "Только персона", TinyArgs, FakeLocalLength);
         r.Overflowed.Should().BeFalse();
         r.TruncatedSections.Should().BeEmpty();
         r.CombinedPrompt.Should().Be("Только персона");
@@ -302,12 +312,19 @@ public class TurnPromptAssemblerTests
             StableSec("mcp-tasks", new string('a', 10_000)),
         };
         var longCli = new string('C', 5_000);
-        var longCwd = new string('D', 5_000); // NOT counted — это WorkingDirectory, не cmdline
-        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, longCli, longCwd);
+        // Невакуумный гейт на cli (ревью dc641949, волна 3): разница длин cli должна
+        // один-в-один отражаться в оценке. workingDir параметром больше не передаётся —
+        // это ProcessStartInfo.WorkingDirectory, в argv не попадает. Если бы cli не
+        // учитывался, разница была бы 0 и тест провалился бы.
+        var forShortCli = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs,
+            args => TinyCli.Length + args.Sum(TurnPromptAssembler.ArgCost));
+        var forLongCli = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs,
+            args => longCli.Length + args.Sum(TurnPromptAssembler.ArgCost));
 
-        // 10 000 + 5 000 cli + TinyArgs с экранированием ≈ 10 150+, в пороге.
-        // Конкретная цифра не важна — нам важно, что cwd НЕ считается в оценке.
-        r.TotalCmdlineChars.Should().BeGreaterThan(10_000);
+        (forLongCli.TotalCmdlineChars - forShortCli.TotalCmdlineChars)
+            .Should().Be(longCli.Length - TinyCli.Length,
+                "cli входит в argv без ArgCost (это начало строки, не отдельный аргумент); "
+                + "разница длин cli должна точно перейти в разницу оценки");
     }
 
     // M5, главная регрессия ревью: чат со стабильной обвязкой в зоне 30 000–32 767 и пустыми
@@ -322,7 +339,7 @@ public class TurnPromptAssemblerTests
         {
             StableSec("project-builtin", new string('Z', 31_000)),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
 
         r.TotalCmdlineChars.Should().BeInRange(30_001, TurnPromptAssembler.CmdlineLimit);
         r.Overflowed.Should().BeFalse(
@@ -340,7 +357,7 @@ public class TurnPromptAssemblerTests
         {
             StableSec("project-builtin", new string('Z', 33_000)),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
 
         r.TotalCmdlineChars.Should().BeGreaterThan(TurnPromptAssembler.CmdlineLimit);
         r.Overflowed.Should().BeTrue();
@@ -359,7 +376,7 @@ public class TurnPromptAssemblerTests
             Sys("recall-memory", "короткая память"),
             StableSec("mcp-tasks", "короткие таски"),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
 
         r.TruncatedSections.Should().ContainSingle()
             .Which.Key.Should().Be("(truncated:code-graph)");
@@ -375,7 +392,7 @@ public class TurnPromptAssemblerTests
     public void ApplyBudget_БезСрезки_SectionsРавныИсходным()
     {
         var sections = new List<PromptSectionDto> { Sys("code-graph", "граф"), StableSec("mcp-tasks", "таски") };
-        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
 
         r.Sections.Should().HaveCount(2);
         r.Sections.Select(s => s.Key).Should().Equal("code-graph", "mcp-tasks");
@@ -388,9 +405,9 @@ public class TurnPromptAssemblerTests
     {
         var sections = new List<PromptSectionDto> { StableSec("mcp-tasks", "коротко") };
 
-        var without = TurnPromptAssembler.ApplyBudget(sections, null, [], TinyCli, TinyCwd);
+        var without = TurnPromptAssembler.ApplyBudget(sections, null, [], FakeLocalLength);
         var with = TurnPromptAssembler.ApplyBudget(
-            sections, null, ["--mcp-config", "C:/some/long/path.json"], TinyCli, TinyCwd);
+            sections, null, ["--mcp-config", "C:/some/long/path.json"], FakeLocalLength);
 
         // Стоимость аргумента = длина + 2 (кавычки) + 2 × число кавычек внутри + 1 (пробел).
         // "--mcp-config" = 12 → 15; "C:/some/long/path.json" = 22 → 25.
@@ -404,8 +421,8 @@ public class TurnPromptAssemblerTests
     {
         var sections = new List<PromptSectionDto> { StableSec("mcp-tasks", "коротко") };
 
-        var plain = TurnPromptAssembler.ApplyBudget(sections, null, ["abcd"], TinyCli, TinyCwd);
-        var quoted = TurnPromptAssembler.ApplyBudget(sections, null, ["a\"cd"], TinyCli, TinyCwd);
+        var plain = TurnPromptAssembler.ApplyBudget(sections, null, ["abcd"], FakeLocalLength);
+        var quoted = TurnPromptAssembler.ApplyBudget(sections, null, ["a\"cd"], FakeLocalLength);
 
         // Та же длина 4, но одна кавычка внутри: .NET экранирует её (" → \"), и верхняя
         // оценка обязана быть больше на 2 — иначе занизим и пропустим ход в Win32 206.
@@ -465,7 +482,7 @@ public class TurnPromptAssemblerTests
             StableSec("persona-mentions", new string('e', 9_000)),
             StableSec("project-builtin", new string('Z', 25_000)),
         };
-        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, TinyCli, TinyCwd);
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
 
         var note = r.TruncatedSections.Single(s => s.Key == "(truncated:persona-mentions)");
         note.Text.Should().NotContain("stable: false",
@@ -476,5 +493,72 @@ public class TurnPromptAssemblerTests
         var plain = r.TruncatedSections.Single(s => s.Key == "(truncated:code-graph)");
         plain.Text.Should().Contain("stable: false",
             "для нестабильных прежняя формулировка верна и остаётся");
+    }
+
+    // M3: ArgCost считает серии \ перед " и в конце аргумента (волна 3 фикса dc641949).
+    // Бывшая формула учитывала только длину + 2 × кавычки + 1 (пробел) — на вырожденных
+    // строках из 3000 подряд \" это давало −2996 символов запаса. Глеб замером опроверг
+    // практическое влияние (500 JSON-путей с обычными кавычками: запас +1036), но формула
+    // документирована как верхняя граница — поэтому досчитываем.
+    [Fact]
+    public void ArgCost_СерииСлэшейПередКавычкой_Удваиваются()
+    {
+        // @"\\\\" — сырая строка с 4 обратными слэшами (Length=4) + " (Length=5).
+        // Серия 4 перед кавычкой → slashDoubled += 4; сама кавычка даёт quotes=1 (+2 к стоимости).
+        // 5 + 2 + 2 + 4 + 1 = 14.
+        const string arg = @"\\\\""";
+        TurnPromptAssembler.ArgCost(arg).Should().Be(14,
+            "4 слэша перед кавычкой дают 4 дополнительных (×2 → 8) плюс сама кавычка ×2");
+    }
+
+    [Fact]
+    public void ArgCost_СерииСлэшейВКонце_Удваиваются()
+    {
+        // @"abc\\\\" — сырая строка: a, b, c, \, \, \, \ (Length=7). Концевая серия 4 →
+        // slashDoubled += 4 (без +1 от кавычки). 7 + 2 + 0 + 4 + 1 = 14.
+        const string arg = @"abc\\\\";
+        TurnPromptAssembler.ArgCost(arg).Should().Be(14,
+            "концевая серия слэшей удваивается так же, как перед кавычкой");
+    }
+
+    [Fact]
+    public void ArgCost_ПустаяСтрока_НеПадает()
+    {
+        // arg="" → пустой аргумент: хотя бы разделитель-пробел между ним и соседями.
+        TurnPromptAssembler.ArgCost("").Should().Be(1);
+    }
+
+    // H3 (волна 3): гейт finalTotal >= CmdlineLimit, не >. Замер на живой ОС:
+    // строка 32 766 стартует, 32 767 — отказ Win32 206. Прежний «>» оставлял последний
+    // символ в зоне риска.
+    // Точная формула: total = cli.Length + Sum(ArgCost(args)) + ArgCost("--append-system-prompt") + ArgCost(big)
+    // С TinyArgs = ["--print"(10), "--input-format"(17), "stream-json"(14)] и cli="claude"(6)
+    // и "--append-system-prompt"(25) получаем total = 6 + 41 + 25 + big + 3 = 75 + big.
+    // При big = 32 692: total = 32 767 (ровно лимит → отказ).
+    [Fact]
+    public void ApplyBudget_РовноНаЛимите_Отказывает()
+    {
+        const int big = 32_692;
+        var sections = new List<PromptSectionDto> { StableSec("one", new string('a', big)) };
+
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TotalCmdlineChars.Should().Be(TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeTrue(
+            "ровно CmdlineLimit отказывается — гейт >= ловит последний символ");
+    }
+
+    // H3: 32 766 (один символ запаса) — ещё стартует.
+    [Fact]
+    public void ApplyBudget_НаСимволНижеЛимита_Стартует()
+    {
+        const int big = 32_691;
+        var sections = new List<PromptSectionDto> { StableSec("one", new string('a', big)) };
+
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TotalCmdlineChars.Should().BeLessThan(TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeFalse(
+            "на символ ниже CmdlineLimit ход обязан стартовать — иначе мы зарежем лишнее");
     }
 }

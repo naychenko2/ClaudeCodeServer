@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 
@@ -21,6 +22,10 @@ public static class TurnPromptAssembler
     // командную строку сам и при превышении бросает Win32Exception с NativeErrorCode=206
     // (ERROR_FILENAME_EXCED_RANGE), а не при сериализации каждого аргумента — поэтому порог
     // надо ставить по СУММЕ длин, а не по длине одного --append-system-prompt.
+    //
+    // Замер на живой ОС (ревью dc641949, волна 3): строка длиной ровно CmdlineLimit (32 767)
+    // стартует, 32 768 — отказ. Гейт ниже использует >=, чтобы последний символ не уехал
+    // в реальный Win32 206 после прохождения нашего собственного рубежа.
     public const int CmdlineLimit = 32_767;
 
     // Порог, при котором запускаем срезку. 30 000 из задачи dc641949: между 30 000 и 32 767
@@ -97,60 +102,45 @@ public static class TurnPromptAssembler
     /// CmdlineLimit (32 767) — ОТКАЗ: Overflowed ставится только по нему. Ход, который
     /// после срезки остался в зоне 30–32к, стартует штатно.
     ///
-    /// TruncatedSections едут в PromptSnapshotDraft.TruncatedSections — пометка в шторке
-    /// "что ушло модели"; Combine их НЕ берёт (Kind="truncated"): они для UI/диагностики,
-    /// в модель не уходят. Sections — итоговый пул после срезки, его и надо публиковать
-    /// в снимок, иначе снимок разойдётся с отправленным промптом.
+    /// TruncatedSections едут в PromptSnapshotDraft.TruncatedSections — поле контракта
+    /// снимка промпта, потребитель — UI (отрисовка в задаче Киры параллельно этой).
+    /// Combine их НЕ берёт (Kind="truncated"): они для UI/диагностики, в модель не уходят.
+    /// Sections — итоговый пул после срезки, его и надо публиковать в снимок, иначе
+    /// снимок разойдётся с отправленным промптом.
     /// </summary>
     /// <param name="sections">Список секций, подготовленный ClaudeSession (Kind="system" идут в склейку).</param>
     /// <param name="personaLayer">Слой персоны (PersonaLayerContributor) — отдельный аргумент, в sections не лежит.</param>
-    /// <param name="args">Уже собранные аргументы CLI на момент склейки (без --append-system-prompt).</param>
-    /// <param name="cliCommand">Имя/путь исполняемого файла (claude или fake-claude в тестах).</param>
-    /// <param name="workingDir">WorkingDirectory процесса — путь к корню проекта. Не входит в
-    /// командную строку (это отдельный параметр ProcessStartInfo.WorkingDirectory).</param>
+    /// <param name="args">Аргументы CLI, которые уже собраны ClaudeSession на момент склейки
+    /// (без пары --append-system-prompt — её ApplyBudget добавляет сам, чтобы не считать дважды).</param>
+    /// <param name="cmdlineLength">Колбэк «длина итоговой cmdline»: получает финальный список
+    /// аргументов CLI (включая добавленный --append-system-prompt) и возвращает длину argv в
+    /// широких символах, как её соберёт .NET при Process.Start. Учитывает СВОЮ обвязку раннера
+    /// (docker exec -i -w … cc-sandbox run-turn.sh turnId claude {args}), а не только argList —
+    /// поэтому Estimate остаётся верхней оценкой и для container-владельцев (ревью dc641949,
+    /// волна 3). Local раннер считает только cli+args.</param>
     /// <param name="threshold">Порог срезки; по умолчанию BudgetThreshold (30 000).</param>
     public static PromptBudgetResult ApplyBudget(
         IReadOnlyList<PromptSectionDto> sections,
         string? personaLayer,
         IReadOnlyList<string> args,
-        string? cliCommand,
-        string? workingDir,
+        Func<IReadOnlyList<string>, int> cmdlineLength,
         int threshold = BudgetThreshold)
     {
-        // ВЕРХНЯЯ оценка длины командной строки, которую соберёт .NET из ArgumentList:
-        // cliCommand + для каждого аргумента (пробел + экранированный аргумент).
-        //
-        // Экранирование .NET (ProcessStartInfo → PasteArguments): аргумент с пробелом или
-        // табом обрамляется кавычками (+2), а каждая внутренняя " экранируется обратным
-        // слэшем (+1 на кавычку); плюс слэши перед кавычкой удваиваются. Считать точно
-        // незачем — нам нужна ВЕРХНЯЯ граница, поэтому берём худший случай для каждого
-        // аргумента: длина + 2 (кавычки) + 2 * число кавычек внутри + 1 (пробел-разделитель).
-        // Занижать нельзя: по заниженной цифре мы бы пропустили ход, который Process.Start
-        // отвергнет с Win32 206.
-        //
-        // workingDir в оценку НЕ входит: это ProcessStartInfo.WorkingDirectory — отдельный
-        // параметр CreateProcess (lpCurrentDirectory), в lpCommandLine он не попадает
-        // (см. LocalProcessRunner.BuildStartInfo: psi.WorkingDirectory ставится отдельно
-        // от psi.ArgumentList). Прежняя версия считала его — завышала оценку на длину
-        // корня проекта и резала ходы, которые стартовали бы штатно (ревью dc641949: L7).
-        static int ArgCost(string a)
-        {
-            var quotes = 0;
-            foreach (var c in a) if (c == '"') quotes++;
-            return a.Length + 2 + 2 * quotes + 1;
-        }
-
+        // ВЕРХНЯЯ оценка длины командной строки. Делегирована раннеру: только он знает свою
+        // обвязку (Local — ничего, Docker — docker exec с -i/-w/-e/контейнером/скриптом).
+        // Тестовая подделка суммирует ArgCost по списку.
         int Estimate(string combined)
         {
-            var n = cliCommand?.Length ?? 0;
-            foreach (var a in args) n += ArgCost(a);
+            if (string.IsNullOrWhiteSpace(combined)) return cmdlineLength(args);
+            var full = new List<string>(args.Count + 2);
+            full.AddRange(args);
             // combined на момент вызова ещё НЕ в args: ClaudeSession добавляет
             // --append-system-prompt уже после возврата ApplyBudget. Поэтому оба слагаемых
             // (имя флага и его значение) считаем здесь руками, иначе самый длинный аргумент
             // хода остался бы неучтённым.
-            if (!string.IsNullOrWhiteSpace(combined))
-                n += ArgCost(AppendSystemPromptFlag) + ArgCost(combined);
-            return n;
+            full.Add(AppendSystemPromptFlag);
+            full.Add(combined);
+            return cmdlineLength(full);
         }
 
         var initialCombined = Combine(sections, personaLayer);
@@ -199,17 +189,26 @@ public static class TurnPromptAssembler
 
         // Приоритеты кончились, а порог срезки так и не взят. ОТКАЗ ставим не по нему:
         // порог — триггер срезки, а настоящая граница одна — лимит командной строки
-        // Windows. Ход, оставшийся в зоне 30 000–32 767, стартует штатно: наша оценка
+        // Windows. Ход, оставшийся в зоне 30 000–32 766, стартует штатно: наша оценка
         // ВЕРХНЯЯ, реальная строка после экранирования не длиннее (ревью dc641949: M5,
         // регрессия у чатов со стабильной обвязкой 30–32к и пустыми нестабильными секциями).
         //
-        // Если же оценка перевалила CmdlineLimit — отказываем сразу и честно: доказать
+        // Если же оценка достигла CmdlineLimit — отказываем сразу и честно: доказать
         // безопасность старта мы не можем, а Process.Start отдал бы Win32 206, который
-        // классификатор увёл бы в бесполезный перебор мёртвых шагов цепочки.
+        // классификатор увёл бы в бесполезный перебор мёртвых шагов цепочки. Гейт именно
+        // >=, не >: замер на живой ОС показал, что 32 767 символов argv стартует, а 32 768
+        // отказывается — оставлять последний символ в зоне риска мы не вправе.
         var finalTotal = Estimate(currentCombined);
         return new PromptBudgetResult(
-            currentCombined, truncated, finalTotal, finalTotal > CmdlineLimit, pool);
+            currentCombined, truncated, finalTotal, finalTotal >= CmdlineLimit, pool);
     }
+
+    // Прокси к общей формуле в Services.Execution.CmdlineEstimate. Оставлено здесь
+    // ради прежних вызывающих (тесты TurnPromptAssemblerTests используют TurnPromptAssembler
+    // как единственную точку входа — это часть публичного API сборки). Реализация одна,
+    // в Execution; расхождение формул = расхождение оценки и реальной сборки .NET, и тесты
+    // DockerProcessRunnerCmdlineEstimationTests его ловят.
+    public static int ArgCost(string a) => CmdlineEstimate.ArgCost(a);
 
     // Заметка в снимке промпта: ровно одна на каждый урезанный ключ. Текст содержит факт
     // (что обрезали, сколько символов сейчас), без сырого содержимого секции — она

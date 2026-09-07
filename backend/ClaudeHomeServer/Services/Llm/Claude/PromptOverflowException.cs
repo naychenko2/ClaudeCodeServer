@@ -5,7 +5,8 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // Локальный детерминированный сбой старта процесса CLI: бюджет промпта на склейке
 // (TurnPromptAssembler.ApplyBudget) превышен даже после срезки всех нестабильных секций,
 // и мы не можем собрать --append-system-prompt в пределах 32 767 символов командной строки
-// Windows. Исключение бросает ClaudeSession после ApplyBudget; общий catch в RunTurnAsync
+// Windows (включая ОБВЯЗКУ docker exec у container-владельцев: ревью dc641949, волна 3).
+// Исключение бросает ClaudeSession после ApplyBudget; общий catch в RunTurnAsync
 // ловит его, кладёт [Win32:206]-совместимый маркер в Details ErrorMessage (см. шаг
 // "маркер Win32-кода" в TurnErrorClassifier.cs), адаптер через TurnErrorClassifier
 // получает FallbackErrorClass.PromptOverflow и фолбэк не запускается.

@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Tests.Services.Dossiers;
 
 // Интеграционные тесты импорта паспортов из ветки ccs/dossiers/v1 (этап 4 «Историй
 // решений», волна 2): настоящий git CLI — ветка пишется тем же plumbing-методом
-// WriteDossiersBranchAsync, что и при экспорте, содержимое файлов — реальным
+// WriteSnapshotAsync, что и при экспорте, содержимое файлов — реальным
 // DossierGitExporter.FormatDossier (контракт «что экспорт написал, то импорт прочитал»);
 // SessionManager не нужен — фильтр сессий относится к выгрузке. Общая папка репо у двух
 // владельцев — штатный сценарий CLAUDE.md, он же модель «подтянули репо на новую машину».
@@ -101,23 +101,23 @@ public class DossierImporterTests : IDisposable
     private async Task WriteBranchAsync(Project p, string owner, bool secretsEmpty, params ChangeDossier[] dossiers)
     {
         var secrets = secretsEmpty ? [] : new[] { Secret };
-        var files = new List<GitDossierFile>();
+        var files = new List<GitSnapshotFile>();
         var entries = new List<DossierIndexEntry>();
         foreach (var d in dossiers)
         {
             var subject = SecretRedactor.Redact(d.CommitSubject, secrets);
             var path = DossierGitExporter.DossierPath(d.CommittedAt, d.CommitSha, subject);
-            files.Add(new GitDossierFile(path, DossierGitExporter.FormatDossier(d, secrets)));
+            files.Add(new GitSnapshotFile(path, DossierGitExporter.FormatDossier(d, secrets)));
             entries.Add(new DossierIndexEntry(d.CommitSha, path, subject, d.CommittedAt,
                 Discussion: null, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
         }
-        files.Add(new GitDossierFile("index.json",
+        files.Add(new GitSnapshotFile("index.json",
             JsonSerializer.Serialize(new DossierBranchIndex(1, entries), IndexOpts)));
-        await _git.WriteDossiersBranchAsync(owner, p.RootPath, files, "test: ветка паспортов");
+        await _git.WriteSnapshotAsync(owner, p.RootPath, DossierBranch.Ref, files, "test: ветка паспортов", DossierBranch.Identity);
     }
 
     private DossierImporter MkImporter(int maxImportBatchEntries = 1000) =>
-        new(_store, _git, new InstanceSecretsProvider(new ConfigurationBuilder()
+        new(_store, (IGitRefSnapshotStore)_git, new InstanceSecretsProvider(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_temp, "projects.json"),
@@ -144,7 +144,7 @@ public class DossierImporterTests : IDisposable
         result.Added.Should().Be(1);
         var imported = _store.List(Owner2, p2.Id).Should().ContainSingle().Subject;
         imported.Origin.Should().Be(DossierOrigin.Imported);
-        // Идентичность коммиттера ветки экспорта (GitService.DossiersIdentity) и нормализованная ветка
+        // Идентичность коммиттера ветки экспорта (DossierBranch.Identity) и нормализованная ветка
         imported.ImportedAuthor.Should().Be("AI Home");
         imported.ImportedFromBranch.Should().Be("ccs/dossiers/v1");
         imported.CommitSha.Should().Be("11aa22bb");
@@ -247,15 +247,15 @@ public class DossierImporterTests : IDisposable
         // Tip-коммит от чужого автора с секретом в user.name: ImportedAuthor — внешний
         // вход той же природы, что subject, и обязан проходить редакцию на входе
         var tree = (await _git.RunAsync(Owner, p1.RootPath,
-            ["rev-parse", $"{GitService.DossiersRef}^{{tree}}"])).Stdout.Trim();
+            ["rev-parse", $"{DossierBranch.Ref}^{{tree}}"])).Stdout.Trim();
         var tip = (await _git.RunAsync(Owner, p1.RootPath,
-            ["commit-tree", tree, "-p", GitService.DossiersRef, "-m", "test: чужой tip"],
+            ["commit-tree", tree, "-p", DossierBranch.Ref, "-m", "test: чужой tip"],
             env: new Dictionary<string, string>
             {
                 ["GIT_AUTHOR_NAME"] = "Чужой " + Secret,
                 ["GIT_AUTHOR_EMAIL"] = "foreign@elsewhere.test",
             })).Stdout.Trim();
-        (await _git.RunAsync(Owner, p1.RootPath, ["update-ref", GitService.DossiersRef, tip]))
+        (await _git.RunAsync(Owner, p1.RootPath, ["update-ref", DossierBranch.Ref, tip]))
             .Ok.Should().BeTrue();
 
         var result = await MkImporter().ImportAsync(Owner2, p2);
@@ -283,7 +283,8 @@ public class DossierImporterTests : IDisposable
         // Портим index.json на уровне JsonNode: запись {} (все поля null после
         // десериализации) и путь вне репо не собрать через record-инициализатор.
         // Годную запись не трогаем.
-        var indexJson = await _git.ReadDossiersFileAsync(Owner, p1.RootPath, "index.json");
+        var resolved = await _git.ResolveRefAsync(Owner, p1.RootPath, [DossierBranch.Ref, DossierBranch.RemoteRef]);
+        var indexJson = await _git.ReadFileAsync(Owner, p1.RootPath, resolved!, "index.json");
         var root = JsonNode.Parse(indexJson!)!;
         var entries = (JsonArray)root["entries"]!;
         var badSha = (JsonObject)entries[0]!.DeepClone()!;
@@ -305,10 +306,11 @@ public class DossierImporterTests : IDisposable
             ["committedAt"] = "2026-08-01T00:00:00Z",
         });
         var broken = root.ToJsonString();
-        await _git.WriteDossiersBranchAsync(Owner, p1.RootPath,
-            [.. (await BranchFilesWithContentAsync(p1)).Where(f => f.Path != "index.json"),
-             new GitDossierFile("index.json", broken)],
-            "test: битый index");
+        var files = await BranchFilesWithContentAsync(p1);
+        var withoutIndex = files.Where(f => f.Path != "index.json").ToList();
+        withoutIndex.Add(new GitSnapshotFile("index.json", broken));
+        await _git.WriteSnapshotAsync(Owner, p1.RootPath, DossierBranch.Ref,
+            withoutIndex, "test: битый index", DossierBranch.Identity);
 
         var result = await MkImporter().ImportAsync(Owner2, p2);
 
@@ -462,7 +464,7 @@ public class DossierImporterTests : IDisposable
     // --- (и) импорт не сдвигает HEAD и не оставляет следов в рабочей папке ---
     // Read-only-семантика импорта (этап 4, ADR-004 §6): пишем в ветку ccs/dossiers/v1
     // plumbing-командами, текущая ветка и рабочая папка не задеты. Проверяем по снимкам
-    // git status --porcelain и git rev-parse HEAD ДО, ПОСЛЕ WriteDossiersBranchAsync и
+    // git status --porcelain и git rev-parse HEAD ДО, ПОСЛЕ WriteSnapshotAsync и
     // ПОСЛЕ ImportAsync — все три равны baseline.
     [Fact]
     public async Task Импорт_НеСдвигаетHeadИНеМеняетРабочееДерево()
@@ -479,8 +481,8 @@ public class DossierImporterTests : IDisposable
         await WriteBranchAsync(p1, Owner, secretsEmpty: false, d);
         var headAfterWrite = (await _git.RunAsync(Owner, p1.RootPath, ["rev-parse", "HEAD"])).Stdout.Trim();
         var statusAfterWrite = (await _git.RunAsync(Owner, p1.RootPath, ["status", "--porcelain"])).Stdout;
-        headAfterWrite.Should().Be(headBefore, "WriteDossiersBranchAsync коммитит в ccs/dossiers/v1, не в текущую");
-        statusAfterWrite.Should().Be(statusBefore, "WriteDossiersBranchAsync не загрязняет рабочую папку");
+        headAfterWrite.Should().Be(headBefore, "WriteSnapshotAsync коммитит в ccs/dossiers/v1, не в текущую");
+        statusAfterWrite.Should().Be(statusBefore, "WriteSnapshotAsync не загрязняет рабочую папку");
 
         var result = await MkImporter().ImportAsync(Owner2, p2);
 
@@ -535,15 +537,17 @@ public class DossierImporterTests : IDisposable
     }
 
     // Текущее дерево ветки (путь + содержимое) — для пересборки с порченным index.json
-    private async Task<List<GitDossierFile>> BranchFilesWithContentAsync(Project p)
+    private async Task<List<GitSnapshotFile>> BranchFilesWithContentAsync(Project p)
     {
-        var r = await _git.RunAsync(Owner, p.RootPath, ["ls-tree", "-r", "--name-only", GitService.DossiersRef]);
+        var resolved = await _git.ResolveRefAsync(Owner, p.RootPath, [DossierBranch.Ref, DossierBranch.RemoteRef]);
+        resolved.Should().NotBeNull("ветка паспортов должна существовать для пересборки");
+        var r = await _git.RunAsync(Owner, p.RootPath, ["ls-tree", "-r", "--name-only", DossierBranch.Ref]);
         r.Ok.Should().BeTrue();
-        var files = new List<GitDossierFile>();
+        var files = new List<GitSnapshotFile>();
         foreach (var f in r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var c = await _git.ReadDossiersFileAsync(Owner, p.RootPath, f);
-            files.Add(new GitDossierFile(f, c!));
+            var c = await _git.ReadFileAsync(Owner, p.RootPath, resolved!, f);
+            files.Add(new GitSnapshotFile(f, c!));
         }
         return files;
     }

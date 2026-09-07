@@ -53,7 +53,7 @@ public class ChangeDossier
     public DossierStatus Status { get; set; } = DossierStatus.Active;
 
     // Происхождение (этап 4): у Imported заполнены автор и ветка-источник — tip-коммит
-    // ветки, из которой запись приехала (GitDossiersTip). У Own оба поля null.
+    // ветки, из которой запись приехала (GitRefTip). У Own оба поля null.
     public DossierOrigin Origin { get; set; } = DossierOrigin.Own;
     public string? ImportedAuthor { get; set; }
     public string? ImportedFromBranch { get; set; }

@@ -31,14 +31,14 @@ public sealed class DossierAutoImporter : BackgroundService
     private readonly ProjectManager _projects;
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
-    private readonly GitService _git;
+    private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly FeatureFlagService _flags;
     private readonly DossierImporter _importer;
     private readonly ILogger<DossierAutoImporter>? _log;
 
     public DossierAutoImporter(ProjectManager projects, DossierStore store, DossierCaptureState state,
-        GitService git, InstanceSecretsProvider secrets, FeatureFlagService flags,
+        IGitRefSnapshotStore git, InstanceSecretsProvider secrets, FeatureFlagService flags,
         ILoggerFactory? logFactory = null, ILogger<DossierAutoImporter>? log = null,
         DossierImporter? importer = null)
     {
@@ -93,7 +93,10 @@ public sealed class DossierAutoImporter : BackgroundService
         // Tip того рефа, из которого импортировал бы ручной вызов (локальная ветка, при
         // её отсутствии — remote-tracking после pull): наблюдение и источник импорта не
         // должны разъезжаться. Ветки нет нигде — нечего импортировать, state не трогаем.
-        var tip = await _git.GetDossiersTipAsync(ownerId, project.RootPath);
+        var resolved = await _git.ResolveRefAsync(ownerId, project.RootPath,
+            [DossierBranch.Ref, DossierBranch.RemoteRef]);
+        if (resolved is null) return;
+        var tip = await _git.TipAsync(ownerId, project.RootPath, resolved);
         if (tip is null) return;
 
         var key = DossierCaptureState.ImportKey(ownerId, project.Id);

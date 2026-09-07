@@ -28,7 +28,7 @@ public sealed record DossierBranchIndex(int Version, IReadOnlyList<DossierIndexE
 // решений»). Формирует ПОЛНОЕ дерево ветки из DossierStore и пишет его методом GitService
 // (чистый plumbing, рабочее дерево не трогается). Инкрементальность — дёшево: снапшот
 // собирается целиком, а git-слой сравнивает дерево с tip и без изменений коммит не создаёт.
-// Автопуша нет и не будет: публикация — PushDossiersBranchAsync по явной команде пользователя.
+// Автопуша нет и не будет: публикация — PushRefAsync по явной команде пользователя.
 public sealed class DossierGitExporter
 {
     private const string IndexPath = "index.json";
@@ -44,12 +44,12 @@ public sealed class DossierGitExporter
 
     private readonly SessionManager _sessions;
     private readonly DossierStore _store;
-    private readonly GitService _git;
+    private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly DossierDiscussionService _discussions;
     private readonly ILogger<DossierGitExporter>? _log;
 
-    public DossierGitExporter(SessionManager sessions, DossierStore store, GitService git,
+    public DossierGitExporter(SessionManager sessions, DossierStore store, IGitRefSnapshotStore git,
         InstanceSecretsProvider secrets, DossierDiscussionService discussions,
         ILogger<DossierGitExporter>? log = null)
     {
@@ -84,7 +84,7 @@ public sealed class DossierGitExporter
         // не нужен, сразу «нечего выгружать». Если ветка есть, а выгружаемого не осталось
         // (чаты ушли в opt-out или удалены) — наоборот, пишем опустевший снапшот: полный
         // снапшот обязан вычистить из ветки то, что больше не должно там жить.
-        if (files.Count == 2 && !await _git.HasDossiersBranchAsync(ownerId, project.RootPath, ct))
+        if (files.Count == 2 && !await _git.RefExistsAsync(ownerId, project.RootPath, DossierBranch.Ref, ct))
             return new DossiersExportResult(0, Committed: false, CommitSha: null);
 
         var message = dossiers > 0
@@ -92,11 +92,11 @@ public sealed class DossierGitExporter
             : digests > 0
                 ? "docs(dossiers): выгрузить конспекты обсуждений"
                 : "docs(dossiers): очистить историю решений";
-        var result = await _git.WriteDossiersBranchAsync(ownerId, project.RootPath, files, message, ct);
+        var result = await _git.WriteSnapshotAsync(ownerId, project.RootPath, DossierBranch.Ref, files, message, DossierBranch.Identity, ct);
         if (result.Created)
             _log?.LogInformation(
                 "dossiers: экспорт проекта {Project} в {Ref}: {Count} паспортов, {Digests} конспектов, коммит {Sha}",
-                project.Id, GitService.DossiersRef, dossiers, digests, result.CommitSha);
+                project.Id, DossierBranch.Ref, dossiers, digests, result.CommitSha);
         return new DossiersExportResult(dossiers, result.Created, result.CommitSha);
     }
 
@@ -105,10 +105,10 @@ public sealed class DossierGitExporter
     // Порядок детерминирован (CommittedAt/GeneratedAt, идентификаторы) — одинаковый стор
     // обязан давать побайтово одинаковое дерево, иначе каждый повторный экспорт плодил бы
     // коммит.
-    public IReadOnlyList<GitDossierFile> BuildFiles(string ownerId, Project project)
+    public IReadOnlyList<GitSnapshotFile> BuildFiles(string ownerId, Project project)
     {
         var secrets = _secrets.GetExactSecrets();
-        var files = new List<GitDossierFile>();
+        var files = new List<GitSnapshotFile>();
         var entries = new List<DossierIndexEntry>();
         var usedPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -132,7 +132,7 @@ public sealed class DossierGitExporter
             while (!usedPaths.Add(dpath) && sessChars < digest.SessionId.Length)
                 dpath = DiscussionPath(session.CreatedAt.Year, digest.SessionId, topic, ++sessChars);
 
-            files.Add(new GitDossierFile(dpath, FormatDigest(digest, secrets)));
+            files.Add(new GitSnapshotFile(dpath, FormatDigest(digest, secrets)));
             discussionPaths[digest.SessionId] = dpath;
         }
 
@@ -155,7 +155,7 @@ public sealed class DossierGitExporter
             while (!usedPaths.Add(path) && shaChars < d.CommitSha.Length)
                 path = DossierPath(d.CommittedAt, d.CommitSha, subject, ++shaChars);
 
-            files.Add(new GitDossierFile(path, FormatDossier(d, secrets)));
+            files.Add(new GitSnapshotFile(path, FormatDossier(d, secrets)));
             // Конспект чата-источника, если снят и едет в этой же выгрузке
             var discussion = d.SessionId is not null
                 && discussionPaths.TryGetValue(d.SessionId, out var dp) ? dp : null;
@@ -163,9 +163,9 @@ public sealed class DossierGitExporter
                 Discussion: discussion, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
         }
 
-        files.Add(new GitDossierFile(IndexPath, SerializeIndex(entries)));
+        files.Add(new GitSnapshotFile(IndexPath, SerializeIndex(entries)));
         // README — самодостаточное описание ветки для того, кто открыл её без приложения
-        files.Add(new GitDossierFile(ReadmePath, ReadmeText));
+        files.Add(new GitSnapshotFile(ReadmePath, ReadmeText));
         return files;
     }
 

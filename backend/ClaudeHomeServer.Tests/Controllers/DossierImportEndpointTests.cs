@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -31,7 +32,7 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
     private async Task<string> CreateGitProjectAsync()
     {
         // Репозиторий с веткой паспортов: init без коммитов рабочего дерева не нужен —
-        // WriteDossiersBranchAsync пишет первый коммит ветки без родителя
+        // WriteSnapshotAsync пишет первый коммит ветки без родителя
         var dir = Path.Combine(_factory.TempDir, "dossier_import_http_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var git = new GitService(TestLauncherFactory.Instance);
@@ -59,9 +60,9 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
             "subject":"feat: импорт через HTTP","committedAt":"2026-07-01T10:00:00Z","discussion":null,
             "taskId":null,"supersededSha":[]}]}
             """;
-        await git.WriteDossiersBranchAsync(null, dir,
-            [new GitDossierFile(filePath, md), new GitDossierFile("index.json", index)],
-            "test: ветка паспортов");
+        await git.WriteSnapshotAsync(null, dir, DossierBranch.Ref,
+            [new GitSnapshotFile(filePath, md), new GitSnapshotFile("index.json", index)],
+            "test: ветка паспортов", DossierBranch.Identity);
 
         var response = await _client.PostAsJsonAsync("/api/projects", new { name = "DossierImport", rootPath = dir });
         response.EnsureSuccessStatusCode();
@@ -144,7 +145,7 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
     }
 
     // Признак наличия ветки паспортов в exportStatus: им фронт гейтит кнопку «Загрузить».
-    // Ветку пишет фикстура WriteDossiersBranchAsync — проверяем только отражение в ответе.
+    // Ветку пишет фикстура WriteSnapshotAsync — проверяем только отражение в ответе.
     private async Task<JsonElement> ExportStatusAsync(string projectId)
     {
         var response = await _client.GetAsync($"/api/projects/{projectId}/dossiers/export/status");
@@ -236,7 +237,7 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
             sp.GetRequiredService<ClaudeHomeServer.Services.ProjectManager>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>(),
-            sp.GetRequiredService<ClaudeHomeServer.Services.Git.GitService>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Git.IGitRefSnapshotStore>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.FeatureFlagService>())
             .TickAsync();

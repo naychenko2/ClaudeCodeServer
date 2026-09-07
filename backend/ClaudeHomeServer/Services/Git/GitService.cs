@@ -33,17 +33,17 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 // Креды HTTP-remote (Forgejo): логин + персональный токен пользователя
 public sealed record GitCredentials(string Username, string Token);
 
-// Файл экспорта в ветку паспортов: путь внутри ветки + текстовое содержимое (паспорта —
-// markdown). При дубле пути в наборе побеждает последняя запись (update-index перезапишет).
-public sealed record GitDossierFile(string Path, string Content);
+// Файл снапшота ветки-паспорта: путь внутри ветки + текстовое содержимое. При дубле пути
+// в наборе побеждает последняя запись (update-index перезапишет запись индекса).
+public sealed record GitSnapshotFile(string Path, string Content);
 
-// Итог записи ветки паспортов: Created=false — дерево снапшота совпало с последним
+// Итог записи ветки-паспорта: Created=false — дерево снапшота совпало с последним
 // коммитом ветки и новый коммит не создавался; CommitSha — tip ветки в обоих случаях.
-public sealed record GitDossiersWriteResult(bool Created, string CommitSha);
+public sealed record GitRefSnapshotResult(bool Created, string CommitSha);
 
-// Tip ветки паспортов: реф, коммит, автор и дата последнего коммита — происхождение
-// данных при обратном чтении ветки (импорт «Историй решений»).
-public sealed record GitDossiersTip(string Ref, string CommitSha, string Author, DateTimeOffset Date);
+// Tip ветки-паспорта: реф, коммит, автор и дата последнего коммита — происхождение данных
+// при обратном чтении ветки (импорт «Историй решений»).
+public sealed record GitRefTip(string Ref, string CommitSha, string Author, DateTimeOffset Date);
 
 // Срез рабочего дерева: short HEAD (для UI/журнала) + список грязных путей (для гейта
 // «можно ли выкатить as-is»). shortHeadSha = null для пустого репо или при сбое rev-parse.
@@ -57,7 +57,11 @@ public sealed record GitRepoSnapshot(string? ShortHeadSha, IReadOnlyList<string>
 // git исполняется внутри песочницы cc-sandbox с маппингом путей, для local — на хосте.
 // Работа с remote (Forgejo) вынесена в отдельный GitServerService.
 // Логгер опционален: DI подставляет реальный, а тесты конструируют сервис напрямую.
-public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null)
+// Реализует IGitRefSnapshotStore — generic plumbing произвольной ветки-паспорта
+// (commit-on-plumbing): запись полного дерева, резолв рефа, чтение списка файлов и
+// содержимого, tip с автором, push. Имя ветки и идентичность коммита — на стороне
+// вызывающей вертикали (см. DossierBranch), GitService про конкретные ветки не знает.
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -797,31 +801,30 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return WriteOp(ownerId, root, ["checkout", branch], ct: ct);
     }
 
-    // ---------- Ветка паспортов ccs/dossiers/v1 (экспорт «Историй решений») ----------
+    // ---------- Ветка-паспорт (generic plumbing через IGitRefSnapshotStore) ----------
 
-    // Полный ref ветки экспорта паспортов изменений
-    public const string DossiersRef = "refs/heads/ccs/dossiers/v1";
-
-    // Фиксированная идентичность коммитов ветки: commit-tree берёт автора из env/конфига,
-    // а user.name на сервере может быть не задан («empty ident name not allowed»)
-    private static readonly Dictionary<string, string> DossiersIdentity = new()
-    {
-        ["GIT_AUTHOR_NAME"] = "AI Home",
-        ["GIT_AUTHOR_EMAIL"] = "dossiers@ai-home.local",
-        ["GIT_COMMITTER_NAME"] = "AI Home",
-        ["GIT_COMMITTER_EMAIL"] = "dossiers@ai-home.local",
-    };
-
-    // Записать ПОЛНЫЙ снапшот файлов в ветку паспортов строго через плюминг:
+    // Записать ПОЛНЫЙ снапшот файлов в произвольную ветку строго через плюминг:
     // hash-object -w → временный индекс (GIT_INDEX_FILE) → write-tree → commit-tree
     // → update-ref. Рабочее дерево, индекс и HEAD пользователя не затрагиваются:
     // ни переключения веток, ни временного worktree — цепочка идёт в том репозитории,
     // откуда вызвали (main или linked worktree). Первый коммит ветки — без родителя.
-    public async Task<GitDossiersWriteResult> WriteDossiersBranchAsync(
-        string? ownerId, string root, IReadOnlyList<GitDossierFile> files, string message,
+    // Реализация IGitRefSnapshotStore.WriteSnapshotAsync — generic plumbing, имя ветки
+    // и идентичность коммита приходят от вызывающей вертикали (см. DossierBranch).
+    public async Task<GitRefSnapshotResult> WriteSnapshotAsync(
+        string? ownerId, string root, string fullRef,
+        IReadOnlyList<GitSnapshotFile> files, string message, GitRefIdentity identity,
         CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) throw new GitCommandException("Каталог не является git-репозиторием");
+        ValidateRevision(fullRef);
+
+        var identityEnv = new Dictionary<string, string>
+        {
+            ["GIT_AUTHOR_NAME"] = identity.AuthorName,
+            ["GIT_AUTHOR_EMAIL"] = identity.AuthorEmail,
+            ["GIT_COMMITTER_NAME"] = identity.CommitterName,
+            ["GIT_COMMITTER_EMAIL"] = identity.CommitterEmail,
+        };
 
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
@@ -830,14 +833,14 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             // Tip ветки и его дерево. Отсутствующая ветка (--quiet, exit 1) — норма, это
             // первый экспорт. sha валидируем: rev-parse превращает опечатку в refname
             // в свободный аргумент и может «резолвнуть» её во что-то неожиданное.
-            var tipRes = await RunAsync(ownerId, root, ["rev-parse", "--quiet", DossiersRef], ct: ct);
+            var tipRes = await RunAsync(ownerId, root, ["rev-parse", "--quiet", fullRef], ct: ct);
             var tipSha = tipRes.Stdout.Trim();
             string? tip = tipRes.Ok && IsValidSha(tipSha) ? tipSha : null;
             string? tipTree = null;
             if (tip is not null)
             {
                 var treeRes = await RunAsync(ownerId, root,
-                    ["rev-parse", "--quiet", $"{DossiersRef}^{{tree}}"], ct: ct);
+                    ["rev-parse", "--quiet", $"{fullRef}^{{tree}}"], ct: ct);
                 if (treeRes.Ok) tipTree = treeRes.Stdout.Trim();
             }
 
@@ -849,7 +852,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             // огрызок незавершённого запуска: update-index добавляет к существующему
             // индексу, и stale-записи утащили бы в дерево чужие файлы.
             var idxPath = (await RunOkAsync(ownerId, root,
-                ["rev-parse", "--git-path", "index.dossiers-tmp"], ct: ct)).Stdout.Trim();
+                ["rev-parse", "--git-path", "index.refsnapshot-tmp"], ct: ct)).Stdout.Trim();
             var hostIdx = HostGitPath(ownerId, root, idxPath);
             try { File.Delete(hostIdx); } catch { /* файла нет — норма */ }
             var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = idxPath };
@@ -866,7 +869,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             // атрибуты (core.autocrlf, .gitattributes) — блобы разъехались бы с прежним
             // «сырым» содержимым из stdin, и то же дерево перестало бы совпадать с tip.
             var tmpPath = (await RunOkAsync(ownerId, root,
-                ["rev-parse", "--git-path", "dossiers-export-tmp"], ct: ct)).Stdout.Trim();
+                ["rev-parse", "--git-path", "refsnapshot-export-tmp"], ct: ct)).Stdout.Trim();
             var hostTmp = HostGitPath(ownerId, root, tmpPath);
             try { Directory.Delete(hostTmp, recursive: true); } catch { /* папки нет — норма */ }
             Directory.CreateDirectory(hostTmp);
@@ -923,20 +926,20 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
                 // Снапшот не изменился — новый коммит не создаём
                 if (tip is not null && tree == tipTree)
-                    return new GitDossiersWriteResult(false, tip);
+                    return new GitRefSnapshotResult(false, tip);
 
                 var commitArgs = new List<string> { "commit-tree", tree };
                 if (tip is not null) commitArgs.AddRange(["-p", tip]);
                 var commit = await RunOkAsync(ownerId, root, commitArgs,
-                    stdin: message, env: DossiersIdentity, ct: ct);
+                    stdin: message, env: identityEnv, ct: ct);
                 var sha = commit.Stdout.Trim();
 
                 // Старое значение передаём (tip или нулевой sha для создания) — это CAS:
                 // параллельный экспорт из другого дерева того же репо не будет молча
                 // перезаписан; проигравший получит ошибку git и повторит вызов.
                 await RunOkAsync(ownerId, root,
-                    ["update-ref", DossiersRef, sha, tip ?? new string('0', 40)], ct: ct);
-                return new GitDossiersWriteResult(true, sha);
+                    ["update-ref", fullRef, sha, tip ?? new string('0', 40)], ct: ct);
+                return new GitRefSnapshotResult(true, sha);
             }
             finally
             {
@@ -968,21 +971,16 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         catch { return gitPath; /* вне маппинга — удалим best effort по сырому пути */ }
     }
 
-    // Ручная публикация ветки паспортов в origin — только по явной команде пользователя.
+    // Ручная публикация ветки-паспорта в origin — только по явной команде пользователя.
     // Полный ref (а не короткое имя ветки): уезжает ровно эта ветка, upstream текущей
-    // ветки рабочего дерева не трогаем.
-    public Task PushDossiersBranchAsync(
-        string? ownerId, string root, GitCredentials? creds = null, CancellationToken ct = default) =>
-        NetworkOp(ownerId, root, ["push", "origin", DossiersRef], creds, ct);
+    // ветки рабочего дерева не трогаем. Реализация IGitRefSnapshotStore.PushRefAsync.
+    public Task PushRefAsync(
+        string? ownerId, string root, string fullRef, GitCredentials? creds = null, CancellationToken ct = default) =>
+        NetworkOp(ownerId, root, ["push", "origin", fullRef], creds, ct);
 
-    // ---------- Чтение ветки паспортов ccs/dossiers/v1 (plumbing, только read-only) ----------
+    // ---------- Чтение ветки-паспорта (generic plumbing через IGitRefSnapshotStore) ----------
 
-    // Remote-tracking реф ветки паспортов: фолбэк, когда локальной ветки нет
-    // (репо стянули fetch'ем/клонировали, но ветку у себя не создавали)
-    private static string DossiersRemoteRef => $"refs/remotes/origin/{DossiersRef["refs/heads/".Length..]}";
-
-    // Есть ли ЛОКАЛЬНАЯ ветка паспортов: один дешёвый вызов проверки рефа —
-    // признак hasDossierBranch для exportStatus (гейт кнопки «Загрузить» в UI).
+    // Существует ли реф: один дешёвый вызов проверки (rev-parse --verify --quiet).
     // Ветка считается существующей ТОЛЬКО при нулевом exit code И непустом stdout
     // с валидным sha: без --verify rev-parse эхом вернул бы имя рефа как свободный
     // аргумент, а потеря кода возврата в цепочке запуска не превратит отказ в «ветка
@@ -990,33 +988,32 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // при инцидентах вида «кнопка есть, а ветки нет» это единственный способ увидеть,
     // что именно видел git. Незапуск/таймаут git — не ошибка статуса, а «ветки нет»
     // (кнопка скрыта): иначе гейт лишился бы весь эндпоинт ответом 500.
-    public async Task<bool> HasDossiersBranchAsync(string? ownerId, string root, CancellationToken ct = default)
+    public async Task<bool> RefExistsAsync(string? ownerId, string root, string fullRef, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return false;
         try
         {
-            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
             var sha = r.Stdout.Trim();
             logger?.LogInformation(
-                "HasDossiersBranch: root='{Root}' exit={ExitCode} stdout='{Stdout}' stderr='{Stderr}'",
-                root, r.ExitCode, sha, FirstLine(r.Stderr) ?? "");
+                "RefExists: root='{Root}' ref='{Ref}' exit={ExitCode} stdout='{Stdout}' stderr='{Stderr}'",
+                root, fullRef, r.ExitCode, sha, FirstLine(r.Stderr) ?? "");
             return r.Ok && sha.Length > 0 && IsValidSha(sha);
         }
         catch (GitCommandException ex)
         {
-            logger?.LogWarning(ex, "HasDossiersBranch: git-проверка не удалась, считаем ветку отсутствующей (root='{Root}')", root);
+            logger?.LogWarning(ex, "RefExists: git-проверка {Ref} не удалась, считаем ветку отсутствующей (root='{Root}')", fullRef, root);
             return false;
         }
     }
 
-    // Резолв рефа ветки паспортов: локальная ветка, при её отсутствии — remote-tracking
-    // того же имени. Возвращает имя существующего рефа либо null (ветки нет нигде).
+    // Резолв рефа из списка: возвращает имя первого существующего, либо null (нигде нет).
     // --verify --quiet: отсутствующий реф — exit 1 без вывода (без --verify rev-parse
     // эхом вернул бы имя как свободный аргумент — поэтому ещё и IsValidSha).
-    public async Task<string?> ResolveDossiersRefAsync(string? ownerId, string root, CancellationToken ct = default)
+    public async Task<string?> ResolveRefAsync(string? ownerId, string root, IReadOnlyList<string> candidates, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
-        foreach (var refName in (string[])[DossiersRef, DossiersRemoteRef])
+        foreach (var refName in candidates)
         {
             var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", refName], ct: ct);
             if (r.Ok && IsValidSha(r.Stdout.Trim())) return refName;
@@ -1024,47 +1021,30 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return null;
     }
 
-    // Локальный tip ветки паспортов (null — локальной ветки нет; remote-tracking мог
-    // остаться). Для гейта автовыгрузки «ветка заведомо наша» (разбор консилиума 23.08):
-    // фон обязан отличать собственный tip от чужого. Тот же вызов, что у
-    // HasDossiersBranchAsync, но возвращает sha, а не признак.
-    public async Task<string?> ResolveDossiersLocalTipAsync(string? ownerId, string root, CancellationToken ct = default)
+    // Локальный tip полного локального рефа (null — локальной ветки нет; remote-tracking
+    // мог остаться). Для гейта автовыгрузки «ветка заведомо наша» (разбор консилиума
+    // 23.08): фон обязан отличать собственный tip от чужого. Тот же вызов, что у
+    // RefExistsAsync, но возвращает sha, а не признак.
+    public async Task<string?> LocalTipAsync(string? ownerId, string root, string fullRef, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
         try
         {
-            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
             var sha = r.Stdout.Trim();
             return r.Ok && IsValidSha(sha) ? sha : null;
         }
         catch (GitCommandException) { return null; }
     }
 
-    // Есть ли remote-tracking реф ветки паспортов (origin/ccs/dossiers/v1): ветку в
-    // репозиторий привёз fetch/pull, локальной копии нет. Признак «сироты» для гейта
-    // автовыгрузки: корневой коммит без родителя поверх origin-версии не запушить
-    // (non-fast-forward, блокер консилиума 23.08) — фон в таком случае обязан молчать.
-    public async Task<bool> HasDossiersRemoteAsync(string? ownerId, string root, CancellationToken ct = default)
-    {
-        if (!IsGitRepo(root)) return false;
-        try
-        {
-            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRemoteRef], ct: ct);
-            return r.Ok && IsValidSha(r.Stdout.Trim());
-        }
-        catch (GitCommandException) { return false; }
-    }
-
-    // Список blob-файлов дерева ветки паспортов (рекурсивно, пути от корня ветки).
+    // Список blob-файлов дерева ветки (рекурсивно, пути от корня ветки).
     // Ветка отсутствует либо дерево пустое — пустой список, без ошибки.
-    public async Task<IReadOnlyList<string>> ListDossiersFilesAsync(
-        string? ownerId, string root, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> ListFilesAsync(
+        string? ownerId, string root, string resolvedRef, CancellationToken ct = default)
     {
-        var refName = await ResolveDossiersRefAsync(ownerId, root, ct);
-        if (refName is null) return [];
         // Полный формат ls-tree ("<mode> <type> <sha>\t<path>"), не --name-only:
         // фильтруем только blob — записи subtree/submodule не нужны
-        var r = await RunAsync(ownerId, root, ["ls-tree", "-r", refName], ct: ct);
+        var r = await RunAsync(ownerId, root, ["ls-tree", "-r", resolvedRef], ct: ct);
         if (!r.Ok) return [];
         var files = new List<string>();
         foreach (var raw in r.Stdout.Split('\n'))
@@ -1078,35 +1058,32 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return files;
     }
 
-    // Содержимое файла ветки паспортов по пути. null — ветки либо файла нет, или
-    // содержимое бинарное (паспорта — текст). Спека "ref:path" читает по рефу:
-    // рабочее дерево, индекс и HEAD не участвуют.
-    public async Task<string?> ReadDossiersFileAsync(
-        string? ownerId, string root, string relPath, CancellationToken ct = default)
+    // Содержимое файла ветки по пути. null — файла нет, или содержимое бинарное.
+    // Спека "ref:path" читает по рефу: рабочее дерево, индекс и HEAD не участвуют.
+    // refName должен быть уже резолвленным (ResolveRefAsync).
+    public async Task<string?> ReadFileAsync(
+        string? ownerId, string root, string resolvedRef, string relPath, CancellationToken ct = default)
     {
-        var refName = await ResolveDossiersRefAsync(ownerId, root, ct);
-        if (refName is null) return null;
         ValidateRel(root, relPath);
         var spec = relPath.Replace('\\', '/');
-        var r = await RunAsync(ownerId, root, ["cat-file", "blob", $"{refName}:{spec}"], ct: ct);
+        var r = await RunAsync(ownerId, root, ["cat-file", "blob", $"{resolvedRef}:{spec}"], ct: ct);
         if (!r.Ok) return null;
         // Бинарь не показываем как текст
         return r.Stdout.Contains('\0') ? null : r.Stdout;
     }
 
-    // Tip ветки паспортов: автор и дата последнего коммита (для пометки происхождения
-    // при импорте). null — ветки нет. Формат тот же, что в LogAsync (%x1f между полями).
-    public async Task<GitDossiersTip?> GetDossiersTipAsync(string? ownerId, string root, CancellationToken ct = default)
+    // Tip ветки: автор и дата последнего коммита (для пометки происхождения при импорте).
+    // null — реф не резолвился в валидный sha, либо log провалился. Формат тот же, что
+    // в LogAsync (%x1f между полями). refName должен быть уже резолвленным (ResolveRefAsync).
+    public async Task<GitRefTip?> TipAsync(string? ownerId, string root, string resolvedRef, CancellationToken ct = default)
     {
-        var refName = await ResolveDossiersRefAsync(ownerId, root, ct);
-        if (refName is null) return null;
         var r = await RunAsync(ownerId, root,
-            ["log", "-1", "--pretty=format:%H%x1f%an%x1f%aI", refName], ct: ct);
+            ["log", "-1", "--pretty=format:%H%x1f%an%x1f%aI", resolvedRef], ct: ct);
         if (!r.Ok) return null;
         var parts = r.Stdout.Trim().Split('\x1f');
         if (parts.Length < 3 || !IsValidSha(parts[0])) return null;
         return DateTimeOffset.TryParse(parts[2], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-            ? new GitDossiersTip(refName, parts[0], parts[1], date)
+            ? new GitRefTip(resolvedRef, parts[0], parts[1], date)
             : null;
     }
 

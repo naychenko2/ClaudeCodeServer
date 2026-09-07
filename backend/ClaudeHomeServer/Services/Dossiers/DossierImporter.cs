@@ -42,12 +42,12 @@ public class DossierImporter
     private static readonly JsonSerializerOptions IndexJsonOpts = new(JsonSerializerDefaults.Web);
 
     private readonly DossierStore _store;
-    private readonly GitService _git;
+    private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly ILogger<DossierImporter>? _log;
     private readonly int _maxImportBatchEntries;
 
-    public DossierImporter(DossierStore store, GitService git, InstanceSecretsProvider secrets,
+    public DossierImporter(DossierStore store, IGitRefSnapshotStore git, InstanceSecretsProvider secrets,
         ILogger<DossierImporter>? log = null, int maxImportBatchEntries = DefaultMaxImportBatchEntries)
     {
         _store = store;
@@ -63,17 +63,20 @@ public class DossierImporter
     // DossierCaptureState. Ручной импорт идёт без предиката: его границы определяет
     // человек кнопкой. virtual для тестовой симуляции «выгрузка успела за время импорта».
     public virtual async Task<DossiersImportResult> ImportAsync(string ownerId, Project project,
-        CancellationToken ct = default, Func<GitDossiersTip, bool>? stillForeign = null)
+        CancellationToken ct = default, Func<GitRefTip, bool>? stillForeign = null)
     {
         // Tip — автор и ветка-источник для пометки происхождения каждой записи
-        var tip = await _git.GetDossiersTipAsync(ownerId, project.RootPath, ct);
+        var resolved = await _git.ResolveRefAsync(ownerId, project.RootPath,
+            [DossierBranch.Ref, DossierBranch.RemoteRef], ct);
+        if (resolved is null) return new DossiersImportResult(0, 0, BranchFound: false);
+        var tip = await _git.TipAsync(ownerId, project.RootPath, resolved, ct);
         if (tip is null) return new DossiersImportResult(0, 0, BranchFound: false);
 
-        var indexJson = await _git.ReadDossiersFileAsync(ownerId, project.RootPath, IndexPath, ct);
+        var indexJson = await _git.ReadFileAsync(ownerId, project.RootPath, resolved, IndexPath, ct);
         if (indexJson is null)
         {
             _log?.LogWarning("dossiers: импорт проекта {Project}: ветка {Ref} без index.json",
-                project.Id, GitService.DossiersRef);
+                project.Id, DossierBranch.Ref);
             return new DossiersImportResult(0, 0, BranchFound: true);
         }
 
@@ -140,7 +143,7 @@ public class DossierImporter
             string? md;
             try
             {
-                md = await _git.ReadDossiersFileAsync(ownerId, project.RootPath, e.File, ct);
+                md = await _git.ReadFileAsync(ownerId, project.RootPath, resolved, e.File, ct);
             }
             // Путь записи — внешний вход: SafeJoin откажет на выходе за корень репо
             // (traversal), и этот отказ стоит пропустить одной записью, а не партии.
@@ -196,7 +199,7 @@ public class DossierImporter
         at >= MinPlausibleCommittedAt && at <= DateTimeOffset.UtcNow.AddDays(1);
 
     private static ChangeDossier BuildDossier(string ownerId, string projectId, DossierIndexEntry e,
-        string md, GitDossiersTip tip, IReadOnlyList<string> secrets)
+        string md, GitRefTip tip, IReadOnlyList<string> secrets)
     {
         // Редакция — над всем импортируемым содержимым (ветка может приехать с чужой машины
         // со старой версией редактора). Идентичность (sha, sessionId, taskId) — не свободный

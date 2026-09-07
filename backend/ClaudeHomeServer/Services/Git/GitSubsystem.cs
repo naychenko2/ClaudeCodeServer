@@ -31,6 +31,11 @@ public sealed class GitSubsystem : IAppSubsystem
     public void Register(IServiceCollection services, IConfiguration config)
     {
         services.AddSingleton<GitService>();
+        // Generic plumbing произвольной ветки-паспорта (commit-on-plumbing) — теми же
+        // методами пользуются Dossiers (ветка ccs/dossiers/v1) и любая будущая
+        // вертикаль с собственной веткой-паспортом. GitService — единственная реализация,
+        // отдельный экземпляр не заводим (синглтон шарится между интерфейсом и классом).
+        services.AddSingleton<IGitRefSnapshotStore>(sp => sp.GetRequiredService<GitService>());
         services.AddSingleton<GitServerService>();
 
         // Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)

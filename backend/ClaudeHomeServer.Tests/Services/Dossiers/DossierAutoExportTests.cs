@@ -214,7 +214,7 @@ public class DossierAutoExportTests : IDisposable
 
     private async Task<bool> HasBranchAsync(string root)
     {
-        var r = await GitAsync(root, "rev-parse", "--quiet", GitService.DossiersRef);
+        var r = await GitAsync(root, "rev-parse", "--quiet", DossierBranch.Ref);
         return r.Ok && !string.IsNullOrWhiteSpace(r.Stdout);
     }
 
@@ -262,7 +262,7 @@ public class DossierAutoExportTests : IDisposable
         _store.Add(Dossier(user.Id, p.Id, "bb22bb22", "feat: паспорт для автовыгрузки", s.Id));
 
         await AwaitBranchAsync(p.RootPath);
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         // имя файла ветки — 7-символьный префикс sha коммита
         tree.Stdout.Should().Contain("bb22bb2", "паспорт захвата доехал до ветки");
         (await GitAsync(p.RootPath, "status", "--porcelain")).Stdout.Trim().Should()
@@ -285,9 +285,9 @@ public class DossierAutoExportTests : IDisposable
         _store.Add(Dossier(user.Id, p.Id, "dd44dd44", "feat: второй из серии", s.Id));
 
         await AwaitBranchAsync(p.RootPath);
-        (await GitAsync(p.RootPath, "rev-list", "--count", GitService.DossiersRef)).Stdout.Trim()
+        (await GitAsync(p.RootPath, "rev-list", "--count", DossierBranch.Ref)).Stdout.Trim()
             .Should().Be("1", "серия захватов батчится в один экспорт, а не по коммиту на паспорт");
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         tree.Stdout.Should().Contain("cc33cc3").And.Contain("dd44dd4",
             "оба паспорта серии вошли в единственный коммит");
     }
@@ -309,7 +309,7 @@ public class DossierAutoExportTests : IDisposable
         _store.Add(Dossier(user.Id, p.Id, "ff66ff66", "feat: остаётся", ok.Id));
 
         await AwaitBranchAsync(p.RootPath);
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         tree.Stdout.Should().Contain("ff66ff6");
         tree.Stdout.Should().NotContain("ee55ee5",
             "паспорт чата с ExcludeFromDossiers отсекается на автовыгрузке, как и на ручной");
@@ -322,18 +322,18 @@ public class DossierAutoExportTests : IDisposable
 
     private async Task WriteForeignBranchAsync(Project p, params ChangeDossier[] dossiers)
     {
-        var files = new List<GitDossierFile>();
+        var files = new List<GitSnapshotFile>();
         var entries = new List<DossierIndexEntry>();
         foreach (var d in dossiers)
         {
             var path = DossierGitExporter.DossierPath(d.CommittedAt, d.CommitSha, d.CommitSubject);
-            files.Add(new GitDossierFile(path, DossierGitExporter.FormatDossier(d, [])));
+            files.Add(new GitSnapshotFile(path, DossierGitExporter.FormatDossier(d, [])));
             entries.Add(new DossierIndexEntry(d.CommitSha, path, d.CommitSubject, d.CommittedAt,
                 Discussion: null, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
         }
-        files.Add(new GitDossierFile("index.json",
+        files.Add(new GitSnapshotFile("index.json",
             JsonSerializer.Serialize(new DossierBranchIndex(1, entries), IndexOpts)));
-        await _git.WriteDossiersBranchAsync(p.OwnerId, p.RootPath, files, "test: ветка соседа");
+        await _git.WriteSnapshotAsync(p.OwnerId, p.RootPath, DossierBranch.Ref, files, "test: ветка соседа", DossierBranch.Identity);
     }
 
     // --- (д) петля автовыгрузка→автоимпорт (разбор 23.08): tip, созданный нашей
@@ -415,7 +415,7 @@ public class DossierAutoExportTests : IDisposable
         await auto.ExportSafeAsync(user.Id, p.Id);
 
         _llmCalls.Should().BeEmpty("автовыгрузка не снимает конспекты — модель не зовётся ни разу");
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         tree.Stdout.Should().Contain("ab12cd3").And.Contain("ef56ab7", "паспорта в ветке");
         tree.Stdout.Should().Contain("discussions/",
             "уже снятый конспект из стора едет в ветку и на авто-пути");
@@ -426,7 +426,7 @@ public class DossierAutoExportTests : IDisposable
     // паспортов — фон обязан молчать, когда ветка может содержать чужое. ---
 
     private async Task<string> BranchTipAsync(string root) =>
-        (await GitAsync(root, "rev-parse", GitService.DossiersRef)).Stdout.Trim();
+        (await GitAsync(root, "rev-parse", DossierBranch.Ref)).Stdout.Trim();
 
     // (а) чужой tip (git pull соседа/второй машины): автовыгрузка не пишет ничего,
     // ветка не изменилась — полный снапшот стёр бы записи соседа
@@ -446,7 +446,7 @@ public class DossierAutoExportTests : IDisposable
 
         (await BranchTipAsync(p.RootPath)).Should().Be(tipBefore,
             "чужой tip — фон не пишет в ветку ничего, судьбу ветки решает ручная кнопка «Выгрузить»");
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         tree.Stdout.Should().NotContain("88bb88",
             "свой паспорт не доехал до чужой ветки: записи соседа не затираются снапшотом");
     }
@@ -467,10 +467,10 @@ public class DossierAutoExportTests : IDisposable
         _store.Add(Dossier(user.Id, p.Id, "a0d0a0d0", "feat: второй паспорт", s.Id));
         await auto.ExportSafeAsync(user.Id, p.Id);
 
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         tree.Stdout.Should().Contain("99cc99c").And.Contain("a0d0a0d",
             "tip помечен MarkOwnTip после первой выгрузки — вторая пишет поверх как раньше");
-        (await GitAsync(p.RootPath, "rev-list", "--count", GitService.DossiersRef)).Stdout.Trim()
+        (await GitAsync(p.RootPath, "rev-list", "--count", DossierBranch.Ref)).Stdout.Trim()
             .Should().Be("2", "каждая выгрузка с изменившимся деревом — отдельный коммит");
     }
 
@@ -486,10 +486,10 @@ public class DossierAutoExportTests : IDisposable
         await InitBareRemoteAsync(p.RootPath, "remote_gate_orphan.git");
         await WriteForeignBranchAsync(p,
             Dossier("neighbor-owner", p.Id, "11bb22cc", "feat: паспорт соседа", "sess-neighbor"));
-        var push = await GitAsync(p.RootPath, "push", "origin", GitService.DossiersRef);
+        var push = await GitAsync(p.RootPath, "push", "origin", DossierBranch.Ref);
         push.Ok.Should().BeTrue("фикстура: ветка запушена в origin: {0}", push.Stderr);
         // Сносим локальную копию — репо, куда ветку привёз fetch: remote-tracking остаётся
-        (await GitAsync(p.RootPath, "update-ref", "-d", GitService.DossiersRef)).Ok.Should().BeTrue();
+        (await GitAsync(p.RootPath, "update-ref", "-d", DossierBranch.Ref)).Ok.Should().BeTrue();
 
         _store.Add(Dossier(user.Id, p.Id, "33dd44ee", "feat: свой паспорт", s.Id));
         await auto.ExportSafeAsync(user.Id, p.Id);
@@ -543,7 +543,7 @@ public class DossierAutoExportTests : IDisposable
 
         (await HasBranchAsync(p.RootPath)).Should()
             .BeTrue("ветки не было нигде — первая выгрузка на этой машине, фон создаёт её");
-        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var tree = await GitAsync(p.RootPath, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         tree.Stdout.Should().Contain("77ff88a", "паспорт доехал до ветки");
     }
 
@@ -584,11 +584,11 @@ public class DossierAutoExportTests : IDisposable
 
         // А вот в origin её быть не должно. ls-remote --heads возвращает ровно
         // запрошенный ref, если он есть в remote: пустой stdout — гарантия «push не было».
-        var ls = await GitAsync(p.RootPath, "ls-remote", "--heads", "origin", GitService.DossiersRef);
+        var ls = await GitAsync(p.RootPath, "ls-remote", "--heads", "origin", DossierBranch.Ref);
         ls.Ok.Should().BeTrue("ls-remote не должен падать: {0}", ls.Stderr);
         ls.Stdout.Trim().Should().BeEmpty(
             "ветка {0} в origin — это автоматический push, а инвариант «push никогда не автоматический»",
-            GitService.DossiersRef);
+            DossierBranch.Ref);
 
         // Контрольный: даже без фильтра по ref в origin нет ни одной ветки
         var lsAll = await GitAsync(p.RootPath, "ls-remote", "--heads", "origin");

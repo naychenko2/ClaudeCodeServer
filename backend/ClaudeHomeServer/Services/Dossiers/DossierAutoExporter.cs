@@ -28,7 +28,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //     паспорта и уже снятые конспекты из стора, недостающие догонит ручная выгрузка
 //     (разбор 23.08).
 // Конфликт с ручной кнопкой «Выгрузить» не разрешается отдельно — их сериализует
-// лок per-root в GitService.WriteDossiersBranchAsync.
+// лок per-root в GitService.WriteSnapshotAsync.
 //
 // Tip, созданный выгрузкой, помечается своим в DossierCaptureState (MarkOwnTip):
 // автоимпорт по нему не запускается — петля «автовыгрузка → автоимпорт» разомкнута
@@ -38,7 +38,7 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly DossierStore _store;
     private readonly ProjectManager _projects;
     private readonly SessionManager _sessions;
-    private readonly GitService _git;
+    private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly DossierDiscussionService _discussions;
     private readonly FeatureFlagService _flags;
@@ -48,7 +48,7 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly MemoryDifyDebouncer _debounce;
 
     public DossierAutoExporter(DossierStore store, ProjectManager projects, SessionManager sessions,
-        GitService git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
+        IGitRefSnapshotStore git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
         FeatureFlagService flags, DossierCaptureState state, IConfiguration config,
         ILogger<DossierAutoExporter>? log = null)
     {
@@ -119,7 +119,7 @@ public sealed class DossierAutoExporter : IHostedService
                 case DossierAutoExportGate.ForeignTip:
                     _log?.LogInformation(
                         "dossiers: автовыгрузка проекта {Project} пропущена: tip {Ref} не создан нашей выгрузкой — ветку трогает только ручная выгрузка",
-                        project.Id, GitService.DossiersRef);
+                        project.Id, DossierBranch.Ref);
                     return;
                 case DossierAutoExportGate.OriginOnly:
                     _log?.LogInformation(
@@ -142,7 +142,7 @@ public sealed class DossierAutoExporter : IHostedService
             if (result.Committed)
                 _log?.LogInformation(
                     "dossiers: автовыгрузка проекта {Project} в {Ref}: {Count} паспортов, коммит {Sha}",
-                    project.Id, GitService.DossiersRef, result.Exported, result.CommitSha);
+                    project.Id, DossierBranch.Ref, result.Exported, result.CommitSha);
         }
         catch (Exception ex)
         {

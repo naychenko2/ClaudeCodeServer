@@ -3083,6 +3083,14 @@ export interface McpServer {
   // CatalogRef запись заведена руками. Сама строка запуска лежит в command/args/url —
   // CatalogRef её НЕ дублирует, только помечает происхождение
   catalogRef?: McpCatalogRef | null;
+  // Группа встроенного сервера продукта: задаётся только для ключей из
+  // McpRegistry.ReservedKeys / IntegrationKeys / pmem_*. У интеграций (dify,
+  // fal-ai, glif, higgsfield) каскад «включить в проекте / выдать персоне»
+  // снят — запись доставляется во все чаты по факту OAuth-входа. Значение
+  // присылает бэкенд через McpRegistry.BuiltinGroupOf, фронту — источник
+  // правды для фильтрации «Доступа». Не-null для встроенных, null/undefined
+  // для обычных записей реестра.
+  group?: McpBuiltinGroup | null;
 }
 
 // Указатель на каталожную запись в McpServerDto и McpServerUpsert. Поля стабильны

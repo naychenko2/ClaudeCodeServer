@@ -44,7 +44,11 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
         string? codeGraphBlock = null;
         try
         {
-            codeGraphBlock = await _provider.GetSliceAsync(sessionContext.RootPath);
+            // RootPath — рабочая директория сессии (для worktree-чата это ветка чата);
+            // MainRootPath — корень ГЛАВНОЙ ветки проекта, fallback для slice пока граф
+            // worktree-ветки ещё не построен (ADR-003). Совпадение корней — обычный чат
+            // без worktree: GetSliceAsync сводит fallback к no-op.
+            codeGraphBlock = await _provider.GetSliceAsync(sessionContext.RootPath, sessionContext.MainRootPath);
         }
         catch (Exception ex)
         {

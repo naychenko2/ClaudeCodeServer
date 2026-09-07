@@ -3650,7 +3650,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
             Events: _turnEvents,
             WatchMcp: watchMcp,
-            WebSearchMcp: webSearchMcp));
+            WebSearchMcp: webSearchMcp,
+            // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
+            // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
+            // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
+            MainRootPath: projectRoot));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4948,7 +4952,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
-                WebSearchMcp: webSearchMcp);
+                WebSearchMcp: webSearchMcp,
+                // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
+                MainRootPath: null);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -4957,7 +4963,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ?? throw new InvalidOperationException("Проект не найден");
             var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
             var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
-            var rootPath = EffectiveRoot(entry.Info, project.RootPath);
+            // Корень проекта запоминаем ДО EffectiveRoot: у worktree-чата это и есть fallback
+            // для slice графа (ADR-003). Совпадение с rootPath — чат без worktree, fallback
+            // сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
+            var projectRoot = project.RootPath;
+            var rootPath = EffectiveRoot(entry.Info, projectRoot);
             var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
             var watchMcp = BuildWatchContext(project.OwnerId);
             var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
@@ -5002,7 +5012,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
-                WebSearchMcp: webSearchMcp);
+                WebSearchMcp: webSearchMcp,
+                // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
+                // worktree-ветки не построен (ADR-003).
+                MainRootPath: projectRoot);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -20,21 +20,29 @@ public sealed record PromptSectionContribution(
 // контрибьютором. НЕ несёт удалённые 6 полей LlmSessionContext (провайдеры Func<…>) и
 // DossierTrailerHint — контрибьюторы получают эти данные сами из своих DI-зависимостей
 // и Session. per-owner изоляция — через Session.OwnerId.
+//
+// MainRootPath — корень ГЛАВНОЙ ветки проекта (project.RootPath), нужен отдельно от
+// RootPath (рабочая директория сессии): у чата с отдельным worktree они расходятся, и
+// CodeGraphContributor использует MainRootPath как fallback для slice графа (ADR-003),
+// пока граф worktree-ветки ещё не построен. null — чат вне проекта, fallback не
+// применяется; равен RootPath — обычный чат без worktree, fallback сводится к no-op
+// (CodeGraphPromptProvider.GetSliceAsync это уже учитывает).
 public sealed record PromptSessionContext(
     Session Session,
     string? OwnerId,
     Persona? Persona,
     string? RootPath,
+    string? MainRootPath = null,
     // Снимки «подключён ли MCP-сервер сессии» — нужны для IsEnabled: recall-notes
     // работает только при NotesMcp, recall-memory — только при MemoryMcp. Без этих
     // флагов гейт был бы размазан по контрибьюторам и терялся бы при рефакторинге
     // (golden-фикстура 4 ловит именно потерю гейтинга).
-    bool HasNotesMcp,
-    bool HasMemoryMcp,
-    bool HasWorkspaceMcp,
+    bool HasNotesMcp = false,
+    bool HasMemoryMcp = false,
+    bool HasWorkspaceMcp = false,
     // Секции workspace-MCP, реально смонтированные сессией (для PersonaBindings:
     // привязки типов без своей секции пропускаются).
-    IReadOnlyList<string> WorkspaceSections);
+    IReadOnlyList<string>? WorkspaceSections = null);
 
 // Контракт контрибьютора секции системного промпта (этап 2 плана «Шина событий хода»,
 // ADR-013). Реестр собирается Filter-событием prompt/assembling; регистрация — через

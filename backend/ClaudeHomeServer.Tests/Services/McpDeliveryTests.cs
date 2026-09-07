@@ -64,4 +64,45 @@ public class McpDeliveryTests
         McpDelivery.ShouldDeliver(record, [], isProjectChat: true, personaGranted: true, readOnly: false)
             .Should().BeTrue();
     }
+
+    // --- IsBuiltinDelivered: продуктовая встроенная интеграция (Higgsfield) ---
+    //
+    // Каскад проекта/персоны снят: решение зависит ТОЛЬКО от рубильника записи и
+    // RO-гейта. Ни McpServersOn, ни personaGranted в формуле не участвуют — иначе
+    // владелец, вошедший в Higgsfield, терял бы сервер на каждом чате, не включённом
+    // вручную в проекте/персоне.
+    [Theory]
+    [InlineData(false, false, false, false)]  // выключен — не едет
+    [InlineData(true,  true,  false, false)]  // RO без явного разрешения — не едет
+    [InlineData(true,  false, false, true)]   // обычная персона — едет
+    [InlineData(true,  true,  true,  true)]   // RO с явным разрешением — едет
+    public void IsBuiltinDelivered_Матрица(bool enabled, bool readOnly, bool allowReadOnly, bool expected)
+    {
+        var record = new McpServerRecord
+        {
+            Key = "higgsfield",
+            Enabled = enabled,
+            AllowReadOnlyPersonas = allowReadOnly,
+        };
+
+        McpDelivery.IsBuiltinDelivered(record, readOnly).Should().Be(expected);
+    }
+
+    // Допущение для встроенной записи: ключ и транспорт не смотрят на ход и проект,
+    // поэтому RO-гейт — единственный фильтр поверх рубильника. AllowOutsideProjects
+    // НЕ участвует (у записи он может быть выставлен реестром, но для встроенной
+    // интеграции он не имеет смысла).
+    [Fact]
+    public void IsBuiltinDelivered_AllowOutsideProjectsИгнорируется()
+    {
+        var record = new McpServerRecord
+        {
+            Key = "higgsfield",
+            Enabled = true,
+            AllowOutsideProjects = false, // явно выключен
+        };
+
+        McpDelivery.IsBuiltinDelivered(record, readOnly: false).Should().BeTrue(
+            "IsBuiltinDelivered — продуктовая интеграция: AllowOutsideProjects из каскада реестра не применяется");
+    }
 }

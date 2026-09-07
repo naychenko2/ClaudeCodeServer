@@ -229,6 +229,82 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Продуктовая встроенная интеграция Higgsfield доставляется НЕ по каскаду реестра
+    /// (McpServersOn/McpServerGranted), а собственной чистой формулой
+    /// McpDelivery.IsBuiltinDelivered: рубильник записи + RO-гейт. Возврат к
+    /// McpDelivery.ShouldDeliver в этой ветке был бы откатом заявки
+    /// «продуктовая интеграция, не запись реестра» и обязан ронять тест.
+    /// </summary>
+    [SkippableFact]
+    public void Хиггсфилд_ПродуктоваяИнтеграция_КаскадРеестраНеПрименяется()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!), "private void TryAddHiggsfieldBuiltin");
+
+        // Решение принимает отдельная точка — IsBuiltinDelivered
+        body.Should().Contain("IsBuiltinDelivered(",
+            "продуктовая интеграция: гейт — McpDelivery.IsBuiltinDelivered, без проекта/персоны");
+        // Каскад реестра (McpServersOn / McpServerGranted) здесь НЕ применяется
+        body.Should().NotContain("McpServerGranted(",
+            "выдача сервера персоне — каскад реестра, к встроенной интеграции не относится");
+        body.Should().NotContain("McpServersOn",
+            "McpServersOn — каскад реестра, к встроенной интеграции не относится");
+        body.Should().NotContain("Mcp.McpDelivery.ShouldDeliver(",
+            "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
+        // Флаг владельца и живой OAuth сохраняем
+        body.Should().Contain("FeatureFlagKeys.Higgsfield",
+            "фич-флаг higgsfield проверяется на каждый ход");
+        body.Should().Contain("EnsureFresh",
+            "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
+        // RO-гейт сохранён через IsBuiltinDelivered — требование точное: «readOnly» даёт
+        // и сигнатура bool readOnly, поэтому проверять «любое вхождение readOnly» бессмысленно,
+        // мутация «захардкодить readOnly: false на месте вызова» пройдёт. Требуем точный вызов
+        // IsBuiltinDelivered(hf, readOnly) — иначе проводка «RO персоны → гейт» не закрыта.
+        body.Should().Contain("IsBuiltinDelivered(hf, readOnly)",
+            "readOnly персоны обязан доезжать до гейта, а не гаситься литералом на месте вызова");
+    }
+
+    /// <summary>
+    /// Записи встроенных интеграций (IntegrationKeys, сейчас — dify/fal-ai/glif/higgsfield)
+    /// доставляются собственной веткой (TryAddHiggsfieldBuiltin и аналоги), а НЕ реестровым
+    /// циклом BuildExternalMcpProvider. Иначе фич-флаг higgsfield становится «второй точкой
+    /// истины»: higgsfield лежит в реестре и включён в проекте/персоне — выключение флага
+    /// сервер не снимет, он доедет реестровым путём.
+    /// </summary>
+    [SkippableFact]
+    public void Хиггсфилд_РеестровыйЦикл_ИсключаетВстроенныеИнтеграции()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        // Тело реестрового цикла обязано знать, что ключи из IntegrationKeys пропускаются —
+        // иначе путь «включено в проекте/персоне» доставляет higgsfield в обход фич-флага.
+        body.Should().Contain("IntegrationKeys",
+            "реестровый цикл BuildExternalMcpProvider обязан пропускать записи встроенных "
+            + "интеграций — их доставляет TryAddHiggsfieldBuiltin по фич-флагу и RO-гейту, "
+            + "а каскад «проект/персона» к ним не применяется");
+
+        // Гейт ОБЯЗАН сравнивать ключ без учёта регистра: McpRegistry грузит data/mcp-servers.json
+        // через JsonFileStore.Load как есть, минуя нормализацию Create/CreateBuiltIn/Update,
+        // и запись вроде «HIGGSFIELD» проскользнёт в реестр (ручная правка файла, восстановление
+        // из бэкапа, миграция). Array.IndexOf сравнивает по Ordinal — запись поедет реестровым
+        // путём мимо фич-флага, и мы получим ровно ту поломку, которую чинили волной 2.
+        body.Should().Contain("IntegrationKeys.Contains(",
+            "гейт должен использовать Contains, а не Array.IndexOf — последний case-sensitive "
+            + "и не ловит ключ, попавший в реестр мимо нормализации");
+        body.Should().Contain("StringComparer.OrdinalIgnoreCase",
+            "CompareMode OrdinalIgnoreCase — единственное правило, общее с McpRegistry.BuiltinGroupOf, "
+            + "иначе классификатор экрана «MCP-серверы» и гейт реестрового цикла разойдутся");
+        body.Should().NotContain("Array.IndexOf(Mcp.McpRegistry.IntegrationKeys",
+            "Array.IndexOf по Ordinal — возврат к поломке волны 2 через чёрный ход JsonFileStore.Load");
+    }
+
+    /// <summary>
     /// Секции-надстройки с пресетом по роли (git/kb в workspace, manage/automation в сервере
     /// персон): решаются ТОЛЬКО по персоне через единую точку SectionEnabled. Свой набор
     /// инструментов у каждой, поэтому зависимость от хода тут так же смертельна.

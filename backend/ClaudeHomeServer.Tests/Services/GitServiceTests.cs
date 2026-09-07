@@ -692,4 +692,129 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         (await _git.RunAsync(null, _repo, ["rev-list", "--count", GitService.DossiersRef])).Stdout.Trim()
             .Should().Be("2", "в ветке коммит первого экспорта и один добавочный");
     }
+
+    // ---------- RepoSnapshot / IsAncestor / CommitStat / ParentCount (волна 1 типизации) ----------
+
+    [Fact]
+    public async Task RepoSnapshot_ПустоеДерево_ПустыеПути_И_КороткийSha()
+    {
+        // В _repo уже есть начальный коммит из InitializeAsync
+        var snap = await _git.RepoSnapshotAsync(null, _repo);
+        snap.DirtyPaths.Should().BeEmpty();
+        snap.ShortHeadSha.Should().NotBeNullOrEmpty().And.HaveLength(7);
+        snap.Error.Should().BeNull("успешный git status — поле Error обязано быть пустым");
+    }
+
+    // Сценарий «git status упал»: выкатка обязана блокироваться гейтом GitFailed, а не
+    // считать дерево чистым по факту провала. Имитируем битый .git переключением core.bare=true
+    // — git отказывается выполнять status в bare-репозитории с «fatal: This operation must be
+    // run in a work tree». Конструктор теста создаёт свежий _repo на каждый прогон, поэтому
+    // config не утекает в другие тесты.
+    [Fact]
+    public async Task RepoSnapshot_GitStatusУпал_ErrorЗаполнен_ПутиНеДоверяем()
+    {
+        await RawGit("config", "core.bare", "true");
+
+        var snap = await _git.RepoSnapshotAsync(null, _repo);
+
+        snap.Error.Should().NotBeNullOrEmpty("падение git status обязано превращаться в Error");
+        snap.DirtyPaths.Should().BeEmpty("пустой список при сбое status — это НЕ чистое дерево");
+        // sha нерелевантен при сбое status; проверим только, что нет исключения и нет ложного «дерево чистое»
+    }
+
+    [Fact]
+    public async Task RepoSnapshot_ГрязноеДерево_ВозвращаетПути()
+    {
+        // Поверх начального коммита: правка существующего + новый untracked
+        await File.WriteAllTextAsync(Path.Combine(_repo, "новый.txt"), "правка\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "мусор\n");
+
+        var snap = await _git.RepoSnapshotAsync(null, _repo);
+        snap.DirtyPaths.Should().BeEquivalentTo(["новый.txt", "a.txt"]);
+        snap.ShortHeadSha.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task RepoSnapshot_НеРепозиторий_ПустойСнапшот()
+    {
+        var empty = Path.Combine(Path.GetTempPath(), "gitsvc_notrepo_" + Guid.NewGuid().ToString("N"));
+        _extraDirs.Add(empty);
+        Directory.CreateDirectory(empty);
+
+        var snap = await _git.RepoSnapshotAsync(null, empty);
+        snap.DirtyPaths.Should().BeEmpty();
+        snap.ShortHeadSha.Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseDirty_РазбираетВсеФорматы_И_ПустойВвод()
+    {
+        // Переехал из DeployHost: раньше жил там, теперь парсер живёт у источника команды
+        var files = GitService.ParseDirty(
+            " M frontend/src/lib/design.ts\n?? docs/adr/ADR-010-deploy-from-chat.md\nR  a.txt -> b.txt\n");
+        files.Should().BeEquivalentTo(
+            ["frontend/src/lib/design.ts", "docs/adr/ADR-010-deploy-from-chat.md", "a.txt -> b.txt"]);
+
+        GitService.ParseDirty("").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task IsAncestor_ПредокВозвращаетTrue_ЧужойВозвращаетFalse()
+    {
+        // Начальный коммит из InitializeAsync — первый; добавляем второй поверх него
+        var first = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+        await File.WriteAllTextAsync(Path.Combine(_repo, "b.txt"), "b2\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "второй");
+
+        (await _git.IsAncestorAsync(null, _repo, first, "HEAD")).Should().BeTrue();
+        (await _git.IsAncestorAsync(null, _repo, "0000000000000000000000000000000000000000", "HEAD"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CommitStat_ИзменённыйФайл_СодержитDiffStat()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "строка один\nстрока два\n");
+        await _git.StageAllAsync(null, _repo);
+        var sha = await _git.CommitAsync(null, _repo, "правка a.txt");
+
+        var stat = await _git.CommitStatAsync(null, _repo, sha);
+        stat.Should().Contain("a.txt");
+    }
+
+    [Fact]
+    public async Task ParentCount_ОбычныйКоммитВозвращает1_Корневой0_Мерж2()
+    {
+        // Корневой: отдельный репо с ОДНИМ коммитом
+        var fresh = Path.Combine(Path.GetTempPath(), "gitsvc_parentcount_" + Guid.NewGuid().ToString("N"));
+        _extraDirs.Add(fresh);
+        Directory.CreateDirectory(fresh);
+        await RawGitIn(fresh, "init", "-b", "main");
+        await RawGitIn(fresh, "config", "user.email", "t@t");
+        await RawGitIn(fresh, "config", "user.name", "T");
+        await File.WriteAllTextAsync(Path.Combine(fresh, "root.txt"), "корень\n");
+        await _git.StageAllAsync(null, fresh);
+        var rootSha = await _git.CommitAsync(null, fresh, "root");
+        (await _git.ParentCountAsync(null, fresh, rootSha)).Should().Be(0);
+
+        // Обычный поверх корневого
+        await File.WriteAllTextAsync(Path.Combine(fresh, "second.txt"), "второй\n");
+        await _git.StageAllAsync(null, fresh);
+        await _git.CommitAsync(null, fresh, "второй");
+        var second = (await _git.RunAsync(null, fresh, ["rev-parse", "HEAD"])).Stdout.Trim();
+        (await _git.ParentCountAsync(null, fresh, second)).Should().Be(1);
+
+        // Merge-коммит: запускаем сырой git merge в основном репо
+        var headBefore = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+        await RawGit("checkout", "-b", "feature/parentcount");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "feature.txt"), "из ветки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "правка в feature");
+        await _git.CheckoutAsync(null, _repo, "main");
+        await RawGit("merge", "--no-ff", "feature/parentcount");
+        var mergeSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
+        (await _git.ParentCountAsync(null, _repo, mergeSha)).Should().Be(2);
+        headBefore.Should().NotBe(mergeSha, "merge-коммит отличается от предыдущего HEAD");
+    }
 }

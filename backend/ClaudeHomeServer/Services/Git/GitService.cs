@@ -45,6 +45,13 @@ public sealed record GitDossiersWriteResult(bool Created, string CommitSha);
 // данных при обратном чтении ветки (импорт «Историй решений»).
 public sealed record GitDossiersTip(string Ref, string CommitSha, string Author, DateTimeOffset Date);
 
+// Срез рабочего дерева: short HEAD (для UI/журнала) + список грязных путей (для гейта
+// «можно ли выкатить as-is»). shortHeadSha = null для пустого репо или при сбое rev-parse.
+// Error — null при чистом ответе git или пустом репо; непустое значение означает «команда
+// git status --porcelain не выполнилась», и Empty DirtyPaths тогда НЕ означает чистое
+// дерево: вызывающий обязан трактовать такой снапшот как отказ, а не как зелёный свет.
+public sealed record GitRepoSnapshot(string? ShortHeadSha, IReadOnlyList<string> DirtyPaths, string? Error = null);
+
 // Единая точка ЛОКАЛЬНЫХ git-операций над рабочим деревом проекта.
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
 // git исполняется внутри песочницы cc-sandbox с маппингом путей, для local — на хосте.
@@ -333,6 +340,104 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         }
         return list;
     }
+
+    // Срез репозитория для гейта «можно ли выкатить как есть»: short HEAD (для журнала
+    // выкатки) + список грязных путей. Два дешёвых вызова, без блокировки. Пустой репо
+    // или сбой rev-parse → ShortHeadSha = null; сбой status → Error заполнен stderr'ом,
+    // а DirtyPaths остаётся пустым — это «команда не выполнилась», а не «дерево чистое»,
+    // и DeployHost обязан различать эти два состояния (иначе гейт грязного дерева
+    // пропустит выкатку с битым .git, локом или диском). Строка porcelain — «XY путь»:
+    // статус фиксированной ширины 2 + пробел. Переименование приходит как «old -> new» —
+    // оставляем как есть, читать это человеку.
+    public async Task<GitRepoSnapshot> RepoSnapshotAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return new GitRepoSnapshot(null, [], null);
+        var status = await RunAsync(ownerId, root, ["status", "--porcelain"], ct: ct);
+        if (!status.Ok)
+            return new GitRepoSnapshot(null, [], FirstLine(status.Stderr) ?? "git status --porcelain завершился с ошибкой");
+        var dirty = ParseDirty(status.Stdout);
+        var head = await RunAsync(ownerId, root, ["rev-parse", "--short", "HEAD"], ct: ct);
+        var sha = head.Ok && head.Stdout.Length > 0 ? head.Stdout.Trim() : null;
+        return new GitRepoSnapshot(sha, dirty, null);
+    }
+
+    // «ancestorSha» — предок «revOrSha» (merge-base --is-ancestor). Используется для
+    // достижимости коммита паспорта от текущего HEAD. Несуществующий объект даёт exit 1
+    // (= false), таймаут/сеть — GitCommandException: на нём возвращаем true, ложный отказ
+    // безопаснее ложного слияния двух паспортов (конвенция DossierCaptureService).
+    // Валидация ревизий под try: некорректный ввод — тоже GitCommandException, и наружу
+    // он уходить не должен, иначе вызывающий получит «не удалось» вместо безопасного true.
+    public async Task<bool> IsAncestorAsync(string? ownerId, string root, string ancestorSha, string revOrSha, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return true;
+        try
+        {
+            ValidateRevision(ancestorSha);
+            ValidateRevision(revOrSha);
+            var r = await RunAsync(ownerId, root, ["merge-base", "--is-ancestor", ancestorSha, revOrSha], ct: ct);
+            return r.Ok;
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogDebug(ex, "IsAncestor: git merge-base --is-ancestor {Ancestor} {Rev} не удался", ancestorSha, revOrSha);
+            return true;
+        }
+    }
+
+    // Сводка изменений коммита (--stat) — снапшот diff'а в паспорт. Ошибка → пустая строка:
+    // листинг паспорта не должен падать из-за метрики diff'а, как и CountRecentCommitsAsync.
+    public async Task<string> CommitStatAsync(string? ownerId, string root, string sha, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root) || !IsValidSha(sha)) return "";
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["show", "--stat", "--pretty=format:", sha], ct: ct);
+            return r.Ok ? r.Stdout.Trim() : "";
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogDebug(ex, "CommitStat: git show --stat {Sha} не удался", sha);
+            return "";
+        }
+    }
+
+    // Число родителей коммита — надёжный признак merge (2+), в отличие от текста subject.
+    // %P — родительские sha через пробел. Ошибка → 1 (обычный): ложный merge-фильтр безопаснее
+    // потери коммита (конвенция DossierCaptureService).
+    //
+    // ПОВЕДЕНЧЕСКИЙ ФИКС относительно старого DossierCaptureService.GetParentCountAsync:
+    // там стоял «r.Stdout.Split(' ')» без Trim, и на root-коммите git отдаёт «\n» — Split
+    // давал массив из одного пустого элемента и метод возвращал 1 вместо корректного 0.
+    // Здесь — Trim перед Split, поэтому root-коммит даёт 0. Наблюдаемое поведение прода не
+    // меняется: единственный потребитель (ShouldSkipCommit) трактует 0 и 1 одинаково,
+    // но семантика «merge vs не-merge» теперь корректна с самого первого коммита.
+    public async Task<int> ParentCountAsync(string? ownerId, string root, string sha, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root) || !IsValidSha(sha)) return 1;
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["show", "-s", "--format=%P", sha], ct: ct);
+            if (!r.Ok) return 1;
+            // git всегда печатает трейлинг-перевод строки: для root-коммита stdout = "\n",
+            // и без Trim Split даст 1 лишний элемент. CommitStatAsync использует тот же
+            // приём (Trim) — единый подход к хвостовому \n.
+            return r.Stdout.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogDebug(ex, "ParentCount: git show {Sha} не удался", sha);
+            return 1;
+        }
+    }
+
+    // Парсер «грязных» путей из porcelain-вывода status: «XY путь», «?? путь», «R old -> new».
+    // Префикс XY (или ??) — фиксированной ширины 2 + пробел (= 3 символа), дальше путь.
+    internal static IReadOnlyList<string> ParseDirty(string stdout) =>
+        [.. stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.TrimEnd('\r'))
+            .Where(l => l.Length > 3)
+            .Select(l => l[3..].Trim())
+            .Where(p => p.Length > 0)];
 
     // sha валидируем формально (hex 6-40) — защита от передачи опций/ссылок вместо хеша
     private static bool IsValidSha(string sha) =>

@@ -236,15 +236,8 @@ public sealed class DossierCaptureService : BackgroundService
     // Недостижимость — оба сигнала дают один и тот же ExitCode != 0 (несуществующий объект
     // после gc тоже не «ancestor»). Ошибка вызова git (таймаут/сеть) → консервативно true
     // (достижим): ложный отказ от переякорения безопаснее ложного слияния двух паспортов.
-    private async Task<bool> IsReachableAsync(string ownerId, string root, string sha)
-    {
-        try
-        {
-            var r = await _git.RunAsync(ownerId, root, ["merge-base", "--is-ancestor", sha, "HEAD"]);
-            return r.Ok;
-        }
-        catch { return true; }
-    }
+    private Task<bool> IsReachableAsync(string ownerId, string root, string sha) =>
+        _git.IsAncestorAsync(ownerId, root, sha, "HEAD");
 
     private async Task CaptureNewAsync(Project project, string root, string ownerId, Session session,
         string? taskId, GitCommitRaw commit)
@@ -354,15 +347,8 @@ public sealed class DossierCaptureService : BackgroundService
         return best;
     }
 
-    private async Task<string> GetDiffStatAsync(string ownerId, string root, string sha)
-    {
-        try
-        {
-            var r = await _git.RunAsync(ownerId, root, ["show", "--stat", "--pretty=format:", sha]);
-            return r.Ok ? r.Stdout.Trim() : "";
-        }
-        catch (Exception ex) { _log.LogDebug(ex, "dossiers: git show --stat {Sha}", sha); return ""; }
-    }
+    private Task<string> GetDiffStatAsync(string ownerId, string root, string sha) =>
+        _git.CommitStatAsync(ownerId, root, sha);
 
     // Реплики хода отбираются по времени коммита, а не «последние N»: сессия живёт сутками и
     // ведёт несколько дел подряд, и хвост подобрал бы соседнее (блокер «зачем про чужое дело»).
@@ -469,16 +455,8 @@ public sealed class DossierCaptureService : BackgroundService
     // стандартные автомержи «Merge branch …» conventional-типом не разбираются и фильтром по
     // типу не ловятся. %P — родительские sha через пробел (0 = корневой, 1 = обычный, 2+ = merge).
     // Ошибка вызова → консервативно 1 (обычный): ложный паспорт на merge безопаснее потери коммита.
-    private async Task<int> GetParentCountAsync(string ownerId, string root, string sha)
-    {
-        try
-        {
-            var r = await _git.RunAsync(ownerId, root, ["show", "-s", "--format=%P", sha]);
-            if (!r.Ok) return 1;
-            return r.Stdout.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
-        }
-        catch { return 1; }
-    }
+    private Task<int> GetParentCountAsync(string ownerId, string root, string sha) =>
+        _git.ParentCountAsync(ownerId, root, sha);
 
     private async Task<List<string>> AnchorSymbolsAsync(string root, List<string> files, string ownerId)
     {

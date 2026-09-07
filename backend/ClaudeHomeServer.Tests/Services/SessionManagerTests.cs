@@ -3979,6 +3979,12 @@ public class SessionManagerTests : IDisposable
     private static void SetTeamTurnFromHuman(object entry, bool value) =>
         entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
 
+    // Баг b63fd8ea: метка подавления гарда живёт на SessionEntry. Для теста «дольше порога»
+    // сдвигаем её в прошлое через рефлексию — ShouldSuppressAsyncAgentStallGuard её
+    // потом прочитает и решит, что подавление истекло.
+    private static void SetAsyncAgentStallSince(object entry, DateTime? value) =>
+        entry.GetType().GetField("AsyncAgentStallSince")!.SetValue(entry, value);
+
     // --- Этап 4 / шаг 1в: тесты проводки turn/completed для HandleTeamTurnEndAsync ---
     // Каждый тест идёт полным продовым путём: InvokeOnMessageAsync кладёт план в
     // LastTeamTurnEnds при терминале хода, PublishTurnCompletedAsync публикует событие на
@@ -6581,6 +6587,434 @@ public class SessionManagerTests : IDisposable
             "ход, оставивший живого async-субагента, — это работа, а не тупик координатора");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
             "стадия не ушла в AwaitingDecision по ложной тревоге");
+    }
+
+    // Задача b63fd8ea: тот же класс молчаливого тупика, что и P16, но дыра была не в условии,
+    // а в его потолке длительности. Подавление через HasAsyncAgent висело бессрочно —
+    // фоновый агент с heartbeat'ами мог не доводить координатора до маркера часами, и
+    // BgLingerTimeout грейс тишины не лечил (это не потолок длительности). Должно быть
+    // наоборот: async-агент живёт дольше своего окна подавления (10 мин) → гард поднимает
+    // карточку молчаливого тупика и уводит стадию в AwaitingDecision, чтобы человек мог
+    // вмешаться.
+    [Fact]
+    public async Task КонецХода_AsyncСубагентВиситДольшеПорога_КарточкаМолчаливогоТупикаПриходит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-async-agent-stalled");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // координатор всё ещё ждёт агента
+        SetProcess(entry, adapter.Object);
+        // Метка подавления проставлена давно — окно 10 мин истекло. Без этого фикса гард
+        // молчал бы бессрочно и интервью висело часами без карточки и push.
+        SetAsyncAgentStallSince(entry, DateTime.UtcNow - TimeSpan.FromMinutes(11));
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Всё ещё жду результат.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().ContainSingle(
+            "async-агент молчит дольше окна подавления — карточка молчаливого тупика обязана прийти");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "гард перевёл стадию, чтобы человек мог вмешаться");
+    }
+
+    // Регрессия P16 с новой логикой: подавление в окне порога (метка 5 минут назад) —
+    // гард молчит. Это не дубль существующего теста P16 (там метки нет вообще — первый вызов):
+    // здесь мы явно проверяем, что окно порога работает в ОБЕ стороны.
+    [Fact]
+    public async Task КонецХода_AsyncСубагентВиситВНачалеОкна_ГардМолчит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-async-agent-fresh-stall");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true);
+        SetProcess(entry, adapter.Object);
+        // Подавление началось 5 минут назад — глубоко внутри окна 10 мин.
+        SetAsyncAgentStallSince(entry, DateTime.UtcNow - TimeSpan.FromMinutes(5));
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Жду результат.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "подавление ещё в окне порога — гард обязан молчать, как при P16");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "стадия не ушла в AwaitingDecision по ложной тревоге");
+    }
+
+    // Волна 3 задачи b63fd8ea (Major): хук на BgAgentDoneMessage(Aborted=true). Агент умер
+    // вместе с прогоном, HandleTeamTurnEndAsync никто не позовёт (следующего хода может
+    // не быть) — карточка молчаливого тупика должна прийти через OnMessageAsync →
+    // case BgAgentDoneMessage → публикация. Тест идёт реальным путём
+    // (InvokeOnMessageAsync + BgAgentDoneMessage), не прямой вызов HandleBgAgentDoneAsync
+    // — иначе повторишь ошибку первой волны (покрываешь только публикацию, а не хук).
+    //
+    // Снимок HasPendingBg=false — ПОСЛЕ учёта текущего сообщения: HandleStructuredTaskNotification
+    // (ClaudeSession.cs:5055) синхронно удаляет задачу из run.PendingBg до публикации
+    // BgAgentDoneMessage. Это сценарий «единственный bg-агент умер вместе с прогоном».
+    // Сценарий «другой агент жив» — отдельный тест ниже (BgAgentDoneMessage_Aborted_ДругойАгентЖив_*).
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_БезСледующегоХода_КарточкаМолчаливогоТупикаПриходит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-aborted");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false); // единственный агент уже удалён из PendingBg
+        SetProcess(entry, adapter.Object);
+
+        // Реальный путь: эмулируем смерть bg-агента вместе с прогоном через OnMessageAsync.
+        var acc = GetAccumulator(entry);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+
+        var cards = await WaitForEscalationCardsAsync(session.Id, minCount: 1);
+        cards.Should().ContainSingle(
+            "единственный async-агент умер вместе с прогоном — карточка молчаливого тупика обязана прийти через BgAgentDoneMessage");
+        cards[0].Title.Should().Be("Координатор не понял вводную",
+            "стадия Planning с WaveNumber == 0 — формулировка «Координатор не понял вводную»");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "pre-claim в HandleBgAgentDoneAsync перевёл стадию в AwaitingDecision");
+    }
+
+    // Волна 3 / регрессия P16 в новой форме: структурный task_notification ставит Aborted
+    // ДЛЯ ОДНОГО конкретного агента, даже если параллельно работает ДРУГОЙ. Прежний
+    // хук (волна 2) поднимал карточку сразу — координатор ЖИВ, второй агент работает,
+    // стадия уходит в AwaitingDecision по ложной тревоге. Глеб уронил это репро мутацией.
+    // Снимок HasPendingBg=true после удаления текущего агента: второй агент в полёте.
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_ДругойАгентЖив_КарточкаНеПоявляется()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-chain-alive");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        // Снимок «после удаления текущего агента»: второй агент в полёте.
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true);
+        SetProcess(entry, adapter.Object);
+
+        var acc = GetAccumulator(entry);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+
+        // Карточки нет и стадия не ушла: HandleBgAgentDoneAsync увидел hasAsync=true
+        // (Major-фикс P16) и вышел без публикации. Ждём чуть-чуть на случай гонки
+        // с фоновыми обработчиками.
+        await Task.Delay(150);
+        Sent<TeamEscalationMessage>()
+            .Where(m => m.SessionId == session.Id && !m.Resolved)
+            .Should().BeEmpty(
+                "другие async-агенты живы — карточка НЕ поднимается (регресс P16)");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "стадия НЕ ушла в AwaitingDecision, координатор ждёт второго агента");
+    }
+
+    // Волна 3 / парный к Major: цепочка агентов по очереди абортируется. После
+    // последнего аборта HasAsyncAgent == false → карточка поднимается. Гард дождался
+    // своего часа (см. шапку HandleBgAgentDoneAsync).
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_ВсеАгентыАбортировались_КарточкаПослеПоследнего()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-chain-all-aborted");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        var acc = GetAccumulator(entry);
+
+        // Первый аборт — второй агент ещё жив. Карточки нет.
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+        await Task.Delay(100);
+        Sent<TeamEscalationMessage>()
+            .Where(m => m.SessionId == session.Id && !m.Resolved).Should().BeEmpty(
+                "первый аборт — другие живые, карточка не поднимается");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning);
+
+        // Второй аборт — других агентов больше нет. Карточка появляется.
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool2" }, Aborted: true), TestRunId);
+
+        var cards = await WaitForEscalationCardsAsync(session.Id, minCount: 1);
+        cards.Should().ContainSingle(
+            "последний аборт — других агентов нет, карточка молчаливого тупика обязана прийти");
+        cards[0].Title.Should().Be("Координатор не понял вводную");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "pre-claim в HandleBgAgentDoneAsync перевёл стадию");
+    }
+
+    // Волна 3 / идемпотентность: повторный BgAgentDoneMessage(Aborted=true) с уже
+    // AwaitingDecision не дублирует карточку (карточка была поднята раньше через
+    // HandleTeamTurnEndAsync, стадия уже переведена публикацией). Защита — НЕ
+    // явный `if (AwaitingDecision) return;` (волна 2 держала его ПОСЛЕ
+    // `if (!stalledStage) return;`, и строка была мертва), а неявная проверка:
+    // AwaitingDecision не входит в stalledStage, и метод выходит через
+    // `if (!stalledStage) return;` ещё до атомарного pre-claim.
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_СтадияУжеAwaitingDecision_НеДублируемКарточку()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-aborted-idem");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.AwaitingDecision; // карточка уже поднята раньше
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var acc = GetAccumulator(entry);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+
+        // Карточки нет и не будет: stalledStage == false на AwaitingDecision, метод
+        // хука выходит до pre-claim. Ждём чуть-чуть на случай гонки.
+        await Task.Delay(150);
+        Sent<TeamEscalationMessage>()
+            .Where(m => m.SessionId == session.Id && !m.Resolved)
+            .Should().BeEmpty(
+                "AwaitingDecision уже стоит — stalledStage == false, хук выходит до публикации");
+    }
+
+    // Волна 3 / Minor 2: AsyncAgentStallSince сбрасывается ТОЛЬКО когда после
+    // текущего BgAgentDoneMessage других async-агентов больше нет (HasAsyncAgent == false).
+    // Сценарий: цепочка из 3 агентов, каждый абортируется по очереди. Метка НЕ должна
+    // сбрасываться на каждом (иначе завершение КАЖДОГО из цепочки перезапускало бы
+    // 10-минутный потолок подавления, и суппрессия тянулась неограниченно).
+    // Прежний безусловный сброс на ЛЮБОМ BgAgentDoneMessage — ровно то, против чего
+    // был написан баг b63fd8ea.
+    [Fact]
+    public async Task BgAgentDoneMessage_МеткаПодавленияСбрасываетсяТолькоКогдаВсеАгентыУшли()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-b63fd8ea-stallreset-precise");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        // Метка подавления проставлена давно (10+ минут назад) — имитирует сценарий,
+        // где гард один раз уже видел подавление. Проверка именно точечности:
+        // метка НЕ должна сбрасываться, пока ещё есть другие агенты.
+        SetAsyncAgentStallSince(entry, DateTime.UtcNow - TimeSpan.FromMinutes(11));
+        var acc = GetAccumulator(entry);
+
+        // Первые два BgAgentDoneMessage — другие агенты живы (HasPendingBg=true).
+        // Метка НЕ сбрасывается — иначе возврат в Interview со свежим агентом
+        // унаследует длительность от НЕсвязанного прошлого.
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+        var afterFirst = entry.GetType().GetField("AsyncAgentStallSince")!.GetValue(entry);
+        afterFirst.Should().NotBeNull(
+            "другие агенты живы — метка НЕ сбрасывается, иначе суппрессия тянется неограниченно");
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool2" }, Aborted: true), TestRunId);
+        var afterSecond = entry.GetType().GetField("AsyncAgentStallSince")!.GetValue(entry);
+        afterSecond.Should().NotBeNull(
+            "второй агент всё ещё жив — метка НЕ сбрасывается");
+
+        // Третий BgAgentDoneMessage — все агенты ушли (HasPendingBg=false).
+        // Метка сбрасывается — следующий всплеск фона считается с нуля.
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new BgAgentDoneMessage(new[] { "tool3" }, Aborted: true), TestRunId);
+        var afterThird = entry.GetType().GetField("AsyncAgentStallSince")!.GetValue(entry);
+        afterThird.Should().BeNull(
+            "агентов больше нет — метка сбрасывается, иначе возврат в Interview со свежим агентом унаследует длительность");
+    }
+
+    // Волна 4 задачи b63fd8ea (Minor A): публикация карточки молчаливого тупика ПОСЛЕ
+    // успешного TryClaimSilentStall упала (AppendAsync бросил исключение / чат удалён).
+    // Клеймо обязано откатиться под WithTeamState, иначе чат навсегда в AwaitingDecision
+    // БЕЗ карточки: stalledStage для этой стадии больше не true, гард больше никогда
+    // не сработает. Проверяем (а) стадия вернулась в Planning, не застряла в
+    // AwaitingDecision, и (б) следующий TryClaimSilentStall снова может пройти.
+    [Fact]
+    public async Task МолчаливыйТупик_ПубликацияКарточкиУпала_КлеймоОткатывается()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-rollback-publish-fail");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+
+        // EscalationRaiser бросает исключение — имитируем сбой AppendAsync/пуш-нотификации.
+        // До фикса это исключение молча уходило в Console.Error (HandleTeamTurnCompletedAsync
+        // оборачивает Task.Run в try/catch), а стадия навсегда залипала в AwaitingDecision.
+        _sut.TeamHandlers.EscalationRaiser = (_, _) =>
+            throw new InvalidOperationException("симуляция сбоя публикации карточки");
+
+        // Никаких маркеров эскалации/работы/разговора — путь идёт через гард молчаливого
+        // тупика (строки HandleTeamTurnEndAsync 244–303): claim → publish → (исключение)
+        // → rollback. HandleTeamTurnCompletedAsync в проде оборачивает Task.Run в try/catch
+        // — имитируем это в тесте, чтобы проверить именно откат, а не исключение.
+        try
+        {
+            await _sut.HandleTeamTurnEndAsync(session.Id, "координатор молчит", failed: false);
+            throw new InvalidOperationException("сбой публикации должен пробрасываться — прод ловит в Task.Run-обёртке");
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("симуляция сбоя публикации карточки"))
+        {
+            // ожидаемо — исключение пробрасывается, клеймо уже откатилось внутри.
+        }
+
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "сбой публикации карточки откатывает клеймо, иначе гард больше никогда не сработает — "
+            + "stalledStage для AwaitingDecision ложно, а AwaitingDecision карточки не имеет");
+
+        // Следующая попытка: гард не «прилип», чат снова может поднять карточку.
+        var claim2 = ((ITeamRunState)_sut).TryClaimSilentStall(session.Id, out _);
+        claim2.Should().BeTrue("после отката чат снова в Planning && WaveNumber==0 — следующий claim обязан пройти");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+    }
+
+    // Тот же класс (Minor A), но через хук BgAgentDoneMessage(Aborted). Покрывает вторую
+    // публикационную точку (HandleBgAgentDoneAsync) и подтверждает, что и там сбой
+    // публикации откатывает клеймо. Без этого теста регрессия ограничилась бы
+    // HandleTeamTurnEndAsync, а хук остался бы без страховки.
+    [Fact]
+    public async Task BgAgentDoneMessage_Aborted_ПубликацияУпала_КлеймоОткатывается()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-rollback-bg-fail");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        _sut.TeamHandlers.EscalationRaiser = (_, _) =>
+            throw new InvalidOperationException("симуляция сбоя публикации по хуку");
+
+        // InvokeOnMessageAsync прогоняет BgAgentDoneMessage через OnMessageAsync →
+        // HandleBgAgentDoneAsync. Исключение из EscalationRaiser НЕ вырывается наружу
+        // (текущая ветка в коде — через await без обёртки try/catch в OnMessageAsync, и
+        // тест ловит его наверху): для целей теста достаточно прогнать и проверить откат.
+        try
+        {
+            var acc = GetAccumulator(entry);
+            await InvokeOnMessageAsync(session.Id, acc,
+                new BgAgentDoneMessage(new[] { "tool1" }, Aborted: true), TestRunId);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("симуляция сбоя публикации по хуку"))
+        {
+            // ожидаемо — исключение пробросилось через OnMessageAsync, клеймо уже откатилось внутри.
+        }
+
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "и через хук BgAgentDoneMessage сбой публикации карточки откатывает клеймо");
+
+        var claim2 = ((ITeamRunState)_sut).TryClaimSilentStall(session.Id, out _);
+        claim2.Should().BeTrue("после отката чат снова в Planning && WaveNumber==0");
+    }
+
+    // Волна 5 (Minor 1, CAS): RollbackSilentStallClaim откатывает снимок ТОЛЬКО если
+    // состояние всё ещё соответствует «живому клейму» — иначе безусловный откат вернёт
+    // стадию в Planning/Interview после успешной публикации карточки, и через StalledMinutes
+    // гард поднимет ВТОРУЮ карточку поверх уже видимой пользователю. Прод-сценарий:
+    // EscalationRaiser (TeamWaveService.RaiseEscalationAsync) УЖЕ положил карточку в
+    // ленту через PublishTeamEscalationAsync, между publish и хвостом (NotificationService.
+    // SendAsync) параллельно пришёл ответ человека (стадия сменилась) — после чего хвост
+    // упал. Без CAS-гейта catch в HandleTeamTurnEndAsync откатил бы стадию, и пользователь
+    // видел бы дубликат. С CAS-гейтом — false на выходе, состояние не трогается.
+    [Fact]
+    public async Task МолчаливыйТупик_ПубликацияУспешнаХвостУпал_КлеймоНеОткатывается()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-rollback-cas-postpublish");
+        ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Planning;
+            t.WaveNumber = 0;
+            return true;
+        });
+
+        // EscalationRaiser имитирует прод-путь TeamWaveService.RaiseEscalationAsync:
+        // 1) успешная публикация карточки (AppendAsync + WithTeamState «AwaitingDecision» +
+        //    BroadcastTeamImplementAsync); 2) параллельная гонка — человек уже ответил на
+        //    опубликованную карточку между publish и send-notification, режим ушёл в работу
+        //    (стадия Wave, как если бы другой поток успел отработать); 3) хвост SendAsync
+        //    бросает исключение. Именно так в проде NotificationService.SendAsync:21
+        //    (store.AddAsync + hub.SendAsync без try/catch там) упадёт ПОСЛЕ publish.
+        _sut.TeamHandlers.EscalationRaiser = async (_, card) =>
+        {
+            // Шаг 1: публикация прошла, карточка пользователю видна.
+            await ((ITeamHistoryStore)_sut).PublishTeamEscalationAsync(session.Id, card);
+
+            // Шаг 2: между publish и send-notification параллельный поток сменил стадию
+            // (варианты в проде: пользователь нажал кнопку карточки, BgAgentDoneMessage от
+            // другого агента, response чата и т.п.). Стадия взята ОТЛИЧНОЙ от claim.Stage
+            // (Planning) намеренно: при совпадении безусловный откат вернул бы ровно то же
+            // значение, и тест перестал бы отличать «CAS есть» от «CAS нет» — гейт был бы
+            // вакуумным (проверено мутацией: со стадией Planning снятие CAS-условия в
+            // RollbackSilentStallClaim не роняет ни одного теста).
+            ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
+            {
+                t.Stage = TeamImplementStage.Wave;
+                return true;
+            });
+
+            // Шаг 3: хвост SendAsync бросил — ловится в HandleTeamTurnEndAsync catch.
+            throw new InvalidOperationException("симуляция сбоя NotificationService.SendAsync после publish");
+        };
+
+        try
+        {
+            await _sut.HandleTeamTurnEndAsync(session.Id, "координатор молчит", failed: false);
+            throw new InvalidOperationException("сбой хвоста публикации должен пробрасываться — прод ловит в Task.Run-обёртке");
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("симуляция сбоя NotificationService"))
+        {
+            // ожидаемо — клеймо НЕ откатилось, потому что состояние уже ушло вперёд.
+        }
+
+        // Карточка в ленте есть — пользователь её видит с момента успешного publish.
+        Sent<TeamEscalationMessage>().Should().Contain(m => !m.Resolved,
+            "пользователь видит опубликованную карточку после успешного publish в EscalationRaiser");
+
+        // Стадия НЕ вернулась в исходное состояние: CAS пропустил откат, потому что
+        // t.Stage уже не AwaitingDecision (параллельный поток увёл её в Wave). Без
+        // CAS-гейта откат вернул бы Planning && WaveNumber==0 поверх идущей волны —
+        // и следующий заход гарда (через StalledMinutes, по умолчанию 30 минут) поднял бы
+        // ВТОРУЮ карточку поверх уже видимой первой. Этот ассерт и есть гейт: со снятым
+        // CAS-условием он падает.
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage.Should().Be(TeamImplementStage.Wave,
+            "стадия сменилась параллельной гонкой — CAS пропустил откат (иначе гард позже "
+            + "поднял бы ВТОРУЮ карточку поверх уже видимой первой)");
+
+        // Второй гейт на то же самое с другой стороны: гард не может переклеймить чат,
+        // потому что состояние осталось за параллельным потоком (Wave — не stalledStage).
+        // Со снятым CAS-условием стадия была бы Planning && WaveNumber==0, и этот вызов
+        // вернул бы true — то есть гард поднял бы вторую карточку.
+        var claim2 = ((ITeamRunState)_sut).TryClaimSilentStall(session.Id, out _);
+        claim2.Should().BeFalse("стадия Wave — не stalledStage, гард не клеймит");
     }
 
     // Прод 2026-08-12 (P23): карточка блокера гаснет, когда координатор, разбуженный докладом,

@@ -86,6 +86,15 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // пришёл готовый план). Память, а не стор: рестарт сервера убивает сам планировщик,
         // и «планирование живо» после него неправда по определению.
         public volatile bool TeamPlanningInFlight;
+        // Момент, когда гард молчаливого тупика (TeamTurnCompletionService) ВПЕРВЫЕ увидел
+        // подавление из-за живого async-субагента для текущего захода в stalledStage
+        // (Interview или Planning && WaveNumber == 0). Задача b63fd8ea: без потолка длительности
+        // подавление висело бессрочно — фоновый агент с heartbeat'ами мог не доводить
+        // координатора до маркера часами. Метка сбрасывается, как только async-агент уходит
+        // (HasPendingBg == false): следующий всплеск фоновой активности считается с нуля,
+        // а не копит время от НЕсвязанного прошлого агента. Под TeamTurnLock (та же дисциплина,
+        // что у TeamTurnText/TeamTurnShownLength/TurnSawAngleBracket/TeamTurnAsked рядом).
+        public DateTime? AsyncAgentStallSince;
         // Текущий ход штаба поднят сообщением ЧЕЛОВЕКА (M7): авто-подтверждение добавочного
         // плана опирается на «вводная человека и есть точка контроля», поэтому инициатора
         // хода помечаем при запуске (SendDirectAsync / SendMessageAndWaitAsync) — классификация
@@ -6581,6 +6590,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task HandleTeamTurnEndAsync(string sessionId, string turnText, bool failed, bool asked = false)
         => _teamTurnCompletion.HandleTeamTurnEndAsync(sessionId, turnText, failed, asked);
 
+    // Волна 3 задачи b63fd8ea: хук на завершение фонового async-агента (BgAgentDoneMessage).
+    // Внутри вертикали читается session, стадия, планирование — то, что вертикаль уже умеет.
+    // asked и hasAsync пробрасываем из ядра, потому что оба значения нужны В ОДНОМ решении
+    // ядра (case BgAgentDoneMessage: сброс метки AsyncAgentStallSince под TeamTurnLock на
+    // проверке !hasAsync, и тут же публикация карточки по тому же hasAsync). Если бы
+    // hasAsync читался через ITeamRunState уже в вертикали (вызовом HasAsyncAgent или иным
+    // способом поверх AsyncAgentInFlight), между её вызовом и вызовом этой обёртки пришёл
+    // бы другой BgAgentDoneMessage, переписал state и ядро приняло решение по устаревшему
+    // снимку. Единый параметр из ядра — общий снимок на оба решения (метка + карточка).
+    // В самой вертикали (TeamTurnCompletionService.HandleTeamTurnEndAsync, путь гарда
+    // молчаливого тупика) проверка живого async-агента идёт через
+    // _run.ShouldSuppressAsyncAgentStallGuard — он под капотом берёт AsyncAgentInFlight(entry)
+    // МИМО шва ITeamRunState.HasAsyncAgent (последний на момент ревью оказался невостребован:
+    // Глеб проверил удалением объявления и реализации, `dotnet build` прошёл с 0 ошибок).
+    // Решения по hasAsync (Major + Minor 2) описаны в шапке HandleBgAgentDoneAsync.
+    public Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked)
+        => _teamTurnCompletion.HandleBgAgentDoneAsync(sessionId, aborted, hasAsync, asked);
+
     // P23: авто-гашение карточки блокера, когда координатор сам снял её предмет. Тело остаётся
     // в ядре (работает с приватным состоянием entry.Accumulator и приватным _history —
     // 40-польная персистентная модель, пять примитивов синхронизации), вертикаль получает
@@ -6992,6 +7019,93 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return false;
     }
 
+    // Атомарный pre-claim публикации карточки молчаливого тупика (волна 3 задачи b63fd8ea).
+    // Под TeamStateService.WithTeamState (тот же лок, что в PublishTeamEscalationAsync,
+    // TeamDecisionService.cs:428) проверяем stalledStage (Interview или Planning && WaveNumber==0);
+    // если выполнен — переводим стадию в AwaitingDecision (побочный эффект) и отдаём СНИМОК
+    // ПОЛНОГО состояния ДО мутации. Возвращаемый bool — единственный источник правды: либо
+    // вызывающий код публикует карточку, либо уже опубликовал параллельный путь.
+    // Снимок нужен BuildSilentStallEscalation (читает Stage/WaveNumber) для заголовка карточки,
+    // а сам объект уже мутирован внутри лока — снапшок берётся ДО мутации и возвращается через
+    // out. Полный набор полей (Stage/StageBeforeDecision/WaveStartedAt/WaveActivityAt) нужен
+    // паре: этот метод + RollbackSilentStallClaim — откат клейма при сбое публикации карточки
+    // (AppendAsync бросил исключение). Случай «чат удалён» здесь не покрыт — там ранний return
+    // БЕЗ исключения, и клеймо остаётся до следующего гарда (отдельный нечастый кейс).
+    // Без отката чат зависал бы в AwaitingDecision без карточки: stalledStage для этой стадии
+    // больше не true, гард больше никогда не сработает.
+    // out-параметры нельзя писать внутри лямбды (CS1628), поэтому захватываем через
+    // локальный массив из одного элемента: внутри лямбды — присвоение по индексу,
+    // снаружи — чтение после возврата.
+    bool ITeamRunState.TryClaimSilentStall(string sessionId, out SilentStallClaim claim)
+    {
+        claim = default;
+        var captured = new SessionTeamImplement?[] { null };
+        var claimed = _teamState.WithTeamState(sessionId, t =>
+        {
+            var stalledStage = t.Stage == TeamImplementStage.Interview
+                || (t.Stage == TeamImplementStage.Planning && t.WaveNumber == 0);
+            if (!stalledStage)
+                return false;
+            captured[0] = new SessionTeamImplement
+            {
+                Stage = t.Stage,
+                StageBeforeDecision = t.StageBeforeDecision,
+                WaveNumber = t.WaveNumber,
+                WaveStartedAt = t.WaveStartedAt,
+                WaveActivityAt = t.WaveActivityAt,
+            };
+            t.StageBeforeDecision = t.Stage;
+            t.Stage = TeamImplementStage.AwaitingDecision;
+            t.WaveStartedAt = null;
+            t.WaveActivityAt = null;
+            return true;
+        });
+        if (claimed && captured[0] is { } snap)
+        {
+            claim = new SilentStallClaim(
+                Stage: snap.Stage,
+                WaveNumber: snap.WaveNumber,
+                StageBeforeDecision: snap.StageBeforeDecision,
+                WaveStartedAt: snap.WaveStartedAt,
+                WaveActivityAt: snap.WaveActivityAt);
+        }
+        return claimed;
+    }
+
+    // Откат успешного TryClaimSilentStall. CAS-подобная проверка: восстанавливаем снимок
+    // ТОЛЬКО если состояние всё ещё соответствует тому, что оставил клейм (стадия AwaitingDecision
+    // и StageBeforeDecision равен исходной стадии из снимка). Прод-сценарий «хвост публикации
+    // упал после того, как карточка уже в ленте»: без CAS-гейта стадия бы откатилась в
+    // Planning/Interview, и следующий заход гарда поднял бы ВТОРУЮ карточку поверх уже
+    // видимой пользователю. С гейтом — false на выходе, состояние не трогается, дублирования
+    // нет. Под тем же локом WithTeamState, что и сам claim: между откатом и параллельным
+    // новым claim нет гонки — оба сериализуются. Сторона вызова не имеет дела с другими
+    // полями SessionTeamImplement и не должна их трогать: меняются ровно те, что заявлены
+    // в SilentStallClaim.
+    bool ITeamRunState.RollbackSilentStallClaim(string sessionId, SilentStallClaim claim)
+    {
+        var rolled = false;
+        _teamState.WithTeamState(sessionId, t =>
+        {
+            // Клеймо «живое»: стадия ровно та, что мы поставили в TryClaimSilentStall,
+            // и StageBeforeDecision хранит исходную стадию (Planning/Interview) из снимка.
+            // Любое другое состояние означает, что либо карточка уже опубликована, либо
+            // параллельный путь уже отменил клеймо — откатывать НЕЛЬЗЯ.
+            if (t.Stage != TeamImplementStage.AwaitingDecision
+                || t.StageBeforeDecision != claim.Stage)
+            {
+                return true;
+            }
+            t.Stage = claim.Stage;
+            t.StageBeforeDecision = claim.StageBeforeDecision;
+            t.WaveStartedAt = claim.WaveStartedAt;
+            t.WaveActivityAt = claim.WaveActivityAt;
+            rolled = true;
+            return true;
+        });
+        return rolled;
+    }
+
     bool ITeamNotifier.IsSessionBusy(string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
@@ -7140,6 +7254,32 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     void ITeamRunState.SetPlanningInFlight(string sessionId, bool inFlight)
     {
         if (_sessions.TryGetValue(sessionId, out var entry)) entry.TeamPlanningInFlight = inFlight;
+    }
+
+    bool ITeamRunState.ShouldSuppressAsyncAgentStallGuard(string sessionId)
+    {
+        // Баг b63fd8ea: голое HasAsyncAgent подавляло гард молчаливого тупика бессрочно,
+        // пока async-агент писал хоть что-то в stdout (BgLingerTimeout — грейс тишины,
+        // а не потолок длительности). Метка подавления AsyncAgentStallSince на SessionEntry
+        // живёт под TeamTurnLock (дисциплина, что у TeamTurnText/TeamTurnAsked/TeamTurnFromHuman
+        // рядом). entry.Process не лочим: он меняется в других точках ядра, и AsyncAgentInFlight
+        // даёт согласованный снимок через HasPendingBg (lock в CliRun).
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        var hasAsync = AsyncAgentInFlight(entry);
+        var now = DateTime.UtcNow;
+        lock (entry.TeamTurnLock)
+        {
+            if (!hasAsync)
+            {
+                // Async-агент ушёл — метку обнуляем, чтобы следующий всплеск не унаследовал
+                // длительность от НЕсвязанного прошлого агента.
+                if (entry.AsyncAgentStallSince is not null) entry.AsyncAgentStallSince = null;
+                return false;
+            }
+            if (entry.AsyncAgentStallSince is null) entry.AsyncAgentStallSince = now;
+            return TeamAsyncAgentStallGuard.ShouldSuppress(true, entry.AsyncAgentStallSince, now,
+                TeamAsyncAgentStallGuard.DefaultSuppressionTimeout);
+        }
     }
 
     Task<bool> ITeamTurnIntake.SendOrEnqueueAsync(string sessionId, string text,
@@ -8199,6 +8339,72 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case BgAgentDoneMessage m:
                     acc.OnBgAgentsDone(m.ToolUseIds);
                     await acc.SaveSnapshotAsync(_history);
+                    // Волна 3 задачи b63fd8ea: хук на завершение фонового async-агента.
+                    //
+                    // Снимок «есть ли ещё живой async-агент» берётся ПОСЛЕ учёта текущего
+                    // сообщения — гонки «читаем старое состояние» нет ни на одном из четырёх
+                    // источников BgAgentDoneMessage. Все четыре ДО отправки сообщения уже
+                    // убрали завершившуюся задачу из run.PendingBg (а для FinalizeRunAsync —
+                    // из всего словаря):
+                    //   • HandleStructuredTaskNotification (ClaudeSession.cs:5055) — снимает
+                    //     задачу через `lock (run.PendingBg) run.PendingBg.Remove(taskId, ...)`
+                    //     синхронно и публикует BgAgentDoneMessage через Task.Run из того же
+                    //     пути, что HandleStructuredTaskNotification читает;
+                    //   • HandleTaskNotification (ClaudeSession.cs:4954) — то же самое, по
+                    //     текстовому <task-notification> вместо структурного события;
+                    //   • HandleTaskOutputCompletion (ClaudeSession.cs:4989) — снимает через
+                    //     `lock (run.PendingBg) run.PendingBg.Remove(agentId, ...)` и
+                    //     публикует через Task.Run;
+                    //   • FinalizeRunAsync (ClaudeSession.cs:3706) — единственный путь,
+                    //     где публикация идёт inline await (не Task.Run): прогон уже умер,
+                    //     `lock (run.PendingBg) { orphanedTools = run.PendingBg.Values...;
+                    //     run.PendingBg.Clear(); }` происходит ДО вызова CompleteBgTasksAsync
+                    //     и до возврата await, поэтому HasPendingBg к моменту чтения ниже
+                    //     уже отражает очищенный словарь.
+                    //
+                    // Решения (Major + Minor 2, оба на одной проверке HasAsyncAgent):
+                    //   • Метка AsyncAgentStallSince сбрасывается ТОЛЬКО когда после
+                    //     текущего done агентов больше нет вообще (HasAsyncAgent == false).
+                    //     Безусловный сброс (как в волне 2) перезапускал 10-минутный
+                    //     потолок подавления на каждом агенте цепочки — суппрессия
+                    //     тянулась неограниченно, ровно против того, что баг b63fd8ea
+                    //     чинил.
+                    //   • Карточка молчаливого тупика поднимается ТОЛЬКО когда (а) агент
+                    //     умер абортивно (Aborted=true) и (б) других живых async-агентов
+                    //     больше нет (HasAsyncAgent == false). Иначе — структурный
+                    //     task_notification ставит Aborted для ОДНОГО агента, пока
+                    //     параллельно работает ДРУГОЙ: карточка «Координатор не понял
+                    //     вводную» сразу на первом аборте уводила стадию в AwaitingDecision,
+                    //     хотя координатор ЖИВ — дословный регресс P16 (Major, найден
+                    //     ревью Глеба).
+                    //
+                    // Карточка публикуется через TeamTurnCompletionService.HandleBgAgentDoneAsync
+                    // — та же точка, что HandleTeamTurnEndAsync, и обе сериализуются на
+                    // общем локе TeamStateService.WithTeamState через TryClaimSilentStall
+                    // (Minor 1, идемпотентность): гонка «оба пути публикуют одновременно»
+                    // закрывается атомарным pre-claim — первый путь переводит стадию в
+                    // AwaitingDecision под локом, второй видит её и выходит.
+                    if (entry is not null)
+                    {
+                        // Снимок HasAsyncAgent — ПОСЛЕ учёта текущего сообщения (см. шапку):
+                        // HandleStructuredTaskNotification (ClaudeSession.cs:5055) уже удалил
+                        // задачу из run.PendingBg синхронно до публикации BgAgentDoneMessage,
+                        // entry.Process?.HasPendingBg отражает обновлённое состояние.
+                        var hasAsync = AsyncAgentInFlight(entry);
+                        bool asked;
+                        lock (entry.TeamTurnLock)
+                        {
+                            // Minor 2: метка сбрасывается ТОЛЬКО когда после текущего done
+                            // других async-агентов больше нет. Безусловный сброс перезапускал
+                            // бы 10-минутный потолок подавления на КАЖДОМ агенте цепочки —
+                            // суппрессия тянулась бы неограниченно (ровно то, против чего
+                            // баг b63fd8ea был написан).
+                            if (!hasAsync && entry.AsyncAgentStallSince is not null)
+                                entry.AsyncAgentStallSince = null;
+                            asked = entry.TeamTurnAsked;
+                        }
+                        await HandleBgAgentDoneAsync(sessionId, m.Aborted, hasAsync, asked);
+                    }
                     break;
                 // Присутствие фона — сигнал для СПИСКА чатов, а не для ленты: в историю не
                 // пишем (состояние живёт ровно столько, сколько процесс) и статус сессии не

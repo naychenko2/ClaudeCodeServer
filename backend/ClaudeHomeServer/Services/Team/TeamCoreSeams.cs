@@ -216,6 +216,18 @@ internal interface ITeamRunState
     void SetPlanningInFlight(string sessionId, bool inFlight);
 
     /// <summary>
+    /// true, если гард молчаливого тупика по концу хода должен молчать из-за живого
+    /// async-субагента координатора (entry.Process.HasPendingBg == true). Подавление
+    /// ограничено собственным потолком длительности (см. <see cref="TeamAsyncAgentStallGuard"/>):
+    /// async-агент, который молчит дольше порога, тупиком считается — иначе гард молчал бы
+    /// бессрочно (баг b63fd8ea, фоновый агент с heartbeat'ами не доводил координатора до
+    /// маркера часами). Метод сам ведёт метку начала подавления на SessionEntry и сбрасывает
+    /// её, когда async-агент уходит — следующий всплеск считается с нуля, а не копит
+    /// длительность от НЕсвязанного прошлого агента.
+    /// </summary>
+    bool ShouldSuppressAsyncAgentStallGuard(string sessionId);
+
+    /// <summary>
     /// Сменить permission-mode живому CLI-прогону (control-протокол set_permission_mode).
     /// Зовётся из вертикали штаба при входе в план-фазу (Э5) и при возврате режима
     /// человека после согласования плана — без него режим применился бы только к
@@ -270,7 +282,69 @@ internal interface ITeamRunState
     /// </summary>
     bool TryTakeTeamTurnEnd(string sessionId, int turnSeq,
         out string? text, out bool failed, out bool asked);
+
+    /// <summary>
+    /// Атомарный pre-claim публикации карточки молчаливого тупика (волна 3 задачи b63fd8ea).
+    /// Под локом <see cref="WithTeamState{T}"/> проверяет stalledStage (Interview или Planning
+    /// с WaveNumber == 0); если условие выполнено — переводит стадию в AwaitingDecision
+    /// (побочный эффект), отдаёт <paramref name="claim"/> со снимком ПОЛНОГО состояния ДО
+    /// мутации и возвращает true. Иначе — false без побочных эффектов.
+    ///
+    /// Назначение: оба пути публикации молчаливого тупика (хук <c>BgAgentDoneMessage</c> и
+    /// обычный <c>HandleTeamTurnEndAsync</c>) могут прийти в почти одновременную попытку
+    /// публикации; без pre-claim оба пройдут через собственные проверки стадии (snapshot
+    /// один и тот же объект, но между read и publish успевает второй поток). Pre-claim
+    /// атомарно резервирует стадию AwaitingDecision, и второй путь видит её в собственном
+    /// проходе — <c>HandleTeamTurnEndAsync</c> через stalledStage == false, хук через свой
+    /// TryClaimSilentStall возвращает false и выходит.
+    ///
+    /// Возвращённый <paramref name="claim"/> — единственный способ откатить клеймо через
+    /// <see cref="RollbackSilentStallClaim"/>: если публикация карточки ПОСЛЕ успешного claim
+    /// падает (<c>raise</c>/<c>PublishTeamEscalationAsync</c> бросают исключение; случай «чат
+    /// удалён» — ранний return без исключения, этим путём НЕ покрыт),
+    /// вызывающий код отдаёт <paramref name="claim"/> в <see cref="RollbackSilentStallClaim"/> и
+    /// стадия возвращается в исходное состояние. Без отката чат зависал бы в
+    /// <c>AwaitingDecision</c> без карточки: <c>stalledStage</c> для этой стадии больше не
+    /// true, гард больше никогда не сработает.
+    ///
+    /// Достройка шва <see cref="ITeamRunState"/> (метод, не новый интерфейс) — общее число
+    /// швов Team остаётся прежним.
+    /// </summary>
+    bool TryClaimSilentStall(string sessionId, out SilentStallClaim claim);
+
+    /// <summary>
+    /// Откатить успешный <see cref="TryClaimSilentStall"/> ТОЛЬКО если состояние всё ещё
+    /// соответствует тому, что оставил клейм: <c>t.Stage == AwaitingDecision</c> и
+    /// <c>t.StageBeforeDecision == claim.Stage</c>. Под локом <see cref="WithTeamState{T}"/>
+    /// восстанавливает <paramref name="claim"/>.<c>Stage</c>, <c>StageBeforeDecision</c>,
+    /// <c>WaveStartedAt</c>, <c>WaveActivityAt</c> (<c>WaveNumber</c> не менялся pre-claim'ом,
+    /// не трогаем).
+    ///
+    /// Возврат: <c>true</c> — клеймо было «живое» и его откатили; <c>false</c> — состояние
+    /// уже ушло вперёд (карточка успела опубликоваться ДО того, как хвост публикации бросил
+    /// исключение, либо параллельный путь уже отменил клеймо) — откат пропущен, чтобы не
+    /// задвоить карточку «Координатор не понял вводную» поверх уже видимой пользователю.
+    /// Сторона вызова зовёт метод из блока catch на исключении публикации карточки.
+    /// </summary>
+    bool RollbackSilentStallClaim(string sessionId, SilentStallClaim claim);
 }
+
+/// <summary>
+/// Снимок состояния под локом <see cref="ITeamRunState.WithTeamState{T}"/> ДО мутации в
+/// <see cref="ITeamRunState.TryClaimSilentStall"/>. Содержит ровно те поля, что метод
+/// меняет: <c>Stage</c>, <c>StageBeforeDecision</c>, <c>WaveStartedAt</c>, <c>WaveActivityAt</c>.
+/// <c>WaveNumber</c> идёт полем — он не меняется pre-claim'ом, но нужен для построения
+/// заголовка карточки и потому возвращается вместе со снимком. Живёт на уровне namespace,
+/// чтобы реализация <see cref="ITeamRunState"/> в ядре и оба вызывающих кода видели тип
+/// без квалификатора <c>ITeamRunState.</c>. <c>internal</c>: снаружи вертикали Team
+/// (обработчики TeamCoreSeams/реализация в ядре/два вызывающих сервиса) тип не нужен.
+/// </summary>
+internal readonly record struct SilentStallClaim(
+    TeamImplementStage Stage,
+    int WaveNumber,
+    TeamImplementStage? StageBeforeDecision,
+    DateTime? WaveStartedAt,
+    DateTime? WaveActivityAt);
 
 /// <summary>
 /// Шов 4 — приём хода. Штаб не поднимает процесс сам: он отдаёт текст ядру, а тот либо

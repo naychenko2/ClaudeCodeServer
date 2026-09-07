@@ -122,6 +122,32 @@ public class HiggsfieldIntegrationTests : IDisposable
             .WithMessage("*ReservedKeys*");
     }
 
+    // Сквозной цикл: EnsureRecord (создание) + сохранение токенов (Update через
+    // McpOAuthService.StoreTokens). До правки второй шаг падал по резерву ключа
+    // «higgsfield» и вход не завершался.
+    [Fact]
+    public void Вход_EnsureRecordИОбновлениеСТокеном_НеПадает()
+    {
+        var record = _sut.EnsureRecord(OwnerId);
+
+        // Имитация McpOAuthService.StoreTokens — обновление заполненным OAuth.
+        record.Auth!.OAuth = new McpOAuthConfig
+        {
+            AuthorizationServer = "https://auth.higgsfield.ai",
+            TokenEndpoint = "https://auth.higgsfield.ai/token",
+            ClientId = "client-test",
+            AccessTokenRef = "secret:stub",
+            ExpiresAt = DateTime.UtcNow.AddHours(1),
+        };
+
+        var act = () => _registry.Update(OwnerId, record.Id, record);
+
+        act.Should().NotThrow("StoreTokens-подобное обновление обязано работать — иначе вход не завершится");
+        var saved = _registry.Get(OwnerId, record.Id)!;
+        saved.Auth!.OAuth!.AccessTokenRef.Should().Be("secret:stub");
+        saved.Key.Should().Be(HiggsfieldIntegration.Key);
+    }
+
     // Минимальная обвязка для конструктора HiggsfieldIntegration — сеть не нужна,
     // потому что EnsureRecord не ходит по проводу.
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

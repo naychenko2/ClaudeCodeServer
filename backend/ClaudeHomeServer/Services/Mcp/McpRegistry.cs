@@ -162,7 +162,13 @@ public class McpRegistry
             if (existing is null) return null;
 
             var key = (draft.Key ?? "").Trim().ToLowerInvariant();
-            var error = ValidateKey(key, list, excludeId: id);
+            // Ключ существующей записи при обновлении не меняется — резерв защищает от ЗАНЯТИЯ
+            // ключа человеком через форму, а не от правки уже заведённой встроенной записи
+            // (StoreTokens в OAuth и Logout в HiggsfieldIntegration кладут токены тем же ключом,
+            // что и EnsureRecord). Совпал с прежним — резерв пропускаем; смена ключа на
+            // резервный по-прежнему отвергается.
+            var allowReserved = string.Equals(key, existing.Key, StringComparison.OrdinalIgnoreCase);
+            var error = ValidateKey(key, list, excludeId: id, allowReserved: allowReserved);
             if (error is not null) throw new InvalidOperationException(error);
 
             existing.Key = key;
@@ -237,13 +243,14 @@ public class McpRegistry
     }
 
     /// <summary>Текст ошибки для 400 или null, если ключ годен.</summary>
-    public string? ValidateKey(string key, IReadOnlyList<McpServerRecord> ownerServers, string? excludeId)
+    public string? ValidateKey(string key, IReadOnlyList<McpServerRecord> ownerServers, string? excludeId,
+        bool allowReserved = false)
     {
         if (string.IsNullOrWhiteSpace(key))
             return "Не задан ключ сервера";
         if (!KeyPattern.IsMatch(key))
             return "Ключ: латиница в нижнем регистре, цифры, дефис и подчёркивание, до 40 символов";
-        if (ReservedKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+        if (!allowReserved && ReservedKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
             return $"Ключ «{key}» занят встроенным сервером продукта";
         if (key.StartsWith(ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase))
             return $"Ключи с префиксом «{ConsultantMemoryPrefix}» заняты памятью персон-консультантов";

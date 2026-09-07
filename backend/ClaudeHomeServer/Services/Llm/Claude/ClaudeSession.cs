@@ -2670,12 +2670,8 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
         // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
-        // в момент склейки, едет в PromptSnapshotDraft.TruncatedSections через PublishPromptSnapshot
-        // — поле контракта снимка, потребитель — UI (отрисовка в задаче Киры параллельно
-        // dc641949). До её завершения факт срезки в продукте НИГДЕ не виден: после ApplyBudget
-        // секции удаляются из Sections, и без явной отрисовки пользователю остаётся только
-        // статус хода.
-        // Задача dc641949.
+        // в момент склейки, едет в PromptSnapshotDraft.TruncatedSections через PublishPromptSnapshot.
+        // Рендерится блоком «Промпт не влез…» в PromptSnapshotDialog.tsx (задача dc641949).
         IReadOnlyList<PromptSectionDto> truncatedSections = [];
 
         // Персональный слой хода (PersonaLayerContributor) — выносим за блок секций: ApplyBudget
@@ -3323,14 +3319,28 @@ public class ClaudeSession : ILlmSessionAdapter
         };
         // EstimateCommandLineLength — единственная точка учёта обвязки раннера, и она
         // ОБЯЗАНА вернуть число. Если кидает (ThrowingRuntimeLauncher в тесте BareArgs или
-        // NoActive у песочницы) — фолбэк на cli+args без обвязки: оценка станет нижней
-        // границей, гейт может не отказать в зоне риска, но ход всё равно не стартанет
-        // (тот же ToRuntime за ним же бросит в BuildArgs или Start). Лучше так, чем ронять
-        // ApplyBudget ДО сборки args и ломать Catch ниже.
+        // NoActive у песочницы, или EnsureProfile внутри Estimate упал на IOException) — фолбэк
+        // на cli+args без обвязки: оценка станет нижней границей, гейт может не отказать
+        // в зоне риска, но ход всё равно не стартанет (тот же ToRuntime за ним же бросит в
+        // BuildArgs или Start). Лучше так, чем ронять ApplyBudget ДО сборки args и ломать
+        // Catch ниже.
+        //
+        // Молча тут нельзя: docker-владелец без обвязки в оценке — это возврат дыры dc641949
+        // (волна 3), которую safeEstimate как раз и прикрывает. Поймать молча и не оставить
+        // следа = гейт «выглядит рабочим, а декоративен». Пишем warning с типом исключения,
+        // чтобы было видно, КТО упал (тест ниже ловит ровно эту строку).
         Func<IReadOnlyList<string>, int> safeEstimate = finalArgs =>
         {
-            try { return _launcher.EstimateCommandLineLength(cmdlineSpec with { Args = finalArgs }); }
-            catch (Exception) { return CmdlineEstimate.ArgCost(cmdlineSpec.FileName) + finalArgs.Sum(CmdlineEstimate.ArgCost); }
+            try
+            {
+                return _launcher.EstimateCommandLineLength(cmdlineSpec with { Args = finalArgs });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] safeEstimate: EstimateCommandLineLength упал ({ex.GetType().Name}: {ex.Message}); " +
+                    "оценка — нижняя граница без обвязки раннера, ход может пройти гейт и упасть на старте");
+                return CmdlineEstimate.ArgCost(cmdlineSpec.FileName) + finalArgs.Sum(CmdlineEstimate.ArgCost);
+            }
         };
         var budget = TurnPromptAssembler.ApplyBudget(
             sections, agentPrompt, args, safeEstimate);
@@ -3341,10 +3351,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // не тот промпт, что отправлен (ревью dc641949: H1 — MaskArgs уже маскировал
         // урезанный --append-system-prompt, а список секций оставался полным).
         // Именно замена содержимого, а не публикация budget.Sections отдельной
-        // переменной: ниже в sections добавляются persona-layer и turn-text, и они
-        // обязаны доехать до шторки.
+        // переменной: turn-text добавляется выше (до ApplyBudget), persona-layer — ниже
+        // отдельным шагом. Оба обязаны доехать до шторки и не попасть под срезку.
         sections.Clear();
         sections.AddRange(budget.Sections);
+        // Слой персоны — отдельный аргумент Combine (PersonaSeparator), в budget.Sections не
+        // входит. Для шторки «что ушло модели» добавляем его сюда: иначе самая жирная часть
+        // (до MaxContractChars у persona-layer) не видна и в картине промпта, и в подсчёте
+        // веса. В склейку не идёт (Combine уже склеил его отдельно выше), Kind="system",
+        // чтобы фронтская фильтрация `s.kind === 'system'` положила его в общий зачёт.
+        if (!string.IsNullOrWhiteSpace(agentPrompt))
+            sections.Add(new PromptSectionDto("persona-layer", "Кто она: роль и характер", agentPrompt, Group: "persona"));
         if (budget.Overflowed)
         {
             // Не влезает даже после срезки всех нестабильных секций. Не стартуем процесс
@@ -4064,9 +4081,9 @@ public class ClaudeSession : ILlmSessionAdapter
         IReadOnlyList<string> args, IReadOnlyList<string> mcpServerNames,
         bool applied, string? inheritedFromId,
         // Секции, удалённые TurnPromptAssembler.ApplyBudget. Пробрасываем в черновик
-        // снимка как TruncatedSections — поле контракта, потребитель — UI (отрисовка в
-        // отдельной задаче Киры параллельно dc641949, фронт здесь не трогаем).
-        // null/пусто → обычный ход, поля в снимке не будет. Задача dc641949.
+        // снимка как TruncatedSections — поле контракта, рендерится блоком «Промпт не влез…»
+        // в PromptSnapshotDialog.tsx (задача dc641949).
+        // null/пусто → обычный ход, поля в снимке не будет.
         IReadOnlyList<PromptSectionDto>? truncated = null)
     {
         if (_events is null) return null;

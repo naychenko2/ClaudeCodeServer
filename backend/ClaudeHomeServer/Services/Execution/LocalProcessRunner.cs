@@ -32,8 +32,12 @@ public sealed class LocalProcessRunner : IProcessLauncher
         //   применим (там вложенные кавычки для cmd /s /c, и «верхняя оценка» — сама строка);
         //   если она длиннее CmdlineLimit — откажем сразу, без сюрпризов.
         //   Без RawArguments — psi.ArgumentList экранирует каждый аргумент, и верхняя оценка =
-        //   sum(ArgCost) по ним + длина пути к exe (ArgCost для самого exe мы не считаем:
-        //   он не обрамляется кавычками, если в нём нет пробелов — запас небольшой).
+        //   sum(ArgCost) по ним + длина пути к exe. .NET обрамляет FileName кавычками ВСЕГДА,
+        //   если в нём есть пробелы (ResolveExecutable на Windows может вернуть
+        //   «C:\Program Files\…\claude.exe»), — ArgCost бы учёл это, но строка пути без пробелов
+        //   остаётся «голой», и верхней оценки хватает: запас на типичном наборе аргументов
+        //   остаётся положительным (проверено в DockerProcessRunnerCmdlineEstimationTests
+        //   и LocalProcessRunnerEnvTests на живой сборке .NET).
         var cliPath = ExecutableResolver.ResolveExecutable(spec.FileName);
         if (spec.RawArguments is { } raw)
             return cliPath.Length + 1 + raw.Length;

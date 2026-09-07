@@ -48,7 +48,15 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // Дешёвый (троттлёный) гарант, что контейнер поднят и актуален
         _sandbox.EnsureRunningAsync().GetAwaiter().GetResult();
 
-        var dockerArgs = BuildDockerExecArgs(spec);
+        // TurnId в Start — уникальный, если ClaudeSession его не проставил. Иначе первый же
+        // docker-запуск без TurnId разделит /tmp/turns/000000000000.pid с соседним процессом,
+        // а run-turn.sh удаляет pid-файл на выходе. Estimate и так использует 12-символьный
+        // плейсхолдер (BuildDockerExecArgs: spec.TurnId ?? "…"); реальный 12-символьный Guid
+        // ему равен по длине, и оценка остаётся согласованной с реальной обвязкой.
+        var finalSpec = spec.TurnId is null
+            ? spec with { TurnId = Guid.NewGuid().ToString("N")[..12] }
+            : spec;
+        var dockerArgs = BuildDockerExecArgs(finalSpec);
 
         var psi = new ProcessStartInfo
         {
@@ -109,9 +117,13 @@ public sealed class DockerProcessRunner : IProcessLauncher
     // Если правила расходятся (новый флаг, иной порядок, доп. переменные) — это место
     // правится ровно один раз, и оценка автоматически последует за реальным запуском.
     // turnId: реальный (TurnId задан ClaudeSession ДО ApplyBudget, см. ClaudeSession.cs:2463);
-    // null — крайний случай на старте, берём консервативный 12-символьный плейсхолдер
-    // (Guid.NewGuid().ToString("N")[..12] в Start выдаёт ровно столько).
-    // Public ради теста симметрии Estimate/Start: единственный способ гарантировать,
+    // null в Estimate — берём 12-символьный плейсхолдер (длина реального Guid[..12] из Start),
+    // в Start — Start генерирует реальный Guid и передаёт сюда через spec with { TurnId = ... }.
+    // Эстетически Estimate и Start используют разные turnId, но оба 12 символов —
+    // длина не разъезжается, и шов «ClaudeSession → раннер» остаётся согласованным.
+    // Симметрия Start↔Estimate по составу обвязки проверяется косвенно через
+    // DockerProcessRunnerCmdlineEstimationTests (см. тест «УчитываетОбвязкуDockerExec»).
+    // Public ради прямой проверки из тестов: единственный способ гарантировать,
     // что добавленный флаг не пройдёт мимо оценки (ревью dc641949, волна 3).
     public List<string> BuildDockerExecArgs(ProcessSpec spec)
     {

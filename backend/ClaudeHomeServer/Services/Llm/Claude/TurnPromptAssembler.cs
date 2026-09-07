@@ -162,7 +162,17 @@ public static class TurnPromptAssembler
         {
             // Удаляем все секции с этим ключом из пула. Их может быть больше одной, если
             // контрибьютор в будущем начнёт добавлять несколько — лишних удалений не будет.
-            var removed = pool.RemoveAll(s => s.Key == key);
+            // removedChars суммируем по удалённым, чтобы размер в TruncatedSections.Size
+            // отражал ФАКТИЧЕСКИЙ объём выкинутого текста (фронт рисует «≈ N символов»).
+            var removed = 0;
+            var removedChars = 0;
+            for (var i = pool.Count - 1; i >= 0; i--)
+            {
+                if (pool[i].Key != key) continue;
+                removedChars += pool[i].Text.Length;
+                pool.RemoveAt(i);
+                removed++;
+            }
             currentCombined = Combine(pool, personaLayer);
             var totalAfter = Estimate(currentCombined);
 
@@ -175,7 +185,7 @@ public static class TurnPromptAssembler
                 // пользователя в заблуждение (стабильные секции по 10 000 не из
                 // TruncationOrder, и ApplyBudget не должен ничего про них писать).
                 if (removed > 0)
-                    truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, false));
+                    truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, false, removedChars));
                 return new PromptBudgetResult(currentCombined, truncated, totalAfter, false, pool);
             }
 
@@ -184,7 +194,7 @@ public static class TurnPromptAssembler
             // нет такого ключа: таких секций ApplyBudget не трогает, и пометка о срезании
             // неуместна (тот же гейт, что у успешной ветки выше).
             if (removed > 0)
-                truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, true));
+                truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, true, removedChars));
         }
 
         // Приоритеты кончились, а порог срезки так и не взят. ОТКАЗ ставим не по нему:
@@ -213,7 +223,7 @@ public static class TurnPromptAssembler
     // Заметка в снимке промпта: ровно одна на каждый урезанный ключ. Текст содержит факт
     // (что обрезали, сколько символов сейчас), без сырого содержимого секции — она
     // вырезана целиком. UI решает, как показать.
-    private static PromptSectionDto MakeTruncatedNote(string key, int totalAfter, int threshold, bool stillOver)
+    private static PromptSectionDto MakeTruncatedNote(string key, int totalAfter, int threshold, bool stillOver, int removedChars)
     {
         var verdict = stillOver
             ? $"После её удаления обвязка всё ещё превышает бюджет ({totalAfter}/{threshold})."
@@ -232,6 +242,9 @@ public static class TurnPromptAssembler
         return new PromptSectionDto(
             Key: $"(truncated:{key})",
             Title: $"Секция «{key}» обрезана",
+            // Size — оригинальная длина срезанной секции: человек видит, чем пришлось
+            // пожертвовать; фронт рисует по нему «≈ N символов» (Trim в PromptSnapshotDialog.tsx).
+            Size: removedChars > 0 ? removedChars : null,
             Text:
                 $"Секция «{key}» удалена из системного промпта: итоговая командная строка " +
                 $"превысила порог {threshold} символов (лимит Windows {CmdlineLimit}). " +

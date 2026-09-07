@@ -4,8 +4,8 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Исключение бросает ClaudeSession, когда ApplyBudget не уложился в порог 30 000
-// даже после срезания всех нестабильных секций. Маркируется как Win32Exception
+// Исключение бросает ClaudeSession, когда оценка ApplyBudget превысила CmdlineLimit
+// после срезания всех приоритетных секций. Маркируется как Win32Exception
 // (NativeErrorCode = 206 ERROR_FILENAME_EXCED_RANGE) — общий catch в RunTurnAsync
 // ловит его тем же кодом, что и реальный Win32Exception от Process.Start, и кладёт
 // в Details ErrorMessage префикс "[Win32:206]". Классификатор по нему отдаёт

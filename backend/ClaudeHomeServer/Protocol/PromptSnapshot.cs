@@ -48,11 +48,8 @@ public record CliLayerDto(
 // вызывающий их не придумывает (иначе пришлось бы передавать заглушку).
 // TruncatedSections — секции, удалённые TurnPromptAssembler.ApplyBudget ради лимита
 // командной строки Windows (32 767 символов). Имеют Kind="truncated" и не участвуют
-// в склейке --append-system-prompt, в модель НЕ уходят. Поле контракта снимка промпта,
-// потребитель — UI (отрисовка в задаче Киры параллельно dc641949); до её завершения
-// факт срезки в продукте НИГДЕ не виден — секция удаляется из итогового пула
-// (см. ApplyBudget.Sections), и без отрисовки пользователю остаётся только статус
-// хода. Задача dc641949.
+// в склейке --append-system-prompt, в модель НЕ уходят. Поле контракта снимка промпта
+// — рендерится блоком «Промпт не влез…» в PromptSnapshotDialog.tsx (задача dc641949).
 public record PromptSnapshotDraft(
     bool Applied,
     string? InheritedFromId,

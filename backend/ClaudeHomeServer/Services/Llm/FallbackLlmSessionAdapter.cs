@@ -439,6 +439,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null;
     }
 
+    // Снимает префикс "[Win32:NNN]" из Details, который ClaudeSession кладёт для
+    // классификатора. Пользовательский текст ошибки без него: человек видит «Промпт хода
+    // превысил…», а не «[Win32:206]Промпт хода превысил…». Сам код через ExtractWin32Code
+    // уже едет в outcome.Win32ErrorCode, и классификатор PromptOverflow не сломается.
+    private static string? StripWin32Marker(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.StartsWith("[Win32:", StringComparison.Ordinal))
+            return text;
+        var end = text.IndexOf(']');
+        if (end < 0) return text;
+        return text[(end + 1)..];
+    }
+
     // Сырые тексты задержанных ошибок попытки — в «Подробности» маркера подмены.
     // null — гасить было нечего (ошибка не приходила).
     private static string? HeldErrorDetails(IEnumerable<ServerMessage> held)
@@ -1599,10 +1612,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             turn.Settled = true;
         }
 
-        // Сырой текст ошибки — в Details (там же, куда ClaudeSession кладёт "[Win32:NNN]"
-        // префикс, уже виден пользователю через «Подробности» маркера ошибки). TurnFailureText.
-        // PromptOverflow — для Text, осмысленная формулировка с указанием действий.
-        var raw = end.ErrorText ?? HeldErrorDetails(held);
+        // Сырой текст ошибки — в Details, но без технического маркера "[Win32:NNN]":
+        // человек видит его в «Подробности» маркера ошибки, и ему незачем знать про Win32-код.
+        // Сам маркер НЕ теряем — ExtractWin32Code выше уже положил 206 в Win32ErrorCode
+        // для классификатора; здесь просто снимаем первые байты "[Win32:206]" из видимого
+        // текста. Осмысленная формулировка — TurnFailureText.PromptOverflow в Text.
+        var raw = StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held));
         await _downstream(new ErrorMessage(TurnFailureText.PromptOverflow,
             ExpectResultFollows: true, Details: raw));
 

@@ -455,6 +455,43 @@ public class ClaudeSessionBareArgsTests : IDisposable
             "_lastBareModeApplied=false → снимок показывает обычный режим");
     }
 
+    /// <summary>
+    /// СТОРОЖ ШВА «ClaudeSession → runner» (M1): safeEstimate обязан ДЕЛАТЬ вызов
+    /// _launcher.EstimateCommandLineLength и при его исключении ПИСАТЬ warning в stderr.
+    /// Без этого шов выглядит рабочим, но декоративен: docker-владелец без обвязки в оценке
+    /// снова ловит Win32 206 уже после старта (та же дыра dc641949, что гейт волны 3 не
+    /// покрывал — он смотрел только на DockerProcessRunner, а не на связку).
+    /// Мутация «заменить тело safeEstimate на локальную формулу без обращения к _launcher»
+    /// или «поменять catch (Exception) на catch (NotSupportedException)» — RED по stderr.
+    /// </summary>
+    [Fact]
+    public async Task safeEstimate_EstimateБросает_ВstderrУходитWarning()
+    {
+        var providers = LocalProviders(localBareMode: false, localSystemPromptFile: null);
+        var throwingLauncher = new ThrowingRuntimeLauncher(_processes);
+
+        var originalErr = Console.Error;
+        var errCapture = new System.IO.StringWriter();
+        Console.SetError(errCapture);
+        try
+        {
+            await RunTurnAsyncWithLauncher(LocalModelId, providers, throwingLauncher);
+
+            var err = errCapture.ToString();
+            err.Should().Contain("[ClaudeSession] safeEstimate: EstimateCommandLineLength упал",
+                "catch обязан диагностировать — иначе шов ClaudeSession → раннер выглядит "
+                + "рабочим, но не работает (тот же класс ошибки, что и блокер dc641949)");
+            err.Should().Contain("NotSupportedException",
+                "диагностика обязана нести тип исключения: реальный сбой docker-владельца — "
+                + "NotSupportedException из ThrowingMapper.ToRuntime или IOException из EnsureProfile, "
+                + "и без типа причины в stderr отличить их нельзя");
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
     // ---------- Контракт BuildBareModeArgs (резолв пути + снятие флагов) ----------
 
     private static (string PromptPath, string PromptRel) CreateServerPromptFile(string rel = "prompts/local.md")

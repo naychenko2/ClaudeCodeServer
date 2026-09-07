@@ -195,7 +195,7 @@ function TruncatedSectionsBlock({ sections }: { sections: PromptSection[] }) {
               а не «мы пожертвовали куском ради запуска» */}
           Промпт не влез в командную строку Windows, поэтому CCS срезал {sections.length}
           {' '}{sections.length === 1 ? 'секцию' : (sections.length < 5 ? 'секции' : 'секций')},
-          {' '}чтобы ход запустился вовсе. Модель их не получила.
+          {' '}чтобы ход вообще запустился. Модель их не получила.
         </span>
       </div>
       <div>

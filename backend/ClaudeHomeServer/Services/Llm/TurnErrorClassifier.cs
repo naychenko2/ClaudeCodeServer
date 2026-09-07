@@ -36,11 +36,11 @@ public enum FallbackErrorClass
     // Промпт хода превысил лимит командной строки Windows (Win32 ERROR_FILENAME_EXCED_RANGE,
     // код 206). Локальный детерминированный отказ: сбой не в провайдере, и перебор других
     // моделей ничего не лечит (длина промпта от выбора пары не зависит). Маркер ставит
-    // ClaudeSession (см. PromptOverflowTests и PrependWin32Marker): при сбое старта процесса
-    // префикс "[Win32:206]" попадает в Details ErrorMessage, оттуда — в ErrorText попытки.
-    // FallbackLlmSessionAdapter: attempts=1, фолбэк не запускается, человек видит
-    // TurnFailureText.PromptOverflow. Источник подмены — задача dc641949 (инцидент 2026-09-07,
-    // чат 74f1c3d6: 5 попыток цепочки по 9 секунд каждая на сломанном промпте).
+    // ClaudeSession: при сбое старта процесса префикс "[Win32:206]" попадает в Details
+    // ErrorMessage, оттуда — в ErrorText попытки. FallbackLlmSessionAdapter: attempts=1,
+    // фолбэк не запускается, человек видит TurnFailureText.PromptOverflow. Источник подмены —
+    // задача dc641949 (инцидент 2026-09-07, чат 74f1c3d6: 5 попыток цепочки по 9 секунд
+    // каждая на сломанном промпте).
     PromptOverflow,
 }
 

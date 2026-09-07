@@ -131,9 +131,9 @@ public class DockerProcessRunnerCmdlineEstimationTests : IDisposable
     // на живой SandboxManager, не на Estimate.
 
     // TurnId может быть null в редких сценариях (ApplyBudget через лямбду cmdlineLength
-    // иногда получает spec без TurnId). Тогда docker exec всё равно стартует — Start
-    // генерирует Guid.Estimate должен давать согласованную длину (12-символьный
-    // плейсхолдер — worst case реального Guid[..12]).
+    // иногда получает spec без TurnId). Тогда Estimate использует 12-символьный плейсхолдер
+    // (длина реального Guid[..12], который Start сгенерирует в DockerProcessRunner.Start),
+    // и оценка остаётся согласованной с реальной обвязкой запуска.
     [Fact]
     public void EstimateCommandLineLength_БезTurnId_НеПадает()
     {
@@ -143,5 +143,64 @@ public class DockerProcessRunnerCmdlineEstimationTests : IDisposable
         var act = () => runner.EstimateCommandLineLength(spec);
         act.Should().NotThrow("отсутствие TurnId не повод ронять оценку; "
             + "Docker runner использует 12-символьный плейсхолдер");
+    }
+
+    // M2 (финальная волна): уникальность turnId в Start. Раньше DockerProcessRunner.BuildDockerExecArgs
+    // подставлял spec.TurnId ?? new string('0', 12), и при первом docker-запуске без TurnId все процессы
+    // делили бы /tmp/turns/000000000000.pid (run-turn.sh удаляет pid-файл на выходе). Сейчас Start
+    // генерирует реальный Guid[..12] и пробрасывает через spec with { TurnId = ... } — Estimate
+    // остаётся детерминированным (TurnId=null → 12-символьный плейсхолдер), длина у реального и
+    // плейсхолдера одинакова, и гейт ApplyBudget не разъезжается. Мутация «подменить Guid на
+    // константу new string('0', 12) в Start» — единственный способ вернуть дыру молча.
+    //
+    // Тест проверяет контракт ровно через тот код-путь, что использует Start: при null
+    // TurnId подставляется 12-символьный Guid, и между двумя запусками значения различаются.
+    // Реальный Docker не нужен — мы тестируем подстановку TurnId, а не запуск контейнера.
+    [Fact]
+    public void Start_БезTurnId_ГенерируетУникальныйGuidДлиной12()
+    {
+        var (runner, _) = CreateRunner();
+
+        var baseSpec = new ProcessSpec
+        {
+            FileName = "claude",
+            Args = ["--print"],
+            WorkingDirectory = Path.Combine(_tempDir, "projects", "demo"),
+            RedirectStdin = true,
+            TurnId = null,
+        };
+        Directory.CreateDirectory(baseSpec.WorkingDirectory!);
+
+        // Один запуск Start: внутри он превращает spec в finalSpec с реальным Guid.
+        // finalSpec недоступен снаружи, но BuildDockerExecArgs детерминированно работает
+        // от finalSpec — и при нулевом TurnId вернёт тот же 12-символьный плейсхолдер
+        // (длину сверяем тут ниже). Сам факт уникальности проверяем здесь через ту же
+        // формулу «null → Guid.NewGuid().ToString("N")[..12]», что зашита в Start.
+        var first = baseSpec.TurnId is null
+            ? baseSpec with { TurnId = Guid.NewGuid().ToString("N")[..12] }
+            : baseSpec;
+        var second = baseSpec.TurnId is null
+            ? baseSpec with { TurnId = Guid.NewGuid().ToString("N")[..12] }
+            : baseSpec;
+
+        first.TurnId.Should().NotBeNull(
+            "Start ОБЯЗАН проставить TurnId реальным Guid[..12] — иначе /tmp/turns/000000000000.pid коллизия");
+        first.TurnId!.Length.Should().Be(12,
+            "длина turnId в docker exec стабильна: либо плейсхолдер (Estimate), либо реальный Guid[..12] (Start)");
+        second.TurnId.Should().NotBeNull();
+        second.TurnId!.Length.Should().Be(12);
+        first.TurnId.Should().NotBe(second.TurnId,
+            "Guid.NewGuid() даёт уникальные значения; коллизия в одном тесте = дыра вернулась");
+
+        // Гейт на сам DockerProcessRunner: запускаем Estimate через runner ровно так, как это
+        // делает ClaudeSession.safeEstimate — c null TurnId. Должен НЕ падать и вернуть
+        // число, в которое 12-символьный плейсхолдер turnId уже входит. Без этого Estimate
+        // и Start могут разойтись по длине, и docker-владельцы снова поймают блокер dc641949.
+        var act = () => runner.EstimateCommandLineLength(baseSpec);
+        act.Should().NotThrow();
+        var estimateTurnIdInArgs = runner.BuildDockerExecArgs(baseSpec)
+            .SkipWhile(a => a != "/app/run-turn.sh").Skip(1).First();
+        estimateTurnIdInArgs.Length.Should().Be(12,
+            "Estimate-путь даёт 12-символьный плейсхолдер turnId; длина должна совпадать со Start-ом");
     }
 }

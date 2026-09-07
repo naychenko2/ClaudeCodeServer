@@ -46,6 +46,11 @@ public record CliLayerDto(
 
 // Черновик снимка: то, что отдаёт ClaudeSession. Id и CreatedAt проставляет стор —
 // вызывающий их не придумывает (иначе пришлось бы передавать заглушку).
+// TruncatedSections — секции, удалённые TurnPromptAssembler.ApplyBudget ради лимита
+// командной строки Windows (32 767 символов). Имеют Kind="truncated" и не участвуют
+// в склейке --append-system-prompt, в модель НЕ уходят. Нужны для шторки "что ушло
+// модели" — пользователь видит, ЧТО обрезано и ПОЧЕМУ. null/пусто — срезки не было,
+// обычный ход. Задача dc641949.
 public record PromptSnapshotDraft(
     bool Applied,
     string? InheritedFromId,
@@ -54,7 +59,8 @@ public record PromptSnapshotDraft(
     IReadOnlyList<string> McpServers,
     string? Model,
     string? Mode,
-    CliLayerDto? CliLayer = null);
+    CliLayerDto? CliLayer = null,
+    IReadOnlyList<PromptSectionDto>? TruncatedSections = null);
 
 // Снимок на диске и в выдаче эндпоинта.
 //   Applied=false — ход доигрывался в живом процессе (same-process), и этот промпт модели
@@ -72,4 +78,5 @@ public record PromptSnapshotDto(
     string? Model,
     string? Mode,
     CliLayerDto? CliLayer = null,
-    string? CliLayerFrom = null);
+    string? CliLayerFrom = null,
+    IReadOnlyList<PromptSectionDto>? TruncatedSections = null);

@@ -346,4 +346,79 @@ public class TurnErrorClassifierTests
     [Fact]
     public void AuthFailure_WireName_AuthFailure()
         => TurnErrorClassifier.WireName(FallbackErrorClass.AuthFailure).Should().Be("auth_failure");
+
+    // ===== PromptOverflow: Win32:206 ERROR_FILENAME_EXCED_RANGE (задача dc641949) =====
+
+    // Канал, по которому приходит сбой старта процесса: ClaudeSession бросает Win32Exception
+    // при Process.Start (или локальный PromptOverflowException до Start), маркирует
+    // Details префиксом "[Win32:206]" и через FallbackLlmSessionAdapter.NoteWin32Code
+    // пробрасывает в outcome.Win32ErrorCode. Классификатор должен выдать PromptOverflow,
+    // а не Unreachable — иначе локальная причина маскируется под мёртвый эндпоинт и фолбэк
+    // крутит 5 пар впустую (история инцидента 2026-09-07, чат 74f1c3d6).
+    [Fact]
+    public void Win32Error206_HasResultFalse_КлассPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "Имя файла или его расширение имеет слишком большую длину.",
+            Win32ErrorCode = 206,
+        };
+        TurnErrorClassifier.Classify(outcome)
+            .Should().Be(FallbackErrorClass.PromptOverflow,
+                "Win32:206 (ERROR_FILENAME_EXCED_RANGE) — локальный сбой старта, не Unreachable");
+    }
+
+    // Тот же случай, но маркер не дошёл через поле Win32ErrorCode — fallback на текст.
+    // Стоит ДО "процесс умер без result → Unreachable", чтобы вторая ветка не выиграла.
+    [Fact]
+    public void Win32Marker_ВErrorText_HasResultFalse_КлассPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "[Win32:206]Имя файла или его расширение имеет слишком большую длину.",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.PromptOverflow,
+            "префикс \"[Win32:206]\" в ErrorText — тот же локальный сбой старта");
+    }
+
+    // Другой Win32-код — НЕ PromptOverflow. Идёт по общему правилу (Unreachable),
+    // потому что настоящая причина не та (например, ERROR_ACCESS_DENIED=5 на неверных
+    // правах к exe). Тест-фикстура на будущее: при появлении новых "локальных" классов
+    // мы добавим сюда свой, а PromptOverflow останется только под 206.
+    [Fact]
+    public void Win32Error5_AccessDenied_HasResultFalse_КлассНеPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "Access is denied.",
+            Win32ErrorCode = 5,
+        };
+        TurnErrorClassifier.Classify(outcome).Should().NotBe(FallbackErrorClass.PromptOverflow,
+            "PromptOverflow — только Win32:206 ERROR_FILENAME_EXCED_RANGE");
+    }
+
+    // Регрессия: в обычной переписке чат может процитировать "[Win32:206]" — мы НЕ
+    // должны ложно классифицировать это как PromptOverflow. Защита держится на
+    // HasWin32Marker (проверяет StartWith, а не Contains) и на HasResult=true для
+    // успешного result. Этот тест ловит и противоположный регресс — что
+    // HasWin32Marker случайно расширили до Contains.
+    [Fact]
+    public void Win32Marker_ВнутриТекста_НеНачалоСтроки_HasResultTrue_КлассНеМеняется()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = true,
+            Subtype = "success",
+            ErrorText = "обсуждали: \"[Win32:206]\" встречалось в соседнем логе",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "HasWin32Marker смотрит на StartWith, цитата в середине текста — не маркер старта");
+    }
+
+    [Fact]
+    public void PromptOverflow_WireName()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.PromptOverflow).Should().Be("prompt_overflow");
 }

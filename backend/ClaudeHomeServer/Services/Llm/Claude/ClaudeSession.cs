@@ -1956,7 +1956,41 @@ public class ClaudeSession : ILlmSessionAdapter
                     // формулировка (точечные catch по типам дыру не закрывают: следующее
                     // исключение всё равно приезжало в ленту сырым .NET-текстом), сырой
                     // ex.Message живёт под «Подробностями» и в логе выше
-                    await _onMessage(new ErrorMessage(TurnFailureText.ForException(ex), Details: ex.Message));
+                    //
+                    // Маркер Win32-кода: Win32Exception.NativeErrorCode — стабильный числовой
+                    // идентификатор причины (напр. 206 = ERROR_FILENAME_EXCED_RANGE). Текст
+                    // ошибки ОС локализован, числовой код — нет. Кладём префикс "[Win32:NNN]"
+                    // в Details: адаптер через turn.NoteErrorMeta пробрасывает в
+                    // TurnAttemptOutcome.Win32ErrorCode, TurnErrorClassifier ловит 206 и
+                    // отдаёт PromptOverflow (фолбэк не запускается). Префикс стоит первым
+                    // токеном и HasWin32Marker в классификаторе начинает строго с него —
+                    // случайные упоминания "[Win32:206]" в обычной переписке чата ложно не
+                    // ловятся. Задача dc641949 (инцидент 2026-09-07, чат 74f1c3d6).
+                    //
+                    // PromptOverflowException: локальный детерминированный сбой, мы его
+                    // узнаём заранее на склейке промпта и Process.Start не вызываем — но
+                    // Win32Exception-маркер ставим тот же (206), адаптер видит PromptOverflow
+                    // по тому же каналу. Текст в Text берём осмысленный (TurnFailureText.
+                    // PromptOverflow), Generic из ForException тут вводит в заблуждение
+                    // («прервался, попробуйте ещё раз» — а проблема в размере промпта).
+                    string details;
+                    string text;
+                    if (ex is PromptOverflowException)
+                    {
+                        details = $"[Win32:206]{ex.Message}";
+                        text = TurnFailureText.PromptOverflow;
+                    }
+                    else if (ex is System.ComponentModel.Win32Exception w32)
+                    {
+                        details = $"[Win32:{w32.NativeErrorCode}]{ex.Message}";
+                        text = TurnFailureText.ForException(ex);
+                    }
+                    else
+                    {
+                        details = ex.Message;
+                        text = TurnFailureText.ForException(ex);
+                    }
+                    await _onMessage(new ErrorMessage(text, Details: details));
                 }
                 finally
                 {
@@ -2633,6 +2667,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
         List<PromptSectionDto> sections = [];
 
+        // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
+        // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
+        // в момент склейки, едет в PromptSnapshotDraft.TruncatedSections через PublishPromptSnapshot
+        // и попадает в шторку "что ушло модели" как явный список "что обрезали и почему".
+        // Задача dc641949.
+        IReadOnlyList<PromptSectionDto> truncatedSections = [];
+
         // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Ход в новом процессе
         // (claude --print --resume) получает его через --append-system-prompt — тот не
         // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/правило
@@ -3091,7 +3132,31 @@ public class ClaudeSession : ILlmSessionAdapter
                     : null);
             personaLayerPrompt = agentPrompt;
 
-            var combinedPrompt = TurnPromptAssembler.Combine(sections, agentPrompt);
+            // Бюджет промпта на склейке: считает сумму длин аргументов + cli-пути +
+            // WorkingDirectory + собранного --append-system-prompt. При превышении 30 000
+            // срезает нестабильные секции в порядке TruncationOrder. Если после срезания
+            // ВСЕХ пяти строка всё равно длиннее бюджета — кидаем PromptOverflowException,
+            // общий catch выше (RunTurnAsync) ловит и кладёт [Win32:206]-совместимый маркер
+            // в Details ErrorMessage. ApplyBudget чистый: единственный путь сборки, шов
+            // между секциями и командной строкой — здесь. Задача dc641949.
+            //
+            // КРИТИЧНО: ApplyBudget вызываем ДО args.AddRange(["--append-system-prompt", …])
+            // ниже — иначе args будет содержать старый combinedPrompt и пересчёт потеряет
+            // смысл (длина в Evaluate держится по ещё-не-добавленному --append-system-prompt,
+            // он там не учитывается; после AddRange — тоже не учитывается, см. реализацию).
+            var budget = TurnPromptAssembler.ApplyBudget(
+                sections, agentPrompt, args, _launcher.ClaudeCliCommand, _rootPath);
+            var combinedPrompt = budget.CombinedPrompt;
+            truncatedSections = budget.TruncatedSections;
+            if (budget.Overflowed)
+            {
+                // Не влезает даже после срезки всех нестабильных секций. Не стартуем процесс
+                // (Process.Start гарантированно бросил бы Win32Exception с кодом 206 —
+                // мы знаем причину заранее). Бросаем наружу — общий catch в RunTurnAsync
+                // обработает и сформирует [Win32:206]-префикс в Details ErrorMessage.
+                throw new PromptOverflowException(budget.TotalCmdlineChars,
+                    TurnPromptAssembler.BudgetThreshold);
+            }
 
             if (!string.IsNullOrWhiteSpace(combinedPrompt))
                 args.AddRange(["--append-system-prompt", combinedPrompt]);
@@ -3283,7 +3348,8 @@ public class ClaudeSession : ILlmSessionAdapter
             // TurnAccumulator сбросит текущий ход, и id уже некуда будет прицепить.
             // applied=false — промпт пересобран, но модели не ушёл: работает промпт старта.
             PublishPromptSnapshot(sections, args, mcpServerNames,
-                applied: false, inheritedFromId: existing.PromptSnapshotId);
+                applied: false, inheritedFromId: existing.PromptSnapshotId,
+                truncated: truncatedSections);
             await existing.TurnTcs.Task.WaitAsync(ct);
             // Прогон умер, не выдав ни одного события хода (TOCTOU: фоновые агенты кончились,
             // CLI завершается сразу после успешной записи в stdin) — гонка same-process, а не
@@ -3334,7 +3400,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // могли на него сослаться. Процесс может не стартовать — тогда снимок останется
         // с applied=true при неушедшем промпте, но ход тут же закончится ошибкой рядом.
         var turnSnapshotId = PublishPromptSnapshot(sections, args, mcpServerNames,
-            applied: true, inheritedFromId: null);
+            applied: true, inheritedFromId: null,
+            truncated: truncatedSections);
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
@@ -3944,7 +4011,12 @@ public class ClaudeSession : ILlmSessionAdapter
     /// </summary>
     private string? PublishPromptSnapshot(IReadOnlyList<PromptSectionDto> sections,
         IReadOnlyList<string> args, IReadOnlyList<string> mcpServerNames,
-        bool applied, string? inheritedFromId)
+        bool applied, string? inheritedFromId,
+        // Секции, удалённые TurnPromptAssembler.ApplyBudget. Пробрасываем в черновик
+        // снимка как TruncatedSections — UI рисует их в шторке "что ушло модели" как
+        // явный список (что обрезали и почему). null/пусто → обычный ход, поля в
+        // снимке не будет. Задача dc641949.
+        IReadOnlyList<PromptSectionDto>? truncated = null)
     {
         if (_events is null) return null;
 
@@ -3954,7 +4026,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Черновик нужен подписчику: собираем до шины, чтобы не зависеть от формы его файлов.
         var draft = new PromptSnapshotDraft(
             applied, inheritedFromId, sections, MaskArgs(args), mcpServerNames,
-            EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles());
+            EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles(),
+            TruncatedSections: truncated);
         // PublishAsync не бросает, но для понятного журнала под try.
         try
         {

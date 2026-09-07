@@ -144,4 +144,63 @@ public class PromptSnapshotStoreTests : IDisposable
         loaded.CliLayerFrom.Should().Be(first);
         loaded.CliLayer!.Files.Should().ContainSingle().Which.Text.Should().Be("правила");
     }
+
+    // ===== TruncatedSections: пометка в снимке об урезанных секциях (задача dc641949) =====
+
+    [Fact]
+    public void TruncatedSections_БезСрезки_ВСнимкеНетПоля()
+    {
+        // Обычный ход: бюджет не превышен, TruncatedSections=null. JSON-сериализация
+        // (DefaultIgnoreCondition.WhenWritingNull) скрывает null-поле на диске, и при
+        // загрузке оно остаётся null — UI не должен показывать пустую плашку "что
+        // обрезали" в шторке для штатного хода.
+        var id = _store.Save("chat1", Draft())!;
+        var loaded = _store.Load("chat1", id)!;
+        loaded.TruncatedSections.Should().BeNull();
+    }
+
+    [Fact]
+    public void TruncatedSections_СЗаметкой_СохраняютсяИЧитаются()
+    {
+        // Срезка случилась: ApplyBudget вернул непустой список. Шторка UI должна видеть
+        // ПОЛНЫЙ текст каждой пометки (что обрезали, сколько символов сейчас, почему
+        // секция вырезана). Trim проходит по тем же потолкам, что и для Sections — заметки
+        // короткие, усечение не активируется, контракт — ключ остаётся (truncated:code-graph).
+        var truncated = new List<PromptSectionDto>
+        {
+            new("(truncated:code-graph)", "Секция «code-graph» обрезана",
+                "Секция удалена из промпта: cmdline превысил 30 000 символов. После удаления обвязка уложилась в бюджет (29 800/30 000).",
+                Kind: "truncated"),
+        };
+        var id = _store.Save("chat1", new PromptSnapshotDraft(
+            Applied: true, InheritedFromId: null,
+            Sections: [new PromptSectionDto("project", "Промпт проекта", "короткий")],
+            CliArgs: ["--print"], McpServers: ["tasks"], Model: "opus", Mode: "acceptEdits",
+            CliLayer: null, TruncatedSections: truncated))!;
+
+        var loaded = _store.Load("chat1", id)!;
+        loaded.TruncatedSections.Should().NotBeNull()
+            .And.HaveCount(1);
+        loaded.TruncatedSections![0].Key.Should().Be("(truncated:code-graph)",
+            "ключ помечает, какая именно секция срезана — UI группирует по нему");
+        loaded.TruncatedSections[0].Kind.Should().Be("truncated",
+            "Kind отличает пометку от обычных system/turn/cli-file секций");
+        loaded.TruncatedSections[0].Text.Should().Contain("30 000",
+            "пометка содержит цифры — пользователь видит, НАСКОЛЬКО обвязка ушла за лимит");
+    }
+
+    [Fact]
+    public void TruncatedSections_ПустойСписок_ВСнимкеНетПоля()
+    {
+        // Защита от регрессии: непустой массив нулевой длины не должен превратиться
+        // в "плашку без содержимого". TrimOrNull возвращает null → JSON-сериализация
+        // с WhenWritingNull уносит поле целиком.
+        var id = _store.Save("chat1", new PromptSnapshotDraft(
+            Applied: true, InheritedFromId: null,
+            Sections: [new PromptSectionDto("project", "Промпт проекта", "короткий")],
+            CliArgs: ["--print"], McpServers: ["tasks"], Model: "opus", Mode: "acceptEdits",
+            CliLayer: null, TruncatedSections: []))!;
+
+        _store.Load("chat1", id)!.TruncatedSections.Should().BeNull();
+    }
 }

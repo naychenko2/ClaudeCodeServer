@@ -319,18 +319,9 @@ public class SubsystemBoundaryTests
         // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
         // Пост-билд фаза `ConfigureApp` регистрирует языковые провайдеры (`.cs`/`.ts`/`.tsx`),
         // MCP-тулсет `CodeGraphToolset` живёт в `Services/Mcp/Http` и регистрируется в Program.cs.
-        // Допуски к корню Services — точечные:
-        // 1) `ProjectManager` (Services/ корень) — граф зависит от проектов
-        //    (`CodeGraphService.cs:43` параметр ctor и поле `_projects:15`).
-        // 2) Knowledge — WorkspaceKnowledgeStore: IL-видимость (задача `8beee75e`).
-        //    `CodeGraphService`/`QueryService`/`PromptProvider` зовут
-        //    `WorkspaceKnowledgeStore.NormalizePath(...)` static-метод из тел методов
-        //    (все три класса, видимо IL-сканом). Шов был задокументирован в комментарии
-        //    раньше как «отдельный allow-list под static-вызов не нужен» — с IL-сканом
-        //    шов стал видимым и нужен явный допуск. Префикс `Services.Knowledge`
-        //    НЕ открываем: точечный допуск ровно на нужный тип.
-        // Примитив `ResolveExecutable("node")` был вынесен в `Services.ExecutableResolver`
-        // (шаг 5, задача `57b5e9bc`) — `CodeGraph` зовёт его через корень Services, шов снят.
+        // Допуски к корню Services — точечные (см. ниже): `ExecutableResolver`. Прежний допуск
+        // `ProjectManager` снят: CodeGraph получает проект через шов `IProjectRootLookup` из Core,
+        // прямой зависимости от `Services.ProjectManager` в CodeGraph больше нет.
         new object[]
         {
             new VerticalBoundary(
@@ -344,7 +335,6 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
                     // ExecutableResolver (шаг 5) — корневой примитив поиска по PATH+PATHEXT.
                     // `TypeScriptGraphProvider.cs:154` зовёт `ResolveExecutable("node")`

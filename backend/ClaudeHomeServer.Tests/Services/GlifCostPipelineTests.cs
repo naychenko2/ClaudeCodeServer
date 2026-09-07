@@ -79,17 +79,15 @@ public class GlifCostPipelineTests : IDisposable
         var notesSvc = new NotesService(_projectManager, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, _userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, _userStore, config, NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _spend = new SpendStore(Path.Combine(_dir, "spend"), detailDays: 30);
 
         _sessions = new SessionManager(_projectManager, _hub.Object, _history, config, adapters, falCost, usage,
-            appSettings, _userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory,
-            bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
+            appSettings, _userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
             spend: _spend, glif: glif);
     }
 

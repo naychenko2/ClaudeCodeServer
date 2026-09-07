@@ -96,10 +96,8 @@ public class VoiceLocalTurnTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _actionOverrides = new LocalActionOverridesStore(config);
@@ -111,8 +109,8 @@ public class VoiceLocalTurnTests : IDisposable
         var router = new LocalActionRouter(ollama, _actionOverrides, config, NullLogger<LocalActionRouter>.Instance);
 
         _sut = new SessionManager(projectManager, hub.Object, _historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox,
             router: router, ollama: ollama);
     }

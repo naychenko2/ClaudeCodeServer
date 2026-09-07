@@ -107,17 +107,15 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(userStore);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
         var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
         var bindings = new PersonaBindingsService(personas, projectManager, new WorkspaceKnowledgeStore(config), notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var historyService = new ChatHistoryService(config);
         return new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory,
-            bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+            appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
     }
 
     private TaskItem CreateTrackedTask(string ownerId = "user-1")

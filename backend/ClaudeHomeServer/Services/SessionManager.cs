@@ -6,10 +6,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Memory;
-using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
-using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
 using Microsoft.AspNetCore.SignalR;
@@ -526,13 +523,9 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // Удаление сессии (чат/проектная сессия) — для авто-движков: сбросить ссылки на чат правила.
     public event Action<Session>? OnSessionDeleted;
 
-    // Auto-recall заметок (фича notes-auto-recall): семантический индекс + гейт по флагу
-    private readonly NotesKnowledgeService _notesKb;
     private readonly FeatureFlagService _flags;
     private readonly PersonaManager _personas;
-    private readonly PersonaMemoryService _personaMemory;
     private readonly PersonaBindingsService _bindings;
-    private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
     // Время последней фактической активности аккаунта пула (живой ход/пинг) для идл-пинга
     // подписок (SubscriptionUsageWarmupService); null — в тестах, тогда просто не трогаем.
@@ -552,7 +545,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly Git.GitService? _git;
     // Учёт glif-генераций (null — в тестах или когда фича не настроена)
     private readonly GlifAccountService? _glif;
-    private readonly SkillsService? _skills;
     // Аналитика расхода токенов (null — в тестах: сбор выключен)
     private readonly Spend.ISpendCollector? _spend;
     // Граф кода: уборка снимка отдельного дерева чата при его удалении (ADR-003); null — в тестах
@@ -611,9 +603,8 @@ public class SessionManager : IDisposable, ITeamNotifier,
         AppSettingsService appSettings, UserStore users, JwtService jwt,
         Microsoft.AspNetCore.Hosting.Server.IServer server,
         LlmProviderRegistry llmProviders,
-        NotesKnowledgeService notesKb, FeatureFlagService flags, PersonaManager personas,
-        PersonaMemoryService personaMemory, PersonaBindingsService bindings,
-        PersonaPromptBuilder promptBuilder,
+        FeatureFlagService flags, PersonaManager personas,
+        PersonaBindingsService bindings,
         ClaudeSubscriptionPool subscriptionPool,
         ILogger<SessionManager> log,
         Execution.ILauncherFactory launchers,
@@ -645,9 +636,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         SubscriptionActivityTracker? activity = null,
         // Опционально: учёт glif-генераций; без него детект glif_cost не работает
         GlifAccountService? glif = null,
-        // Опционально (в тестах не передаётся): скиллы для блока «Командные механики»
-        // руководителя проекта; без него в блоке остаются механики без скилла
-        SkillsService? skills = null,
         // Опционально (в тестах не передаётся): снимки промпта ходов — кнопка «какой промпт
         // ушёл» под постом. Без него ходы идут как раньше, просто без снимков.
         PromptSnapshotStore? promptSnapshots = null,
@@ -693,7 +681,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _router = router;
         _ollama = ollama;
 
-        _skills = skills;
         _mcpRegistry = mcpRegistry;
         _mcpSecrets = mcpSecrets;
         _mcpStatus = mcpStatus;
@@ -788,13 +775,10 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // пульса волны — TeamWaveService._quietThreshold
         _freshTurnThreshold = TimeSpan.FromMinutes(
             int.TryParse(config["TeamImplement:QuietMinutes"], out var quietMin) && quietMin > 0 ? quietMin : 15);
-        _notesKb = notesKb;
         _flags = flags;
         // _personas инициализирован выше (до создания TeamPlanService, чтобы вертикаль
         // не получила null в конструкторе).
-        _personaMemory = personaMemory;
         _bindings = bindings;
-        _promptBuilder = promptBuilder;
         _subscriptionPool = subscriptionPool;
         _log = log;
 
@@ -2777,10 +2761,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return (BuildMemoryContext(ownerId, persona.Id, session.ProjectId), persona);
     }
 
-    // Блок «Командные механики» для руководителя проекта (мост в механики): добавляется,
-    // только когда персона чата — дефолт-персона его проекта (Project.DefaultPersonaId).
-    // Состав — по установленным скиллам
-    // (TeamMechanicsPromptCatalog); без SkillsService (тесты) остаются механики без скилла.
     // Провайдер блока «Привязанные знания и правила» персоны (флаг persona-bindings):
     // на каждый ход перечитывает персону (привязки могли измениться) и собирает
     // индекс + always-выжимки. mountedSections — секции workspace, реально смонтированные

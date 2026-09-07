@@ -29,9 +29,9 @@ namespace ClaudeHomeServer.Services.Team;
 // Лок штаба — на стороне вертикали (ConcurrentDictionary по sessionId), а не на entry.
 // Так разорван цикл «нужен entry для lock → нужен шов → нельзя»: вертикаль держит
 // собственный словарь блокировок, а само TeamImplement достаётся через публичный
-// SessionManager.GetById(...).TeamImplement. Расхождение с прежним entry.TeamLock
-// невозможно по построению: до этой волны других держателей лока не было, и весь
-// мутирующий код штаба проходит через WithTeamState.
+// SessionManager.GetById(...).TeamImplement. Прежнее поле SessionEntry.TeamLock было
+// удалено (этап 4, приём хода, 2026-09-07): за ненадобностью — до этой волны других
+// держателей лока не было, и весь мутирующий код штаба проходит через WithTeamState.
 internal sealed class TeamStateService
 {
     private readonly SessionManager _sessions;

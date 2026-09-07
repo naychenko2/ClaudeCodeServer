@@ -97,8 +97,6 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // хода помечаем при запуске (SendDirectAsync / SendMessageAndWaitAsync) — классификация
         // агентской вводной как работы публикует план неподтверждённым и ждёт человека.
         public bool TeamTurnFromHuman;
-        // Счётчики бюджета итерации правит и раздача волны, и гейт запуска на ходу-реакции
-        public readonly object TeamLock = new();
         // Сабагент этого хода оборвался на середине (паспорт прогона с Truncated) — по концу
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
@@ -439,8 +437,55 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // ~1.5 часа чистого ожидания — дольше редко нужно; раньше цикл честно признаёт, что
     // событие не пришло.
     private readonly int _maxWaitingTicks;
-    // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий
+    // Сериализует внеходовые операции над историей сессии (lazy-init аккумулятора,
+    // публикация fal/glif, правка карточек, эскалации штаба). Раньше семь мест брали
+    // этот лок напрямую через Wait/Release — консолидировано через WithFalPersistLockAsync.
     private readonly SemaphoreSlim _falPersistLock = new(1, 1);
+
+    // ЕДИНСТВЕННАЯ точка входа к _falPersistLock: WaitAsync + try/finally Release() под
+    // одну обёртку. Все семь операций, которые раньше брали лок напрямую, идут через
+    // неё — это держит инвариант «общий лок для внеходовых записей истории» по
+    // построению (новая операция не сможет взять лок в обход, не дописав вызов).
+    private async Task<T> WithFalPersistLockAsync<T>(Func<Task<T>> work)
+    {
+        await _falPersistLock.WaitAsync();
+        try { return await work(); }
+        finally { _falPersistLock.Release(); }
+    }
+
+    private async Task WithFalPersistLockAsync(Func<Task> work)
+    {
+        await _falPersistLock.WaitAsync();
+        try { await work(); }
+        finally { _falPersistLock.Release(); }
+    }
+
+    // Результат AppendIfNotDuplicateStoredNoLockAsync для дисковой ветки публикаций:
+    // Added — запись добавлена; Duplicate — предикат уже видел такую запись; NoKey —
+    // у чата ещё нет ClaudeSessionId (история не заведена). NoKey отделён от Duplicate
+    // специально: при нём дисковой записи нет, но учёт и broadcast должны пройти
+    // (раньше оба случая мапились в duplicate=true и аналитика терялась).
+    private enum AppendResult { Added, Duplicate, NoKey }
+
+    // Дедуп-then-append: общий шов публикаций fal/glif и AppendStoredAsync на
+    // дисковой ветке. КОНТРАКТ: вызывающий ОБЯЗАН держать _falPersistLock — иначе
+    // Load+SaveAsync терял бы параллельные записи соседа, а главное — публикация
+    // могла бы пройти в обход оживления аккумулятора (EnsureAccumulatorAsync) и
+    // дописать запись в историю, которую тут же затрёт свежий SaveSnapshotAsync.
+    // Проверка entry.Accumulator в публикациях тоже идёт под этим локом, чтобы
+    // EnsureAccumulatorAsync не мог вклиниться между выбором ветки и самой записью.
+    private async Task<AppendResult> AppendIfNotDuplicateStoredNoLockAsync(
+        SessionEntry entry,
+        Func<StoredMessage, bool> isDuplicate,
+        Func<StoredMessage> factory)
+    {
+        if (entry.Info.ClaudeSessionId is not string key) return AppendResult.NoKey;
+        var stored = await _history.LoadAsync(key);
+        if (stored.Any(isDuplicate)) return AppendResult.Duplicate;
+        stored.Add(factory());
+        await _history.SaveAsync(key, stored);
+        return AppendResult.Added;
+    }
 
     // Enum (в т.ч. ClaudeMode) сериализуем строками — устойчиво к изменению порядка значений.
     // При чтении конвертер принимает и старый числовой формат.
@@ -4782,15 +4827,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Оживление под _falPersistLock — сериализуем с прямой записью fal-стоимости в
         // историю неактивной сессии (PublishFalCostAsync): иначе LoadAsync тут и запись там
         // теряли бы друг друга (lost update). Повторная проверка под локом.
-        await _falPersistLock.WaitAsync();
-        try
+        await WithFalPersistLockAsync(async () =>
         {
             if (entry.Accumulator is not null) return;
             var key = entry.Info.ClaudeSessionId ?? entry.Info.Id.ToString();
             var existingHistory = await _history.LoadAsync(key);
             entry.Accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
-        }
-        finally { _falPersistLock.Release(); }
+        });
     }
 
     private async Task EnsureProcessAsync(string sessionId, SessionEntry entry)
@@ -5952,27 +5995,25 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             return true;
         }
         if (entry.Info.ClaudeSessionId is not string key) return false;
-        await _falPersistLock.WaitAsync();
         try
         {
-            var stored = await _history.LoadAsync(key);
-            var card = stored.OfType<StoredTeamPlanMessage>()
-                .LastOrDefault(m => m.PlanId == planId && !m.Resolved);
-            if (card is null) return false;
-            card.Plan = plan;
-            card.Resolved = resolved;
-            if (resolved) card.Approved = plan.Approved;
-            await _history.SaveAsync(key, stored);
-            return true;
+            return await WithFalPersistLockAsync(async () =>
+            {
+                var stored = await _history.LoadAsync(key);
+                var card = stored.OfType<StoredTeamPlanMessage>()
+                    .LastOrDefault(m => m.PlanId == planId && !m.Resolved);
+                if (card is null) return false;
+                card.Plan = plan;
+                card.Resolved = resolved;
+                if (resolved) card.Approved = plan.Approved;
+                await _history.SaveAsync(key, stored);
+                return true;
+            });
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Правка карточки в истории на диске ({SessionId}) не удалась", sessionId);
             return false;
-        }
-        finally
-        {
-            _falPersistLock.Release();
         }
     }
 
@@ -5986,22 +6027,23 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         Func<T, bool> match, Action<T> mutate) where T : StoredMessage
     {
         if (entry.Info.ClaudeSessionId is not string key) return false;
-        await _falPersistLock.WaitAsync();
         try
         {
-            var stored = await _history.LoadAsync(key);
-            var card = stored.OfType<T>().LastOrDefault(match);
-            if (card is null) return false;
-            mutate(card);
-            await _history.SaveAsync(key, stored);
-            return true;
+            return await WithFalPersistLockAsync(async () =>
+            {
+                var stored = await _history.LoadAsync(key);
+                var card = stored.OfType<T>().LastOrDefault(match);
+                if (card is null) return false;
+                mutate(card);
+                await _history.SaveAsync(key, stored);
+                return true;
+            });
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Правка карточки в истории на диске ({SessionId}) не удалась", sessionId);
             return false;
         }
-        finally { _falPersistLock.Release(); }
     }
 
     // Транзакция над состоянием режима: ЕДИНСТВЕННЫЙ способ править счётчики бюджета и
@@ -6830,55 +6872,56 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Чат неактивен — пишем карточку прямо в историю на диске под _falPersistLock:
         // та же сериализация, что у внеходовых записей и правок карточек (см. ITeamHistoryStore).
         if (entry.Info.ClaudeSessionId is not string key) return false;
-        await _falPersistLock.WaitAsync();
         try
         {
-            var stored = await _history.LoadAsync(key);
-            // Append — публикация карточки плана.
-            if (!req.Resolved && req.SupersededBy is null)
+            return await WithFalPersistLockAsync(async () =>
             {
-                stored.Add(new StoredTeamPlanMessage
+                var stored = await _history.LoadAsync(key);
+                // Append — публикация карточки плана.
+                if (!req.Resolved && req.SupersededBy is null)
                 {
-                    PlanId = req.Plan.Id,
-                    Plan = req.Plan,
-                    Resolved = false,
-                    Approved = req.Approved,
-                    PersonaId = req.Plan.PlannerPersonaId,
-                });
-            }
-            else
-            {
-                // Mutate существующей неразрешённой карточки — иначе двойной клик по
-                // карточке применился бы дважды (та же защита, что у Filter by Resolved
-                // у Accumulator.FindTeamPlan).
-                var card = stored.OfType<StoredTeamPlanMessage>().LastOrDefault(
-                    m => m.PlanId == req.Plan.Id && !m.Resolved);
-                if (card is null) return false;
-                if (req.SupersededBy is { } sb)
-                {
-                    card.Resolved = true;
-                    card.Approved = false;
-                    card.SupersededBy = sb;
+                    stored.Add(new StoredTeamPlanMessage
+                    {
+                        PlanId = req.Plan.Id,
+                        Plan = req.Plan,
+                        Resolved = false,
+                        Approved = req.Approved,
+                        PersonaId = req.Plan.PlannerPersonaId,
+                    });
                 }
                 else
                 {
-                    card.Plan = req.Plan;
-                    if (req.Resolved)
+                    // Mutate существующей неразрешённой карточки — иначе двойной клик по
+                    // карточке применился бы дважды (та же защита, что у Filter by Resolved
+                    // у Accumulator.FindTeamPlan).
+                    var card = stored.OfType<StoredTeamPlanMessage>().LastOrDefault(
+                        m => m.PlanId == req.Plan.Id && !m.Resolved);
+                    if (card is null) return false;
+                    if (req.SupersededBy is { } sb)
                     {
                         card.Resolved = true;
-                        card.Approved = req.Approved;
+                        card.Approved = false;
+                        card.SupersededBy = sb;
+                    }
+                    else
+                    {
+                        card.Plan = req.Plan;
+                        if (req.Resolved)
+                        {
+                            card.Resolved = true;
+                            card.Approved = req.Approved;
+                        }
                     }
                 }
-            }
-            await _history.SaveAsync(key, stored);
-            return true;
+                await _history.SaveAsync(key, stored);
+                return true;
+            });
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Прямая запись карточки плана ({SessionId}) не удалась", sessionId);
             return false;
         }
-        finally { _falPersistLock.Release(); }
     }
 
     bool ITeamRunState.HasLiveTurn(string sessionId) => HasLiveTurnProcess(sessionId);
@@ -8093,7 +8136,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case ResultMessage m:
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
-                    RecordTurnSpend(entry, m);
+                    SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m);
                     break;
                 case ProviderSwitchedMessage m:
                     // Пометка автоподмены модели в историю — после F5/рестарта человек видит,
@@ -8459,31 +8502,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
-    // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
-    // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
-    //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
-    //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
-    private static string? TryExtractFalRequestId(string content)
-    {
-        if (string.IsNullOrEmpty(content)) return null;
-        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(content);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-            if (root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
-                return rid.GetString();
-            return null;
-        }
-        catch { return null; } // не JSON / не наш формат — это не fal-результат
-    }
-
     // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
     private void TryTrackFalCost(string sessionId, string content)
     {
         if (!_falCost.Enabled) return;
-        var requestId = TryExtractFalRequestId(content);
+        var requestId = SpendMapping.TryExtractFalRequestId(content);
         if (!string.IsNullOrEmpty(requestId))
             _falCost.Track(sessionId, requestId);
     }
@@ -8499,7 +8522,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         foreach (var m in history)
         {
             if (m is not StoredToolUseMessage t || t.IsError || string.IsNullOrEmpty(t.Result)) continue;
-            var rid = TryExtractFalRequestId(t.Result);
+            var rid = SpendMapping.TryExtractFalRequestId(t.Result);
             if (rid != null && !have.Contains(rid))
                 _falCost.Track(sessionId, rid);
         }
@@ -8538,61 +8561,46 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        await _falPersistLock.WaitAsync();
-        bool duplicate = false;
-        try
+        // Лок держим РОВНО один раз на весь путь «проверить entry.Accumulator → выбрать
+        // ветку → записать»: иначе EnsureAccumulatorAsync под тем же локом успевает
+        // прочитать историю до нашей записи, создать аккумулятор со старым снимком и
+        // следующий SaveSnapshotAsync затирает нашу запись. SemaphoreSlim не реентерабелен,
+        // поэтому AppendIfNotDuplicateStoredNoLockAsync внутри WithFalPersistLockAsync
+        // НЕ берёт лок повторно (контракт — caller holds).
+        var result = await WithFalPersistLockAsync(async () =>
         {
             if (entry.Accumulator is not null)
             {
                 if (!entry.Accumulator.OnGlifCost(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model))
-                    duplicate = true;
-                else
-                {
-                    try { await entry.Accumulator.SaveSnapshotAsync(_history); }
-                    catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
-                }
+                    return AppendResult.Duplicate;
+                try { await entry.Accumulator.SaveSnapshotAsync(_history); }
+                catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
+                return AppendResult.Added;
             }
-            else if (entry.Info.ClaudeSessionId is string key)
+            else
             {
                 try
                 {
-                    var stored = await _history.LoadAsync(key);
-                    if (stored.Any(m => m is StoredGlifCostMessage g && g.JobId == msg.JobId))
-                        duplicate = true;
-                    else
-                    {
-                        stored.Add(new StoredGlifCostMessage(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model));
-                        await _history.SaveAsync(key, stored);
-                    }
+                    return await AppendIfNotDuplicateStoredNoLockAsync(entry,
+                        m => m is StoredGlifCostMessage g && g.JobId == msg.JobId,
+                        () => new StoredGlifCostMessage(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model));
                 }
-                catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    // Дисковая запись не удалась — но аналитику и broadcast обязаны пройти
+                    // (зеркало поведения PublishFalCostAsync до правки): карточка стоимости
+                    // должна появиться у пользователя даже при сбое истории, иначе при рестарте
+                    // она пропадёт совсем.
+                    Console.Error.WriteLine($"[GlifCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}");
+                    return AppendResult.Added;
+                }
             }
-        }
-        finally { _falPersistLock.Release(); }
+        });
 
-        if (duplicate) return;
+        if (result == AppendResult.Duplicate) return;
 
         // Аналитика: генерация glif — счётчик операций, кредиты про запас, стоимость USD неизвестна.
-        if (_spend is not null)
-            try
-            {
-                var s = entry.Info;
-                _spend.Record(new SpendRecord
-                {
-                    OwnerId = ResolveOwnerId(s) ?? "",
-                    ProjectId = s.ProjectId,
-                    SessionId = s.Id,
-                    TaskId = s.TaskId,
-                    PersonaId = s.PersonaId,
-                    Provider = "glif",
-                    Model = msg.Model ?? msg.OutputType,
-                    Source = SpendSources.Glif,
-                    CostUsd = null,
-                    Generations = 1,
-                    Label = msg.OutputType,
-                });
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "spend: запись генерации glif не удалась"); }
+        SpendMapping.RecordGlifGeneration(_spend, ResolveOwnerId, _log, entry.Info, msg);
 
         await BroadcastAsync(sessionId, msg);
     }
@@ -8604,104 +8612,58 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        // Весь выбор ветки (аккумулятор vs прямая запись на диск) — под _falPersistLock, тем же,
-        // что берёт ленивое оживление аккумулятора в EnsureProcessCoreAsync. Иначе check-then-act
-        // на entry.Accumulator гонялся бы с оживлением → двойная запись/потеря стоимости.
-        await _falPersistLock.WaitAsync();
-        bool duplicate = false;
-        try
+        // Лок держим РОВНО один раз на весь путь «проверить entry.Accumulator → выбрать
+        // ветку → записать»: иначе EnsureAccumulatorAsync под тем же локом успевает
+        // прочитать историю до нашей записи, создать аккумулятор со старым снимком и
+        // следующий SaveSnapshotAsync затирает нашу запись. SemaphoreSlim не реентерабелен,
+        // поэтому AppendIfNotDuplicateStoredNoLockAsync внутри WithFalPersistLockAsync
+        // НЕ берёт лок повторно (контракт — caller holds).
+        var result = await WithFalPersistLockAsync(async () =>
         {
             if (entry.Accumulator is not null)
             {
                 if (!entry.Accumulator.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice))
-                    duplicate = true; // уже опубликован
-                else
-                {
-                    try { await entry.Accumulator.SaveSnapshotAsync(_history); }
-                    catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
-                }
+                    return AppendResult.Duplicate;
+                try { await entry.Accumulator.SaveSnapshotAsync(_history); }
+                catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
+                return AppendResult.Added;
             }
-            else if (entry.Info.ClaudeSessionId is string key)
+            else
             {
-                // Сессия не активна — пишем стоимость напрямую в историю на диске
+                // Сессия не активна — пишем стоимость напрямую в историю на диске. Дедуп
+                // по RequestId и проверка наличия ClaudeSessionId идут в
+                // AppendIfNotDuplicateStoredNoLockAsync.
                 try
                 {
-                    var stored = await _history.LoadAsync(key);
-                    if (stored.Any(m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId))
-                        duplicate = true; // уже в истории
-                    else
-                    {
-                        stored.Add(new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
-                        await _history.SaveAsync(key, stored);
-                    }
+                    return await AppendIfNotDuplicateStoredNoLockAsync(entry,
+                        m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId,
+                        () => new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
                 }
-                catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    // Дисковая запись не удалась — но аналитику и broadcast обязаны пройти:
+                    // карточка стоимости должна появиться у пользователя даже при сбое истории,
+                    // иначе при рестарте она пропадёт совсем (нет ни AppendIfNotDuplicate, ни
+                    // аккумулятора).
+                    Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}");
+                    return AppendResult.Added;
+                }
             }
-        }
-        finally { _falPersistLock.Release(); }
+        });
 
-        if (duplicate) return; // дубликат — не ретранслируем
+        if (result == AppendResult.Duplicate) return; // дубль — не ретранслируем
 
         // Аналитика расхода: генерация fal.ai — счётчик операций (токенов у fal нет),
         // фактическая стоимость про запас. Дедуп выше гарантирует одну запись на request_id.
-        if (_spend is not null)
-            try
-            {
-                var s = entry.Info;
-                _spend.Record(new SpendRecord
-                {
-                    OwnerId = ResolveOwnerId(s) ?? "",
-                    ProjectId = s.ProjectId,
-                    SessionId = s.Id,
-                    TaskId = s.TaskId,
-                    PersonaId = s.PersonaId,
-                    Provider = "fal",
-                    Model = msg.EndpointId,
-                    Source = SpendSources.Fal,
-                    CostUsd = msg.CostUsd,
-                    Generations = 1,
-                    Label = msg.EndpointId,
-                });
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "spend: запись генерации fal не удалась"); }
+        SpendMapping.RecordFalGeneration(_spend, ResolveOwnerId, _log, entry.Info, msg);
 
         await BroadcastAsync(sessionId, msg);
     }
 
-    // Запись расхода штатного хода в аналитику (Spend Analytics): все разрезы из Session,
-    // модель — фактическая из modelUsage result'а (субагенты могли считать другой моделью),
-    // фолбэк — модель сессии. Ошибка записи ход не роняет.
-    private void RecordTurnSpend(SessionEntry? entry, ResultMessage m)
-    {
-        if (_spend is null || entry is null || m.Usage is null) return;
-        try
-        {
-            var s = entry.Info;
-            var provider = SpendSources.NormalizeProvider(s.Provider);
-            // Фактическая модель хода из modelUsage (субагенты могли считать другой), фолбэк —
-            // модель сессии; пустой результат резолвится в дефолт подписки, чтобы SpendRecord
-            // никогда не оставался без модели (иначе в аналитике копилась «Модель по умолчанию»).
-            var model = _llmProviders.ResolveModelOrDefault(m.UsageModel ?? s.Model, provider);
-            _spend.Record(new SpendRecord
-            {
-                OwnerId = ResolveOwnerId(s) ?? "",
-                ProjectId = s.ProjectId,
-                SessionId = s.Id,
-                TaskId = s.TaskId,
-                PersonaId = s.PersonaId,
-                Provider = provider,
-                Model = model,
-                Source = SpendSources.IsFree(provider, model) ? SpendSources.Free : SpendSources.ChatTurn,
-                InputTokens = m.Usage.InputTokens,
-                OutputTokens = m.Usage.OutputTokens,
-                CacheReadTokens = m.Usage.CacheReadTokens,
-                CacheCreationTokens = m.Usage.CacheCreationTokens,
-                CostUsd = m.TotalCostUsd,
-                DurationMs = m.DurationMs,
-            });
-        }
-        catch (Exception ex) { _log.LogWarning(ex, "spend: запись хода не удалась"); }
-    }
+    // Запись расхода штатного хода в аналитику — вынесена в SpendMapping.RecordTurnSpend
+    // (этап 4, волна 1 «приём хода», 2026-09-07): код спины, использующий обе стороны
+    // (ISpendCollector подсистемы Spend и LlmProviderRegistry слоя Llm), без состояния,
+    // держать его в ядре SessionManager было лишним весом.
 
     // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
     // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;
@@ -8710,10 +8672,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        // Как в PublishFalCostAsync: выбор ветки под _falPersistLock, чтобы check-then-act на
-        // entry.Accumulator не гонялся с ленивым оживлением аккумулятора (EnsureProcessCoreAsync).
-        await _falPersistLock.WaitAsync();
-        try
+        // Как в PublishFalCostAsync: лок держим РОВНО один раз на «проверить entry.Accumulator
+        // → выбрать ветку → записать», иначе EnsureAccumulatorAsync вклинится между
+        // выбором дисковой ветки и записью и следующий SaveSnapshotAsync затрёт нашу запись.
+        await WithFalPersistLockAsync(async () =>
         {
             if (entry.Accumulator is { } acc)
             {
@@ -8724,21 +8686,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
                 }
             }
-            else if (entry.Info.ClaudeSessionId is string key)
+            else
             {
                 try
                 {
-                    var stored0 = await _history.LoadAsync(key);
-                    stored0.Add(stored);
-                    await _history.SaveAsync(key, stored0);
+                    // Дедуп предикат «никогда» — совещания/конвейеры сами следят за
+                    // уникальностью по своим ключам; AppendResult тут не интересует,
+                    // broadcast всё равно отправим.
+                    await AppendIfNotDuplicateStoredNoLockAsync(entry, _ => false, () => stored);
                 }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
                 }
             }
-        }
-        finally { _falPersistLock.Release(); }
+        });
 
         await BroadcastSessionMessageAsync(sessionId, broadcast);
     }

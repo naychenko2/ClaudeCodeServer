@@ -165,8 +165,15 @@ public class RootSubsystemBoundaryTests
         // FeatureFlagService дёргает ModuleRegistry на каждый запрос.
         "ClaudeHomeServer.Services.Modules.ModuleRegistry",
         // Метрики задач: TaskExecutionService пишет метрики в spend-стор через
-        // TaskPromptMetricsStore. Единственный root→Spend переход.
+        // TaskPromptMetricsStore. Первый root→Spend переход.
         "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore",
+        // SpendMapping — чистые функции сборки SpendRecord из потока сообщений приёма хода
+        // (этап 4, волна 1, 2026-09-07). Использует `ISpendCollector` как зависимость в
+        // параметрах; префикс `Services.Spend` не открываем (Spend — продуктовая под-вертикаль).
+        // Если завтра root начнёт ссылаться ещё на `SpendStore`/`SpendRecord`/etc — повод
+        // пересмотреть, не выделить ли сборочные хелперы внутрь Spend (или не открыть
+        // общий Spend-интерфейс).
+        "ClaudeHomeServer.Services.Spend.ISpendCollector",
         // ⚠ Волна 4C, шаг 1 — выделена вертикаль Tasks, но шесть root-типов держат
         // `TaskManager` в конструкторе как «продуктовую зависимость», а не как
         // инфраструктуру. Префикс `Services.Tasks` не открываем (Tasks — продуктовая

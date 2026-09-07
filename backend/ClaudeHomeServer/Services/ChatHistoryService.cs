@@ -19,7 +19,7 @@ public class ChatHistoryService
         _basePath = Path.Combine(dataDir, "sessions");
     }
 
-    public Task<List<StoredMessage>> LoadAsync(string claudeSessionId)
+    public virtual Task<List<StoredMessage>> LoadAsync(string claudeSessionId)
     {
         var path = GetPath(claudeSessionId);
 
@@ -120,7 +120,7 @@ public class ChatHistoryService
         return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
     }
 
-    public Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)
+    public virtual Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)
     {
         JsonFileStore.Save(GetPath(claudeSessionId), messages, _opts);
         return Task.CompletedTask;

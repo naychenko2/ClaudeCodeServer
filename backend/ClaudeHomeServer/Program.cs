@@ -161,6 +161,12 @@ builder.Services.AddSingleton<ProjectManager>();
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.
 builder.Services.AddSingleton<IProjectRootLookup, ProjectRootLookup>();
+// Швы для Skills (волна 4C, шаг 1 — финальный): вместо прямой зависимости
+// SkillSuggestService от PersonaManager/ProjectManager — узкие контракты
+// на резолв персоны+Skill-биндингов и проекта по id. Реализации — тонкие
+// обёртки в Main, контракты живут в Core.
+builder.Services.AddSingleton<IPersonaSkillBindingLookup, PersonaSkillBindingLookup>();
+builder.Services.AddSingleton<IProjectSummaryLookup, ProjectSummaryLookup>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();

@@ -12,29 +12,30 @@ namespace ClaudeHomeServer.Services.Skills;
 // инжекция тела агента в системный промпт сессии и раскрытие /skill в сообщениях.
 //
 // Известные границы (сознательные):
-// 1) `ClaudeHomeServer.Services.Llm` — префикс-шов через `ICheapTextRunner` и
-//    `LocalActionCatalog.SkillSuggest/SkillTranslate/SkillGenerate` (SkillSuggestService,
-//    SkillTranslationService, SkillGenerationService). Префикс-шов по прецеденту
+// 1) `ClaudeHomeServer.Services.Llm` — префикс-шов для `LocalActionCatalog.SkillSuggest/
+//    SkillTranslate/SkillGenerate` (ключи действий, по ним раннер ищет маршрут).
+//    `ICheapTextRunner` (контракт) уже в Core (assembly-фильтр IsCoreAssembly), тут
+//    шов для остального Llm-слоя, который Skills использует. Префикс-шов по прецеденту
 //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
-// 2) `ClaudeHomeServer.Services.Execution` — префикс-шов через `ILauncherFactory` для
-//    запуска CLI «npx skills» в `SkillsCliService.RunAsync` (запуск процесса — общий
-//    слой, по аналогии с `ProjectServices`/`Terminal`/`Git`/`Deploy`). Execution — нижний
-//    слой, ссылаться на него сверху законно.
-// 3) Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»:
-//    - `PersonaManager` — `SkillSuggestService.SuggestForPersonaAsync` резолвит персону
-//      владельца и читает существующие Skill-привязки (PersonaBinding.Target) для
-//      исключения уже привязанных скиллов из кандидатов.
-//    - `ProjectManager` — `SkillSuggestService.SuggestForProjectAsync` берёт контекст
-//      проекта (имя + системный промпт); `SkillsService.GetProjectSkills/Agents`
-//      работают с `projectRootPath`; `SkillsController` использует `GetById(projectId)`
-//      для получения пути.
-// 4) Известные потребители (шов `SessionManager → SkillsService` остаётся до этапа 4 —
+// 2) Точечных допусков к корню `Services.*` нет после Этапа 3 (волна 1):
+//    - `PersonaManager` снят — `SkillSuggestService` берёт персону через
+//      `IPersonaSkillBindingLookup` (Core).
+//    - `ProjectManager` снят — `SkillSuggestService` берёт проект через
+//      `IProjectSummaryLookup` (Core).
+//    - `ILauncherFactory`/`IProcessLauncher`/`ProcessSpec`/`IPathMapper` —
+//      контракты в Core (assembly-фильтр), реализации (`LauncherFactory`/
+//      `LocalProcessRunner`/`DockerProcessRunner`/`DockerPathMapper`) Skills не нужны:
+//      `SkillsCliService` зовёт только интерфейсы.
+// 3) Известные потребители (шов `SessionManager → SkillsService` остаётся до этапа 4 —
 //    расщепление SessionManager): `SessionManager.InstalledSkillNames` собирает имена
 //    глобальных + workflow + плагинных скиллов для фильтра каталога «Командных механик»
 //    руководителя проекта (блок системного промпта). Также `PersonaLayerContributor`
 //    и `ClaudeSession` держат `SkillsService?` как опциональную зависимость для
 //    раскрытия /skill в сообщениях и инжекции тела агента в системный промпт.
 //
+// `SkillsController` лежит в `ClaudeHomeServer.Controllers`, не в этой вертикали;
+// под сторож границ не попадает (по-прежнему держит `PersonaManager`/`ProjectManager`
+// для своих нужд — `personas.Get/UpdateBindings`, `projects.GetById` для `RootPath`).
 // Шов `Skills → Models.Persona` (binding-источник `PersonaBinding.Target`) идёт через
 // `ClaudeHomeServer.Models` (SharedAllowedPrefixes).
 public sealed class SkillsSubsystem : IAppSubsystem

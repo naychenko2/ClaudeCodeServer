@@ -3,15 +3,8 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Execution;
 
-// Резолв драйвера среды исполнения по владельцу процесса.
-public interface ILauncherFactory
-{
-    // Локальная среда — для системных вызовов бэкенда (каталог моделей, changelog)
-    IProcessLauncher Local { get; }
-    // Среда владельца: container-пользователь → docker-песочница; null/неизвестный → local
-    IProcessLauncher ForOwner(string? ownerId);
-}
-
+// Реализация ILauncherFactory (контракт в Core, реализация держит UserStore/SandboxManager
+// и потому живёт в Main).
 public sealed class LauncherFactory(UserStore users, SandboxManager sandbox) : ILauncherFactory
 {
     private readonly ConcurrentDictionary<string, DockerProcessRunner> _sandboxed = new();

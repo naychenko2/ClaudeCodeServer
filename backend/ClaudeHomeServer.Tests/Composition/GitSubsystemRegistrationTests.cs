@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;

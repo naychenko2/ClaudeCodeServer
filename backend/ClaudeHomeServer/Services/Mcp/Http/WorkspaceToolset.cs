@@ -66,7 +66,7 @@ public sealed partial class WorkspaceToolset(
     ProjectKnowledgeSyncService knowledgeSync,
     UnifiedSearchService search,
     Git.GitService git,
-    Git.CommitAttributionService commitAttribution,
+    CommitAttributionService commitAttribution,
     UserStore users,
     TeamMemoryService teamMemory,
     DeployService deploy,

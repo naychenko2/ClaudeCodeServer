@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Services.Git;
 
-namespace ClaudeHomeServer.Services.Git;
+namespace ClaudeHomeServer.Services;
 
 // Детект коммита по сдвигу HEAD — помечает чатам пути «правки уже зафиксированы в git»
 // (Session.CommittedFilePaths), чтобы атрибуция «какой чат менял файл» (панель

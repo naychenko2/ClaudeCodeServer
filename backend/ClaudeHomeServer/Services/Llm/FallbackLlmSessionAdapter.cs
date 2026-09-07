@@ -363,6 +363,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 {
                     if (turn.Settled) return _downstream(msg);
                     turn.NoteErrorText(RawErrorText(em));
+                    // Win32-маркер из Details: ClaudeSession кладёт префикс "[Win32:NNN]"
+                    // при сбое Process.Start и при локальном PromptOverflowException
+                    // (см. ClaudeSession.RunTurnAsync → catch). Извлекаем и пробрасываем
+                    // в outcome.Win32ErrorCode — TurnErrorClassifier ловит 206 и
+                    // отдаёт FallbackErrorClass.PromptOverflow, без ротации модели.
+                    turn.NoteWin32Code(ExtractWin32Code(em.Details));
                     if (turn.SwallowCleanup) return Task.CompletedTask; // уборка прерванной ротацией попытки
                     turn.Hold(msg);
                     turn.ResolveAttempt(AttemptEndKind.FatalError);
@@ -417,6 +423,34 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // был уйти на подмену, завершился бы честной ошибкой (класс None).
     private static string RawErrorText(ErrorMessage em) =>
         string.IsNullOrWhiteSpace(em.Details) ? em.Text : em.Details!;
+
+    // Парсит префикс "[Win32:NNN]" из Details ErrorMessage (ClaudeSession ставит первым
+    // токеном при сбое Process.Start и при локальном PromptOverflowException). null —
+    // маркера нет, нечего передавать в outcome. Соответствует TurnErrorClassifier.
+    // HasWin32Marker, который тоже начинает строку с префикса — парсинг тут зеркальный.
+    private static int? ExtractWin32Code(string? details)
+    {
+        if (string.IsNullOrEmpty(details) || !details.StartsWith("[Win32:", StringComparison.Ordinal))
+            return null;
+        var end = details.IndexOf(']');
+        if (end < 0 || end <= 7) return null; // длина префикса "[Win32:" = 7
+        var span = details.AsSpan(7, end - 7); // начинаем с '2' в "206]"
+        return int.TryParse(span, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null;
+    }
+
+    // Снимает префикс "[Win32:NNN]" из Details, который ClaudeSession кладёт для
+    // классификатора. Пользовательский текст ошибки без него: человек видит «Промпт хода
+    // превысил…», а не «[Win32:206]Промпт хода превысил…». Сам код через ExtractWin32Code
+    // уже едет в outcome.Win32ErrorCode, и классификатор PromptOverflow не сломается.
+    private static string? StripWin32Marker(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.StartsWith("[Win32:", StringComparison.Ordinal))
+            return text;
+        var end = text.IndexOf(']');
+        if (end < 0) return text;
+        return text[(end + 1)..];
+    }
 
     // Сырые тексты задержанных ошибок попытки — в «Подробности» маркера подмены.
     // null — гасить было нечего (ошибка не приходила).
@@ -679,6 +713,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     Subtype = end.Result?.Subtype,
                     ApiErrorStatus = end.Result?.ApiErrorStatus,
                     ErrorText = end.ErrorText,
+                    // Извлечён из префикса "[Win32:NNN]" в Details ErrorMessage (см.
+                    // ClaudeSession → RunTurnAsync → catch). Прокидывается явно, чтобы
+                    // классификатор не парсил текст повторно и не пропустил случай с
+                    // обрезанным/пустым ErrorText.
+                    Win32ErrorCode = end.Win32ErrorCode,
                     RateLimitRejected = end.Kind == AttemptEndKind.RateLimited,
                     // Намеренное прерывание (Interrupt ради очереди / «Стоп») — НЕ ошибка доставки.
                     // Это второй эшелон: первым стоит if (_userInterrupted) выше (SettleAsync без
@@ -701,6 +740,22 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // result на error статус становился Active, и провал маскировался. AuthFailure сюда
                 // не попадает — это отдельный класс, он эскалирует по пулу и цепочке ниже.
                 if (cls == FallbackErrorClass.None) { turnOutcome = "failed"; await FailClosedAsync(turn, end); return; }
+
+                // Перерасход командной строки (Win32:206 / PromptOverflowException). Локальный
+                // детерминированный отказ — Process.Start не сработал, cmdline превысила 32 767
+                // символов Windows. Сменить пару «модель × подписка» бесполезно: длина промпта
+                // от неё не зависит, и попытка N+1 на другой паре упадёт так же. По образцу
+                // EgressDown/LocalModelDown: формулировка уводит от ложного «сменить модель».
+                // Стоит ПЕРЕД egress/down-проверкой и ротацией пула — наш случай вообще не
+                // про провайдера и не про сеть, и попытки ретрая или подмены только вредят
+                // (история инцидента 2026-09-07, чат 74f1c3d6: 5 попыток за 9 секунд на
+                // сломанном промпте). attempts остаётся 1, substitutions не растёт.
+                if (cls == FallbackErrorClass.PromptOverflow)
+                {
+                    turnOutcome = "failed";
+                    await FailPromptOverflowAsync(turn, end);
+                    return;
+                }
 
                 // ОТКАЗ ВЫХОДА В СЕТЬ, а не отказ провайдера. Unreachable покрывает два корня,
                 // и лечатся они противоположно: мёртвый эндпоинт вендора чинится сменой пары
@@ -1539,6 +1594,46 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     }
 
     /// <summary>
+    /// Финал «промпт хода превысил лимит командной строки»: Process.Start не сработал
+    /// (Win32:206 ERROR_FILENAME_EXCED_RANGE) — итоговая длина аргументов перевалила
+    /// лимит Windows 32 767. По образцу FailEgressAsync/LocalModelDown: человеку
+    /// показывается осмысленный текст про размер промпта, а не «сервис не отвечает»,
+    /// иначе пользователь пошёл бы менять модель. Сменить пару бесполезно — длина
+    /// промпта от выбора пары не зависит, и попытка N+1 упадёт так же.
+    /// attempts остаётся 1, substitutions не растёт (фолбэк не запускается).
+    /// </summary>
+    private async Task FailPromptOverflowAsync(FallbackTurn turn, AttemptEnd end)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        // Сырой текст ошибки — в Details, но без технического маркера "[Win32:NNN]":
+        // человек видит его в «Подробности» маркера ошибки, и ему незачем знать про Win32-код.
+        // Сам маркер НЕ теряем — ExtractWin32Code выше уже положил 206 в Win32ErrorCode
+        // для классификатора; здесь просто снимаем первые байты "[Win32:206]" из видимого
+        // текста. Осмысленная формулировка — TurnFailureText.PromptOverflow в Text.
+        var raw = StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held));
+        await _downstream(new ErrorMessage(TurnFailureText.PromptOverflow,
+            ExpectResultFollows: true, Details: raw));
+
+        // Финальный result — ошибочный: ход не состоялся, и статус чата обязан это показать
+        // (иначе провал маскируется штатным finished — та же половина P29, что у FailClosed).
+        var orig = held.OfType<ResultMessage>().FirstOrDefault();
+        await _downstream(orig is { Subtype: "error" }
+            ? orig
+            : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
+                orig?.Usage, orig?.TotalCostUsd,
+                ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
+            await _downstream(m);
+    }
+
+    /// <summary>
     /// Финал «канала наружу нет»: повтор не помог, а перебирать цепочку бессмысленно — её шаги
     /// ведут через тот же прокси. Человек читает про сеть, а не про «сервис не отвечает»: второе
     /// толкает его менять модель, чего делать как раз не надо. Сырой текст CLI уезжает в Details.
@@ -1718,7 +1813,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         AttemptEndKind Kind,
         ResultMessage? Result,
         string? ErrorText,
-        string? RateLimitResetsAt);
+        string? RateLimitResetsAt,
+        // Win32 NativeErrorCode исключения старта процесса (см. ClaudeSession → общий
+        // catch в RunTurnAsync → "[Win32:NNN]" префикс). Нужен классификатору, чтобы
+        // отдать FallbackErrorClass.PromptOverflow на Win32:206 (ERROR_FILENAME_EXCED_RANGE)
+        // и НЕ крутить фолбэк по живым моделям. null/0 — не Win32, или маркер не дошёл.
+        int? Win32ErrorCode = null);
 
     // След одной попытки для финального сообщения: модель и ключ — в лог (через
     // TraceLine), поставщик (ProviderLabel) и причина (UserClassLabel) — в ленту.
@@ -1747,6 +1847,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         public List<ServerMessage> Held = [];
         public string? ErrorText;
         public string? RateLimitResetsAt;
+        // Win32-код из Details ErrorMessage (см. ClaudeSession → "[Win32:NNN]" префикс).
+        // Хранится до outcome, чтобы TurnErrorClassifier увидел 206 и отдал PromptOverflow.
+        public int? Win32ErrorCode;
         // Прерывание хода («Стоп» / interrupt ради очереди). Живёт ровно ход, поэтому лежит
         // здесь, а не в поле адаптера: тот переживает много ходов, а CTS одноразовый.
         // Нужен, чтобы паузу перед повтором при лежащем канале рвал сам «Стоп».
@@ -1766,6 +1869,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             Held.Clear();
             ErrorText = null;
             RateLimitResetsAt = null;
+            Win32ErrorCode = null;
         }
 
         public void NoteResult(ResultMessage res)
@@ -1777,13 +1881,21 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         public void NoteErrorText(string text)
             => ErrorText = string.IsNullOrEmpty(ErrorText) ? text : ErrorText + "\n" + text;
 
+        // Запоминает первый пришедший ненулевой Win32-код. Классификатору важно число,
+        // и только одно: 206 (ERROR_FILENAME_EXCED_RANGE) — уникальный для нашего кейса.
+        public void NoteWin32Code(int? code)
+        {
+            if (code is not null && code.Value != 0 && Win32ErrorCode is null)
+                Win32ErrorCode = code;
+        }
+
         public void Hold(ServerMessage msg) => Held.Add(msg);
 
         public void ResolveAttempt(AttemptEndKind kind, ResultMessage? result = null)
         {
             if (AttemptResolved) return;
             AttemptResolved = true;
-            AttemptTcs.TrySetResult(new AttemptEnd(kind, result, ErrorText, RateLimitResetsAt));
+            AttemptTcs.TrySetResult(new AttemptEnd(kind, result, ErrorText, RateLimitResetsAt, Win32ErrorCode));
         }
     }
 }

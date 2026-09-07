@@ -208,10 +208,19 @@ public class PersonaManager
 
     // Весь слой персоны уезжает в claude аргументом --append-system-prompt (ClaudeSession),
     // а командная строка Windows ограничена 32767 символами вместе с остальным промптом хода
-    // (контекст проекта, привязки, code graph, recall памяти, дисциплинарный слой) — это ещё
-    // 8-12 КБ. Отсюда потолок самого контракта: 12 000 символов оставляют запас, при котором
-    // ход стартует. Проверяется только на пользовательской записи (PersonasController → UI и
-    // MCP personas_create/update); ConnectPantheon с его каталожными регламентами идёт мимо.
+    // (контекст проекта, привязки, code graph, recall памяти, дисциплинарный слой). Замер
+    // 2026-09-07 по 48 чатам в зоне риска (≥ 28 000): обвязка — ~27 КБ (persona-layer,
+    // recall-memory, project-builtin-0, persona-mentions, recall-notes, mcp-tasks, code-graph,
+    // voice-mode, mcp-memory, images, mcp-workspace, mcp-personas, persona-bindings,
+    // dossier-recall). Раньше комментарий говорил «8-12 КБ остального промпта» — это
+    // устарело: по факту обвязки выросли в 2-3 раза за счёт подключения MCP-серверов и
+    // recall-каналов. Отсюда потолок самого контракта: 12 000 символов оставляют запас,
+    // при котором TurnPromptAssembler.ApplyBudget (задача dc641949) срезает нестабильные
+    // секции в порядке code-graph → dossier-recall → recall-notes → recall-memory →
+    // persona-mentions и ход укладывается в лимит. Без срезания ~5 КБ уводят из зоны
+    // 30-32к все 48 чатов, и ход стартует. Проверяется только на пользовательской записи
+    // (PersonasController → UI и MCP personas_create/update); ConnectPantheon с его
+    // каталожными регламентами идёт мимо.
     public const int MaxContractChars = 12_000;
 
     // Суммарный размер контракта: все слоты плюс legacy-SystemPrompt — ровно то, что

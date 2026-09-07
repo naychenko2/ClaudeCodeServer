@@ -75,7 +75,11 @@ public sealed class PromptSnapshotStore
                 id, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 draft.Applied, draft.InheritedFromId,
                 Trim(draft.Sections), draft.CliArgs, draft.McpServers,
-                draft.Model, draft.Mode, draft.CliLayer);
+                draft.Model, draft.Mode, draft.CliLayer,
+                // TruncatedSections режутся по тому же Trim — каждая такая запись короткая
+                // (поясняющий текст, не исходное содержимое секции) и редко превышает
+                // MaxSectionChars, но граница у неё та же: снимок — диагностика, а не архив.
+                TruncatedSections: TrimOrNull(draft.TruncatedSections));
 
             snapshot = DedupCliLayer(sessionId, snapshot);
 
@@ -244,6 +248,14 @@ public sealed class PromptSnapshotStore
             result.Add(s with { Text = text });
         }
         return result;
+    }
+
+    // TruncatedSections — необязательное поле. null/пусто → null (срезки не было);
+    // непусто → пропущено через Trim (потолки те же, что у Sections).
+    private static IReadOnlyList<PromptSectionDto>? TrimOrNull(IReadOnlyList<PromptSectionDto>? sections)
+    {
+        if (sections is null || sections.Count == 0) return null;
+        return Trim(sections);
     }
 
     // Файловая часть слоя CLI (CLAUDE.md + скиллы) меняется редко, а весит больше всего

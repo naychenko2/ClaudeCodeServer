@@ -24,6 +24,28 @@ public sealed class LocalProcessRunner : IProcessLauncher
         return process;
     }
 
+    public int EstimateCommandLineLength(ProcessSpec spec)
+    {
+        // Симметрично BuildStartInfo:
+        //   RawArguments — кладётся в psi.Arguments как есть, .NET не экранирует, и реальная
+        //   argv будет этой строкой после имени exe + пробела. ArgCost для сырых строк не
+        //   применим (там вложенные кавычки для cmd /s /c, и «верхняя оценка» — сама строка);
+        //   если она длиннее CmdlineLimit — откажем сразу, без сюрпризов.
+        //   Без RawArguments — psi.ArgumentList экранирует каждый аргумент, и верхняя оценка =
+        //   sum(ArgCost) по ним + длина пути к exe. .NET обрамляет FileName кавычками ВСЕГДА,
+        //   если в нём есть пробелы (ResolveExecutable на Windows может вернуть
+        //   «C:\Program Files\…\claude.exe»), — ArgCost бы учёл это, но строка пути без пробелов
+        //   остаётся «голой», и верхней оценки хватает: запас на типичном наборе аргументов
+        //   остаётся положительным (проверено в DockerProcessRunnerCmdlineEstimationTests
+        //   и LocalProcessRunnerEnvTests на живой сборке .NET).
+        var cliPath = ExecutableResolver.ResolveExecutable(spec.FileName);
+        if (spec.RawArguments is { } raw)
+            return cliPath.Length + 1 + raw.Length;
+        var total = cliPath.Length;
+        foreach (var a in spec.Args) total += CmdlineEstimate.ArgCost(a);
+        return total;
+    }
+
     // Сборка ProcessStartInfo вынесена из Start, чтобы правила окружения (что наследуем,
     // что выкидываем) можно было проверить тестом, не запуская процессов: сам запуск
     // непереносим между Windows и linux-раннером CI.

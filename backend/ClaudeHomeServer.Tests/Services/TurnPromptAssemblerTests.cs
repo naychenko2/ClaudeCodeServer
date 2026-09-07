@@ -131,4 +131,456 @@ public class TurnPromptAssemblerTests
         VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: true)
             .Should().Be(VoicePrompts.DigestSectionText);
     }
+
+    // ===== ApplyBudget: бюджет промпта + срезка нестабильных секций (задача dc641949) =====
+
+    private static PromptSectionDto Sys(string key, string text) =>
+        new(key, key, text, "system", Stable: false);
+
+    private static PromptSectionDto StableSec(string key, string text) =>
+        new(key, key, text, "system", Stable: true);
+
+    // Минимальная нагрузка args + workingDir + cli, чтобы итоговая формула Estimate
+    // была короткой и не съедала бюджет. Тесты далее штурмуют 30 000 символов в основном
+    // через --append-system-prompt.
+    private static readonly string[] TinyArgs = ["--print", "--input-format", "stream-json"];
+    private const string TinyCli = "claude";
+    private const string TinyCwd = "C:\\proj";
+
+    // Тестовая имитация LocalProcessRunner.EstimateCommandLineLength: cli + сумма ArgCost по аргументам.
+    // Тесты намеренно НЕ проверяют обвязку раннера — это задача DockerProcessRunnerEnvTests,
+    // иначе мы смешаем два контракта в одном файле и потеряем причину правки (ревью dc641949, волна 3).
+    private static int FakeLocalLength(IReadOnlyList<string> finalArgs)
+    {
+        var total = TinyCli.Length;
+        foreach (var a in finalArgs) total += TurnPromptAssembler.ArgCost(a);
+        return total;
+    }
+
+    [Fact]
+    public void ApplyBudget_КороткийПромпт_НеРежет()
+    {
+        var sections = new List<PromptSectionDto> { Sys("code-graph", "граф"), Sys("recall-memory", "память") };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
+
+        r.Overflowed.Should().BeFalse();
+        r.TruncatedSections.Should().BeEmpty();
+        r.CombinedPrompt.Should().Contain("граф").And.Contain("память").And.Contain("persona");
+    }
+
+    [Fact]
+    public void ApplyBudget_ПревышениеПорога_РежетВУказанномПорядке()
+    {
+        // Заполняем каждую из 5 секций приоритета по 12 000 символов. Без срезки суммарно
+        // 60 000 — далеко за бюджетом 30 000. После срезания 3 секций остаётся 24 000 +
+        // personaLayer — это уже влезает. Проверяем порядок И что срезка успела остановиться.
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", new string('a', 12_000)),
+            Sys("dossier-recall", new string('b', 12_000)),
+            Sys("recall-notes", new string('c', 12_000)),
+            Sys("recall-memory", new string('d', 12_000)),
+            Sys("persona-mentions", new string('e', 12_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "слой персоны", TinyArgs, FakeLocalLength);
+
+        r.Overflowed.Should().BeFalse("срезка трёх секций уложила остаток в бюджет 30 000");
+        r.TruncatedSections.Should().HaveCount(3,
+            "три секции суммарно 36 000 символов — этого хватило, чтобы влезть в бюджет");
+        r.TruncatedSections[0].Key.Should().Be("(truncated:code-graph)",
+            "первый приоритет — code-graph");
+        r.TruncatedSections[1].Key.Should().Be("(truncated:dossier-recall)",
+            "второй — dossier-recall");
+        r.TruncatedSections[2].Key.Should().Be("(truncated:recall-notes)",
+            "третий — recall-notes");
+    }
+
+    [Fact]
+    public void ApplyBudget_ПереполнениеПослеВсехСрезок_Overflowed()
+    {
+        // Сценарий, который приводит к PromptOverflowException в ClaudeSession: все 5
+        // секций приоритета огромные, и даже после их срезания остаётся стабильная
+        // обвязка выше бюджета. Стабильные рубить НЕЛЬЗЯ, поэтому ClaudeSession бросает
+        // исключение. 5 × 10 000 = 50 000 нестабильных + 35 000 стабильных = 85 000.
+        // После срезания 5 нестабильных остаётся 35 000 стабильных + cli/cwd > 30 000.
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", new string('a', 10_000)),
+            Sys("dossier-recall", new string('b', 10_000)),
+            Sys("recall-notes", new string('c', 10_000)),
+            Sys("recall-memory", new string('d', 10_000)),
+            Sys("persona-mentions", new string('e', 10_000)),
+            StableSec("project-builtin-0", new string('Z', 35_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.Overflowed.Should().BeTrue(
+            "5 нестабильных срезаны, осталась 35 000 стабильных + cli/cwd — НЕ влезает " +
+            "(стабильные рубить нельзя, иначе сломается контракт секций, которые модель ожидает)");
+        r.TruncatedSections.Should().HaveCount(5,
+            "все пять нестабильных срезаны, иначе бы осталась ещё одна");
+    }
+
+    // Длины подобраны так, чтобы первая секция вытолкнула сумму ЗА порог, а после её
+    // удаления оставшиеся секции + personaLayer УЖЕ укладываются в бюджет. Это основной
+    // сценарий задачи dc641949: 30-32к чаты режут ОДНУ секцию и стартуют штатно.
+    [Fact]
+    public void ApplyBudget_СрезкаОднойСекции_ВозвращаетКороткийПромпт()
+    {
+        // 35 000 — выше BudgetThreshold (30 000) даже с учётом коротких секций.
+        // Без срезки суммарно 35 000 + ~50 символов обвязки — за порогом.
+        var bigBlock = new string('a', 35_000);
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", bigBlock),
+            Sys("recall-memory", "короткая память"),
+            StableSec("mcp-tasks", "короткие таски"),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
+
+        r.Overflowed.Should().BeFalse(
+            "после срезания code-graph 35 000 символов + стабильные секции + personaLayer " +
+            "укладываются в порог 30 000");
+        r.TruncatedSections.Should().HaveCount(1);
+        r.TruncatedSections[0].Key.Should().Be("(truncated:code-graph)");
+        // Урезанный code-graph НЕ попал в склейку
+        r.CombinedPrompt.Should().NotContain(bigBlock);
+        // Стабильные секции и persona-layer не тронуты
+        r.CombinedPrompt.Should().Contain("короткие таски").And.Contain("короткая память")
+            .And.Contain("persona");
+    }
+
+    [Fact]
+    public void ApplyBudget_СтабильныеСекцииНеРежутся()
+    {
+        // 5 стабильных секций (не в приоритете) общей длиной сильно за 30 000 — но они
+        // не должны срезаться. Если даже после этого строка не влезает — overflowed=true,
+        // но TruncatedSections пустой.
+        var sections = new List<PromptSectionDto>
+        {
+            StableSec("mcp-tasks", new string('a', 10_000)),
+            StableSec("mcp-memory", new string('b', 10_000)),
+            StableSec("mcp-personas", new string('c', 10_000)),
+            StableSec("voice-mode", new string('d', 5_000)),
+            StableSec("images", new string('e', 5_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TruncatedSections.Should().BeEmpty(
+            "стабильные секции не в приоритете срезания — кэш промпта их держит, ими нельзя рубить");
+        // Содержимое всех стабильных секций доехало
+        r.CombinedPrompt.Should().Contain(new string('a', 10_000));
+        r.CombinedPrompt.Should().Contain(new string('b', 10_000));
+    }
+
+    [Fact]
+    public void ApplyBudget_PersonaLayerНеТрогается()
+    {
+        // Переполнение от code-graph, personaLayer огромный и СТАБИЛЬНЫЙ — после срезки
+        // code-graph проверяем, что personaLayer доехал целиком и в склейке, и в TruncatedSections.
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", new string('a', 25_000)),
+            Sys("recall-memory", "mem"),
+        };
+        var bigPersona = "ты — " + new string('P', 5_000);
+        var r = TurnPromptAssembler.ApplyBudget(sections, bigPersona, TinyArgs, FakeLocalLength);
+
+        r.Overflowed.Should().BeFalse();
+        r.CombinedPrompt.Should().Contain(bigPersona,
+            "personaLayer — отдельный аргумент, в TruncationOrder не входит, режется только промпт");
+    }
+
+    [Fact]
+    public void ApplyBudget_БезСекций_ПустойCombinedPrompt()
+    {
+        // Защита от регрессии: секций нет, personaLayer есть — порция промпта идёт
+        // от персоны, порог не превышен, TruncatedSections пуст.
+        var r = TurnPromptAssembler.ApplyBudget([], "Только персона", TinyArgs, FakeLocalLength);
+        r.Overflowed.Should().BeFalse();
+        r.TruncatedSections.Should().BeEmpty();
+        r.CombinedPrompt.Should().Be("Только персона");
+    }
+
+    [Fact]
+    public void ApplyBudget_УчитываетРабочийКаталогИИмяCli()
+    {
+        // workingDir — параметр ProcessStartInfo.WorkingDirectory, НЕ часть командной строки.
+        // Поэтому Estimate НЕ учитывает workingDir. cli влияет: это начало командной строки.
+        var sections = new List<PromptSectionDto>
+        {
+            StableSec("mcp-tasks", new string('a', 10_000)),
+        };
+        var longCli = new string('C', 5_000);
+        // Невакуумный гейт на cli (ревью dc641949, волна 3): разница длин cli должна
+        // один-в-один отражаться в оценке. workingDir параметром больше не передаётся —
+        // это ProcessStartInfo.WorkingDirectory, в argv не попадает. Если бы cli не
+        // учитывался, разница была бы 0 и тест провалился бы.
+        var forShortCli = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs,
+            args => TinyCli.Length + args.Sum(TurnPromptAssembler.ArgCost));
+        var forLongCli = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs,
+            args => longCli.Length + args.Sum(TurnPromptAssembler.ArgCost));
+
+        (forLongCli.TotalCmdlineChars - forShortCli.TotalCmdlineChars)
+            .Should().Be(longCli.Length - TinyCli.Length,
+                "cli входит в argv без ArgCost (это начало строки, не отдельный аргумент); "
+                + "разница длин cli должна точно перейти в разницу оценки");
+    }
+
+    // M5, главная регрессия ревью: чат со стабильной обвязкой в зоне 30 000–32 767 и пустыми
+    // нестабильными секциями до фикса ходил нормально, а после фикса получал
+    // PromptOverflowException. Порог 30 000 — ТРИГГЕР срезки, отказ ставится по CmdlineLimit.
+    [Fact]
+    public void ApplyBudget_Зона30к32к_НеОтказывает()
+    {
+        // 31 000 стабильной обвязки: срезать нечего (нестабильных секций нет), порог
+        // срезки перейдён, но в лимит командной строки Windows мы укладываемся.
+        var sections = new List<PromptSectionDto>
+        {
+            StableSec("project-builtin", new string('Z', 31_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TotalCmdlineChars.Should().BeInRange(30_001, TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeFalse(
+            "оценка ВЕРХНЯЯ и укладывается в 32 767 — ход обязан стартовать, "
+            + "иначе это регрессия против поведения до фикса dc641949");
+        r.CombinedPrompt.Should().Contain(new string('Z', 31_000));
+    }
+
+    [Fact]
+    public void ApplyBudget_ЗаCmdlineLimit_Отказывает()
+    {
+        // Та же обвязка, но за жёстким лимитом Windows: доказать безопасность старта
+        // нельзя, отказываем сразу — перебор шагов фолбэка тут бесполезен.
+        var sections = new List<PromptSectionDto>
+        {
+            StableSec("project-builtin", new string('Z', 33_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TotalCmdlineChars.Should().BeGreaterThan(TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeTrue();
+    }
+
+    // H1: снимок промпта строится из Sections. После срезки там не должно остаться секции,
+    // которая в модель не ушла, — иначе шторка «что ушло модели» противоречит сама себе
+    // (MaskArgs уже показывал урезанный --append-system-prompt).
+    [Fact]
+    public void ApplyBudget_Sections_НеСодержатСрезанное()
+    {
+        var bigBlock = new string('a', 35_000);
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", bigBlock),
+            Sys("recall-memory", "короткая память"),
+            StableSec("mcp-tasks", "короткие таски"),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
+
+        r.TruncatedSections.Should().ContainSingle()
+            .Which.Key.Should().Be("(truncated:code-graph)");
+        r.Sections.Should().NotContain(s => s.Key == "code-graph",
+            "срезанная секция обязана исчезнуть из итогового списка для снимка");
+        r.Sections.Should().Contain(s => s.Key == "recall-memory");
+        r.Sections.Should().Contain(s => s.Key == "mcp-tasks");
+        // Входной список не мутируем: у вызывающего своя модель памяти
+        sections.Should().HaveCount(3, "ApplyBudget не меняет переданный список");
+    }
+
+    [Fact]
+    public void ApplyBudget_БезСрезки_SectionsРавныИсходным()
+    {
+        var sections = new List<PromptSectionDto> { Sys("code-graph", "граф"), StableSec("mcp-tasks", "таски") };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
+
+        r.Sections.Should().HaveCount(2);
+        r.Sections.Select(s => s.Key).Should().Equal("code-graph", "mcp-tasks");
+    }
+
+    // M3: Size в TruncatedSections отражает ФАКТИЧЕСКИЙ объём срезанного текста, не null.
+    // Фронт рисует по нему «≈ N символов» (Trim в PromptSnapshotDialog.tsx), и без него
+    // пользователь не видит, чем пришлось пожертвовать. Мутация «Size: null» роняет тест.
+    [Fact]
+    public void ApplyBudget_TruncatedSection_SizeРавенДлинеСрезанного()
+    {
+        const int bigLen = 35_000;
+        var bigBlock = new string('a', bigLen);
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", bigBlock),
+            Sys("recall-memory", "короткая память"),
+            StableSec("mcp-tasks", "короткие таски"),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
+
+        r.TruncatedSections.Should().ContainSingle()
+            .Which.Size.Should().Be(bigLen,
+                "Size в TruncatedSections — фактическая длина срезанной секции, а не null: "
+                + "фронт рисует «≈ N символов» по нему; мутация «Size: null» теряет это число");
+    }
+
+    // L8: слагаемое args в Estimate. Меряем РАЗНИЦУ двух оценок на одних и тех же секциях —
+    // так тест ловит мутацию «не считать args» точной цифрой, а не порогом «больше чем».
+    [Fact]
+    public void Estimate_УчитываетДлинуArgs()
+    {
+        var sections = new List<PromptSectionDto> { StableSec("mcp-tasks", "коротко") };
+
+        var without = TurnPromptAssembler.ApplyBudget(sections, null, [], FakeLocalLength);
+        var with = TurnPromptAssembler.ApplyBudget(
+            sections, null, ["--mcp-config", "C:/some/long/path.json"], FakeLocalLength);
+
+        // Стоимость аргумента = длина + 2 (кавычки) + 2 × число кавычек внутри + 1 (пробел).
+        // "--mcp-config" = 12 → 15; "C:/some/long/path.json" = 22 → 25.
+        var expected = (12 + 2 + 1) + (22 + 2 + 1);
+        (with.TotalCmdlineChars - without.TotalCmdlineChars).Should().Be(expected,
+            "args входят в командную строку и обязаны учитываться в оценке");
+    }
+
+    [Fact]
+    public void Estimate_КавычкиВнутриАргумента_УдваиваютЗапас()
+    {
+        var sections = new List<PromptSectionDto> { StableSec("mcp-tasks", "коротко") };
+
+        var plain = TurnPromptAssembler.ApplyBudget(sections, null, ["abcd"], FakeLocalLength);
+        var quoted = TurnPromptAssembler.ApplyBudget(sections, null, ["a\"cd"], FakeLocalLength);
+
+        // Та же длина 4, но одна кавычка внутри: .NET экранирует её (" → \"), и верхняя
+        // оценка обязана быть больше на 2 — иначе занизим и пропустим ход в Win32 206.
+        (quoted.TotalCmdlineChars - plain.TotalCmdlineChars).Should().Be(2,
+            "каждая внутренняя кавычка удорожает аргумент в экранированном виде");
+    }
+
+    // M4: пятый шаг срезки — persona-mentions, и это СТАБИЛЬНАЯ секция. Тест сверяет
+    // фактический флаг Stable у секции, которую ApplyBudget реально удаляет на пятом шаге,
+    // а не список строк (прежняя редакция сверяла строки и мимо флагов проходила молча).
+    [Fact]
+    public void TruncationOrder_ПервыеЧетыреНестабильны_ПятаяСтабильнаОсознанно()
+    {
+        var order = TurnPromptAssembler.TruncationOrder;
+        order.Should().Equal(
+            "code-graph", "dossier-recall", "recall-notes", "recall-memory", "persona-mentions");
+        order[^1].Should().Be(TurnPromptAssembler.StableLastResortKey,
+            "последний шаг вынесен именованной константой — это исключение из правила");
+
+        // Заводим секции с ТЕМИ ЖЕ флагами, что ставит ClaudeSession: четыре первые
+        // stable: false (Add(..., stable: false)), persona-mentions — по дефолту stable: true.
+        var byKey = new Dictionary<string, PromptSectionDto>
+        {
+            ["code-graph"] = Sys("code-graph", new string('a', 9_000)),
+            ["dossier-recall"] = Sys("dossier-recall", new string('b', 9_000)),
+            ["recall-notes"] = Sys("recall-notes", new string('c', 9_000)),
+            ["recall-memory"] = Sys("recall-memory", new string('d', 9_000)),
+            ["persona-mentions"] = StableSec("persona-mentions", new string('e', 9_000)),
+        };
+
+        foreach (var key in order.Take(4))
+            byKey[key].Stable.Should().BeFalse(
+                $"«{key}» заводится stable: false — срезка по ней не бьёт по cache_read");
+
+        byKey[TurnPromptAssembler.StableLastResortKey].Stable.Should().BeTrue(
+            "persona-mentions стабильна: флаг НЕ меняем — stable: false удешевил бы аварийный "
+            + "случай ценой инвалидации кэша у каждого хода всех чатов. Пятый шаг срезки "
+            + "действительно бьёт по кэшируемому префиксу, и оправдан только тем, что "
+            + "альтернатива — несостоявшийся ход");
+    }
+
+    // M4: текст пометки о срезке обязан говорить правду про кэш. Для четырёх нестабильных —
+    // «stable: false, кэш не держит»; для persona-mentions — что кэш ПОСТРАДАЕТ.
+    [Fact]
+    public void ПометкаОСрезке_ПроPersonaMentions_НеВрётПроКэш()
+    {
+        // Стабильный балласт 25 000 подобран так, чтобы после срезки первых ЧЕТЫРЁХ
+        // (36 000) сумма 25 000 + 9 000 всё ещё была за порогом — тогда цикл дойдёт до
+        // пятого шага и реально снимет persona-mentions, а без балласта остановился бы
+        // на четвёртом, и пометки про пятый ключ в снимке просто не было бы.
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", new string('a', 9_000)),
+            Sys("dossier-recall", new string('b', 9_000)),
+            Sys("recall-notes", new string('c', 9_000)),
+            Sys("recall-memory", new string('d', 9_000)),
+            StableSec("persona-mentions", new string('e', 9_000)),
+            StableSec("project-builtin", new string('Z', 25_000)),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        var note = r.TruncatedSections.Single(s => s.Key == "(truncated:persona-mentions)");
+        note.Text.Should().NotContain("stable: false",
+            "секция стабильная — прежний текст утверждал обратное для всех пяти ключей");
+        note.Text.Should().Contain("кэшируемому префиксу",
+            "говорим честно: срезка по стабильной секции бьёт по кэшу");
+
+        var plain = r.TruncatedSections.Single(s => s.Key == "(truncated:code-graph)");
+        plain.Text.Should().Contain("stable: false",
+            "для нестабильных прежняя формулировка верна и остаётся");
+    }
+
+    // M3: ArgCost считает серии \ перед " и в конце аргумента (волна 3 фикса dc641949).
+    // Бывшая формула учитывала только длину + 2 × кавычки + 1 (пробел) — на вырожденных
+    // строках из 3000 подряд \" это давало −2996 символов запаса. Глеб замером опроверг
+    // практическое влияние (500 JSON-путей с обычными кавычками: запас +1036), но формула
+    // документирована как верхняя граница — поэтому досчитываем.
+    [Fact]
+    public void ArgCost_СерииСлэшейПередКавычкой_Удваиваются()
+    {
+        // @"\\\\" — сырая строка с 4 обратными слэшами (Length=4) + " (Length=5).
+        // Серия 4 перед кавычкой → slashDoubled += 4; сама кавычка даёт quotes=1 (+2 к стоимости).
+        // 5 + 2 + 2 + 4 + 1 = 14.
+        const string arg = @"\\\\""";
+        TurnPromptAssembler.ArgCost(arg).Should().Be(14,
+            "4 слэша перед кавычкой дают 4 дополнительных (×2 → 8) плюс сама кавычка ×2");
+    }
+
+    [Fact]
+    public void ArgCost_СерииСлэшейВКонце_Удваиваются()
+    {
+        // @"abc\\\\" — сырая строка: a, b, c, \, \, \, \ (Length=7). Концевая серия 4 →
+        // slashDoubled += 4 (без +1 от кавычки). 7 + 2 + 0 + 4 + 1 = 14.
+        const string arg = @"abc\\\\";
+        TurnPromptAssembler.ArgCost(arg).Should().Be(14,
+            "концевая серия слэшей удваивается так же, как перед кавычкой");
+    }
+
+    [Fact]
+    public void ArgCost_ПустаяСтрока_НеПадает()
+    {
+        // arg="" → пустой аргумент: хотя бы разделитель-пробел между ним и соседями.
+        TurnPromptAssembler.ArgCost("").Should().Be(1);
+    }
+
+    // H3 (волна 3): гейт finalTotal >= CmdlineLimit, не >. Замер на живой ОС:
+    // строка 32 766 стартует, 32 767 — отказ Win32 206. Прежний «>» оставлял последний
+    // символ в зоне риска.
+    // Точная формула: total = cli.Length + Sum(ArgCost(args)) + ArgCost("--append-system-prompt") + ArgCost(big)
+    // С TinyArgs = ["--print"(10), "--input-format"(17), "stream-json"(14)] и cli="claude"(6)
+    // и "--append-system-prompt"(25) получаем total = 6 + 41 + 25 + big + 3 = 75 + big.
+    // При big = 32 692: total = 32 767 (ровно лимит → отказ).
+    [Fact]
+    public void ApplyBudget_РовноНаЛимите_Отказывает()
+    {
+        const int big = 32_692;
+        var sections = new List<PromptSectionDto> { StableSec("one", new string('a', big)) };
+
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TotalCmdlineChars.Should().Be(TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeTrue(
+            "ровно CmdlineLimit отказывается — гейт >= ловит последний символ");
+    }
+
+    // H3: 32 766 (один символ запаса) — ещё стартует.
+    [Fact]
+    public void ApplyBudget_НаСимволНижеЛимита_Стартует()
+    {
+        const int big = 32_691;
+        var sections = new List<PromptSectionDto> { StableSec("one", new string('a', big)) };
+
+        var r = TurnPromptAssembler.ApplyBudget(sections, null, TinyArgs, FakeLocalLength);
+
+        r.TotalCmdlineChars.Should().BeLessThan(TurnPromptAssembler.CmdlineLimit);
+        r.Overflowed.Should().BeFalse(
+            "на символ ниже CmdlineLimit ход обязан стартовать — иначе мы зарежем лишнее");
+    }
 }

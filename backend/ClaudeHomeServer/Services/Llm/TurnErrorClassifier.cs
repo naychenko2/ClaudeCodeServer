@@ -33,6 +33,15 @@ public enum FallbackErrorClass
     // 2026-08-13). Источник ошибки разводит FallbackLlmSessionAdapter: подписка пула → ротация,
     // провайдер/пул без живых → error.
     AuthFailure,
+    // Промпт хода превысил лимит командной строки Windows (Win32 ERROR_FILENAME_EXCED_RANGE,
+    // код 206). Локальный детерминированный отказ: сбой не в провайдере, и перебор других
+    // моделей ничего не лечит (длина промпта от выбора пары не зависит). Маркер ставит
+    // ClaudeSession: при сбое старта процесса префикс "[Win32:206]" попадает в Details
+    // ErrorMessage, оттуда — в ErrorText попытки. FallbackLlmSessionAdapter: attempts=1,
+    // фолбэк не запускается, человек видит TurnFailureText.PromptOverflow. Источник подмены —
+    // задача dc641949 (инцидент 2026-09-07, чат 74f1c3d6: 5 попыток цепочки по 9 секунд
+    // каждая на сломанном промпте).
+    PromptOverflow,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -47,6 +56,11 @@ public sealed record TurnAttemptOutcome
     public string? ApiErrorStatus { get; init; }
     // Текст ошибки хода (API-ошибка провайдера из result / исключение запуска)
     public string? ErrorText { get; init; }
+    // Win32 NativeErrorCode исключения запуска процесса (если сбой пришёл через Win32Exception):
+    // 0 или null — не Win32, или код не передан адаптером. Сейчас используется только для
+    // ERROR_FILENAME_EXCED_RANGE (206) — выставляет PromptOverflow, чтобы сбой старта по
+    // перерасходу cmdline не уходил в Unreachable и не крутил фолбэк по живым моделям.
+    public int? Win32ErrorCode { get; init; }
     // rate_limit_event rejected по окну исчерпания внутри попытки — CLI приостановил ход
     public bool RateLimitRejected { get; init; }
     // Ход остановил пользователь (Interrupt) — это не ошибка доставки
@@ -71,6 +85,24 @@ public static class TurnErrorClassifier
     private static readonly string[] NetworkPhrases =
         ["fetch failed", "socket hang up", "network socket disconnected", "tls handshake"];
 
+    // Win32-код, который .NET оборачивает в Win32Exception при перерасходе длины командной
+    // строки. Маркируется явно — на разных локалях ОС текст ошибки разный, а числовой код
+    // стабилен. Полный путь: ClaudeSession при Process.Start ловит Win32Exception, кладёт
+    // префикс "[Win32:206]" в Details ErrorMessage; адаптер пробрасывает в outcome.Win32ErrorCode
+    // и ищет подстроку в ErrorText как запасной канал на случай потери маркера.
+    private const int Win32ErrorFilenameExcedRange = 206;
+
+    // Ищет префикс "[Win32:NNN]" в начале текста ошибки (ClaudeSession ставит его первым
+    // токеном в Details ErrorMessage). Возвращает true, если первый маркер имеет искомый код.
+    // НЕ проверяет весь текст на вхождение "[Win32:206]" где попало — это спасло бы от
+    // ложных срабатываний в чате, который ЦИТИРУЕТ маркер в своей переписке.
+    private static bool HasWin32Marker(string? text, int code)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        var prefix = $"[Win32:{code}]";
+        return text.StartsWith(prefix, StringComparison.Ordinal);
+    }
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -79,6 +111,19 @@ public static class TurnErrorClassifier
         // Мягкий лимит: rejected по окну исчерпания (five_hour/seven_day) — CLI
         // приостановил ход до сброса окна
         if (outcome.RateLimitRejected) return FallbackErrorClass.RateLimit;
+
+        // Локальный детерминированный сбой старта процесса: Win32 ERROR_FILENAME_EXCED_RANGE
+        // (206) значит, что командная строка (системный промпт + прочие аргументы + путь
+        // к exe + WorkingDirectory) перевалила лимит Windows 32 767 символов. Сменить пару
+        // «модель × подписка» бесполезно — длина промпта от неё не зависит. Должно стоять
+        // ДО ветки "процесс умер без result → Unreachable", иначе локальная причина маскируется
+        // под мёртвый эндпоинт и фолбэк жжёт 5 попыток впустую (инцидент 2026-09-07, чат
+        // 74f1c3d6). Код приходит из адаптера (FallbackLlmSessionAdapter → FallbackTurn →
+        // outcome.Win32ErrorCode); второй источник — префикс "[Win32:206]" в ErrorText,
+        // который ClaudeSession кладёт в Details ErrorMessage на сбое Process.Start.
+        if (outcome.Win32ErrorCode == Win32ErrorFilenameExcedRange
+            || HasWin32Marker(outcome.ErrorText, Win32ErrorFilenameExcedRange))
+            return FallbackErrorClass.PromptOverflow;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;
@@ -169,6 +214,9 @@ public static class TurnErrorClassifier
         // видел «Сервис не отвечает» при протухшем ключе. Тот же класс бага, что раньше чинили
         // хардкодом unreachable в стартовой подмене.
         FallbackErrorClass.AuthFailure => "auth_failure",
+        // Перерасход командной строки: не идёт в ProviderSwitchedMessage (фолбэк не
+        // запускается), но имя полезно для лога/паспорта хода и для будущих подсказок.
+        FallbackErrorClass.PromptOverflow => "prompt_overflow",
         _ => null,
     };
 

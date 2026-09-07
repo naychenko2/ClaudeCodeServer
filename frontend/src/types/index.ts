@@ -1100,8 +1100,9 @@ export interface PromptSection {
   title: string;
   text: string;
   // system — часть --append-system-prompt; turn — текст сообщения хода с обвязками;
-  // cli-file — файл слоя CLI (CLAUDE.md с раскрытыми импортами)
-  kind: 'system' | 'turn' | 'cli-file';
+  // cli-file — файл слоя CLI (CLAUDE.md с раскрытыми импортами); truncated — секция,
+  // срезанная ради лимита командной строки Windows (живёт в PromptSnapshot.TruncatedSections)
+  kind: 'system' | 'turn' | 'cli-file' | 'truncated';
   // Длина оригинального текста, когда сам текст в выдаче опущен (файлы слоя CLI
   // грузятся по требованию — они весят десятки КБ)
   size?: number | null;
@@ -1144,6 +1145,11 @@ export interface PromptSnapshot {
   model?: string | null;
   mode?: string | null;
   cliLayer?: CliLayer | null;
+  // Секции, вырезанные из промпта ради лимита командной строки Windows: в модель НЕ ушли,
+  // а здесь — чтобы человек видел, чем пришлось пожертвовать. null/пусто — срезки не было,
+  // обычный ход. У каждой записи kind='truncated', text — пометка о факте срезки (что
+  // вырезано и сколько символов осталось бы), не исходное содержимое. Задача dc641949
+  truncatedSections?: PromptSection[] | null;
 }
 
 export interface UsageInfo {

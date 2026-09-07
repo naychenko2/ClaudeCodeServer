@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Prompts;
@@ -1956,7 +1957,41 @@ public class ClaudeSession : ILlmSessionAdapter
                     // формулировка (точечные catch по типам дыру не закрывают: следующее
                     // исключение всё равно приезжало в ленту сырым .NET-текстом), сырой
                     // ex.Message живёт под «Подробностями» и в логе выше
-                    await _onMessage(new ErrorMessage(TurnFailureText.ForException(ex), Details: ex.Message));
+                    //
+                    // Маркер Win32-кода: Win32Exception.NativeErrorCode — стабильный числовой
+                    // идентификатор причины (напр. 206 = ERROR_FILENAME_EXCED_RANGE). Текст
+                    // ошибки ОС локализован, числовой код — нет. Кладём префикс "[Win32:NNN]"
+                    // в Details: адаптер через turn.NoteErrorMeta пробрасывает в
+                    // TurnAttemptOutcome.Win32ErrorCode, TurnErrorClassifier ловит 206 и
+                    // отдаёт PromptOverflow (фолбэк не запускается). Префикс стоит первым
+                    // токеном и HasWin32Marker в классификаторе начинает строго с него —
+                    // случайные упоминания "[Win32:206]" в обычной переписке чата ложно не
+                    // ловятся. Задача dc641949 (инцидент 2026-09-07, чат 74f1c3d6).
+                    //
+                    // PromptOverflowException: локальный детерминированный сбой, мы его
+                    // узнаём заранее на склейке промпта и Process.Start не вызываем — но
+                    // Win32Exception-маркер ставим тот же (206), адаптер видит PromptOverflow
+                    // по тому же каналу. Текст в Text берём осмысленный (TurnFailureText.
+                    // PromptOverflow), Generic из ForException тут вводит в заблуждение
+                    // («прервался, попробуйте ещё раз» — а проблема в размере промпта).
+                    string details;
+                    string text;
+                    if (ex is PromptOverflowException)
+                    {
+                        details = $"[Win32:206]{ex.Message}";
+                        text = TurnFailureText.PromptOverflow;
+                    }
+                    else if (ex is System.ComponentModel.Win32Exception w32)
+                    {
+                        details = $"[Win32:{w32.NativeErrorCode}]{ex.Message}";
+                        text = TurnFailureText.ForException(ex);
+                    }
+                    else
+                    {
+                        details = ex.Message;
+                        text = TurnFailureText.ForException(ex);
+                    }
+                    await _onMessage(new ErrorMessage(text, Details: details));
                 }
                 finally
                 {
@@ -2633,6 +2668,18 @@ public class ClaudeSession : ILlmSessionAdapter
         // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
         List<PromptSectionDto> sections = [];
 
+        // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
+        // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
+        // в момент склейки, едет в PromptSnapshotDraft.TruncatedSections через PublishPromptSnapshot.
+        // Рендерится блоком «Промпт не влез…» в PromptSnapshotDialog.tsx (задача dc641949).
+        IReadOnlyList<PromptSectionDto> truncatedSections = [];
+
+        // Персональный слой хода (PersonaLayerContributor) — выносим за блок секций: ApplyBudget
+        // теперь живёт ПОСЛЕ сборки env и ДО добавления persona-layer/turn-text, а значит должен
+        // видеть и agentPrompt (его текст), и переменные того же блока. Сам по себе agentPrompt —
+        // просто строка, и читается снаружи без потери смысла.
+        string? agentPrompt = null;
+
         // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Ход в новом процессе
         // (claude --print --resume) получает его через --append-system-prompt — тот не
         // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/правило
@@ -3084,23 +3131,13 @@ public class ClaudeSession : ILlmSessionAdapter
             // Персональный слой (этап 2): контрибьютор PersonaLayerContributor добавляет секцию
             // Key="persona-layer" в filter.Sections. Combine находит её по ключу и клеит
             // через PersonaSeparator после тела. Без шины — fallback на skills agent prompt.
-            string? agentPrompt = contributorSections.TryGetValue("persona-layer", out var personaSection)
+            // Объявление agentPrompt снаружи (строка выше) — ApplyBudget видит его ПОСЛЕ сборки env.
+            agentPrompt = contributorSections.TryGetValue("persona-layer", out var personaSection)
                 ? personaSection.Text
                 : (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null
                     ? _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName)
                     : null);
             personaLayerPrompt = agentPrompt;
-
-            var combinedPrompt = TurnPromptAssembler.Combine(sections, agentPrompt);
-
-            if (!string.IsNullOrWhiteSpace(combinedPrompt))
-                args.AddRange(["--append-system-prompt", combinedPrompt]);
-
-            // Слой персоны — тоже часть того, что ушло модели: кладём его секцией уже ПОСЛЕ
-            // склейки (Combine принимает его отдельным аргументом, чтобы не спутать порядок).
-            if (!string.IsNullOrWhiteSpace(agentPrompt))
-                sections.Add(new PromptSectionDto("persona-layer", "Кто она: роль и характер",
-                    agentPrompt, Group: "persona"));
 
             // Текст хода — не системный промпт, но модель видит именно его: сюда уже вклеены
             // обвязки OmO (SessionManager.BuildCliTurnText), разворот скилла и имена вложений,
@@ -3116,7 +3153,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }
 
-        // Env-оверрайды процесса собираем заранее (не сразу в psi): пары входят в сигнатуру прогона
+        // Env-оверрайды собираем ДО ApplyBudget: оценка должна учитывать фактический env,
+        // иначе сторонний провайдер (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN от BuildCliEnv)
+        // приехал бы в оценку нулевой длиной, а в реальном docker exec — нет (ревью dc641949,
+        // волна 3: длина токена нам неизвестна, и фиксированный запас — гадание).
         var envOverrides = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
             // claude --print по умолчанию ждёт фоновые задачи (субагентов workflow) не дольше 600с,
@@ -3244,6 +3284,99 @@ public class ClaudeSession : ILlmSessionAdapter
         _turnConfigRoot = envOverrides.TryGetValue("CLAUDE_CONFIG_DIR", out var turnConfigDir)
             && !string.IsNullOrWhiteSpace(turnConfigDir) ? turnConfigDir : _cliConfigRoot;
 
+        // Бюджет промпта на склейке: считает ВЕРХНЮЮ оценку командной строки — cli-путь
+        // плюс каждый аргумент в экранированном виде плюс пара --append-system-prompt со
+        // склеенным промптом плюс ОБВЯЗКА РАННЕРА (для container-владельцев это ещё
+        // ~401 символ docker exec: ревью dc641949, волна 3).
+        // WorkingDirectory в неё НЕ входит: это отдельный параметр ProcessStartInfo,
+        // в командную строку он не попадает.
+        // Два числа не путать: 30 000 (BudgetThreshold) — ТРИГГЕР срезки нестабильных
+        // секций в порядке TruncationOrder; 32 767 (CmdlineLimit) — ОТКАЗ. Ход, который
+        // после срезки остался в зоне 30–32к, стартует штатно; кидаем
+        // PromptOverflowException только за лимитом cmdline, и тогда общий catch выше
+        // (RunTurnAsync) кладёт [Win32:206]-совместимый маркер в Details ErrorMessage.
+        // ApplyBudget чистый: единственный путь сборки, шов между секциями и командной
+        // строкой — здесь. Задача dc641949, волна 2 ревью.
+        //
+        // КРИТИЧНО: ApplyBudget вызываем ДО args.AddRange(["--append-system-prompt", …])
+        // ниже — иначе пара приехала бы в args и посчиталась дважды: ApplyBudget
+        // добавляет её к оценке сам, ровно потому что на момент вызова её в args нет.
+        //
+        // Колбэк cmdlineLength отдаёт раннер: только он знает СВОЮ обвязку (Local — ничего,
+        // Docker — docker exec с -i/-w/-e/контейнером/скриптом). На момент ApplyBudget env
+        // уже собран целиком — порядок блоков выше это гарантирует. Spec собираем здесь,
+        // на Start ниже передаётся ровно тот же объект — иначе оценка и реальный запуск
+        // разъедутся при первой же правке ProcessSpec.
+        var cmdlineSpec = new Execution.ProcessSpec
+        {
+            FileName = _launcher.ClaudeCliCommand,
+            Args = args,
+            WorkingDirectory = _rootPath,
+            Env = envOverrides,
+            ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+            RedirectStdin = true,
+            TurnId = _currentTurnId,
+        };
+        // EstimateCommandLineLength — единственная точка учёта обвязки раннера, и она
+        // ОБЯЗАНА вернуть число. Если кидает (ThrowingRuntimeLauncher в тесте BareArgs или
+        // NoActive у песочницы, или EnsureProfile внутри Estimate упал на IOException) — фолбэк
+        // на cli+args без обвязки: оценка станет нижней границей, гейт может не отказать
+        // в зоне риска, но ход всё равно не стартанет (тот же ToRuntime за ним же бросит в
+        // BuildArgs или Start). Лучше так, чем ронять ApplyBudget ДО сборки args и ломать
+        // Catch ниже.
+        //
+        // Молча тут нельзя: docker-владелец без обвязки в оценке — это возврат дыры dc641949
+        // (волна 3), которую safeEstimate как раз и прикрывает. Поймать молча и не оставить
+        // следа = гейт «выглядит рабочим, а декоративен». Пишем warning с типом исключения,
+        // чтобы было видно, КТО упал (тест ниже ловит ровно эту строку).
+        Func<IReadOnlyList<string>, int> safeEstimate = finalArgs =>
+        {
+            try
+            {
+                return _launcher.EstimateCommandLineLength(cmdlineSpec with { Args = finalArgs });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] safeEstimate: EstimateCommandLineLength упал ({ex.GetType().Name}: {ex.Message}); " +
+                    "оценка — нижняя граница без обвязки раннера, ход может пройти гейт и упасть на старте");
+                return CmdlineEstimate.ArgCost(cmdlineSpec.FileName) + finalArgs.Sum(CmdlineEstimate.ArgCost);
+            }
+        };
+        var budget = TurnPromptAssembler.ApplyBudget(
+            sections, agentPrompt, args, safeEstimate);
+        var combinedPrompt = budget.CombinedPrompt;
+        truncatedSections = budget.TruncatedSections;
+        // Срезку применяем к самому списку секций: снимок промпта строится из него, и
+        // оставить там секции, которые в модель НЕ ушли, значит показать пользователю
+        // не тот промпт, что отправлен (ревью dc641949: H1 — MaskArgs уже маскировал
+        // урезанный --append-system-prompt, а список секций оставался полным).
+        // Именно замена содержимого, а не публикация budget.Sections отдельной
+        // переменной: turn-text добавляется выше (до ApplyBudget), persona-layer — ниже
+        // отдельным шагом. Оба обязаны доехать до шторки и не попасть под срезку.
+        sections.Clear();
+        sections.AddRange(budget.Sections);
+        // Слой персоны — отдельный аргумент Combine (PersonaSeparator), в budget.Sections не
+        // входит. Для шторки «что ушло модели» добавляем его сюда: иначе самая жирная часть
+        // (до MaxContractChars у persona-layer) не видна и в картине промпта, и в подсчёте
+        // веса. В склейку не идёт (Combine уже склеил его отдельно выше), Kind="system",
+        // чтобы фронтская фильтрация `s.kind === 'system'` положила его в общий зачёт.
+        if (!string.IsNullOrWhiteSpace(agentPrompt))
+            sections.Add(new PromptSectionDto("persona-layer", "Кто она: роль и характер", agentPrompt, Group: "persona"));
+        if (budget.Overflowed)
+        {
+            // Не влезает даже после срезки всех нестабильных секций. Не стартуем процесс
+            // (Process.Start гарантированно бросил бы Win32Exception с кодом 206 —
+            // мы знаем причину заранее). Бросаем наружу — общий catch в RunTurnAsync
+            // обработает и сформирует [Win32:206]-префикс в Details ErrorMessage.
+            // Лимит в сообщении — CmdlineLimit: именно он перейдён, порог срезки
+            // (BudgetThreshold) отказом не является.
+            throw new PromptOverflowException(budget.TotalCmdlineChars,
+                TurnPromptAssembler.CmdlineLimit);
+        }
+
+        if (!string.IsNullOrWhiteSpace(combinedPrompt))
+            args.AddRange(["--append-system-prompt", combinedPrompt]);
+
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
         object content;
@@ -3283,7 +3416,8 @@ public class ClaudeSession : ILlmSessionAdapter
             // TurnAccumulator сбросит текущий ход, и id уже некуда будет прицепить.
             // applied=false — промпт пересобран, но модели не ушёл: работает промпт старта.
             PublishPromptSnapshot(sections, args, mcpServerNames,
-                applied: false, inheritedFromId: existing.PromptSnapshotId);
+                applied: false, inheritedFromId: existing.PromptSnapshotId,
+                truncated: truncatedSections);
             await existing.TurnTcs.Task.WaitAsync(ct);
             // Прогон умер, не выдав ни одного события хода (TOCTOU: фоновые агенты кончились,
             // CLI завершается сразу после успешной записи в stdin) — гонка same-process, а не
@@ -3334,7 +3468,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // могли на него сослаться. Процесс может не стартовать — тогда снимок останется
         // с applied=true при неушедшем промпте, но ход тут же закончится ошибкой рядом.
         var turnSnapshotId = PublishPromptSnapshot(sections, args, mcpServerNames,
-            applied: true, inheritedFromId: null);
+            applied: true, inheritedFromId: null,
+            truncated: truncatedSections);
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
@@ -3944,7 +4079,12 @@ public class ClaudeSession : ILlmSessionAdapter
     /// </summary>
     private string? PublishPromptSnapshot(IReadOnlyList<PromptSectionDto> sections,
         IReadOnlyList<string> args, IReadOnlyList<string> mcpServerNames,
-        bool applied, string? inheritedFromId)
+        bool applied, string? inheritedFromId,
+        // Секции, удалённые TurnPromptAssembler.ApplyBudget. Пробрасываем в черновик
+        // снимка как TruncatedSections — поле контракта, рендерится блоком «Промпт не влез…»
+        // в PromptSnapshotDialog.tsx (задача dc641949).
+        // null/пусто → обычный ход, поля в снимке не будет.
+        IReadOnlyList<PromptSectionDto>? truncated = null)
     {
         if (_events is null) return null;
 
@@ -3954,7 +4094,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Черновик нужен подписчику: собираем до шины, чтобы не зависеть от формы его файлов.
         var draft = new PromptSnapshotDraft(
             applied, inheritedFromId, sections, MaskArgs(args), mcpServerNames,
-            EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles());
+            EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles(),
+            TruncatedSections: truncated);
         // PublishAsync не бросает, но для понятного журнала под try.
         try
         {

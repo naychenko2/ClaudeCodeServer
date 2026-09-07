@@ -48,27 +48,15 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // Дешёвый (троттлёный) гарант, что контейнер поднят и актуален
         _sandbox.EnsureRunningAsync().GetAwaiter().GetResult();
 
-        var env = BuildTurnEnv(spec.Env);
-
-        var turnId = spec.TurnId ?? Guid.NewGuid().ToString("N")[..12];
-        var dockerArgs = new List<string> { "exec" };
-        if (spec.RedirectStdin) dockerArgs.Add("-i");
-        if (spec.WorkingDirectory is not null)
-        {
-            dockerArgs.Add("-w");
-            dockerArgs.Add(_paths.ToRuntime(spec.WorkingDirectory));
-        }
-        foreach (var (k, v) in env)
-        {
-            dockerArgs.Add("-e");
-            dockerArgs.Add($"{k}={v}");
-        }
-        dockerArgs.Add(_sandbox.Options.ContainerName);
-        // Обвязка убиваемости: setsid-группа + pid-файл /tmp/turns/{turnId}.pid
-        dockerArgs.Add("/app/run-turn.sh");
-        dockerArgs.Add(turnId);
-        dockerArgs.Add(spec.FileName);
-        dockerArgs.AddRange(spec.Args);
+        // TurnId в Start — уникальный, если ClaudeSession его не проставил. Иначе первый же
+        // docker-запуск без TurnId разделит /tmp/turns/000000000000.pid с соседним процессом,
+        // а run-turn.sh удаляет pid-файл на выходе. Estimate и так использует 12-символьный
+        // плейсхолдер (BuildDockerExecArgs: spec.TurnId ?? "…"); реальный 12-символьный Guid
+        // ему равен по длине, и оценка остаётся согласованной с реальной обвязкой.
+        var finalSpec = spec.TurnId is null
+            ? spec with { TurnId = NewTurnId() }
+            : spec;
+        var dockerArgs = BuildDockerExecArgs(finalSpec);
 
         var psi = new ProcessStartInfo
         {
@@ -92,6 +80,83 @@ public sealed class DockerProcessRunner : IProcessLauncher
             throw new InvalidOperationException($"Не удалось запустить docker exec для {spec.FileName}");
         if (spec.Track) ProcessRegistry.Register(process);
         return process;
+    }
+
+    // Уникальный 12-символьный turnId для docker exec без заданного TurnId. Длина жёстко
+    // привязана к плейсхолдеру из BuildDockerExecArgs (new string('0', 12)) — иначе Estimate
+    // и Start разъедутся по длине, и docker-владельцы снова поймают блокер dc641949. Вынесен
+    // отдельным internal-методом, чтобы тест-сторож проверял РЕАЛЬНУЮ генерацию, а не свою
+    // копию формулы (та дыра, на которой раньше проходили мутации «подменить Guid на
+    // константу» и «растянуть Guid до 24 символов»).
+    internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
+
+    public int EstimateCommandLineLength(ProcessSpec spec)
+    {
+        if (spec.RawArguments is not null)
+            throw new NotSupportedException("RawArguments — только local-раннер (cmd /s /c); песочница всегда Linux");
+
+        // Симметрично Start: тот же BuildDockerExecArgs даёт ровно ту argv, что соберёт .NET.
+        // ВЕРХНЯЯ оценка считается через ArgCost по каждому элементу (с пробелом-разделителем
+        // и экранированием). Здесь она ОБЯЗАНА совпадать с реальной сборкой .NET, иначе
+        // ревью dc641949 (волна 3): оценка 20 347, реальная cmdline docker-раннера 20 710 —
+        // незамеченные 401 символ обвязки docker exec проходили наш гейт и ловили Win32 206.
+        //
+        // ToRuntime может бросить (путь вне песочницы — ревью ClaudeSessionBareArgsTests).
+        // На этапе оценки это означает «всё равно не стартанём», и лучше вернуть нижнюю
+        // границу (cli + args), чем уронить ход сбросом BareMode ещё до сборки args.
+        try
+        {
+            var total = CmdlineEstimate.ArgCost(_sandbox.Options.DockerPath);
+            foreach (var a in BuildDockerExecArgs(spec)) total += CmdlineEstimate.ArgCost(a);
+            return total;
+        }
+        catch (InvalidOperationException)
+        {
+            // Фолбэк: cli + args без обвязки. Реальный Start всё равно бросит, и
+            // ClaudeSession catch в BuildArgs снимет BareMode. Главное — не уронить
+            // ApplyBudget ДО того, как аргументы хода будут собраны.
+            var total = CmdlineEstimate.ArgCost(spec.FileName);
+            foreach (var a in spec.Args) total += CmdlineEstimate.ArgCost(a);
+            return total;
+        }
+    }
+
+    // Сборка аргументов docker exec — ЕДИНСТВЕННАЯ точка для Start и оценки.
+    // Если правила расходятся (новый флаг, иной порядок, доп. переменные) — это место
+    // правится ровно один раз, и оценка автоматически последует за реальным запуском.
+    // turnId: реальный (TurnId задан ClaudeSession ДО ApplyBudget, см. ClaudeSession.cs:2463);
+    // null в Estimate — берём 12-символьный плейсхолдер (длина реального Guid[..12] из Start),
+    // в Start — Start генерирует реальный Guid и передаёт сюда через spec with { TurnId = ... }.
+    // Эстетически Estimate и Start используют разные turnId, но оба 12 символов —
+    // длина не разъезжается, и шов «ClaudeSession → раннер» остаётся согласованным.
+    // Симметрия Start↔Estimate по составу обвязки проверяется косвенно через
+    // DockerProcessRunnerCmdlineEstimationTests (см. тест «УчитываетОбвязкуDockerExec»).
+    // Public ради прямой проверки из тестов: единственный способ гарантировать,
+    // что добавленный флаг не пройдёт мимо оценки (ревью dc641949, волна 3).
+    public List<string> BuildDockerExecArgs(ProcessSpec spec)
+    {
+        var env = BuildTurnEnv(spec.Env);
+        var turnId = spec.TurnId ?? new string('0', 12);
+
+        var dockerArgs = new List<string> { "exec" };
+        if (spec.RedirectStdin) dockerArgs.Add("-i");
+        if (spec.WorkingDirectory is not null)
+        {
+            dockerArgs.Add("-w");
+            dockerArgs.Add(_paths.ToRuntime(spec.WorkingDirectory));
+        }
+        foreach (var (k, v) in env)
+        {
+            dockerArgs.Add("-e");
+            dockerArgs.Add($"{k}={v}");
+        }
+        dockerArgs.Add(_sandbox.Options.ContainerName);
+        // Обвязка убиваемости: setsid-группа + pid-файл /tmp/turns/{turnId}.pid
+        dockerArgs.Add("/app/run-turn.sh");
+        dockerArgs.Add(turnId);
+        dockerArgs.Add(spec.FileName);
+        dockerArgs.AddRange(spec.Args);
+        return dockerArgs;
     }
 
     public void Kill(Process process, string? turnId = null)

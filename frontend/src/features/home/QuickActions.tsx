@@ -1,15 +1,18 @@
-import { useState } from 'react';
-import { FolderPlus, MessageCirclePlus, NotebookPen, Plus, UserPlus, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowRight, FolderPlus, MessageCirclePlus, NotebookPen, Plus, UserPlus, Zap } from 'lucide-react';
 import type { Project, ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
 import { createChatWithContextPersona } from '../../lib/defaultPersona';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, R } from '../../lib/design';
 import { openTaskInSection } from '../../lib/tasks';
 import { ensureNotesLoaded } from '../../lib/notes';
+import { useRecentIds } from '../../lib/pinnedProjects';
 import type { HubTab } from '../../components/HubTabs';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
 import { NewNoteDialog } from '../notes/NewNoteDialog';
 import { AddProjectDialog } from '../projects/dialogs/AddProjectDialog';
+import { ProjectIcon } from '../projects/ProjectIcon';
+import { ensureProjectsLoaded } from '../projects/useAllProjects';
 import { WidgetCard } from './WidgetCard';
 import { openNote } from './NotesWidget';
 
@@ -42,6 +45,42 @@ function ActionButton({ icon, label, onClick, disabled }: {
   );
 }
 
+// Возврат в последний открытый проект — самый частый вход с дашборда, поэтому плашка
+// занимает целую строку сетки ('1 / -1', а не span 2: при одной колонке span 2 добавил
+// бы неявную вторую и разъехалась бы вся сетка).
+function LastProjectTile({ project, onClick }: { project: Project; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        gridColumn: '1 / -1',
+        display: 'flex', alignItems: 'center', gap: 10, borderRadius: 10,
+        width: '100%', minWidth: 0, boxSizing: 'border-box', textAlign: 'left',
+        padding: '9px 13px', cursor: 'pointer',
+        background: hover ? C.bgSelected : C.bgCard,
+        border: `1px solid ${C.borderLight}`,
+      }}
+    >
+      <ProjectIcon project={project} size={30} radius={R.md} />
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{
+          fontFamily: FONT.sans, fontSize: 13.5, color: C.textPrimary,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {project.name}
+        </span>
+        <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>
+          Последний проект
+        </span>
+      </span>
+      <ArrowRight size={15} strokeWidth={2} style={{ color: C.accent, flexShrink: 0 }} />
+    </button>
+  );
+}
+
 // «Быстрые действия»: создание чата, задачи, заметки, проекта и персоны с дашборда.
 export function QuickActions({ onHubTab, onOpenProject }: {
   onHubTab: (t: HubTab) => void;
@@ -52,6 +91,21 @@ export function QuickActions({ onHubTab, onOpenProject }: {
   const [newNoteOpen, setNewNoteOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
+  // Последний открытый проект берём из клиентского MRU (lib/pinnedProjects) — это
+  // «куда я заходил», а не updatedAt проекта: чужая активность не должна подменять
+  // плашку. Сам Project тянем из списка; не нашёлся (удалён, чужой) — плашки нет.
+  const recentIds = useRecentIds();
+  const lastId = recentIds[0];
+  const [lastProject, setLastProject] = useState<Project | null>(null);
+  useEffect(() => {
+    if (!lastId) { setLastProject(null); return; }
+    let alive = true;
+    // Общий кэш шапки и палитры (TTL 60с) — отдельный запрос /projects тут не нужен
+    ensureProjectsLoaded()
+      .then(list => { if (alive) setLastProject(list.find(p => p.id === lastId) ?? null); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [lastId]);
 
   // Новый чат вне проекта: создаем и передаем готовому listener'у App (cc-open-chat) —
   // тот сам переключит раздел «Чаты» и откроет чат
@@ -84,6 +138,9 @@ export function QuickActions({ onHubTab, onOpenProject }: {
     <WidgetCard icon={<Zap size={16} strokeWidth={2} />} title="Быстрые действия">
       {/* Сетка с равной шириной кнопок: колонки тянутся одинаково, ряды добираются сами */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+        {lastProject && (
+          <LastProjectTile project={lastProject} onClick={() => onOpenProject(lastProject)} />
+        )}
         <ActionButton
           icon={<MessageCirclePlus size={15} strokeWidth={2} />}
           label={creatingChat ? 'Создаю…' : 'Новый чат'}

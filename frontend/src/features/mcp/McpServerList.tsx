@@ -59,7 +59,6 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
   showHiggsfield?: boolean;
 }) {
   const { servers, builtin } = data;
-  const hasLegacy = servers?.some(s => s.source !== 'manual') ?? false;
   // Три известные группы разбираем явно, всё прочее — в «подключено вне AI Home»:
   // незнакомое значение group (новая группа с бэкенда) обязано остаться видимым,
   // иначе сервер подключён, а в списке его нет
@@ -71,22 +70,36 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
     return <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>;
   }
 
+  // Записи группы «integration» (dify / fal-ai / glif / higgsfield) доставляются во все
+  // чаты владельца по факту входа — статус интеграции рисует HiggsfieldCard и плитка
+  // «через интернет» в блоке «Сервисы AI Home». Показывать ту же сущность полноразмерной
+  // карточкой в «Ваших серверах» нельзя: карточка врет про модель доступа («Доступ не
+  // выдан» при работающем сервере), ссылка «Настроить» ведёт в тупик, а крестик
+  // «Удалить» обещает то, чего продукт не делает. Фильтруем на входе.
+  const integrationCount = servers.filter(s => s.group === 'integration').length;
+  const ownServers = servers.filter(s => s.group !== 'integration');
+  const hasLegacy = ownServers.some(s => s.source !== 'manual');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <div style={groupHeaderStyle}>Ваши серверы</div>
 
-      {servers.length === 0 ? (
+      {ownServers.length === 0 ? (
         <div style={{
           border: `1px dashed ${C.dashed}`, borderRadius: R.xxl, padding: `${SP.sm}px 0`,
         }}>
           <EmptyState
             icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
             title="Своих серверов пока нет"
-            // Что такое внешний MCP-сервер: программа, которую AI Home запускает
-            // рядом с собой, чтобы дать чатам новые возможности — файлы, БД, поиск
-            // по API. Это первое, что видит новый человек в разделе, и без строчки
-            // «а зачем» кнопки «Найти» и «Добавить» выглядели бы как ритуал
-            subtitle="Внешний MCP-сервер — это программа, которую AI Home запускает рядом с собой, чтобы дать чатам новые возможности: чтение файлов, доступ к базе, поиск по API. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками"
+            // У владельца может остаться ноль своих серверов (все его записи — интеграции):
+            // тогда EmptyState должна объяснить, что интеграции работают сами, и называть
+            // их по имени — именно их ищет человек, который только что вошёл (он шёл в
+            // раздел MCP и увидел Higgsfield в ленте). Когда интеграций нет, остаётся
+            // прежнее объяснение «что такое MCP» — оно первое, что видит новый человек,
+            // и без строчки «а зачем» кнопки «Найти» и «Добавить» выглядели бы как ритуал
+            subtitle={integrationCount > 0
+              ? 'Интеграции вроде Higgsfield работают во всех чатах после входа — отдельно добавлять ничего не нужно.'
+              : 'Внешний MCP-сервер — это программа, которую AI Home запускает рядом с собой, чтобы дать чатам новые возможности: чтение файлов, доступ к базе, поиск по API. Найдите свой — Notion, файловый сервер, Postgres — или добавьте руками'}
             action={
               <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
                 {onCatalog && <Button variant="primary" size="sm" onClick={onCatalog}>Найти сервер</Button>}
@@ -97,7 +110,7 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {servers.map(server => (
+          {ownServers.map(server => (
             <ServerCard
               key={server.id}
               server={server}

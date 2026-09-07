@@ -16,18 +16,37 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Консолидация _falPersistLock (этап 4, волна 2): все внеходовые операции над историей
-// теперь идут через WithFalPersistLockAsync, общий шов для дедупа AppendIfNotDuplicateStoredAsync.
-// Тест ниже ловит нарушение инварианта «двойной клик применился ровно один раз» под
-// реальной конкуренцией: десять параллельных публикаций одного и того же glif-job должны
-// оставить в истории ровно одну запись, а в эфир уйти ровно один GlifCostMessage.
+// Тестовый дубль ChatHistoryService: вставляет await Task.Yield() между LoadAsync и
+// SaveAsync. Без этого ChatHistoryService синхронен (Task.FromResult/Task.CompletedTask),
+// и Task.WhenAll над несколькими публикациями выполняет их инлайн последовательно —
+// тест на конкурентность видит зелёное даже при полностью снятом _falPersistLock,
+// потому что гонки физически нет. Yield даёт планировщику шанс переключить потоки
+// ровно в том окне, где в проде происходит переключение контекста.
+internal sealed class YieldingChatHistoryService : ChatHistoryService
+{
+    public YieldingChatHistoryService(IConfiguration config) : base(config) { }
+
+    public override async Task<List<StoredMessage>> LoadAsync(string claudeSessionId)
+    {
+        var result = await base.LoadAsync(claudeSessionId);
+        await Task.Yield();
+        return result;
+    }
+}
+
+// Консолидация _falPersistLock (этап 4, волна 2→3): все внеходовые операции над историей
+// теперь идут через WithFalPersistLockAsync, общий шов для дедупа
+// AppendIfNotDuplicateStoredNoLockAsync. Тесты ниже ловят нарушение инварианта «двойной
+// клик применился ровно один раз» под РЕАЛЬНОЙ конкуренцией (yield между Load/Save
+// создаёт окно гонки; без него Task.WhenAll над синхронными операциями выполнит их
+// инлайн и не увидит проблемы).
 public class FalPersistLockDedupTests : IDisposable
 {
     private readonly string _dir;
     private readonly SessionManager _sessions;
     private readonly UserStore _userStore;
     private readonly ProjectManager _projectManager;
-    private readonly ChatHistoryService _history;
+    private readonly YieldingChatHistoryService _history;
     private readonly Mock<IHubContext<SessionHub>> _hub;
     private readonly List<ServerMessage> _broadcasts = [];
 
@@ -49,7 +68,7 @@ public class FalPersistLockDedupTests : IDisposable
         _projectManager = new ProjectManager(config, _userStore, appSettings);
         var personas = new PersonaManager(config);
         var tasks = new TaskManager(config, personas: personas);
-        _history = new ChatHistoryService(config);
+        _history = new YieldingChatHistoryService(config);
 
         _hub = new Mock<IHubContext<SessionHub>>();
         var clients = new Mock<IHubClients>();
@@ -108,14 +127,16 @@ public class FalPersistLockDedupTests : IDisposable
         // CreateAsync инициализирует Accumulator (с собственным внутренним локом), и
         // PublishGlifCostAsync предпочтёт его дисковой ветке. Сбрасываем Accumulator в null
         // через рефлексию, чтобы тест пробежал именно по дисковой ветке через WithFalPersistLockAsync
-        // и AppendIfNotDuplicateStoredAsync — то есть по тому пути, который защищает _falPersistLock.
+        // и AppendIfNotDuplicateStoredNoLockAsync — то есть по тому пути, который защищает _falPersistLock.
         ClearAccumulator(session.Id);
 
         var msg = new GlifCostMessage("job-concurrent-1", "image", 1, 1.0, "model_x");
 
-        // Десять одновременных публикаций одного и того же job_id. Если защита от
-        // двойного клика снята (или лок не держится на всю операцию), история получит
-        // несколько StoredGlifCostMessage вместо одной.
+        // Десять одновременных публикаций одного и того же job_id. Без _falPersistLock
+        // yield-окно между Load и Save даёт всем десяти прочитать пустую историю: каждая
+        // считает себя первой, дописывает запись и рассылает свой broadcast. В файле
+        // после гонки остаётся запись последнего SaveAsync, а в эфир уходит до десяти
+        // GlifCostMessage вместо одного — на этом тест и краснеет без лока.
         var tasks = Enumerable.Range(0, 10)
             .Select(_ => _sessions.PublishGlifCostAsync(session.Id, msg))
             .ToArray();
@@ -138,11 +159,11 @@ public class FalPersistLockDedupTests : IDisposable
         ClearAccumulator(session.Id);
 
         // Десять параллельных добавлений РАЗНЫХ сообщений под _falPersistLock. Без лока
-        // каждое AppendStoredAsync делает LoadAsync → Add → SaveAsync; все потоки видят
-        // пустую историю в начале, добавляют свой текст в локальный список, и последний
-        // SaveAsync перетирает остальные — в файле остаётся ровно одно сообщение, не десять.
-        // Тест ловит регрессю «лок не сериализует доступ к файлу», если AppendStoredAsync
-        // когда-нибудь начнёт брать лок в обход WithFalPersistLockAsync / AppendIfNotDuplicateStoredAsync.
+        // yield-окно даёт всем десяти увидеть пустую историю в начале: каждый добавляет
+        // свой текст в локальный список, и последний SaveAsync перетирает остальные — в
+        // файле остаётся ровно одно сообщение, не десять. Тест ловит регрессию «лок не
+        // сериализует доступ к файлу», если AppendStoredAsync когда-нибудь начнёт брать
+        // лок в обход WithFalPersistLockAsync / AppendIfNotDuplicateStoredNoLockAsync.
         var tasks = Enumerable.Range(0, 10)
             .Select(i => _sessions.AppendStoredAsync(
                 session.Id,

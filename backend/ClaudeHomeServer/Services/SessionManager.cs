@@ -460,28 +460,31 @@ public class SessionManager : IDisposable, ITeamNotifier,
         finally { _falPersistLock.Release(); }
     }
 
-    // Дедуп-then-append под _falPersistLock: общий шов публикаций fal/glif и
-    // AppendStoredAsync. Возвращает true, если запись добавлена; false — если уже была
-    // (predicate сработал) либо у чата нет ClaudeSessionId (история ещё не заведена).
-    // Семантика «нет ключа → нечего писать» совпадает с поведением прямой записи
-    // Publish*/AppendStored: если у сессии ещё нет cli-истории, публикация молча
-    // отступает.
-    private async Task<bool> AppendIfNotDuplicateStoredAsync(
+    // Результат AppendIfNotDuplicateStoredNoLockAsync для дисковой ветки публикаций:
+    // Added — запись добавлена; Duplicate — предикат уже видел такую запись; NoKey —
+    // у чата ещё нет ClaudeSessionId (история не заведена). NoKey отделён от Duplicate
+    // специально: при нём дисковой записи нет, но учёт и broadcast должны пройти
+    // (раньше оба случая мапились в duplicate=true и аналитика терялась).
+    private enum AppendResult { Added, Duplicate, NoKey }
+
+    // Дедуп-then-append: общий шов публикаций fal/glif и AppendStoredAsync на
+    // дисковой ветке. КОНТРАКТ: вызывающий ОБЯЗАН держать _falPersistLock — иначе
+    // Load+SaveAsync терял бы параллельные записи соседа, а главное — публикация
+    // могла бы пройти в обход оживления аккумулятора (EnsureAccumulatorAsync) и
+    // дописать запись в историю, которую тут же затрёт свежий SaveSnapshotAsync.
+    // Проверка entry.Accumulator в публикациях тоже идёт под этим локом, чтобы
+    // EnsureAccumulatorAsync не мог вклиниться между выбором ветки и самой записью.
+    private async Task<AppendResult> AppendIfNotDuplicateStoredNoLockAsync(
         SessionEntry entry,
         Func<StoredMessage, bool> isDuplicate,
         Func<StoredMessage> factory)
     {
-        if (entry.Info.ClaudeSessionId is not string key) return false;
-        await _falPersistLock.WaitAsync();
-        try
-        {
-            var stored = await _history.LoadAsync(key);
-            if (stored.Any(isDuplicate)) return false;
-            stored.Add(factory());
-            await _history.SaveAsync(key, stored);
-            return true;
-        }
-        finally { _falPersistLock.Release(); }
+        if (entry.Info.ClaudeSessionId is not string key) return AppendResult.NoKey;
+        var stored = await _history.LoadAsync(key);
+        if (stored.Any(isDuplicate)) return AppendResult.Duplicate;
+        stored.Add(factory());
+        await _history.SaveAsync(key, stored);
+        return AppendResult.Added;
     }
 
     // Enum (в т.ч. ClaudeMode) сериализуем строками — устойчиво к изменению порядка значений.
@@ -8499,8 +8502,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
-    // (см. SpendMapping.TryExtractFalRequestId)
-
     // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
     private void TryTrackFalCost(string sessionId, string content)
     {
@@ -8560,32 +8561,43 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        bool duplicate = false;
-        if (entry.Accumulator is not null)
+        // Лок держим РОВНО один раз на весь путь «проверить entry.Accumulator → выбрать
+        // ветку → записать»: иначе EnsureAccumulatorAsync под тем же локом успевает
+        // прочитать историю до нашей записи, создать аккумулятор со старым снимком и
+        // следующий SaveSnapshotAsync затирает нашу запись. SemaphoreSlim не реентерабелен,
+        // поэтому AppendIfNotDuplicateStoredNoLockAsync внутри WithFalPersistLockAsync
+        // НЕ берёт лок повторно (контракт — caller holds).
+        var result = await WithFalPersistLockAsync(async () =>
         {
-            if (!entry.Accumulator.OnGlifCost(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model))
-                duplicate = true;
-            else
+            if (entry.Accumulator is not null)
             {
+                if (!entry.Accumulator.OnGlifCost(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model))
+                    return AppendResult.Duplicate;
                 try { await entry.Accumulator.SaveSnapshotAsync(_history); }
                 catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
+                return AppendResult.Added;
             }
-        }
-        else
-        {
-            // Дисковая ветка — через AppendIfNotDuplicateStoredAsync (RAII по _falPersistLock +
-            // единая точка дедупа по JobId). Здесь лок не нужен: при активном аккумуляторе мы
-            // ушли выше, при неактивном без ClaudeSessionId метод сам вернёт false.
-            try
+            else
             {
-                duplicate = !await AppendIfNotDuplicateStoredAsync(entry,
-                    m => m is StoredGlifCostMessage g && g.JobId == msg.JobId,
-                    () => new StoredGlifCostMessage(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model));
+                try
+                {
+                    return await AppendIfNotDuplicateStoredNoLockAsync(entry,
+                        m => m is StoredGlifCostMessage g && g.JobId == msg.JobId,
+                        () => new StoredGlifCostMessage(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model));
+                }
+                catch (Exception ex)
+                {
+                    // Дисковая запись не удалась — но аналитику и broadcast обязаны пройти
+                    // (зеркало поведения PublishFalCostAsync до правки): карточка стоимости
+                    // должна появиться у пользователя даже при сбое истории, иначе при рестарте
+                    // она пропадёт совсем.
+                    Console.Error.WriteLine($"[GlifCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}");
+                    return AppendResult.Added;
+                }
             }
-            catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
-        }
+        });
 
-        if (duplicate) return;
+        if (result == AppendResult.Duplicate) return;
 
         // Аналитика: генерация glif — счётчик операций, кредиты про запас, стоимость USD неизвестна.
         SpendMapping.RecordGlifGeneration(_spend, ResolveOwnerId, _log, entry.Info, msg);
@@ -8600,35 +8612,46 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        // Выбор ветки (аккумулятор vs диск) и сама запись — под _falPersistLock через
-        // AppendIfNotDuplicateStoredAsync (диск) либо Accumulator.OnFalCost (активная сессия).
-        // Check-then-act на entry.Accumulator гонялся бы с оживлением из EnsureAccumulatorAsync
-        // → двойная запись/потеря стоимости.
-        bool duplicate = false;
-        if (entry.Accumulator is not null)
+        // Лок держим РОВНО один раз на весь путь «проверить entry.Accumulator → выбрать
+        // ветку → записать»: иначе EnsureAccumulatorAsync под тем же локом успевает
+        // прочитать историю до нашей записи, создать аккумулятор со старым снимком и
+        // следующий SaveSnapshotAsync затирает нашу запись. SemaphoreSlim не реентерабелен,
+        // поэтому AppendIfNotDuplicateStoredNoLockAsync внутри WithFalPersistLockAsync
+        // НЕ берёт лок повторно (контракт — caller holds).
+        var result = await WithFalPersistLockAsync(async () =>
         {
-            if (!entry.Accumulator.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice))
-                duplicate = true; // уже опубликован
-            else
+            if (entry.Accumulator is not null)
             {
+                if (!entry.Accumulator.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice))
+                    return AppendResult.Duplicate;
                 try { await entry.Accumulator.SaveSnapshotAsync(_history); }
                 catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
+                return AppendResult.Added;
             }
-        }
-        else
-        {
-            // Сессия не активна — пишем стоимость напрямую в историю на диске через
-            // AppendIfNotDuplicateStoredAsync, который держит lock и делает дедуп по RequestId.
-            try
+            else
             {
-                duplicate = !await AppendIfNotDuplicateStoredAsync(entry,
-                    m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId,
-                    () => new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
+                // Сессия не активна — пишем стоимость напрямую в историю на диске. Дедуп
+                // по RequestId и проверка наличия ClaudeSessionId идут в
+                // AppendIfNotDuplicateStoredNoLockAsync.
+                try
+                {
+                    return await AppendIfNotDuplicateStoredNoLockAsync(entry,
+                        m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId,
+                        () => new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
+                }
+                catch (Exception ex)
+                {
+                    // Дисковая запись не удалась — но аналитику и broadcast обязаны пройти:
+                    // карточка стоимости должна появиться у пользователя даже при сбое истории,
+                    // иначе при рестарте она пропадёт совсем (нет ни AppendIfNotDuplicate, ни
+                    // аккумулятора).
+                    Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}");
+                    return AppendResult.Added;
+                }
             }
-            catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
-        }
+        });
 
-        if (duplicate) return; // дубликат — не ретранслируем
+        if (result == AppendResult.Duplicate) return; // дубль — не ретранслируем
 
         // Аналитика расхода: генерация fal.ai — счётчик операций (токенов у fal нет),
         // фактическая стоимость про запас. Дедуп выше гарантирует одну запись на request_id.
@@ -8649,29 +8672,35 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        // Как в PublishFalCostAsync: check-then-act на entry.Accumulator сериализуется с
-        // ленивым оживлением аккумулятора (EnsureAccumulatorAsync) — AppendIfNotDuplicateStoredAsync
-        // берёт _falPersistLock на дисковой ветке.
-        if (entry.Accumulator is { } acc)
+        // Как в PublishFalCostAsync: лок держим РОВНО один раз на «проверить entry.Accumulator
+        // → выбрать ветку → записать», иначе EnsureAccumulatorAsync вклинится между
+        // выбором дисковой ветки и записью и следующий SaveSnapshotAsync затрёт нашу запись.
+        await WithFalPersistLockAsync(async () =>
         {
-            acc.Append(stored);
-            try { await acc.SaveSnapshotAsync(_history); }
-            catch (Exception ex)
+            if (entry.Accumulator is { } acc)
             {
-                Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
+                acc.Append(stored);
+                try { await acc.SaveSnapshotAsync(_history); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
+                }
             }
-        }
-        else
-        {
-            try
+            else
             {
-                await AppendIfNotDuplicateStoredAsync(entry, _ => false, () => stored);
+                try
+                {
+                    // Дедуп предикат «никогда» — совещания/конвейеры сами следят за
+                    // уникальностью по своим ключам; AppendResult тут не интересует,
+                    // broadcast всё равно отправим.
+                    await AppendIfNotDuplicateStoredNoLockAsync(entry, _ => false, () => stored);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
-            }
-        }
+        });
 
         await BroadcastSessionMessageAsync(sessionId, broadcast);
     }

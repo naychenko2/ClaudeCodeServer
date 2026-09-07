@@ -2003,6 +2003,10 @@ public class SubsystemBoundaryTests
         // PathNormalizer — нормализация корня, ExecutableResolver — поиск по PATH+PATHEXT.
         "ClaudeHomeServer.Services.PathNormalizer",
         "ClaudeHomeServer.Services.ExecutableResolver",
+        // Этап 3: транслитерация кириллицы в slug. Три независимые копии
+        // (`PersonaManager`, `Dossiers/DossierGitExporter`, `Git/GitServerService`)
+        // не принадлежали ни одной вертикали — чистый stateless-примитив спины.
+        "ClaudeHomeServer.Services.Slugifier",
     ];
 
     /// <summary>

@@ -48,13 +48,17 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
     private static AuthenticationHeaderValue BasicAuth(string user, string password) =>
         new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password}")));
 
-    // Логин Forgejo из логина приложения: латиница/цифры/дефис (правила имён Gitea/Forgejo)
+    // Логин Forgejo из логина приложения: латиница/цифры/дефис (правила имён Gitea/Forgejo —
+    // надмножество нашего slug-формата, так что общий примитив в них укладывается).
+    // Транслит ОБЯЗАТЕЛЕН по той же причине, что у имён репозиториев (инцидент 20.07):
+    // `Username` нигде не валидируется, а прежняя ASCII-only копия отправляла КАЖДЫЙ
+    // кириллический логин в один и тот же фолбэк «user» — разные пользователи молча
+    // цеплялись к одному аккаунту Forgejo. Уже провижненные логины персистятся
+    // в `User.ForgejoUsername` (короткий выход в EnsureUserAsync) и сменой алгоритма
+    // не затрагиваются.
     private static string SlugifyUsername(string username)
     {
-        var sb = new StringBuilder();
-        foreach (var c in username.ToLowerInvariant())
-            sb.Append(char.IsAsciiLetterOrDigit(c) ? c : '-');
-        var slug = sb.ToString().Trim('-');
+        var slug = Slugifier.Slugify(username, Slugifier.XStyle.H);
         return slug.Length > 0 ? slug : "user";
     }
 

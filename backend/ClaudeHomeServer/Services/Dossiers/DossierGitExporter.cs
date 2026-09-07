@@ -199,45 +199,14 @@ public sealed class DossierGitExporter
         return $"discussions/{year}/{prefix}-{Slugify(topic)}.md";
     }
 
-    // Транслитерация кириллицы для slug: однозначная, без контекстных правил (й→y, х→kh,
-    // щ→sch) — детерминизм важнее филологической точности. ъ/ь выбрасываются (объект→obekt).
-    private static readonly Dictionary<char, string> Translit = new()
-    {
-        ['а'] = "a", ['б'] = "b", ['в'] = "v", ['г'] = "g", ['д'] = "d", ['е'] = "e", ['ё'] = "e",
-        ['ж'] = "zh", ['з'] = "z", ['и'] = "i", ['й'] = "y", ['к'] = "k", ['л'] = "l", ['м'] = "m",
-        ['н'] = "n", ['о'] = "o", ['п'] = "p", ['р'] = "r", ['с'] = "s", ['т'] = "t", ['у'] = "u",
-        ['ф'] = "f", ['х'] = "kh", ['ц'] = "ts", ['ч'] = "ch", ['ш'] = "sh", ['щ'] = "sch",
-        ['ъ'] = "", ['ы'] = "y", ['ь'] = "", ['э'] = "e", ['ю'] = "yu", ['я'] = "ya",
-    };
-
-    // Детерминированный slug из (уже отредактированного) subject: кириллица → латиница,
-    // строчные, прочие символы → дефисы, повторы и краевые дефисы схлопываются, потолок
-    // длины. Пустой результат (subject из одних символов) — нейтральное "dossier".
+    // Детерминированный slug из (уже отредактированного) subject: алгоритм общий
+    // (`Slugifier` в спине, Этап 3), здесь — политика летописи: стиль «х»→«kh» и потолок
+    // длины. Стиль зафиксирован задним числом: имена файлов в ветке летописи персистятся,
+    // смена буквы переименовала бы все существующие паспорта и конспекты.
+    // Пустой результат (subject из одних символов) — нейтральное "dossier".
     internal static string Slugify(string subject)
     {
-        var sb = new StringBuilder();
-        var lastDash = false;
-        foreach (var ch in subject.ToLowerInvariant())
-        {
-            if (Translit.TryGetValue(ch, out var piece))
-            {
-                if (piece.Length == 0) continue;
-                sb.Append(piece);
-                lastDash = false;
-            }
-            else if (char.IsAsciiLetterOrDigit(ch))
-            {
-                sb.Append(ch);
-                lastDash = false;
-            }
-            else if (!lastDash)
-            {
-                sb.Append('-');
-                lastDash = true;
-            }
-        }
-        var slug = sb.ToString().Trim('-');
-        if (slug.Length > MaxSlugChars) slug = slug[..MaxSlugChars].Trim('-');
+        var slug = Slugifier.Slugify(subject, Slugifier.XStyle.Kh, MaxSlugChars);
         return slug.Length == 0 ? "dossier" : slug;
     }
 

@@ -147,6 +147,15 @@ public sealed record WidgetsMcpContext(string ApiUrl, Func<string> TokenFactory,
 // ходу не объявляется вовсе.
 public sealed record WatchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера веб-поиска (websearch: web_search + web_read): адрес API и фабрика
+// сервисного токена владельца; сессия-вызыватель едет хвостом URL (/mcp/websearch/{sessionId})
+// — по ней тулсет проверяет право на чат и берёт разрезы траты. null — чат без владельца ИЛИ
+// пустой Perplexity:ApiKey (единственный рубильник: не настроен — сервер ходу не объявляется,
+// и его схемы не занимают окно модели). TokenFactory/UseHttp — тот же идиом, что у watch;
+// stdio-ветки отката НЕТ (node-сервера не существовало). Ключ Perplexity сюда НЕ кладётся:
+// он живёт только на бэкенде, в конфиг хода и env процесса CLI не уезжает.
+public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
 // граф ключуется проектом, в чате вне проекта сервер не подключается.
@@ -324,6 +333,10 @@ public sealed record LlmSessionContext(
     // MCP-сервер сторожей чатов (watch_*): null — чат без владельца. Наличие контекста —
     // свойство владельца (инвариант стабильности состава ADR-012).
     WatchMcpContext? WatchMcp = null,
+    // MCP-сервер веб-поиска (web_search/web_read): null — чат без владельца или пустой
+    // Perplexity:ApiKey. Наличие контекста — свойство владельца и настройки инстанса
+    // (инвариант стабильности состава ADR-012).
+    WebSearchMcpContext? WebSearchMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации

@@ -311,6 +311,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // проверяется на каждый tools/list и вызов (WatchToolset.TryResolve)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WatchToolset>();
+// Веб-поиск (websearch: web_search + web_read): поиск идёт во внешний Perplexity Sonar
+// (ключ не покидает бэкенд), чтение страницы — существующим ридером панели «Чтение»
+// вместе с его SsrfGuard и квотой владельца. Пустой Perplexity:ApiKey = сервер ходу
+// не объявляется вовсе (SessionManager не строит контекст).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.WebSearchToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -558,6 +564,19 @@ builder.Services.AddQuietHttpClient(
         c.MaxResponseContentBufferSize = 2 * 1024 * 1024;
     });
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Catalog.McpCatalogClient>();
+// Веб-поиск Perplexity Sonar (MCP-сервер websearch): сервис зарубежный — клиент ходит
+// ЧЕРЕЗ egress-прокси (WithoutEgressProxy тут НЕ звать, в отличие от локальных Dify/Forgejo).
+// Опциональная зависимость: пустой Perplexity:ApiKey выключает сервер целиком, а лежащий
+// сервис не должен сыпать в консоль стектрейсами на каждый запрос
+builder.Services.AddSingleton(ClaudeHomeServer.Services.WebSearch.PerplexityOptions.FromConfig(
+    builder.Configuration));
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.WebSearch.PerplexitySearchService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.WebSearch.Perplexity",
+        Subject: "сервисом веб-поиска Perplexity",
+        Consequence: "Инструмент web_search вернёт модели отказ — сам ход это не ломает."));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.WebSearch.PerplexitySearchService>();
 // Сторонний провайдер — опциональная зависимость: баланс уходит в протухший кэш, каталог
 // моделей — в дефолтный список, фоновое действие — к другой модели. Мёртвый провайдер
 // не должен засыпать консоль стектрейсами (см. QuietHttpLogger)

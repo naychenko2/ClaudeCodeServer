@@ -992,6 +992,26 @@ public class SessionManager : IDisposable, ITeamNotifier,
         return new WatchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // Контекст MCP-сервера веб-поиска: null — чат без владельца ИЛИ пустой Perplexity:ApiKey
+    // (единственный рубильник фичи, как у Dify). Ключ читается ЖИВЬЁМ, но остаётся свойством
+    // ИНСТАНСА, а не хода: инвариант стабильности состава (ADR-012) не задет — правка ключа
+    // штатно меняет сигнатуру запуска и перезапускает CLI, как любое изменение shapes.
+    // Сам ключ в контекст не кладётся: наружу он не уезжает, тулсет берёт его из конфига.
+    //
+    // Третье условие — возможность персоны «web» (EffectiveToolEnabled, та же, что гасит
+    // встроенные WebSearch/WebFetch у CLI): персона с выключенным веб-поиском не должна
+    // получать обходной путь в интернет через MCP. Гейт стоит на объявлении сервера, а не
+    // только в запретах: так у такой персоны схемы ещё и не занимают окно. Персона — свойство
+    // сессии, инвариант стабильности состава не задет (как у widgets).
+    private WebSearchMcpContext? BuildWebSearchContext(string? ownerId, Persona? persona)
+    {
+        if (ownerId is null) return null;
+        if (string.IsNullOrWhiteSpace(_config["Perplexity:ApiKey"])) return null;
+        if (!_bindings.EffectiveToolEnabled(ownerId, persona, "web")) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new WebSearchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -1030,12 +1050,12 @@ public class SessionManager : IDisposable, ITeamNotifier,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
-        WatchMcpContext? watch = null) =>
+        WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
-        || watch is { UseHttp: true };
+        || watch is { UseHttp: true } || webSearch is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -3869,6 +3889,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         var widgetsMcp = BuildWidgetsContext(ownerId, persona.Persona);
         var watchMcp = BuildWatchContext(ownerId);
+        var webSearchMcp = BuildWebSearchContext(ownerId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -3905,13 +3926,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp),
+                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
             ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
             Events: _turnEvents,
-            WatchMcp: watchMcp));
+            WatchMcp: watchMcp,
+            WebSearchMcp: webSearchMcp));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -5173,6 +5195,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var workspace = BuildWorkspaceContext(entry.Info.OwnerId, null, entry.Info.Id, persona.Persona);
             var widgetsMcp = BuildWidgetsContext(entry.Info.OwnerId, persona.Persona);
             var watchMcp = BuildWatchContext(entry.Info.OwnerId);
+            var webSearchMcp = BuildWebSearchContext(entry.Info.OwnerId, persona.Persona);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -5206,10 +5229,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, dify: difyMcp, watch: watchMcp),
+                    workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
-                WatchMcp: watchMcp);
+                WatchMcp: watchMcp,
+                WebSearchMcp: webSearchMcp);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -5221,6 +5245,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var rootPath = EffectiveRoot(entry.Info, project.RootPath);
             var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
             var watchMcp = BuildWatchContext(project.OwnerId);
+            var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -5257,11 +5282,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp),
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
-                WatchMcp: watchMcp);
+                WatchMcp: watchMcp,
+                WebSearchMcp: webSearchMcp);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

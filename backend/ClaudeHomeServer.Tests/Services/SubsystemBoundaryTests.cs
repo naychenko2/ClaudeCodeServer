@@ -178,6 +178,24 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SsrfGuard+AddressCheck",
                 }),
         },
+        // WebSearch — вертикаль веб-поиска (клиент Perplexity Sonar под MCP-сервером
+        // websearch). Вертикаль без IAppSubsystem: регистрация — две строки в Program.cs
+        // рядом с прочими клиентами внешних сервисов, отдельный .csproj по критерию
+        // ADR-014 не оправдан (нужны Models и связка со Spend/Reader на стороне тулсета).
+        // Зависимостей за пределами спинки нет вовсе: клиент берёт IHttpClientFactory,
+        // свои опции и логгер. Чтение страниц лежит НЕ здесь — его делает вертикаль Reader
+        // (переиспользование ридера вместе с его SsrfGuard и квотой), а склейку «поиск +
+        // чтение + траты» держит тулсет в спине `Services.Mcp.Http`.
+        new object[]
+        {
+            new VerticalBoundary(
+                "WebSearch",
+                "ClaudeHomeServer.Services.WebSearch",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.WebSearch" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
         // Images — вертикаль генерации картинок. Допуск к корню Services точечный,
         // через AllowedExactNamespaces: `PersonaManager` (Services/ корень) — догоняющая
         // генерация аватара триггерится из карточки персоны; это сознательная зависимость

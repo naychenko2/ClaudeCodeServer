@@ -68,6 +68,12 @@ public class ClaudeSession : ILlmSessionAdapter
     public bool CurrentTurnSuppressTasksExecute => _currentTurnSuppressTasksExecute;
 
     private readonly string _rootPath;
+    // Корень ГЛАВНОЙ ветки проекта (project.RootPath, прокинут через
+    // LlmSessionContext.MainRootPath): у чата с отдельным worktree расходится с _rootPath
+    // и используется CodeGraphContributor'ом как fallback для slice графа (ADR-003).
+    // null — чат вне проекта; равен _rootPath — обычный чат без worktree, fallback
+    // сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
+    private readonly string? _mainRootPath;
     // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
     // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
     private readonly ILogger? _log;
@@ -730,6 +736,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _rootPath = context.RootPath;
+        _mainRootPath = context.MainRootPath;
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
@@ -2739,6 +2746,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     OwnerId: Info.OwnerId,
                     Persona: _personaProvider?.Invoke(),
                     RootPath: _rootPath,
+                    MainRootPath: _mainRootPath,
                     HasNotesMcp: _notesMcp is not null,
                     HasMemoryMcp: _memoryMcp is not null,
                     HasWorkspaceMcp: _workspaceMcp is not null,

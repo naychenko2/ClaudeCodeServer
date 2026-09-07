@@ -223,6 +223,13 @@ public sealed record PersonaAgentsContext(IReadOnlyList<string> AddDirs,
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
+//
+// MainRootPath — корень ГЛАВНОЙ ветки проекта (project.RootPath), нужен отдельно от
+// RootPath (рабочая директория сессии после EffectiveRoot): у чата с отдельным
+// worktree они расходятся, и провайдер slice графа использует MainRootPath как
+// fallback (ADR-003), пока граф worktree-ветки ещё не построен. null — чат вне
+// проекта; равен RootPath — обычный чат без worktree, fallback сводится к no-op
+// (CodeGraphPromptProvider.GetSliceAsync это уже учитывает).
 public sealed record LlmSessionContext(
     string RootPath,
     Func<ServerMessage, Task> OnMessage,
@@ -342,4 +349,10 @@ public sealed record LlmSessionContext(
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации
     // бэкенда, а не в каждом проекте пользователя. null — тесты/старый контракт:
     // в этом случае SystemPromptFile ожидается абсолютным путём.
-    string? ContentRootPath = null);
+    string? ContentRootPath = null,
+    // Корень ГЛАВНОЙ ветки проекта (project.RootPath) — отдельный от RootPath (рабочая
+    // директория сессии после EffectiveRoot). У чата с отдельным worktree они расходятся:
+    // CodeGraphContributor использует MainRootPath как fallback для slice графа кода
+    // (ADR-003), пока граф worktree-ветки ещё не построен. null — чат вне проекта; равен
+    // RootPath — обычный чат без worktree, fallback сводится к no-op.
+    string? MainRootPath = null);

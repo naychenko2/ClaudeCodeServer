@@ -1733,21 +1733,24 @@ public class SubsystemBoundaryTests
         // LLM-генерация тела нового навыка; перевод описаний RU→EN; фоновый перевод
         // плагиновых описаний с персистентным кешем.
         // Префиксы-швы (по образцу `Tasks`/`Notes`/`Dossiers`):
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для `SkillSuggestService`,
-        //    `SkillTranslationService`, `SkillGenerationService` (действия
-        //    `LocalActionCatalog.SkillSuggest/SkillTranslate/SkillGenerate`). Префикс-шов,
-        //    как у `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
-        // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для запуска
-        //    CLI «npx skills» в `SkillsCliService.RunAsync` (запуск процесса — общий
-        //    слой, по аналогии с `ProjectServices`/`Terminal`/`Git`/`Deploy`).
-        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»:
-        // 3) `PersonaManager` — `SkillSuggestService.SuggestForPersonaAsync` резолвит
-        //    персону владельца и читает существующие Skill-привязки
-        //    (`PersonaBinding.Target`) для исключения уже привязанных скиллов.
-        // 4) `ProjectManager` — `SkillSuggestService.SuggestForProjectAsync` берёт
-        //    контекст проекта (имя + системный промпт); `SkillsService.GetProjectSkills/
-        //    Agents` работают с `projectRootPath`; `SkillsController` использует
-        //    `GetById(projectId)` для получения пути.
+        // 1) `ClaudeHomeServer.Services.Llm` — `LocalActionCatalog.SkillSuggest/
+        //    SkillTranslate/SkillGenerate` (ключи действий, по ним раннер ищет
+        //    маршрут и профиль). Префикс-шов сохраняется потому, что `LocalActionCatalog`
+        //    остаётся в `Services.Llm` — там же, где его реестр действий.
+        //    `ICheapTextRunner` (контракт) уже в Core и резолвится через assembly-фильтр
+        //    `IsCoreAssembly`; тут шов для остального Llm-слоя, который Skills
+        //    использует.
+        // Точечных допусков к корню `Services.*` после Этапа 3 больше нет:
+        //  - `PersonaManager` снят: `SkillSuggestService` берёт персону через
+        //    `IPersonaSkillBindingLookup` (Core, assembly-фильтр).
+        //  - `ProjectManager` снят: `SkillSuggestService` берёт проект через
+        //    `IProjectSummaryLookup` (Core, assembly-фильтр).
+        //  - `Execution` (`ILauncherFactory`/`IProcessLauncher`/`ProcessSpec`) —
+        //    интерфейсы переехали в Core (assembly-фильтр), а реализации (`LauncherFactory`/
+        //    `LocalProcessRunner`/`DockerProcessRunner`) Skills не нужны.
+        //    `SkillsCliService` зовёт только интерфейсы.
+        // `SkillsController` лежит в `ClaudeHomeServer.Controllers`, не в этой вертикали;
+        // под сторож не попадает.
         new object[]
         {
             new VerticalBoundary(
@@ -1758,14 +1761,9 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Skills",
                         "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Services.Execution",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                }),
+                Array.Empty<string>()),
         },
     };
 
@@ -1986,6 +1984,13 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Mcp",
+        // Этап 3, волна 1 (Skills): ICheapTextRunner/OneShotResult/OneShotUsage/
+        // LlmTimeoutException переехали в Core, чтобы вертикали (Skills, Git, Notes, Tasks)
+        // могли зависеть от шва без ProjectReference на Main.
+        "ClaudeHomeServer.Services.Llm",
+        // Этап 3, волна 1 (Skills): ILauncherFactory/IProcessLauncher/ProcessSpec/IPathMapper
+        // переехали в Core — общие контракты запуска процессов для всех вертикалей.
+        "ClaudeHomeServer.Services.Execution",
     ];
 
     /// <summary>

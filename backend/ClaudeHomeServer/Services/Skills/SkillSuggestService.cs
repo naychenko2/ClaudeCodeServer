@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Skills;
@@ -13,12 +13,17 @@ public record SkillSuggestion(RegistrySkill Skill, string Reason);
 // (навыки С ОПИСАНИЯМИ), кэшируется. Модель — Skills:AiModel (дефолт haiku), one-shot через
 // общий OneShotClaudeRunner. Подбор работает только по агрегированному каталогу (в промпт);
 // по безлимитному реестру остаётся обычный текстовый поиск (SkillsCliService.FindAsync).
+//
+// PersonaManager/ProjectManager больше не инжектятся напрямую: используем узкие швы
+// IPersonaSkillBindingLookup и IProjectSummaryLookup (Core) — иначе вертикаль тянет
+// в себя `Services.PersonaManager`/`Services.ProjectManager`, и сторож границ
+// SubsystemBoundaryTests падает.
 public class SkillSuggestService(
     SkillsCliService cli,
     ICheapTextRunner cheap,
     SkillTranslationService translation,
-    PersonaManager personas,
-    ProjectManager projects,
+    IPersonaSkillBindingLookup personaBindings,
+    IProjectSummaryLookup projectSummary,
     IConfiguration config,
     ILogger<SkillSuggestService> log)
 {
@@ -73,20 +78,17 @@ public class SkillSuggestService(
     public async Task<IReadOnlyList<SkillSuggestion>> SuggestForPersonaAsync(string ownerId, string personaId,
         CancellationToken ct = default)
     {
-        var persona = personas.Get(personaId, ownerId)
+        var ctx = personaBindings.Get(ownerId, personaId)
             ?? throw new KeyNotFoundException("Персона не найдена");
-        var already = persona.Bindings?
-            .Where(b => b.Type == PersonaBindingType.Skill)
-            .Select(b => b.Target)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
-        return await SuggestAsync(ownerId, BuildPersonaContext(persona), already, ct);
+        var already = new HashSet<string>(ctx.SkillBindingTargets, StringComparer.OrdinalIgnoreCase);
+        return await SuggestAsync(ownerId, BuildPersonaContext(ctx), already, ct);
     }
 
     // Подбор под проект: имя + системный промпт проекта.
     public async Task<IReadOnlyList<SkillSuggestion>> SuggestForProjectAsync(string? ownerId, string projectId,
         CancellationToken ct = default)
     {
-        var project = projects.GetById(projectId)
+        var project = projectSummary.GetById(projectId)
             ?? throw new KeyNotFoundException("Проект не найден");
         var sb = new StringBuilder();
         sb.AppendLine($"Проект: {project.Name}");
@@ -100,15 +102,14 @@ public class SkillSuggestService(
         CancellationToken ct = default) =>
         await SuggestAsync(ownerId, $"Задача/запрос пользователя: {query}", null, ct);
 
-    private static string BuildPersonaContext(Persona p)
+    private static string BuildPersonaContext(PersonaForSkillSuggestion ctx)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Персона: {p.Role ?? p.Name} ({p.Name})");
-        if (!string.IsNullOrWhiteSpace(p.Description)) sb.AppendLine($"Кто это: {p.Description}");
-        var character = p.Contract?.Character ?? p.SystemPrompt;
-        if (!string.IsNullOrWhiteSpace(character)) sb.AppendLine($"Характер и обязанности: {character}");
-        if (p.Contract?.MustDo is { Count: > 0 } must)
-            sb.AppendLine("Всегда делает: " + string.Join("; ", must.Where(x => !string.IsNullOrWhiteSpace(x))));
+        sb.AppendLine($"Персона: {ctx.Role ?? ctx.Name} ({ctx.Name})");
+        if (!string.IsNullOrWhiteSpace(ctx.Description)) sb.AppendLine($"Кто это: {ctx.Description}");
+        if (!string.IsNullOrWhiteSpace(ctx.Character)) sb.AppendLine($"Характер и обязанности: {ctx.Character}");
+        if (ctx.MustDo is { Count: > 0 })
+            sb.AppendLine("Всегда делает: " + string.Join("; ", ctx.MustDo));
         return sb.ToString();
     }
 

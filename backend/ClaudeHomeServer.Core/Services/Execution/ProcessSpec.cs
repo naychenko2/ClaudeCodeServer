@@ -5,6 +5,9 @@ namespace ClaudeHomeServer.Services.Execution;
 // Спецификация запуска процесса в среде исполнения пользователя.
 // WorkingDirectory — всегда ХОСТОВЫЙ путь: драйвер среды сам переводит его
 // в свой вид (IPathMapper) при запуске.
+//
+// Контракт в Core: DTO без зависимостей на Main — вертикали собирают spec,
+// реализации (LocalProcessRunner/DockerProcessRunner) его исполняют.
 public sealed record ProcessSpec
 {
     public required string FileName { get; init; }

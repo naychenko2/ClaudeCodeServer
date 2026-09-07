@@ -5,29 +5,6 @@ using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Расход одного вызова: токены по видам, стоимость и модель, которой он реально
-// посчитан. Вход разбит на виды — они тарифицируются по-разному (cache read дешевле).
-public sealed record OneShotUsage(
-    long InputTokens, long CacheCreationTokens, long CacheReadTokens, long OutputTokens,
-    double? CostUsd, string? Model)
-{
-    public long TotalInputTokens => InputTokens + CacheCreationTokens + CacheReadTokens;
-}
-
-// Ответ вызова вместе с расходом. Usage = null, если CLI метрик не дал
-// (нераспознанный формат ответа) — потребитель должен это пережить.
-public sealed record OneShotResult(string Text, OneShotUsage? Usage, long DurationMs);
-
-// Отказ one-shot вызова по таймауту. Наследник InvalidOperationException — потребители,
-// ловящие её, ведут себя как раньше; отдельный тип нужен, чтобы CheapTextRunner мог
-// сделать ОДИН повтор (обрыв по таймауту — не приговор), а человек увидел честную
-// причину отказа вместо «уточните задачу». Базовое сообщение обязано сохранять подстроку
-// «не ответил за отведённое время»: по ней ChangelogService.DescribeFailure различает
-// таймаут и сбой CLI. Вариант с деталями (TimeoutMessage) называет применённый лимит
-// и фактическую длительность — без них лог места («модель не ответила») не разбирается.
-public sealed class LlmTimeoutException(string? message = null)
-    : InvalidOperationException(message ?? "AI не ответил за отведённое время");
-
 // Абстракция one-shot вызова LLM — для мокирования в тестах.
 // В DI интерфейс указывает на тот же singleton OneShotClaudeRunner.
 public interface IOneShotRunner

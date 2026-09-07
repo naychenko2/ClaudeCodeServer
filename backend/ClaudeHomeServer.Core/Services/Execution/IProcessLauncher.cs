@@ -5,6 +5,9 @@ namespace ClaudeHomeServer.Services.Execution;
 // Драйвер среды исполнения процессов пользователя: local (машина сервера)
 // или docker-песочница. Единственная точка, через которую бэкенд запускает
 // процессы от имени пользователя (claude, терминал, dev-серверы, npx skills).
+//
+// Контракт в Core: реализации (LocalProcessRunner/DockerProcessRunner) живут в Main
+// и держат зависимости на SandboxManager/ProcessRegistry/UserStore.
 public interface IProcessLauncher
 {
     bool IsSandboxed { get; }

@@ -430,11 +430,14 @@ export function proxyUrl(url: string): string {
 // Домены, которые разрешены прокси-контроллером на бэкенде (синхронизировать с AllowedHosts).
 // glif-медиа — glifusercontent.com и res.cloudinary.com (их CDN); glif.app/glif.xyz в списке
 // нет намеренно: бэкенд их не проксирует (там страницы, а не медиа) — projectUrl из ответа
-// glif остаётся обычной ссылкой.
+// glif остаётся обычной ссылкой. Higgsfield-CDN — точный distribution
+// d8j0ntlcm91z4.cloudfront.net; общий суффикс cloudfront.net НЕ открываем, чтобы не стать
+// открытым прокси на чужой контент. Списки синхронизируются тестом ProxyAllowedHostsSyncTests.
 const PROXY_ALLOWED_HOSTS = [
   'fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai',
   'storage.googleapis.com', 'replicate.delivery', 'pbxt.replicate.delivery',
   'glifusercontent.com', 'res.cloudinary.com',
+  'd8j0ntlcm91z4.cloudfront.net',
 ];
 
 // Домены генераторов медиа — их src в markdown не проксируем: медиа уже показаны в MediaBlock.

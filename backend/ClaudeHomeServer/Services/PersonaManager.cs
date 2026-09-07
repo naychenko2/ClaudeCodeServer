@@ -918,68 +918,13 @@ public class PersonaManager
     };
 
     // Транслитерация кириллицы для slug: без неё русские имена давали handle «agent»,
-    // и @упоминания превращались в безликие @agent-2
-    private static readonly Dictionary<char, string> Translit = new()
-    {
-        ['а'] = "a",
-        ['б'] = "b",
-        ['в'] = "v",
-        ['г'] = "g",
-        ['д'] = "d",
-        ['е'] = "e",
-        ['ё'] = "e",
-        ['ж'] = "zh",
-        ['з'] = "z",
-        ['и'] = "i",
-        ['й'] = "y",
-        ['к'] = "k",
-        ['л'] = "l",
-        ['м'] = "m",
-        ['н'] = "n",
-        ['о'] = "o",
-        ['п'] = "p",
-        ['р'] = "r",
-        ['с'] = "s",
-        ['т'] = "t",
-        ['у'] = "u",
-        ['ф'] = "f",
-        ['х'] = "h",
-        ['ц'] = "ts",
-        ['ч'] = "ch",
-        ['ш'] = "sh",
-        ['щ'] = "sch",
-        ['ъ'] = "",
-        ['ы'] = "y",
-        ['ь'] = "",
-        ['э'] = "e",
-        ['ю'] = "yu",
-        ['я'] = "ya",
-    };
-
+    // и @упоминания превращались в безликие @agent-2. Сам алгоритм живёт в спине
+    // (`Slugifier`, Этап 3) — здесь тонкий forwarding: имя зовут из десятка мест этого
+    // класса плюс `GitServerService` (имена репозиториев) и `SessionManager` (имена ветвей
+    // и папок worktree). Стиль «х»→«h» зафиксирован: handle персистятся в personas.json
+    // и в @упоминаниях, смена буквы переименовала бы существующие персоны.
     // public: переиспользуется GitServerService для имён репозиториев (транслит кириллицы)
-    public static string Slugify(string s)
-    {
-        var sb = new StringBuilder();
-        var prevDash = false;
-        foreach (var ch in s.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(ch) && ch < 128)
-            {
-                sb.Append(ch);
-                prevDash = false;
-            }
-            else if (Translit.TryGetValue(ch, out var tr))
-            {
-                if (tr.Length > 0) { sb.Append(tr); prevDash = false; }
-            }
-            else if (!prevDash && sb.Length > 0)
-            {
-                sb.Append('-');
-                prevDash = true;
-            }
-        }
-        return sb.ToString().Trim('-');
-    }
+    public static string Slugify(string s) => Slugifier.Slugify(s, Slugifier.XStyle.H);
 
     private void Load()
     {

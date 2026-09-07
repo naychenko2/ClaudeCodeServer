@@ -519,7 +519,8 @@ TCP-коннект к адресу прокси. Источников два —
 подтверждён только структурой ответа 401 (не 404) на живом эндпоинте без ключа — финальная
 проверка кодом 200 с реальным ключом не выполнена (детали и источники —
 [appsettings.json](../../backend/ClaudeHomeServer/appsettings.json), секция `CheapHttpSources`).
-- **Каталог** — [LocalActionCatalog.cs](../../backend/ClaudeHomeServer/Services/Llm/LocalActionCatalog.cs):
+- **Каталог** — [LocalActionCatalog.cs](../../backend/ClaudeHomeServer.Core/Services/Llm/LocalActionCatalog.cs)
+  (переехал в сборку `Core` Этапом 3 ради выноса Skills; namespace прежний — `ClaudeHomeServer.Services.Llm`):
   все фоновые действия (ключ, группа, профиль вызова small/text/large, `DefaultLocal` —
   рекомендация). **changelog** («Что нового») входит — идёт через `RunDetailedAsync` (сохраняет
   usage/стоимость на claude-пути; на бесплатной модели usage=null, стоимость 0). НЕ входят:

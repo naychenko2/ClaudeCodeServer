@@ -8,8 +8,9 @@ namespace ClaudeHomeServer.Services;
 // принимает индексы enum ("0" → Strong, со знаком "+0" мимо любого digit-guard) и списки
 // флагов ("strong,weak" → Weak) независимо от FlagsAttribute. Мусор от LLM должен давать
 // 400, а не молча уезжать на самую дорогую модель.
-// Сам `ModelTier` объявлен в `ClaudeHomeServer.Core.Services.ModelTier` — примитив
-// спинки, от него зависят и Core, и Main, и вертикали вроде Skills.
+// Сам `ModelTier` живёт в файле `Services/ModelTier.cs` сборки `ClaudeHomeServer.Core`,
+// namespace при переезде сохранён прежний — `ClaudeHomeServer.Services` (примитив спины,
+// от него зависят и Main, и вертикали вроде Skills).
 public static class ModelTiers
 {
     // Текст ошибки 400 при неизвестном уровне — один на все точки входа (задачи, персоны)

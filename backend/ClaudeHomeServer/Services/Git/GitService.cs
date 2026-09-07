@@ -975,8 +975,11 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // Полный ref (а не короткое имя ветки): уезжает ровно эта ветка, upstream текущей
     // ветки рабочего дерева не трогаем. Реализация IGitRefSnapshotStore.PushRefAsync.
     public Task PushRefAsync(
-        string? ownerId, string root, string fullRef, GitCredentials? creds = null, CancellationToken ct = default) =>
-        NetworkOp(ownerId, root, ["push", "origin", fullRef], creds, ct);
+        string? ownerId, string root, string fullRef, GitCredentials? creds = null, CancellationToken ct = default)
+    {
+        ValidateRevision(fullRef);
+        return NetworkOp(ownerId, root, ["push", "origin", fullRef], creds, ct);
+    }
 
     // ---------- Чтение ветки-паспорта (generic plumbing через IGitRefSnapshotStore) ----------
 
@@ -991,6 +994,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<bool> RefExistsAsync(string? ownerId, string root, string fullRef, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return false;
+        ValidateRevision(fullRef);
         try
         {
             var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
@@ -1013,6 +1017,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<string?> ResolveRefAsync(string? ownerId, string root, IReadOnlyList<string> candidates, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
+        // Валидация всех кандидатов ДО первого git-вызова: битый элемент в любой позиции
+        // списка роняет вызов, даже если перед ним стоял валидный (порядок «битый после
+        // валидного» не прикрывает инъекцию)
+        foreach (var refName in candidates) ValidateRevision(refName);
         foreach (var refName in candidates)
         {
             var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", refName], ct: ct);
@@ -1028,6 +1036,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<string?> LocalTipAsync(string? ownerId, string root, string fullRef, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
+        ValidateRevision(fullRef);
         try
         {
             var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);

@@ -169,6 +169,35 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
             .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
     }
 
+    // IGitRefSnapshotStore — публичный контракт для будущих вертикалей (комментарий в
+    // DossierBranch.cs: «сторонняя вертикаль заведёт свой клон DossierBranch и позовёт те
+    // же методы со своими значениями»). Те же ревизии, что в Log/Checkout/CreateBranch,
+    // доходят до argv в RefExists/LocalTip/ResolveRef/PushRef — каждая обязана отбить
+    // fullRef/candidate, начинающийся с «-», до того как git увидит его как флаг.
+    [Fact]
+    public async Task IGitRefSnapshotStore_RefСОпцией_Отвергается()
+    {
+        var target = Path.Combine(Path.GetTempPath(),
+            "gitsvc_rfs_inject_" + Guid.NewGuid().ToString("N") + ".txt");
+
+        // RefExists: invalid input — программная ошибка, throw (не молча false «ветки нет»)
+        await FluentActions.Awaiting(() => _git.RefExistsAsync(null, _repo, $"--output={target}"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+        File.Exists(target).Should().BeFalse(
+            "git не должен был выполниться вовсе — файл вне репо не создаётся и не затирается");
+
+        // LocalTip: тот же контракт
+        await FluentActions.Awaiting(() => _git.LocalTipAsync(null, _repo, "--force"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+
+        // ResolveRef: валидация в цикле — битый кандидат в списке тоже отвергается,
+        // даже если перед ним стоял валидный (порядок «битый после валидного» не
+        // прикрывает инъекцию)
+        await FluentActions.Awaiting(() => _git.ResolveRefAsync(null, _repo,
+            ["main", $"--output={target}"]))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+    }
+
     // ---------- Метрика охвата паспортов: CountRecentCommitsAsync (GET /dossiers) ----------
 
     // Обе даты коммита в прошлом: --since фильтрует по committer date, поэтому сдвигаем

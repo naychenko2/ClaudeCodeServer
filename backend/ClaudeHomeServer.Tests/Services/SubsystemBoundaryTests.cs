@@ -356,10 +356,13 @@ public class SubsystemBoundaryTests
         // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для `schtasks`
         //    (`DeployHost.WakeAgentAsync` будит задачу планировщика через `launchers.Local`);
         //    легально: Execution — нижний слой, общий для всех, кто запускает процессы.
-        // 3) `ClaudeHomeServer.Services.Git` — `GitService` для git-guard в `DeployHost`
-        //    (проба репозитория: `rev-parse HEAD` и `status --porcelain`). Это СОЗНАТЕЛЬНАЯ
-        //    связь «вертикаль → вертикаль» (TODO на шов: завести `IGitGuard` в `Services.Git`
-        //    и перевести `DeployHost` на него, тогда `Services.Git` уйдёт из allow-list);
+        // 3) `ClaudeHomeServer.Services.Git` — `GitService.RepoSnapshotAsync` в `DeployHost`
+        //    (проба репозитория: HEAD + грязное дерево). Это СОЗНАТЕЛЬНАЯ связь
+        //    «вертикаль → вертикаль». `IGitGuard` как общий шов для Deploy+Dossiers
+        //    ОТКЛОНЁН (разведка Dossiers↔Git, 2026-09-07): Deploy нужен один метод,
+        //    Dossiers — 7+ разных с 5 намерениями — единый контракт был бы вторым
+        //    `LlmSessionContext`. Deploy остаётся на конкретном `GitService`, допуск
+        //    в allow-list не снимается;
         //
         // === Шов `Deploy → Backup.InstanceLock.TryAcquireDeploy` (шаг 5, задача `57b5e9bc`).
         // `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через статику
@@ -511,8 +514,8 @@ public class SubsystemBoundaryTests
                 }),
         },
         // Dossiers — паспорта изменений (ADR-004). Сознательно завязана на две
-        // «вертикали-нижнего-слоя» (Git/CodeGraph) — TODO на швы по прецеденту Deploy→Git,
-        // и общий слой Dify-синка (Services.Memory). Допуски к корню Services точечные:
+        // «вертикали-нижнего-слоя» (Git/CodeGraph) и общий слой Dify-синка
+        // (Services.Memory). Допуски к корню Services точечные:
         // 1) `SessionManager`/`ProjectManager`/`TaskManager`/`FileService`/`UserStore`
         //    — общая инфраструктура (DossierCaptureService.cs:39-42, DossierStore.cs:41-42,
         //    DossierDiscussionService.cs:27, DossierRecallService:tasks/file params).
@@ -523,11 +526,13 @@ public class SubsystemBoundaryTests
         // 3) `FeatureFlagService` (DossierAutoExporter.cs:44, DossierAutoImporter.cs:36) —
         //    гейт флага `change-dossiers-recall` владельца.
         // Префиксы-швы:
-        // 4) `ClaudeHomeServer.Services.Git` — `GitService` для захвата коммитов
-        //    (DossierCaptureService.cs:53), recall (DossierRecallService),
-        //    автовыгрузки/импорта (DossierAutoExporter/Importer). TODO на шов:
-        //    завести `IGitGuard` в `Services.Git` и перевести вертикаль на него
-        //    (по прецеденту Deploy→Git).
+        // 4) `ClaudeHomeServer.Services.Git` — большая часть уже за узким швом
+        //    `IGitRefSnapshotStore` (волна 2 линии Dossiers↔Git, снапшот-реф ветки
+        //    паспортов, владение константами `DossierBranch` — в Dossiers). Остаток —
+        //    конкретный `GitService` для операций вне scope снапшот-рефа (`git show`
+        //    и т.п. в DossierCaptureService/DossierRecallService). Общий `IGitGuard`
+        //    на Deploy+Dossiers ОТКЛОНЁН (разведка 2026-09-07): 7+ разных методов с
+        //    5 намерениями — грабмешок, не шов. Допуск остаётся точечным.
         // 5) `ClaudeHomeServer.Services.CodeGraph` — `CodeGraphService` для обогащения
         //    паспортов графом кода (DossierCaptureService.cs:54, DossierRecallService).
         //    TODO на шов аналогично Git.

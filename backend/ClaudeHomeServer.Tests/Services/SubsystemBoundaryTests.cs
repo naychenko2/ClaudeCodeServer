@@ -335,7 +335,6 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
                     // ExecutableResolver (шаг 5) — корневой примитив поиска по PATH+PATHEXT.
                     // `TypeScriptGraphProvider.cs:154` зовёт `ResolveExecutable("node")`
                     // из тела метода. До выноса шов шёл на `LocalProcessRunner` —

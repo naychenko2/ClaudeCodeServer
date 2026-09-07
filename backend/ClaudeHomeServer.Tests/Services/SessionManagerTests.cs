@@ -145,10 +145,8 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
         _personaManager = personas;
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _actionOverrides = new ClaudeHomeServer.Services.Llm.LocalActionOverridesStore(config);
@@ -165,7 +163,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns);
     }
 
     public void Dispose()
@@ -1570,16 +1568,14 @@ public class SessionManagerTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
         return new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox);
     }
 

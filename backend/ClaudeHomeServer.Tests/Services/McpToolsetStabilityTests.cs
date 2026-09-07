@@ -94,7 +94,6 @@ public class McpToolsetStabilityTests
     [SkippableTheory]
     [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
     [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
-    [InlineData("private Func<string?, Task<string?>>? BuildCodeGraphProvider", "codegraph")]
     // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
     [InlineData("internal bool PersonasEnabled", "personas")]
     [InlineData("internal bool ConsultantsEnabled", "consultants")]

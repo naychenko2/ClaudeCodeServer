@@ -429,17 +429,14 @@ public class ChatArchiveServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, users, config,
-            NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, projects, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
         var sessions = new SessionManager(projects, hub.Object, history, config, adapters, falCost,
-            usage, appSettings, users, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
+            usage, appSettings, users, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox);
         var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
         return (sessions, projects, users, flags, notifStore);

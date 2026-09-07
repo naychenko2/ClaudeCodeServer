@@ -96,19 +96,16 @@ public class SessionManagerContainerMigrationTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
         // Настоящая фабрика: container-пользователь должен получить песочный драйвер с
         // маппером путей (docker при этом не запускается — Start в тестах не зовётся)
         var launchers = new LauncherFactory(userStore, sandbox);
 
         var sut = new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
             launchers, sandbox);
 
         return (sut, sandbox, llmProviders, userStore, projectManager);

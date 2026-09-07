@@ -105,16 +105,13 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(_userStore);
-        var personaMemory = new PersonaMemoryService(knowledge, _personas, _userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(_personas, projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _sessions = new SessionManager(projectManager, hub.Object, new ChatHistoryService(config), config,
-            adapters, falCost, usage, appSettings, _userStore, jwt, server.Object, llmProviders, notesKb,
-            flags, _personas, personaMemory, bindings, promptBuilder, subPool,
+            adapters, falCost, usage, appSettings, _userStore, jwt, server.Object, llmProviders,
+            flags, _personas, bindings, subPool,
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
 
         _sut = new TaskExecutionService(_tasks, _sessions, _personas, hub.Object, push, notesKb, notif,

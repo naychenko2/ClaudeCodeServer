@@ -141,7 +141,7 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
 
     // Блок «Командные механики» для руководителя проекта (мост в механики). Только
     // когда персона чата — дефолт-персона проекта (Project.DefaultPersonaId).
-    // Без SkillsService (тесты) — механики без скилла, не падаем.
+    // Без SkillsService (тесты) — механики не добавляются, не падаем.
     private string? BuildTeamMechanicsBlock(Session session, Persona persona)
     {
         if (session.ProjectId is not { } projectId) return null;

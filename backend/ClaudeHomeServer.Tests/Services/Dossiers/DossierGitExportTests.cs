@@ -153,16 +153,13 @@ public class DossierGitExportTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(_config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, _config,
-            NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, _projects, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         return new SessionManager(_projects, _hub.Object, _history, _config, adapters, falCost, usage, appSettings,
-            userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings,
-            promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+            userStore, jwt, server.Object, llmProviders, flags, personas, bindings,
+            subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
     }
 
     // Экспортёр собирается как в DossiersController — на живом графе зависимостей.

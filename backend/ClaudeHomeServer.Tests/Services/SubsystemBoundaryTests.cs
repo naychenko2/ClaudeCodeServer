@@ -1797,12 +1797,12 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 5 = Main + Core + 3 вынесенные на Этапе 3 (Video/Yandex/Reader); при добавлении
-        // новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(5,
-            "после Этапа 3 сторож должен видеть 5 прод-сборок: ClaudeHomeServer, " +
+        // 6 = Main + Core + 4 вынесенные на Этапе 3 (Video/Yandex/Reader/CodeGraph);
+        // при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(6,
+            "после Этапа 3 сторож должен видеть 6 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
-            "ClaudeHomeServer.Reader");
+            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

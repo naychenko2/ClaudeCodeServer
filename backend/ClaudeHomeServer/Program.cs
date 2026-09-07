@@ -436,7 +436,7 @@ builder.Services.AddHttpClient("media-proxy");
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-// Раздел «Видео» — пилот подсистемы (см. `Services/Video/VideoSubsystem.cs`).
+// Раздел «Видео» — пилот подсистемы (см. `ClaudeHomeServer.Video/VideoSubsystem.cs`).
 // Сам `VideoSubsystem.Register` подключает и платформенный `IMemoryCache` для своих
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.

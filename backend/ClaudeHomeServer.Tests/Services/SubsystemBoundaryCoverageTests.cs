@@ -21,11 +21,13 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class SubsystemBoundaryCoverageTests
 {
-    // Загрузка Main — иначе AppDomain.CurrentDomain.GetAssemblies() её не увидит
-    // (см. комментарий в SubsystemBoundaryTests).
+    // Форс-загрузка всех вертикальных сборок (Main плюс вынесенные .Reader/.Yandex/.Video).
+    // Подробности см. в комментарии к статическому конструктору SubsystemBoundaryTests.
     static SubsystemBoundaryCoverageTests()
     {
         _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
     }
 
     [Fact]
@@ -40,15 +42,16 @@ public class SubsystemBoundaryCoverageTests
         // вертикали, и она содержит почти все реализации) тоже входит в выборку.
         // Тестовая сборка `ClaudeHomeServer.Tests` намеренно исключена: там живут
         // `StubSubsystem`/`FakeSubsystem` (тестовые стабы IAppSubsystem), они нам
-        // не нужны в реестре продовых вертикалей.
+        // не нужны в реестре продовых вертикалей. Сейчас тестовых сборок уже четыре
+        // (см. комментарий в SubsystemBoundaryTests), и фильтр по `*.Tests` это
+        // учитывает.
         var assemblies = AppDomain.CurrentDomain.GetAssemblies()
             .Where(a =>
             {
                 var name = a.GetName().Name;
                 return name is not null
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
-                    && name != "ClaudeHomeServer.Tests"
-                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+                    && !name.EndsWith(".Tests", StringComparison.Ordinal);
             })
             .ToList();
 
@@ -140,8 +143,7 @@ public class SubsystemBoundaryCoverageTests
                 var name = a.GetName().Name;
                 return name is not null
                     && (name == "ClaudeHomeServer" || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
-                    && name != "ClaudeHomeServer.Tests"
-                    && !name.StartsWith("ClaudeHomeServer.Tests.", StringComparison.Ordinal);
+                    && !name.EndsWith(".Tests", StringComparison.Ordinal);
             })
             .ToList();
 

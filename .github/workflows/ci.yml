@@ -64,8 +64,18 @@ jobs:
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
       - name: Test
-# Категория "Node" — тестам нужен Node + frontend/node_modules (npm-зависимости
-      # в backend-job не ставим); они остаются для локальных прогонов, как Dns.
+# Категория "Node" — за бортом: нужен Node + frontend/node_modules, не ставим.
+      # Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
+      # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её —
+      # потерять рабочие тесты, в т.ч. SSRF-страховку Reader (проверки приватных
+      # адресов/схем через редирект — `ReaderService_*`, `SsrfGuardTests.*DnsFailed`).
+      # На локальной Windows-машине с Proxifier Dns-категория падает средой, и там
+      # прогоняют с дополнительным `--filter "Category!=Dns"` (рекомендация в CLAUDE.md,
+      # раздел «Соглашения»); в CI этого фильтра быть НЕ должно.
+      # Общий прогон по `.slnx`, а не по одному `.Tests.csproj`: вынесенные тестовые
+      # проекты (`.Video.Tests`/`.Yandex.Tests`/`.Reader.Tests`, после Этапа 3) собираются
+      # шагом Build выше и должны гоняться в том же гейте master — иначе их падения
+      # пройдут мимо CI, ровно до первого прод-бага в перенесённом коде.
       # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
       # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
       # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.
@@ -74,17 +84,19 @@ jobs:
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
         run: >
-          dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
+          dotnet test backend/ClaudeHomeServer.slnx --no-build
           --filter "Category!=Node"
           --blame-hang-timeout 5m --blame-hang-dump-type full
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
-      # иначе они умирают вместе с раннером
+      # иначе они умирают вместе с раннером. После Этапа 3 артефакты тестов идут
+      # из корня slnx (а не из папки конкретного `.Tests.csproj`) — общий глоб
+      # `backend/**/TestResults/**` ловит выгрузки всех проектов.
       - name: Upload hang dumps
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-hang-artifacts
-          path: backend/ClaudeHomeServer.Tests/TestResults/**
+          path: backend/**/TestResults/**
 
   frontend:
     name: Frontend (lint + typecheck + build)

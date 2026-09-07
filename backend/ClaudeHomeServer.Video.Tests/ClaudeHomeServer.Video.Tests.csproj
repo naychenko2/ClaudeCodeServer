@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали. По тем же причинам, что и в Core/Video/Yandex/Reader:
+         SDK = Web ради FrameworkReference Microsoft.AspNetCore.App и
+         OutputType=Library ради отсутствия Main. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Тестируемая вертикаль. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Video\ClaudeHomeServer.Video.csproj" />
+    <!-- Core ради McpSecretStore (YouTubeFeedTests использует свой McpSecretStore-like
+         fixture). -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Main ради UserStore — VideoFavoritesTests использует его как фикстуру
+         (избранные каналы по CLAUDE.md живут в UserStore, не в отдельном сторе
+         подсистемы). Тест-проект → main НЕ создаёт цикла, потому что main
+         на тесты не ссылается; меняется лишь то, что правка main инвалидирует
+         эту DLL, а правка Video — только Video + эту DLL. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

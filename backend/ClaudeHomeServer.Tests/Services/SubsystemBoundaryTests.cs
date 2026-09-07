@@ -267,8 +267,8 @@ public class SubsystemBoundaryTests
         // Git. Поэтому `SessionManager`/`ProjectManager`/`ProjectFileSessionsIndex`/
         // `SessionChangedPaths` больше НЕ нужны Git-вертикали — допуски убраны.
         // Допуск к корню Services точечный:
-        // 1) `UserStore` (Services/ корень) — `GitServerService:18` (Forgejo-клиент
-        //    резолвит креденшалы пользователя).
+        // 1) `IForgejoAccountStore` — GitServerService сохраняет Forgejo-креденшалы через
+        //    узкую проекцию, не принимая конкретный UserStore.
         // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory`, через который
         //    GitService запускает процессы git (источник истины, как в задаче).
         // 3) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для генерации сообщения
@@ -301,7 +301,7 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
                     // Точечные зависимости из тел методов (IL-видимость, задача `8beee75e`):
                     // `GitService.cs:73` зовёт `FileService.SafeJoinPublic(...)` static-метод,
                     // `GitServerService.cs:213` зовёт `PersonaManager.Slugify(name)` — имя репозитория,

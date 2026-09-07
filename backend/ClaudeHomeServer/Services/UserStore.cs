@@ -1,11 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.Identity;
 
 namespace ClaudeHomeServer.Services;
 
-public class UserStore
+public class UserStore : IForgejoAccountStore
 {
     private readonly string _filePath;
     private readonly PasswordHasher<User> _hasher = new();

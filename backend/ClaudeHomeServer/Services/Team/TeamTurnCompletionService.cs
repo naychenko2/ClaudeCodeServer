@@ -282,12 +282,14 @@ internal sealed class TeamTurnCompletionService
                     Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
                 }
                 : BuildSilentStallEscalation(snapshot, turnText);
-            // Публикация карточки ПОСЛЕ успешного claim: если она упадёт (AppendAsync бросил
-            // исключение, чат удалён — ранний return в PublishTeamEscalationAsync), клеймо
-            // откатывается через RollbackSilentStallClaim под тем же WithTeamState. Без отката
-            // чат зависнет в AwaitingDecision БЕЗ карточки: stalledStage для этой стадии больше
-            // не true, гард больше никогда не сработает, а исключение раньше молча уходило в
-            // Console.Error (см. ниже, обёртка HandleTeamTurnCompletedAsync).
+            // Публикация карточки ПОСЛЕ успешного claim: если она упадёт (AppendAsync
+            // бросил исключение), клеймо откатывается через RollbackSilentStallClaim под
+            // тем же WithTeamState. Без отката чат зависнет в AwaitingDecision БЕЗ карточки:
+            // stalledStage для этой стадии больше не true, гард больше никогда не сработает,
+            // а исключение раньше молча уходило в Console.Error (см. ниже, обёртка
+            // HandleTeamTurnCompletedAsync). Случай «чат удалён» этим catch НЕ покрыт —
+            // PublishTeamEscalationAsync там делает ранний return БЕЗ исключения, и клеймо
+            // остаётся до следующего гарда (отдельный нечастый кейс, отдельная диагностика).
             try
             {
                 if (_sessions.TeamHandlers.EscalationRaiser is { } raise)
@@ -297,7 +299,9 @@ internal sealed class TeamTurnCompletionService
             }
             catch
             {
-                _run.RollbackSilentStallClaim(sessionId, claim);
+                if (!_run.RollbackSilentStallClaim(sessionId, claim))
+                    _log.LogInformation("Молчаливый тупик {SessionId}: хвост публикации карточки «{Title}» упал после того, как она уже опубликована — клеймо не откатываем",
+                        sessionId, stalled.Title);
                 throw;
             }
             return;
@@ -470,60 +474,63 @@ internal sealed class TeamTurnCompletionService
     // эскалацией (BuildSilentStallEscalation + EscalationRaiser/PublishTeamEscalationAsync),
     // добавить сюда соседний путь публикации — естественное расширение, а не новая ось.
     public async Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked)
-{
-    var session = _sessions.GetById(sessionId);
-    if (session is null) return;
-    if (session.TeamImplement is not { } team) return;
-
-    // 1. Major: есть ещё живой async-агент — карточка не нужна (P16-регресс).
-    //    Гард дождётся финального BgAgentDoneMessage от последнего агента или
-    //    следующего хода + 10-минутного порога волны 1.
-    if (hasAsync) return;
-
-    // Агент завершился штатно — карточка не нужна. Метка подавления
-    // AsyncAgentStallSince уже сброшена (или не тронута) в OnMessageAsync по той же
-    // проверке HasAsyncAgent.
-    if (!aborted) return;
-
-    // Зеркало гарда из HandleTeamTurnEndAsync (строки 244–247), но без 10-минутного
-    // суппрессирования (агент уже мёртв, ждать дальше нечего).
-    var stalledStage = team.Stage == TeamImplementStage.Interview
-        || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
-    if (!stalledStage) return;
-    if (asked) return;
-    if (_run.IsPlanningInFlight(sessionId)) return;
-
-    // 3. Minor 1: атомарный pre-claim. Снимок для заголовка карточки и для отката при сбое
-    // публикации берётся ДО мутации — полный набор, см. xml-doc TryClaimSilentStall.
-    if (!_run.TryClaimSilentStall(sessionId, out var claim))
-        return;
-
-    var snapshot = new SessionTeamImplement
     {
-        Stage = claim.Stage,
-        WaveNumber = claim.WaveNumber,
-    };
+        var session = _sessions.GetById(sessionId);
+        if (session is null) return;
+        if (session.TeamImplement is not { } team) return;
 
-    // turnText намеренно пуст: BgAgentDoneMessage не несёт координаторского текста,
-    // и цитировать в карточке нечего. Формулировка «Координатор не понял вводную» и
-    // так говорит, что текста-ответа не было.
-    var escalation = BuildSilentStallEscalation(snapshot, turnText: string.Empty);
-    // Публикация карточки ПОСЛЕ успешного claim: если она упадёт (AppendAsync бросил
-    // исключение, чат удалён — ранний return в PublishTeamEscalationAsync), клеймо
-    // откатывается через RollbackSilentStallClaim под тем же WithTeamState. Без отката
-    // чат зависнет в AwaitingDecision БЕЗ карточки: stalledStage для этой стадии больше
-    // не true, гард больше никогда не сработает.
-    try
-    {
-        if (_sessions.TeamHandlers.EscalationRaiser is { } raise)
-            await raise(session, escalation);
-        else
-            await _history.PublishTeamEscalationAsync(sessionId, escalation);
+        // 1. Major: есть ещё живой async-агент — карточка не нужна (P16-регресс).
+        //    Гард дождётся финального BgAgentDoneMessage от последнего агента или
+        //    следующего хода + 10-минутного порога волны 1.
+        if (hasAsync) return;
+
+        // Агент завершился штатно — карточка не нужна. Метка подавления
+        // AsyncAgentStallSince уже сброшена (или не тронута) в OnMessageAsync по той же
+        // проверке HasAsyncAgent.
+        if (!aborted) return;
+
+        // Зеркало гарда из HandleTeamTurnEndAsync (строки 244–247), но без 10-минутного
+        // суппрессирования (агент уже мёртв, ждать дальше нечего).
+        var stalledStage = team.Stage == TeamImplementStage.Interview
+            || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
+        if (!stalledStage) return;
+        if (asked) return;
+        if (_run.IsPlanningInFlight(sessionId)) return;
+
+        // 3. Minor 1: атомарный pre-claim. Снимок для заголовка карточки и для отката при сбое
+        // публикации берётся ДО мутации — полный набор, см. xml-doc TryClaimSilentStall.
+        if (!_run.TryClaimSilentStall(sessionId, out var claim))
+            return;
+
+        var snapshot = new SessionTeamImplement
+        {
+            Stage = claim.Stage,
+            WaveNumber = claim.WaveNumber,
+        };
+
+        // turnText намеренно пуст: BgAgentDoneMessage не несёт координаторского текста,
+        // и цитировать в карточке нечего. Формулировка «Координатор не понял вводную» и
+        // так говорит, что текста-ответа не было.
+        var escalation = BuildSilentStallEscalation(snapshot, turnText: string.Empty);
+        // Публикация карточки ПОСЛЕ успешного claim: если она упадёт (AppendAsync
+        // бросил исключение), клеймо откатывается через RollbackSilentStallClaim под тем же
+        // WithTeamState. Без отката чат зависнет в AwaitingDecision БЕЗ карточки: stalledStage
+        // для этой стадии больше не true, гард больше никогда не сработает. Случай «чат удалён»
+        // этим catch НЕ покрыт — PublishTeamEscalationAsync там делает ранний return БЕЗ
+        // исключения, и клеймо остаётся до следующего гарда (отдельный нечастый кейс).
+        try
+        {
+            if (_sessions.TeamHandlers.EscalationRaiser is { } raise)
+                await raise(session, escalation);
+            else
+                await _history.PublishTeamEscalationAsync(sessionId, escalation);
+        }
+        catch
+        {
+            if (!_run.RollbackSilentStallClaim(sessionId, claim))
+                _log.LogInformation("Молчаливый тупик {SessionId} через хук: хвост публикации карточки «{Title}» упал после того, как она уже опубликована — клеймо не откатываем",
+                    sessionId, escalation.Title);
+            throw;
+        }
     }
-    catch
-    {
-        _run.RollbackSilentStallClaim(sessionId, claim);
-        throw;
-    }
-}
 }

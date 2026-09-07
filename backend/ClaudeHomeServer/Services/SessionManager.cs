@@ -6569,14 +6569,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // asked и hasAsync пробрасываем из ядра, потому что оба значения нужны В ОДНОМ решении
     // ядра (case BgAgentDoneMessage: сброс метки AsyncAgentStallSince под TeamTurnLock на
     // проверке !hasAsync, и тут же публикация карточки по тому же hasAsync). Если бы
-    // hasAsync читался через ITeamRunState.HasAsyncAgent уже в вертикали, между её вызовом
-    // и вызовом этой обёртки пришёл бы другой BgAgentDoneMessage, переписал HasAsyncAgent
-    // (гасящий случай гонки), и ядро приняло решение по устаревшему снимку. Единый
-    // параметр из ядра — общий снимок на оба решения (метка + карточка). Шов
-    // ITeamRunState.HasAsyncAgent при этом уже существовал (TeamCoreSeams.cs:194) и
-    // продолжает жить: вертикаль пользуется им в HandleTeamTurnEndAsync, где второго
-    // читателя по тому же снимку нет. Решения по hasAsync (Major + Minor 2) описаны
-    // в шапке HandleBgAgentDoneAsync.
+    // hasAsync читался через ITeamRunState уже в вертикали (вызовом HasAsyncAgent или иным
+    // способом поверх AsyncAgentInFlight), между её вызовом и вызовом этой обёртки пришёл
+    // бы другой BgAgentDoneMessage, переписал state и ядро приняло решение по устаревшему
+    // снимку. Единый параметр из ядра — общий снимок на оба решения (метка + карточка).
+    // В самой вертикали (TeamTurnCompletionService.HandleTeamTurnEndAsync, путь гарда
+    // молчаливого тупика) проверка живого async-агента идёт через
+    // _run.ShouldSuppressAsyncAgentStallGuard — он под капотом берёт AsyncAgentInFlight(entry)
+    // МИМО шва ITeamRunState.HasAsyncAgent (последний на момент ревью оказался невостребован:
+    // Глеб проверил удалением объявления и реализации, `dotnet build` прошёл с 0 ошибок).
+    // Решения по hasAsync (Major + Minor 2) описаны в шапке HandleBgAgentDoneAsync.
     public Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked)
         => _teamTurnCompletion.HandleBgAgentDoneAsync(sessionId, aborted, hasAsync, asked);
 
@@ -7001,8 +7003,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // а сам объект уже мутирован внутри лока — снапшок берётся ДО мутации и возвращается через
     // out. Полный набор полей (Stage/StageBeforeDecision/WaveStartedAt/WaveActivityAt) нужен
     // паре: этот метод + RollbackSilentStallClaim — откат клейма при сбое публикации карточки
-    // (chat удалён, AppendAsync бросил исключение). Без отката чат зависал бы в AwaitingDecision
-    // без карточки: stalledStage для этой стадии больше не true, гард больше никогда не сработает.
+    // (AppendAsync бросил исключение). Случай «чат удалён» здесь не покрыт — там ранний return
+    // БЕЗ исключения, и клеймо остаётся до следующего гарда (отдельный нечастый кейс).
+    // Без отката чат зависал бы в AwaitingDecision без карточки: stalledStage для этой стадии
+    // больше не true, гард больше никогда не сработает.
     // out-параметры нельзя писать внутри лямбды (CS1628), поэтому захватываем через
     // локальный массив из одного элемента: внутри лямбды — присвоение по индексу,
     // снаружи — чтение после возврата.
@@ -7042,21 +7046,38 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return claimed;
     }
 
-    // Откат успешного TryClaimSilentStall. Зовётся вызывающей стороной из блока catch
-    // на исключении публикации карточки (raise(...)/PublishTeamEscalationAsync). Под тем же
-    // локом WithTeamState, что и сам claim: между откатом и параллельным новым claim нет
-    // гонки — оба сериализуются. Сторона вызова не имеет дела с другими полями SessionTeamImplement
-    // и не должна их трогать: меняются ровно те, что заявлены в SilentStallClaim.
-    void ITeamRunState.RollbackSilentStallClaim(string sessionId, SilentStallClaim claim)
+    // Откат успешного TryClaimSilentStall. CAS-подобная проверка: восстанавливаем снимок
+    // ТОЛЬКО если состояние всё ещё соответствует тому, что оставил клейм (стадия AwaitingDecision
+    // и StageBeforeDecision равен исходной стадии из снимка). Прод-сценарий «хвост публикации
+    // упал после того, как карточка уже в ленте»: без CAS-гейта стадия бы откатилась в
+    // Planning/Interview, и следующий заход гарда поднял бы ВТОРУЮ карточку поверх уже
+    // видимой пользователю. С гейтом — false на выходе, состояние не трогается, дублирования
+    // нет. Под тем же локом WithTeamState, что и сам claim: между откатом и параллельным
+    // новым claim нет гонки — оба сериализуются. Сторона вызова не имеет дела с другими
+    // полями SessionTeamImplement и не должна их трогать: меняются ровно те, что заявлены
+    // в SilentStallClaim.
+    bool ITeamRunState.RollbackSilentStallClaim(string sessionId, SilentStallClaim claim)
     {
+        var rolled = false;
         _teamState.WithTeamState(sessionId, t =>
         {
+            // Клеймо «живое»: стадия ровно та, что мы поставили в TryClaimSilentStall,
+            // и StageBeforeDecision хранит исходную стадию (Planning/Interview) из снимка.
+            // Любое другое состояние означает, что либо карточка уже опубликована, либо
+            // параллельный путь уже отменил клеймо — откатывать НЕЛЬЗЯ.
+            if (t.Stage != TeamImplementStage.AwaitingDecision
+                || t.StageBeforeDecision != claim.Stage)
+            {
+                return true;
+            }
             t.Stage = claim.Stage;
             t.StageBeforeDecision = claim.StageBeforeDecision;
             t.WaveStartedAt = claim.WaveStartedAt;
             t.WaveActivityAt = claim.WaveActivityAt;
+            rolled = true;
             return true;
         });
+        return rolled;
     }
 
     bool ITeamNotifier.IsSessionBusy(string sessionId)

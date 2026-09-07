@@ -300,7 +300,8 @@ internal interface ITeamRunState
     ///
     /// Возвращённый <paramref name="claim"/> — единственный способ откатить клеймо через
     /// <see cref="RollbackSilentStallClaim"/>: если публикация карточки ПОСЛЕ успешного claim
-    /// падает (<c>raise</c>/<c>PublishTeamEscalationAsync</c> бросают исключение, чат удалён),
+    /// падает (<c>raise</c>/<c>PublishTeamEscalationAsync</c> бросают исключение; случай «чат
+    /// удалён» — ранний return без исключения, этим путём НЕ покрыт),
     /// вызывающий код отдаёт <paramref name="claim"/> в <see cref="RollbackSilentStallClaim"/> и
     /// стадия возвращается в исходное состояние. Без отката чат зависал бы в
     /// <c>AwaitingDecision</c> без карточки: <c>stalledStage</c> для этой стадии больше не
@@ -312,14 +313,20 @@ internal interface ITeamRunState
     bool TryClaimSilentStall(string sessionId, out SilentStallClaim claim);
 
     /// <summary>
-    /// Откатить успешный <see cref="TryClaimSilentStall"/>. Под локом <see cref="WithTeamState{T}"/>
+    /// Откатить успешный <see cref="TryClaimSilentStall"/> ТОЛЬКО если состояние всё ещё
+    /// соответствует тому, что оставил клейм: <c>t.Stage == AwaitingDecision</c> и
+    /// <c>t.StageBeforeDecision == claim.Stage</c>. Под локом <see cref="WithTeamState{T}"/>
     /// восстанавливает <paramref name="claim"/>.<c>Stage</c>, <c>StageBeforeDecision</c>,
-    /// <c>WaveStartedAt</c>, <c>WaveActivityAt</c> (поле <c>WaveNumber</c> не менялось, не
-    /// трогаем). Идемпотентен в пределах «один успешный claim → один rollback»: повторный вызов
-    /// с тем же <paramref name="claim"/> просто перепишет состояние теми же значениями. Сторона
-    /// вызова зовёт метод только из блока catch на исключении публикации карточки.
+    /// <c>WaveStartedAt</c>, <c>WaveActivityAt</c> (<c>WaveNumber</c> не менялся pre-claim'ом,
+    /// не трогаем).
+    ///
+    /// Возврат: <c>true</c> — клеймо было «живое» и его откатили; <c>false</c> — состояние
+    /// уже ушло вперёд (карточка успела опубликоваться ДО того, как хвост публикации бросил
+    /// исключение, либо параллельный путь уже отменил клеймо) — откат пропущен, чтобы не
+    /// задвоить карточку «Координатор не понял вводную» поверх уже видимой пользователю.
+    /// Сторона вызова зовёт метод из блока catch на исключении публикации карточки.
     /// </summary>
-    void RollbackSilentStallClaim(string sessionId, SilentStallClaim claim);
+    bool RollbackSilentStallClaim(string sessionId, SilentStallClaim claim);
 }
 
 /// <summary>
@@ -329,9 +336,10 @@ internal interface ITeamRunState
 /// <c>WaveNumber</c> идёт полем — он не меняется pre-claim'ом, но нужен для построения
 /// заголовка карточки и потому возвращается вместе со снимком. Живёт на уровне namespace,
 /// чтобы реализация <see cref="ITeamRunState"/> в ядре и оба вызывающих кода видели тип
-/// без квалификатора <c>ITeamRunState.</c>.
+/// без квалификатора <c>ITeamRunState.</c>. <c>internal</c>: снаружи вертикали Team
+/// (обработчики TeamCoreSeams/реализация в ядре/два вызывающих сервиса) тип не нужен.
 /// </summary>
-public readonly record struct SilentStallClaim(
+internal readonly record struct SilentStallClaim(
     TeamImplementStage Stage,
     int WaveNumber,
     TeamImplementStage? StageBeforeDecision,

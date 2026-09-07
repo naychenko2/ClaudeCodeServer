@@ -61,6 +61,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace

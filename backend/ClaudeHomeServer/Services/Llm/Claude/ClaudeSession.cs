@@ -2622,6 +2622,26 @@ public class ClaudeSession : ILlmSessionAdapter
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
         var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
+        // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
+        // а не на «контекст сервера есть у сессии»: TrimMcpServers/KeepMcpServers гасят сервер
+        // (у local-qwen из всего набора остаются tasks/codegraph/memory), а руководство к нему
+        // оставалось в промпте — 2 580 токенов замера 2026-09-07, 15% промпта, и это не только
+        // трата окна, но и дезинформация: секция звала search_unified/notes_create, которых
+        // в наборе модели нет («No such tool available»).
+        //
+        // Источник правды — mcpServerNames (ключи собранного temp-конфига), а не пересчёт
+        // флагов Keep(...) рядом: имена переживают ВСЕ ранние возвраты BuildTurnMcpConfig
+        // (пустой набор, servers.Count == 0, сбой записи файла) — там ход идёт по базовому
+        // конфигу без продуктовых серверов, и секции обязаны пропасть вместе с ними.
+        // Флаг, посчитанный до этих возвратов, разошёлся бы с фактом.
+        var deliveredMcp = new HashSet<string>(mcpServerNames, StringComparer.OrdinalIgnoreCase);
+        bool McpDelivered(string key) => deliveredMcp.Contains(key);
+        // Встроенный Task (сабагенты): под --bare CLI отдаёт только Bash/Edit/PowerShell/Read
+        // (замер 2026-09-05, см. LlmProviderConfig.BareTools) — подсказки про
+        // Task(subagent_type=…) учат инструменту, которого у хода нет. _lastBareModeApplied
+        // выставлен блоком BareMode выше по методу, до сборки секций.
+        var taskToolAvailable = !_lastBareModeApplied
+            && !_disallowedTools.Contains("Task", StringComparer.Ordinal);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
         {
@@ -2794,8 +2814,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         : "Краткая выдержка у длинных ответов",
                     voiceSection);
 
-            // Подсказка про систему задач — только когда tasks-server подключён
-            if (_tasksMcp is not null)
+            // Подсказка про систему задач — только когда tasks-server доехал до этого хода
+            if (_tasksMcp is not null && McpDelivered("tasks"))
             {
                 var scope = _tasksMcp.ProjectId is not null
                     ? "Текущий контекст — задачи этого проекта."
@@ -2819,8 +2839,8 @@ public class ClaudeSession : ILlmSessionAdapter
                       "не спрашивая разрешения. Вместо вопроса дай короткий доклад по факту: кому поручил, что именно, где смотреть ход. " +
                       "Спрашивай только тогда, когда неясен объём работы или выбор исполнителя меняет результат."
                     : "";
-                // Поручение задачи персоне — только когда доступен и personas-server (есть personas_list)
-                var personaExecHint = _personasMcp is not null
+                // Поручение задачи персоне — только когда доехал и personas-server (есть personas_list)
+                var personaExecHint = _personasMcp is not null && McpDelivered("personas")
                     ? " Чтобы поручить задачу персоне-исполнителю, передай её personaId в tasks_create/tasks_update — " +
                       "задачу выполнит Claude от её лица; список персон и их id — personas_list."
                     : "";
@@ -2849,11 +2869,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("mcp-tasks", "Как работать с задачами", tasksHint, group: "mcp");
             }
 
-            // Серверные сторожа чатов: «долгое ожидание → watch_start». Условие то же,
-            // что у узла servers["watch"] (WatchHttpOn): stdio-ветки нет, и при негодном
-            // адресе или выключенном рубильнике секция обучала бы тула, которого в ходу
-            // нет — «No such tool available»
-            if (WatchHttpOn())
+            // Серверные сторожа чатов: «долгое ожидание → watch_start». Гейт — факт доставки
+            // узла servers["watch"] в конфиг хода: stdio-ветки нет, и при негодном адресе,
+            // выключенном рубильнике ИЛИ урезании набора (KeepMcpServers без "watch") секция
+            // обучала бы тула, которого в ходу нет — «No such tool available»
+            if (McpDelivered("watch"))
                 Add("mcp-watch", "Как ждать долгие события", Prompts.WatchPrompts.SectionText, group: "mcp");
 
             // Трейлер истории решений (ADR-004) — рядом с конвенцией Co-Authored-By: одной
@@ -2862,8 +2882,8 @@ public class ClaudeSession : ILlmSessionAdapter
             if (contributorSections.TryGetValue("dossier-trailer", out var dossierTrailer))
                 Add("dossier-trailer", "Трейлер истории решений", dossierTrailer.Text, group: "project");
 
-            // Подсказка про базу заметок — только когда notes-server подключён
-            if (_notesMcp is not null)
+            // Подсказка про базу заметок — только когда notes-server доехал до этого хода
+            if (_notesMcp is not null && McpDelivered("notes"))
             {
                 var scope = _notesMcp.ProjectId is not null
                     ? "По умолчанию создавай заметки в notes/ текущего проекта; source=\"personal\" — в личный vault."
@@ -2889,8 +2909,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("mcp-notes", "Как работать с заметками", notesHint, group: "mcp");
             }
 
-            // Подсказка про виджеты — только когда сервер виджетов подключён ходу
-            if (_widgetsMcp is not null)
+            // Подсказка про виджеты — только когда сервер виджетов доехал до этого хода
+            if (_widgetsMcp is not null && McpDelivered("widgets"))
             {
                 var widgetsHint =
                     "Тебе доступен инструмент mcp__widgets__widget_show — интерактивный HTML-виджет прямо в ленте чата. " +
@@ -2938,8 +2958,8 @@ public class ClaudeSession : ILlmSessionAdapter
             if (contributorSections.TryGetValue("recall-notes", out var recallNotes))
                 Add("recall-notes", "Заметки, подходящие к вопросу", recallNotes.Text, stable: false, group: "recall");
 
-            // Подсказка про раздел «Персоны» — только когда personas-server подключён
-            if (_personasMcp is not null)
+            // Подсказка про раздел «Персоны» — только когда personas-server доехал до этого хода
+            if (_personasMcp is not null && McpDelivered("personas"))
             {
                 var scope = _personasMcp.ProjectId is not null
                     ? "Текущий контекст — проект: создавая проектную персону (scope \"project\"), projectId можно не указывать."
@@ -2968,8 +2988,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("mcp-personas", "Как работать с персонами", personasHint, group: "persona");
             }
 
-            // Подсказка про рабочее пространство — только когда workspace-server подключён
-            if (_workspaceMcp is not null)
+            // Подсказка про рабочее пространство — только когда workspace-server доехал до хода
+            if (_workspaceMcp is not null && McpDelivered("wsp"))
             {
                 var wsScope = _workspaceMcp.ProjectId is not null
                     ? "Текущая сессия идёт в проекте — его файлы правь встроенными Read/Edit/Write, а не через mcp__wsp__files_*."
@@ -3032,7 +3052,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Подсказка про долгую память. Персонная сессия — личная (memory_*) + командная (team_*);
             // обычный проектный чат без персоны — только память КОМАНДЫ проекта (team_memory_*).
-            if (_memoryMcp is not null)
+            if (_memoryMcp is not null && McpDelivered("memory"))
             {
                 var hasPersonal = !string.IsNullOrEmpty(_memoryMcp.PersonaId);
                 var hasTeam = !string.IsNullOrEmpty(_memoryMcp.ProjectId);
@@ -3066,15 +3086,23 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
             // Подсказка про @упоминания (список «@handle — Роль (Имя)» + persona_ask) —
-            // только при включённом флаге persona-mentions и наличии других персон
-            if (_personasMcp?.MentionsHint is { } mentionsHint)
+            // только при включённом флаге persona-mentions и наличии других персон.
+            // Плюс гейт доставки: единственный инструмент, к которому ведёт этот блок, —
+            // persona_ask сервера personas; при урезании набора (KeepMcpServers без
+            // "personas") блок в 859 токенов учит несуществующему вызову. Второй его канал —
+            // сабагенты через Task — под --bare тоже мёртв, но по нему секцию не рубим:
+            // текст умеет быть чисто persona_ask'овым (SessionManager.BuildMentionsHint,
+            // ветка viaAsk), и общий отказ увёл бы рабочий инструмент из виду.
+            if (_personasMcp?.MentionsHint is { } mentionsHint && McpDelivered("personas"))
                 Add("persona-mentions", "Кого можно позвать через @", mentionsHint, group: "persona");
 
             // Подсказка про субагентов-персон в Workflow: перечисляем handle'ы доступных
             // .md-агентов (из --add-dir) — модель должна знать, что их можно вызывать
             // через agentType в Task(agentType="handle", "prompt": "...") внутри workflow-скрипта.
-            // ВАЖНО: добавляем ВСЕГДА. persona_ask — это одноразовый вопрос в чат, НЕ для Workflow.
-            if (personaAgents is { AgentHandles.Count: > 0 })
+            // ВАЖНО: добавляем ВСЕГДА, пока встроенный Task жив. Под --bare его нет вовсе
+            // (CLI отдаёт Bash/Edit/PowerShell/Read) — секция учила бы вызывать несуществующий
+            // инструмент. persona_ask — это одноразовый вопрос в чат, НЕ для Workflow.
+            if (personaAgents is { AgentHandles.Count: > 0 } && taskToolAvailable)
             {
                 var workflowHint =
                     "## Персоны-субагенты в Workflow\n" +

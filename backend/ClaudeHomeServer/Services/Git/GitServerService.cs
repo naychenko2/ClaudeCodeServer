@@ -15,7 +15,7 @@ public sealed record ForgejoRepo(string CloneUrl, string HtmlUrl);
 // (аккаунт + персональный PAT) и создание репозиториев. ТОЛЬКО remote-специфика —
 // историю/статус/диффы читает GitService из локального git.
 // Без Forgejo:BaseUrl/AdminToken сервис тихо выключен (как Dify без ApiKey).
-public sealed class GitServerService(IConfiguration config, IHttpClientFactory httpFactory, UserStore users, ILogger<GitServerService> logger)
+public sealed class GitServerService(IConfiguration config, IHttpClientFactory httpFactory, IForgejoAccountStore accounts, ILogger<GitServerService> logger)
 {
     private string BaseUrl => (config["Forgejo:BaseUrl"] ?? "").TrimEnd('/');
     private string AdminToken => config["Forgejo:AdminToken"] ?? "";
@@ -127,7 +127,7 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         var token = tokenJson.GetProperty("sha1").GetString()
             ?? throw new GitCommandException("Forgejo: токен без sha1");
 
-        users.SetForgejoAccount(user.Id, login, token, password);
+        accounts.SetForgejoAccount(user.Id, login, token, password);
         user.ForgejoUsername = login;
         user.ForgejoToken = token;
         user.ForgejoPassword = password;
@@ -149,7 +149,7 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         }, ct);
         if (!patch.IsSuccessStatusCode)
             throw new GitCommandException($"Forgejo: не удалось сбросить пароль ({(int)patch.StatusCode})");
-        users.SetForgejoAccount(user.Id, login, user.ForgejoToken!, password);
+        accounts.SetForgejoAccount(user.Id, login, user.ForgejoToken!, password);
         user.ForgejoPassword = password;
         return password;
     }

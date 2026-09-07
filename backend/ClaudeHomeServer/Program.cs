@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
@@ -146,6 +147,7 @@ builder.Services.AddSignalR(o =>
 builder.Services.AddObservability(builder.Configuration);
 
 builder.Services.AddSingleton<UserStore>();
+builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<UserStore>());
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,

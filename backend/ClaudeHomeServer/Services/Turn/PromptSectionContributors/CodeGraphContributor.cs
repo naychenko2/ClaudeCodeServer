@@ -7,7 +7,14 @@ namespace ClaudeHomeServer.Services.Turn;
 // тот же: проектный чат с включённым codegraph) и есть риск рассинхрона.
 //
 // IsEnabled: провайдер подключён, rootPath не пустой, у владельца tool:codegraph
-// не выключен off-привязкой (прежний BuildCodeGraphProvider).
+// не выключен Off-привязкой (прежний BuildCodeGraphProvider).
+//
+// Семантика гейта — серверная deny-only (PersonaBindingsService.ServerToolEnabled):
+// если персоны у сессии нет — гейт не мешает (нет Off-привязки = включено); если
+// персона есть — её явная Off-привязка на «codegraph» отключает секцию. Эффективный
+// гейт EffectiveToolEnabled здесь неуместен: «codegraph» в ServerKeys, и Persona.Tools
+// о нём никогда не знал (включая дефолт «без ограничений») — переключение на
+// Effective сломало бы типичную персону с суженным Tools = [tasks, notes].
 public sealed class CodeGraphContributor : IPromptSectionContributor
 {
     private readonly CodeGraph.CodeGraphPromptProvider? _provider;
@@ -30,12 +37,7 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         _provider is not null
         && !string.IsNullOrWhiteSpace(sessionContext.RootPath)
-        // EffectiveToolEnabled принимает nullable Persona — раньше это прощалось, но
-        // паттерн хрупкий (полагается на short-circuit внутри реализации). Гейтим явно:
-        // без персоны codegraph-подсказка в личных чатах не нужна, персоны в сессии нет —
-        // null.
-        && sessionContext.Persona is not null
-        && _bindings.EffectiveToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");
+        && _bindings.ServerToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)

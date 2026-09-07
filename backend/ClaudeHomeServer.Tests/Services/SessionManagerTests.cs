@@ -6958,8 +6958,8 @@ public class SessionManagerTests : IDisposable
         // EscalationRaiser имитирует прод-путь TeamWaveService.RaiseEscalationAsync:
         // 1) успешная публикация карточки (AppendAsync + WithTeamState «AwaitingDecision» +
         //    BroadcastTeamImplementAsync); 2) параллельная гонка — человек уже ответил на
-        //    опубликованную карточку между publish и send-notification (стадия снова
-        //    Planning, как если бы другой поток успел отработать); 3) хвост SendAsync
+        //    опубликованную карточку между publish и send-notification, режим ушёл в работу
+        //    (стадия Wave, как если бы другой поток успел отработать); 3) хвост SendAsync
         //    бросает исключение. Именно так в проде NotificationService.SendAsync:21
         //    (store.AddAsync + hub.SendAsync без try/catch там) упадёт ПОСЛЕ publish.
         _sut.TeamHandlers.EscalationRaiser = async (_, card) =>
@@ -6969,11 +6969,14 @@ public class SessionManagerTests : IDisposable
 
             // Шаг 2: между publish и send-notification параллельный поток сменил стадию
             // (варианты в проде: пользователь нажал кнопку карточки, BgAgentDoneMessage от
-            // другого агента, response чата и т.п.). Для CAS-гейта этого достаточно:
-            // t.Stage != AwaitingDecision → откат пропускается.
+            // другого агента, response чата и т.п.). Стадия взята ОТЛИЧНОЙ от claim.Stage
+            // (Planning) намеренно: при совпадении безусловный откат вернул бы ровно то же
+            // значение, и тест перестал бы отличать «CAS есть» от «CAS нет» — гейт был бы
+            // вакуумным (проверено мутацией: со стадией Planning снятие CAS-условия в
+            // RollbackSilentStallClaim не роняет ни одного теста).
             ((ITeamRunState)_sut).WithTeamState(session.Id, t =>
             {
-                t.Stage = TeamImplementStage.Planning;
+                t.Stage = TeamImplementStage.Wave;
                 return true;
             });
 
@@ -6996,23 +6999,22 @@ public class SessionManagerTests : IDisposable
             "пользователь видит опубликованную карточку после успешного publish в EscalationRaiser");
 
         // Стадия НЕ вернулась в исходное состояние: CAS пропустил откат, потому что
-        // t.Stage уже не AwaitingDecision (параллельный поток сменил её на Planning).
-        // Без CAS-гейта клеймо безусловно восстановило бы claim.Stage (тоже Planning) —
-        // это скрыло бы проблему здесь, НО тест ниже ловит РЕАЛЬНУЮ опасность: после
-        // отката стадия в Planning && WaveNumber==0 — следующий заход гарда (через
-        // StalledMinutes по умолчанию 30 минут) поднимет ВТОРУЮ карточку поверх первой.
+        // t.Stage уже не AwaitingDecision (параллельный поток увёл её в Wave). Без
+        // CAS-гейта откат вернул бы Planning && WaveNumber==0 поверх идущей волны —
+        // и следующий заход гарда (через StalledMinutes, по умолчанию 30 минут) поднял бы
+        // ВТОРУЮ карточку поверх уже видимой первой. Этот ассерт и есть гейт: со снятым
+        // CAS-условием он падает.
         var team = _sut.GetById(session.Id)!.TeamImplement!;
-        team.Stage.Should().Be(TeamImplementStage.Planning,
+        team.Stage.Should().Be(TeamImplementStage.Wave,
             "стадия сменилась параллельной гонкой — CAS пропустил откат (иначе гард позже "
             + "поднял бы ВТОРУЮ карточку поверх уже видимой первой)");
 
-        // Прямая проверка CAS-гейта: следующий TryClaimSilentStall теперь НЕ проходит
-        // (стадия Planning — снова stalledStage=true — но клейма «живого» уже нет, и
-        // первый же заход гарда после подтверждения стадии снова поднимет карточку —
-        // и это норма: первая карточка закрыта ответом человека).
+        // Второй гейт на то же самое с другой стороны: гард не может переклеймить чат,
+        // потому что состояние осталось за параллельным потоком (Wave — не stalledStage).
+        // Со снятым CAS-условием стадия была бы Planning && WaveNumber==0, и этот вызов
+        // вернул бы true — то есть гард поднял бы вторую карточку.
         var claim2 = ((ITeamRunState)_sut).TryClaimSilentStall(session.Id, out _);
-        claim2.Should().BeTrue("после ответа человека стадия снова Planning && WaveNumber==0 — "
-            + "следующий гард корректно поднимает СВЕЖУЮ карточку по новой ситуации");
+        claim2.Should().BeFalse("стадия Wave — не stalledStage, гард не клеймит");
     }
 
     // Прод 2026-08-12 (P23): карточка блокера гаснет, когда координатор, разбуженный докладом,

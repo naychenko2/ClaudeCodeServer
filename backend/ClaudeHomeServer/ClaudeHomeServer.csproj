@@ -77,6 +77,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Yandex\ClaudeHomeServer.Yandex.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Reader\ClaudeHomeServer.Reader.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
   </ItemGroup>
 
   <ItemGroup>

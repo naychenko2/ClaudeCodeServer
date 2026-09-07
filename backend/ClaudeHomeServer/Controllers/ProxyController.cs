@@ -5,9 +5,11 @@ namespace ClaudeHomeServer.Controllers;
 
 [ApiController]
 [Authorize]
-public class ProxyController(IHttpClientFactory httpClientFactory) : ControllerBase
+public class ProxyController(IHttpClientFactory httpClientFactory, ILogger<ProxyController> logger) : ControllerBase
 {
-    // Белый список доменов — только доверенные внешние сервисы
+    // Белый список доменов — только доверенные внешние сервисы.
+    // Списки AllowedHosts (здесь) и PROXY_ALLOWED_HOSTS во фронтенде (MarkdownContent.tsx)
+    // синхронизируются тестом ProxyAllowedHostsSyncTests: расхождение роняет сборку.
     private static readonly string[] AllowedHosts =
     [
         "fal.media", "fal.run", "queue.fal.run", "cdn.fal.ai",
@@ -16,6 +18,14 @@ public class ProxyController(IHttpClientFactory httpClientFactory) : ControllerB
         // медиа — с Cloudinary (res.cloudinary.com/dzkwltgyd/image|video/upload);
         // оба подтверждены живым get_project (2026-07-31)
         "glifusercontent.com", "res.cloudinary.com",
+        // Higgsfield-CDN: точный distribution d8j0ntlcm91z4.cloudfront.net, отдаёт
+        // сгенерированные image/png и видео через generate_image / generate_video.
+        // cdn.higgsfield.ai / media.higgsfield.ai живые, но 404 на тех же путях, так что
+        // точный distribution — единственный вариант. При смене distribution ссылки
+        // отвалятся — WARN в логах подскажет. Общий суффикс cloudfront.net НЕ открываем:
+        // distribution там заводит кто угодно, а /api/proxy ходит с сервера и отдаёт
+        // ответ клиенту — получится открытый прокси на произвольный контент.
+        "d8j0ntlcm91z4.cloudfront.net",
     ];
 
     /// <summary>
@@ -44,6 +54,10 @@ public class ProxyController(IHttpClientFactory httpClientFactory) : ControllerB
                 uri.Host.Equals(h, StringComparison.OrdinalIgnoreCase) ||
                 uri.Host.EndsWith("." + h, StringComparison.OrdinalIgnoreCase)))
         {
+            // Хост намеренно шумный: на узком списке distribution любой отказ — это либо
+            // смена CDN у провайдера, либо ссылка мимо прокси (URL бывают с подписанными
+            // параметрами, в логе только хост).
+            logger.LogWarning("Proxy: домен {Host} не в allow-list", uri.Host);
             Response.StatusCode = 400;
             await Response.WriteAsync("Домен не разрешён", ct);
             return;

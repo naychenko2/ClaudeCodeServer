@@ -120,20 +120,36 @@ public class McpOAuthService(
         if (Trim(input?.ClientSecret) is { } freshSecret)
             clientSecretRef = secrets.Set(ownerId, freshSecret);
 
-        // Ручной client_id — для серверов, которые DCR не умеют; иначе регистрируемся сами
+        // Что именно запросим у провайдера. Приоритет:
+        // - input.Scopes — явно заданный человеком набор (всегда побеждает, и при DCR, и без);
+        // - иначе scope из ответа DCR — то, что сервер фактически выдал нашему клиенту
+        //   (RFC 7591 §3.2.1: при отличии от запрошенного сервер возвращает его здесь);
+        // - иначе null — провайдер применит дефолт клиента (заведомо разрешённый).
+        // Никогда не подставляем endpoints.ScopesSupported: это возможности СЕРВЕРА,
+        // а не права КЛИЕНТА. У Clerk (Higgsfield) провайдер отбивает authorize
+        // до формы согласия, если клиент просит хоть один scope, который ему не выдан.
+        List<string>? authorizeScopes;
         if (clientId is null)
         {
-            var registered = await RegisterClientAsync(endpoints, redirectUri, input?.Scopes ?? oauth.Scopes, ct);
+            var registered = await RegisterClientAsync(endpoints, redirectUri,
+                input?.Scopes ?? oauth.Scopes, ct);
             clientId = registered.ClientId;
             if (registered.ClientSecret is { Length: > 0 } secret)
                 clientSecretRef = secrets.SetEntry(ownerId, McpSecretEntry.Plain(secret), clientSecretRef);
+            authorizeScopes = input?.Scopes ?? SplitScopes(registered.Scope);
+        }
+        else
+        {
+            // Ручной client_id — DCR не было, за набор отвечает человек (или прежняя запись).
+            // Прежний oauth.Scopes здесь допустим: он задан человеком и не отравлен фолбэком.
+            authorizeScopes = input?.Scopes ?? oauth.Scopes;
         }
 
-        var scopes = input?.Scopes ?? oauth.Scopes
-            ?? (endpoints.ScopesSupported.Count > 0 ? endpoints.ScopesSupported.ToList() : null);
-
         // Настройки клиента переживают неудачный вход: повторный «Войти» не станет
-        // регистрировать в провайдере ещё одного клиента
+        // регистрировать в провайдере ещё одного клиента. Scopes в запись кладём ровно то,
+        // на что опирался authorize: либо явный ввод человека, либо ответ DCR. Если
+        // ничего из этого не известно — кладём null: повторный вход должен перерегистрировать
+        // клиента с нуля, а не пробить теми же scope, что отказали в прошлый раз.
         var updated = SaveAuth(ownerId, record, auth =>
         {
             auth.Kind = McpAuthKind.OAuth2;
@@ -143,7 +159,7 @@ public class McpOAuthService(
                 TokenEndpoint = endpoints.TokenEndpoint,
                 ClientId = clientId,
                 ClientSecretRef = clientSecretRef,
-                Scopes = scopes,
+                Scopes = authorizeScopes,
                 AccessTokenRef = oauth.AccessTokenRef,
                 ExpiresAt = oauth.ExpiresAt,
                 RedirectUri = redirectUri,
@@ -166,7 +182,7 @@ public class McpOAuthService(
             ["code_challenge"] = McpPkce.Challenge(verifier),
             ["code_challenge_method"] = "S256",
             ["resource"] = resource,
-            ["scope"] = scopes is { Count: > 0 } ? string.Join(' ', scopes) : null,
+            ["scope"] = authorizeScopes is { Count: > 0 } ? string.Join(' ', authorizeScopes) : null,
         };
         return new McpOAuthStart(AppendQuery(endpoints.AuthorizationEndpoint, query), state, redirectUri);
     }
@@ -408,10 +424,14 @@ public class McpOAuthService(
 
     // ── регистрация клиента (RFC 7591) ───────────────────────────────────────────────
 
-    private sealed record RegisteredClient(string ClientId, string? ClientSecret);
+    // Scope — то, что сервер фактически выдал клиенту (RFC 7591 §3.2.1). Приходит
+    // пробело-разделённой строкой в ответе /register и отличается от запрошенного,
+    // если провайдер урезал набор. Это ЕДИНСТВЕННЫЙ безопасный набор для authorize:
+    // scopes_supported описывает возможности сервера, а не права нашего клиента.
+    private sealed record RegisteredClient(string ClientId, string? ClientSecret, string? Scope);
 
     private async Task<RegisteredClient> RegisterClientAsync(McpOAuthEndpoints endpoints,
-        string redirectUri, IReadOnlyList<string>? scopes, CancellationToken ct)
+        string redirectUri, List<string>? scopes, CancellationToken ct)
     {
         if (endpoints.RegistrationEndpoint is not { Length: > 0 } endpoint)
             throw new McpOAuthException(
@@ -463,7 +483,12 @@ public class McpOAuthService(
                     throw new McpOAuthException("Сервер не вернул client_id — впиши его вручную");
                 var secret = root.TryGetProperty("client_secret", out var s) && s.ValueKind == JsonValueKind.String
                     ? s.GetString() : null;
-                return new RegisteredClient(id.GetString()!, secret);
+                // RFC 7591 §3.2.1: scope при отличии от запрошенного. Отсутствие — null,
+                // и тогда в authorize параметр scope не шлём вовсе (провайдер применит
+                // дефолт клиента).
+                var scope = root.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String
+                    ? sc.GetString() : null;
+                return new RegisteredClient(id.GetString()!, secret, scope);
             }
             catch (JsonException)
             {
@@ -627,6 +652,13 @@ public class McpOAuthService(
 
     private static string? Trim(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    // RFC 6749 §3.3 и RFC 7591 §3.2.1: scope в ответе регистрации — строка,
+    // разделённая пробелами. Пустая строка и пробелы по краям — не набор.
+    private static List<string>? SplitScopes(string? scope) =>
+        string.IsNullOrWhiteSpace(scope)
+            ? null
+            : scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private void CleanupPending()
     {

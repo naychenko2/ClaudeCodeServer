@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // ранний выход, у статуса отдельное поле isGitRepo.
 // Тонкий объект над синглтонами — тот же паттерн, что DossierGitExporter: состояния не
 // держит, собирается per-request/per-экспорт.
-public sealed class DossierAutoExportGate(ProjectManager projects, GitService git, DossierCaptureState state)
+public sealed class DossierAutoExportGate(ProjectManager projects, IGitRefSnapshotStore git, DossierCaptureState state)
 {
     // Причины — wire-строки поля autoExport: сериализуются в JSON как есть, фронт
     // раскладывает по ним тексты подсказки. Переименование = правка фронта.
@@ -50,9 +50,9 @@ public sealed class DossierAutoExportGate(ProjectManager projects, GitService gi
 
     private async Task<BranchOwnership> ClassifyBranchAsync(string ownerId, Project project, CancellationToken ct)
     {
-        var localTip = await git.ResolveDossiersLocalTipAsync(ownerId, project.RootPath, ct);
+        var localTip = await git.LocalTipAsync(ownerId, project.RootPath, DossierBranch.Ref, ct);
         if (localTip is null)
-            return await git.HasDossiersRemoteAsync(ownerId, project.RootPath, ct)
+            return await git.RefExistsAsync(ownerId, project.RootPath, DossierBranch.RemoteRef, ct)
                 ? BranchOwnership.Orphan
                 : BranchOwnership.Absent;
         return state.Get(DossierCaptureState.ImportKey(ownerId, project.Id)) == localTip

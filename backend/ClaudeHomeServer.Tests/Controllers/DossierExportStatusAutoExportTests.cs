@@ -45,9 +45,9 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
         Directory.CreateDirectory(dir);
         await _git.InitAsync(null, dir);
         if (withBranch)
-            await _git.WriteDossiersBranchAsync(null, dir,
-                [new GitDossierFile("index.json", """{"version":1,"entries":[]}""")],
-                "test: ветка паспортов");
+            await _git.WriteSnapshotAsync(null, dir, DossierBranch.Ref,
+                [new GitSnapshotFile("index.json", """{"version":1,"entries":[]}""")],
+                "test: ветка паспортов", DossierBranch.Identity);
         var response = await _client.PostAsJsonAsync("/api/projects", new { name, rootPath = dir });
         response.EnsureSuccessStatusCode();
         var id = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync())
@@ -75,7 +75,7 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
         var (projectId, dir) = await CreateGitProjectAsync("DossierStOwn", withBranch: true);
 
         // Tip помечен созданным нашей выгрузкой — как после ручной/авто выгрузки
-        var tip = (await GitAsync(dir, "rev-parse", GitService.DossiersRef)).Stdout.Trim();
+        var tip = (await GitAsync(dir, "rev-parse", DossierBranch.Ref)).Stdout.Trim();
         _factory.Services.GetRequiredService<DossierCaptureState>().MarkOwnTip(TestOwnerId(), projectId, tip);
 
         (await AutoExportAsync(projectId)).Should().Be("active",
@@ -105,9 +105,9 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
         Directory.CreateDirectory(bare);
         (await GitAsync(bare, "init", "--bare")).Ok.Should().BeTrue("bare-репозиторий обязан создаться");
         (await GitAsync(dir, "remote", "add", "origin", bare)).Ok.Should().BeTrue();
-        (await GitAsync(dir, "push", "origin", GitService.DossiersRef)).Ok.Should()
+        (await GitAsync(dir, "push", "origin", DossierBranch.Ref)).Ok.Should()
             .BeTrue("фикстура: ветка запушена в origin");
-        (await GitAsync(dir, "update-ref", "-d", GitService.DossiersRef)).Ok.Should().BeTrue();
+        (await GitAsync(dir, "update-ref", "-d", DossierBranch.Ref)).Ok.Should().BeTrue();
 
         (await AutoExportAsync(projectId)).Should().Be("originOnly",
             "есть только origin-ветка — фон локальную сироту не создаёт, выгрузка по кнопке");

@@ -187,7 +187,7 @@ public class DossierGitExportTests : IDisposable
 
     private async Task<string[]> BranchFilesAsync(string root)
     {
-        var r = await GitAsync(root, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var r = await GitAsync(root, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         r.Ok.Should().BeTrue("ветка паспортов должна существовать после экспорта: {0}", r.Stderr);
         return r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
@@ -199,7 +199,7 @@ public class DossierGitExportTests : IDisposable
         var tree = new List<(string, string)>(files.Length);
         foreach (var f in files)
         {
-            var c = await GitAsync(root, "show", $"{GitService.DossiersRef}:{f}");
+            var c = await GitAsync(root, "show", $"{DossierBranch.Ref}:{f}");
             c.Ok.Should().BeTrue("файл ветки {0} обязан читаться: {1}", f, c.Stderr);
             tree.Add((f, c.Stdout));
         }
@@ -222,7 +222,7 @@ public class DossierGitExportTests : IDisposable
         var result = await exporter.ExportAsync(Owner, p);
 
         result.Committed.Should().BeTrue("первый экспорт создаёт коммит — иначе проверки ниже вакуумны");
-        (await GitAsync(p.RootPath, "rev-parse", "--verify", GitService.DossiersRef)).Ok.Should().BeTrue();
+        (await GitAsync(p.RootPath, "rev-parse", "--verify", DossierBranch.Ref)).Ok.Should().BeTrue();
 
         (await GitAsync(p.RootPath, "rev-parse", "HEAD")).Stdout.Trim()
             .Should().Be(headBefore, "HEAD проекта не сдвинулся");
@@ -314,7 +314,7 @@ public class DossierGitExportTests : IDisposable
 
         second.Committed.Should().BeFalse("дерево снапшота совпало с tip ветки — нового коммита быть не должно");
         second.CommitSha.Should().Be(first.CommitSha, "tip ветки не сдвинулся");
-        (await GitAsync(p.RootPath, "rev-list", "--count", GitService.DossiersRef)).Stdout.Trim()
+        (await GitAsync(p.RootPath, "rev-list", "--count", DossierBranch.Ref)).Stdout.Trim()
             .Should().Be("1", "в ветке по-прежнему ровно один коммит");
     }
 
@@ -363,7 +363,7 @@ public class DossierGitExportTests : IDisposable
         var first = await exporter.ExportAsync(Owner, p);
         first.Committed.Should().BeTrue();
 
-        var readme = await GitAsync(p.RootPath, "show", $"{GitService.DossiersRef}:README.md");
+        var readme = await GitAsync(p.RootPath, "show", $"{DossierBranch.Ref}:README.md");
         readme.Ok.Should().BeTrue("README.md обязан лежать в корне ветки: {0}", readme.Stderr);
         readme.Stdout.Should().Be(DossierGitExporter.ReadmeText,
             "README — подготовленный текст без подстановок, дословно");
@@ -372,7 +372,7 @@ public class DossierGitExportTests : IDisposable
 
         var second = await exporter.ExportAsync(Owner, p);
         second.Committed.Should().BeFalse("README не изменился — нового коммита быть не должно");
-        (await GitAsync(p.RootPath, "show", $"{GitService.DossiersRef}:README.md")).Stdout
+        (await GitAsync(p.RootPath, "show", $"{DossierBranch.Ref}:README.md")).Stdout
             .Should().Be(readme.Stdout, "повторный экспорт не меняет README");
     }
 }

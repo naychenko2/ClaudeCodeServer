@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Tests.Services.Dossiers;
 
 // Интеграционные тесты автоимпорта паспортов по новому tip ветки ccs/dossiers/v1
 // (задача 3 спринта автоматизации): настоящий git CLI и реальные сторы на temp-конфиге,
-// ветка пишется тем же plumbing-методом WriteDossiersBranchAsync, что и при экспорте.
+// ветка пишется тем же plumbing-методом WriteSnapshotAsync, что и при экспорте.
 // Сценарий «вторая машина / сосед по общей папке»: ветка в репозитории меняется
 // «извне» (pull/сосед), поллер обязан заметить новый tip и подтянуть записи — и только
 // чтением из git, без checkout/fetch/pull.
@@ -90,21 +90,30 @@ public class DossierAutoImportTests : IDisposable
 
     private static readonly JsonSerializerOptions IndexOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    // tip ветки паспортов: резолв локального либо remote-tracking рефа, затем TipAsync.
+    // Раньше делалось одним методом GitService.GetDossiersTipAsync; после выноса в
+    // IGitRefSnapshotStore caller сам резолвит реф перед чтением tip.
+    private static async Task<GitRefTip?> GetTipAsync(IGitRefSnapshotStore git, string? ownerId, string root)
+    {
+        var resolved = await git.ResolveRefAsync(ownerId, root, [DossierBranch.Ref, DossierBranch.RemoteRef]);
+        return resolved is null ? null : await git.TipAsync(ownerId, root, resolved);
+    }
+
     // Ветка паспортов, как её написал бы экспортёр соседней машины
     private async Task WriteBranchAsync(Project p, params ChangeDossier[] dossiers)
     {
-        var files = new List<GitDossierFile>();
+        var files = new List<GitSnapshotFile>();
         var entries = new List<DossierIndexEntry>();
         foreach (var d in dossiers)
         {
             var path = DossierGitExporter.DossierPath(d.CommittedAt, d.CommitSha, d.CommitSubject);
-            files.Add(new GitDossierFile(path, DossierGitExporter.FormatDossier(d, [])));
+            files.Add(new GitSnapshotFile(path, DossierGitExporter.FormatDossier(d, [])));
             entries.Add(new DossierIndexEntry(d.CommitSha, path, d.CommitSubject, d.CommittedAt,
                 Discussion: null, TaskId: d.TaskId, SupersededSha: d.SupersededSha));
         }
-        files.Add(new GitDossierFile("index.json",
+        files.Add(new GitSnapshotFile("index.json",
             JsonSerializer.Serialize(new DossierBranchIndex(1, entries), IndexOpts)));
-        await _git.WriteDossiersBranchAsync(p.OwnerId, p.RootPath, files, "test: ветка паспортов");
+        await _git.WriteSnapshotAsync(p.OwnerId, p.RootPath, DossierBranch.Ref, files, "test: ветка паспортов", DossierBranch.Identity);
     }
 
     private Task TickAsync() => _auto.TickAsync();
@@ -124,7 +133,7 @@ public class DossierAutoImportTests : IDisposable
         var imported = _store.List(owner, p.Id).Should().ContainSingle().Subject;
         imported.Origin.Should().Be(DossierOrigin.Imported);
         imported.CommitSha.Should().Be("aa11aa11");
-        var tip = await _git.GetDossiersTipAsync(owner, p.RootPath);
+        var tip = await GetTipAsync(_git, owner, p.RootPath);
         _state.Get(DossierCaptureState.ImportKey(owner, p.Id)).Should().Be(tip!.CommitSha,
             "tip зафиксирован — повторный тик того же состояния не зовёт импортёр");
     }
@@ -242,7 +251,7 @@ public class DossierAutoImportTests : IDisposable
         }
 
         public override async Task<DossiersImportResult> ImportAsync(string ownerId, Project project,
-            CancellationToken ct = default, Func<GitDossiersTip, bool>? stillForeign = null)
+            CancellationToken ct = default, Func<GitRefTip, bool>? stillForeign = null)
         {
             var own = new ChangeDossier
             {
@@ -254,7 +263,7 @@ public class DossierAutoImportTests : IDisposable
                 Why = "почему изменение сделано",
             };
             var path = DossierGitExporter.DossierPath(own.CommittedAt, own.CommitSha, own.CommitSubject);
-            var files = new List<GitDossierFile>
+            var files = new List<GitSnapshotFile>
             {
                 new(path, DossierGitExporter.FormatDossier(own, [])),
                 new("index.json", JsonSerializer.Serialize(new DossierBranchIndex(1,
@@ -263,8 +272,8 @@ public class DossierAutoImportTests : IDisposable
                         Discussion: null, TaskId: null, SupersededSha: []),
                 ]), IndexOpts)),
             };
-            await _gitSvc.WriteDossiersBranchAsync(ownerId, project.RootPath, files, "test: наша автовыгрузка");
-            var newTip = await _gitSvc.GetDossiersTipAsync(ownerId, project.RootPath);
+            await _gitSvc.WriteSnapshotAsync(ownerId, project.RootPath, DossierBranch.Ref, files, "test: наша автовыгрузка", DossierBranch.Identity);
+            var newTip = await GetTipAsync(_gitSvc, ownerId, project.RootPath);
             _st.MarkOwnTip(ownerId, project.Id, newTip!.CommitSha);
             return await base.ImportAsync(ownerId, project, ct, stillForeign);
         }
@@ -276,14 +285,14 @@ public class DossierAutoImportTests : IDisposable
         var (p, owner) = await MkRepoProjectAsync("repo_race", flagOn: true);
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         await WriteBranchAsync(p, Dossier(p.Id, "ace00001", "feat: чужой паспорт"));
-        var foreignTip = await _git.GetDossiersTipAsync(owner, p.RootPath);
+        var foreignTip = await GetTipAsync(_git, owner, p.RootPath);
 
         var auto = new DossierAutoImporter(_projects, _store, _state, _git,
             new InstanceSecretsProvider(_config), _flags,
             importer: new RacingImporter(_store, _git, new InstanceSecretsProvider(_config), _state));
         await auto.TickAsync();
 
-        var ownTip = await _git.GetDossiersTipAsync(owner, p.RootPath);
+        var ownTip = await GetTipAsync(_git, owner, p.RootPath);
         ownTip!.CommitSha.Should().NotBe(foreignTip!.CommitSha,
             "симуляция сработала: автовыгрузка успела перезаписать ветку за время импорта");
         _state.Get(DossierCaptureState.ImportKey(owner, p.Id)).Should().Be(ownTip.CommitSha,

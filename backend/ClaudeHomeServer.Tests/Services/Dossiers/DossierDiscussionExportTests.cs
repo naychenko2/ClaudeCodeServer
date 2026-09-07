@@ -217,14 +217,14 @@ public class DossierDiscussionExportTests : IDisposable
 
     private async Task<string[]> BranchFilesAsync(string root)
     {
-        var r = await GitAsync(root, "ls-tree", "-r", "--name-only", GitService.DossiersRef);
+        var r = await GitAsync(root, "ls-tree", "-r", "--name-only", DossierBranch.Ref);
         r.Ok.Should().BeTrue("ветка паспортов должна существовать после экспорта: {0}", r.Stderr);
         return r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private async Task<string> BranchFileAsync(string root, string path)
     {
-        var r = await GitAsync(root, "show", $"{GitService.DossiersRef}:{path}");
+        var r = await GitAsync(root, "show", $"{DossierBranch.Ref}:{path}");
         r.Ok.Should().BeTrue("файл ветки {0} обязан читаться: {1}", path, r.Stderr);
         return r.Stdout;
     }
@@ -288,7 +288,7 @@ public class DossierDiscussionExportTests : IDisposable
         _llmCalls.Count(c => c.Key == LocalActionCatalog.DiscussionDigest)
             .Should().Be(callsAfterFirst, "снятый конспект лежит в сторе — модель повторно не зовётся");
         second.Committed.Should().BeFalse("дерево из стора побайтово совпало с tip — коммита нет");
-        (await GitAsync(p.RootPath, "rev-list", "--count", GitService.DossiersRef)).Stdout.Trim()
+        (await GitAsync(p.RootPath, "rev-list", "--count", DossierBranch.Ref)).Stdout.Trim()
             .Should().Be("1", "в ветке по-прежнему один коммит");
     }
 

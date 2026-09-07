@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using FluentAssertions;
@@ -165,6 +166,35 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await FluentActions.Awaiting(() => _git.CreateBranchAsync(null, _repo, "-b", "main"))
             .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
         await FluentActions.Awaiting(() => _git.CreateBranchAsync(null, _repo, "ok", "--detach"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+    }
+
+    // IGitRefSnapshotStore — публичный контракт для будущих вертикалей (комментарий в
+    // DossierBranch.cs: «сторонняя вертикаль заведёт свой клон DossierBranch и позовёт те
+    // же методы со своими значениями»). Те же ревизии, что в Log/Checkout/CreateBranch,
+    // доходят до argv в RefExists/LocalTip/ResolveRef/PushRef — каждая обязана отбить
+    // fullRef/candidate, начинающийся с «-», до того как git увидит его как флаг.
+    [Fact]
+    public async Task IGitRefSnapshotStore_RefСОпцией_Отвергается()
+    {
+        var target = Path.Combine(Path.GetTempPath(),
+            "gitsvc_rfs_inject_" + Guid.NewGuid().ToString("N") + ".txt");
+
+        // RefExists: invalid input — программная ошибка, throw (не молча false «ветки нет»)
+        await FluentActions.Awaiting(() => _git.RefExistsAsync(null, _repo, $"--output={target}"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+        File.Exists(target).Should().BeFalse(
+            "git не должен был выполниться вовсе — файл вне репо не создаётся и не затирается");
+
+        // LocalTip: тот же контракт
+        await FluentActions.Awaiting(() => _git.LocalTipAsync(null, _repo, "--force"))
+            .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+
+        // ResolveRef: валидация в цикле — битый кандидат в списке тоже отвергается,
+        // даже если перед ним стоял валидный (порядок «битый после валидного» не
+        // прикрывает инъекцию)
+        await FluentActions.Awaiting(() => _git.ResolveRefAsync(null, _repo,
+            ["main", $"--output={target}"]))
             .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
     }
 
@@ -605,10 +635,10 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     // hash-object -w --stdin + update-index --cacheinfo. Здесь — эталон для проверки
     // эквивалентности: пишет то же множество файлов во временный индекс и возвращает
     // дерево write-tree. Форма --cacheinfo — через пробел, как в старом коде.
-    private async Task<string> LegacyWriteTreeAsync(string root, IReadOnlyList<GitDossierFile> files)
+    private async Task<string> LegacyWriteTreeAsync(string root, IReadOnlyList<GitSnapshotFile> files)
     {
-        var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = ".git/index.dossiers-legacy" };
-        var hostIdx = Path.Combine(root, ".git", "index.dossiers-legacy");
+        var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = ".git/index.refsnapshot-legacy" };
+        var hostIdx = Path.Combine(root, ".git", "index.refsnapshot-legacy");
         try { File.Delete(hostIdx); } catch { }
         try
         {
@@ -628,9 +658,9 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         finally { try { File.Delete(hostIdx); } catch { } }
     }
 
-    private static List<GitDossierFile> MkDossierFiles(int count)
+    private static List<GitSnapshotFile> MkDossierFiles(int count)
     {
-        var files = new List<GitDossierFile>(count);
+        var files = new List<GitSnapshotFile>(count);
         for (var i = 0; i < count; i++)
         {
             // Разнобой содержимого: кириллица, CRLF, кавычки и длинные строки — всё это
@@ -640,7 +670,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
                 : i % 3 == 1
                     ? $"# dossier {i}\n\ntext with \"quotes\" and 'apostrophes'\n"
                     : $"# запись {i}\n\n" + new string('д', 500) + "\n";
-            files.Add(new GitDossierFile($"dossiers/2026/08/{i:0000}-dossier-zapis-{i}.md", body));
+            files.Add(new GitSnapshotFile($"dossiers/2026/08/{i:0000}-dossier-zapis-{i}.md", body));
         }
         return files;
     }
@@ -655,19 +685,19 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         var files = MkDossierFiles(200);
         var legacyTree = await LegacyWriteTreeAsync(_repo, files);
 
-        var result = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 200 паспортов");
+        var result = await _git.WriteSnapshotAsync(null, _repo, DossierBranch.Ref, files, "экспорт: 200 паспортов", DossierBranch.Identity);
 
         result.Created.Should().BeTrue("первая запись ветки обязана создать коммит");
         var newTree = (await _git.RunAsync(null, _repo,
-            ["rev-parse", $"{GitService.DossiersRef}^{{tree}}"])).Stdout.Trim();
+            ["rev-parse", $"{DossierBranch.Ref}^{{tree}}"])).Stdout.Trim();
         newTree.Should().Be(legacyTree,
             "батчинг обязан давать побайтово то же дерево, что прежняя пофайловая цепочка");
 
         var names = (await _git.RunAsync(null, _repo,
-            ["ls-tree", "-r", "--name-only", GitService.DossiersRef])).Stdout
+            ["ls-tree", "-r", "--name-only", DossierBranch.Ref])).Stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         names.Should().HaveCount(200);
-        Directory.Exists(Path.Combine(_repo, ".git", "dossiers-export-tmp")).Should()
+        Directory.Exists(Path.Combine(_repo, ".git", "refsnapshot-export-tmp")).Should()
             .BeFalse("временная папка батчинга удаляется после экспорта");
         (await _git.StatusAsync(null, _repo)).Untracked.Should().BeEmpty(
             "временная папка внутри git-dir не мусорит в рабочем дереве");
@@ -679,17 +709,17 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     public async Task WriteDossiersBranch_Батчинг_ИдемпотентенИИнкрементален()
     {
         var files = MkDossierFiles(60);
-        var first = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 60");
+        var first = await _git.WriteSnapshotAsync(null, _repo, DossierBranch.Ref, files, "экспорт: 60", DossierBranch.Identity);
 
         first.Created.Should().BeTrue();
-        var second = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 60 повторно");
+        var second = await _git.WriteSnapshotAsync(null, _repo, DossierBranch.Ref, files, "экспорт: 60 повторно", DossierBranch.Identity);
         second.Created.Should().BeFalse("дерево не изменилось — нового коммита быть не должно");
         second.CommitSha.Should().Be(first.CommitSha);
 
-        files.Add(new GitDossierFile("dossiers/2026/08/0060-dossier-novyy.md", "# новый паспорт\n"));
-        var third = await _git.WriteDossiersBranchAsync(null, _repo, files, "экспорт: 61");
+        files.Add(new GitSnapshotFile("dossiers/2026/08/0060-dossier-novyy.md", "# новый паспорт\n"));
+        var third = await _git.WriteSnapshotAsync(null, _repo, DossierBranch.Ref, files, "экспорт: 61", DossierBranch.Identity);
         third.Created.Should().BeTrue();
-        (await _git.RunAsync(null, _repo, ["rev-list", "--count", GitService.DossiersRef])).Stdout.Trim()
+        (await _git.RunAsync(null, _repo, ["rev-list", "--count", DossierBranch.Ref])).Stdout.Trim()
             .Should().Be("2", "в ветке коммит первого экспорта и один добавочный");
     }
 

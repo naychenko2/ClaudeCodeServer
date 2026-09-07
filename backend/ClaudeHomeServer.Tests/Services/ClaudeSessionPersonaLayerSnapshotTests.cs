@@ -29,8 +29,6 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(),
         "ccs-persona-snapshot-" + Guid.NewGuid().ToString("N"));
     private readonly ConcurrentDictionary<int, Process> _clis = new();
-    private readonly TaskCompletionSource<IReadOnlyList<string>> _argsCaptured =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<IReadOnlyList<PromptSectionDto>> _snapshotSections =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -46,13 +44,11 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
     }
 
-    // Fake-CLI launcher: захватывает args первого старта процесса и держит его живым,
-    // чтобы ход не ушёл в боевой claude.exe. Оценка cmdline — FileName+args через ArgCost
-    // (контракт LocalProcessRunner; точные цифры раннера — отдельный сторож в
-    // DockerProcessRunnerCmdlineEstimationTests, нам здесь достаточно не падать).
-    private sealed class CapturingLauncher(
-        ConcurrentDictionary<int, Process> clis,
-        TaskCompletionSource<IReadOnlyList<string>> argsCaptured) : IProcessLauncher
+    // Fake-CLI launcher: держит процесс живым, чтобы ход не ушёл в боевой claude.exe.
+    // Оценка cmdline — FileName+args через ArgCost (контракт LocalProcessRunner; точные цифры
+    // раннера — отдельный сторож в DockerProcessRunnerCmdlineEstimationTests, нам здесь
+    // достаточно не падать).
+    private sealed class CapturingLauncher(ConcurrentDictionary<int, Process> clis) : IProcessLauncher
     {
         public bool IsSandboxed => false;
         public bool TargetIsWindows => OperatingSystem.IsWindows();
@@ -63,7 +59,6 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
 
         public Process Start(ProcessSpec spec)
         {
-            argsCaptured.TrySetResult(spec.Args);
             var fake = new ProcessSpec
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
@@ -125,7 +120,7 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
             TasksMcp: null,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
             PersonaProvider: () => new Persona { Id = "persona-1", Name = "Тестовая Персона" },
-            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            Launcher: new CapturingLauncher(_clis),
             Events: bus);
 
         var session = new ClaudeSession(info, context);
@@ -133,30 +128,24 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
 
         await session.SendMessageAsync("привет");
 
-        // Дожидаемся либо снимка (он публикуется раньше args CLI — см. ClaudeSession.cs:3401),
-        // либо старта fake-CLI, либо таймаута. Таймаут без снимка = красный тест.
-        var done = await Task.WhenAny(
-            _snapshotSections.Task,
-            _argsCaptured.Task,
-            Task.Delay(TimeSpan.FromSeconds(10)));
+        // Ждём ТОЛЬКО снимок. Прежняя редакция жонглировала _argsCaptured в WhenAny, и на
+        // нагруженной машине / CI ubuntu-latest (ThreadPool голодает) первым приходил именно
+        // _argsCaptured — тест падал, хотя снимок приходил мгновением позже. PublishAsync
+        // fire-and-forget (ClaudeSession.cs:4101) публикацию не ждёт, поэтому гонка была
+        // неизбежной; _argsCaptured из гонки убран — он тут ничего не даёт. 15 с, как у
+        // братьев по паттерну: longRunningTestSeconds=10 в xunit.runner.json оставляет 10 с
+        // на грани — на CI ThreadPool иногда не укладывается.
+        var done = await Task.WhenAny(_snapshotSections.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        done.Should().Be(_snapshotSections.Task,
+            "снимок промпта должен публиковаться из шины до старта CLI; если этого не происходит — "
+            + "ClaudeSession изменился и тест надо обновить под новый контракт");
 
-        if (_snapshotSections.Task.IsCompletedSuccessfully)
-        {
-            var sections = await _snapshotSections.Task;
-            sections.Should().Contain(s => s.Key == "persona-layer",
-                "слой персоны ОТДЕЛЬНЫМ шагом после ApplyBudget ложится в sections; "
-                + "иначе самая крупная секция промпта (до MaxContractChars) не видна в шторке");
-            sections.Single(s => s.Key == "persona-layer").Group.Should().Be("persona",
-                "persona-layer должен ехать с Group=persona, чтобы фронт сразу метил её иконкой "
-                + "«Часть персоны» и считал вес персоны в общем зачёте");
-        }
-        else
-        {
-            // Снимок не пришёл — падаем с диагностикой. done указывает, что случилось вместо.
-            throw new Xunit.Sdk.XunitException(
-                $"Снимок промпта не опубликован за 10с (argsCaptured={_argsCaptured.Task.IsCompleted}, "
-                + $"snapshotDone={_snapshotSections.Task.Status}). Шина или ClaudeSession изменились, "
-                + "тест надо обновить под новый контракт публикации");
-        }
+        var sections = await _snapshotSections.Task;
+        sections.Should().Contain(s => s.Key == "persona-layer",
+            "слой персоны ОТДЕЛЬНЫМ шагом после ApplyBudget ложится в sections; "
+            + "иначе самая крупная секция промпта (до MaxContractChars) не видна в шторке");
+        sections.Single(s => s.Key == "persona-layer").Group.Should().Be("persona",
+            "persona-layer должен ехать с Group=persona, чтобы фронт сразу метил её иконкой "
+            + "«Часть персоны» и считал вес персоны в общем зачёте");
     }
 }

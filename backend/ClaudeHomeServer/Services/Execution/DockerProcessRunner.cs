@@ -54,7 +54,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // плейсхолдер (BuildDockerExecArgs: spec.TurnId ?? "…"); реальный 12-символьный Guid
         // ему равен по длине, и оценка остаётся согласованной с реальной обвязкой.
         var finalSpec = spec.TurnId is null
-            ? spec with { TurnId = Guid.NewGuid().ToString("N")[..12] }
+            ? spec with { TurnId = NewTurnId() }
             : spec;
         var dockerArgs = BuildDockerExecArgs(finalSpec);
 
@@ -81,6 +81,14 @@ public sealed class DockerProcessRunner : IProcessLauncher
         if (spec.Track) ProcessRegistry.Register(process);
         return process;
     }
+
+    // Уникальный 12-символьный turnId для docker exec без заданного TurnId. Длина жёстко
+    // привязана к плейсхолдеру из BuildDockerExecArgs (new string('0', 12)) — иначе Estimate
+    // и Start разъедутся по длине, и docker-владельцы снова поймают блокер dc641949. Вынесен
+    // отдельным internal-методом, чтобы тест-сторож проверял РЕАЛЬНУЮ генерацию, а не свою
+    // копию формулы (та дыра, на которой раньше проходили мутации «подменить Guid на
+    // константу» и «растянуть Guid до 24 символов»).
+    internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
 
     public int EstimateCommandLineLength(ProcessSpec spec)
     {

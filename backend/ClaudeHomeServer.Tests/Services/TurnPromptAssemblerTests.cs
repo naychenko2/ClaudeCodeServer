@@ -398,6 +398,28 @@ public class TurnPromptAssemblerTests
         r.Sections.Select(s => s.Key).Should().Equal("code-graph", "mcp-tasks");
     }
 
+    // M3: Size в TruncatedSections отражает ФАКТИЧЕСКИЙ объём срезанного текста, не null.
+    // Фронт рисует по нему «≈ N символов» (Trim в PromptSnapshotDialog.tsx), и без него
+    // пользователь не видит, чем пришлось пожертвовать. Мутация «Size: null» роняет тест.
+    [Fact]
+    public void ApplyBudget_TruncatedSection_SizeРавенДлинеСрезанного()
+    {
+        const int bigLen = 35_000;
+        var bigBlock = new string('a', bigLen);
+        var sections = new List<PromptSectionDto>
+        {
+            Sys("code-graph", bigBlock),
+            Sys("recall-memory", "короткая память"),
+            StableSec("mcp-tasks", "короткие таски"),
+        };
+        var r = TurnPromptAssembler.ApplyBudget(sections, "persona", TinyArgs, FakeLocalLength);
+
+        r.TruncatedSections.Should().ContainSingle()
+            .Which.Size.Should().Be(bigLen,
+                "Size в TruncatedSections — фактическая длина срезанной секции, а не null: "
+                + "фронт рисует «≈ N символов» по нему; мутация «Size: null» теряет это число");
+    }
+
     // L8: слагаемое args в Estimate. Меряем РАЗНИЦУ двух оценок на одних и тех же секциях —
     // так тест ловит мутацию «не считать args» точной цифрой, а не порогом «больше чем».
     [Fact]

@@ -3160,4 +3160,49 @@ public class FallbackLlmSessionAdapterTests
         CallExtractWin32Code("[Win32:206 текст").Should().BeNull("нет закрывающей скобки");
         CallExtractWin32Code("[Win32:2 06]").Should().BeNull("пробел внутри числа");
     }
+
+    // ===== StripWin32Marker: снятие маркера «[Win32:NNN]» с видимого текста Details =====
+    //
+    // Метод приватный: публиковать его наружу ради теста незачем — зовём рефлексией.
+    // Мутация «вернуть text как есть» (без срезания префикса) должна ронять тест:
+    // человек видит в «Подробностях» маркера подмены текст «[Win32:206] Промпт хода превысил…»,
+    // а не «Промпт хода превысил…», и это лишний шум — код уже едет через ExtractWin32Code
+    // в outcome.Win32ErrorCode и оттуда в TurnErrorClassifier.
+    private static string? CallStripWin32Marker(string? text)
+    {
+        var m = typeof(FallbackLlmSessionAdapter).GetMethod(
+            "StripWin32Marker",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        m.Should().NotBeNull("StripWin32Marker — шов Details ErrorMessage, переименование ломает видимый текст ошибки");
+        return (string?)m!.Invoke(null, [text]);
+    }
+
+    [Fact]
+    public void StripWin32Marker_МаркерПервым_Снимается()
+    {
+        // Штатный случай от FailPromptOverflowAsync: ClaudeSession кладёт [Win32:206] первым
+        // токеном Details, StripWin32Marker обязан снять префикс и оставить осмысленный текст.
+        CallStripWin32Marker("[Win32:206] Промпт хода превысил лимит 32 767 символов")
+            .Should().Be(" Промпт хода превысил лимит 32 767 символов",
+                "префикс [Win32:206] снят, остаток текста доходит до Details как есть");
+    }
+
+    [Fact]
+    public void StripWin32Marker_МаркерНеПервым_НеТрогается()
+    {
+        // Маркер НЕ в начале — по контракту StartsWith не срабатывает, текст идёт целиком.
+        // (Та же логика, что и у ExtractWin32Code: код относится к ДРУГОЙ попытке.)
+        CallStripWin32Marker("ошибка первой попытки\n[Win32:206] вторая")
+            .Should().Be("ошибка первой попытки\n[Win32:206] вторая",
+                "StripWin32Marker режет только префикс; серединный маркер не его дело");
+    }
+
+    [Fact]
+    public void StripWin32Marker_БезМаркера_ТекстЦеликом()
+    {
+        // Нет префикса — текст идёт как есть; иначе мы бы проглатывали нормальные сообщения.
+        CallStripWin32Marker("Промпт хода превысил лимит").Should().Be("Промпт хода превысил лимит");
+        CallStripWin32Marker(null).Should().BeNull("null на входе — null на выходе");
+        CallStripWin32Marker("").Should().Be(string.Empty);
+    }
 }

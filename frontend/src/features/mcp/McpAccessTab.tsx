@@ -51,6 +51,11 @@ function AllowAccessView({ data, onClose, onAdd, onEdit }: {
   // Фильтруем на входе: тумблеры на таких записях только врали бы про модель доступа.
   const integrationCount = servers.filter(s => s.group === 'integration').length;
   const ownServers = servers.filter(s => s.group !== 'integration');
+  // Один текст на оба случая: пустое состояние и подсказка под списком. Имя «Higgsfield»
+  // здесь не случайно — человек, который только что вошёл, шёл в раздел MCP именно за ним
+  // (увидел в ленте), и обобщённое «встроенные серверы доступны всегда» ему не отвечает.
+  // Когда интеграций нет — возвращаемся к прежней общей формулировке
+  const integrationHint = 'Интеграции вроде Higgsfield работают во всех чатах после входа — отдельно выдавать доступ не нужно.';
 
   if (ownServers.length === 0) {
     return (
@@ -58,7 +63,9 @@ function AllowAccessView({ data, onClose, onAdd, onEdit }: {
         compact
         icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Своих серверов пока нет"
-        subtitle="Выдавать доступ пока не к чему: встроенные серверы продукта доступны всегда."
+        subtitle={integrationCount > 0
+          ? integrationHint
+          : 'Выдавать доступ пока не к чему: встроенные серверы продукта доступны всегда.'}
         action={<Button variant="primary" size="sm" onClick={onAdd}>Добавить сервер</Button>}
       />
     );
@@ -72,10 +79,7 @@ function AllowAccessView({ data, onClose, onAdd, onEdit }: {
         этого чата. Чат вне проекта — по отдельной настройке сервера «Чаты вне проектов».
       </div>
       {integrationCount > 0 && (
-        <div style={allowHintStyle}>
-          Интеграции вроде Higgsfield работают во всех чатах после входа — отдельно
-          выдавать доступ не нужно.
-        </div>
+        <div style={allowHintStyle}>{integrationHint}</div>
       )}
       {ownServers.map(server => (
         <ServerAccessCard key={server.id} server={server} data={data} projects={projects} personas={personas} onClose={onClose} onEdit={onEdit} />

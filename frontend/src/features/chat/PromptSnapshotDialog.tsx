@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, ChevronDown, Check, EyeOff, Sparkles, Database, CircleDollarSign,
-  UserRound } from 'lucide-react';
+  UserRound, Scissors } from 'lucide-react';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { SegmentedControl } from '../../components/ui/Segmented';
@@ -165,6 +165,71 @@ function SkillsRow({ skills, share, hovered, onHover, onLeave }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Блок срезанных секций: всё, что модель НЕ получила, потому что иначе --append-system-prompt
+// не влез бы в лимит командной строки Windows (32 767 символов). Появляется только при
+// непустом truncatedSections — у подавляющего большинства ходов блока нет вообще, и это
+// правильное поведение. Тон — warningBg/warningText, чтобы взгляд сразу падал: это
+// исключительный случай, а не часть штатного хода.
+// Смысл ровно обратный ушедшим в модель секциям: их шторка обычно показывает «что она
+// знала», здесь — «от чего мы её отрезали, чтобы ход вообще запустился». Отсюда иконка
+// ножниц и тон «спасения», а не ошибки: без срезки процесс бы не состоялся вовсе
+// (cmdline не переварил бы строку), срезка — это штатный обход ограничения платформы
+function TruncatedSectionsBlock({ sections }: { sections: PromptSection[] }) {
+  return (
+    <div style={{
+      marginTop: SP.md, borderRadius: R.md, overflow: 'hidden',
+      border: `1px solid ${C.warningBg}`,
+    }}>
+      <div style={{
+        padding: `${SP.sm}px ${SP.md}px`, background: C.warningBg, color: C.warningText,
+        display: 'flex', alignItems: 'center', gap: SP.sm,
+        fontSize: FS.base, lineHeight: 1.5,
+      }}>
+        <Scissors size={16} style={{ flexShrink: 0 }} />
+        <span>
+          {/* Поясняем причину прямо в заголовке: без него читается как «что-то пропало»,
+              а не «мы пожертвовали куском ради запуска» */}
+          Промпт не влез в командную строку Windows, поэтому CCS срезал {sections.length}
+          {' '}{sections.length === 1 ? 'секцию' : (sections.length < 5 ? 'секции' : 'секций')},
+          {' '}чтобы ход запустился вовсе. Модель их не получила.
+        </span>
+      </div>
+      <div>
+        {sections.map(s => (
+          <div key={s.key}
+            style={{
+              padding: `${SP.sm}px ${SP.md}px`,
+              borderTop: `1px solid ${C.borderLight}`,
+              fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5,
+            }}>
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: SP.sm,
+              color: C.textPrimary, fontFamily: FONT.sans, marginBottom: SP.xxs,
+            }}>
+              <span style={{ flex: 1, minWidth: 0 }}>{s.title}</span>
+              {/* size — оригинальная длина срезанной секции: человек видит, чем пожертвовали,
+                  text ниже — это пометка бэка о факте срезки (что именно вырезано) */}
+              {(typeof s.size === 'number' && s.size > 0) && (
+                <span style={SIZE_COL}>
+                  ≈ {s.size.toLocaleString('ru')} символов
+                </span>
+              )}
+            </div>
+            {s.text && (
+              <div style={{
+                fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.6,
+                wordBreak: 'break-word',
+              }}>
+                {s.text}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -569,6 +634,17 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
                 : 'Что она видела на самом деле — уже не сохранилось.')}
             </span>
           </div>
+
+          {/* Срезанные секции — самое важное исключение из «что ушло в модель».
+              Показываем сразу под плашкой applied, до всего остального списка:
+              человек сразу видит, чем пришлось пожертвовать ради запуска хода.
+              Условие — вложенный блок уже под общим гардом ready+snapshot сверху;
+              проверка массива остаётся, чтобы пустой/отсутствующий список не
+              выводил пустую обводку. Подавляющее большинство ходов — без срезки,
+              и блока у них нет вообще */}
+          {snapshot.truncatedSections && snapshot.truncatedSections.length > 0 && (
+            <TruncatedSectionsBlock sections={snapshot.truncatedSections} />
+          )}
 
           {/* Окно контекста хода: сколько в нём занял наш промпт, а сколько — невидимый
               слой CLI и история. Наша часть — прикидка по символам, поэтому «≈» */}

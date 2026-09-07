@@ -3132,18 +3132,21 @@ public class ClaudeSession : ILlmSessionAdapter
                     : null);
             personaLayerPrompt = agentPrompt;
 
-            // Бюджет промпта на склейке: считает сумму длин аргументов + cli-пути +
-            // WorkingDirectory + собранного --append-system-prompt. При превышении 30 000
-            // срезает нестабильные секции в порядке TruncationOrder. Если после срезания
-            // ВСЕХ пяти строка всё равно длиннее бюджета — кидаем PromptOverflowException,
-            // общий catch выше (RunTurnAsync) ловит и кладёт [Win32:206]-совместимый маркер
-            // в Details ErrorMessage. ApplyBudget чистый: единственный путь сборки, шов
-            // между секциями и командной строкой — здесь. Задача dc641949.
+            // Бюджет промпта на склейке: считает ВЕРХНЮЮ оценку командной строки — cli-путь
+            // плюс каждый аргумент в экранированном виде плюс пара --append-system-prompt со
+            // склеенным промптом. WorkingDirectory в неё НЕ входит: это отдельный параметр
+            // ProcessStartInfo, в командную строку он не попадает.
+            // Два числа не путать: 30 000 (BudgetThreshold) — ТРИГГЕР срезки нестабильных
+            // секций в порядке TruncationOrder; 32 767 (CmdlineLimit) — ОТКАЗ. Ход, который
+            // после срезки остался в зоне 30–32к, стартует штатно; кидаем
+            // PromptOverflowException только за лимитом cmdline, и тогда общий catch выше
+            // (RunTurnAsync) кладёт [Win32:206]-совместимый маркер в Details ErrorMessage.
+            // ApplyBudget чистый: единственный путь сборки, шов между секциями и командной
+            // строкой — здесь. Задача dc641949, волна 2 ревью.
             //
             // КРИТИЧНО: ApplyBudget вызываем ДО args.AddRange(["--append-system-prompt", …])
-            // ниже — иначе args будет содержать старый combinedPrompt и пересчёт потеряет
-            // смысл (длина в Evaluate держится по ещё-не-добавленному --append-system-prompt,
-            // он там не учитывается; после AddRange — тоже не учитывается, см. реализацию).
+            // ниже — иначе пара приехала бы в args и посчиталась дважды: ApplyBudget
+            // добавляет её к оценке сам, ровно потому что на момент вызова её в args нет.
             var budget = TurnPromptAssembler.ApplyBudget(
                 sections, agentPrompt, args, _launcher.ClaudeCliCommand, _rootPath);
             var combinedPrompt = budget.CombinedPrompt;

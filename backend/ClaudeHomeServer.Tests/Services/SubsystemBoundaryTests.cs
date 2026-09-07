@@ -424,7 +424,7 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                 }),
         },
         // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
@@ -502,7 +502,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     // SpendMaintenanceService.cs: BackfillAsync — поля async-state-машины
                     // материализуют возвращаемые типы из истории чатов.
@@ -570,7 +570,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.FileService",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.FeatureFlagService",
                     "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
                     // DossierStore — участник реконсайлера error-документов Dify
@@ -657,7 +657,7 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.NotificationStore",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionManager",
@@ -724,7 +724,7 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.UserHomeResolver",
                     "ClaudeHomeServer.Services.SessionMessagingService",
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome",
@@ -813,7 +813,7 @@ public class SubsystemBoundaryTests
                     // Вертикаль → спинка (см. пункты 3-6 комментария выше).
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
@@ -1002,7 +1002,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.Skills.SkillsService",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ModelCatalogService",
                     "ClaudeHomeServer.Services.ModelCatalogService+ModelInfo",
                     // Волна 4B, шаг 2 — переехавшие типы тянут точечные зависимости
@@ -1148,7 +1148,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.PersonaPromptBuilder",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Skills.SkillsService",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
@@ -1241,7 +1241,7 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     // Шов Execution → TranscriptRoots: статический вызов из тела,
                     // IL-скан видит declaring-тип.
                     "ClaudeHomeServer.Services.TranscriptRoots",
@@ -1264,7 +1264,7 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                 }),
         },
         // Backup — инфраструктура снимков data/. Точечный допуск к ProjectManager
@@ -1321,7 +1321,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                 }),
         },
         // Diagnostics — файловый лог инстанса (FileLog, 1 файл). Полностью изолирован.
@@ -1364,7 +1364,7 @@ public class SubsystemBoundaryTests
                     // `UserStore` через `sp.GetRequiredService<UserStore>()` —
                     // generic-аргумент виден IL-сканом как `Modules → UserStore`.
                     // Точечный допуск по образцу `Llm → SessionSummaryService`.
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     // `ModuleRegistry` (`<>c__DisplayClass7_0`) материализует
                     // `ModelTier` в generic-аргументе. Точечный допуск.
                     "ClaudeHomeServer.Services.ModelTier",
@@ -1609,7 +1609,7 @@ public class SubsystemBoundaryTests
                     // Корневые «спинки» (см. комментарий выше 1–10).
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
@@ -1717,7 +1717,7 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
+                    "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Protocol.NotesChangedMessage",

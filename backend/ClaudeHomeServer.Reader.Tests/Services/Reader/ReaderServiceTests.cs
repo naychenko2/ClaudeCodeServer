@@ -230,12 +230,14 @@ public class ReaderServiceTests
     }
 
     [Fact]
-    public async Task Статус403_СЗаголовкомCfRay_BlockedBySite()
+    public async Task Статус403_СЗаголовкомCfMitigated_BlockedBySite()
     {
+        // Маркер щита — только cf-mitigated: cf-ray есть в любом ответе Cloudflare,
+        // включая успешный (полная таблица случаев — ReaderBotShieldTests)
         var handler = new StubHandler(_ =>
         {
             var resp = new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("blocked") };
-            resp.Headers.Add("cf-ray", "abc123");
+            resp.Headers.Add("cf-mitigated", "challenge");
             return resp;
         });
         var outcome = await CreateService(handler).ReadAsync(PublicUrl, CancellationToken.None);

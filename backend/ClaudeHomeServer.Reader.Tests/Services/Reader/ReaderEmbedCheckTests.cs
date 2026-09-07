@@ -324,10 +324,11 @@ public class ReaderEmbedCheckTests
     }
 
     [Fact]
-    public async Task Статус403_СЗаголовкомCfRay_BlockedBySite()
+    public async Task Статус403_СЗаголовкомCfMitigated_BlockedBySite()
     {
-        // Тело проба не читает — маркеры щита определяются только по заголовкам.
-        var handler = new StubHandler(_ => WithHeaders(new HttpResponseMessage(HttpStatusCode.Forbidden), ("cf-ray", "abc123")));
+        // Тело проба не читает — маркер щита определяется только по заголовку, и маркер
+        // ровно один: cf-mitigated (cf-ray стоит в каждом ответе Cloudflare, см. ReaderBotShieldTests).
+        var handler = new StubHandler(_ => WithHeaders(new HttpResponseMessage(HttpStatusCode.Forbidden), ("cf-mitigated", "challenge")));
         var result = await CreateService(handler).CheckEmbedAsync(PublicUrl, CancellationToken.None);
         result.Reason.Should().Be("blocked-by-site");
     }

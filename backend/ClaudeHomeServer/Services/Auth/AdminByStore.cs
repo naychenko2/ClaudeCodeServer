@@ -21,7 +21,7 @@ public sealed class AdminByStoreRequirement : IAuthorizationRequirement
     public const string PolicyName = "admin-by-store";
 }
 
-public sealed class AdminByStoreHandler(UserStore users)
+public sealed class AdminByStoreHandler(IUserStore users)
     : AuthorizationHandler<AdminByStoreRequirement>
 {
     protected override Task HandleRequirementAsync(
@@ -32,7 +32,7 @@ public sealed class AdminByStoreHandler(UserStore users)
     }
 
     /// <summary>Роль владельца токена по стору. Вынесено ради теста и повторного использования.</summary>
-    internal static bool IsAdmin(UserStore users, ClaimsPrincipal? principal)
+    internal static bool IsAdmin(IUserStore users, ClaimsPrincipal? principal)
     {
         if (principal?.FindFirstValue(JwtRegisteredClaimNames.Sub) is not { Length: > 0 } userId)
             return false;

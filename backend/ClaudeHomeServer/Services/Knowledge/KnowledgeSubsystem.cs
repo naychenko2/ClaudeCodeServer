@@ -86,6 +86,13 @@ public sealed class KnowledgeSubsystem : IAppSubsystem
         // Клиент Dify: список/создание документов, поиск, ретривер; graceful degradation
         // при недоступном Dify (см. KnowledgeService).
         services.AddSingleton<KnowledgeService>();
+        // Шов из Core (IKnowledgeIndex, Этап 5, волна 5): Notes/Memory/Dossiers зовут
+        // шесть методов KnowledgeService через узкий Core-контракт. Полный API сервиса
+        // (включая EnsureDatasetAsync, ListDatasetsAsync, UpdateDocumentTagsAsync и пр.)
+        // остаётся доступным напрямую как KnowledgeService — для ProjectKnowledgeSyncService
+        // и контроллеров Main.
+        services.AddSingleton<IKnowledgeIndex>(
+            sp => sp.GetRequiredService<KnowledgeService>());
 
         // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
         // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated).

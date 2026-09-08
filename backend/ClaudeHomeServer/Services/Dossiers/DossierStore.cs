@@ -38,7 +38,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
     private readonly Lock _saveLock = new();
     private readonly ILogger<DossierStore>? _log;
 
-    private readonly KnowledgeService? _knowledge;
+    private readonly IKnowledgeIndex? _knowledge;
     private readonly UserStore? _users;
     private readonly ProjectManager? _projects;
 
@@ -55,7 +55,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
     private readonly HashSet<string> _migrationWarned = [];
 
     public DossierStore(IConfiguration config, ILogger<DossierStore>? log = null,
-        KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null)
+        IKnowledgeIndex? knowledge = null, UserStore? users = null, ProjectManager? projects = null)
     {
         _log = log;
         _knowledge = knowledge;

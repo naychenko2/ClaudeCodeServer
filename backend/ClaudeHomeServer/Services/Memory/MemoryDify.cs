@@ -34,7 +34,7 @@ public static class MemoryDify
     // и индексируем новый; документы исчезнувших записей удаляем. Мутации docs идут через setDoc/
     // removeDoc (facade держит их под своим локом). Возвращает число затронутых документов.
     public static async Task<int> DiffSyncAsync(
-        KnowledgeService knowledge, string datasetId,
+        IKnowledgeIndex knowledge, string datasetId,
         IReadOnlyList<MemorySyncItem> items,
         IReadOnlyDictionary<string, MemoryDocRef> docsSnapshot,
         Action<string, MemoryDocRef> setDoc, Action<string> removeDoc,

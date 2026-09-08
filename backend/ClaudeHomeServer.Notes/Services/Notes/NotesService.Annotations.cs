@@ -30,7 +30,10 @@ public sealed partial class NotesService
     // Документ: scope=personal → путь в личном vault; scope=projectId → путь от корня
     // проекта (любые .md). ^id пишем только туда, где живут заметки (vault и notes/):
     // в прочих файлах проекта чужой git-шум недопустим.
-    internal (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath)
+    // `private`: зовётся только внутри самого NotesService (аннотации). Был `internal`
+    // до выноса вертикали — снаружи не вызывался ни разу, проверено по репозиторию
+    // (ревью 2026-09-08). Лишняя видимость требовала InternalsVisibleTo без нужды.
+    private (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath)
     {
         var rel = NormalizeRel(relPath);
         if (!rel.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
@@ -38,7 +41,7 @@ public sealed partial class NotesService
             throw new ArgumentException("Комментировать можно только markdown-документы");
 
         if (scope == PersonalKey)
-            return (FileService.SafeJoinPublic(Path.Combine(_dataDir, "notes", userId), rel), true);
+            return (SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel), true);
 
         var project = _projects.GetById(scope)
             ?? throw new KeyNotFoundException($"Проект {scope} не найден");
@@ -47,7 +50,7 @@ public sealed partial class NotesService
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
         var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
-        return (FileService.SafeJoinPublic(project.RootPath, rel), canWrite);
+        return (SafePath.Join(project.RootPath, rel), canWrite);
     }
 
     // --- Создание комментария ---
@@ -444,7 +447,7 @@ public sealed partial class NotesService
 
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
-        var full = FileService.SafeJoinPublic(rootDir, relPath);
+        var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
         var content = File.ReadAllText(full, Encoding.UTF8);

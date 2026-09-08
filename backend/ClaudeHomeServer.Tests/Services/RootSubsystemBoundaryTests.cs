@@ -74,6 +74,7 @@ public class RootSubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Notes.NotesSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
     }
 

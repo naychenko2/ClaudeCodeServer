@@ -38,7 +38,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
     private readonly Lock _saveLock = new();
     private readonly ILogger<DossierStore>? _log;
 
-    private readonly KnowledgeService? _knowledge;
+    private readonly IKnowledgeIndex? _knowledge;
     private readonly UserStore? _users;
     private readonly ProjectManager? _projects;
 
@@ -55,7 +55,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
     private readonly HashSet<string> _migrationWarned = [];
 
     public DossierStore(IConfiguration config, ILogger<DossierStore>? log = null,
-        KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null)
+        IKnowledgeIndex? knowledge = null, UserStore? users = null, ProjectManager? projects = null)
     {
         _log = log;
         _knowledge = knowledge;
@@ -255,6 +255,14 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
         var ownerDir = Path.Combine(_dataDir, ownerId);
         try { if (Directory.Exists(ownerDir)) Directory.Delete(ownerDir, recursive: true); }
         catch { /* уборка best-effort */ }
+    }
+
+    // Каскадное удаление знаний владельца через участник синка — обёртка над DeleteOwnerDossiers.
+    // Dify на этом шаге не трогаем (общий проход в UserKnowledgeCascade).
+    public Task DeleteAllAsync(string userId)
+    {
+        DeleteOwnerDossiers(userId);
+        return Task.CompletedTask;
     }
 
     // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---

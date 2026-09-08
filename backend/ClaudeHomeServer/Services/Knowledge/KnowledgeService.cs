@@ -6,11 +6,6 @@ using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Knowledge;
 
-public record DifyDocumentInfo(
-    [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("indexing_status")] string IndexingStatus);
-
 public record DifyDocumentItem(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
@@ -19,6 +14,9 @@ public record DifyDocumentItem(
     [property: JsonPropertyName("error")] string? Error = null,
     // Объём документа в словах (для выдачи модели в MCP dify); у старых ответов — 0
     [property: JsonPropertyName("word_count")] int WordCount = 0);
+
+// DifyDocumentInfo (id/name/indexing_status) — переехал в Core/Services/Knowledge/
+// KnowledgeDtos.cs (Этап 5, волна 5): IKnowledgeIndex в Core возвращает DifyDocumentInfo.
 
 public record DifyDocumentsPage(
     [property: JsonPropertyName("data")] List<DifyDocumentItem> Data,
@@ -87,18 +85,50 @@ public record DifyRetrieveResponse(
 
 // Чанк результата поиска. Metadata — структурные метаданные документа-источника
 // (дата встречи, id, источник и т.п.), приведённые к строкам; null/пусто — их нет.
-public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName,
-    IReadOnlyDictionary<string, string>? Metadata = null);
+// Тип переехал в Core/Services/Knowledge/KnowledgeDtos.cs (Этап 5, волна 5) —
+// IKnowledgeIndex в Core возвращает IReadOnlyList<DifyRetrieveChunk>.
 
 // Условие фильтрации по метаданным. Op — строковый оператор Dify (contains, not contains,
 // start with, end with, is, is not, empty, not empty). Value не нужен для empty/not empty.
-public record KnowledgeMetadataFilter(string Name, string Op, string? Value);
+// Тип переехал в Core/Services/Knowledge/KnowledgeDtos.cs (Этап 5, волна 5) —
+// IKnowledgeIndex.RetrieveAsync в Core принимает IReadOnlyList<KnowledgeMetadataFilter>?.
 
 // Поле метаданных датасета (имя + тип: string/number/time).
-public record KnowledgeMetadataFieldInfo(string Name, string Type);
+// Тип переехал в Core/Services/Knowledge/KnowledgeDtos.cs (Этап 5, волна 5) —
+// IKnowledgeIndex.CreateDatasetAsync в Core принимает IReadOnlyList<KnowledgeMetadataFieldInfo>?.
 
-public class KnowledgeService
+// Реализует узкий IKnowledgeIndex (Core) для шести методов Notes/Memory/Dossiers.
+// Полный API остаётся в Main: прочие методы (UpdateDocumentTagsAsync, RenameDatasetAsync,
+// ListDatasetsAsync и пр.) зовутся внутренними сервисами вертикали Knowledge и в Core-контракт
+// не попадают. KnowledgeSubsystem.Register ниже добавляет forwarder на IKnowledgeIndex.
+//
+// Методы IKnowledgeIndex реализованы через EXPLICIT interface impl ниже
+// (знак `IKnowledgeIndex.X(...)`) — параметры реализации расширены
+// опциональными searchMethod/indexingTechnique/scoreThreshold/etc., и
+// C#-компилятор не разрешает сужать сигнатуру интерфейса дополнительными
+// обязательными позиционными аргументами. Explicit impl делегирует
+// одноимённым public-методам и не нарушает публичный контракт класса.
+public class KnowledgeService : IKnowledgeIndex
 {
+    bool IKnowledgeIndex.IsConfigured => IsConfigured;
+
+    Task<string> IKnowledgeIndex.CreateDatasetAsync(string name, string permission, string? description,
+        string? indexingTechnique) =>
+        CreateDatasetAsync(name, permission, description, indexingTechnique);
+
+    Task IKnowledgeIndex.DeleteDocumentAsync(string datasetId, string documentId) =>
+        DeleteDocumentAsync(datasetId, documentId);
+
+    Task IKnowledgeIndex.DeleteDatasetAsync(string datasetId) => DeleteDatasetAsync(datasetId);
+
+    Task<DifyDocumentInfo> IKnowledgeIndex.IndexFileByTextAsync(string datasetId, string fileName,
+        string content, List<string>? tags) =>
+        IndexFileByTextAsync(datasetId, fileName, content, tags);
+
+    Task<IReadOnlyList<DifyRetrieveChunk>> IKnowledgeIndex.RetrieveAsync(string datasetId, string query,
+        int topK, IReadOnlyList<KnowledgeMetadataFilter>? filters) =>
+        RetrieveAsync(datasetId, query, topK, filters);
+
     // Расширения, которые индексируем как текст (прямая отправка содержимого)
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {

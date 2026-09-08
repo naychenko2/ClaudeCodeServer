@@ -65,6 +65,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Notes.NotesSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1593,11 +1594,16 @@ public class SubsystemBoundaryTests
                     // через `ModelTiers.TryParse`. Точечный допуск.
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ExecutorStopClassifier",
-                    // ⚠ ИНВЕРСИЯ СЛОЁВ `Tasks → Controllers` через extension-метод
-                    // `TaskHubExtensions.BroadcastTaskChangedAsync` (см. комментарий выше;
-                    // TaskSchedulerService.cs:128). Прямой шов Tasks-вертикали на
-                    // Controllers-пространство имён. Разбор и разворот — этап 4.
-                    "ClaudeHomeServer.Controllers.TaskHubExtensions",
+                    // DailyBriefingService (Этап 5, волна C): фасад поперёк Tasks+Notes+Llm,
+                    // сидит в корне Services. Tasks зовёт его через
+                    // TaskSchedulerService.Зависимости от «спинки» — легитимные.
+                    "ClaudeHomeServer.Services.DailyBriefingService",
+                    // TaskHubExtensions (Этап 5, волна C): extension-метод
+                    // BroadcastTaskChangedAsync переехал из Controllers/TasksController в
+                    // Hubs/TaskHubExtensions. Tasks его зовёт через
+                    // `hub.BroadcastTaskChangedAsync(...)` (TaskSchedulerService).
+                    // Шов `Tasks → Hubs` по образцу других вертикалей (Llm, Notes).
+                    "ClaudeHomeServer.Hubs.TaskHubExtensions",
                 }),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
@@ -1605,43 +1611,26 @@ public class SubsystemBoundaryTests
         // мост чекбоксов заметок ↔ задач (`NoteTaskSyncService`), авто-истечение
         // заметок (`NoteExpiryService`). `UnifiedSearchService` остаётся в корне —
         // он фасад поперёк Notes+Task, отдельная задача на разрез.
-        // Префиксы-швы (по образцу `Tasks`/`Spend`/`Memory`/`Dossiers`):
-        // 1) `ClaudeHomeServer.Services.Tasks` — префикс-шов через `NoteTaskSyncService`
-        //    (`TaskManager` + `CreateTaskRequest` + `UpdateTaskRequest`): мост чекбоксов
-        //    заметок и карточек задач. Шов снимается порядком — Tasks уже вертикаль,
-        //    направление одно: Notes → Tasks.
-        // 2) `ClaudeHomeServer.Services.Knowledge` — префикс-шов через `NotesKnowledgeService`
-        //    (`IKnowledgeSyncParticipant` + `KnowledgeService` + `KnowledgeSyncTarget`):
-        //    синхронизация заметок с Dify-датасетом per-owner; тот же шов, что у
-        //    `Knowledge` → `Memory`/`Dossiers` и у `Memory`/`Spend` → `Knowledge`.
-        // 3) `ClaudeHomeServer.Services.Llm` — префикс-шов через `NotesAiService`
-        //    (`ICheapTextRunner`) для тегов/сводок заметок. Префикс-шов по прецеденту
-        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
-        // 4) `ClaudeHomeServer.Hubs` — префикс-шов через `NoteTaskSyncService` и
-        //    `NoteExpiryService` (`IHubContext<SessionHub>`): рассылка `notes_changed`
-        //    и напоминания об истечении заметок. По прецеденту `Tasks`/`Git`/`Images`/
-        //    `ProjectServices`/`Terminal`/`Watchdog`.
-        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»:
-        // 5) `ProjectManager` — `NoteTaskSyncService` (projectId для промоута чекбокса),
-        //    `NoteExpiryService` (проекты для авто-истечения), `NotesService` (пути
-        //    к папкам заметок).
-        // 6) `UserStore` — `NotesKnowledgeService` (имя владельца → имя Dify-датасета
-        //    `{username}:notes`).
-        // 7) Точечный допуск к `ClaudeHomeServer.Protocol` — `NotesChangedMessage` в
-        //    `NoteTaskSyncService.BroadcastNoteChangedAsync` (материал-аргумент `SendAsync`,
-        //    поле state-машины). Префикс `ClaudeHomeServer.Protocol` возвращён в
-        //    `SharedAllowedPrefixes` (волна 1 IL-сторожа, 2026-09-06, задача `8beee75e`;
-        //    решение зафиксировано в ADR-014 §«Решение по Protocol»), оставлен точный
-        //    тип как документация явного шва по образцу `Spend`/`Memory`/`Dossiers`/`Watchdog`/`Terminal`.
-        // 8) `FileService` (Services/ корень) — `NotesService` зовёт
-        //    `FileService.SafeJoinPublic(...)` из 12 мест тел методов
-        //    (NotesService.cs:128,133,498,653,660,724,767,780,814,815,874,889,903,920,1005
-        //    и NotesService.Annotations.cs:41,50,447). Статический вызов через
-        //    path-traversal-санитайзер — допускаем как инфраструктурный шов.
-        // 9) ⚠ ИНВЕРСИЯ СЛОЁВ `Notes → Controllers` через extension-метод
-        //    `TaskHubExtensions.BroadcastTaskChangedAsync` (NoteTaskSyncService.cs:61,106,157,162).
-        //    Прямой шов Notes-вертикали на Controllers-пространство имён. Объявляем
-        //    явно, разбор — этап 4 (как у `Tasks`).
+        // **Допусков нет вовсе — ни префиксов, ни точечных типов.** Пустой
+        // `AllowedExactNamespaces` здесь не забытая строка, а результат Этапа 5: после
+        // выноса в `ClaudeHomeServer.Notes.csproj` вертикаль физически не может сослаться
+        // на Main (нет `ProjectReference`), и весь прежний список швов закрыт контрактами
+        // из Core, которые проходят более ранний чек `IsCoreAssembly`:
+        //  - `TaskManager` → `INoteTaskBridge`;
+        //  - `KnowledgeService` → `IKnowledgeIndex` (6 методов по факту вызовов);
+        //  - `ICheapTextRunner` — уже в Core с волны 1 Skills;
+        //  - `IHubContext<SessionHub>` и `Protocol.NotesChangedMessage` →
+        //    `INotesHubNotifier` (первый в проекте шов Hub-рассылки для вынесенной
+        //    вертикали; по этому образцу пойдут Team и Desktop);
+        //  - `ProjectManager` → `IProjectManager` (3 метода), `UserStore` → `IUserStore`,
+        //    `ProjectEventLogService` → `IProjectEventLogService`;
+        //  - `FileService.SafeJoinPublic` → Core-примитив `SafePath.Join`;
+        //  - инверсия `Notes → Controllers.TaskHubExtensions` снята переносом статики
+        //    в `Hubs/` (волна C), допуск больше не нужен.
+        // Мёртвые допуски снял ревьюер (2026-09-08): формально сторож оставался зелёным
+        // и с ними, но был ШИРЕ реальной поверхности зависимостей — то есть пропустил бы
+        // повторную прямую связь Notes с `TaskManager`/`FileService`/`Hubs` в обход
+        // интерфейсов. Ровно та декоративность, ради проверки которой волна и делалась.
         new object[]
         {
             new VerticalBoundary(
@@ -1651,23 +1640,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Notes",
-                        "ClaudeHomeServer.Services.Tasks",
-                        "ClaudeHomeServer.Services.Knowledge",
-                        "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.ProjectEventLogService",
-                    "ClaudeHomeServer.Services.FileService",
-                    "ClaudeHomeServer.Protocol.NotesChangedMessage",
-                    // ⚠ ИНВЕРСИЯ СЛОЁВ `Notes → Controllers` через extension-метод
-                    // TaskHubExtensions (см. комментарий выше, пункт 9). Разбор — этап 4.
-                    "ClaudeHomeServer.Controllers.TaskHubExtensions",
-                }),
+                Array.Empty<string>()),
         },
         // Skills — вертикаль навыков (волна 4C, шаг 3): чтение скиллов и агентов из
         // глобального (~/.claude/skills, ~/.claude/workflows, ~/.claude/plugins) и
@@ -1779,13 +1754,13 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 9 = Main + Core + 7 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts);
-        // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(9,
-            "после Этапа 3 сторож должен видеть 9 прод-сборок: ClaudeHomeServer, " +
+        // 10 = Main + Core + 8 вынесенных на Этапе 3/5 (Video/Yandex/Reader/CodeGraph/
+        // Skills/Git/Tts/Notes); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(10,
+            "после Этапа 5 сторож должен видеть 10 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
-            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts");
+            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");
@@ -1976,10 +1951,23 @@ public class SubsystemBoundaryTests
         // Этап 3, волна 1 (Skills): ILauncherFactory/IProcessLauncher/ProcessSpec/IPathMapper
         // переехали в Core — общие контракты запуска процессов для всех вертикалей.
         "ClaudeHomeServer.Services.Execution",
+        // Этап 5, волна A (Notes): IKnowledgeSyncParticipant/KnowledgeSyncTarget в Core —
+        // контракт синка с Dify, который реализуют ЧЕТЫРЕ вертикали (Notes, Memory,
+        // Dossiers, ProjectKnowledgeSync). Он же снял прямые ссылки из
+        // UserKnowledgeCascade на конкретные типы этих вертикалей: каскад теперь берёт
+        // IEnumerable<IKnowledgeSyncParticipant>. Сам KnowledgeService в Core НЕ едет —
+        // он тянет WorkspaceKnowledgeStore, законную внутреннюю композицию своей
+        // вертикали; потребителям вместо него узкий контракт (волна B).
+        "ClaudeHomeServer.Services.Knowledge",
         // Этап 5, шаг Ф1 (Models→Core): контракт записи долгой памяти нужен обоим
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
+        // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
+        // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
+        // ссылалась на шов без ProjectReference на Main.
+        "ClaudeHomeServer.Services.Notes",
     ];
 
     /// <summary>

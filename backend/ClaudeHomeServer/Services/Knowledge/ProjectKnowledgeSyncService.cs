@@ -268,6 +268,20 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
         _wkStore.Save(wk);
     }
 
+    // Каскадное удаление знаний владельца через участник синка: пройти по всем проектам
+    // владельца и снять локальный стор БЗ для тех корней, где он единственный. Dify
+    // не трогаем — общий проход в UserKnowledgeCascade.
+    public Task DeleteAllAsync(string userId)
+    {
+        foreach (var p in _projects.GetByOwner(userId))
+        {
+            // Папку может делить проект другого владельца — тогда запись знаний не трогаем
+            if (_projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != userId)) continue;
+            _wkStore.Delete(p.RootPath);
+        }
+        return Task.CompletedTask;
+    }
+
     // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
     // Цель на каждую папку с датасетом БЗ; ключ записи — относительный путь файла.
     // Карта wk.Docs мутируется под _syncLock (существующие исключения HandleRename/

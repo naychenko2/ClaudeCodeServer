@@ -483,15 +483,6 @@ public static class BoardColumnHelper
     }
 }
 
-public static class TaskHubExtensions
-{
-    // Уведомление всех устройств пользователя об изменении задачи
-    public static Task BroadcastTaskChangedAsync(
-        this IHubContext<SessionHub> hub, string userId, string action, TaskItem task) =>
-        hub.Clients.Group("user_" + userId)
-            .SendAsync("message", new TaskChangedMessage(action, task));
-}
-
 // Опции десериализации CreateTaskRequest для ручного парсинга тела в TasksController.Create
 // (полю projectId нет в record, но клиент шлёт его в JSON — нужно для резолва колонки).
 // Те же настройки, что и в Program.cs для глобального MVC: enum-ы в CamelCase,

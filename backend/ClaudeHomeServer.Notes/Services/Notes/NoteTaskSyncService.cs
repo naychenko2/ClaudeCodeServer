@@ -1,9 +1,4 @@
-using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Tasks;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -11,9 +6,15 @@ namespace ClaudeHomeServer.Services.Notes;
 // Заметка — источник истины: чекбокс можно «промоутнуть» в настоящую задачу
 // (появится в календаре, работают напоминания), а завершение с любой стороны
 // синхронизирует галочку/статус. Связь — по (SourceNoteId, SourceNoteLine).
+//
+// Этап 5, волна 5: ctor перешёл с TaskManager + IHubContext<SessionHub> на
+// INoteTaskBridge + INotesHubNotifier — разрез цикла Notes → Tasks и
+// Notes → Hubs. Реализации обоих интерфейсов в Main (Services/Tasks/TaskBridge
+// и Services/Composition/NotesHubNotifier) транслируют Core-вызовы в TaskManager
+// и IHubContext соответственно.
 public sealed class NoteTaskSyncService(
-    NotesService notes, TaskManager tasks, ProjectManager projects, NotesKnowledgeService kb,
-    IHubContext<SessionHub> hub, ILogger<NoteTaskSyncService> log)
+    NotesService notes, INoteTaskBridge tasks, IProjectManager projects, NotesKnowledgeService kb,
+    INotesHubNotifier notifier, ILogger<NoteTaskSyncService> log)
 {
     // Чекбоксы заметки + связанные задачи (для панели «Задачи из заметки»)
     public IReadOnlyList<NoteTaskDto> ListForNote(string userId, string noteId)
@@ -21,7 +22,7 @@ public sealed class NoteTaskSyncService(
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
 
-        var byLine = new Dictionary<int, TaskItem>();
+        var byLine = new Dictionary<int, NoteTaskRef>();
         foreach (var t in tasks.GetBySourceNote(noteId))
             if (t.SourceNoteLine is int ln) byLine[ln] = t; // последняя выигрывает
 
@@ -35,7 +36,7 @@ public sealed class NoteTaskSyncService(
 
     // Промоут чекбокса в настоящую задачу. Повторный промоут той же строки — no-op
     // (возвращает существующую задачу).
-    public async Task<TaskItem> PromoteAsync(string userId, string noteId, int line)
+    public async Task<NoteTaskRef> PromoteAsync(string userId, string noteId, int line)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
@@ -50,17 +51,19 @@ public sealed class NoteTaskSyncService(
             ? note.Source
             : null;
 
-        var task = tasks.Create(projectId, userId, new CreateTaskRequest(
+        var created = tasks.Create(projectId, userId, new NoteTaskCreateRequest(
             Title: parsed.Text,
             DueDate: parsed.Due,
-            Recurrence: parsed.Recurrence,
-            Status: parsed.Done ? TaskItemStatus.Done : TaskItemStatus.Todo,
+            Status: parsed.Done ? NoteTaskStatus.Done : NoteTaskStatus.Todo,
             SourceNoteId: noteId,
-            SourceNoteLine: line));
+            SourceNoteLine: line,
+            Recurrence: parsed.Recurrence is null
+                ? null
+                : new NoteTaskRecurrence(parsed.Recurrence.Type.ToString().ToLowerInvariant())));
 
-        await hub.BroadcastTaskChangedAsync(userId, "created", task);
-        log.LogInformation("Чекбокс заметки {NoteId}:{Line} промоутнут в задачу {TaskId}", noteId, line, task.Id);
-        return task;
+        await notifier.BroadcastTaskChangedAsync(userId, "created", created.Id);
+        log.LogInformation("Чекбокс заметки {NoteId}:{Line} промоутнут в задачу {TaskId}", noteId, line, created.Id);
+        return created;
     }
 
     // Тоггл чекбокса из заметки: правит .md + синхронизирует связанную задачу.
@@ -74,7 +77,7 @@ public sealed class NoteTaskSyncService(
         var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
-        await BroadcastNoteChangedAsync(userId, noteId);
+        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
 
         var linked = tasks.GetBySourceNote(noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (linked is not null)
@@ -96,20 +99,27 @@ public sealed class NoteTaskSyncService(
         var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
-        await BroadcastNoteChangedAsync(userId, noteId);
+        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
 
-        // Синхронизируем срок связанной задачи (пусто → очистить)
+        // Синхронизируем срок связанной задачи (пусто → очистить).
         var linked = tasks.GetBySourceNote(noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (linked is not null)
         {
-            var updated = tasks.Update(linked.Id, new UpdateTaskRequest(DueDate: due ?? ""));
-            if (updated is not null) await hub.BroadcastTaskChangedAsync(userId, "updated", updated);
+            var updated = tasks.Update(linked.Id,
+                new NoteTaskUpdateRequest(Status: linked.Status, DueDate: due));
+            if (updated is not null) await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
         }
         return saved;
     }
 
     // Обратная запись: статус задачи → галочка в заметке. Вызывается из TasksController.Update
     // при смене done-состояния (покрывает UI, MCP tasks_complete, Claude-исполнителя).
+    //
+    // Сигнатура оставлена с TaskItem до волны E: NoteTaskSyncService пока в Main,
+    // TaskItem доступен. В Wave E при извлечении Notes в отдельный .csproj
+    // сигнатура сменится на (string userId, string taskId, NoteTaskRef data) или
+    // мост расширится методом GetById — задача отложена, чтобы не размывать
+    // границу контракта INoteTaskBridge ещё одной перегрузкой.
     public async Task SyncTaskToNoteAsync(string userId, TaskItem task)
     {
         if (task.SourceNoteId is null || task.SourceNoteLine is null) return;
@@ -126,7 +136,7 @@ public sealed class NoteTaskSyncService(
         {
             if (notes.Update(userId, task.SourceNoteId, new UpdateNoteRequest(Content: updatedContent)) is null) return;
             kb.QueueSync(userId);
-            await BroadcastNoteChangedAsync(userId, task.SourceNoteId);
+            await notifier.BroadcastNotesChangedAsync(userId, "updated", task.SourceNoteId);
         }
         catch (Exception ex)
         {
@@ -135,37 +145,30 @@ public sealed class NoteTaskSyncService(
         }
     }
 
-    // Перевод связанной задачи в done/todo напрямую через TaskManager (не через контроллер —
+    // Перевод связанной задачи в done/todo напрямую через bridge (не через контроллер —
     // чтобы не зациклить обратную запись). Регулярная задача при завершении спавнит следующую.
-    private async Task ApplyTaskStatusAsync(string userId, TaskItem task, bool done)
+    private async Task ApplyTaskStatusAsync(string userId, NoteTaskRef task, bool done)
     {
-        var newStatus = done ? TaskItemStatus.Done : TaskItemStatus.Todo;
+        var newStatus = done ? NoteTaskStatus.Done : NoteTaskStatus.Todo;
         if (task.Status == newStatus) return;
 
-        var wasDone = task.Status == TaskItemStatus.Done;
+        var wasDone = task.Status == NoteTaskStatus.Done;
         // Деградация дефекта: галочка заметки закрывает карточку без отдельной проверки —
         // Outcome=ClosedWithoutCheck снимает гейт DefectRules.EnsureVerificationOnClose.
         // Для обычной задачи Outcome не выставляем: исход — поле карточки дефекта, у Task
         // его быть не должно (галочка закрывает обычную задачу без чужого признака исхода).
-        var outcome = done && task.Kind == TaskKind.Defect
-            ? DefectOutcome.ClosedWithoutCheck
-            : (DefectOutcome?)null;
-        var updated = tasks.Update(task.Id, new UpdateTaskRequest(
-            Status: newStatus,
-            Outcome: outcome));
+        // Outcome транслируется внутри bridge.Update: для дефектных карточек мост выставляет
+        // DefectOutcome.ClosedWithoutCheck, для обычных — нет.
+        var updated = tasks.Update(task.Id, new NoteTaskUpdateRequest(newStatus));
         if (updated is null) return;
-        await hub.BroadcastTaskChangedAsync(userId, "updated", updated);
+        await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
 
         if (!wasDone && done && updated.Recurrence is not null)
         {
-            var next = tasks.SpawnNextOccurrence(updated);
-            if (next is not null) await hub.BroadcastTaskChangedAsync(userId, "created", next);
+            var next = tasks.SpawnNextOccurrence(updated.Id);
+            if (next is not null) await notifier.BroadcastTaskChangedAsync(userId, "created", next.Id);
         }
     }
-
-    private Task BroadcastNoteChangedAsync(string userId, string noteId) =>
-        hub.Clients.Group("user_" + userId)
-            .SendAsync("message", new NotesChangedMessage("updated", noteId));
 }
 
 // Строка-чекбокс заметки + связанная задача (если промоутнута)

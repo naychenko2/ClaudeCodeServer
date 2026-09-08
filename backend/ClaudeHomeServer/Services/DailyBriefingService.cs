@@ -3,10 +3,27 @@ using System.Text;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services.Tasks;
+namespace ClaudeHomeServer.Services;
+
+// Утренний бриф-агент. Собирает из уже готовых источников:
+// просроченные и сегодняшние задачи, изменённые сегодня заметки, git-активность
+// проектов владельца за сутки — прогоняет через one-shot Claude и пишет
+// структурированный план дня в дневниковую заметку (секция «## Утренний бриф»),
+// затем шлёт тост + web-push. Работает on-demand (BriefingController) и по расписанию
+// (утренний хук в TaskSchedulerService, идемпотентность — по дате в briefing-state.json;
+// автозапуск гасится настройкой инстанса AppSettings.DailyBriefingEnabled, ручной сбор —
+// всегда доступен).
+//
+// Переехал из Services/Tasks/ в Services/ (Этап 5, волна 5): это фасад поперёк
+// Notes+Tasks+Llm+Push (см. NotesSubsystem.cs:9-11 про UnifiedSearchService — тот же
+// силуэт), класть его в Notes нельзя (потянет Task), в Task нельзя (потянет Notes+Llm).
+// Сидит в спине `Services/` как кросс-вертикальный клей — TasksSubsystem продолжает
+// регистрировать (см. TasksSubsystem.cs:76), `namespace Services.Tasks` больше не
+// собственный, TaskManager/TaskItem подтягиваются через using.
 
 // Утренний бриф-агент. Собирает из уже готовых источников:
 // просроченные и сегодняшние задачи, изменённые сегодня заметки, git-активность

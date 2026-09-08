@@ -669,6 +669,14 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
         }
     }
 
+    // Каскадное удаление знаний владельца через участник синка — обёртка над DeleteOwnerTeamMemory.
+    // Dify на этом шаге не трогаем (общий проход в UserKnowledgeCascade).
+    public Task DeleteAllAsync(string userId)
+    {
+        DeleteOwnerTeamMemory(userId);
+        return Task.CompletedTask;
+    }
+
     // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
     // Цель на каждый scope «owner:project» с созданным датасетом; ключ записи — id записи.
     // Карту Docs защищает _kLock (не _saveLock — тот про записи памяти); порядок _syncLock → _kLock.

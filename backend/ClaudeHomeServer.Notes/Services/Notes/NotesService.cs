@@ -13,9 +13,9 @@ namespace ClaudeHomeServer.Services.Notes;
 // (заметок немного; кэш-инвалидация — возможная оптимизация позже).
 public sealed partial class NotesService
 {
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly ILogger<NotesService> _logger;
-    private readonly ProjectEventLogService? _events;
+    private readonly IProjectEventLogService? _events;
     private readonly string _dataDir;
 
     private const string PersonalKey = "personal";
@@ -32,8 +32,8 @@ public sealed partial class NotesService
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
-    public NotesService(ProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        ProjectEventLogService? events = null)
+    public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
+        IProjectEventLogService? events = null)
     {
         _projects = projects;
         _logger = logger;
@@ -130,7 +130,7 @@ public sealed partial class NotesService
                 var fileMissing = false;
                 if (fileRef is not null)
                 {
-                    try { fileMissing = !File.Exists(FileService.SafeJoinPublic(src.ProjectRoot!, fileRef)); }
+                    try { fileMissing = !File.Exists(SafePath.Join(src.ProjectRoot!, fileRef)); }
                     catch { fileMissing = true; }
                 }
                 notes.Add(new RawNote
@@ -495,7 +495,7 @@ public sealed partial class NotesService
     // Абсолютный путь вложения (картинки и т.п.) внутри vault источника — для отдачи
     // в <img>; владение источником проверяет ResolveRoot, traversal — SafeJoin.
     public string ResolveAttachmentPath(string userId, string sourceKey, string relativePath) =>
-        FileService.SafeJoinPublic(ResolveRoot(userId, sourceKey), relativePath);
+        SafePath.Join(ResolveRoot(userId, sourceKey), relativePath);
 
     // --- Публичное API ---
 
@@ -650,14 +650,14 @@ public sealed partial class NotesService
         var folder = SanitizeFolder(req.Folder);
         var prefix = folder.Length > 0 ? folder + "/" : "";
         var relPath = prefix + baseName + ".md";
-        var full = FileService.SafeJoinPublic(rootDir, relPath);
+        var full = SafePath.Join(rootDir, relPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         // Разрешаем коллизию имени файла суффиксом
         var n = 2;
         while (File.Exists(full))
         {
             relPath = $"{prefix}{baseName}-{n++}.md";
-            full = FileService.SafeJoinPublic(rootDir, relPath);
+            full = SafePath.Join(rootDir, relPath);
         }
 
         var content = req.Content
@@ -721,7 +721,7 @@ public sealed partial class NotesService
         var day = string.IsNullOrWhiteSpace(date) ? DateTime.Now.ToString("yyyy-MM-dd") : date!.Trim();
         var rootDir = ResolveRoot(userId, PersonalKey);
         var rel = $"Journal/{SanitizeFileName(day)}.md";
-        var full = FileService.SafeJoinPublic(rootDir, rel);
+        var full = SafePath.Join(rootDir, rel);
         var id = EncodeId(PersonalKey, NormalizeRel(rel));
 
         if (!File.Exists(full))
@@ -764,7 +764,7 @@ public sealed partial class NotesService
     {
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
-        var full = FileService.SafeJoinPublic(rootDir, relPath);
+        var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
         // Целевой источник: пусто = текущий; владение проверяет ResolveRoot
@@ -777,7 +777,7 @@ public sealed partial class NotesService
         if (newSource == sourceKey && string.Equals(newRel, NormalizeRel(relPath), StringComparison.OrdinalIgnoreCase))
             return GetDetail(userId, id);   // уже там
 
-        var newFull = FileService.SafeJoinPublic(newRootDir, newRel);
+        var newFull = SafePath.Join(newRootDir, newRel);
         if (File.Exists(newFull))
             throw new InvalidOperationException($"В папке «{(target.Length > 0 ? target : "корень")}» уже есть «{fileName}»");
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
@@ -811,8 +811,8 @@ public sealed partial class NotesService
         if (newFolder.StartsWith(oldFolder + "/", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Нельзя перенести папку внутрь самой себя");
 
-        var oldFull = FileService.SafeJoinPublic(rootDir, oldFolder);
-        var newFull = FileService.SafeJoinPublic(rootDir, newFolder);
+        var oldFull = SafePath.Join(rootDir, oldFolder);
+        var newFull = SafePath.Join(rootDir, newFolder);
         if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
         if (Directory.Exists(newFull) || File.Exists(newFull))
             throw new InvalidOperationException($"«{newFolder}» уже существует");
@@ -871,7 +871,7 @@ public sealed partial class NotesService
         var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
-        var full = FileService.SafeJoinPublic(rootDir, folder);
+        var full = SafePath.Join(rootDir, folder);
         if (File.Exists(full))
             throw new InvalidOperationException($"«{folder}» — уже файл, не папка");
         Directory.CreateDirectory(full);
@@ -886,7 +886,7 @@ public sealed partial class NotesService
         var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
-        var full = FileService.SafeJoinPublic(rootDir, folder);
+        var full = SafePath.Join(rootDir, folder);
         if (!Directory.Exists(full)) throw new KeyNotFoundException("Папка не найдена");
         int mdCount;
         try { mdCount = Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories).Count(); }
@@ -900,7 +900,7 @@ public sealed partial class NotesService
     {
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
-        var full = FileService.SafeJoinPublic(rootDir, relPath);
+        var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
         // Заголовок, по которому на заметку ссылаются сейчас (для авто-обновления ссылок)
@@ -917,7 +917,7 @@ public sealed partial class NotesService
             {
                 var dir = Path.GetDirectoryName(relPath) ?? "";
                 var newRel = NormalizeRel(Path.Combine(dir, newBase + ".md"));
-                var newFull = FileService.SafeJoinPublic(rootDir, newRel);
+                var newFull = SafePath.Join(rootDir, newRel);
                 if (!File.Exists(newFull))
                 {
                     File.Move(full, newFull);
@@ -1002,7 +1002,7 @@ public sealed partial class NotesService
     {
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
-        var full = FileService.SafeJoinPublic(rootDir, relPath);
+        var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return false;
         File.Delete(full);
         Invalidate(userId);

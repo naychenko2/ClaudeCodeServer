@@ -22,9 +22,3 @@ public sealed record KnowledgeSyncTarget(
     Func<IReadOnlyCollection<string>, Task<IReadOnlyList<(string DocId, string EntryKey)>>> ResolveAsync,
     Func<IReadOnlyCollection<string>, Task> InvalidateAsync,
     Action KickSync);
-
-public interface IKnowledgeSyncParticipant
-{
-    // Снимок текущих целей участника (датасеты с записанным DatasetId)
-    IReadOnlyList<KnowledgeSyncTarget> ListTargets();
-}

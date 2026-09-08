@@ -41,6 +41,9 @@ public class ModuleGatewayMiddlewareTests
         services.AddSingleton<ModuleRegistry>();
         services.AddSingleton<JwtService>();
         services.AddSingleton<UserStore>();
+        // ModuleGatewayMiddleware резолвит пользователя через шов IUserStore (Core).
+        // В тесте это тот же UserStore — он реализует IUserStore.
+        services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<UserStore>());
         services.AddSingleton<FeatureFlagService>();
         services.AddSingleton<ModuleTokenService>();
         return services.BuildServiceProvider();

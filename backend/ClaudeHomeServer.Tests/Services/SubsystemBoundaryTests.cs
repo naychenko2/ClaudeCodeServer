@@ -72,6 +72,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -408,30 +409,24 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Backup.BackupCore",
                 }),
         },
-        // Spend — аналитика расхода токенов (Spend Analytics v2). Самая «толстая» по
-        // количеству зависимостей вертикаль волны 2: дашборд резолвит имена/метаданные
-        // по всем доменам, а фоновый maintenance — ещё историю чатов для backfill.
-        // Допуски к корню Services — точечные:
-        // 1) `SessionManager`, `ProjectManager`, `TaskManager`, `PersonaManager`,
-        //    `UserStore` (`SpendAnalyticsService.cs:65-67`) — резолв имён и метаданных
-        //    в дашборде (чаты, проекты, задачи, персоны, пользователи).
-        // 2) `ChatHistoryService` (`SpendMaintenanceService.cs:15`) — backfill истории
-        //    расхода из сохранённых транскриптов при первом запуске.
-        // 3) Префикс `ClaudeHomeServer.Services.Llm` снят (этап 5, шаг 3) — расход
-        //    получает резолв модели через узкий Core-шов `IModelResolver` (одного
-        //    метода `ResolveModelOrDefault`). Префикс держал окно открытым, хотя
-        //    фактических ссылок Spend → Llm после шва не осталось; мутация
-        //    (вернуть префикс → прогон `SubsystemBoundary`) дала зелёный результат
-        //    — снятие законно. Адаптер `LlmModelResolverAdapter` живёт в Main
-        //    (`Services/Llm`), DI регистрирует интерфейс рядом с реестром.
-        // 4) Точечный допуск к `ClaudeHomeServer.Protocol` — типы WS-событий, которые
-        //    `SpendMaintenanceService.BackfillAsync` разбирает из истории чатов при
-        //    первичном наполнении стора: `StoredMessage`/`StoredResultMessage`
-        //    (попадают в поля async-state-машины `<BackfillAsync>d__7` через `var`),
-        //    плюс `StoredFalCostMessage`/`StoredGlifCostMessage`/`UsageInfo` для
-        //    подсчёта стоимости провайдеров по прайсу. Префикс `ClaudeHomeServer.Protocol`
-        //    снят (волна 3), чтобы сторож ловил новые зависимости от любых из ~105
-        //    публичных типов протокола (включая десктопный `DesktopCallCommand`/`DeviceHello`).
+        // Spend — аналитика расхода токенов (Spend Analytics v2, Этап 5).
+        // Allow-list пустой поверх общей спинки: после выноса Spend в отдельный .csproj
+        // ВСЕ его внешние зависимости идут через Core-швы (`ISessionDirectory`,
+        // `IProjectManager`, `IUserStore`, `IPersonaLookup`, `ITaskLookup`,
+        // `IChatHistoryLoader`, `IModelResolver`, `ISpendCollector`). Раньше здесь
+        // были точечные допуски на `SessionManager`/`ProjectManager`/`TaskManager`/
+        // `PersonaManager`/`UserStore`/`ChatHistoryService` (Main) и пять типов
+        // `ClaudeHomeServer.Protocol.*` — после выноса все они стали мёртвыми:
+        //  * Main-типы — Spend.dll не имеет ProjectReference на Main, IL-скан их
+        //    в Spend просто не видит;
+        //  * типы протокола — `StoredMessage`/`StoredResultMessage`/`StoredFalCostMessage`/
+        //    `StoredGlifCostMessage`/`UsageInfo` переехали в Core-сборку ещё на
+        //    выносе протокола (Этап 5, ADR-014 §«Решение по Protocol»), покрываются
+        //    `IsCoreAssembly` сторожа.
+        // Мутация (убрать все 11 допусков → прогон `SubsystemBoundary`) дала зелёный
+        // результат — снятие законно. Если вернётся хоть одна прямая зависимость
+        // на Main-тип — сторож укажет точное имя и файл через IL-скан.
+        //
         // `SpendStore` форвардит `ISpendCollector` через `sp => ...GetRequiredService<SpendStore>()` —
         // инвариант «интерфейс и конкретный тип указывают на ОДИН инстанс» (тест
         // `SpendSubsystemRegistrationTests.Register_SpendCollector_IsSameInstanceAsStore`).
@@ -446,22 +441,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Spend",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Tasks.TaskManager",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.ChatHistoryService",
-                    // SpendMaintenanceService.cs: BackfillAsync — поля async-state-машины
-                    // материализуют возвращаемые типы из истории чатов.
-                    "ClaudeHomeServer.Protocol.StoredMessage",
-                    "ClaudeHomeServer.Protocol.StoredResultMessage",
-                    "ClaudeHomeServer.Protocol.StoredFalCostMessage",
-                    "ClaudeHomeServer.Protocol.StoredGlifCostMessage",
-                    "ClaudeHomeServer.Protocol.UsageInfo",
-                }),
+                Array.Empty<string>()),
         },
         // Dossiers — паспорта изменений (ADR-004). Сознательно завязана на две
         // «вертикали-нижнего-слоя» (Git/CodeGraph) и общий слой Dify-синка

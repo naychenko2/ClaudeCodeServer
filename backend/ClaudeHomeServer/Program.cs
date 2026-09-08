@@ -692,6 +692,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 
+// Адаптеры Core-швов Knowledge (Этап 5, волна 5): живут в Main, регистрируются
+// здесь — Knowledge не должна знать про конкретные классы, только про швы.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IKnowledgeHubNotifier,
+    ClaudeHomeServer.Services.Composition.KnowledgeHubNotifier>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionMessageObserver,
+    ClaudeHomeServer.Services.Composition.SessionMessageObserver>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaDirectory,
+    ClaudeHomeServer.Services.Composition.PersonaDirectoryAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IKnowledgeNotificationDispatcher,
+    ClaudeHomeServer.Services.Composition.Notifications.KnowledgeNotificationDispatcher>();
+builder.Services.AddSingleton<ClaudeHomeServer.Core.Telemetry.IDifyMetrics,
+    ClaudeHomeServer.Services.Composition.DifyMetricsAdapter>();
+
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
 // живут в Main как тонкие обёртки; Notes (в отдельной сборке) получает только

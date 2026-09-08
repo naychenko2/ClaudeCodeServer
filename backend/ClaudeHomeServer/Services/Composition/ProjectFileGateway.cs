@@ -7,29 +7,47 @@ namespace ClaudeHomeServer.Services.Composition;
 // событие OnMutated, на котором висит синк базы знаний (ProjectKnowledgeSyncService).
 // Прямой File.WriteAllText/Directory.Move здесь обходил бы синк молча — правки
 // документов перестали бы доходить до Dify.
-public sealed class ProjectFileGateway(FileService files) : IProjectFileGateway
+public sealed class ProjectFileGateway : IProjectFileGateway
 {
+    private readonly FileService _files;
+
+    public ProjectFileGateway(FileService files)
+    {
+        _files = files;
+        // FileService.FileMutationKind (Main) и Core/Services/Composition.FileMutationKind
+        // — параллельные enum'ы с одинаковыми значениями (Write/Create/Delete/Rename).
+        // Явное приведение по int: Core не может импортировать Main-тип, но мост через
+        // числовые значения легитимен и проверен ревью швов.
+        _files.OnMutated += (root, rel, kind, newRel) =>
+            OnMutated?.Invoke(root, rel, (FileMutationKind)(int)kind, newRel);
+    }
+
     public void CreateDirectory(string root, string relativePath) =>
-        files.CreateDirectory(root, relativePath);
+        _files.CreateDirectory(root, relativePath);
 
     public void CreateFile(string root, string relativePath) =>
-        files.CreateFile(root, relativePath);
+        _files.CreateFile(root, relativePath);
 
     public void CreateFile(string root, string relativePath, string content) =>
-        files.CreateFile(root, relativePath, content);
+        _files.CreateFile(root, relativePath, content);
 
     public void WriteFile(string root, string relativePath, string content) =>
-        files.WriteFile(root, relativePath, content);
+        _files.WriteFile(root, relativePath, content);
 
     public void WriteFileBytes(string root, string relativePath, byte[] content) =>
-        files.WriteFileBytes(root, relativePath, content);
+        _files.WriteFileBytes(root, relativePath, content);
+
+    public string ReadFile(string root, string relativePath) =>
+        _files.ReadFile(root, relativePath);
 
     public byte[] ReadFileBytes(string root, string relativePath) =>
-        files.ReadFileBytes(root, relativePath);
+        _files.ReadFileBytes(root, relativePath);
 
     public void Delete(string root, string relativePath) =>
-        files.Delete(root, relativePath);
+        _files.Delete(root, relativePath);
 
     public void Rename(string root, string oldRelative, string newRelative) =>
-        files.Rename(root, oldRelative, newRelative);
+        _files.Rename(root, oldRelative, newRelative);
+
+    public event Action<string, string, FileMutationKind, string?>? OnMutated;
 }

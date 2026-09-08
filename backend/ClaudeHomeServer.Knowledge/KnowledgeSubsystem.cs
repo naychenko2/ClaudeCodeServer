@@ -19,8 +19,12 @@ namespace ClaudeHomeServer.Services.Knowledge;
 // - KnowledgeBaseCatalogService — менеджер Dify-датасетов под пользователя (общий
 //   для REST /api/knowledge/catalog и wsp-тулсета Dify, см. ADR-014 §Knowledge).
 // - ProjectKnowledgeSyncService — дебаунс-синк «файл проекта ↔ документ БЗ»:
-//   singleton + мост событий хода Claude (ProjectKnowledgeTurnSync hosted подписывается
-//   на FileService.OnMutated).
+//   singleton, подписан на `IProjectFileGateway.OnMutated` (Core-шов; в адаптере
+//   в Main это `FileService.OnMutated`).
+// - ProjectKnowledgeTurnSync (hosted через AddGatedHostedFrom) — мост «ход Claude
+//   → синк»: подписан на `ISessionMessageObserver` (Core-шов) и зовёт
+//   `ProjectKnowledgeSyncService.QueueSync` с путями из `FileChangedMessage`/
+//   `ResultMessage`.
 // - UserKnowledgeCascade — каскадная уборка знаний при удалении пользователя
 //   (UsersController).
 // - IKnowledgeAlertNotifier + KnowledgeAlertNotifier — шов нотификатора для
@@ -48,9 +52,12 @@ namespace ClaudeHomeServer.Services.Knowledge;
 // - `ICheapTextRunner` (Services.Llm) — KnowledgeIndexReconciler не использует, но
 //   `ProjectKnowledgeSyncService` (вне записи) при будущем расширении может; сейчас
 //   допуск не нужен.
-// - `NotificationService`/`NotificationStore` (Services/ корень) — `KnowledgeAlertNotifier`
-//   шлёт алерт владельцу через общий нотификатор; это «вертикаль → спинка» (как у Git),
-//   см. `KnowledgeAlertNotifier.cs:23-24`.
+// - `IKnowledgeNotificationDispatcher` (Core-шов) — `KnowledgeAlertNotifier` шлёт
+//   алерт владельцу через Core-интерфейс; реализация в Main переиспользует
+//   `NotificationService` (Services/ корень) и его стор, как `AlertPollingService`,
+//   но Knowledge этого типа не видит — инвариант «вертикаль → спинка только через
+//   Core-шовы», как у Git/Deploy (см. `KnowledgeAlertNotifier.cs:23-24`,
+//   `Core/Services/IKnowledgeNotificationDispatcher.cs`).
 // - Все типы подсистемы (`WorkspaceKnowledgeStore`/`KnowledgeService`/`KnowledgeBaseCatalogService`/
 //   `ProjectKnowledgeSyncService`/`UserKnowledgeCascade`/`KnowledgeAlertNotifier`/
 //   `KnowledgeIndexReconciler`/`IKnowledgeSyncParticipant`/`KnowledgeSyncTarget`/
@@ -95,7 +102,8 @@ public sealed class KnowledgeSubsystem : IAppSubsystem
             sp => sp.GetRequiredService<KnowledgeService>());
 
         // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
-        // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated).
+        // (ProjectKnowledgeTurnSync подписан на ISessionMessageObserver и на QueueSync
+        // синка; сам синк подписан на IProjectFileGateway.OnMutated).
         services.AddSingleton<ProjectKnowledgeSyncService>();
         services.AddGatedHostedService<ProjectKnowledgeTurnSync>(config);
 

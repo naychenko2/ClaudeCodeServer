@@ -1,5 +1,3 @@
-using ClaudeHomeServer.Controllers;
-
 namespace ClaudeHomeServer.Services.Knowledge;
 
 /// <summary>
@@ -12,7 +10,7 @@ namespace ClaudeHomeServer.Services.Knowledge;
 /// Username — параметр, а не claim: у REST это ClaimTypes.Name, у MCP-вызова — Username
 /// из UserStore по владельцу токена (сервисный JWT может не нести Name).
 /// </summary>
-public sealed class KnowledgeBaseCatalogService(KnowledgeService knowledge, UserStore userStore)
+public sealed class KnowledgeBaseCatalogService(KnowledgeService knowledge, IUserStore userStore)
 {
     // Имена других пользователей — чтобы отличить «без префикса = глобальная»
     // от «чужая {otheruser}:…» (иначе чужие утекли бы в публичные).

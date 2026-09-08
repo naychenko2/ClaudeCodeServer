@@ -1,11 +1,10 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Telemetry;
-using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Core.Telemetry;
 
 namespace ClaudeHomeServer.Services.Knowledge;
 
@@ -23,9 +22,10 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
 
     private readonly KnowledgeService _knowledge;
     private readonly WorkspaceKnowledgeStore _wkStore;
-    private readonly ProjectManager _projects;
-    private readonly FileService _files;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly IProjectManager _projects;
+    private readonly IProjectFileGateway _files;
+    private readonly IKnowledgeHubNotifier _hub;
+    private readonly IDifyMetrics _metrics;
     private readonly ILogger<ProjectKnowledgeSyncService> _logger;
 
     private sealed class Pending
@@ -39,14 +39,15 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
     public ProjectKnowledgeSyncService(KnowledgeService knowledge, WorkspaceKnowledgeStore wkStore,
-        ProjectManager projects, FileService files, IHubContext<SessionHub> hub,
-        ILogger<ProjectKnowledgeSyncService> logger)
+        IProjectManager projects, IProjectFileGateway files, IKnowledgeHubNotifier hub,
+        IDifyMetrics metrics, ILogger<ProjectKnowledgeSyncService> logger)
     {
         _knowledge = knowledge;
         _wkStore = wkStore;
         _projects = projects;
         _files = files;
         _hub = hub;
+        _metrics = metrics;
         _logger = logger;
         // Мутации через файловый API (UI, OnlyOffice, upload): правка/создание/удаление —
         // отложенный синк; перенос — миграция ключей карты
@@ -60,7 +61,7 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
     }
 
     // Отложенная синхронизация после изменения файлов (дебаунс — частые правки не спамят Dify).
-    // changedPaths — подсказки «что менялось»: по ним детектится перенос файла вне файлового API.
+    // changedPaths — подсказки «что менялось»: по ним детектируется перенос файла вне файлового API.
     public void QueueSync(string rootPath, IEnumerable<string>? changedPaths = null)
     {
         if (!_knowledge.IsConfigured) return;
@@ -99,7 +100,7 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Синхронизация базы знаний проекта {Root}", rootPath);
-                ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                _metrics.RecordSyncError(DifyErrorCategorizer.Categorize(ex));
             }
         });
     }
@@ -133,7 +134,7 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
                     // файле. Best-effort удаления внутри Reindex/SyncOne в счётчик намеренно
                     // не идут: 404 на уже удалённом документе — штатный шум, он размывал бы
                     // смысл метрики «что-то не проиндексировалось».
-                    ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                    _metrics.RecordSyncError(DifyErrorCategorizer.Categorize(ex));
                 }
             }
 
@@ -421,19 +422,21 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
     {
         // Датасет общий для проектов в одной папке — уведомляем владельцев каждого
         foreach (var ownerId in _projects.GetByRootPath(rootPath).Select(p => p.OwnerId).Distinct())
-            await _hub.Clients.Group("user_" + ownerId)
-                .SendAsync("message", new KnowledgeChangedMessage("doc_changed", datasetId));
+        {
+            if (string.IsNullOrEmpty(ownerId)) continue;
+            await _hub.BroadcastKnowledgeChangedAsync(ownerId!, "doc_changed", datasetId);
+        }
     }
 
     private static string Normalize(string path) =>
         (path ?? "").Replace('\\', '/').Trim().TrimStart('/');
 
-    // Путь-хинт «что менялось» для детекта переноса: вложения чата (FileService.AttachmentsDir)
+    // Путь-хинт «что менялось» для детекта переноса: вложения чата (AttachmentsDir)
     // отбрасываем — иначе документ базы знаний мог бы «переехать» на файл сообщения
     private static string NormalizeHint(string path)
     {
         var norm = Normalize(path);
-        return norm.StartsWith(FileService.AttachmentsDir + "/", StringComparison.OrdinalIgnoreCase)
+        return norm.StartsWith(ProjectFileGatewayConstants.AttachmentsDir + "/", StringComparison.OrdinalIgnoreCase)
             ? "" : norm;
     }
 
@@ -445,39 +448,30 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
 // API), поэтому слушаем события хода: file_changed даёт точные пути (и хинты для детекта
 // переноса), result — страховочный полный дифф по завершении хода. Отдельный IHostedService,
 // чтобы не раздувать SessionManager и гарантированно инстанцировать синк-сервис на старте.
-public sealed class ProjectKnowledgeTurnSync : IHostedService
+public sealed class ProjectKnowledgeTurnSync(
+    ISessionMessageObserver sessions,
+    IProjectManager projects,
+    ProjectKnowledgeSyncService sync) : IHostedService
 {
-    private readonly SessionManager _sessions;
-    private readonly ProjectManager _projects;
-    private readonly ProjectKnowledgeSyncService _sync;
-
-    public ProjectKnowledgeTurnSync(SessionManager sessions, ProjectManager projects,
-        ProjectKnowledgeSyncService sync)
-    {
-        _sessions = sessions;
-        _projects = projects;
-        _sync = sync;
-    }
-
     public Task StartAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage += OnMsgAsync;
+        sessions.Attach(OnMsgAsync);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage -= OnMsgAsync;
+        sessions.Detach(OnMsgAsync);
         return Task.CompletedTask;
     }
 
-    private Task OnMsgAsync(Session session, ServerMessage msg)
+    private Task OnMsgAsync(string? projectId, ServerMessage msg)
     {
-        if (string.IsNullOrEmpty(session.ProjectId)) return Task.CompletedTask;
+        if (string.IsNullOrEmpty(projectId)) return Task.CompletedTask;
         if (msg is not (FileChangedMessage or ResultMessage)) return Task.CompletedTask;
-        var root = _projects.GetById(session.ProjectId)?.RootPath;
+        var root = projects.GetById(projectId)?.RootPath;
         if (root is null) return Task.CompletedTask;
-        _sync.QueueSync(root, msg is FileChangedMessage fc ? [fc.Path] : null);
+        sync.QueueSync(root, msg is FileChangedMessage fc ? [fc.Path] : null);
         return Task.CompletedTask;
     }
 }

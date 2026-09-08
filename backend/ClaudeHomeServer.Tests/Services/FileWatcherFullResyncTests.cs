@@ -99,7 +99,8 @@ public class FileWatcherFullResyncTests : IDisposable
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
             Options.Create(new DifyOptions()), wkStore);
         var knowledgeSync = new ProjectKnowledgeSyncService(knowledge, wkStore, projects,
-            new FileService(), hub.Context, NullLogger<ProjectKnowledgeSyncService>.Instance);
+            new ProjectFileGateway(new FileService()), new RecordingHubNotifier(), new NullDifyMetrics(),
+            NullLogger<ProjectKnowledgeSyncService>.Instance);
         var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, new ProjectRootLookup(projects),
             new GraphPersistence(_tempDir, NullLogger<GraphPersistence>.Instance), config);
 

@@ -245,16 +245,10 @@ public sealed class SpecialtySettingsStore
 
     // --- Секции промпта и типовые умения (посекочное наследование) ---
 
-    // Источник значения параметра секции (для UI-бейджа и тестов). Значения User и Owner
-    // после снятия слоёв (v5) недостижимы, но остаются в enum: он живёт в wire-контракте
-    // фронта и в чужих файлах — сужение отдельной задачей после мержа (ADR-012, «Хвосты»).
-    public enum SectionSource { Code, Global, User, Owner }
-
-    // Эффективное состояние секции промпта: enabled и text наследуются КАЖДЫЙ СВОИМ
-    // параметром (см. EffectivePromptSectionStates).
-    public sealed record EffectivePromptSection(
-        string Id, bool Enabled, string Text,
-        SectionSource EnabledSource, SectionSource TextSource);
+    // SectionSource и EffectivePromptSection переехали в Core
+    // (`Core/Services/Llm/IPromptSectionProvider.cs`, этап 5, шаг 4). Здесь
+    // остаётся только разворот наследования и отдача наружу через тип Core.
+    // `using ClaudeHomeServer.Services.Llm;` уже подключает оба имени из Core.
 
     // ВАЖНО: здесь вторая семантика наследования стора. Права и модели (выше) — «запись
     // заменяет дефолт целиком»; секции промпта — ПОПАРАМЕТРНО: enabled и text каждой секции

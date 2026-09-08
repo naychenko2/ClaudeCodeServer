@@ -1087,7 +1087,10 @@ public class SubsystemBoundaryTests
                     // адрес (см. `ClaudeHomeServer.Services.Llm.SpecialtySettingsStore`
                     // в allow-list Llm).
                     "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore",
-                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",
+                    // SpecialtySettingsStore+EffectivePromptSection переехал в Core
+                    // (`Core/Services/Llm/IPromptSectionProvider.cs`, этап 5, шаг 4)
+                    // — EffectivePromptSection теперь Core-DTO, допуск снят.
+                    // (Был: "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",)
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
                     // RecallItem переехал в Core (`Core/Services/Llm/RecallManifest.cs`,

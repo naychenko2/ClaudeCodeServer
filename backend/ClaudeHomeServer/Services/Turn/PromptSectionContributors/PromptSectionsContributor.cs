@@ -9,20 +9,24 @@ namespace ClaudeHomeServer.Services.Turn;
 // (контракт плана: «призыв и данные рядом»).
 //
 // IsEnabled повторяет прежний BuildPromptSectionsProvider: owner != null, есть
-// SpecialtySettingsStore (без DI — секция не собирается), есть персона с непустой
+// IPromptSectionProvider (без DI — секция не собирается), есть персона с непустой
 // специальностью, и сессия не групповая (контракт плана: секции только у персонных
 // сессий — в групповом чате секции по роли одного из участников сбивают остальных).
 //
 // Гейт по флагу specialty-prompt-sections идёт ВНУТРИ BuildAsync (переключение
 // действует сразу, как у dossier-trailer).
+//
+// Этап 5, шаг 4: разрыв цикла Turn → Llm через Core-шов `IPromptSectionProvider`.
+// Опциональность (`?`) сохранена — без DI секция не собирается, и это осознанное
+// поведение, а не недосмотр (см. комментарий в `Core/Services/Llm/IPromptSectionProvider.cs`).
 public sealed class PromptSectionsContributor : IPromptSectionContributor
 {
-    private readonly SpecialtySettingsStore? _specialty;
+    private readonly IPromptSectionProvider? _sections;
     private readonly FeatureFlagService _flags;
 
-    public PromptSectionsContributor(SpecialtySettingsStore? specialty, FeatureFlagService flags)
+    public PromptSectionsContributor(IPromptSectionProvider? sections, FeatureFlagService flags)
     {
-        _specialty = specialty;
+        _sections = sections;
         _flags = flags;
     }
 
@@ -34,7 +38,7 @@ public sealed class PromptSectionsContributor : IPromptSectionContributor
     public string Group => "persona";
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
-        _specialty is not null
+        _sections is not null
         && sessionContext.OwnerId is not null
         && sessionContext.Persona is not null
         && sessionContext.Persona.Specialty != PersonaSpecialty.None
@@ -43,13 +47,13 @@ public sealed class PromptSectionsContributor : IPromptSectionContributor
     public Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)
     {
-        if (sessionContext.OwnerId is null || sessionContext.Persona is null || _specialty is null)
+        if (sessionContext.OwnerId is null || sessionContext.Persona is null || _sections is null)
             return Task.FromResult<PromptSectionContribution?>(null);
 
         if (!_flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.SpecialtyPromptSections))
             return Task.FromResult<PromptSectionContribution?>(null);
 
-        var sections = _specialty.EffectivePromptSections(sessionContext.OwnerId, sessionContext.Persona.Specialty);
+        var sections = _sections.EffectivePromptSections(sessionContext.OwnerId, sessionContext.Persona.Specialty);
         var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
         if (string.IsNullOrWhiteSpace(text))
             return Task.FromResult<PromptSectionContribution?>(null);

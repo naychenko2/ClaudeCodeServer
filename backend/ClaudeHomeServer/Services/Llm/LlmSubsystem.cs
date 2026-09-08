@@ -205,6 +205,12 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Стор настроек фолбэк-оркестрации (ADR-007 §4).
         services.AddSingleton<FallbackSettingsStore>();
 
+        // Этап 5, шаг 4 (шов IPromptSectionProvider): Core-интерфейс под единственный
+        // метод `EffectivePromptSections`, который PromptSectionsContributor в Turn
+        // дёргает у SpecialtySettingsStore через прямую ссылку на Llm. Адаптер
+        // лежит тут, в Main, рядом со сторем — DI подтянет его по конструктору.
+        services.AddSingleton<IPromptSectionProvider, SpecialtyPromptSectionProvider>();
+
         // Пресеты автоподбора исполнителя фоновых действий.
         services.AddSingleton<LocalActionPresetService>();
 

@@ -3,7 +3,6 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Git;
 
@@ -63,14 +62,17 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
     }
 
     /// <summary>
-    /// Идемпотентный провижн: аккаунт в Forgejo + персональный токен → User.Forgejo*.
+    /// Идемпотентный провижн: аккаунт в Forgejo + персональный токен.
     /// Уже провижнен — короткий выход. Возвращает логин Forgejo.
+    /// Мутация <c>User</c> — обязанность вызывающего (он владеет User и читает
+    /// результат через <see cref="IForgejoAccountStore.GetAccount"/>).
     /// </summary>
-    public async Task<string> EnsureUserAsync(User user, CancellationToken ct = default)
+    public async Task<string> EnsureUserAsync(string userId, string username, CancellationToken ct = default)
     {
         if (!Enabled) throw new GitCommandException("Forgejo не настроен (Forgejo:BaseUrl/AdminToken)");
-        if (!string.IsNullOrEmpty(user.ForgejoUsername) && !string.IsNullOrEmpty(user.ForgejoToken))
-            return user.ForgejoUsername;
+        var existing = accounts.GetAccount(userId);
+        if (!string.IsNullOrEmpty(existing?.ForgejoUsername) && !string.IsNullOrEmpty(existing?.ForgejoToken))
+            return existing.ForgejoUsername!;
 
         // Пароль сохраняем в User (открыто — решение владельца, как токен): им пользователь
         // входит в веб-UI Forgejo, иначе приватные репо отдают анониму 404
@@ -81,7 +83,7 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
 
         // Имена вида admin/user/api в Forgejo зарезервированы: создание вернёт 422 при
         // НЕсуществующем пользователе — тогда пробуем вариант с суффиксом.
-        var slug = SlugifyUsername(user.Username);
+        var slug = SlugifyUsername(username);
         string? login = null;
         foreach (var candidate in new[] { slug, slug + "-cc" })
         {
@@ -114,7 +116,7 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
             throw new GitCommandException($"Forgejo: не удалось создать пользователя {candidate} ({(int)create.StatusCode})");
         }
         if (login is null)
-            throw new GitCommandException($"Forgejo: не удалось подобрать логин для «{user.Username}»");
+            throw new GitCommandException($"Forgejo: не удалось подобрать логин для «{username}»");
 
         // 2. Выпустить персональный токен от лица пользователя (basic-auth одноразовым паролем).
         //    Имя токена уникальное — прежние «claude-home-*» не мешают повторному провижну.
@@ -131,19 +133,16 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         var token = tokenJson.GetProperty("sha1").GetString()
             ?? throw new GitCommandException("Forgejo: токен без sha1");
 
-        accounts.SetForgejoAccount(user.Id, login, token, password);
-        user.ForgejoUsername = login;
-        user.ForgejoToken = token;
-        user.ForgejoPassword = password;
+        accounts.SetForgejoAccount(userId, login, token, password);
         logger.LogInformation("Forgejo: провижн пользователя {Login} завершён", login);
         return login;
     }
 
-    /// <summary>Сброс пароля веб-входа (утерян/скомпрометирован) — новый сохраняется в User.</summary>
-    public async Task<string> ResetPasswordAsync(User user, CancellationToken ct = default)
+    /// <summary>Сброс пароля веб-входа (утерян/скомпрометирован) — возвращает новый пароль.</summary>
+    public async Task<string> ResetPasswordAsync(string userId, string username, CancellationToken ct = default)
     {
         if (!Enabled) throw new GitCommandException("Forgejo не настроен");
-        var login = await EnsureUserAsync(user, ct);
+        var login = await EnsureUserAsync(userId, username, ct);
         var password = RandomNumberGenerator.GetHexString(24, lowercase: true);
         using var http = Client();
         http.DefaultRequestHeaders.Authorization = TokenAuth(AdminToken);
@@ -153,8 +152,8 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         }, ct);
         if (!patch.IsSuccessStatusCode)
             throw new GitCommandException($"Forgejo: не удалось сбросить пароль ({(int)patch.StatusCode})");
-        accounts.SetForgejoAccount(user.Id, login, user.ForgejoToken!, password);
-        user.ForgejoPassword = password;
+        var existing = accounts.GetAccount(userId);
+        accounts.SetForgejoAccount(userId, login, existing?.ForgejoToken!, password);
         return password;
     }
 
@@ -163,10 +162,10 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
     /// и коллизии слагов («Проект» vs «проект!») решаются меткой projectId в description репо:
     /// свой — переиспользуем, чужой с тем же именем — берём слаг с суффиксом -2, -3…
     /// </summary>
-    public async Task<ForgejoRepo> CreateRepoAsync(User user, string repoName, string projectId, CancellationToken ct = default)
+    public async Task<ForgejoRepo> CreateRepoAsync(string userId, string username, string repoName, string projectId, CancellationToken ct = default)
     {
         if (!Enabled) throw new GitCommandException("Forgejo не настроен");
-        var login = await EnsureUserAsync(user, ct);
+        var login = await EnsureUserAsync(userId, username, ct);
         var baseName = SlugifyRepoName(repoName);
 
         using var http = Client();

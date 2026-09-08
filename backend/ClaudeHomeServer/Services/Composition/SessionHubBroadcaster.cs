@@ -27,8 +27,12 @@ public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub) : ISessio
 {
     // Префиксы групп — единственный источник правды в коде. Совпадают с
     // SessionHub.JoinUser/JoinProject, которые добавляют соединение в группу.
+    // Формат preview_<projectId>:<serviceId> зеркалится из DevServerService.LogGroup —
+    // SessionHub зовёт её же для Groups.AddToGroupAsync; расхождение поймает парный
+    // тест (см. отчёт Ф4, обоснование 4-го метода шва).
     private const string OwnerGroupPrefix = "user_";
     private const string ProjectGroupPrefix = "project_";
+    private const string PreviewLogGroupPrefix = "preview_";
 
     public Task ToSession(string sessionId, ServerMessage message) =>
         hub.Clients.Group(sessionId).SendAsync("message", message);
@@ -38,4 +42,8 @@ public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub) : ISessio
 
     public Task ToProject(string projectId, ServerMessage message) =>
         hub.Clients.Group(ProjectGroupPrefix + projectId).SendAsync("message", message);
+
+    public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) =>
+        hub.Clients.Group($"{PreviewLogGroupPrefix}{projectId}:{serviceId}")
+            .SendAsync("message", message);
 }

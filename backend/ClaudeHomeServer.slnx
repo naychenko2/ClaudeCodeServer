@@ -10,6 +10,8 @@
   <Project Path="ClaudeHomeServer.Skills/ClaudeHomeServer.Skills.csproj" />
   <Project Path="ClaudeHomeServer.Skills.Tests/ClaudeHomeServer.Skills.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Tts/ClaudeHomeServer.Tts.csproj" />
+  <Project Path="ClaudeHomeServer.Tts.Tests/ClaudeHomeServer.Tts.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tray/ClaudeHomeServer.Tray.csproj" />
   <Project Path="ClaudeHomeServer.Video/ClaudeHomeServer.Video.csproj" />
   <Project Path="ClaudeHomeServer.Video.Tests/ClaudeHomeServer.Video.Tests.csproj" />

@@ -33,6 +33,7 @@ public class SubsystemBoundaryCoverageTests
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Personas.PersonaDraftService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Diagnostics.FileLog).Assembly;
     }
 
     [Fact]

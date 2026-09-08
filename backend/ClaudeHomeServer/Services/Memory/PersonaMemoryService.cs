@@ -32,7 +32,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
 
     private readonly KnowledgeService _knowledge;
     private readonly PersonaManager _personas;
-    private readonly UserStore _users;
+    private readonly IUserStore _users;
     private readonly TeamMemoryService? _teamMemory;
     // Заметки — для выноса записи памяти в общий vault (③-3.3); null в юнит-тестах
     private readonly NotesService? _notes;
@@ -58,7 +58,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
 
-    public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
+    public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, IUserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
         TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null,
         Dossiers.DossierRecallService? dossierRecall = null, NotesService? notes = null)

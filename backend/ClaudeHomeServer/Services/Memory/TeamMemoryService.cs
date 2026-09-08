@@ -38,8 +38,8 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
 
     // Опциональные зависимости семантического слоя (nullable-паттерн: в юнит-тестах Волны 1 не заданы)
     private readonly KnowledgeService? _knowledge;
-    private readonly UserStore? _users;
-    private readonly ProjectManager? _projects;
+    private readonly IUserStore? _users;
+    private readonly IProjectManager? _projects;
     // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
     private readonly Memory.MemoryWriteResolver? _resolver;
     // Сжатие авто-записи (autolearn/резолвер), длиннее AutoCompressThreshold; null в юнит-тестах —
@@ -66,7 +66,7 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
     private const double DedupBoost = 0.1;
 
     public TeamMemoryService(IConfiguration config, ILogger<TeamMemoryService>? log = null,
-        KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null,
+        KnowledgeService? knowledge = null, IUserStore? users = null, IProjectManager? projects = null,
         Memory.MemoryWriteResolver? resolver = null, Llm.ICheapTextRunner? cheap = null)
     {
         _log = log;

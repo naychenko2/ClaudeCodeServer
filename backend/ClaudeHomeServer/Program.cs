@@ -405,6 +405,10 @@ builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Шов ITaskExecutor (Core) → TaskExecutorAdapter → TaskExecutionService.
+// Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
+builder.Services.AddSingleton<TaskExecutorAdapter>();
+builder.Services.AddSingleton<ITaskExecutor>(sp => sp.GetRequiredService<TaskExecutorAdapter>());
 // Раздача под-задач и волны режима «Командная реализация» (Э3): создание задач по плану
 // и пакетный запуск исполнителей. Конструктор вешает хук в SessionManager — сервис нужно
 // прогреть на старте (ниже), иначе «Запустить» в карточке плана осталось бы без раздачи.

@@ -12,7 +12,7 @@ public class TaskSchedulerService(
     TaskManager tasks,
     UserStore users,
     IHubContext<SessionHub> hub,
-    TaskExecutionService executor,
+    ITaskExecutor executor,
     IDailyBriefingRunner briefing,
     IPersonaAutomationRunner automation,
     NotificationService notif,

@@ -1,12 +1,18 @@
 <Solution>
   <Project Path="ClaudeHomeServer/ClaudeHomeServer.csproj" />
+  <Project Path="ClaudeHomeServer.Changelog/ClaudeHomeServer.Changelog.csproj" />
+  <Project Path="ClaudeHomeServer.Changelog.Tests/ClaudeHomeServer.Changelog.Tests.csproj" />
   <Project Path="ClaudeHomeServer.CodeGraph/ClaudeHomeServer.CodeGraph.csproj" />
   <Project Path="ClaudeHomeServer.CodeGraph.Tests/ClaudeHomeServer.CodeGraph.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Core/ClaudeHomeServer.Core.csproj" />
+  <Project Path="ClaudeHomeServer.Diagnostics/ClaudeHomeServer.Diagnostics.csproj" />
+  <Project Path="ClaudeHomeServer.Diagnostics.Tests/ClaudeHomeServer.Diagnostics.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Docs/ClaudeHomeServer.Docs.csproj" />
   <Project Path="ClaudeHomeServer.Git/ClaudeHomeServer.Git.csproj" />
   <Project Path="ClaudeHomeServer.Git.Tests/ClaudeHomeServer.Git.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Notes/ClaudeHomeServer.Notes.csproj" />
   <Project Path="ClaudeHomeServer.Notes.Tests/ClaudeHomeServer.Notes.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Personas/ClaudeHomeServer.Personas.csproj" />
   <Project Path="ClaudeHomeServer.Reader/ClaudeHomeServer.Reader.csproj" />
   <Project Path="ClaudeHomeServer.Reader.Tests/ClaudeHomeServer.Reader.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Skills/ClaudeHomeServer.Skills.csproj" />
@@ -14,6 +20,7 @@
   <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tts/ClaudeHomeServer.Tts.csproj" />
   <Project Path="ClaudeHomeServer.Tts.Tests/ClaudeHomeServer.Tts.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.WebSearch/ClaudeHomeServer.WebSearch.csproj" />
   <Project Path="ClaudeHomeServer.Tray/ClaudeHomeServer.Tray.csproj" />
   <Project Path="ClaudeHomeServer.Video/ClaudeHomeServer.Video.csproj" />
   <Project Path="ClaudeHomeServer.Video.Tests/ClaudeHomeServer.Video.Tests.csproj" />

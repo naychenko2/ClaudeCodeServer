@@ -2,6 +2,7 @@ using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Changelog;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -32,8 +33,11 @@ public class ChangelogServiceTests : IDisposable
             ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
         });
 
-        _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance,
-            BuildCheapRunner(config));
+        // ChangelogService принимает узкий шов ICommitLogReader (Этап 5, ярус 1, волна A):
+        // адаптер над FileService. Сам GetCommitsRaw не переносили — у него другие
+        // вызывающие, и в этом тесте источник не задан.
+        _sut = new ChangelogService(new CommitLogReader(new FileService()), config,
+            NullLogger<ChangelogService>.Instance, BuildCheapRunner(config));
     }
 
     // ─── Источник не задан ──────────────────────────────────────────────────

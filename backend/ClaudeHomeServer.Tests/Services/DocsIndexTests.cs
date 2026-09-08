@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Docs;
 using FluentAssertions;
 
@@ -638,9 +639,10 @@ public class DocsIndexTests : IDisposable
 
     // ─── Создание документов и разделов ─────────────────────────────────────
 
-    // Создание пишет в рабочее дерево, поэтому идёт через FileService (SafeJoin + OnMutated).
+    // Создание пишет в рабочее дерево, поэтому идёт через файловый шов
+    // (IProjectFileGateway — SafeJoin + OnMutated внутри FileService).
     // Отдельный экземпляр сервиса: у остальных тестов файлового сервиса нет, он им не нужен
-    private DocsIndexService Creating() => new(new FileService());
+    private DocsIndexService Creating() => new(new ProjectFileGateway(new FileService()));
 
     [Fact]
     public void Создание_Документа_ФайлСЗаголовкомИПутьВОтвете()

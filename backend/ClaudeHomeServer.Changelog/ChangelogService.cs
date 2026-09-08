@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
-using Microsoft.Extensions.Logging;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Changelog;
 
@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.Changelog;
 /// всех проектов) — сводка одна для всех и перегенерируется только при новых
 /// коммитах дня.
 /// </summary>
-public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger,
+public class ChangelogService(ICommitLogReader commits, IConfiguration config, ILogger<ChangelogService> logger,
     Llm.ICheapTextRunner cheap)
 {
     // Длинному JSON-ответу сводки дня (до 12 пунктов) профильного лимита вывода мало —
@@ -207,7 +207,7 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             var name = string.IsNullOrWhiteSpace(_sourceProjectName)
                 ? Path.GetFileName(_sourceRepoPath.TrimEnd('/', '\\'))
                 : _sourceProjectName;
-            all.AddRange(files.GetCommitsRaw(_sourceRepoPath, name, limit: 2000, _authorAliases));
+            all.AddRange(commits.GetCommitsRaw(_sourceRepoPath, name, limit: 2000, _authorAliases));
         }
         lock (_rawCacheLock)
         {

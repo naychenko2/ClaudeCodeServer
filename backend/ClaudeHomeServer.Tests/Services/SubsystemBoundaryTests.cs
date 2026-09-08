@@ -66,6 +66,11 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Notes.NotesSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Personas.PersonaDraftService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Diagnostics.FileLog).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.WebSearch.PerplexitySearchService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1752,13 +1757,16 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 10 = Main + Core + 8 вынесенных на Этапе 3/5 (Video/Yandex/Reader/CodeGraph/
-        // Skills/Git/Tts/Notes); при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(10,
-            "после Этапа 5 сторож должен видеть 10 прод-сборок: ClaudeHomeServer, " +
+        // 15 = Main + Core + 13 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs — Этап 5, волна A);
+        // при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(15,
+            "сторож должен видеть 15 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
-            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes");
+            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
+            "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
+            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

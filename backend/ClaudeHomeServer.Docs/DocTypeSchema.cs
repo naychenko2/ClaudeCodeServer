@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.Docs;
 //
 // Чтение терпимое: мусор молча отбрасывается, а структурная ошибка уезжает отдельным
 // сообщением и НЕ роняет область документации — схема не имеет права утащить её за собой.
-internal static class DocTypeSchema
+public static class DocTypeSchema
 {
     public const int MaxTypes = 20;
     public const int MaxProperties = 20;

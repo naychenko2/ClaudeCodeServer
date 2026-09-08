@@ -2734,7 +2734,7 @@ public class SessionManagerTests : IDisposable
 
     // ─── Обрыв фонового сабагента: сквозной путь «паспорт → добивание» ────────────────
 
-    private static ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport CutBgPassport(
+    private static ClaudeHomeServer.Services.Llm.SubagentRunPassport CutBgPassport(
         string sessionId, string agentId = "a-cut", string finishedBy = "bg_done", bool truncated = true) =>
         new(agentId, "mark", "Волна 1", sessionId, "toolu_1",
             DateTime.UtcNow.AddMinutes(-5), DateTime.UtcNow, 300, 20, 40, 1, 120_000, 3000,
@@ -2742,8 +2742,8 @@ public class SessionManagerTests : IDisposable
             finishedBy, DateTime.UtcNow);
 
     // Сток паспортов — ровно тот делегат, что SessionManager отдаёт ватчеру сабагентов
-    private Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport> SubagentSink(string sessionId) =>
-        (Action<ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport>)typeof(SessionManager)
+    private Action<ClaudeHomeServer.Services.Llm.SubagentRunPassport> SubagentSink(string sessionId) =>
+        (Action<ClaudeHomeServer.Services.Llm.SubagentRunPassport>)typeof(SessionManager)
             .GetMethod("SubagentRunSinkFor", BindingFlags.NonPublic | BindingFlags.Instance)!
             .Invoke(_sut, [sessionId])!;
 
@@ -2807,7 +2807,7 @@ public class SessionManagerTests : IDisposable
             new ResultMessage("success", 10, 1, null, null), TestRunId);
 
         entry.GetType().GetField("TruncatedSubagent")!.GetValue(entry).Should().BeNull();
-        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+        ((ClaudeHomeServer.Services.Llm.SubagentRunPassport?)entry.GetType()
             .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
         _subagentRuns.Latest("a-cut")!.NudgeAttempts.Should().Be(0,
             "добивание уступает циклу — у него свой протокол продолжения");
@@ -2869,9 +2869,9 @@ public class SessionManagerTests : IDisposable
         sink(CutBgPassport(session.Id, agentId: "a-cut"));
         // Штатный отчёт ЧУЖОГО агента пометку a-cut не трогает
         sink(CutBgPassport(session.Id, agentId: "a-other", truncated: false));
-        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+        ((ClaudeHomeServer.Services.Llm.SubagentRunPassport?)entry.GetType()
             .GetField("TruncatedBgNote")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
-        ((ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport?)entry.GetType()
+        ((ClaudeHomeServer.Services.Llm.SubagentRunPassport?)entry.GetType()
             .GetField("TruncatedSubagent")!.GetValue(entry))!.AgentId.Should().Be("a-cut");
 
         // Финал a-cut доехал до транскрипта позже сигнала — ватчер прислал опровержение:

@@ -1088,9 +1088,15 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    "ClaudeHomeServer.Services.Llm.RecallItem",
-                    "ClaudeHomeServer.Services.Llm.TurnRunPassport",
-                    "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // RecallItem переехал в Core (`Core/Services/Llm/RecallManifest.cs`,
+                    // этап 5, шаг 2). Turn берёт тип через Core-DTO, допуск снят.
+                    // (Был: "ClaudeHomeServer.Services.Llm.RecallItem",)
+                    // TurnRunPassport переехал в Core (`Core/Services/Llm/TurnRunPassport.cs`),
+                    // TurnEvents.TurnCompleted хранит ссылку как Core-DTO.
+                    // (Был: "ClaudeHomeServer.Services.Llm.TurnRunPassport",)
+                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`),
+                    // TurnEvents.SubagentRunCompleted — Core-DTO.
+                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
                     // Этап 4, шаг 2г-2 — переезд промптов штаба: ClaudeSession
                     // (DecidePermissionAsync) ссылается на `TeamImplementPrompts.MaxInterviewRounds`
                     // и `InterviewRoundsExhausted` для гейта AskUserQuestion. До переезда
@@ -1131,7 +1137,10 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ModelTier",
-                    "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`,
+                    // этап 5, шаг 2) — SubagentPrompts теперь берёт тип через Core-DTO,
+                    // допуск снят. Раньше был мёртвый декоратор (с момента коммита Этапа 5).
+                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
                     // `OmcPersonaRouting.cs:114` зовёт `PersonaConsultantToolset`
                     // static-метод из тела метода (IL-видимость, задача `8beee75e`).
                     // Точечный допуск по образцу `Llm → SpecialtyCatalog`/`SpecialtyPromptPresets`.

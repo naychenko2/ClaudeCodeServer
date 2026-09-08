@@ -957,7 +957,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
                     // Spend — ISpendCollector пишут все четыре ход-раннера (cloud-cheap,
                     // Ollama/LlamaServer и OneShot-Claude). Префикс не открываем.
-                    "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                    // (Этап 5: после переезда ISpendCollector в Core сборка закрыта
+                    // `IsCoreAssembly`, точечный допуск снят — мёртвый.)
                     // Telemetry (бывший префикс, заменён точечным допуском):
                     // `ClaudeSession` зовёт `TurnTelemetry.StartTurnSpan`/`RecordTurnResult`
                     // и прочие методы из тел async-методов.
@@ -1953,6 +1954,11 @@ public class SubsystemBoundaryTests
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
         // ссылалась на шов без ProjectReference на Main.
         "ClaudeHomeServer.Services.Notes",
+        // Этап 5, шаг 1 (цикл Llm ⇄ Spend): ISpendCollector переехал в Core, чтобы
+        // вертикаль Llm могла зависеть от Core-интерфейса без прямой ссылки на
+        // вертикаль Spend. Реализация `SpendStore : ISpendCollector` остаётся
+        // в Main (Services/Spend) — пока сам Spend не вынесен в свой csproj.
+        "ClaudeHomeServer.Services.Spend",
         // Этап 5, волна 5 (Knowledge): узкий Core-шов IDifyMetrics (ProjectKnowledgeSyncService
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).

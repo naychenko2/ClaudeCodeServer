@@ -5,13 +5,8 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Spend;
 
-// Точка записи расхода для всех источников (ходы, one-shot, fal, бесплатные модели).
-// Интерфейс, а не класс — чтобы точки сбора (SessionManager, раннеры, HTTP-клиенты)
-// мокались в тестах без файлового стора.
-public interface ISpendCollector
-{
-    void Record(SpendRecord record);
-}
+// ISpendCollector переехал в Core (`Core/Services/Spend/ISpendCollector.cs`,
+// этап 5, шаг 1) — для разрыва цикла Llm ⇄ Spend.
 
 // Хранилище аналитики расхода токенов. Форма согласована с инвариантом Артёма «новой БД
 // не нужно» (team memory, техразрез 2026-07-24): файловое хранилище в data/, как остальные

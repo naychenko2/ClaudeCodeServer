@@ -597,7 +597,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Knowledge",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
                 Array.Empty<string>()),

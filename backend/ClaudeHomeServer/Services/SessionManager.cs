@@ -362,7 +362,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private readonly ProjectManager _projects;
     // Шов Ф4 (Этап 5): заменяет _hub.Clients.Group(...).SendAsync — префиксы
     // собираются внутри SessionHubBroadcaster, а не в вызывающем коде.
-    private readonly Core.Services.ISessionBroadcaster _broadcaster;
+    private readonly Composition.ISessionBroadcaster _broadcaster;
     private readonly Llm.ICheapTextRunner? _cheap;
     // Маршруты мест каталога (локаль/слот/модель) и параметры профилей — для ветки
     // локального голосового хода (chat-voice). null — в тестах без локали.
@@ -659,7 +659,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // ядро держит в owning-обёртке (см. комментарий TeamCoordinator.cs:14). Сам
         // SessionManager пока сидит на IHubContext<SessionHub> — миграция будет
         // отдельным коммитом (это корневой сервис, см. задачу Ф4).
-        Core.Services.ISessionBroadcaster broadcaster = null!,
+        Composition.ISessionBroadcaster broadcaster = null!,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
         PersonaAgentFileSync? agentSync = null,
         UserHomeResolver? homes = null,

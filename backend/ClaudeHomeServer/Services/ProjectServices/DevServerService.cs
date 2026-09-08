@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.ProjectServices;

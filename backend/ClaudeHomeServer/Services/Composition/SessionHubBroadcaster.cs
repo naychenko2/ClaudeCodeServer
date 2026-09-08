@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;

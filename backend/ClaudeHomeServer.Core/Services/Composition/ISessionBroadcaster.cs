@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Core.Services;
+namespace ClaudeHomeServer.Services.Composition;
 
 // Шов для рассылки WS-событий фронту (Этап 5, Ф4). Вертикали и корневые сервисы
 // больше не ссылаются на IHubContext<SessionHub> напрямую — это стена для выноса,

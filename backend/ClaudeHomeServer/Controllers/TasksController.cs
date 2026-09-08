@@ -2,7 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;

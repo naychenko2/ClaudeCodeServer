@@ -75,7 +75,7 @@ public class SessionManagerTests : IDisposable
     // в общий шаблон.
     private sealed class TrackingBroadcaster(
         TestSessionBroadcaster inner, List<ServerMessage> sentMessages, object sentLock)
-        : Core.Services.ISessionBroadcaster
+        : ClaudeHomeServer.Services.Composition.ISessionBroadcaster
     {
         public Task ToSession(string sessionId, Protocol.ServerMessage message)
         {

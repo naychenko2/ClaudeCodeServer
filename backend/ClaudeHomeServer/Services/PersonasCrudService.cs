@@ -1,6 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Memory;

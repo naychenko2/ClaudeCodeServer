@@ -1,5 +1,5 @@
 using System.Text.Json;
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;

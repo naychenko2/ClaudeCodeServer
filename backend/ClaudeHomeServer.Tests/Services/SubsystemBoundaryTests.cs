@@ -1937,10 +1937,6 @@ public class SubsystemBoundaryTests
     private static readonly string[] CoreAllowedNamespaces =
     [
         "ClaudeHomeServer.Models",
-        // Этап 5, шов Ф4: ISessionBroadcaster + IPreviewLogWriter — контракты рассылки
-        // между SessionManager (Main) и вертикалями (Video, NotesWatcher...); нужны Core,
-        // чтобы вертикали могли зависеть от шва без ProjectReference на Main.
-        "ClaudeHomeServer.Core.Services",
         // Этап 5, ярус 0 (Ф3б): WS-контракт с фронтом едет в Core как спина
         // (задача `b6f0e1f4`, ADR-014 §«Решение по Protocol») — record-DTO
         // дискриминируются по `type` в едином потоке `ServerMessage`, отдельная

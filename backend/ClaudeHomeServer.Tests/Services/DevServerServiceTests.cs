@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;

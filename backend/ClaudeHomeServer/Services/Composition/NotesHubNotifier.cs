@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Notes;

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 

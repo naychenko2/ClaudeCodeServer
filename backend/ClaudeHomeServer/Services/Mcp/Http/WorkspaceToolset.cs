@@ -2,7 +2,7 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Core.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Tasks;
 // (ReminderSentAt, ClaudeStartedAt), переживают рестарт сервера.
 public class TaskSchedulerService(
     TaskManager tasks,
-    UserStore users,
+    IUserStore users,
     ISessionBroadcaster broadcaster,
     ITaskExecutor executor,
     IDailyBriefingRunner briefing,

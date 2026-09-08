@@ -1529,7 +1529,13 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.NotificationService",
+                    // Волна 1 Tasks (2026-09-08) сняла три допуска —
+                    // NotificationService, TaskExecutionService, PersonaAutomationService:
+                    // вертикаль ходит к ним через швы ITaskNotificationDispatcher,
+                    // ITaskExecutor, IPersonaAutomationRunner. Мёртвость каждого
+                    // проверена мутацией: сторож остаётся зелёным без них.
+                    // DailyBriefingService ниже — допуск ЖИВОЙ (мутация роняет тест):
+                    // TasksSubsystem регистрирует его конкретным типом.
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.PersonaManager",
@@ -1544,8 +1550,6 @@ public class SubsystemBoundaryTests
                     // Оба остаются в корне до этапа 4 (расщепление SessionManager).
                     // Когда `TaskExecutionService`/`PersonaAutomationService` уедут —
                     // эти точечные допуски уйдут вместе с ними.
-                    "ClaudeHomeServer.Services.TaskExecutionService",
-                    "ClaudeHomeServer.Services.PersonaAutomationService",
                     // ⚠ Шов `Tasks → Models.Session`: три статических резолвера в
                     // TaskManager.cs:32-36. Контракт: мутация проходит до первого
                     // использования (TaskManager — singleton, инстанс строится при

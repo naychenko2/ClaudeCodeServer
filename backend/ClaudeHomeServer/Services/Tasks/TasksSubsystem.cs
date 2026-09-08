@@ -74,6 +74,14 @@ public sealed class TasksSubsystem : IAppSubsystem
         services.AddSingleton<TaskAiService>();
         services.AddSingleton<BoardService>();
         services.AddSingleton<DailyBriefingService>();
+        // Шов IDailyBriefingRunner (Core) → DailyBriefingRunnerAdapter → DailyBriefingService.
+        // Адаптер обязан идти ПОСЛЕ DailyBriefingService — он резолвит его через конструктор.
+        services.AddSingleton<DailyBriefingRunnerAdapter>();
+        services.AddSingleton<IDailyBriefingRunner>(sp => sp.GetRequiredService<DailyBriefingRunnerAdapter>());
+        // Шов IPersonaAutomationRunner (Core) → PersonaAutomationRunnerAdapter → PersonaAutomationService.
+        // PersonaAutomationService регистрируется в Program.cs:430 — выше по порядку.
+        services.AddSingleton<PersonaAutomationRunnerAdapter>();
+        services.AddSingleton<IPersonaAutomationRunner>(sp => sp.GetRequiredService<PersonaAutomationRunnerAdapter>());
         services.AddGatedHostedService<TaskSchedulerService>(config);
     }
 }

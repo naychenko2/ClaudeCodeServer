@@ -10,16 +10,16 @@ public class TaskManager
     private readonly ConcurrentDictionary<string, TaskItem> _tasks = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
-    private readonly ProjectEventLogService? _events;
-    private readonly NotificationService? _notif;
+    private readonly IProjectEventLogService? _events;
+    private readonly ITaskNotificationDispatcher? _notif;
     private readonly PersonaManager? _personas;
 
     // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
 
-    public TaskManager(IConfiguration config, ProjectEventLogService? events = null,
-        NotificationService? notif = null, PersonaManager? personas = null)
+    public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
+        ITaskNotificationDispatcher? notif = null, PersonaManager? personas = null)
     {
         _events = events;
         _notif = notif;

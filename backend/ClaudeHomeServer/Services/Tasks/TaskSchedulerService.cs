@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Controllers;
+﻿using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -12,10 +12,10 @@ public class TaskSchedulerService(
     TaskManager tasks,
     UserStore users,
     ISessionBroadcaster broadcaster,
-    TaskExecutionService executor,
-    DailyBriefingService briefing,
-    PersonaAutomationService automation,
-    NotificationService notif,
+    ITaskExecutor executor,
+    IDailyBriefingRunner briefing,
+    IPersonaAutomationRunner automation,
+    ITaskNotificationDispatcher notif,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);

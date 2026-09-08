@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Composition.Notifications;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
@@ -402,9 +403,19 @@ builder.Services.AddSingleton<ProjectFileSessionsIndex>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();
+// Шов ITaskNotificationDispatcher (Core) → TaskNotificationDispatcherAdapter → NotificationService.
+// Обоснование отдельного шва (а не расширения IKnowledgeNotificationDispatcher) —
+// в ITaskNotificationDispatcher.cs: Tasks работает с готовым NotificationMessage и
+// всегда с web push; Knowledge шлёт плоские параметры и без push.
+builder.Services.AddSingleton<TaskNotificationDispatcherAdapter>();
+builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredService<TaskNotificationDispatcherAdapter>());
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Шов ITaskExecutor (Core) → TaskExecutorAdapter → TaskExecutionService.
+// Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
+builder.Services.AddSingleton<TaskExecutorAdapter>();
+builder.Services.AddSingleton<ITaskExecutor>(sp => sp.GetRequiredService<TaskExecutorAdapter>());
 // Раздача под-задач и волны режима «Командная реализация» (Э3): создание задач по плану
 // и пакетный запуск исполнителей. Конструктор вешает хук в SessionManager — сервис нужно
 // прогреть на старте (ниже), иначе «Запустить» в карточке плана осталось бы без раздачи.

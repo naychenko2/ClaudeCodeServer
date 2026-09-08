@@ -37,7 +37,7 @@ public sealed class ExternalPreviewRouter(
     IOptions<ExternalPreviewOptions> options,
     JwtService jwt,
     ExternalPreviewStore store,
-    ProjectManager projects,
+    IProjectManager projects,
     ProjectServiceDiscovery discovery,
     DevServerService devServer,
     DevServerPortMemory portMemory)

@@ -63,6 +63,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1763,6 +1764,32 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // Git — вертикаль локальных git-операций над проектом (запуск через
+        // ILauncherFactory) + Forgejo HTTP-клиент для remote + LLM-помощь для
+        // сообщений коммита и имён stash (GitAiService через LocalActionCatalog +
+        // ICheapTextRunner, оба в Core после Этапа 3, ловятся assembly-фильтром).
+        // Допусков к корню Services нет: вся зависимость от спинки закрыта Core:
+        //  - Models.GitStatus (Core, assembly-фильтр);
+        //  - Services.Execution.ILauncherFactory/ProcessSpec (Core, assembly-фильтр);
+        //  - Services.Composition.IAppSubsystem (Core, assembly-фильтр);
+        //  - Services.Http.WithoutEgressProxy (Core, assembly-фильтр).
+        // Реакторы GitAutoCommitService/CommitAttributionService лежат в корне
+        // Services и регистрируются в Program.cs — это сознательная связь
+        // «вертикаль → спинка», Main->Git направление, сторож по Git не
+        // запрещает Main ссылаться на Git.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Git",
+                "ClaudeHomeServer.Services.Git",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Git",
+                    })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
     };
 
     [Theory]
@@ -1798,12 +1825,13 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 7 = Main + Core + 5 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills);
+        // 8 = Main + Core + 6 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git);
         // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(7,
-            "после Этапа 3 сторож должен видеть 7 прод-сборок: ClaudeHomeServer, " +
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(8,
+            "после Этапа 3 сторож должен видеть 8 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
-            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills");
+            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
+            "ClaudeHomeServer.Git");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

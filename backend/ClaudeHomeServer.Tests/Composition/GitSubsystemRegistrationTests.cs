@@ -24,6 +24,12 @@ namespace ClaudeHomeServer.Tests.Composition;
 // графа: `GitAutoCommitService` (hosted) подписан на SessionManager, `CommitAttributionService`
 // тоже зависит от SessionManager — полный резолв потребует поднимать весь SessionManager
 // и его зависимости, что не задача стража Git.
+//
+// Остаётся в ClaudeHomeServer.Tests (Этап 3, волна 2 — вынос Git): по конвенции
+// docs/architecture/conventions.md («Сторож регистрации подсистемы: где ему жить»)
+// дефолт для стража подсистемы — Main.Tests, потому что ему нужен Program из Main
+// (или его эквивалент через TestWebApplicationFactory<Program>). Перенос в Git.Tests
+// потребовал бы поднимать полный стенд Main ради регистрации, что не задача стража.
 public class GitSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

@@ -12,6 +12,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Валидация живёт в GitService.ValidateRevision — общий слой для MCP (git_log) и REST;
 /// юнит-оси на живом git — GitServiceTests, здесь проверяем, что тонкая прокси контроллера
 /// не пропускает опцию наружу (раньше «--output=…» перезаписывала произвольный файл).
+///
+/// Остаётся в ClaudeHomeServer.Tests (Этап 3, волна 2 — вынос Git): тестирует
+/// GitController, который лежит в Main (Controllers/GitController.cs), а не в
+/// ClaudeHomeServer.Git. Перенос в Git.Tests потребовал бы выноса контроллера в
+/// вертикаль (отдельная задача — обсуждать с архитектором, сейчас не в скоупе).
 /// </summary>
 public class GitControllerLogTests : IDisposable
 {

@@ -3,6 +3,8 @@
   <Project Path="ClaudeHomeServer.CodeGraph/ClaudeHomeServer.CodeGraph.csproj" />
   <Project Path="ClaudeHomeServer.CodeGraph.Tests/ClaudeHomeServer.CodeGraph.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Core/ClaudeHomeServer.Core.csproj" />
+  <Project Path="ClaudeHomeServer.Git/ClaudeHomeServer.Git.csproj" />
+  <Project Path="ClaudeHomeServer.Git.Tests/ClaudeHomeServer.Git.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Reader/ClaudeHomeServer.Reader.csproj" />
   <Project Path="ClaudeHomeServer.Reader.Tests/ClaudeHomeServer.Reader.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Skills/ClaudeHomeServer.Skills.csproj" />

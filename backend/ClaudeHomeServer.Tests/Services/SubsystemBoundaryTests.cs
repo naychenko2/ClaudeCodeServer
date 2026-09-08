@@ -261,62 +261,6 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.PersonaManager",
                 }),
         },
-        // Git — НИЖНИЙ слой вертикалей (на него смотрят будущие Dossiers/Knowledge/Deploy,
-        // плюс hosted-сервисы SessionManager/ProjectManager). После Этапа 3
-        // (задача `4d044b22`) реакторы `GitAutoCommitService`/`CommitAttributionService`
-        // вынесены в корень `Services.*` — это «реакция на ход/статус» (прецедент
-        // `PersonaMemoryAutolearnService`), они ЗОВУТ `GitService`, а не принадлежат
-        // Git. После уборки Git (Этап 3, 2026-09-08) реакторы регистрируются
-        // в Program.cs, а не в `GitSubsystem.Register`, и из тел методов
-        // вертикали Git больше не достижимы — допуск на `GitAutoCommitService`/
-        // `CommitAttributionService` снят.
-        //
-        // После уборки (Этап 3, 2026-09-08) сняты также допуски на
-        // `ClaudeHomeServer.Services.FileService` (GitService валидирует пути
-        // через Core-примитив `SafePath.Join`, не через `FileService.SafeJoinPublic`)
-        // и `ClaudeHomeServer.Services.PersonaManager` (GitServerService транслитерирует
-        // через Core-примитив `Slugifier.Slugify`, не через `PersonaManager.Slugify`).
-        // Эти две связи были скрытыми — резолв через цепочку namespace
-        // `Services.Git` → `Services` → Core без явного `using`.
-        //
-        // Допуск к корню Services точечный:
-        // 1) `IForgejoAccountStore` — GitServerService сохраняет Forgejo-креденшалы через
-        //    узкую проекцию, не принимая конкретный UserStore.
-        // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory`, через который
-        //    GitService запускает процессы git (источник истины, как в задаче).
-        // 3) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для генерации сообщения
-        //    коммита и имени стэша в `GitAiService`. Это сознательная связь «вертикаль →
-        //    спинка»: LLM-инфраструктура общего назначения (дешёвые one-shot ходы через
-        //    локальную модель или haiku), используемая и другими разделами (теги заметок,
-        //    сводки, память...). Вынос Llm в отдельный allow-list вместо расширения
-        //    SharedAllowedPrefixes — чтобы не открывать любой подсистеме весь
-        //    `ClaudeHomeServer.Services.Llm`.
-        // 4) `ClaudeHomeServer.Protocol` — префикс СНЯТ (волна 3) как полностью
-        //    избыточный: `GitTurnCommitMessage`/`GitStatusChangedMessage` теперь создаются
-        //    в `Services.GitAutoCommitService` (root Services, не в Git-вертикали),
-        //    а метод OnSessionMessageAsync с ServerMessage в сигнатуре — private,
-        //    сторож читает только public-методы. Поэтому убираем префикс, а
-        //    `AllowedExactNamespaces` для `ClaudeHomeServer.Protocol.*` оставляем
-        //    пустым — это сознательный нулевой allow-list: если вертикаль получит
-        //    поле/параметр типа из Protocol, сторож поймает это сразу.
-        new object[]
-        {
-            new VerticalBoundary(
-                "Git",
-                "ClaudeHomeServer.Services.Git",
-                SharedAllowedPrefixes
-                    .Concat(new[]
-                    {
-                        "ClaudeHomeServer.Services.Git",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Services.Llm",
-                    })
-                    .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
-                }),
-        },
         // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
         // Пост-билд фаза `ConfigureApp` регистрирует языковые провайдеры (`.cs`/`.ts`/`.tsx`),
         // MCP-тулсет `CodeGraphToolset` живёт в `Services/Mcp/Http` и регистрируется в Program.cs.
@@ -1777,6 +1721,15 @@ public class SubsystemBoundaryTests
         // Services и регистрируются в Program.cs — это сознательная связь
         // «вертикаль → спинка», Main->Git направление, сторож по Git не
         // запрещает Main ссылаться на Git.
+        //
+        // `AllowedExactNamespaces` пуст СОЗНАТЕЛЬНО, это не забытая строка (перенесено
+        // из прежней записи, снятой при выносе в отдельный .csproj): префикс
+        // `ClaudeHomeServer.Protocol` был убран ещё волной 3 как избыточный —
+        // `GitTurnCommitMessage`/`GitStatusChangedMessage` создаются в
+        // `Services.GitAutoCommitService` (корень Services, не в вертикали), а
+        // `OnSessionMessageAsync` с `ServerMessage` в сигнатуре — private, сторож
+        // читает только public-члены. Нулевой allow-list здесь работает как ловушка:
+        // получит вертикаль поле или параметр типа из Protocol — сторож поймает сразу.
         new object[]
         {
             new VerticalBoundary(

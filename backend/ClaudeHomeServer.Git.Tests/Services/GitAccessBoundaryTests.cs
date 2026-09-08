@@ -9,8 +9,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // `public` (и не должны быть `protected`) — после волн 1-3 вся нужная функциональность
 // доступна через типизированные методы GitService и IGitRefSnapshotStore. Любой внешний
 // код, желающий сырую команду git, должен идти через типизированный метод (образец
-// DiffFileVsHeadAsync/LogNumstatRangeAsync, добавленные в волне 3). Тесты — через
-// InternalsVisibleTo("ClaudeHomeServer.Tests").
+// DiffFileVsHeadAsync/LogNumstatRangeAsync, добавленные в волне 3). Этот файл живёт
+// в `ClaudeHomeServer.Git.Tests` (Этап 3, вынос вертикали в отдельный .csproj) и
+// видит internal-члены через `InternalsVisibleTo("ClaudeHomeServer.Git.Tests")` в
+// `ClaudeHomeServer.Git.csproj`; второй атрибут там же, на `ClaudeHomeServer.Tests`,
+// оставлен ради тестов, которые остались в Main.Tests.
 //
 // Проверка опирается на сам факт модификатора: если кто-то по ошибке вернёт
 // `public`/`protected`, сторож упадёт. Сам компилятор при текущем `internal` тоже

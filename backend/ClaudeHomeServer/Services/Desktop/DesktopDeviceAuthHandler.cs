@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 
@@ -18,10 +19,15 @@ namespace ClaudeHomeServer.Services.Desktop;
 ///
 /// Ставится на эндпоинты явно:
 /// <c>[Authorize(AuthenticationSchemes = DesktopDeviceAuthHandler.SchemeName)]</c>.
+///
+/// Имена <c>SchemeName</c> и <c>DeviceIdClaim</c> берутся из WS-контракта
+/// <see cref="DesktopProtocol"/> — это единственный источник правды, чтобы литералы
+/// не разъехались между контрактом и авторизацией (иначе пустой владелец в хабе
+/// при формально успешной проверке токена).
 /// </summary>
 public sealed class DesktopDeviceAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
-    public const string SchemeName = "DesktopDevice";
+    public const string SchemeName = DesktopProtocol.DeviceTokenScheme;
 
     /// <summary>Префикс схемы в Authorization — намеренно не Bearer: это другой класс токена.</summary>
     public const string TokenPrefix = "Device ";
@@ -29,7 +35,7 @@ public sealed class DesktopDeviceAuthHandler : AuthenticationHandler<Authenticat
     public const string FingerprintHeader = "X-Device-Fingerprint";
 
     /// <summary>Устройство в принципале (то же имя claim, что у capability-токена канала).</summary>
-    public const string DeviceIdClaim = "did";
+    public const string DeviceIdClaim = DesktopProtocol.DeviceIdClaim;
 
     /// <summary>Версия device-токена: по ней видно, что принципал построен не на прошлой выдаче.</summary>
     public const string DeviceTokenVersionClaim = "dtv";

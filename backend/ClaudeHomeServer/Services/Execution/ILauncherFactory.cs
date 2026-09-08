@@ -3,9 +3,9 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Execution;
 
-// Реализация ILauncherFactory (контракт в Core, реализация держит UserStore/SandboxManager
+// Реализация ILauncherFactory (контракт в Core, реализация держит IUserStore/SandboxManager
 // и потому живёт в Main).
-public sealed class LauncherFactory(UserStore users, SandboxManager sandbox) : ILauncherFactory
+public sealed class LauncherFactory(IUserStore users, SandboxManager sandbox) : ILauncherFactory
 {
     private readonly ConcurrentDictionary<string, DockerProcessRunner> _sandboxed = new();
 

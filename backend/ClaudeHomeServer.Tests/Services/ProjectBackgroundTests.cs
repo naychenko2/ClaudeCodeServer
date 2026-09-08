@@ -265,7 +265,7 @@ public class ProjectBackgroundTests : IDisposable
     // ---------- Сервис генерации ----------
 
     private ProjectBackgroundService Service(string answer) =>
-        new(_projects, new FakeCheap(answer), NullLogger<ProjectBackgroundService>.Instance);
+        new(_projects, _projects, new FakeCheap(answer), NullLogger<ProjectBackgroundService>.Instance);
 
     [Fact]
     public async Task Удачная_генерация_пишет_файл_и_ссылку()
@@ -321,7 +321,7 @@ public class ProjectBackgroundTests : IDisposable
     public async Task Модель_не_ответила_фон_остаётся_стандартным()
     {
         var project = NewProject();
-        var service = new ProjectBackgroundService(_projects,
+        var service = new ProjectBackgroundService(_projects, _projects,
             new FakeCheap(null), NullLogger<ProjectBackgroundService>.Instance);
 
         var result = await service.GenerateAsync(project);

@@ -7,7 +7,7 @@ namespace ClaudeHomeServer.Services.Tasks;
 // Генерация контента задач одноразовым вызовом (без сессии). Идёт через «дешёвый» раннер:
 // локальная модель Ollama (если действие task-ai на неё заведено) или claude (Tasks:AiModel).
 // Контекст проекта передаётся в промпте (имя + выдержка из CLAUDE.md).
-public class TaskAiService(ProjectManager projects, IConfiguration config,
+public class TaskAiService(IProjectManager projects, IConfiguration config,
     Llm.ICheapTextRunner cheap)
 {
 

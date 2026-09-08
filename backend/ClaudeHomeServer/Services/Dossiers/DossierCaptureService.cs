@@ -38,7 +38,7 @@ public sealed class DossierCaptureService : BackgroundService
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private readonly SessionManager _sessions;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly TaskManager _tasks;
     private readonly FileService _files;
     private readonly Git.GitService _git;
@@ -50,7 +50,7 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly HashSet<string> _skipTypes;
     private readonly ILogger<DossierCaptureService> _log;
 
-    public DossierCaptureService(SessionManager sessions, ProjectManager projects, TaskManager tasks,
+    public DossierCaptureService(SessionManager sessions, IProjectManager projects, TaskManager tasks,
         FileService files, Git.GitService git, DossierStore store, DossierCaptureState state,
         ICheapTextRunner cheap, CodeGraph.CodeGraphService codeGraph,
         InstanceSecretsProvider secrets, IConfiguration config, ILogger<DossierCaptureService> log)

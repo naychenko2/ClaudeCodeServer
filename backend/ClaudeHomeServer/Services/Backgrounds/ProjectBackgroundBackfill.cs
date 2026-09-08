@@ -22,8 +22,8 @@ public sealed record BackfillSummary(int Generated, int Skipped, int Failed)
 /// отдельного стора «что уже прогнали» не нужно.
 /// </summary>
 public sealed class ProjectBackgroundBackfill(
-    ProjectManager projects, ProjectBackgroundService backgrounds,
-    UserStore users, ILogger<ProjectBackgroundBackfill> log)
+    IProjectManager projects, ProjectBackgroundService backgrounds,
+    IUserStore users, ILogger<ProjectBackgroundBackfill> log)
 {
     // Не больше 2 генераций одновременно на инстанс: 39 залповых вызовов сильной модели
     // упрутся в rate limit, и половина проектов получит Failed по вине очереди, а не модели

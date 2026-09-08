@@ -26,7 +26,12 @@ public sealed record IconMigrationSummary(int Migrated, int Failed)
 /// сам сервис; не снялся — миграция не стартует вовсе.
 /// </summary>
 public sealed class ProjectIconMigration(
-    ProjectManager projects,
+    IProjectManager projects,
+    // Мутация (TrySetIconGlyphMigrated) — единственная запись в сторе значков,
+    // её нет в шве IProjectManager (см. задачу Ф5.1, раздел «что не делать»).
+    // Прямая ссылка держится отдельно: ProjectIconMigration использует и шов
+    // для чтения, и полный ProjectManager для записи.
+    ProjectManager projectsWriter,
     ProjectIconGlyphService glyphs,
     IConfiguration config,
     ILogger<ProjectIconMigration> log)
@@ -128,7 +133,7 @@ public sealed class ProjectIconMigration(
                 // Кандидаты — только имена из набора lucide: рисованные пути вырезаны
                 var pick = result.Candidates[0];
                 var glyph = new ProjectGlyph { Name = pick.Name, SetAt = DateTime.UtcNow };
-                if (!projects.TrySetIconGlyphMigrated(project.Id, glyph))
+                if (!projectsWriter.TrySetIconGlyphMigrated(project.Id, glyph))
                 {
                     // Значок успел выбрать пользователь — его выбор главнее
                     log.LogInformation("Значок проекта «{Name}»: пропущен, значок уже стоит", project.Name);

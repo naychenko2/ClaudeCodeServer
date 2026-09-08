@@ -20,18 +20,18 @@ namespace ClaudeHomeServer.Services.Turn;
 // всего --append-system-prompt.
 public sealed class PersonaLayerContributor : IPromptSectionContributor
 {
-    private readonly UserStore _users;
+    private readonly IUserStore _users;
     private readonly PersonaManager _personas;
     private readonly PersonaPromptBuilder _promptBuilder;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly SkillsService? _skills;
     private readonly Func<bool> _personasEnabled;
 
     public PersonaLayerContributor(
-        UserStore users,
+        IUserStore users,
         PersonaManager personas,
         PersonaPromptBuilder promptBuilder,
-        ProjectManager projects,
+        IProjectManager projects,
         SkillsService? skills,
         // Резолвер «разрешены ли персоны для этой сессии» — определяет, добавлять ли
         // подсказку про создание персоны в онбординг-оверлей. Без него (тесты) —

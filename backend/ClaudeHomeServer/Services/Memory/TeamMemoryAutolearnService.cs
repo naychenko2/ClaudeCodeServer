@@ -19,7 +19,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private readonly SessionManager _sessions;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly TeamMemoryService _memory;
     private readonly TeamMemoryConsolidationService _consolidation;
     private readonly Llm.ICheapTextRunner _cheap;
@@ -35,7 +35,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly int _minTurnChars;
     private int _skipped;
 
-    public TeamMemoryAutolearnService(SessionManager sessions, ProjectManager projects,
+    public TeamMemoryAutolearnService(SessionManager sessions, IProjectManager projects,
         TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
         Llm.ICheapTextRunner cheap,
         IConfiguration config, ILogger<TeamMemoryAutolearnService> log, ISessionBroadcaster broadcaster,

@@ -68,7 +68,7 @@ public sealed record SpendBadgeDto(string SessionId, SpendTokensDto Total, int T
 // и идёт через узкий шов `IModelResolver` (Core). Раньше это была прямая ссылка
 // на `LlmProviderRegistry`, и вертикаль не собиралась без ProjectReference на Llm.
 public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessions,
-    ProjectManager projects, TaskManager tasks, PersonaManager personas, UserStore users,
+    IProjectManager projects, TaskManager tasks, PersonaManager personas, IUserStore users,
     IModelResolver llmProviders)
 {
     private const int CardLimit = 8;

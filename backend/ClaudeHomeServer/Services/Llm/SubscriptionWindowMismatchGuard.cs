@@ -16,7 +16,7 @@ public interface ISubscriptionAlertNotifier
 // чужого токена жил трое суток и нашёлся только ручным сравнением каналов.
 public sealed class SubscriptionAlertNotifier(
     NotificationService notifications,
-    UserStore users) : ISubscriptionAlertNotifier
+    IUserStore users) : ISubscriptionAlertNotifier
 {
     public async Task NotifyAdminsAsync(string title, string body)
     {

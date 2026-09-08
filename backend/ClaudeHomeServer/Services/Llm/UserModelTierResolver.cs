@@ -40,7 +40,7 @@ public sealed record TierMatrix(string? Strong, string? Medium, string? Weak)
 // единственной точки разворачивания»). Перегрузка с узкими матрицами (персона → специальность)
 // обходит их по порядку и только потом падает на слоты; без матриц — сразу слоты (фоновые
 // действия, CheapTextRunner — у них нет персоны/специальности).
-public sealed class UserModelTierResolver(UserStore users, AppSettingsService appSettings)
+public sealed class UserModelTierResolver(IUserStore users, AppSettingsService appSettings)
 {
     public string? ModelFor(ModelTier tier, string? ownerId)
     {

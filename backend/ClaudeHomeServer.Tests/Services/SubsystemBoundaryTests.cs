@@ -1976,6 +1976,10 @@ public class SubsystemBoundaryTests
         // Этап 3, волна 1 (Skills): ILauncherFactory/IProcessLauncher/ProcessSpec/IPathMapper
         // переехали в Core — общие контракты запуска процессов для всех вертикалей.
         "ClaudeHomeServer.Services.Execution",
+        // Этап 5, шаг Ф1 (Models→Core): контракт записи долгой памяти нужен обоим
+        // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
+        // интерфейса в Core `Models/` целиком не уезжает.
+        "ClaudeHomeServer.Services.Memory",
     ];
 
     /// <summary>

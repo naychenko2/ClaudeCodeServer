@@ -1,8 +1,6 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Watchdog;
 
@@ -16,14 +14,14 @@ namespace ClaudeHomeServer.Services.Watchdog;
 public sealed class WatchdogNotifier : IDisposable
 {
     private readonly WatchdogStore _store;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly ILogger<WatchdogNotifier>? _log;
 
     public WatchdogNotifier(WatchdogStore store,
-        IHubContext<SessionHub> hub, ILogger<WatchdogNotifier>? log = null)
+        ISessionBroadcaster broadcaster, ILogger<WatchdogNotifier>? log = null)
     {
         _store = store;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _log = log;
         store.Changed += OnChanged;
     }
@@ -67,11 +65,11 @@ public sealed class WatchdogNotifier : IDisposable
         try
         {
             var msg = Snapshot(ownerId);
-            var sends = new List<Task> { _hub.Clients.Group("user_" + ownerId).SendAsync("message", msg) };
+            var sends = new List<Task> { _broadcaster.ToOwner(ownerId, msg) };
             foreach (var sid in msg.Sessions)
-                sends.Add(_hub.Clients.Group(sid).SendAsync("message", msg with { SessionId = sid }));
+                sends.Add(_broadcaster.ToSession(sid, msg with { SessionId = sid }));
             foreach (var pid in msg.Projects)
-                sends.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+                sends.Add(_broadcaster.ToProject(pid, msg));
             await Task.WhenAll(sends);
         }
         catch (Exception ex)

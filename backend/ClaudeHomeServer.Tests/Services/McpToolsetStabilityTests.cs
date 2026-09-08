@@ -255,8 +255,10 @@ public class McpToolsetStabilityTests
             "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
         // Фич-флага в этой ветке нет с 2026-09-08 (снят): интеграция работает безусловно,
         // единственный предохранитель — рубильник Enabled записи, который читает
-        // IsBuiltinDelivered. Возврат проверки флага обязан ронять тест.
-        body.Should().NotContain("FeatureFlagKeys",
+        // IsBuiltinDelivered. Возврат любой проверки флага (хоть FeatureFlagKeys.DesktopAgent,
+        // хоть литералом "higgsfield") обязан ронять тест: доставка идёт по записи
+        // реестра, а не по тумблеру фичи.
+        body.Should().NotContain("_flags",
             "флаг higgsfield снят: доставка идёт по записи реестра, а не по тумблеру фичи");
         // Живой OAuth сохраняем
         body.Should().Contain("EnsureFresh",

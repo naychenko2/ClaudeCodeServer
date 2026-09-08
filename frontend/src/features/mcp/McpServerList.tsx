@@ -139,23 +139,30 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
       {/* Карточка Higgsfield показывается всегда: интеграция работает безусловно
           (фич-флаг снят 2026-09-08), состояние входа она узнаёт сама */}
       <HiggsfieldCard />
-      {serviceTiles.length > 0 && (
-        <div style={tileGridStyle}>
-          {serviceTiles.map(tile => (
-            <Tile
-              key={tile.key}
-              tile={tile}
-              title={SERVICE_TITLES[tile.key] ?? tile.key}
-              subtitle={tile.key}
-              badge={tile.group === 'integration' ? 'через интернет' : undefined}
-            />
-          ))}
-        </div>
-      )}
-      {serviceTiles.length > 0 && (
+      {serviceTiles.length > 0 ? (
+        <>
+          <div style={tileGridStyle}>
+            {serviceTiles.map(tile => (
+              <Tile
+                key={tile.key}
+                tile={tile}
+                title={SERVICE_TITLES[tile.key] ?? tile.key}
+                subtitle={tile.key}
+                badge={tile.group === 'integration' ? 'через интернет' : undefined}
+              />
+            ))}
+          </div>
+          <div style={hintStyle}>
+            Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
+            Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
+          </div>
+        </>
+      ) : (
+        // У нового владельца плиток ещё нет (статусы приезжают из первого хода в чате, а
+        // до этого раздел пуст), и без этой подсказки секция «Сервисы AI Home» выглядит
+        // как пустая панель рядом с карточкой Higgsfield.
         <div style={hintStyle}>
-          Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
-          Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
+          Пока ничего не наблюдалось: статус серверов приезжает из первого же хода в чате.
         </div>
       )}
 

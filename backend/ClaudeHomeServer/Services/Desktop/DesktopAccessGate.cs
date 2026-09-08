@@ -196,7 +196,7 @@ public sealed class DesktopAccessGate(
 /// </summary>
 public sealed class DesktopChatDirectory(
     SessionManager sessions,
-    ProjectManager projects,
+    IProjectManager projects,
     FeatureFlagService flags,
     PersonaManager? personas = null) : IDesktopChatDirectory
 {

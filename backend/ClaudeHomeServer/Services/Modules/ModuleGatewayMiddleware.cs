@@ -81,7 +81,7 @@ public static class ModuleGatewayMiddleware
         var userId = jwt.ValidateUserToken(rawToken);
         var user = userId is null
             ? null
-            : ctx.RequestServices.GetRequiredService<UserStore>().GetById(userId);
+            : ctx.RequestServices.GetRequiredService<IUserStore>().GetById(userId);
         if (user is null)
         {
             // (б) модульный токен chan=mcp этого модуля (RS256) — passthrough (§5.2б).

@@ -19,17 +19,21 @@ public static class DesktopProtocol
     /// <summary>
     /// Схема авторизации канала устройств. /api/devices/* и /hubs/devices НЕ принимают
     /// дефолтную JwtBearer и сервисный JWT владельца (ADR-008, «Авторизация канала»);
-    /// сама схема регистрируется в слое авторизации устройств.
+    /// сама схема регистрируется в слое авторизации устройств. Источник правды —
+    /// здесь: вертикаль Desktop ссылается на этот литерал, а не наоборот (иначе
+    /// контракт WS-канала зависел бы от вертикали, что ломает Ф3 Этапа 5).
     /// </summary>
-    public const string DeviceTokenScheme = Services.Desktop.DesktopDeviceAuthHandler.SchemeName;
+    public const string DeviceTokenScheme = "DesktopDevice";
 
     // Claims токена устройства. Имена НЕ свои: их выдаёт сторона авторизации
     // (DesktopDeviceAuthHandler), и разъехавшиеся литералы означали бы пустого владельца
-    // в хабе при формально успешной проверке токена. Claim чата (sid) сюда НЕ выносим:
-    // его читает только DesktopCaller.FromPrincipal — единственная точка разбора
-    // capability-токена, а висящий алиас читался бы как отдельная проверка чата.
+    // в хабе при формально успешной проверке токена. Источник правды — здесь,
+    // `DesktopDeviceAuthHandler` ссылается на эти литералы, а не объявляет свои.
+    // Claim чата (sid) сюда НЕ выносим: его читает только DesktopCaller.FromPrincipal —
+    // единственная точка разбора capability-токена, а висящий алиас читался бы как
+    // отдельная проверка чата.
     public const string OwnerIdClaim = "sub";
-    public const string DeviceIdClaim = Services.Desktop.DesktopDeviceAuthHandler.DeviceIdClaim;
+    public const string DeviceIdClaim = "did";
 
     /// <summary>Ack на команду: нет за 2 с — честная ошибка, а не висение до таймаута MCP.</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(2);

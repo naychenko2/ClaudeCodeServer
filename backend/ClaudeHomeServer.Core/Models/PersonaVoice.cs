@@ -6,6 +6,11 @@ namespace ClaudeHomeServer.Models;
 // Все поля проверяются в VoiceResolver, а не здесь: стор переживает и переименование
 // голоса в SpeechKit, и правку json руками, и в обоих случаях озвучка обязана продолжать
 // работать — молча на дефолте, а не отказом.
+//
+// Переехал из `ClaudeHomeServer/Models/PersonaVoice.cs` в Core с сохранением namespace
+// (по образцу `ClaudeMode`/`GitStatus`/`TeamEscalation`): шов `IPersonaVoiceLookup` отдаёт
+// именно `PersonaVoice`, и call-site'ы (контроллер, форма персоны, сидинг) остаются без
+// правок. Файл в Main удалён.
 public class PersonaVoice
 {
     // Имя голоса SpeechKit (белый список — TtsVoiceCatalog). Пусто = голос не выбран

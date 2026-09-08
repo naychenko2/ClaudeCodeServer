@@ -169,6 +169,10 @@ builder.Services.AddSingleton<IProjectRootLookup, ProjectRootLookup>();
 // обёртки в Main, контракты живут в Core.
 builder.Services.AddSingleton<IPersonaSkillBindingLookup, PersonaSkillBindingLookup>();
 builder.Services.AddSingleton<IProjectSummaryLookup, ProjectSummaryLookup>();
+// Шов для Tts (Этап 3, вынос Tts): вместо прямой зависимости VoiceResolver от
+// PersonaManager — узкий контракт на голос персоны. Реализация — тонкая обёртка
+// в Main (`Services/Composition/PersonaVoiceLookup`), контракт живёт в Core.
+builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();

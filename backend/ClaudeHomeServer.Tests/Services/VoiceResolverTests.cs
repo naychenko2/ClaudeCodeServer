@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tts;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -38,7 +39,9 @@ public class VoiceResolverTests : IDisposable
         if (configuredSpeed is not null)
             values["Yandex:SpeechKit:Speed"] = configuredSpeed.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        return new VoiceResolver(_personas, config, NullLogger<VoiceResolver>.Instance);
+        // Голос извлекает адаптер IPersonaVoiceLookup поверх реального PersonaManager —
+        // тот же seam, что регистрируется в Program.cs: вертикаль видит только DTO.
+        return new VoiceResolver(new PersonaVoiceLookup(_personas), config, NullLogger<VoiceResolver>.Instance);
     }
 
     private Persona PersonaWith(string ownerId, PersonaVoice? voice)

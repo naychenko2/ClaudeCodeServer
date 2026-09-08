@@ -64,6 +64,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1778,13 +1779,13 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 8 = Main + Core + 6 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git);
+        // 9 = Main + Core + 7 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts);
         // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(8,
-            "после Этапа 3 сторож должен видеть 8 прод-сборок: ClaudeHomeServer, " +
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(9,
+            "после Этапа 3 сторож должен видеть 9 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
-            "ClaudeHomeServer.Git");
+            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

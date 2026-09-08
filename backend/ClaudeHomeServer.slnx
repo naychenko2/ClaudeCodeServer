@@ -15,6 +15,7 @@
   <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tts/ClaudeHomeServer.Tts.csproj" />
   <Project Path="ClaudeHomeServer.Tts.Tests/ClaudeHomeServer.Tts.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.WebSearch/ClaudeHomeServer.WebSearch.csproj" />
   <Project Path="ClaudeHomeServer.Tray/ClaudeHomeServer.Tray.csproj" />
   <Project Path="ClaudeHomeServer.Video/ClaudeHomeServer.Video.csproj" />
   <Project Path="ClaudeHomeServer.Video.Tests/ClaudeHomeServer.Video.Tests.csproj" />

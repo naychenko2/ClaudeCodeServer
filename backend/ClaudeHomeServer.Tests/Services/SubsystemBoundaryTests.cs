@@ -1975,6 +1975,14 @@ public class SubsystemBoundaryTests
         // Этап 3, волна 1 (Skills): ILauncherFactory/IProcessLauncher/ProcessSpec/IPathMapper
         // переехали в Core — общие контракты запуска процессов для всех вертикалей.
         "ClaudeHomeServer.Services.Execution",
+        // Этап 5, волна A (Notes): IKnowledgeSyncParticipant/KnowledgeSyncTarget в Core —
+        // контракт синка с Dify, который реализуют ЧЕТЫРЕ вертикали (Notes, Memory,
+        // Dossiers, ProjectKnowledgeSync). Он же снял прямые ссылки из
+        // UserKnowledgeCascade на конкретные типы этих вертикалей: каскад теперь берёт
+        // IEnumerable<IKnowledgeSyncParticipant>. Сам KnowledgeService в Core НЕ едет —
+        // он тянет WorkspaceKnowledgeStore, законную внутреннюю композицию своей
+        // вертикали; потребителям вместо него узкий контракт (волна B).
+        "ClaudeHomeServer.Services.Knowledge",
     ];
 
     /// <summary>

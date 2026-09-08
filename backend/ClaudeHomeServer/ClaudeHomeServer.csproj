@@ -82,6 +82,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

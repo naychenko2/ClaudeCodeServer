@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Tts;
 
@@ -13,7 +14,7 @@ namespace ClaudeHomeServer.Services.Tts;
 // протухший personaId) молча вырождается в дефолт. Причина — в поведении фронта: 400
 // или 502 уводят ОСТАТОК фразы на голос браузера, то есть опечатка в сторе стоила бы
 // человеку куска озвучки, а не одной неверной интонации.
-public class VoiceResolver(PersonaManager personas, IConfiguration config, ILogger<VoiceResolver> logger)
+public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, ILogger<VoiceResolver> logger)
 {
     // Границы SpeechKit: вне их запрос отвергается с 400
     private const double MinSpeed = 0.1;
@@ -37,8 +38,8 @@ public class VoiceResolver(PersonaManager personas, IConfiguration config, ILogg
             return ForPersonaVoice(@explicit);
 
         if (string.IsNullOrWhiteSpace(personaId)) return Default();
-        var persona = personas.Get(personaId, ownerId);
-        return persona?.Voice is null ? Default() : ForPersonaVoice(persona.Voice);
+        var voice = personas.GetVoice(ownerId, personaId);
+        return voice is null ? Default() : ForPersonaVoice(voice);
     }
 
     private VoiceChoice Default() => new(_defaultVoice, null, _defaultSpeed);

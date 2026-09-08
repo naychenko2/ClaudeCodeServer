@@ -71,6 +71,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.WebSearch.PerplexitySearchService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -547,47 +548,47 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
-        // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Сторож проверяет
-        // типы из `Services.Knowledge` (KnowledgeAlertNotifier, KnowledgeIndexReconciler,
-        // IKnowledgeSyncParticipant/KnowledgeSyncTarget, KnowledgeService, WorkspaceKnowledgeStore,
-        // KnowledgeBaseCatalogService, ProjectKnowledgeSyncService, UserKnowledgeCascade,
-        // а также вложенные типы KnowledgeService — DifyDocumentItem/DifyDocumentsPage).
-        // Префикс-шов: `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для событий
-        // `knowledge_changed` (KnowledgeController, DifyToolset) и `ProjectKnowledgeTurnSync`
-        // (hosted-мост событий хода Claude на FileService.OnMutated).
-        // Допуски к корню Services — точечные (по образцу Dossiers/Spend):
-        // 1) `NotificationService`/`NotificationStore` (Services/ корень) — `KnowledgeAlertNotifier`
-        //    шлёт алерт владельцу через общий нотификатор (KnowledgeAlertNotifier.cs:23-24),
-        //    «вертикаль → спинка» (общая инфраструктура).
-        // 2) `UserStore` (Services/ корень) — `KnowledgeBaseCatalogService` (для доступа
-        //    к списку пользователей, по префиксу имени определяется «своя»/«чужая» БЗ).
-        // 3) `ProjectManager` (Services/ корень) — `ProjectKnowledgeSyncService`/
-        //    `ProjectKnowledgeTurnSync`/`UserKnowledgeCascade` для разрешения пути
-        //    проекта и удаления каскада (UserKnowledgeCascade удаляет все БЗ проекта).
-        // 4) `FileService` (Services/ корень) — `ProjectKnowledgeSyncService` подписан
-        //    на `FileService.OnMutated` через мост хода, видит поле типа `IHubContext`.
-        // 5) `SessionManager` (Services/ корень) — `ProjectKnowledgeTurnSync` пишет
-        //    `session_known` снапшоты через `SessionManager` (поле `_sessions`).
-        // 6) `PersonaManager`/`PersonaMemoryService` (Services/ корень) — `UserKnowledgeCascade`
-        //    удаляет персональные БЗ и Dify-датасеты персон при удалении пользователя.
-        // 7) `TeamMemoryService` (Services/ корень) — `UserKnowledgeCascade` чистит
-        //    team-memory-датасеты per-проект.
-        // 8) `Dossiers.DossierStore` (Services/Dossiers) — `UserKnowledgeCascade` чистит
-        //    dossiers-датасеты per-проект. Сознательная зависимость: каскадная уборка
-        //    знаний идёт по ВСЕМ владельцам стора «запись → Dify-документ», как и форвардер
-        //    `IKnowledgeSyncParticipant → DossierStore` в Program.cs. Выделение явного
-        //    интерфейса «владелец Dify-датасета» — отдельная задача.
-        // 9) `NotesKnowledgeService` (Services/ корень) — `UserKnowledgeCascade` чистит
-        //    notes-датасет; на него уже есть форвардер `IKnowledgeSyncParticipant →
-        //    NotesKnowledgeService` в Program.cs, каскад идёт той же логикой.
-        // Допуски к `ClaudeHomeServer.Controllers` (DTO):
-        // 10) `KnowledgeBaseSummary`/`KnowledgeBaseDetail`/`KnowledgeDocumentDto`
-        //    (Controllers) — `KnowledgeBaseCatalogService` отдаёт их же и REST, и MCP-тулсету
-        //    (общая оркестрация; ADR-014 §Knowledge). DTO живут в Controllers как
-        //    ASP.NET-контракт ответа — выделение отдельной сборки под общие DTO не делали.
-        // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, NotesKnowledgeService,
-        // ProjectKnowledgeSyncService, ...}` остаются в Program.cs (кросс-вертикальный клей)
-        // и поэтому НЕ входят в allow-list Knowledge.
+        // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Allow-list
+        // пустой поверх общей спинки: всё, что раньше требовало точечных допусков
+        // к `Services`/`Controllers`, после выноса закрыто швами в `Core`. Перечень
+        // швов (источник правды — `Core/Services/Composition/`, `Core/Services/Knowledge/`,
+        // `Core/Services/IKnowledgeNotificationDispatcher.cs`):
+        // - `IProjectFileGateway` (был `FileService` + `FileService.OnMutated` в allow-list
+        //   п.4 и комментарии про Hubs-шов) — `ProjectKnowledgeSyncService` подписан
+        //   на `OnMutated` через адаптер `ProjectFileGateway` (Services/), адаптер
+        //   идёт через `FileService` (инвариант, Core/Services/Composition/IProjectFileGateway.cs:13-16).
+        // - `ISessionMessageObserver` (был `Hubs.SessionHub`/`SessionManager` в п.5 и
+        //   комментарии про Hubs-шов) — `ProjectKnowledgeTurnSync` слушает события хода
+        //   через Core-шов, без прямого доступа к `SessionManager`.
+        // - `IKnowledgeHubNotifier` (был `Hubs.SessionHub`/`IHubContext<SessionHub>`
+        //   в комментарии про Hubs-шов) — `ProjectKnowledgeSyncService` шлёт
+        //   `knowledge_changed` через Core-шов; реализация живёт в Main и инъектится
+        //   форвардером в Program.cs.
+        // - `IKnowledgeNotificationDispatcher` (был `NotificationService`/`NotificationStore`
+        //   в п.1) — `KnowledgeAlertNotifier` ходит через Core-шов (Core/Services/IKnowledgeNotificationDispatcher.cs).
+        // - `IKnowledgeSyncParticipant` (был `DossierStore`/`NotesKnowledgeService` в п.8-9)
+        //   — `UserKnowledgeCascade` чистит датасеты per-участник через Core-контракт,
+        //   форвардеры `IKnowledgeSyncParticipant → {DossierStore, NotesKnowledgeService,
+        //   ProjectKnowledgeSyncService, ...}` остаются в Program.cs (кросс-вертикальный клей)
+        //   и поэтому не входят в allow-list Knowledge.
+        // - `IKnowledgeIndex` (был `KnowledgeBaseSummary`/`KnowledgeBaseDetail`/
+        //   `KnowledgeDocumentDto` в п.10) — узкий Core-контракт из шести методов для
+        //   Notes/Memory/Dossiers; DTO (`DifyDocumentInfo`/`DifyRetrieveChunk`/
+        //   `KnowledgeMetadataFilter`/`KnowledgeMetadataFieldInfo`) переехали в
+        //   `Core/Services/Knowledge/KnowledgeDtos.cs` (Этап 5, волна 5), отдельной
+        //   сборки под DTO в Controllers больше нет.
+        // - `IProjectManager` (был п.3) — `ProjectKnowledgeSyncService`/`UserKnowledgeCascade`
+        //   резолвят путь проекта через Core-шов (Core/Services/Composition/IProjectManager.cs);
+        //   `ProjectManager` живёт в `Services/` root, но обращение из Knowledge идёт
+        //   через интерфейс, который собирается в Core и потому покрыт `IsCoreAssembly`.
+        // `UserStore` (был п.2) — больше не нужен: префиксный допуск имени пользователя
+        // для определения «своей»/«чужой» БЗ заменён на `IUserLookup` (Core).
+        // `PersonaManager`/`PersonaMemoryService` (был п.6) — `UserKnowledgeCascade`
+        // ходит через Core-шов, конкретные типы персон не видит.
+        // `TeamMemoryService` (был п.7) — то же: `UserKnowledgeCascade` идёт через
+        // `IKnowledgeSyncParticipant`, и для Team подключён форвардер в Program.cs.
+        // Итого: `AllowedExactNamespaces` пуст, точечных допусков нет. Появится новая
+        // прямая зависимость — добавляется шов в Core, иначе сторож укажет на нарушение.
         new object[]
         {
             new VerticalBoundary(

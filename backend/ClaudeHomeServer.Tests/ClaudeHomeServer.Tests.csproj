@@ -25,10 +25,15 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <!-- Форс-загрузка сборки Knowledge в сторожах SubsystemBoundaryTests /
-         RootSubsystemBoundaryTests / SubsystemBoundaryCoverageTests — иначе фильтр
-         AppDomain.CurrentDomain.GetAssemblies() возвращает пустой набор и сторож
-         проходит вакуумно (см. ADR-014, задача 8beee75e). -->
+    <!--
+      Знание — отдельная сборка (этап 5). Нужен ProjectReference, чтобы тесты
+      видели IKnowledgeIndex/IKnowledgeSyncParticipant/KnowledgeDtos из Core,
+      и компилировались Knowledge-вызовы в UserKnowledgeCascadeTests,
+      PersonaMemoryServiceDossierSplitTests, NotesKnowledgeServiceDossierSplitTests
+      и др. Сама по себе ссылка сборку в AppDomain не грузит — загрузка в .NET
+      ленивая; явный форс лежит в статических конструкторах SubsystemBoundaryTests,
+      RootSubsystemBoundaryTests и SubsystemBoundaryCoverageTests.
+    -->
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />

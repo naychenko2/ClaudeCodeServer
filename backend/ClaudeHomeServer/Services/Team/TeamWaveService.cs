@@ -46,7 +46,7 @@ public class TeamWaveService
     // «активный аккумулятор против диска», которая живёт в приватном состоянии ядра.
     private readonly ITeamHistoryStore _history;
     private readonly TaskManager _tasks;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly ISessionBroadcaster _broadcaster;
     private readonly TaskExecutionService? _exec;
     private readonly NotificationService? _notif;
@@ -68,7 +68,7 @@ public class TeamWaveService
     // поэтому «кто закрывает волну» решается под этим локом, а не проверкой состояния на глаз.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
 
-    public TeamWaveService(SessionManager sessions, TaskManager tasks, ProjectManager projects,
+    public TeamWaveService(SessionManager sessions, TaskManager tasks, IProjectManager projects,
         ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
         // Имя персоны-автора для текста уведомлений и push (Э8) — зависимость обязательная:
         // «карточки и уведомления от лица персоны» это требование фичи, а не украшение,

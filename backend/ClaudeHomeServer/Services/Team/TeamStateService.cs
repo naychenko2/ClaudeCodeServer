@@ -38,7 +38,7 @@ internal sealed class TeamStateService
     private readonly ITeamSessionDirectory _dir;
     private readonly ITeamRunState _run;
     private readonly TeamPlanningService? _teamPlanning;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly IConfiguration? _config;
     private readonly LlmProviderRegistry _llmProviders;
     // Лок-словарь штаба по sessionId: единственный держатель блокировки для мутаций
@@ -47,7 +47,7 @@ internal sealed class TeamStateService
     private readonly ConcurrentDictionary<string, object> _teamLocks = new();
 
     internal TeamStateService(SessionManager sessions, TeamPlanningService? teamPlanning,
-        ProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
+        IProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
     {
         _sessions = sessions;
         _dir = sessions;

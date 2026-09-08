@@ -14,7 +14,7 @@ public class TaskSchedulerService(
     IHubContext<SessionHub> hub,
     TaskExecutionService executor,
     IDailyBriefingRunner briefing,
-    PersonaAutomationService automation,
+    IPersonaAutomationRunner automation,
     NotificationService notif,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {

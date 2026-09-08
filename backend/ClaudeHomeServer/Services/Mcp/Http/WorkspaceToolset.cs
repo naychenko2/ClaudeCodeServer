@@ -2,8 +2,8 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Filters;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Deploy;
@@ -12,7 +12,6 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -74,7 +73,7 @@ public sealed partial class WorkspaceToolset(
     TaskManager tasks,
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -492,7 +491,7 @@ public sealed partial class WorkspaceToolset(
                 // интерфейс жил бы с устаревшими метками до перезагрузки (блокер волны 3.1;
                 // TaskManager.Update бродкаста не делает — он был обязанностью контроллера)
                 if (updatedTask is not null)
-                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updatedTask);
+                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
                 var taskAnswer = new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -568,7 +567,7 @@ public sealed partial class WorkspaceToolset(
                 // Бродкаст task_changed(updated) — как tags_apply (блокер волны 3.1): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки
                 if (updatedTask is not null)
-                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updatedTask);
+                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
                 return Json(new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -1041,8 +1040,8 @@ public sealed partial class WorkspaceToolset(
 
     // Событие knowledge_changed в хаб — тот же канал, что у контроллеров знаний
     private Task BroadcastKnowledgeChanged(string ownerId, string? datasetId) =>
-        hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new KnowledgeChangedMessage("doc_changed", datasetId));
+        broadcaster.ToOwner(ownerId,
+            new KnowledgeChangedMessage("doc_changed", datasetId));
 
     // --- Секция search (единый поиск по рабочему пространству) ---
 
@@ -1143,8 +1142,7 @@ public sealed partial class WorkspaceToolset(
 
     // Событие git_status_changed в хаб — тот же канал, что у GitController.NotifyChanged
     private Task BroadcastGitChanged(string ownerId, string projectId) =>
-        hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new GitStatusChangedMessage(projectId));
+        broadcaster.ToOwner(ownerId, new GitStatusChangedMessage(projectId));
 
     // --- Секция knowledge_bases (менеджер баз Dify владельца) ---
 

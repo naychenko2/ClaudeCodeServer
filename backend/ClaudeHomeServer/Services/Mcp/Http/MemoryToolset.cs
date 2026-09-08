@@ -2,12 +2,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Memory;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -44,7 +43,7 @@ public sealed class MemoryToolset(
     DossierRecallService dossierRecall,
     FeatureFlagService flags,
     IConfiguration config,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/memory/{personaId}/{projectId}.
     // Константа — единственная точка правды: URL конфига хода (ClaudeSession) и хвост
@@ -474,12 +473,12 @@ public sealed class MemoryToolset(
     // --- Broadcast (UI-панели памяти обновляются и при MCP-записи, как при stdio-прокси) ---
 
     private async Task BroadcastMemoryAsync(string ownerId, string personaId) =>
-        await hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new PersonasChangedMessage("memory", personaId));
+        await broadcaster.ToOwner(ownerId,
+            new PersonasChangedMessage("memory", personaId));
 
     private async Task BroadcastTeamAsync(string ownerId, string projectId, string action, string? entryId) =>
-        await hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
+        await broadcaster.ToOwner(ownerId,
+            new TeamMemoryChangedMessage(action, projectId, entryId));
 
     // --- Схемы инструментов: копия mcp/memory-server/index.js (источник контракта — здесь,
     // index.js заморожен; сторож парности — MemoryToolsetParityTests). internal для того

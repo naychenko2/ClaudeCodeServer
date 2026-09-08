@@ -10,8 +10,11 @@ namespace ClaudeHomeServer.Services.Changelog;
 //   дневная сводка идёт через дешёвую модель общего назначения, используемую и
 //   другими разделами (теги заметок, сводки, память). Расширять `SharedAllowedPrefixes`
 //   им нельзя — это открыло бы любой подсистеме весь `Services.Llm`.
-// - `FileService` (`Services`-корень) — точечный: чтение коммитов и кеша сводок
-//   (ChangelogService читает `data/changelog/product.json` и git-вывод).
+// - `ICommitLogReader` (`Core/Services/Composition`) — узкий шов на чтение git-лога
+//   (Этап 5, ярус 1, волна A): вырвали из FileService.GetCommitsRaw. Сам метод
+//   остаётся в FileService — у него другие вызывающие, это отдельная уборка.
+//   Кеш сводок (`data/changelog/product.json`) пишется через `System.IO.File`
+//   напрямую — это продуктовый путь, не SafeJoin, синк знаний его не обслуживает.
 public sealed class ChangelogSubsystem : IAppSubsystem
 {
     public string Key => "changelog";

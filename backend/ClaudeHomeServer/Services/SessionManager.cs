@@ -3279,11 +3279,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 {
                     if (!record.Enabled) continue;
                     // Встроенные интеграции (IntegrationKeys: dify/fal-ai/glif/higgsfield)
-                    // доставляются собственной веткой (TryAddHiggsfieldBuiltin) с проверкой
-                    // фич-флага владельца и RO-гейтом. Реестровый путь для них НЕ применяется:
-                    // иначе фич-флаг превращается во «вторую точку истины» — higgsfield, лежащий
-                    // в реестре и включённый в проекте (или выданный персоне), доедет и при
-                    // выключенном флаге. Сейчас записи dify/fal-ai/glif в реестре не заводятся
+                    // доставляются собственной веткой (TryAddHiggsfieldBuiltin) по рубильнику
+                    // записи и RO-гейту. Реестровый путь для них НЕ применяется: иначе у
+                    // доставки две точки истины — higgsfield, лежащий в реестре и включённый
+                    // в проекте (или выданный персоне), доедет мимо продуктовой формулы, да
+                    // ещё дублем. Сейчас записи dify/fal-ai/glif в реестре не заводятся
                     // (живут как HTTP-узлы Kestrel), условие держим общим — защита от случайного
                     // возврата в реестр.
                     if (Mcp.McpRegistry.IntegrationKeys.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
@@ -3341,14 +3341,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // Продуктовая встроенная интеграция Higgsfield (вынесено из лямбды
     // BuildExternalMcpProvider, чтобы было отдельное тело для сторожа). Доставка:
-    // фич-флаг владельца → запись в реестре (TryGetRecord, не создаём) → рубильник Enabled
-    // и RO-гейт (McpDelivery.IsBuiltinDelivered) → живой OAuth-токен (EnsureFresh).
+    // запись в реестре (TryGetRecord, не создаём) → рубильник Enabled и RO-гейт
+    // (McpDelivery.IsBuiltinDelivered) → живой OAuth-токен (EnsureFresh). Фич-флага
+    // здесь нет с 2026-09-08 (снят): интеграция безусловна, предохранитель — Enabled.
     // Ни McpServersOn проекта, ни McpServerGranted персоны здесь НЕ читаются — это
     // встроенная интеграция, а не запись личного реестра, и каскад доставки другой.
     private void TryAddHiggsfieldBuiltin(string ownerId, bool readOnly, List<ExternalMcpServer> servers)
     {
         if (_higgsfield is null) return;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.Higgsfield)) return;
+        // Владелец, который никогда не входил: записи нет — тихо выходим, без ошибок
+        // и без обращений к провайдеру.
         var hf = _higgsfield.TryGetRecord(ownerId);
         if (hf is null || !Mcp.McpDelivery.IsBuiltinDelivered(hf, readOnly)) return;
 

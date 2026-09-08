@@ -62,9 +62,6 @@ public static class FeatureFlagKeys
     // wsp-сервера и подсказку хода: иначе схема инструмента висела бы в контексте каждого
     // хода каждого пользователя при выключенной фиче.
     public const string ChatContext = "chat-context";
-
-    // Встроенная интеграция Higgsfield: генерация видео и картинок по подписке (волна 1).
-    public const string Higgsfield = "higgsfield";
 }
 
 /// <summary>
@@ -154,14 +151,6 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.ChatContext,
             Title: "Контекст чата",
             Description: "Файлы, ссылки и задачи можно закрепить за чатом кнопкой «в контекст чата»: они остаются на месте после закрытия окна, видны вкладками справа, а Claude может свериться с ними сам.",
-            Default: false,
-            Stage: "dev"),
-
-        // Встроенная интеграция Higgsfield (волна 1): генерация видео и картинок по подписке.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.Higgsfield,
-            Title: "Higgsfield",
-            Description: "Встроенная интеграция с Higgsfield: генерация видео и картинок по вашей подписке, прямо в чате. Войдите в свой аккаунт Higgsfield один раз — и можно просить ролики и картинки в любом чате. Кредиты списываются с вашей подписки, отдельный ключ разработчика не нужен.",
             Default: false,
             Stage: "dev"),
     ];

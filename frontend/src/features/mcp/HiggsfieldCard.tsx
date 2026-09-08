@@ -3,7 +3,6 @@ import type { CSSProperties } from 'react';
 import { Button, Badge } from '../../components/ui';
 import { C, FS, FONT, R, SP } from '../../lib/design';
 import { api } from '../../lib/api';
-import { useFeature } from '../../lib/featureFlags';
 import type { HiggsfieldStatus } from '../../lib/api';
 
 // Окно входа и таймер опроса — не React-состояние: Window-ссылку и interval id
@@ -18,8 +17,6 @@ function formatExpiry(iso: string | null): string {
 }
 
 export function HiggsfieldCard() {
-  const flagOn = useFeature('higgsfield');
-
   const [status, setStatus] = useState<HiggsfieldStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [loginStarted, setLoginStarted] = useState(false); // окно открыто
@@ -40,9 +37,8 @@ export function HiggsfieldCard() {
   };
 
   useEffect(() => {
-    if (flagOn) loadStatus();
-    else setLoading(false);
-  }, [flagOn]);
+    loadStatus();
+  }, []);
 
   // Очистка таймера автосброса ошибки
   useEffect(() => {
@@ -139,7 +135,6 @@ export function HiggsfieldCard() {
     return () => window.removeEventListener('message', onMessage);
   }, [loginStarted]);
 
-  if (!flagOn) return null;
   if (loading) {
     return (
       <div style={{
@@ -153,6 +148,11 @@ export function HiggsfieldCard() {
 
   const connected = status?.connected ?? false;
   const expiresAt = status?.expiresAt ?? null;
+  // Запись выключена на уровне API: тумблера «включить» в интерфейсе для этого сервера
+  // нет (McpServerList рисует Toggle только для своих), и вход бэк тоже отвергнет.
+  // Единственное, что человек может сделать сам — выйти и войти заново: Logout чистит
+  // запись, а свежий LoginAsync создаст её с Enabled=true.
+  const disabledByRecord = status?.enabled === false;
 
   const cardStyle: CSSProperties = {
     background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
@@ -186,8 +186,19 @@ export function HiggsfieldCard() {
         </div>
       )}
 
+      {/* Запись выключена на уровне API — вход бессмысленен, пока её не пересоздать.
+          Тумблера «включить» в интерфейсе для этого сервера нет: единственное действие,
+          которое человек может сделать сам — выйти из Higgsfield (когда подключён) и войти
+          заново. Logout чистит запись, LoginAsync создаёт её с Enabled=true. */}
+      {disabledByRecord && (
+        <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
+          Higgsfield выключен на нашей стороне. Кнопки «включить» для него в интерфейсе нет —
+          выйдите из Higgsfield (если подключены) и войдите заново: это вернёт запись.
+        </div>
+      )}
+
       {/* Состояние «не подключено» */}
-      {!connected && !loginStarted && !showManual && (
+      {!connected && !loginStarted && !showManual && !disabledByRecord && (
         <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
           Войдите в свой аккаунт Higgsfield — и сможете просить ролики и картинки прямо в разговоре.
           Списывается с вашей подписки, отдельный ключ не нужен.
@@ -195,7 +206,7 @@ export function HiggsfieldCard() {
       )}
 
       {/* Кнопка «Войти» */}
-      {!connected && !showManual && (
+      {!connected && !showManual && !disabledByRecord && (
         <Button variant="primary" size="md" onClick={() => void startLogin()}>
           Войти в Higgsfield
         </Button>

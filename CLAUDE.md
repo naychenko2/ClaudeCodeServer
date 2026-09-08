@@ -751,7 +751,11 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 **карточка доклада о завершённой задаче** в чате постановщика вместе с новым промптом
 реакции — [docs/features/task-completion-report.md](docs/features/task-completion-report.md);
 **серверные сторожа чатов** (флаг снят 2026-09-01, через две недели после dark launch) —
-см. раздел выше и [ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md).
+см. раздел выше и [ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md);
+**встроенная интеграция Higgsfield** (флаг снят 2026-09-08: OAuth-токен продлевается сам,
+повторный вход не нужен) — вход живёт в разделе «MCP-серверы», доставка сервера в ход идёт
+по записи реестра (рубильник `Enabled` + RO-гейт + живой токен), и он же остаётся
+единственным предохранителем.
 
 **Как добавить новый флаг (3 шага):**
 1. Бэк: добавить строку в `FeatureFlagCatalog.All` (`key`, `title`, `description`, `Default: false`, `stage`).

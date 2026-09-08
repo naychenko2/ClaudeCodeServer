@@ -26,9 +26,6 @@ export const FLAGS = {
   // всегда.
   mcpCatalog: 'mcp-catalog',
   chatContext: 'chat-context',
-  // Higgsfield (волна 1): OAuth-вход в свой аккаунт + инжект MCP-сервера в ход.
-  // Сервер показывается только при включённом флаге.
-  higgsfield: 'higgsfield',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

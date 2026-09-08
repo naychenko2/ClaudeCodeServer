@@ -17,8 +17,6 @@ public class HiggsfieldIntegrationTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly McpRegistry _registry;
-    private readonly UserStore _users;
-    private readonly FeatureFlagService _flags;
     private readonly HiggsfieldIntegration _sut;
     private const string OwnerId = "owner-hf";
 
@@ -34,16 +32,9 @@ public class HiggsfieldIntegrationTests : IDisposable
         var secrets = new McpSecretStore(config);
         var statuses = new McpStatusStore(config);
         _registry = new McpRegistry(config, secrets);
-        _users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        // Создаём владельца под тест — UserStore с пустым хранилищем отдаст дефолтного admin,
-        // но интеграции нужна конкретная запись, чтобы не зависеть от каталога флагов.
-        var owner = _users.GetFirst() ?? throw new InvalidOperationException("UserStore пуст");
-        // Гарантируем, что запись идёт ровно под OwnerId — используем id владельца.
-        // (тест-локальная переменная OwnerId ниже переиспользуется)
-        _flags = new FeatureFlagService(_users);
         var oauth = new McpOAuthService(_registry, secrets, statuses,
             new StubHttpClientFactory(new EmptyHandler()), config, NullLogger<McpOAuthService>.Instance);
-        _sut = new HiggsfieldIntegration(_registry, secrets, statuses, oauth, _flags,
+        _sut = new HiggsfieldIntegration(_registry, secrets, statuses, oauth,
             NullLogger<HiggsfieldIntegration>.Instance);
     }
 
@@ -146,6 +137,19 @@ public class HiggsfieldIntegrationTests : IDisposable
         var saved = _registry.Get(OwnerId, record.Id)!;
         saved.Auth!.OAuth!.AccessTokenRef.Should().Be("secret:stub");
         saved.Key.Should().Be(HiggsfieldIntegration.Key);
+    }
+
+    // Владелец, который никогда не входил: ни записи, ни токена, ни исключения.
+    // Флаг снят (2026-09-08), поэтому «тихий выход по отсутствию записи» — единственное,
+    // что защищает такого владельца от лишних действий на каждом ходу.
+    [Fact]
+    public void ВладелецБезВхода_НиЗаписиНиТокена_БезИсключений()
+    {
+        _sut.TryGetRecord("owner-never-logged-in").Should().BeNull(
+            "просмотр состояния не смеет заводить запись реестра");
+        _sut.TryGetAccessToken("owner-never-logged-in").Should().BeNull();
+        _registry.GetByOwner("owner-never-logged-in").Should().BeEmpty();
+        _sut.Logout("owner-never-logged-in").Should().BeFalse("выходить не из чего — но и падать незачем");
     }
 
     // Минимальная обвязка для конструктора HiggsfieldIntegration — сеть не нужна,

@@ -1,6 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Mcp;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,24 +15,21 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/mcp/integrations/higgsfield")]
 public class HiggsfieldAuthController(
-    HiggsfieldIntegration higgsfield,
-    Services.FeatureFlagService flags) : ControllerBase
+    HiggsfieldIntegration higgsfield) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    /// <summary>Состояние интеграции: флаг, вход выполнен, срок токена.</summary>
+    /// <summary>Состояние интеграции: рубильник записи, вход выполнен, срок токена.</summary>
     [HttpGet]
     public IActionResult Get()
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.Higgsfield))
-            return Ok(new { enabled = false, flagOn = false, connected = false, expiresAt = (DateTime?)null });
-
         var record = higgsfield.TryGetRecord(UserId);
         var connected = higgsfield.TryGetAccessToken(UserId) is not null;
         return Ok(new
         {
-            enabled = true,
-            flagOn = true,
+            // Записи ещё нет (никогда не входил) — интеграция доступна, а не «выключена»:
+            // «выключено» здесь означает ровно снятый рубильник Enabled у записи реестра.
+            enabled = record?.Enabled ?? true,
             connected,
             expiresAt = record?.Auth.OAuth?.ExpiresAt,
         });
@@ -43,8 +39,11 @@ public class HiggsfieldAuthController(
     [HttpPost("login")]
     public async Task<IActionResult> Login(CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.Higgsfield))
-            return BadRequest(new { error = "Интеграция Higgsfield отключена. Включите её в настройках экспериментальных функций." });
+        // Фич-флага больше нет (интеграция безусловна), но молчаливого пути на его месте
+        // быть не должно: выключенный рубильник записи снимает сервер с хода, и вход в
+        // таком состоянии — обман. Отвечаем внятным текстом, а не пустым успехом.
+        if (higgsfield.TryGetRecord(UserId) is { Enabled: false })
+            return BadRequest(new { error = "Интеграция Higgsfield выключена в разделе «MCP-серверы». Включите её и повторите вход." });
 
         try
         {

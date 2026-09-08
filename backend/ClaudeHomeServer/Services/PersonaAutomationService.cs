@@ -1,12 +1,8 @@
 using System.Text;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.TriggerSources;
-using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services;
 
@@ -23,7 +19,6 @@ public sealed class PersonaAutomationService : IDisposable
     private readonly PersonaManager _personas;
     private readonly SessionManager _sessions;
     private readonly PushService _push;
-    private readonly IHubContext<SessionHub> _hub;
     private readonly NotificationService _notif;
     private readonly AutomationStateStore _state;
     private readonly MentionTriggerSource _mentions;
@@ -50,13 +45,13 @@ public sealed class PersonaAutomationService : IDisposable
         ?? (rule.Trigger.Type == AutomationTriggerType.File ? FileDefaultMinIntervalMinutes : DefaultMinIntervalMinutes);
 
     public PersonaAutomationService(PersonaManager personas, SessionManager sessions,
-        PushService push, IHubContext<SessionHub> hub,
+        PushService push,
         NotificationService notif,
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, AutomationRootResolver roots, IEnumerable<ITriggerSource> sources,
         IConfiguration config, Llm.ICheapTextRunner cheap, ILogger<PersonaAutomationService> log)
     {
-        _personas = personas; _sessions = sessions; _push = push; _hub = hub; _notif = notif;
+        _personas = personas; _sessions = sessions; _push = push; _notif = notif;
         _state = state; _mentions = mentions; _projects = projects; _users = users; _roots = roots;
         _config = config; _cheap = cheap; _log = log;
         _sources = sources.ToDictionary(s => s.Type);

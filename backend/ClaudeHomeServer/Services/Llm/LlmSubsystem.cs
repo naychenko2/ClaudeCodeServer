@@ -233,6 +233,12 @@ public sealed class LlmSubsystem : IAppSubsystem
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<ILocalEndpointProbe>()));
 
+        // Этап 5, шаг 3 (шов IModelResolver): Core-интерфейс под единственный
+        // метод `ResolveModelOrDefault`, который Spend дёргает у LlmProviderRegistry.
+        // Адаптер лежит тут, в Main, рядом с LlmProviderRegistry — DI подтянет
+        // его по конструктору автоматически.
+        services.AddSingleton<IModelResolver, LlmModelResolverAdapter>();
+
         // Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory, без персиста.
         services.AddSingleton<ProviderHealthRegistry>();
         services.AddSingleton<IProviderBalanceService>(sp => sp.GetRequiredService<ProviderBalanceService>());

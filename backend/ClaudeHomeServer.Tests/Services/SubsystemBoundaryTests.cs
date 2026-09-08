@@ -417,10 +417,13 @@ public class SubsystemBoundaryTests
         //    в дашборде (чаты, проекты, задачи, персоны, пользователи).
         // 2) `ChatHistoryService` (`SpendMaintenanceService.cs:15`) — backfill истории
         //    расхода из сохранённых транскриптов при первом запуске.
-        // 3) `ClaudeHomeServer.Services.Llm` — `LlmProviderRegistry` для расчёта
-        //    стоимости по прайсу провайдера (тот же шов «вертикаль → спинка LLM», что
-        //    у `Git`/`Backgrounds`/`Deploy`): цены живут в одном месте на все
-        //    потребительские разделы, вынос из SharedAllowedPrefixes держит гейт узким.
+        // 3) Префикс `ClaudeHomeServer.Services.Llm` снят (этап 5, шаг 3) — расход
+        //    получает резолв модели через узкий Core-шов `IModelResolver` (одного
+        //    метода `ResolveModelOrDefault`). Префикс держал окно открытым, хотя
+        //    фактических ссылок Spend → Llm после шва не осталось; мутация
+        //    (вернуть префикс → прогон `SubsystemBoundary`) дала зелёный результат
+        //    — снятие законно. Адаптер `LlmModelResolverAdapter` живёт в Main
+        //    (`Services/Llm`), DI регистрирует интерфейс рядом с реестром.
         // 4) Точечный допуск к `ClaudeHomeServer.Protocol` — типы WS-событий, которые
         //    `SpendMaintenanceService.BackfillAsync` разбирает из истории чатов при
         //    первичном наполнении стора: `StoredMessage`/`StoredResultMessage`
@@ -441,7 +444,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Spend",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]

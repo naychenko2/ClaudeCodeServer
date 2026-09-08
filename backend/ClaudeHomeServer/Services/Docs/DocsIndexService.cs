@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Docs;
 
@@ -19,9 +20,9 @@ namespace ClaudeHomeServer.Services.Docs;
 // владельцы) документация одна и та же, разбирать её дважды незачем. Доступ проверяет
 // контроллер — сюда попадает уже разрешённый корень.
 // files необязателен (DI подставляет): нужен только созданию документов — писать в рабочее
-// дерево продукт обязан через файловый сервис, там SafeJoin и уведомление OnMutated, на
+// дерево продукт обязан через файловый шов, там SafeJoin и уведомление OnMutated, на
 // котором висит синк базы знаний. Юнит-тестам чтения он ни к чему.
-public sealed partial class DocsIndexService(FileService? files = null)
+public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
 {
     // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
     // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.

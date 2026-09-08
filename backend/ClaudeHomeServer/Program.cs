@@ -173,6 +173,13 @@ builder.Services.AddSingleton<IProjectSummaryLookup, ProjectSummaryLookup>();
 // PersonaManager — узкий контракт на голос персоны. Реализация — тонкая обёртка
 // в Main (`Services/Composition/PersonaVoiceLookup`), контракт живёт в Core.
 builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
+// Швы для Docs/Changelog (Этап 5, ярус 1, волна A): вместо прямой зависимости
+// DocsIndexService/ChangelogService от FileService — узкие контракты на файловые
+// операции и чтение git-лога. Реализации — тонкие обёртки в `Services/Composition`,
+// контракты живут в Core. Адаптер файлов идёт через FileService (а не пишет сам),
+// чтобы синк базы знаний продолжал видеть правки документов.
+builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
+builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();

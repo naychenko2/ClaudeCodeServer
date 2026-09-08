@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
@@ -386,6 +387,32 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
 // PromptSectionContributorsRegistration.RegisterAll в SessionManager.
 // Новый контрибьютор — одна строка в PromptSectionContributorsDi.AddPromptSectionContributors().
 builder.Services.AddPromptSectionContributors();
+// Гейт подсистемы Notes: контрибьютор `NotesRecallContributor` зависит от NotesKnowledgeService
+// (DI-резолв свалится на первом ходу), а весь авто-recall в этом случае бесполезен.
+// `AddPromptSectionContributors` живёт в Main (`PromptSectionContributorsDi.cs`) и не
+// в курсе про подсистемы — вырезаем регистрацию конкретного контрибьютора здесь,
+// пока контрибьютор не вынесен в отдельный вертикальный csproj. Удаляем ОБЕ регистрации
+// (как concrete, так и в наборе `IPromptSectionContributor`), иначе первая оставит
+// сироту, которую шина всё равно вытащит через `IEnumerable<IPromptSectionContributor>`.
+if (!SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    // Удаляем регистрацию контрибьютора заметок: NotesKnowledgeService не попадёт
+    // в DI при выключенной подсистеме, и резолв NotesRecallContributor на первом
+    // же ходе свалился бы. Убираем ОБЕ регистрации (конкретный тип и запись в
+    // наборе IPromptSectionContributor) — иначе вторая оставит сироту, которую
+    // шина вытащит через IEnumerable<> и попытается сконструировать.
+    // Цикл с Remove вместо `RemoveAll<T>(predicate)`: в репо перегрузка с
+    // предикатом не доступна (нет PackageReference на Microsoft.Extensions.DependencyInjection.Abstractions),
+    // а `RemoveAll<T>()` без аргументов удаляет ВСЕ регистрации типа — это слишком грубо.
+    foreach (var descriptor in builder.Services
+        .Where(d => d.ServiceType == typeof(NotesRecallContributor) ||
+                    (d.ServiceType == typeof(IPromptSectionContributor) &&
+                     d.ImplementationType == typeof(NotesRecallContributor)))
+        .ToList())
+    {
+        builder.Services.Remove(descriptor);
+    }
+}
 builder.Services.AddSingleton<SessionManager>();
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
@@ -723,13 +750,18 @@ builder.Services.AddSingleton<ClaudeHomeServer.Core.Telemetry.IDifyMetrics,
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
 // живут в Main как тонкие обёртки; Notes (в отдельной сборке) получает только
-// Core-контракты.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Tasks.TaskBridge>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
+// Core-контракты. Гейт `Subsystems:Notes:Enabled`: при выключенной подсистеме
+// и сами реализации, и форвардеры швов в DI не нужны — резолв `INoteTaskBridge`/
+// `INotesHubNotifier` иначе свалится на первом же обращении из Notes.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
+        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Tasks.TaskBridge>());
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
+        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
+}
 
 // Этап 5, Ф4: шов ISessionBroadcaster (Core) → SessionHubBroadcaster (Main, поверх
 // IHubContext<SessionHub>). Префиксы групп "user_"/"project_" собираются только здесь —

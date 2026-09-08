@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Changelog;
 using FluentAssertions;
+using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 

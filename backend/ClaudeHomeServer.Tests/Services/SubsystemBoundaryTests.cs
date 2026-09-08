@@ -68,6 +68,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Personas.PersonaDraftService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Diagnostics.FileLog).Assembly;
         _ = typeof(ClaudeHomeServer.Services.WebSearch.PerplexitySearchService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1782,14 +1783,14 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 12 = Main + Core + 7 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts)
-        // + Personas + Diagnostics + WebSearch (Этап 5, ярус 1, волна A); при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(12,
-            "после Этапа 3 + трёх выносов волны A Этапа 5 сторож должен видеть 12 прод-сборок: ClaudeHomeServer, " +
+        // 13 = Main + Core + 7 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts)
+        // + Personas + Diagnostics + WebSearch + Changelog (Этап 5, ярус 1, волна A); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(13,
+            "после Этапа 3 + четырёх выносов волны A Этапа 5 сторож должен видеть 13 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Personas, " +
-            "ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch");
+            "ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, ClaudeHomeServer.Changelog");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

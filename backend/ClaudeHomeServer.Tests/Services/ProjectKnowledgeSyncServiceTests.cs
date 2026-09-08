@@ -303,7 +303,8 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var teamMemory = new TeamMemoryService(_config);
         var cascade = new UserKnowledgeCascade(_knowledge, _wkStore, _projects, _personas,
-            personaMemory, teamMemory, _dossierStore, notesKb, NullLogger<UserKnowledgeCascade>.Instance);
+            new IKnowledgeSyncParticipant[] { personaMemory, teamMemory, _dossierStore, notesKb },
+            NullLogger<UserKnowledgeCascade>.Instance);
 
         // Запись знаний проекта владельца — каскад должен её снять
         var wk = _wkStore.GetOrCreate(_projectDir);

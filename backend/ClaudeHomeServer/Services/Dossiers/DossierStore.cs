@@ -257,6 +257,14 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
         catch { /* уборка best-effort */ }
     }
 
+    // Каскадное удаление знаний владельца через участник синка — обёртка над DeleteOwnerDossiers.
+    // Dify на этом шаге не трогаем (общий проход в UserKnowledgeCascade).
+    public Task DeleteAllAsync(string userId)
+    {
+        DeleteOwnerDossiers(userId);
+        return Task.CompletedTask;
+    }
+
     // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
     // Цель на каждый scope «owner:project» с созданным датасетом; ключ записи — id паспорта.
     // Карту Docs защищает _kLock (не _saveLock); порядок _syncLock → _kLock.

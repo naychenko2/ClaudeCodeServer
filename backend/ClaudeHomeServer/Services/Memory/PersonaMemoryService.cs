@@ -882,6 +882,16 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         }
     }
 
+    // Каскадное удаление знаний владельца через участник синка — проходит по всем персонам
+    // владельца и чистит их память. Сами персоны из стора PersonManager НЕ удаляет —
+    // это ответственность UserKnowledgeCascade (там же, где удаляется профиль).
+    public async Task DeleteAllAsync(string userId)
+    {
+        var personas = _personas.GetByOwner(userId).ToList();
+        foreach (var persona in personas)
+            await DeletePersonaAsync(persona.Id);
+    }
+
     // Уборка при остановке хоста (DI dispose'ит синглтон): таймеры дебаунса Dify-синка
     // не должны переживать остановку и запускать синк по мёртвому приложению
     public void Dispose() => _debounce.Dispose();

@@ -66,6 +66,7 @@ public class KnowledgeIndexReconcilerTests
         }
 
         public IReadOnlyList<KnowledgeSyncTarget> ListTargets() => Targets;
+        public Task DeleteAllAsync(string userId) => Task.CompletedTask;
     }
 
     // Фейковый канал уведомлений: доставку проверяет NotificationService, здесь важен дедуп.

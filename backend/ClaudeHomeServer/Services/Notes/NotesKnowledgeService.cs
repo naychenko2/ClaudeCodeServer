@@ -246,6 +246,14 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
         }
     }
 
+    // Каскадное удаление знаний владельца через участник синка — обёртка над DeleteUser.
+    // Dify не трогаем.
+    public Task DeleteAllAsync(string userId)
+    {
+        DeleteUser(userId);
+        return Task.CompletedTask;
+    }
+
     private Entry GetEntry(string userId)
     {
         lock (_saveLock)

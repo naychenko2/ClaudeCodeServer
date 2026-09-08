@@ -10,7 +10,7 @@ public class TaskManager
     private readonly ConcurrentDictionary<string, TaskItem> _tasks = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
-    private readonly ProjectEventLogService? _events;
+    private readonly IProjectEventLogService? _events;
     private readonly NotificationService? _notif;
     private readonly PersonaManager? _personas;
 
@@ -18,7 +18,7 @@ public class TaskManager
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
 
-    public TaskManager(IConfiguration config, ProjectEventLogService? events = null,
+    public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
         NotificationService? notif = null, PersonaManager? personas = null)
     {
         _events = events;

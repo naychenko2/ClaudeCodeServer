@@ -11,6 +11,9 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Git.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 
@@ -62,9 +65,9 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- === Модульность (Этап 3, feature/etap3-video-yandex-reader) ===
-       Вертикали Video/Yandex/Reader вынесены в собственные .csproj и ссылаются
-       только на Core. Здесь — обратная ссылка «Main → вертикаль» ради
+  <!-- === Модульность (Этап 3) ===
+       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git вынесены в собственные .csproj
+       и ссылаются только на Core. Здесь — обратная ссылка «Main → вертикаль» ради
        регистрации подсистем в Program.cs: AddSubsystems(new VideoSubsystem(), ...).
        Это не цикл: цепочка Main → Vertical → Core → (BCL). Core не ссылается ни
        на Main, ни на вертикали. До этапа 3 всё это жило одной сборкой, и инвариант
@@ -78,6 +81,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Reader\ClaudeHomeServer.Reader.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
   </ItemGroup>
 
   <ItemGroup>

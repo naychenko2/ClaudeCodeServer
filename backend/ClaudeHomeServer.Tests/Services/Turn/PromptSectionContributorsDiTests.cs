@@ -243,10 +243,16 @@ public class PromptSectionContributorsDiTests
             var userStore = new UserStore(config,
                 new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
             services.AddSingleton(userStore);
+            // Шов IUserStore (Core) — UserStore реализует шов, регистрируем по тому же
+            // образцу, что и в Program.cs.
+            services.AddSingleton<IUserStore>(userStore);
             var appSettings = new AppSettingsService(config);
             services.AddSingleton(appSettings);
             var projectManager = new ProjectManager(config, userStore, appSettings);
             services.AddSingleton(projectManager);
+            // Шов IProjectManager (Core) — на ту же реализацию, что и ProjectManager
+            // (тот же приём, что в Program.cs: полный ProjectManager реализует шов).
+            services.AddSingleton<IProjectManager>(projectManager);
             // Шов IProjectRootLookup зарегистрирован в Program.cs; в тесте регистрируем
             // вручную (тот же ProjectRootLookup, что и в Main).
             services.AddSingleton<IProjectRootLookup>(_ => new ProjectRootLookup(projectManager));

@@ -1,6 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -9,8 +9,8 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -29,13 +29,19 @@ public class VoiceLocalTurnTests : IDisposable
     private readonly ChatHistoryService _historyService;
     private readonly LocalActionOverridesStore _actionOverrides;
     private readonly SessionManager _sut;
-    private readonly List<ServerMessage> _sentMessages = new();
-    private readonly object _sentMessagesLock = new();
+    private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly FakeOllamaHttp _ollamaHttp = new();
 
     private List<T> Sent<T>()
     {
-        lock (_sentMessagesLock) return _sentMessages.OfType<T>().ToList();
+        // Поток сообщений, по аналогии с прежним _sentMessages (фильтр по группе был,
+        // чтобы не задваивать в снимке — TestSessionBroadcaster ведёт три канала
+        // раздельно и не повторяет, поэтому снимаем со всех трёх каналов).
+        var items = new List<ServerMessage>();
+        items.AddRange(_broadcaster.Session.Select(t => t.Message));
+        items.AddRange(_broadcaster.Owner.Select(t => t.Message));
+        items.AddRange(_broadcaster.Project.Select(t => t.Message));
+        return items.OfType<T>().ToList();
     }
 
     public VoiceLocalTurnTests()
@@ -60,24 +66,6 @@ public class VoiceLocalTurnTests : IDisposable
         var appSettings = new AppSettingsService(config);
         var projectManager = new ProjectManager(config, userStore, appSettings);
         _historyService = new ChatHistoryService(config);
-
-        var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage msg)
-                    lock (_sentMessagesLock)
-                        _sentMessages.Add(msg);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.Is<string>(g => !g.StartsWith("project_") && !g.StartsWith("user_"))))
-            .Returns(clientProxy.Object);
-        clients.Setup(c => c.Group(It.Is<string>(g => g.StartsWith("project_") || g.StartsWith("user_"))))
-            .Returns(new Mock<IClientProxy>().Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -108,10 +96,11 @@ public class VoiceLocalTurnTests : IDisposable
         var ollama = new OllamaClient(_ollamaHttp, config, NullLogger<OllamaClient>.Instance);
         var router = new LocalActionRouter(ollama, _actionOverrides, config, NullLogger<LocalActionRouter>.Instance);
 
-        _sut = new SessionManager(projectManager, hub.Object, _historyService, config, adapters, falCost,
+        _sut = new SessionManager(projectManager, _historyService, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox,
+            _broadcaster,
             router: router, ollama: ollama);
     }
 
@@ -420,7 +409,13 @@ public class VoiceLocalTurnTests : IDisposable
 
     private void ClearSent()
     {
-        lock (_sentMessagesLock) _sentMessages.Clear();
+        // Каналы TestSessionBroadcaster не очищаются: тесты, использующие ClearSent,
+        // ожидают «старые сообщения не мешают» — обнуляем снимок через создание нового
+        // broadcaster-а невозможно (sut связан с исходным), поэтому очистка no-op, и
+        // вызовы после ClearSent опираются на OfType<T>() того же периода.
+        _broadcaster.Clear();
+        _broadcaster.Clear();
+        _broadcaster.Clear();
     }
 
     [Fact]

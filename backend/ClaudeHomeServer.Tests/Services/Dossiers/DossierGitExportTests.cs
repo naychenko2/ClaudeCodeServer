@@ -1,5 +1,5 @@
 using System.Text.Json;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Skills;
@@ -9,8 +9,8 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -39,7 +39,7 @@ public class DossierGitExportTests : IDisposable
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
     private readonly ChatHistoryService _history;
-    private readonly Mock<IHubContext<SessionHub>> _hub;
+    private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly DossierStore _store;
     private readonly GitService _git = new(TestLauncherFactory.Instance);
     private readonly List<IDisposable> _disposables = [];
@@ -61,15 +61,6 @@ public class DossierGitExportTests : IDisposable
         _projects = new ProjectManager(_config, userStore, new AppSettingsService(_config));
         _history = new ChatHistoryService(_config);
         _store = new DossierStore(_config);
-
-        var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        _hub = new Mock<IHubContext<SessionHub>>();
-        _hub.Setup(h => h.Clients).Returns(clients.Object);
     }
 
     public void Dispose()
@@ -157,9 +148,9 @@ public class DossierGitExportTests : IDisposable
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SessionManager(_projects, _hub.Object, _history, _config, adapters, falCost, usage, appSettings,
+        return new SessionManager(_projects, _history, _config, adapters, falCost, usage, appSettings,
             userStore, jwt, server.Object, llmProviders, flags, personas, bindings,
-            subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+            subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, _broadcaster);
     }
 
     // Экспортёр собирается как в DossiersController — на живом графе зависимостей.

@@ -1,7 +1,6 @@
 ﻿using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -14,6 +13,7 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.TriggerSources;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -47,7 +47,7 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
-    private readonly Mock<IClientProxy> _clientProxy;
+    private readonly TrackingBroadcaster _broadcaster;
     private readonly List<ServerMessage> _sentMessages = new();
     // Broadcast'ы из фоновых задач (OnMessageAsync запускает HandleTeamTurnEnd fire-and-forget)
     // пишут в _sentMessages параллельно с чтением из проверок теста — синхронизируем
@@ -65,6 +65,32 @@ public class SessionManagerTests : IDisposable
     private void ClearSent()
     {
         lock (_sentMessagesLock) _sentMessages.Clear();
+    }
+
+    // Локальная обёртка ISessionBroadcaster поверх TestSessionBroadcaster: писали через мок
+    // IHubContext, и старый setup ловил ТОЛЬКО session-группу (user_/project_-группы шли
+    // в отдельный Mock<IClientProxy> без callback — без записи в _sentMessages). Здесь
+    // то же правило: только ToSession пишет в _sentMessages, остальные каналы — в inner.
+    // Не лежит в Helpers/ — единый тест, иначе размывает «broadcaster пишет в одно место»
+    // в общий шаблон.
+    private sealed class TrackingBroadcaster(
+        TestSessionBroadcaster inner, List<ServerMessage> sentMessages, object sentLock)
+        : Core.Services.ISessionBroadcaster
+    {
+        public Task ToSession(string sessionId, Protocol.ServerMessage message)
+        {
+            lock (sentLock) sentMessages.Add(message);
+            return inner.ToSession(sessionId, message);
+        }
+
+        public Task ToOwner(string ownerId, Protocol.ServerMessage message) =>
+            inner.ToOwner(ownerId, message);
+
+        public Task ToProject(string projectId, Protocol.ServerMessage message) =>
+            inner.ToProject(projectId, message);
+
+        public Task ToPreviewLog(string projectId, string serviceId, Protocol.ServerMessage message) =>
+            inner.ToPreviewLog(projectId, serviceId, message);
     }
 
     public SessionManagerTests()
@@ -105,25 +131,11 @@ public class SessionManagerTests : IDisposable
         _projectManager = new ProjectManager(config, userStore, appSettings);
         _historyService = new ChatHistoryService(config);
 
-        var clients = new Mock<IHubClients>();
-        _clientProxy = new Mock<IClientProxy>();
-        _clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((method, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage msg)
-                    lock (_sentMessagesLock)
-                        _sentMessages.Add(msg);
-            })
-            .Returns(Task.CompletedTask);
-        // Захватываем только session-группу; project_/user_-группы дублировали бы сообщения
-        clients.Setup(c => c.Group(It.Is<string>(g => !g.StartsWith("project_") && !g.StartsWith("user_"))))
-            .Returns(_clientProxy.Object);
-        clients.Setup(c => c.Group(It.Is<string>(g => g.StartsWith("project_") || g.StartsWith("user_"))))
-            .Returns(new Mock<IClientProxy>().Object);
-
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        // Локальная обёртка TestSessionBroadcaster → _sentMessages: писали через мок IHubContext
+        // и теперь пишем через единый broadcaster — assertions Sent<T>/ClearSent сохранены как
+        // единый API всех тестов файла.
+        var testBroadcaster = new TestSessionBroadcaster();
+        _broadcaster = new TrackingBroadcaster(testBroadcaster, _sentMessages, _sentMessagesLock);
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -163,7 +175,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns);
+        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster);
     }
 
     public void Dispose()
@@ -1548,8 +1560,6 @@ public class SessionManagerTests : IDisposable
             .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -1573,10 +1583,10 @@ public class SessionManagerTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
+        return new SessionManager(projectManager, historyService, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox);
+            TestLauncherFactory.Instance, sandbox, broadcaster: new TestSessionBroadcaster());
     }
 
     // --- Очередь сообщений занятой сессии (chats_send в идущий ход) ---
@@ -9977,17 +9987,14 @@ public class SessionManagerTests : IDisposable
         var pushStore = new PushSubscriptionStore(config);
         var jwt = new JwtService(config, _userStore, NullLogger<JwtService>.Instance);
         var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(new Mock<IClientProxy>().Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-        var notif = new NotificationService(notifStore, hub.Object, push, _personaManager, _projectManager,
+        var broadcaster = new TestSessionBroadcaster();
+        var notif = new NotificationService(notifStore, broadcaster, push, _personaManager, _projectManager,
             NullLogger<NotificationService>.Instance);
         var state = new AutomationStateStore(config);
         var mentions = new MentionTriggerSource(_personaManager);
         var roots = new AutomationRootResolver(_projectManager, _appSettings);
 
-        var service = new PersonaAutomationService(_personaManager, _sut, push, hub.Object, notif,
+        var service = new PersonaAutomationService(_personaManager, _sut, push, notif,
             state, mentions, _projectManager, _userStore, roots, Array.Empty<ITriggerSource>(),
             config, cheap, NullLogger<PersonaAutomationService>.Instance);
         return (service, state);

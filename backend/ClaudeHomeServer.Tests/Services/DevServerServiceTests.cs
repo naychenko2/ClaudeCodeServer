@@ -1,7 +1,7 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Services.ProjectServices;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -23,7 +23,7 @@ public class DevServerServiceTests
         // поэтому файл ложится во временный каталог сборки и никому не мешает
         var portMemory = new DevServerPortMemory(config,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<DevServerPortMemory>.Instance);
-        _svc = new DevServerService(null!, new Mock<IHubContext<SessionHub>>().Object,
+        _svc = new DevServerService(null!, new TestSessionBroadcaster(),
             new Mock<ILogger<DevServerService>>().Object, TestLauncherFactory.Instance, sandbox, portMemory);
     }
 

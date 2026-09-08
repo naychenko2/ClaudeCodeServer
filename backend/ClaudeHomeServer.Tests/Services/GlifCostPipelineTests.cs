@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -9,8 +9,8 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -26,8 +26,7 @@ public class GlifCostPipelineTests : IDisposable
     private readonly UserStore _userStore;
     private readonly ProjectManager _projectManager;
     private readonly ChatHistoryService _history;
-    private readonly Mock<IHubContext<SessionHub>> _hub;
-    private readonly List<ServerMessage> _broadcasts = [];
+    private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly SpendStore _spend;
 
     public GlifCostPipelineTests()
@@ -49,18 +48,6 @@ public class GlifCostPipelineTests : IDisposable
         var personas = new PersonaManager(config);
         var tasks = new TaskManager(config, personas: personas);
         _history = new ChatHistoryService(config);
-
-        _hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        var proxy = new Mock<IClientProxy>();
-        proxy.Setup(c => c.SendCoreAsync("message", It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage m) _broadcasts.Add(m);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
-        _hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -85,10 +72,10 @@ public class GlifCostPipelineTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _spend = new SpendStore(Path.Combine(_dir, "spend"), detailDays: 30);
 
-        _sessions = new SessionManager(_projectManager, _hub.Object, _history, config, adapters, falCost, usage,
+        _sessions = new SessionManager(_projectManager, _history, config, adapters, falCost, usage,
             appSettings, _userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            spend: _spend, glif: glif);
+            _broadcaster, spend: _spend, glif: glif);
     }
 
     public void Dispose()
@@ -118,8 +105,9 @@ public class GlifCostPipelineTests : IDisposable
         stored.Model.Should().Be("image_tool_x");
 
         // SignalR
-        _broadcasts.Should().ContainSingle(m => m is GlifCostMessage);
-        var broadcast = (GlifCostMessage)_broadcasts.Single(m => m is GlifCostMessage);
+        var broadcasts = _broadcaster.Session.Select(t => t.Message).ToList();
+        broadcasts.Should().ContainSingle(m => m is GlifCostMessage);
+        var broadcast = (GlifCostMessage)broadcasts.Single(m => m is GlifCostMessage);
         broadcast.JobId.Should().Be("job-pipe-1");
 
         // Spend
@@ -147,7 +135,7 @@ public class GlifCostPipelineTests : IDisposable
 
         var history = await _history.LoadAsync(session.ClaudeSessionId!);
         history.OfType<StoredGlifCostMessage>().Should().HaveCount(1);
-        _broadcasts.OfType<GlifCostMessage>().Should().HaveCount(1);
+        _broadcaster.Session.Select(t => t.Message).OfType<GlifCostMessage>().Should().HaveCount(1);
         _spend.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue).Count(r => r.Source == SpendSources.Glif).Should().Be(1);
     }
 }

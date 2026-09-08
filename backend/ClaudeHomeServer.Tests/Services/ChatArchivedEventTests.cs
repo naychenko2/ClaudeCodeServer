@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -9,7 +9,6 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -41,10 +40,19 @@ public class ChatArchivedEventTests : IDisposable
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
     }
 
-    // (группа, сообщение) каждого SendAsync — детектор адресации chat_archived
-    private readonly List<(string Group, ServerMessage Msg)> _sent = [];
+    // Широковещатель сообщений, в котором SessionManager ведёт поток по группе адресации:
+    // session-группа, user_X-группа или project_X-группа. Тесты проверяют адресацию по
+    // парам «адресат × сообщение», как раньше через mock IHubClients.Group(...).SendCoreAsync(...).
+    private readonly TestSessionBroadcaster _broadcaster = new();
     private ChatHistoryService? _historyForBuild;
     private UserStore? _userStoreForBuild;
+
+    // Снимок адресации: приводим три канала broadcaster-а к единому виду (адресат × сообщение),
+    // как был старый _sent — для проекта адресат у нас «project_X», для пользователя — «user_X».
+    private IEnumerable<(string Group, ServerMessage Msg)> Broadcasts =>
+        _broadcaster.Session.Select(t => (t.SessionId, t.Message))
+            .Concat(_broadcaster.Project.Select(t => ("project_" + t.ProjectId, t.Message)))
+            .Concat(_broadcaster.Owner.Select(t => ("user_" + t.OwnerId, t.Message)));
 
     // --- Событие chat_archived: адресация ---
 
@@ -58,13 +66,13 @@ public class ChatArchivedEventTests : IDisposable
 
         await sut.SetArchivedAsync(chat.Id, _ownerId, archived: true);
 
-        var archivedMsgs = _sent.Where(t => t.Msg is ChatArchivedMessage).ToList();
+        var archivedMsgs = Broadcasts.Where(t => t.Msg is ChatArchivedMessage).ToList();
         archivedMsgs.Should().HaveCount(2, "session-группа + project-группа: по копии каждому адресату");
         archivedMsgs.Select(t => t.Group).Should().BeEquivalentTo([chat.Id, "project_" + project.Id],
             "адресация как у BroadcastChatDeletedAsync: session-группа всегда, дальше project_X");
         archivedMsgs.Should().AllSatisfy(t =>
             ((ChatArchivedMessage)t.Msg).Archived.Should().BeTrue("событие несёт направление"));
-        _sent.Should().NotContain(t => t.Msg is ChatDeletedMessage,
+        Broadcasts.Should().NotContain(t => t.Msg is ChatDeletedMessage,
             "chat_deleted — семантика «чата больше нет», суррогатом архива не является");
     }
 
@@ -76,7 +84,7 @@ public class ChatArchivedEventTests : IDisposable
 
         await sut.SetArchivedAsync(chat.Id, _ownerId, archived: true);
 
-        var groups = _sent.Where(t => t.Msg is ChatArchivedMessage).Select(t => t.Group).ToList();
+        var groups = Broadcasts.Where(t => t.Msg is ChatArchivedMessage).Select(t => t.Group).ToList();
         groups.Should().BeEquivalentTo([chat.Id, "user_" + _ownerId],
             "чат вне проекта — user-группа владельца вместо project-группы");
     }
@@ -87,11 +95,13 @@ public class ChatArchivedEventTests : IDisposable
         var (sut, projects) = BuildSut();
         var chat = await sut.CreateChatAsync(_ownerId, ClaudeMode.Auto);
         await sut.SetArchivedAsync(chat.Id, _ownerId, archived: true);
-        _sent.Clear();
+        _broadcaster.Clear();
+        _broadcaster.Clear();
+        _broadcaster.Clear();
 
         await sut.SetArchivedAsync(chat.Id, _ownerId, archived: false);
 
-        _sent.Where(t => t.Msg is ChatArchivedMessage)
+        Broadcasts.Where(t => t.Msg is ChatArchivedMessage)
             .Should().OnlyContain(t => ((ChatArchivedMessage)t.Msg).Archived == false);
     }
 
@@ -231,20 +241,6 @@ public class ChatArchivedEventTests : IDisposable
         _historyForBuild = new ChatHistoryService(config);
 
         // Мок хаба с записью групп: Group(name) запоминает адресата, SendCoreAsync — пару
-        string? currentGroup = null;
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-                _sent.Add((currentGroup!, (ServerMessage)args[0]!)))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>()))
-            .Callback<string>(g => currentGroup = g)
-            .Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
         var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
@@ -267,10 +263,10 @@ public class ChatArchivedEventTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return (new SessionManager(projectManager, hub.Object, _historyForBuild, config, adapters, falCost,
+        return (new SessionManager(projectManager, _historyForBuild, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox), projectManager);
+            TestLauncherFactory.Instance, sandbox, broadcaster: _broadcaster), projectManager);
     }
 }
 

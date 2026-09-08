@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -9,8 +9,8 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Spend;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -55,14 +55,7 @@ public class SpendBackfillTests : IDisposable
         _tasks = new TaskManager(config, personas: _personas);
         _history = new ChatHistoryService(config);
 
-        var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         _llmProviders = llmProviders;
@@ -86,10 +79,10 @@ public class SpendBackfillTests : IDisposable
             knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        _sessions = new SessionManager(_projectManager, hub.Object, _history, config, adapters, falCost, usage,
+        _sessions = new SessionManager(_projectManager, _history, config, adapters, falCost, usage,
             appSettings, _userStore, jwt, server.Object, llmProviders, flags, _personas,
             bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            glif: glif);
+            broadcaster, glif: glif);
     }
 
     public void Dispose()

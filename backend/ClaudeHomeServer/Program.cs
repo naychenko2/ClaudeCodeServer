@@ -232,8 +232,9 @@ builder.Services.AddSingleton<ProjectPresetService>();
 // Документы AI: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MarkitdownService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocumentAiService>();
-// Подсистема Git (волна 1.5): GitService/GitServerService/GitAutoCommitService/GitAiService
-// и CommitAttributionService (ниже) — теперь регистрируются в `Services/Git/GitSubsystem.cs`.
+// Подсистема Git (волна 1.5): GitService/GitServerService/GitAiService регистрируются
+// в `Services/Git/GitSubsystem.cs`. Реакторы GitAutoCommitService/CommitAttributionService
+// — общая композиция спины, см. блок рядом с FileWatcherService (Этап 3, уборка Git).
 builder.Services.AddSingleton<UnifiedSearchService>();
 // Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
 // Модельный слой (OneShotClaudeRunner / OllamaClient / LlamaServerClient / CloudCheapClient /
@@ -253,6 +254,15 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolv
 builder.Services.AddSingleton<PersonaAskService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<FileWatcherService>();
+// Реактор авто-commit (Project.GitAutoCommit после каждого хода Claude). Живёт в
+// корне Services, не в Git-вертикали — это «реакция на ход» по прецеденту
+// PersonaMemoryAutolearnService. Здесь, а не в GitSubsystem, потому что регистрации
+// реакторов — общая композиция спины, а не домена Git.
+builder.Services.AddGatedHostedService<GitAutoCommitService>(builder.Configuration);
+// Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути
+// (Session.CommittedFilePaths), чтобы атрибуция файлов чатам не врала после коммита.
+// Аналогично GitAutoCommitService — реактор на горячем пути статуса, не домен Git.
+builder.Services.AddSingleton<CommitAttributionService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<PromptSnapshotStore>();

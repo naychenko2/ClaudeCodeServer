@@ -265,8 +265,19 @@ public class SubsystemBoundaryTests
         // (задача `4d044b22`) реакторы `GitAutoCommitService`/`CommitAttributionService`
         // вынесены в корень `Services.*` — это «реакция на ход/статус» (прецедент
         // `PersonaMemoryAutolearnService`), они ЗОВУТ `GitService`, а не принадлежат
-        // Git. Поэтому `SessionManager`/`ProjectManager`/`ProjectFileSessionsIndex`/
-        // `SessionChangedPaths` больше НЕ нужны Git-вертикали — допуски убраны.
+        // Git. После уборки Git (Этап 3, 2026-09-08) реакторы регистрируются
+        // в Program.cs, а не в `GitSubsystem.Register`, и из тел методов
+        // вертикали Git больше не достижимы — допуск на `GitAutoCommitService`/
+        // `CommitAttributionService` снят.
+        //
+        // После уборки (Этап 3, 2026-09-08) сняты также допуски на
+        // `ClaudeHomeServer.Services.FileService` (GitService валидирует пути
+        // через Core-примитив `SafePath.Join`, не через `FileService.SafeJoinPublic`)
+        // и `ClaudeHomeServer.Services.PersonaManager` (GitServerService транслитерирует
+        // через Core-примитив `Slugifier.Slugify`, не через `PersonaManager.Slugify`).
+        // Эти две связи были скрытыми — резолв через цепочку namespace
+        // `Services.Git` → `Services` → Core без явного `using`.
+        //
         // Допуск к корню Services точечный:
         // 1) `IForgejoAccountStore` — GitServerService сохраняет Forgejo-креденшалы через
         //    узкую проекцию, не принимая конкретный UserStore.
@@ -303,21 +314,6 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
-                    // Точечные зависимости из тел методов (IL-видимость, задача `8beee75e`):
-                    // `GitService.cs:73` зовёт `FileService.SafeJoinPublic(...)` static-метод,
-                    // `GitServerService.cs:213` зовёт `PersonaManager.Slugify(name)` — имя репозитория,
-                    //    а не автор коммита (обоснование выправлено по факту, ревью 894e3ec9).
-                    "ClaudeHomeServer.Services.FileService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    // === Этап 3, задача `4d044b22` — реакторы `GitAutoCommitService`/
-                    // `CommitAttributionService` переехали в корень `Services.*` (прецедент
-                    // `PersonaMemoryAutolearnService`). `GitSubsystem.Register` всё ещё
-                    // регистрирует их — это сознательная связь «вертикаль → root»,
-                    // подсистема знает, что регистрирует, и без точечного допуска сторож
-                    // ловит generic-аргументы `<GitAutoCommitService>`/`<CommitAttributionService>`.
-                    // Префикс `Services` целиком не открываем.
-                    "ClaudeHomeServer.Services.GitAutoCommitService",
-                    "ClaudeHomeServer.Services.CommitAttributionService",
                 }),
         },
         // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).

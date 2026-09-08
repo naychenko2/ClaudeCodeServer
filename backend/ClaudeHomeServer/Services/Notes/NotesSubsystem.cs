@@ -55,5 +55,15 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
         services.AddGatedHostedService<NoteExpiryService>(config);
+
+        // Этап 5, волна 5: два новых Core-интерфейса разрезают циклы Notes → Tasks/Hubs.
+        // Регистрация здесь, потому что NotesSubsystem — единственная точка композиции
+        // Notes-вертикали (Main), и после выноса Notes в отдельный .csproj именно она
+        // пробросит регистрации. Сами реализации (TaskBridge, NotesHubNotifier) сидят
+        // в Main как тонкие обёртки вокруг TaskManager / IHubContext<SessionHub>.
+        services.AddSingleton<Services.Tasks.TaskBridge>();
+        services.AddSingleton<Services.Composition.NotesHubNotifier>();
+        services.AddSingleton<INoteTaskBridge>(sp => sp.GetRequiredService<Services.Tasks.TaskBridge>());
+        services.AddSingleton<INotesHubNotifier>(sp => sp.GetRequiredService<Services.Composition.NotesHubNotifier>());
     }
 }

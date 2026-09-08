@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -8,8 +7,8 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -57,20 +56,13 @@ public class TaskExecutionServiceJoinTests : IDisposable
         _personas = personas;
         _tasks = new TaskManager(config, personas: personas);
 
-        var hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var pushStore = new PushSubscriptionStore(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
         var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
         _notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
-        var notif = new NotificationService(_notifStore, hub.Object, push, personas, projectManager, NullLogger<NotificationService>.Instance);
+        var notif = new NotificationService(_notifStore, broadcaster, push, personas, projectManager, NullLogger<NotificationService>.Instance);
 
         var wkStore = new WorkspaceKnowledgeStore(config);
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
@@ -79,9 +71,9 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
 
-        var sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, hub);
+        var sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
 
-        _sut = new TaskExecutionService(_tasks, sessions, personas, hub.Object, push, notesKb, notif,
+        _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notesKb, notif,
             NullLogger<TaskExecutionService>.Instance, config);
     }
 
@@ -95,7 +87,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
     // упадёт с NRE. Сами сценарии ниже (без персоны-делегата) до SessionManager не достают.
     private static SessionManager CreateSessionManager(IConfiguration config, ProjectManager projectManager,
         UserStore userStore, AppSettingsService appSettings, PersonaManager personas,
-        KnowledgeService knowledge, NotesKnowledgeService notesKb, Mock<IHubContext<SessionHub>> hub)
+        KnowledgeService knowledge, NotesKnowledgeService notesKb, TestSessionBroadcaster broadcaster)
     {
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -113,9 +105,10 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var historyService = new ChatHistoryService(config);
-        return new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost, usage,
+        return new SessionManager(projectManager, historyService, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
+            broadcaster: broadcaster);
     }
 
     private TaskItem CreateTrackedTask(string ownerId = "user-1")

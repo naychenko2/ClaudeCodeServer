@@ -1,11 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Notes;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -34,7 +33,7 @@ public sealed class NotesToolset(
     PersonaManager personas,
     PersonaBindingsService bindings,
     SessionManager sessions,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/notes/{sessionId}
     public const string ServerName = "notes";
@@ -400,8 +399,7 @@ public sealed class NotesToolset(
     private async Task BroadcastAsync(string ownerId, string action, string? noteId)
     {
         kb.QueueSync(ownerId);
-        await hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new NotesChangedMessage(action, noteId));
+        await broadcaster.ToOwner(ownerId, new NotesChangedMessage(action, noteId));
     }
 
     // Компактное представление заметки для списков — как brief у stdio-ветки

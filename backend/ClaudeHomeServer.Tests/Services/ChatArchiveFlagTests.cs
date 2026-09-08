@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -10,7 +9,6 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -286,15 +284,6 @@ public class ChatArchiveFlagTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         _historyForBuild = new ChatHistoryService(config);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
         var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
@@ -317,10 +306,10 @@ public class ChatArchiveFlagTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return (new SessionManager(projectManager, hub.Object, _historyForBuild, config, adapters, falCost,
+        return (new SessionManager(projectManager, _historyForBuild, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, cheap: cheap), projectManager);
+            TestLauncherFactory.Instance, sandbox, cheap: cheap, broadcaster: new TestSessionBroadcaster()), projectManager);
     }
 
     private Session NewChat(SessionManager sut, ProjectManager projects, string? resumeSessionId = null) =>

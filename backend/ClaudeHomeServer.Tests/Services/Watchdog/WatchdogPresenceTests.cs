@@ -1,24 +1,22 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Watchdog;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 
 namespace ClaudeHomeServer.Tests.Services.Watchdog;
 
 // Присутствие сторожей для фронта: снимок {sessions, projects}, событие Changed стора
-// на Create/Cancel/CancelBySession и адресация рассылки watchdogs_changed. Хаб — моком
-// с записью пар (группа, сообщение); sends мока синхронны, поэтому fire-and-forget
-// рассылка успевает до ассертов без ожиданий (CI Linux).
+// на Create/Cancel/CancelBySession и адресация рассылки watchdogs_changed. Тестовый
+// broadcaster (TestSessionBroadcaster) собирает сообщения в три ConcurrentBag по адресу —
+// fire-and-forget рассылка успевает до ассертов без ожиданий (CI Linux).
 public class WatchdogPresenceTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly WatchdogStore _store;
-    private readonly List<(string Group, ServerMessage Msg)> _sent = [];
+    private readonly TestSessionBroadcaster _broadcaster;
     private readonly WatchdogNotifier _notifier;
 
     public WatchdogPresenceTests()
@@ -30,36 +28,30 @@ public class WatchdogPresenceTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json")
             }).Build());
-        _notifier = new WatchdogNotifier(_store, TestHub(), NullLogger<WatchdogNotifier>.Instance);
-    }
-
-    // Мок хаба с записью (группа, сообщение) — образец ChatArchivedEventTests
-    private IHubContext<SessionHub> TestHub()
-    {
-        _sent.Clear();
-        string? currentGroup = null;
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-                _sent.Add((currentGroup!, (ServerMessage)args[0]!)))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>()))
-            .Callback<string>(g => currentGroup = g)
-            .Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-        return hub.Object;
+        _broadcaster = new TestSessionBroadcaster();
+        _notifier = new WatchdogNotifier(_store, _broadcaster, NullLogger<WatchdogNotifier>.Instance);
     }
 
     private WatchdogRecord Create(string session = "chat-1", string? project = "proj-1",
         string owner = "owner-1") =>
         _store.Create(owner, session, project, "Билд", "true", null, null, out _)!;
 
-    private List<WatchdogsChangedMessage> Broadcasts() => _sent
-        .Where(t => t.Msg is WatchdogsChangedMessage)
-        .Select(t => (WatchdogsChangedMessage)t.Msg).ToList();
+    // Все три канала рассылки склеены: присутствие проверяем «был ли вообще broadcast»
+    // (адресация — отдельные тесты ниже, считающие по каналам).
+    private List<WatchdogsChangedMessage> Broadcasts() => _broadcaster.Owner.Select(t => t.Message)
+        .Concat(_broadcaster.Session.Select(t => t.Message))
+        .Concat(_broadcaster.Project.Select(t => t.Message))
+        .OfType<WatchdogsChangedMessage>().ToList();
+
+    // Сброс накопленных broadcast'ов между «прогревом» (Create) и проверяемым действием
+    // (Cancel/Tick). Mock IHubContext обнулял список одной строкой List.Clear(); здесь —
+    // три канала параллельно.
+    private void ClearBroadcasts()
+    {
+        _broadcaster.Clear();
+        _broadcaster.Clear();
+        _broadcaster.Clear();
+    }
 
     // --- Снимок ---
 
@@ -137,27 +129,28 @@ public class WatchdogPresenceTests : IDisposable
     [Fact]
     public void Create_BroadcastsToUserSessionAndProjectGroups()
     {
-        _sent.Clear();
-
         Create("chat-1", "proj-1");
 
-        var byGroup = _sent.Where(t => t.Msg is WatchdogsChangedMessage).ToList();
-        byGroup.Select(t => t.Group).Should().BeEquivalentTo(
-            ["user_owner-1", "chat-1", "project_proj-1"],
-            "session-группа каждого затронутого чата (имя группы — сам id) + project- и user-группы");
-        // Копия в session-группу несёт SessionId — клиент роутит по сессии
-        var sessionCopy = byGroup.Single(t => t.Group == "chat-1");
-        sessionCopy.Msg.SessionId.Should().Be("chat-1");
-        sessionCopy.Msg.Should().BeOfType<WatchdogsChangedMessage>().Which.Sessions
-            .Should().BeEquivalentTo(["chat-1"]);
-        byGroup.Single(t => t.Group == "user_owner-1").Msg.SessionId.Should().BeEmpty();
+        // Адресация рассылки: user_/session/project — три отдельных канала TestSessionBroadcaster
+        _broadcaster.Owner.Select(t => t.OwnerId).Should().BeEquivalentTo(["owner-1"],
+            "user-канал шлёт ВСЕ затронутые чаты одним сообщением владельцу");
+        _broadcaster.Session.Select(t => t.SessionId).Should().BeEquivalentTo(["chat-1"],
+            "session-канал адресует ровно чат, на который встал сторож");
+        _broadcaster.Project.Select(t => t.ProjectId).Should().BeEquivalentTo(["proj-1"],
+            "project-канал адресует проект, в котором живёт чат");
+        // Копия в session-канал несёт SessionId — клиент роутит по сессии
+        var sessionCopy = _broadcaster.Session.Select(t => t.Message).OfType<WatchdogsChangedMessage>().Single();
+        sessionCopy.SessionId.Should().Be("chat-1");
+        sessionCopy.Sessions.Should().BeEquivalentTo(["chat-1"]);
+        var ownerCopy = _broadcaster.Owner.Select(t => t.Message).OfType<WatchdogsChangedMessage>().Single();
+        ownerCopy.SessionId.Should().BeEmpty("user-канал — общий список всех сессий владельца, без конкретного SessionId");
     }
 
     [Fact]
     public void Cancel_BroadcastsEmptiedSnapshot()
     {
         var w = Create("chat-1", "proj-1");
-        _sent.Clear();
+        ClearBroadcasts();
 
         _store.Cancel(w.Id, "owner-1", out _);
 
@@ -202,7 +195,7 @@ public class WatchdogPresenceTests : IDisposable
         var w = Create("chat-1", "proj-1");
         var sut = new WatchdogService(_store, env, new FakeRunner { Next = PollOutcome.ExitedZero },
             new FakeAlarm(), NullLogger<WatchdogService>.Instance, _notifier);
-        _sent.Clear();
+        ClearBroadcasts();
 
         await sut.TickAsync(DateTime.UtcNow);
 

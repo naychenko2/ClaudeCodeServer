@@ -1,11 +1,9 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -46,7 +44,6 @@ public sealed class DailyBriefingService
     private readonly ProjectEventLogService? _events;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly PushService _push;
-    private readonly IHubContext<SessionHub> _hub;
     private readonly ITaskNotificationDispatcher _notif;
     private readonly IConfiguration _config;
     private readonly ILogger<DailyBriefingService> _log;
@@ -61,7 +58,7 @@ public sealed class DailyBriefingService
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
         PersonaManager personas, AppSettingsService appSettings,
         Llm.ICheapTextRunner cheap, PushService push,
-        IHubContext<SessionHub> hub, ITaskNotificationDispatcher notif,
+        ITaskNotificationDispatcher notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
         ProjectEventLogService? events = null)
     {
@@ -73,7 +70,6 @@ public sealed class DailyBriefingService
         _appSettings = appSettings;
         _cheap = cheap;
         _push = push;
-        _hub = hub;
         _notif = notif;
         _config = config;
         _log = log;

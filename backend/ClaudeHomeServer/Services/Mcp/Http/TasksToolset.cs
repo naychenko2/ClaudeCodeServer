@@ -2,12 +2,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -43,7 +43,7 @@ public sealed class TasksToolset(
     NoteTaskSyncService noteSync,
     PersonaBindingsService bindings,
     SessionManager sessions,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -253,7 +253,7 @@ public sealed class TasksToolset(
                     // — тот же текст, что в REST-контроллере, в Deny пробрасываем как есть
                     return Deny(ex.Message);
                 }
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "created", created);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", created));
                 return Json(created);
             }
 
@@ -363,14 +363,14 @@ public sealed class TasksToolset(
                     // с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
                 }
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
 
                 // Завершение регулярной задачи → следующий экземпляр серии (тот же путь, что REST)
                 if (!wasDone && updated.Status == TaskItemStatus.Done && updated.Recurrence is not null)
                 {
                     var next = tasks.SpawnNextOccurrence(updated);
                     if (next is not null)
-                        await hub.BroadcastTaskChangedAsync(context.OwnerId, "created", next);
+                        await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
                 }
                 // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
@@ -415,10 +415,10 @@ public sealed class TasksToolset(
                     // же ловит и наш «не найдена» с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
                 }
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
                 if (!wasDone && updated.Recurrence is not null
                     && tasks.SpawnNextOccurrence(updated) is { } next)
-                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "created", next);
+                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
                 return Json(updated);
@@ -488,7 +488,7 @@ public sealed class TasksToolset(
                 if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
                 tasks.Delete(id);
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "deleted", task);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("deleted", task));
                 return Text($"Задача {id} удалена.");
             }
 
@@ -514,7 +514,7 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
                 return Json(updated);
             }
 
@@ -544,7 +544,7 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
                 return Json(updated);
             }
 

@@ -1,8 +1,7 @@
 using System.Collections.Concurrent;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -17,7 +16,7 @@ public class DefaultAssistantProvisioner
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly ILogger<DefaultAssistantProvisioner> _log;
 
     // Идемпотентность провижна: перечитывание под per-ключевым семафором (паттерн
@@ -29,12 +28,12 @@ public class DefaultAssistantProvisioner
 
     public DefaultAssistantProvisioner(UserStore users, PersonaManager personas,
         PersonaBindingsService bindings,
-        IHubContext<SessionHub> hub, ILogger<DefaultAssistantProvisioner> log)
+        ISessionBroadcaster broadcaster, ILogger<DefaultAssistantProvisioner> log)
     {
         _users = users;
         _personas = personas;
         _bindings = bindings;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _log = log;
     }
 
@@ -113,13 +112,16 @@ public class DefaultAssistantProvisioner
         // доставка события клиенту — best-effort. Без этого catch закрытая на полпути вкладка
         // (ct = HttpContext.RequestAborted из гейта создания чата) роняла бы необработанное
         // исключение в пайплайн и шумела бы ошибкой в логах и трейсах там, где ошибки нет.
-        var groupName = "user_" + userId;
         try
         {
-            await _hub.Clients.Group(groupName)
-                .SendAsync("message", new PersonasChangedMessage("created", created.Id), ct);
-            await _hub.Clients.Group(groupName)
-                .SendAsync("message", new PersonasChangedMessage("default", created.Id), ct);
+            // Шов ISessionBroadcaster не принимает CancellationToken — broadcast-операция
+            // короткая, дальше клиент всё равно получит событие при следующем JoinUser.
+            // catch (OperationCanceledException) сохранён ради обратной совместимости
+            // и на случай будущей отмены внутри адаптера.
+            await _broadcaster.ToOwner(userId,
+                new PersonasChangedMessage("created", created.Id));
+            await _broadcaster.ToOwner(userId,
+                new PersonasChangedMessage("default", created.Id));
         }
         catch (OperationCanceledException) { /* клиент ушёл — персона всё равно создана */ }
         return created;

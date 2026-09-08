@@ -1,13 +1,11 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Images;
-using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -22,8 +20,7 @@ public class ImageBackfillTests : IDisposable
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
     private readonly User _owner;
-    private readonly List<ServerMessage> _broadcasts = [];
-    private readonly Mock<IHubContext<SessionHub>> _hub;
+    private readonly TestSessionBroadcaster _broadcaster;
 
     public ImageBackfillTests()
     {
@@ -40,18 +37,8 @@ public class ImageBackfillTests : IDisposable
         _personas = new PersonaManager(_config);
         _owner = _users.Add("imgfill_" + Guid.NewGuid().ToString("N")[..8], "pwd", "admin");
 
-        // Перехват broadcast-сообщений в группу (паттерн GlifCostPipelineTests)
-        _hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        var proxy = new Mock<IClientProxy>();
-        proxy.Setup(c => c.SendCoreAsync("message", It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage m) _broadcasts.Add(m);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
-        _hub.Setup(h => h.Clients).Returns(clients.Object);
+        // Перехват broadcast-сообщений через TestSessionBroadcaster (заменяет мок IHubContext)
+        _broadcaster = new TestSessionBroadcaster();
     }
 
     public void Dispose()
@@ -71,7 +58,7 @@ public class ImageBackfillTests : IDisposable
         var settings = new ImageGenerationSettingsStore(_config);
         var images = new ImageGenerationService([generator], settings);
         return new ImageBackfillService(store ?? NewStore(), images, _personas,
-            _hub.Object, new FakeLifetime(), NullLogger<ImageBackfillService>.Instance)
+            _broadcaster, new FakeLifetime(), NullLogger<ImageBackfillService>.Instance)
         {
             RetryDelay = TimeSpan.Zero,
         };
@@ -113,11 +100,12 @@ public class ImageBackfillTests : IDisposable
         Assert.Equal(PersonaAvatarKind.Image, saved.Avatar.Kind);
         Assert.True(File.Exists(Path.Combine(_personas.AssetsDir, persona.Id, saved.Avatar.ImageFile!)));
 
-        var backfilled = Assert.Single(_broadcasts.OfType<ImageBackfilledMessage>());
+        var backfilled = Assert.Single(_broadcaster.Owner.Select(t => t.Message)
+            .OfType<ImageBackfilledMessage>());
         Assert.Equal(ImageBackfillKinds.PersonaAvatar, backfilled.Kind);
         Assert.Equal(persona.Id, backfilled.EntityId);
         // Раздел «Персоны» слушает штатное personas_changed — его шлём вдобавок
-        Assert.Contains(_broadcasts.OfType<PersonasChangedMessage>(),
+        Assert.Contains(_broadcaster.Owner.Select(t => t.Message).OfType<PersonasChangedMessage>(),
             m => m.Action == "updated" && m.PersonaId == persona.Id);
     }
 

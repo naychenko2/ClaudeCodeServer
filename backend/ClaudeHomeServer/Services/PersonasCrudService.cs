@@ -1,6 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Memory;
@@ -9,7 +9,6 @@ using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -38,7 +37,7 @@ public sealed class PersonasCrudService(
     SpecialtySettingsStore specialtySettings,
     IConfiguration config,
     ILogger<PersonasCrudService> log,
-    IHubContext<SessionHub> hub)
+    ISessionBroadcaster broadcaster)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -55,8 +54,7 @@ public sealed class PersonasCrudService(
     private static NoContentResult NoContent() => new();
 
     private Task Broadcast(string userId, string action, string? personaId = null) =>
-        hub.Clients.Group("user_" + userId)
-            .SendAsync("message", new PersonasChangedMessage(action, personaId));
+        broadcaster.ToOwner(userId, new PersonasChangedMessage(action, personaId));
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 

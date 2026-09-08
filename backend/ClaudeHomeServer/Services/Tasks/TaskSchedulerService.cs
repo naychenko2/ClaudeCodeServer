@@ -1,7 +1,7 @@
-using ClaudeHomeServer.Hubs;
+﻿using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.Tasks;
 public class TaskSchedulerService(
     TaskManager tasks,
     UserStore users,
-    IHubContext<SessionHub> hub,
+    ISessionBroadcaster broadcaster,
     ITaskExecutor executor,
     IDailyBriefingRunner briefing,
     IPersonaAutomationRunner automation,
@@ -124,7 +124,7 @@ public class TaskSchedulerService(
             Url: TaskUrl(updated),
             Kind: "reminder"));
         // Синхронизируем сторы клиентов (ReminderSentAt изменился)
-        await hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+        await broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
 
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }

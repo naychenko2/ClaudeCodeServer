@@ -1506,13 +1506,10 @@ public class SubsystemBoundaryTests
         // - `Services.Tasks.TaskManager` зовёт `Services.ExecutorStopClassifier.IsTerminal(...)`
         //   в теле метода (`TaskManager.cs:429`) — root-тип `ExecutorStopClassifier`
         //   (ExecutorStopClassifier.cs:16). Шов Tasks → корень через статику.
-        // - `Services.Tasks.TaskSchedulerService` зовёт
-        //   `Controllers.TaskHubExtensions.BroadcastTaskChangedAsync(...)` в теле
-        //   метода (`TaskSchedulerService.cs:128`) — это extension-метод,
-        //   объявленный в `Controllers/TasksController.cs:486` (`public static class
-        //   TaskHubExtensions`). ⚠ ИНВЕРСИЯ СЛОЁВ: сервис Tasks вызывает код,
-        //   объявленный в `ClaudeHomeServer.Controllers.*`. Оставить как шов;
-        //   разбор вынести в отдельную задачу этапа 4.
+        // - Прежний шов `Services.Tasks.TaskSchedulerService → Hubs.TaskHubExtensions`
+        //   снят в Этап 5, Ф4 (extension-метод BroadcastTaskChangedAsync удалён
+        //   вместе с файлом Hubs/TaskHubExtensions.cs; TaskSchedulerService переведён
+        //   на ISessionBroadcaster.Core).
         new object[]
         {
             new VerticalBoundary(
@@ -1576,12 +1573,10 @@ public class SubsystemBoundaryTests
                     // сидит в корне Services. Tasks зовёт его через
                     // TaskSchedulerService.Зависимости от «спинки» — легитимные.
                     "ClaudeHomeServer.Services.DailyBriefingService",
-                    // TaskHubExtensions (Этап 5, волна C): extension-метод
-                    // BroadcastTaskChangedAsync переехал из Controllers/TasksController в
-                    // Hubs/TaskHubExtensions. Tasks его зовёт через
-                    // `hub.BroadcastTaskChangedAsync(...)` (TaskSchedulerService).
-                    // Шов `Tasks → Hubs` по образцу других вертикалей (Llm, Notes).
-                    "ClaudeHomeServer.Hubs.TaskHubExtensions",
+                    // TaskHubExtensions удалён (Этап 5, Ф4): все потребители
+                    // (TaskSchedulerService, TasksController, Mcp-тулсеты) переехали
+                    // на ISessionBroadcaster. Шов `Tasks → Hubs` через шов-интерфейс
+                    // Core (см. ISessionBroadcaster), а не через extension-метод.
                 }),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault

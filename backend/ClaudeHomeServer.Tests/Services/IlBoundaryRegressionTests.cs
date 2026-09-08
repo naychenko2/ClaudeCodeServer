@@ -32,10 +32,12 @@ public class IlBoundaryRegressionTests
                 && !n.EndsWith(".Tests", StringComparison.Ordinal))
             .ToList();
 
-        // 7 известных швов из CLAUDE.md «Известное ограничение», которые раньше
+        // 6 известных швов из CLAUDE.md «Известное ограничение», которые раньше
         // объявлялись «вслепую, для будущего IL-скана». Теперь это живой гейт.
-        // После Этапа 5, волны C `TaskHubExtensions` переехал из Controllers/TasksController
-        // в Hubs/TaskHubExtensions — обновляем needle на новый путь.
+        // После Этапа 5, Ф4 «шов вещания» extension-метод TaskHubExtensions.BroadcastTaskChangedAsync
+        // удалён (все потребители переехали на ISessionBroadcaster), case
+        // «Tasks → Hubs.TaskHubExtensions» снят — соответствующая статическая ссылка
+        // больше не существует.
         var checks = new (string Label, string SourceType, string Needle)[]
         {
             ("DeployHost → GitService", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Git.GitService"),
@@ -44,7 +46,6 @@ public class IlBoundaryRegressionTests
             ("Memory → SessionSummaryService", "ClaudeHomeServer.Services.Memory.PersonaMemoryAutolearnService", "ClaudeHomeServer.Services.SessionSummaryService"),
             ("Execution → TranscriptRoots", "ClaudeHomeServer.Services.Execution.DockerProcessRunner", "ClaudeHomeServer.Services.TranscriptRoots"),
             ("Llm → SpecialtyCatalog", "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore", "ClaudeHomeServer.Services.SpecialtyCatalog"),
-            ("Tasks → Hubs.TaskHubExtensions", "ClaudeHomeServer.Services.Tasks.TaskSchedulerService", "ClaudeHomeServer.Hubs.TaskHubExtensions"),
         };
 
         var missed = new List<string>();

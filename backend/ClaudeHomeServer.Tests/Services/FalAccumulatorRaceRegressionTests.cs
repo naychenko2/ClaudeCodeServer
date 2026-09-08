@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -8,8 +8,8 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -50,13 +50,7 @@ public class FalAccumulatorRaceRegressionTests : IDisposable
         var personas = new PersonaManager(config);
         _history = new ChatHistoryService(config);
 
-        var hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        var proxy = new Mock<IClientProxy>();
-        proxy.Setup(c => c.SendCoreAsync("message", It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -81,10 +75,10 @@ public class FalAccumulatorRaceRegressionTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var spend = new SpendStore(Path.Combine(_dir, "spend"), detailDays: 30);
 
-        _sessions = new SessionManager(_projectManager, hub.Object, _history, config, adapters, falCost, usage,
+        _sessions = new SessionManager(_projectManager, _history, config, adapters, falCost, usage,
             appSettings, _userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            spend: spend, glif: glif);
+            broadcaster, spend: spend, glif: glif);
     }
 
     public void Dispose()

@@ -63,6 +63,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -258,62 +259,6 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.PersonaManager",
-                }),
-        },
-        // Git — НИЖНИЙ слой вертикалей (на него смотрят будущие Dossiers/Knowledge/Deploy,
-        // плюс hosted-сервисы SessionManager/ProjectManager). После Этапа 3
-        // (задача `4d044b22`) реакторы `GitAutoCommitService`/`CommitAttributionService`
-        // вынесены в корень `Services.*` — это «реакция на ход/статус» (прецедент
-        // `PersonaMemoryAutolearnService`), они ЗОВУТ `GitService`, а не принадлежат
-        // Git. После уборки Git (Этап 3, 2026-09-08) реакторы регистрируются
-        // в Program.cs, а не в `GitSubsystem.Register`, и из тел методов
-        // вертикали Git больше не достижимы — допуск на `GitAutoCommitService`/
-        // `CommitAttributionService` снят.
-        //
-        // После уборки (Этап 3, 2026-09-08) сняты также допуски на
-        // `ClaudeHomeServer.Services.FileService` (GitService валидирует пути
-        // через Core-примитив `SafePath.Join`, не через `FileService.SafeJoinPublic`)
-        // и `ClaudeHomeServer.Services.PersonaManager` (GitServerService транслитерирует
-        // через Core-примитив `Slugifier.Slugify`, не через `PersonaManager.Slugify`).
-        // Эти две связи были скрытыми — резолв через цепочку namespace
-        // `Services.Git` → `Services` → Core без явного `using`.
-        //
-        // Допуск к корню Services точечный:
-        // 1) `IForgejoAccountStore` — GitServerService сохраняет Forgejo-креденшалы через
-        //    узкую проекцию, не принимая конкретный UserStore.
-        // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory`, через который
-        //    GitService запускает процессы git (источник истины, как в задаче).
-        // 3) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для генерации сообщения
-        //    коммита и имени стэша в `GitAiService`. Это сознательная связь «вертикаль →
-        //    спинка»: LLM-инфраструктура общего назначения (дешёвые one-shot ходы через
-        //    локальную модель или haiku), используемая и другими разделами (теги заметок,
-        //    сводки, память...). Вынос Llm в отдельный allow-list вместо расширения
-        //    SharedAllowedPrefixes — чтобы не открывать любой подсистеме весь
-        //    `ClaudeHomeServer.Services.Llm`.
-        // 4) `ClaudeHomeServer.Protocol` — префикс СНЯТ (волна 3) как полностью
-        //    избыточный: `GitTurnCommitMessage`/`GitStatusChangedMessage` теперь создаются
-        //    в `Services.GitAutoCommitService` (root Services, не в Git-вертикали),
-        //    а метод OnSessionMessageAsync с ServerMessage в сигнатуре — private,
-        //    сторож читает только public-методы. Поэтому убираем префикс, а
-        //    `AllowedExactNamespaces` для `ClaudeHomeServer.Protocol.*` оставляем
-        //    пустым — это сознательный нулевой allow-list: если вертикаль получит
-        //    поле/параметр типа из Protocol, сторож поймает это сразу.
-        new object[]
-        {
-            new VerticalBoundary(
-                "Git",
-                "ClaudeHomeServer.Services.Git",
-                SharedAllowedPrefixes
-                    .Concat(new[]
-                    {
-                        "ClaudeHomeServer.Services.Git",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Services.Llm",
-                    })
-                    .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.Git.IForgejoAccountStore",
                 }),
         },
         // CodeGraph — вертикаль графа зависимостей кода (узлы — типы, рёбра — Calls/Implements/References).
@@ -1763,6 +1708,41 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // Git — вертикаль локальных git-операций над проектом (запуск через
+        // ILauncherFactory) + Forgejo HTTP-клиент для remote + LLM-помощь для
+        // сообщений коммита и имён stash (GitAiService через LocalActionCatalog +
+        // ICheapTextRunner, оба в Core после Этапа 3, ловятся assembly-фильтром).
+        // Допусков к корню Services нет: вся зависимость от спинки закрыта Core:
+        //  - Models.GitStatus (Core, assembly-фильтр);
+        //  - Services.Execution.ILauncherFactory/ProcessSpec (Core, assembly-фильтр);
+        //  - Services.Composition.IAppSubsystem (Core, assembly-фильтр);
+        //  - Services.Http.WithoutEgressProxy (Core, assembly-фильтр).
+        // Реакторы GitAutoCommitService/CommitAttributionService лежат в корне
+        // Services и регистрируются в Program.cs — это сознательная связь
+        // «вертикаль → спинка», Main->Git направление, сторож по Git не
+        // запрещает Main ссылаться на Git.
+        //
+        // `AllowedExactNamespaces` пуст СОЗНАТЕЛЬНО, это не забытая строка (перенесено
+        // из прежней записи, снятой при выносе в отдельный .csproj): префикс
+        // `ClaudeHomeServer.Protocol` был убран ещё волной 3 как избыточный —
+        // `GitTurnCommitMessage`/`GitStatusChangedMessage` создаются в
+        // `Services.GitAutoCommitService` (корень Services, не в вертикали), а
+        // `OnSessionMessageAsync` с `ServerMessage` в сигнатуре — private, сторож
+        // читает только public-члены. Нулевой allow-list здесь работает как ловушка:
+        // получит вертикаль поле или параметр типа из Protocol — сторож поймает сразу.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Git",
+                "ClaudeHomeServer.Services.Git",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Git",
+                    })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
     };
 
     [Theory]
@@ -1798,12 +1778,13 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 7 = Main + Core + 5 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills);
+        // 8 = Main + Core + 6 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git);
         // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(7,
-            "после Этапа 3 сторож должен видеть 7 прод-сборок: ClaudeHomeServer, " +
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(8,
+            "после Этапа 3 сторож должен видеть 8 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
-            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills");
+            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
+            "ClaudeHomeServer.Git");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

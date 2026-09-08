@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Git. По тем же причинам, что и Core/Video/Yandex/
+         Reader/CodeGraph/Skills: SDK = Web ради FrameworkReference Microsoft.AspNetCore.App
+         и OutputType=Library ради отсутствия Main. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- ProjectReference на Main нужен ради GitServiceTests: тесты интеграционные
+         против настоящего git CLI (LocalProcessRunner), и один из них —
+         WriteSnapshotAsync — использует DossierBranch.Ref/Identity из
+         Services/Dossiers (тип остаётся в Main, потому что Dossiers ещё не
+         вынесены в отдельный .csproj — кандидат по ADR-014, но не сегодня).
+         Без ProjectReference на Main тестовая сборка не скомпилируется:
+         DossierBranch.cs:1 — using ClaudeHomeServer.Services.Git; — и обратная
+         зависимость Main->Git разрешится через Main в этой сборке.
+         Прецедент — ClaudeHomeServer.CodeGraph.Tests, у которой ровно так же
+         есть ProjectReference на Main ради доступа к интеграционным типам Main. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+  </ItemGroup>
+
+</Project>

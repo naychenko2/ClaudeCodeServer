@@ -236,15 +236,30 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
 и разрез через `TranscriptRoots` в спине стал лечением, а не записью в allow-list.
 
 **Курс после пилота физической изоляции** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md),
-раздел «Курс после пилота»): из **20** реализаций `IAppSubsystem` (33 записи в
-`Boundaries`) **восемь** (Video, Yandex, Reader, CodeGraph, Skills, Git, Tts, Notes)
-уже вынесены в отдельные `.csproj`: сначала плановый мерж пилота (первые три),
-затем по критерию готовности швов — CodeGraph, Skills, Git и Tts, а на Этапе 5 —
-Notes. Двум из них вынос потребовал предварительной уборки: **Git** (`SafeJoin` →
+раздел «Курс после пилота»): **четырнадцать** вертикалей уже вынесены в отдельные
+`.csproj` — Changelog, CodeGraph, Diagnostics, Docs, Git, Knowledge, Notes,
+Personas, Reader, Skills, Tts, Video, WebSearch, Yandex. Сначала плановый мерж
+пилота (Video, Yandex, Reader), затем по критерию готовности швов — CodeGraph,
+Skills, Git, Tts, а на Этапе 5 — Notes, Knowledge и волна из пяти
+(Personas, Diagnostics, WebSearch, Changelog, Docs).
+
+Трём вынос потребовал предварительной уборки: **Git** (`SafeJoin` →
 Core-примитив `SafePath.Join`, `Models.User` вон из контракта через read-метод
 `IForgejoAccountStore`, `Models/GitStatus.cs` → Core, возврат регистрации спинных
-реакторов в `Program.cs`) и **Notes** (разрез ДВУХ циклов — с `Knowledge` и с
-`Tasks`, плюс снятие двух инверсий слоёв).
+реакторов в `Program.cs`), **Notes** (разрез ДВУХ циклов — с `Knowledge` и с
+`Tasks`, плюс снятие двух инверсий слоёв) и **Knowledge** (семь швов под
+фактические вызовы, DTO каталога из контроллера в вертикаль).
+
+**Не вынесены и почему** (по разведкам боем 2026-09-08, объём доказан
+компилятором): **Tasks** — швы готовы, ждёт чужих швов под четыре god-объекта;
+**Spend** — 8 мест, из них пять god-объекты; **Turn** — 32 места, свой набор
+чужих вертикалей (Dossiers, CodeGraph, Notes, Skills); **Llm** (73 файла,
+23 232 строки) — была заблокирована взаимными циклами с Turn и Spend, циклы
+разрезаны; **Memory** — сцеплена с `Dossiers` (зависимости на Knowledge 8 и
+Dossiers 6), уезжает вместе с ней; **Dossiers** — решением Андрея отложена
+в конец этапа: `DossierCaptureService`/`DossierRecallService` берут
+`GitService`/`CodeGraphService`/`TaskManager` ОБЯЗАТЕЛЬНЫМИ параметрами
+конструктора, и это не утечка абстракции, а смысл подсистемы (ADR-004).
 
 **Решение Андрея 2026-09-08 — Этап 5: вынести в отдельные `.csproj` ВСЕ
 оставшиеся вертикали**, критерий успеха — в `Services/` не остаётся ни одной папки
@@ -260,7 +275,7 @@ Core-примитив `SafePath.Join`, `Models.User` вон из контрак�
 отдают пустой набор (доказано мутацией в ревью: 17/17 зелёных при нулевом наборе).
 Статические конструкторы сторожей (`SubsystemBoundaryTests`,
 `RootSubsystemBoundaryTests`, `SubsystemBoundaryCoverageTests`) форсят загрузку всех
-вертикальных сборок (`Video`/`Yandex`/`Reader`/`CodeGraph`/`Skills`/`Git`), иначе
+вертикальных сборок (все четырнадцать — список выше), иначе
 порядок тестов ложно рушит сторож при изолированном прогоне. **Дубль записи в
 `Boundaries` сторожа не ловят ни один:** `SubsystemBoundaryCoverageTests` сводит
 записи в `boundaryRoots` через `ToHashSet()` по `NamespaceRoot`, и вторая запись о

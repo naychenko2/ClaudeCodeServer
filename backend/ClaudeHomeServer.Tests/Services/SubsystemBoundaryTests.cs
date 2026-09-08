@@ -1984,6 +1984,10 @@ public class SubsystemBoundaryTests
         // он тянет WorkspaceKnowledgeStore, законную внутреннюю композицию своей
         // вертикали; потребителям вместо него узкий контракт (волна B).
         "ClaudeHomeServer.Services.Knowledge",
+        // Этап 5, шаг Ф1 (Models→Core): контракт записи долгой памяти нужен обоим
+        // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
+        // интерфейса в Core `Models/` целиком не уезжает.
+        "ClaudeHomeServer.Services.Memory",
     ];
 
     /// <summary>

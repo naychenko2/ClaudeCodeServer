@@ -94,13 +94,8 @@ public record PersonasMcpContext(string ApiUrl, Func<string> TokenFactory, strin
 // атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team|
 // dossier (team — память команды проекта, ③-3.4; dossier — паспорт изменения, ADR-004 §5);
 // Ref — id/ссылка.
-public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
-
-// Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).
-// DossierText — блок паспортов изменений ОТДЕЛЬНО от Text (план «Секции промптов» этап 3,
-// флаг specialty-prompt-sections): секция dossier-recall клеится своим местом промпта;
-// null — флаг выключен/досье нет (тогда, если есть, оно уже внутри Text — как до фичи).
-public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items, string? DossierText = null);
+// RecallItem и RecallBlock переехали в Core (`Core/Services/Llm/RecallManifest.cs`,
+// этап 5, шаг 2) — для разрыва цикла Llm ⇄ Turn через шину событий хода.
 
 // Контекст MCP-сервера уведомлений: адрес API и сервисный токен владельца.
 // Всегда подключается, когда есть владелец сессии — Claude и агенты могут

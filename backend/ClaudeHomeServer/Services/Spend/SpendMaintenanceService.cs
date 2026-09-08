@@ -11,8 +11,11 @@ namespace ClaudeHomeServer.Services.Spend;
 // равномерно между Session.CreatedAt и Session.UpdatedAt — по дням агрегатов это даёт
 // правдоподобную картину, а точная минута для аналитики не важна. Ходы с расчётным временем
 // после T0 (момент включения live-сбора) пропускаются — они уже записаны штатной точкой.
+//
+// Этап 5, шаг 3: расход берёт у Llm только один метод (`ResolveModelOrDefault`)
+// и идёт через узкий шов `IModelResolver` (Core).
 public sealed class SpendMaintenanceService(SpendStore store, SessionManager sessions,
-    ChatHistoryService history, LlmProviderRegistry llm, ILogger<SpendMaintenanceService> log)
+    ChatHistoryService history, IModelResolver llm, ILogger<SpendMaintenanceService> log)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)

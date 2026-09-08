@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Prompts;
 

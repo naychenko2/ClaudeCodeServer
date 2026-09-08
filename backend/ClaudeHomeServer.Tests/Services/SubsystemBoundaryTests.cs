@@ -417,10 +417,13 @@ public class SubsystemBoundaryTests
         //    в дашборде (чаты, проекты, задачи, персоны, пользователи).
         // 2) `ChatHistoryService` (`SpendMaintenanceService.cs:15`) — backfill истории
         //    расхода из сохранённых транскриптов при первом запуске.
-        // 3) `ClaudeHomeServer.Services.Llm` — `LlmProviderRegistry` для расчёта
-        //    стоимости по прайсу провайдера (тот же шов «вертикаль → спинка LLM», что
-        //    у `Git`/`Backgrounds`/`Deploy`): цены живут в одном месте на все
-        //    потребительские разделы, вынос из SharedAllowedPrefixes держит гейт узким.
+        // 3) Префикс `ClaudeHomeServer.Services.Llm` снят (этап 5, шаг 3) — расход
+        //    получает резолв модели через узкий Core-шов `IModelResolver` (одного
+        //    метода `ResolveModelOrDefault`). Префикс держал окно открытым, хотя
+        //    фактических ссылок Spend → Llm после шва не осталось; мутация
+        //    (вернуть префикс → прогон `SubsystemBoundary`) дала зелёный результат
+        //    — снятие законно. Адаптер `LlmModelResolverAdapter` живёт в Main
+        //    (`Services/Llm`), DI регистрирует интерфейс рядом с реестром.
         // 4) Точечный допуск к `ClaudeHomeServer.Protocol` — типы WS-событий, которые
         //    `SpendMaintenanceService.BackfillAsync` разбирает из истории чатов при
         //    первичном наполнении стора: `StoredMessage`/`StoredResultMessage`
@@ -441,7 +444,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Spend",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]
@@ -957,7 +959,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore",
                     // Spend — ISpendCollector пишут все четыре ход-раннера (cloud-cheap,
                     // Ollama/LlamaServer и OneShot-Claude). Префикс не открываем.
-                    "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                    // (Этап 5: после переезда ISpendCollector в Core сборка закрыта
+                    // `IsCoreAssembly`, точечный допуск снят — мёртвый.)
                     // Telemetry (бывший префикс, заменён точечным допуском):
                     // `ClaudeSession` зовёт `TurnTelemetry.StartTurnSpan`/`RecordTurnResult`
                     // и прочие методы из тел async-методов.
@@ -1084,12 +1087,21 @@ public class SubsystemBoundaryTests
                     // адрес (см. `ClaudeHomeServer.Services.Llm.SpecialtySettingsStore`
                     // в allow-list Llm).
                     "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore",
-                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",
+                    // SpecialtySettingsStore+EffectivePromptSection переехал в Core
+                    // (`Core/Services/Llm/IPromptSectionProvider.cs`, этап 5, шаг 4)
+                    // — EffectivePromptSection теперь Core-DTO, допуск снят.
+                    // (Был: "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",)
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    "ClaudeHomeServer.Services.Llm.RecallItem",
-                    "ClaudeHomeServer.Services.Llm.TurnRunPassport",
-                    "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // RecallItem переехал в Core (`Core/Services/Llm/RecallManifest.cs`,
+                    // этап 5, шаг 2). Turn берёт тип через Core-DTO, допуск снят.
+                    // (Был: "ClaudeHomeServer.Services.Llm.RecallItem",)
+                    // TurnRunPassport переехал в Core (`Core/Services/Llm/TurnRunPassport.cs`),
+                    // TurnEvents.TurnCompleted хранит ссылку как Core-DTO.
+                    // (Был: "ClaudeHomeServer.Services.Llm.TurnRunPassport",)
+                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`),
+                    // TurnEvents.SubagentRunCompleted — Core-DTO.
+                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
                     // Этап 4, шаг 2г-2 — переезд промптов штаба: ClaudeSession
                     // (DecidePermissionAsync) ссылается на `TeamImplementPrompts.MaxInterviewRounds`
                     // и `InterviewRoundsExhausted` для гейта AskUserQuestion. До переезда
@@ -1130,7 +1142,10 @@ public class SubsystemBoundaryTests
                 new[]
                 {
                     "ClaudeHomeServer.Services.ModelTier",
-                    "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",
+                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`,
+                    // этап 5, шаг 2) — SubagentPrompts теперь берёт тип через Core-DTO,
+                    // допуск снят. Раньше был мёртвый декоратор (с момента коммита Этапа 5).
+                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
                     // `OmcPersonaRouting.cs:114` зовёт `PersonaConsultantToolset`
                     // static-метод из тела метода (IL-видимость, задача `8beee75e`).
                     // Точечный допуск по образцу `Llm → SpecialtyCatalog`/`SpecialtyPromptPresets`.
@@ -1953,6 +1968,11 @@ public class SubsystemBoundaryTests
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
         // ссылалась на шов без ProjectReference на Main.
         "ClaudeHomeServer.Services.Notes",
+        // Этап 5, шаг 1 (цикл Llm ⇄ Spend): ISpendCollector переехал в Core, чтобы
+        // вертикаль Llm могла зависеть от Core-интерфейса без прямой ссылки на
+        // вертикаль Spend. Реализация `SpendStore : ISpendCollector` остаётся
+        // в Main (Services/Spend) — пока сам Spend не вынесен в свой csproj.
+        "ClaudeHomeServer.Services.Spend",
         // Этап 5, волна 5 (Knowledge): узкий Core-шов IDifyMetrics (ProjectKnowledgeSyncService
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).

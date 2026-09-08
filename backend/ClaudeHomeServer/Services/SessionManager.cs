@@ -99,12 +99,12 @@ public class SessionManager : IDisposable, ITeamNotifier,
         // Сабагент этого хода оборвался на середине (паспорт прогона с Truncated) — по концу
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
-        public volatile Llm.Claude.SubagentRunPassport? TruncatedSubagent;
+        public volatile Llm.SubagentRunPassport? TruncatedSubagent;
         // Пометка координатору: ФОНОВЫЙ агент оборвался на tool_use, а CLI выдал координатору
         // его последнюю реплику за готовый результат. Своего хода на пометку не тратим (второй
         // systemDirective в идущий процесс слать нельзя) — она уезжает префиксом ближайшего
         // хода, см. BuildCliTurnText. null — пометки нет либо она уже уехала.
-        public volatile Llm.Claude.SubagentRunPassport? TruncatedBgNote;
+        public volatile Llm.SubagentRunPassport? TruncatedBgNote;
         // Сколько добиваний подряд отправлено ЗА ОДНОГО агента (потолок — MaxSubagentNudges).
         // Обнуляется штатным отчётом ТОГО ЖЕ агента и любым ходом человека: две попытки — на серию.
         public int SubagentNudges;
@@ -1952,7 +1952,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
 // здесь ОК: подписчик шины пишет в стор и взводит флаги, оба эти действия идемпотентны
 // и не могут зациклиться. null — шины нет (тесты без SessionManager), ватчер сам бы
 // отказался публиковать.
-internal Action<Llm.Claude.SubagentRunPassport>? SubagentRunSinkFor(string sessionId)
+internal Action<Llm.SubagentRunPassport>? SubagentRunSinkFor(string sessionId)
 {
     return passport =>
     {
@@ -7297,7 +7297,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     /// если ход координатора не идёт (иначе ждём result, как раньше).
     /// </summary>
     private void NoteTruncatedBgAgent(string sessionId, SessionEntry entry,
-        Llm.Claude.SubagentRunPassport run)
+        Llm.SubagentRunPassport run)
     {
         // Пометка уедет префиксом ближайшего хода — чем бы он ни был поднят (человеком,
         // очередью, добиванием): координатор обязан узнать, что обрывок не итог, даже когда
@@ -7368,7 +7368,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // isInterruptedRun: true), но если когда-то дойдёт — текст берётся по-другому
     // (ResumeInterrupted: не «дослать продолжить», а «ход прерван, транскрипт цел»).
     private async Task NudgeTruncatedSubagentAsync(string sessionId,
-        Llm.Claude.SubagentRunPassport run, int attempt)
+        Llm.SubagentRunPassport run, int attempt)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
         // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта

@@ -654,6 +654,11 @@ public class SessionManager : IDisposable, ITeamNotifier,
         ILogger<SessionManager> log,
         Execution.ILauncherFactory launchers,
         Execution.SandboxManager sandbox,
+        // Шов Ф4 (Этап 5): ISessionBroadcaster нужен TeamCoordinator — его экземпляр
+        // ядро держит в owning-обёртке (см. комментарий TeamCoordinator.cs:14). Сам
+        // SessionManager пока сидит на IHubContext<SessionHub> — миграция будет
+        // отдельным коммитом (это корневой сервис, см. задачу Ф4).
+        Core.Services.ISessionBroadcaster broadcaster = null!,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
         PersonaAgentFileSync? agentSync = null,
         UserHomeResolver? homes = null,
@@ -748,7 +753,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _sandbox = sandbox;
         _projects = projects;
         _hub = hub;
-        _teamCoordinator = new TeamCoordinator(hub);
+        _teamCoordinator = new TeamCoordinator(broadcaster);
         // Хранитель состояния режима (волна А): создаётся ДО _teamNotifier/teamHistory
         // и до LoadSessions, чтобы восстановление состояния режима после рестарта
         // (через публичные обёртки WithTeamState) могло идти через TeamStateService

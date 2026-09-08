@@ -1,7 +1,6 @@
-﻿using ClaudeHomeServer.Hubs;
+﻿using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Team;
 
@@ -21,11 +20,11 @@ namespace ClaudeHomeServer.Services.Team;
 // (как TeamWaveService), а статические утилиты не ссылаются на состояние ядра.
 internal sealed class TeamCoordinator
 {
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
 
-    internal TeamCoordinator(IHubContext<SessionHub> hub)
+    internal TeamCoordinator(ISessionBroadcaster broadcaster)
     {
-        _hub = hub;
+        _broadcaster = broadcaster;
     }
 
     // === Обработчики волны: собственность вертикали, а не ядра (шаг 2г-4, волна 1) ===
@@ -115,7 +114,7 @@ internal sealed class TeamCoordinator
     // дублировать не надо), и при рестарте сервера не восстанавливается — спиннер просто
     // не показывается, карточка подтянется через /api/.../history.
     public Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
-        _hub.Clients.Group(sessionId).SendAsync("message", new TeamPlanningMessage(
+        _broadcaster.ToSession(sessionId, new TeamPlanningMessage(
             Start: true,
             Success: false,
             SubtaskCount: 0,
@@ -128,7 +127,7 @@ internal sealed class TeamCoordinator
             ResponseChars: 0) with { SessionId = sessionId });
 
     public Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r, string? plannerPersonaId) =>
-        _hub.Clients.Group(sessionId).SendAsync("message", new TeamPlanningMessage(
+        _broadcaster.ToSession(sessionId, new TeamPlanningMessage(
             Start: false,
             Success: r.Plan is not null,
             SubtaskCount: r.Plan?.Subtasks.Count ?? 0,

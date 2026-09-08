@@ -1,10 +1,9 @@
 using System.Collections.Concurrent;
 using System.Text;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -21,7 +20,7 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects, NotesService notes,
     NotesKnowledgeService kb, Llm.ICheapTextRunner cheap,
-    IHubContext<SessionHub> hub,
+    ISessionBroadcaster broadcaster,
     NotificationService notif, IConfiguration config,
     ILogger<SessionSummaryService> logger)
 {
@@ -85,8 +84,8 @@ public class SessionSummaryService(
             }
 
             kb.QueueSync(ownerId);
-            await hub.Clients.Group("user_" + ownerId).SendAsync(
-                "message", new NotesChangedMessage(isUpdate ? "updated" : "created", note.Id), ct);
+            await broadcaster.ToOwner(ownerId,
+                new NotesChangedMessage(isUpdate ? "updated" : "created", note.Id));
 
             await notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
                 Title: "Итог сессии готов",

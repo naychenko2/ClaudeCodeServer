@@ -315,7 +315,7 @@ public class FileWatcherService : IDisposable
             // изменений не доезжала до клиента никогда. Теперь — признак полной
             // пересинхронизации; сами пути не слаим, клиент при full перезагружает всё раскрытое.
             var clientPaths = full ? Array.Empty<string>() : allPaths;
-            _ = _hub.Clients.Group("project_" + projectId)
+            _ = _hub.Clients.Group(Composition.SessionHubBroadcaster.ProjectGroup(projectId))
                 .SendAsync("filesChanged", new { projectId, paths = clientPaths, full });
             // Правки Claude/внешние идут мимо файлового API — синк знаний узнаёт о них отсюда.
             // Передаём полный накопленный список (а не клиентскую вырезку): SyncAsync и так
@@ -356,7 +356,7 @@ public class FileWatcherService : IDisposable
         // как delete+create вместо миграции, это приемлемая цена редкого сбоя.
         if (entry.ProjectId is string projectId)
         {
-            _ = _hub.Clients.Group("project_" + projectId)
+            _ = _hub.Clients.Group(Composition.SessionHubBroadcaster.ProjectGroup(projectId))
                 .SendAsync("filesChanged", new { projectId, paths = Array.Empty<string>(), full = true });
             _knowledgeSync.QueueSync(entry.Root);
         }

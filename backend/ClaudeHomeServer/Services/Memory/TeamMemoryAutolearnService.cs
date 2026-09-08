@@ -1,10 +1,9 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Memory;
 
@@ -26,7 +25,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<TeamMemoryAutolearnService> _log;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly ProjectEventLogService? _events;
 
     // Длина транскрипта на момент последнего извлечения по сессии — гасит повторную работу на
@@ -39,7 +38,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     public TeamMemoryAutolearnService(SessionManager sessions, ProjectManager projects,
         TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
         Llm.ICheapTextRunner cheap,
-        IConfiguration config, ILogger<TeamMemoryAutolearnService> log, IHubContext<SessionHub> hub,
+        IConfiguration config, ILogger<TeamMemoryAutolearnService> log, ISessionBroadcaster broadcaster,
         ProjectEventLogService? events = null)
     {
         _sessions = sessions;
@@ -49,7 +48,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         _cheap = cheap;
         _config = config;
         _log = log;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _events = events;
         _minTurnChars = int.TryParse(config["Memory:AutolearnMinTurnChars"], out var mtc) && mtc > 0 ? mtc : 400;
     }
@@ -150,8 +149,8 @@ public sealed class TeamMemoryAutolearnService : IHostedService
                 _consolidation.RequestConsolidation(ownerId, projectId);
 
             // Realtime: командный центр слушает team_memory_changed
-            await _hub.Clients.Group("user_" + ownerId)
-                .SendAsync("message", new TeamMemoryChangedMessage("added", projectId, lastId));
+            await _broadcaster.ToOwner(ownerId,
+                new TeamMemoryChangedMessage("added", projectId, lastId));
 
             // Активность-лента проекта
             _events?.Append(projectId, ownerId, ProjectEventTypes.MemoryLearned, "team",

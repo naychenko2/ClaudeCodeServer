@@ -1,6 +1,5 @@
 ﻿using System.Reflection;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -10,8 +9,8 @@ using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -37,13 +36,12 @@ public class TaskExecutionServiceStallTests : IDisposable
     private readonly SessionManager _sessions;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
-    private readonly List<ServerMessage> _sent = [];
-    private readonly object _sentLock = new();
+    private readonly TestSessionBroadcaster _broadcaster;
 
-    private List<T> Sent<T>()
-    {
-        lock (_sentLock) return _sent.OfType<T>().ToList();
-    }
+    // Захват только session-канала (см. TaskExecutionServiceDelegationReportTests).
+    private List<T> Sent<T>() => _broadcaster.Session.Select(t => t.Message)
+        .OfType<T>()
+        .ToList();
 
     public TaskExecutionServiceStallTests()
     {
@@ -66,30 +64,13 @@ public class TaskExecutionServiceStallTests : IDisposable
         var personas = new PersonaManager(config);
         _tasks = new TaskManager(config, personas: personas);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage msg)
-                    lock (_sentLock) _sent.Add(msg);
-            })
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        // Только session-группа: клиент чата состоит и в user_/project_-группе, широкая
-        // рассылка задвоила бы сообщения в снимке
-        clients.Setup(c => c.Group(It.Is<string>(g => !g.StartsWith("project_") && !g.StartsWith("user_"))))
-            .Returns(clientProxy.Object);
-        clients.Setup(c => c.Group(It.Is<string>(g => g.StartsWith("project_") || g.StartsWith("user_"))))
-            .Returns(new Mock<IClientProxy>().Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var pushStore = new PushSubscriptionStore(config);
         var jwt = new JwtService(config, _userStore, NullLogger<JwtService>.Instance);
         var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
         _notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
-        var notif = new NotificationService(_notifStore, hub.Object, push, personas, projectManager,
+        var notif = new NotificationService(_notifStore, broadcaster, push, personas, projectManager,
             NullLogger<NotificationService>.Instance);
 
         var wkStore = new WorkspaceKnowledgeStore(config);
@@ -111,13 +92,15 @@ public class TaskExecutionServiceStallTests : IDisposable
             knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        _sessions = new SessionManager(projectManager, hub.Object, new ChatHistoryService(config), config,
+        _sessions = new SessionManager(projectManager, new ChatHistoryService(config), config,
             adapters, falCost, usage, appSettings, _userStore, jwt, server.Object, llmProviders,
             flags, personas, bindings, subPool,
-            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
+            broadcaster: broadcaster);
 
-        _sut = new TaskExecutionService(_tasks, _sessions, personas, hub.Object, push, notesKb, notif,
+        _sut = new TaskExecutionService(_tasks, _sessions, personas, broadcaster, push, notesKb, notif,
             NullLogger<TaskExecutionService>.Instance, config);
+        _broadcaster = broadcaster;
     }
 
     public void Dispose()

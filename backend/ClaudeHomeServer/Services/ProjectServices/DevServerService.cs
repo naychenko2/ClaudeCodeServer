@@ -3,9 +3,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.ProjectServices;
 
@@ -103,7 +102,7 @@ public sealed class DevServerService : IDisposable
     private readonly ConcurrentDictionary<string, (string ServiceId, int Port)> _externalPreview = new();
     private readonly DevServerPortMemory _portMemory;
     private readonly ProjectManager _projects;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly ILogger<DevServerService> _log;
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
@@ -118,12 +117,12 @@ public sealed class DevServerService : IDisposable
         @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public DevServerService(ProjectManager projects, IHubContext<SessionHub> hub, ILogger<DevServerService> log,
+    public DevServerService(ProjectManager projects, ISessionBroadcaster broadcaster, ILogger<DevServerService> log,
         Execution.ILauncherFactory launchers, Execution.SandboxManager sandbox, DevServerPortMemory portMemory)
     {
         _portMemory = portMemory;
         _projects = projects;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _log = log;
         _launchers = launchers;
         _sandbox = sandbox;
@@ -576,8 +575,8 @@ public sealed class DevServerService : IDisposable
         if (data is null) return;
         try
         {
-            await _hub.Clients.Group(LogGroup(instance.ProjectId, instance.ServiceId))
-                .SendAsync("message", new PreviewLogMessage(instance.ServiceId, data));
+            await _broadcaster.ToPreviewLog(instance.ProjectId, instance.ServiceId,
+                new PreviewLogMessage(instance.ServiceId, data));
         }
         catch (Exception ex)
         {
@@ -590,9 +589,9 @@ public sealed class DevServerService : IDisposable
         try
         {
             var project = _projects.GetById(projectId);
-            if (project is null) return;
-            await _hub.Clients.Group("user_" + project.OwnerId)
-                .SendAsync("message", new PreviewStatusMessage(status, port, error, serviceId));
+            if (project is null || string.IsNullOrEmpty(project.OwnerId)) return;
+            await _broadcaster.ToOwner(project.OwnerId,
+                new PreviewStatusMessage(status, port, error, serviceId));
         }
         catch (Exception ex)
         {

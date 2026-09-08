@@ -1,8 +1,8 @@
 ﻿using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Tasks;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Team;
 
@@ -47,7 +47,7 @@ public class TeamWaveService
     private readonly ITeamHistoryStore _history;
     private readonly TaskManager _tasks;
     private readonly ProjectManager _projects;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly TaskExecutionService? _exec;
     private readonly NotificationService? _notif;
     private readonly PersonaManager _personas;
@@ -69,7 +69,7 @@ public class TeamWaveService
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
 
     public TeamWaveService(SessionManager sessions, TaskManager tasks, ProjectManager projects,
-        IHubContext<SessionHub> hub, ILogger<TeamWaveService> log,
+        ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
         // Имя персоны-автора для текста уведомлений и push (Э8) — зависимость обязательная:
         // «карточки и уведомления от лица персоны» это требование фичи, а не украшение,
         // и молча деградировать до обезличенного текста из-за DI мы не хотим.
@@ -87,7 +87,7 @@ public class TeamWaveService
         _history = sessions;
         _tasks = tasks;
         _projects = projects;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _log = log;
         _exec = exec;
         _notif = notif;
@@ -299,7 +299,7 @@ public class TeamWaveService
                 return true;
             });
             created.Add(task);
-            await _hub.BroadcastTaskChangedAsync(ownerId, "created", task);
+            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("created", task));
         }
 
         // Состояние и бюджет уже записаны транзакцией-резервом выше (счёт ведёт бэкенд
@@ -377,7 +377,7 @@ public class TeamWaveService
             ResultMarkdown: reason,
             Outcome: DefectOutcome.ClosedWithoutCheck));
         if (updated is null) return;
-        if (updated.OwnerId is { } ownerId) await _hub.BroadcastTaskChangedAsync(ownerId, "updated", updated);
+        if (updated.OwnerId is { } ownerId) await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", updated));
     }
 
     // --- Э4: автономный цикл волн ---
@@ -661,7 +661,7 @@ public class TeamWaveService
                 $"Прошлый запуск не довёл задачу до конца ({reason}). Разберись, что пошло не так, " +
                 "и доведи работу до фактической проверки — «почти готово» не считается."));
         if (updated is null) return (false, "задача удалена");
-        await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
 
         if (_exec is null) return (true, null);
         try
@@ -1113,7 +1113,7 @@ public class TeamWaveService
                     QuietSeconds: snap.QuietSeconds,
                     Liveness: LivenessToken(snap.Liveness))
                     with { SessionId = session.Id };
-                await _hub.Clients.Group(session.Id).SendAsync("message", msg);
+                await _broadcaster.ToSession(session.Id, msg);
             }
             catch (Exception ex)
             {

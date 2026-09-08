@@ -9,7 +9,6 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -361,7 +360,9 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // сравниваются только прогоны одной сессии, глобальная уникальность лишь упрощает отладку
     private static long _runSeq;
     private readonly ProjectManager _projects;
-    private readonly IHubContext<Hubs.SessionHub> _hub;
+    // Шов Ф4 (Этап 5): заменяет _hub.Clients.Group(...).SendAsync — префиксы
+    // собираются внутри SessionHubBroadcaster, а не в вызывающем коде.
+    private readonly Composition.ISessionBroadcaster _broadcaster;
     private readonly Llm.ICheapTextRunner? _cheap;
     // Маршруты мест каталога (локаль/слот/модель) и параметры профилей — для ветки
     // локального голосового хода (chat-voice). null — в тестах без локали.
@@ -642,7 +643,7 @@ public class SessionManager : IDisposable, ITeamNotifier,
     // Dify — в KnowledgeService со своей копией IOptions
     private readonly Models.DifyOptions _dify = new();
 
-    public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
+    public SessionManager(ProjectManager projects,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
         AppSettingsService appSettings, UserStore users, JwtService jwt,
@@ -654,6 +655,11 @@ public class SessionManager : IDisposable, ITeamNotifier,
         ILogger<SessionManager> log,
         Execution.ILauncherFactory launchers,
         Execution.SandboxManager sandbox,
+        // Шов Ф4 (Этап 5): ISessionBroadcaster нужен TeamCoordinator — его экземпляр
+        // ядро держит в owning-обёртке (см. комментарий TeamCoordinator.cs:14). Сам
+        // SessionManager пока сидит на IHubContext<SessionHub> — миграция будет
+        // отдельным коммитом (это корневой сервис, см. задачу Ф4).
+        Composition.ISessionBroadcaster broadcaster = null!,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
         PersonaAgentFileSync? agentSync = null,
         UserHomeResolver? homes = null,
@@ -747,8 +753,8 @@ public class SessionManager : IDisposable, ITeamNotifier,
         _launchers = launchers;
         _sandbox = sandbox;
         _projects = projects;
-        _hub = hub;
-        _teamCoordinator = new TeamCoordinator(hub);
+        _broadcaster = broadcaster;
+        _teamCoordinator = new TeamCoordinator(broadcaster);
         // Хранитель состояния режима (волна А): создаётся ДО _teamNotifier/teamHistory
         // и до LoadSessions, чтобы восстановление состояния режима после рестарта
         // (через публичные обёртки WithTeamState) могло идти через TeamStateService
@@ -1664,11 +1670,11 @@ public class SessionManager : IDisposable, ITeamNotifier,
     private async Task BroadcastChatArchivedAsync(string sessionId, Session info, bool archived)
     {
         var msg = new ChatArchivedMessage(archived) with { SessionId = sessionId };
-        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
         if (info.ProjectId is string pid)
-            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+            tasks.Add(_broadcaster.ToProject(pid, msg));
         else if (info.OwnerId is string oid)
-            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+            tasks.Add(_broadcaster.ToOwner(oid, msg));
         await Task.WhenAll(tasks);
     }
 
@@ -5252,11 +5258,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task BroadcastChatRenamedAsync(string sessionId, Session info, string name)
     {
         var msg = new ChatRenamedMessage(name, info.Topic) with { SessionId = sessionId };
-        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
         if (info.ProjectId is string pid)
-            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+            tasks.Add(_broadcaster.ToProject(pid, msg));
         else if (info.OwnerId is string oid)
-            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+            tasks.Add(_broadcaster.ToOwner(oid, msg));
         await Task.WhenAll(tasks);
     }
 
@@ -7871,11 +7877,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task BroadcastChatDeletedAsync(string sessionId, Session info)
     {
         var msg = new ChatDeletedMessage() with { SessionId = sessionId };
-        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
         if (info.ProjectId is string pid)
-            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+            tasks.Add(_broadcaster.ToProject(pid, msg));
         else if (info.OwnerId is string oid)
-            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+            tasks.Add(_broadcaster.ToOwner(oid, msg));
         await Task.WhenAll(tasks);
     }
 
@@ -8802,19 +8808,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Снаружи (из контроллеров/хаба) используется публичный BroadcastSessionMessageAsync,
     // который дополнительно вещает в project_/user_-группу — для чат-карточек в списке.
     internal Task BroadcastAsync(string sessionId, ServerMessage msg) =>
-        _hub.Clients.Group(sessionId).SendAsync("message", msg with { SessionId = sessionId });
+        _broadcaster.ToSession(sessionId, msg with { SessionId = sessionId });
 
-    // Публичный broadcast внеходового сообщения сессии: session-группа + project_/user_-группа
+    // Публильный broadcast внеходового сообщения сессии: session-группа + project_/user_-группа
     // (по образцу BroadcastStatusChangeAsync). Используется роутингом группового чата и совещаниями.
     public async Task BroadcastSessionMessageAsync(string sessionId, ServerMessage msg)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         var wired = msg with { SessionId = sessionId };
-        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", wired) };
+        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, wired) };
         if (entry.Info.ProjectId is string pid)
-            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", wired));
+            tasks.Add(_broadcaster.ToProject(pid, wired));
         else if (entry.Info.OwnerId is string oid)
-            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", wired));
+            tasks.Add(_broadcaster.ToOwner(oid, wired));
         await Task.WhenAll(tasks);
     }
 
@@ -8834,11 +8840,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         var statusMsg = new StatusChangedMessage(status.ToString().ToLower(), lastMessage, messageCount)
             with { SessionId = sessionId };
-        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", statusMsg) };
+        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, statusMsg) };
         if (info.ProjectId is string pid)
-            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", statusMsg));
+            tasks.Add(_broadcaster.ToProject(pid, statusMsg));
         else if (info.OwnerId is string oid)
-            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", statusMsg));
+            tasks.Add(_broadcaster.ToOwner(oid, statusMsg));
         await Task.WhenAll(tasks);
     }
 }

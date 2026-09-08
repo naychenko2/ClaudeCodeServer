@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -8,8 +8,8 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -47,8 +47,7 @@ public class FalPersistLockDedupTests : IDisposable
     private readonly UserStore _userStore;
     private readonly ProjectManager _projectManager;
     private readonly YieldingChatHistoryService _history;
-    private readonly Mock<IHubContext<SessionHub>> _hub;
-    private readonly List<ServerMessage> _broadcasts = [];
+    private readonly TestSessionBroadcaster _broadcaster = new();
 
     public FalPersistLockDedupTests()
     {
@@ -69,18 +68,6 @@ public class FalPersistLockDedupTests : IDisposable
         var personas = new PersonaManager(config);
         var tasks = new TaskManager(config, personas: personas);
         _history = new YieldingChatHistoryService(config);
-
-        _hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        var proxy = new Mock<IClientProxy>();
-        proxy.Setup(c => c.SendCoreAsync("message", It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage m) _broadcasts.Add(m);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
-        _hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -105,10 +92,10 @@ public class FalPersistLockDedupTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var spend = new SpendStore(Path.Combine(_dir, "spend"), detailDays: 30);
 
-        _sessions = new SessionManager(_projectManager, _hub.Object, _history, config, adapters, falCost, usage,
+        _sessions = new SessionManager(_projectManager, _history, config, adapters, falCost, usage,
             appSettings, _userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            spend: spend, glif: glif);
+            _broadcaster, spend: spend, glif: glif);
     }
 
     public void Dispose()
@@ -144,7 +131,7 @@ public class FalPersistLockDedupTests : IDisposable
 
         var history = await _history.LoadAsync(session.ClaudeSessionId!);
         history.OfType<StoredGlifCostMessage>().Should().HaveCount(1);
-        _broadcasts.OfType<GlifCostMessage>().Should().HaveCount(1);
+        _broadcaster.Session.Select(t => t.Message).OfType<GlifCostMessage>().Should().HaveCount(1);
     }
 
     [Fact]

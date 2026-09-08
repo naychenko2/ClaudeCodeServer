@@ -1,5 +1,4 @@
-﻿using ClaudeHomeServer.Hubs;
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
@@ -8,8 +7,8 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Team;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -34,14 +33,9 @@ public class TeamWaveServiceTests : IDisposable
     private string _plannerAnswer = "{}";
     private const string UserId = "user-1";
     private const string Username = "tester";
-    // Снимок уведомлений (NotificationService шлёт их тем же хабом в группу user_*) —
-    // под локом: бродкасты приходят и из фоновых задач
-    private readonly List<ClaudeHomeServer.Protocol.NotificationMessage> _notifications = [];
-    private readonly object _notificationsLock = new();
-    // Снимок всех broadcast-ов хаба с ГРУППОЙ рассылки: пульс волны обязан идти строго
-    // в группу сессии-штаба (не user_/project_-wide) — группа замыкается прокси
-    private readonly List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> _hubSends = [];
-    private readonly object _hubSendsLock = new();
+    // TestSessionBroadcaster разделяет по каналам: Owner — уведомления штаба,
+    // Session — пульсы/прочее в группу конкретного чата-штаба
+    private readonly TestSessionBroadcaster _broadcaster = new();
 
     public TeamWaveServiceTests()
     {
@@ -60,39 +54,18 @@ public class TeamWaveServiceTests : IDisposable
         _personas = new PersonaManager(config);
         _tasks = new TaskManager(config, personas: _personas);
 
-        var hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        // Прокси фабрикуется ПОД ГРУППУ (замыкает её): один общий прокси не различал,
-        // в какую группу ушёл broadcast, а пульс волны адресуется строго в сессию-штаб
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns((string group) =>
-        {
-            var proxy = new Mock<IClientProxy>();
-            proxy
-                .Setup(p => p.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-                .Callback<string, object[], CancellationToken>((_, args, _) =>
-                {
-                    if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.NotificationMessage n)
-                        lock (_notificationsLock) _notifications.Add(n);
-                    if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.ServerMessage m)
-                        lock (_hubSendsLock) _hubSends.Add((group, m));
-                })
-                .Returns(Task.CompletedTask);
-            return proxy.Object;
-        });
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
-        _sessions = CreateSessionManager(config, userStore, appSettings, hub);
+        _sessions = CreateSessionManager(config, userStore, appSettings, _broadcaster);
         // Реальный NotificationService с дисковым стором (паттерн TaskExecutionServiceDelegationReportTests):
         // напоминания о карточках проверяем по broadcast-снимку выше
         var notif = new NotificationService(
             new NotificationStore(config, NullLogger<NotificationStore>.Instance),
-            hub.Object,
+            _broadcaster,
             new PushService(config, new PushSubscriptionStore(config),
                 new JwtService(config, userStore, NullLogger<JwtService>.Instance),
                 NullLogger<PushService>.Instance),
             _personas, _projects, NullLogger<NotificationService>.Instance);
-        _sut = new TeamWaveService(_sessions, _tasks, _projects, hub.Object,
+        _sut = new TeamWaveService(_sessions, _tasks, _projects, _broadcaster,
             NullLogger<TeamWaveService>.Instance, _personas, notif: notif);
     }
 
@@ -105,7 +78,7 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     private SessionManager CreateSessionManager(IConfiguration config, UserStore userStore,
-        AppSettingsService appSettings, Mock<IHubContext<SessionHub>> hub)
+        AppSettingsService appSettings, TestSessionBroadcaster broadcaster)
     {
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -128,10 +101,11 @@ public class TeamWaveServiceTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var history = new ChatHistoryService(config);
-        return new SessionManager(_projects, hub.Object, history, config, adapters, falCost, usage,
+        return new SessionManager(_projects, history, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, llmProviders, flags, _personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, teamPlanning: _teamPlanning);
+            TestLauncherFactory.Instance, sandbox, teamPlanning: _teamPlanning,
+            broadcaster: broadcaster);
     }
 
     // Чат-штаб с включённым режимом и командой из двух персон. resumeSessionId — задать
@@ -1343,10 +1317,13 @@ public class TeamWaveServiceTests : IDisposable
 
     // --- Пульс волны (КР-наблюдаемость, этап 1) ---
 
-    private List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> HubSends()
-    {
-        lock (_hubSendsLock) return [.. _hubSends];
-    }
+    private List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> HubSends() =>
+        // Склейка всех каналов broadcaster'а: тест «пульс — не в user_/project_-группу»
+        // превратился в «пульс ушёл через session-канал broadcaster.ToSession».
+        _broadcaster.Session.Select(t => (t.SessionId, (ClaudeHomeServer.Protocol.ServerMessage)t.Message))
+        .Concat(_broadcaster.Owner.Select(t => ("user_" + t.OwnerId, (ClaudeHomeServer.Protocol.ServerMessage)t.Message)))
+        .Concat(_broadcaster.Project.Select(t => ("project_" + t.ProjectId, (ClaudeHomeServer.Protocol.ServerMessage)t.Message)))
+        .ToList();
 
     // Возвращаем штабу «свободный» статус: MakeRunningStabAsync держит его Working, а
     // Working без живого прогона для пульса — мёртвый штаб (dead), что мешает проверкам
@@ -2014,10 +1991,10 @@ public class TeamWaveServiceTests : IDisposable
 
     // --- Повторные напоминания о висящей карточке остановки (прод 15→16.08) ---
 
-    private List<ClaudeHomeServer.Protocol.NotificationMessage> Notifications()
-    {
-        lock (_notificationsLock) return [.. _notifications];
-    }
+    private List<ClaudeHomeServer.Protocol.NotificationMessage> Notifications() =>
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<ClaudeHomeServer.Protocol.NotificationMessage>()
+            .ToList();
 
     // Опубликовать «состаренную» карточку остановки: порог первого напоминания считается
     // от CreatedAt, поэтому для проверки порога карточка создаётся сразу постаревшей

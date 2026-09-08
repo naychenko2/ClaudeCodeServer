@@ -1,8 +1,7 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Git;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -17,7 +16,7 @@ public sealed class GitAutoCommitService(
     ProjectManager projects,
     UserStore users,
     GitService git,
-    IHubContext<SessionHub> hub,
+    ISessionBroadcaster broadcaster,
     ILogger<GitAutoCommitService> logger) : IHostedService
 {
     public Task StartAsync(CancellationToken ct)
@@ -60,8 +59,8 @@ public sealed class GitAutoCommitService(
             var sha = await git.CommitAsync(ownerId, root, message);
 
             // Плашка «Изменения сохранены» в ленту чата — со ссылкой на просмотр коммита
-            await hub.Clients.Group(session.Id)
-                .SendAsync("message", new GitTurnCommitMessage(project.Id, sha, subject) { SessionId = session.Id });
+            await broadcaster.ToSession(session.Id,
+                new GitTurnCommitMessage(project.Id, sha, subject) { SessionId = session.Id });
 
             if (project.GitAutoPush && project.GitRemoteUrl is not null)
             {
@@ -76,8 +75,7 @@ public sealed class GitAutoCommitService(
             }
 
             if (project.OwnerId is not null)
-                await hub.Clients.Group("user_" + project.OwnerId)
-                    .SendAsync("message", new GitStatusChangedMessage(project.Id));
+                await broadcaster.ToOwner(project.OwnerId, new GitStatusChangedMessage(project.Id));
         }
         catch (Exception ex)
         {

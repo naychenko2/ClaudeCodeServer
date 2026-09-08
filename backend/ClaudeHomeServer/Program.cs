@@ -716,6 +716,13 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
 
+// Этап 5, Ф4: шов ISessionBroadcaster (Core) → SessionHubBroadcaster (Main, поверх
+// IHubContext<SessionHub>). Префиксы групп "user_"/"project_" собираются только здесь —
+// потребители больше не видят SignalR напрямую.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.SessionHubBroadcaster>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.SessionHubBroadcaster>());
+
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
 // Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная
 // JwtBearer к /api/devices/* не допускается вовсе — сервисный JWT владельца лежит в env

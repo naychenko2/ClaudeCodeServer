@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -9,7 +8,6 @@ using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -341,14 +339,7 @@ public class ChatDigestServiceTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         _history = new ChatHistoryService(config);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
@@ -372,10 +363,10 @@ public class ChatDigestServiceTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        var manager = new SessionManager(projectManager, hub.Object, _history, config, adapters, falCost,
+        var manager = new SessionManager(projectManager, _history, config, adapters, falCost,
             usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, cheap: null);
+            TestLauncherFactory.Instance, sandbox, cheap: null, broadcaster: broadcaster);
         return (manager, projectManager, notesSvc);
     }
 

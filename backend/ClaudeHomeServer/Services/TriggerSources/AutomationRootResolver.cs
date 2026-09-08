@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.TriggerSources;
 //     Guard от path traversal: результат обязан лежать внутри домашней папки.
 // Единая точка, чтобы FileTriggerSource / GitCommitTriggerSource / PersonaAutomationService не
 // дублировали резолв. label — человекочитаемая подпись корня для summary/контекста хода.
-public sealed class AutomationRootResolver(ProjectManager projects, AppSettingsService appSettings,
+public sealed class AutomationRootResolver(IProjectManager projects, AppSettingsService appSettings,
     UserHomeResolver? homes = null)
 {
     private readonly UserHomeResolver _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings);

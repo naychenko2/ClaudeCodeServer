@@ -12,12 +12,17 @@ namespace ClaudeHomeServer.Services.Skills;
 // инжекция тела агента в системный промпт сессии и раскрытие /skill в сообщениях.
 //
 // Известные границы (сознательные):
-// 1) `ClaudeHomeServer.Services.Llm` — префикс-шов для `LocalActionCatalog.SkillSuggest/
-//    SkillTranslate/SkillGenerate` (ключи действий, по ним раннер ищет маршрут).
-//    `ICheapTextRunner` (контракт) уже в Core (assembly-фильтр IsCoreAssembly), тут
-//    шов для остального Llm-слоя, который Skills использует. Префикс-шов по прецеденту
-//    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
-// 2) Точечных допусков к корню `Services.*` нет после Этапа 3 (волна 1):
+// 1) Префикс-швов к чужому `ClaudeHomeServer.Services.*` нет после Этапа 3 (волна 2):
+//    - `LocalActionCatalog` (SkillSuggest/SkillTranslate/SkillGenerate) переехал в Core
+//      вместе с `ICheapTextRunner` — оба ловятся assembly-фильтром `IsCoreAssembly`,
+//      отдельного допуска в allow-list не требуется.
+//    - `IPersonaSkillBindingLookup`/`IProjectSummaryLookup` (Core) — узкие швы вместо
+//      прямых ссылок на `PersonaManager`/`ProjectManager`.
+//    - `ILauncherFactory`/`IProcessLauncher`/`ProcessSpec`/`IPathMapper` — контракты
+//      в Core (assembly-фильтр), реализации (`LauncherFactory`/`LocalProcessRunner`/
+//      `DockerProcessRunner`/`DockerPathMapper`) Skills не нужны: `SkillsCliService`
+//      зовёт только интерфейсы.
+// 2) Точечных допусков к корню `Services.*` нет:
 //    - `PersonaManager` снят — `SkillSuggestService` берёт персону через
 //      `IPersonaSkillBindingLookup` (Core).
 //    - `ProjectManager` снят — `SkillSuggestService` берёт проект через

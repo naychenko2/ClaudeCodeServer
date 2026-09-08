@@ -62,6 +62,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1732,15 +1733,17 @@ public class SubsystemBoundaryTests
         // для поиска/установки из реестра skills.sh; LLM-подбор под персону/проект/запрос;
         // LLM-генерация тела нового навыка; перевод описаний RU→EN; фоновый перевод
         // плагиновых описаний с персистентным кешем.
-        // Префиксы-швы (по образцу `Tasks`/`Notes`/`Dossiers`):
-        // 1) `ClaudeHomeServer.Services.Llm` — `LocalActionCatalog.SkillSuggest/
-        //    SkillTranslate/SkillGenerate` (ключи действий, по ним раннер ищет
-        //    маршрут и профиль). Префикс-шов сохраняется потому, что `LocalActionCatalog`
-        //    остаётся в `Services.Llm` — там же, где его реестр действий.
-        //    `ICheapTextRunner` (контракт) уже в Core и резолвится через assembly-фильтр
-        //    `IsCoreAssembly`; тут шов для остального Llm-слоя, который Skills
-        //    использует.
-        // Точечных допусков к корню `Services.*` после Этапа 3 больше нет:
+        // Префиксов-швов к чужому `ClaudeHomeServer.Services.*` после Этапа 3 (волна 2) нет:
+        //  - `LocalActionCatalog` (SkillSuggest/SkillTranslate/SkillGenerate) переехал
+        //    в Core вместе с `ICheapTextRunner` — оба ловятся assembly-фильтром
+        //    `IsCoreAssembly`, отдельного допуска в allow-list не требуется.
+        //  - `IPersonaSkillBindingLookup`/`IProjectSummaryLookup` (Core) — узкие швы
+        //    вместо прямых ссылок на `PersonaManager`/`ProjectManager`.
+        //  - `Execution` (`ILauncherFactory`/`IProcessLauncher`/`ProcessSpec`) — интерфейсы
+        //    в Core (assembly-фильтр), реализации (`LauncherFactory`/`LocalProcessRunner`/
+        //    `DockerProcessRunner`) Skills не нужны: `SkillsCliService` зовёт только
+        //    интерфейсы.
+        // Точечных допусков к корню `Services.*` нет:
         //  - `PersonaManager` снят: `SkillSuggestService` берёт персону через
         //    `IPersonaSkillBindingLookup` (Core, assembly-фильтр).
         //  - `ProjectManager` снят: `SkillSuggestService` берёт проект через
@@ -1760,7 +1763,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Skills",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 Array.Empty<string>()),
@@ -1800,12 +1802,12 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 6 = Main + Core + 4 вынесенные на Этапе 3 (Video/Yandex/Reader/CodeGraph);
+        // 7 = Main + Core + 5 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills);
         // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(6,
-            "после Этапа 3 сторож должен видеть 6 прод-сборок: ClaudeHomeServer, " +
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(7,
+            "после Этапа 3 сторож должен видеть 7 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
-            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph");
+            "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");
@@ -2012,6 +2014,10 @@ public class SubsystemBoundaryTests
         // (`PersonaManager`, `Dossiers/DossierGitExporter`, `Git/GitServerService`)
         // не принадлежали ни одной вертикали — чистый stateless-примитив спины.
         "ClaudeHomeServer.Services.Slugifier",
+        // Этап 3, волна 2 (Skills): `ModelTier` переехал в Core, чтобы `LocalActionCatalog`
+        // (тоже Core) мог ссылаться на слот без обратной ссылки на Main. Парсер
+        // `ModelTiers` остаётся в Main — он завязан на IConfiguration/JSON-стор.
+        "ClaudeHomeServer.Services.ModelTier",
     ];
 
     /// <summary>

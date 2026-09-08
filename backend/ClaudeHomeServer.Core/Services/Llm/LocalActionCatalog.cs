@@ -171,7 +171,7 @@ public static class LocalActionCatalog
         new(NoteTitle, "Заголовок заметки", "Заметки", CheapProfile.Small, DefaultLocal: true),
         new(NoteToc, "Оглавление заметки", "Заметки", CheapProfile.Text, DefaultLocal: true),
         new(NoteTranslate, "Перевод заметки", "Заметки", CheapProfile.Large, DefaultLocal: true),
-        new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
+        new(ChatTitle, "Заговолок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
         // Разбор промпта хода («что тут лишнее»): вызывается человеком по кнопке, не фоном.

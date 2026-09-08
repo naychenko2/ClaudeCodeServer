@@ -199,7 +199,7 @@ public class QuietHttpLoggerTests
     }
 
     [Fact]
-    public void LogRequestStop_4xx_ContentОстаётсяЧитаемымПослеЛога()
+    public async Task LogRequestStop_4xx_ContentОстаётсяЧитаемымПослеЛога()
     {
         // Имитируем ResponseHeadersRead: HttpContent указывает на стрим, который ещё
         // не вычитан. После LogRequestStop вызывающий (ChatTurnAsync потокового режима)
@@ -215,7 +215,7 @@ public class QuietHttpLoggerTests
 
         // Главное: тело всё ещё доступно вызывающему. Без LoadIntoBufferAsync здесь был бы
         // пустой/обрезанный стрим — логгер съел бы сетевой поток раньше владельца.
-        var stillReadable = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        var stillReadable = await response.Content.ReadAsStringAsync();
         stillReadable.Should().Contain("request too large");
     }
 

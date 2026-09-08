@@ -71,8 +71,10 @@ public class FallbackLocalDownTests
         public bool TrySetPermissionModeLive(ClaudeMode mode) => false;
         public bool TrySetModelLive(string model) => false;
         public int Interrupts;
-        public Action? OnInterrupt;
-        public void Interrupt() { Interrupts++; OnInterrupt?.Invoke(); }
+        // Хук OnInterrupt из соседних фейков (FallbackEgressDownTests,
+        // FallbackLlmSessionAdapterTests) здесь не нужен: этим тестам достаточно
+        // счётчика. Заводить его обратно — только вместе с использующим тестом.
+        public void Interrupt() { Interrupts++; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -105,7 +107,10 @@ public class FallbackLocalDownTests
         string? provider = "local-qwen", string? model = "qwen38-27b",
         string[]? chain = null)
     {
-        var session = new Session { Model = model, Provider = provider };
+        // `Session.Model` nullable, а `Provider` — нет (дефолт "claude"). Подставляем
+        // тот же дефолт, что и сама модель: ни один тест сюда null не передаёт, но
+        // молча писать null в non-nullable поле нельзя.
+        var session = new Session { Model = model, Provider = provider ?? "claude" };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,

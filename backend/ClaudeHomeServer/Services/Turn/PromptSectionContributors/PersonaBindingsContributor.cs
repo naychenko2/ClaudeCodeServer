@@ -37,9 +37,12 @@ public sealed class PersonaBindingsContributor : IPromptSectionContributor
         if (turnText is null) return null;
         try
         {
+            // `?? []` не косметика: `WorkspaceSections` nullable, а `BuildTurnBlockAsync`
+            // принимает non-nullable список и отдаёт его в `BuildIndex` без проверки.
+            // Пустой список — честное «смонтированных секций нет», null был бы миной.
             var block = await _bindings.BuildTurnBlockAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, turnText,
-                sessionContext.WorkspaceSections);
+                sessionContext.WorkspaceSections ?? []);
             if (string.IsNullOrWhiteSpace(block)) return null;
             return new PromptSectionContribution([new PromptSection(Key, block)]);
         }

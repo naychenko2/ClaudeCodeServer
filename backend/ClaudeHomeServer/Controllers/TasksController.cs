@@ -2,7 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -11,7 +11,6 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -21,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/tasks")]
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
-    IHubContext<SessionHub> hub, PersonaBindingsService bindings) : ControllerBase
+    ISessionBroadcaster broadcaster, PersonaBindingsService bindings) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -83,7 +82,7 @@ public class ProjectTasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await hub.BroadcastTaskChangedAsync(UserId, "created", task);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
         return Ok(task);
     }
 }
@@ -93,7 +92,7 @@ public class ProjectTasksController(
 [Authorize]
 [Route("api/tasks")]
 public class TasksController(
-    TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
+    TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync,
     PersonaBindingsService bindings, SessionManager sessions) : ControllerBase
 {
@@ -248,7 +247,7 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await hub.BroadcastTaskChangedAsync(UserId, "created", task);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
         return Ok(task);
     }
 
@@ -370,7 +369,7 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await hub.BroadcastTaskChangedAsync(UserId, "updated", updated);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", updated));
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
@@ -378,7 +377,7 @@ public class TasksController(
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
-                await hub.BroadcastTaskChangedAsync(UserId, "created", next);
+                await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", next));
         }
 
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
@@ -422,7 +421,7 @@ public class TasksController(
         if (task is null || task.OwnerId != UserId) return NotFound();
 
         tasks.Delete(taskId);
-        await hub.BroadcastTaskChangedAsync(UserId, "deleted", task);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
         return NoContent();
     }
 }

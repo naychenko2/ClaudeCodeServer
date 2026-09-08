@@ -1,12 +1,10 @@
 ﻿using System.Text;
-using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -39,7 +37,7 @@ public class TaskExecutionService
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
     private readonly PersonaManager _personas;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly PushService _push;
     private readonly NotificationService _notif;
     private readonly NotesKnowledgeService _kb;
@@ -96,7 +94,7 @@ public class TaskExecutionService
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
-        IHubContext<SessionHub> hub, PushService push,
+        ISessionBroadcaster broadcaster, PushService push,
         NotesKnowledgeService kb,
         NotificationService notif,
         ILogger<TaskExecutionService> log, IConfiguration config,
@@ -120,7 +118,7 @@ public class TaskExecutionService
         _tasks = tasks;
         _sessions = sessions;
         _personas = personas;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _push = push;
         _kb = kb;
         _log = log;
@@ -262,7 +260,7 @@ public class TaskExecutionService
 
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");
-        await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
+        await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task));
@@ -627,7 +625,7 @@ public class TaskExecutionService
                     var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
-                    await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+                    await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
                     if (stopReason is not null)
                     {
                         // Своё уведомление вместо обычного «Не смог выполнить задачу»: у человека
@@ -716,7 +714,7 @@ public class TaskExecutionService
     private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
-        await _hub.BroadcastTaskChangedAsync(stopped.OwnerId!, "updated", stopped);
+        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
 
         var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
         await NotifyAsync(stopped, BuildExecutorStoppedNotification(stopped, persona));
@@ -918,7 +916,7 @@ public class TaskExecutionService
     private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc)
     {
         var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
-        await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
         await NotifyAsync(updated, BuildStaleNotification(updated, persona));

@@ -716,6 +716,18 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IKnowledgeNo
 builder.Services.AddSingleton<ClaudeHomeServer.Core.Telemetry.IDifyMetrics,
     ClaudeHomeServer.Services.Composition.DifyMetricsAdapter>();
 
+// Этап 5, шаг 1: адаптеры узких швов для выноса Spend в отдельный .csproj.
+// Spend ходит в корень Services только через эти интерфейсы — иначе сторож
+// границ поймал бы прямую ссылку на SessionManager/PersonaManager/etc.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ISessionDirectory,
+    ClaudeHomeServer.Services.Composition.SessionDirectoryAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IPersonaLookup,
+    ClaudeHomeServer.Services.Composition.PersonaLookupAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IChatHistoryLoader,
+    ClaudeHomeServer.Services.Composition.ChatHistoryLoaderAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ITaskLookup,
+    ClaudeHomeServer.Services.Composition.TaskLookupAdapter>();
+
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
 // живут в Main как тонкие обёртки; Notes (в отдельной сборке) получает только

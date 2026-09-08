@@ -1,6 +1,5 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Spend;
 
@@ -67,8 +66,8 @@ public sealed record SpendBadgeDto(string SessionId, SpendTokensDto Total, int T
 // Этап 5, шаг 3: расход берёт у Llm только один метод (`ResolveModelOrDefault`)
 // и идёт через узкий шов `IModelResolver` (Core). Раньше это была прямая ссылка
 // на `LlmProviderRegistry`, и вертикаль не собиралась без ProjectReference на Llm.
-public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessions,
-    ProjectManager projects, TaskManager tasks, PersonaManager personas, UserStore users,
+public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory sessions,
+    IProjectManager projects, ITaskLookup tasks, IPersonaLookup personas, IUserStore users,
     IModelResolver llmProviders)
 {
     private const int CardLimit = 8;

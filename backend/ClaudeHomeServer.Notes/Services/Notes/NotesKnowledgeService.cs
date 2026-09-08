@@ -28,7 +28,7 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
 
     private readonly IKnowledgeIndex _knowledge;
     private readonly NotesService _notes;
-    private readonly UserStore _users;
+    private readonly IUserStore _users;
     private readonly ILogger<NotesKnowledgeService> _logger;
     private readonly string _storePath;
     private readonly Dictionary<string, Entry> _store;
@@ -36,7 +36,7 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly ConcurrentDictionary<string, Timer> _debounce = new();
 
-    public NotesKnowledgeService(IKnowledgeIndex knowledge, NotesService notes, UserStore users,
+    public NotesKnowledgeService(IKnowledgeIndex knowledge, NotesService notes, IUserStore users,
         IConfiguration config, ILogger<NotesKnowledgeService> logger)
     {
         _knowledge = knowledge;

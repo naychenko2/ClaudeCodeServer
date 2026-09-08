@@ -13,11 +13,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- InternalsVisibleTo на ДВЕ сборки: ClaudeHomeServer.Tests (нужен
-        существующим тестам в Main — NotesTaskSyncIntegrationTests дергает
-        NoteTaskSyncService через DI-контейнер, и для внутренних полей
-        private тоже полезно) и ClaudeHomeServer.Notes.Tests (будущая
-        тестовая сборка вертикали, Notes-юниты). Без обоих тесты не компилируются. -->
+    <!-- InternalsVisibleTo на ТРИ сборки:
+         - ClaudeHomeServer (Main): NotesRecallContributor и другие
+           Main-компоненты зовут NotesKnowledgeService.BuildRecallBlock
+           (internal) при сборке промпта. Без атрибута — CS0122.
+         - ClaudeHomeServer.Tests: NotesTaskSyncIntegrationTests дергает
+           NoteTaskSyncService через DI-контейнер, и для внутренних
+           приватных полей тоже нужно.
+         - ClaudeHomeServer.Notes.Tests: будущая тестовая сборка вертикали,
+           Notes-юниты. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer</_Parameter1>
+    </AssemblyAttribute>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>

@@ -3,7 +3,7 @@ namespace ClaudeHomeServer.Services.Notes;
 // Фоновая уборка временных заметок: раз в минуту проверяет все заметки
 // владельцев и удаляет те, у которых срок жизни (expires в frontmatter) истёк.
 // При удалении также убирает [[wikilinks]] на удаляемую заметку из других заметок.
-public class NoteExpiryService(NotesService notes, ProjectManager projects, IConfiguration config,
+public class NoteExpiryService(NotesService notes, IProjectManager projects, IConfiguration config,
     ILogger<NoteExpiryService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(60);

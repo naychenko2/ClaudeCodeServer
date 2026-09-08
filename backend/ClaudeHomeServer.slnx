@@ -5,6 +5,8 @@
   <Project Path="ClaudeHomeServer.Core/ClaudeHomeServer.Core.csproj" />
   <Project Path="ClaudeHomeServer.Git/ClaudeHomeServer.Git.csproj" />
   <Project Path="ClaudeHomeServer.Git.Tests/ClaudeHomeServer.Git.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Notes/ClaudeHomeServer.Notes.csproj" />
+  <Project Path="ClaudeHomeServer.Notes.Tests/ClaudeHomeServer.Notes.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Reader/ClaudeHomeServer.Reader.csproj" />
   <Project Path="ClaudeHomeServer.Reader.Tests/ClaudeHomeServer.Reader.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Skills/ClaudeHomeServer.Skills.csproj" />

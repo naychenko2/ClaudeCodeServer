@@ -148,6 +148,10 @@ builder.Services.AddObservability(builder.Configuration);
 
 builder.Services.AddSingleton<UserStore>();
 builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<UserStore>());
+// Этап 5, волна E: узкие Core-швы для выноса Notes (NotesKnowledgeService → UserStore
+// ради User.Username для имени Dify-датасета). Полный UserStore в Main, Notes видит
+// только IUserStore (см. Core/Services/IUserStore.cs).
+builder.Services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<UserStore>());
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
@@ -159,6 +163,10 @@ builder.Services.AddSingleton<AppSettingsService>();
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
+// Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
+// Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит
+// только GetById/GetByOwner/GetAll — этого хватает для NoteTaskSync/NoteExpiry/NotesService.
+builder.Services.AddSingleton<IProjectManager>(sp => sp.GetRequiredService<ProjectManager>());
 // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.
@@ -177,6 +185,10 @@ builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
+// Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
+// пишет ProjectEventTypes.NoteChanged при мутациях заметок). Полный сервис в Main,
+// Notes видит только Append.
+builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 // Память персон и команды (волна 3, шаг 4) — DI в подсистеме `MemorySubsystem`:
@@ -672,6 +684,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
+
+// Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
+// Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
+// живут в Main как тонкие обёртки; Notes (в отдельной сборке) получает только
+// Core-контракты.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Tasks.TaskBridge>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
 // Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная

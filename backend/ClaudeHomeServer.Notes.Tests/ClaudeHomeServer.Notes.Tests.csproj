@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Notes. По образцу CodeGraph/Skills/Git:
+         SDK=Web ради FrameworkReference Microsoft.AspNetCore.App, OutputType=Library
+         ради отсутствия Main. Тесты Notes — чистый парсинг / файловая система,
+         без подъёма полного стенда; Notes не зависит от internals Main (в отличие
+         от Git, который требует ProjectReference на Main ради DossierBranch).
+         GlobalUsings.cs не нужен (нет параметризации Theory). -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- ProjectReference на Main нужен ради ProjectManager/UserStore —
+         тесты Notes конструируют их напрямую (см. NotesServiceTests, NoteAnnotationTests,
+         NotesAiConsumerTests), иначе пришлось бы писать моки поверх IProjectManager.
+         Прецедент — Git.Tests, тоже ссылается на Main ради DossierBranch.
+         Цикла нет: Main → Notes → Notes.Tests → Main не возникает, Main не
+         ссылается на Tests. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- ProjectReference на Main.Tests ради ClaudeHomeServer.Tests.Helpers (FakeHostEnvironment)
+         — используется в NotesServiceTests/NotesAiConsumerTests/NoteAnnotationTests для
+         конструирования UserStore в тестах. Без этого пришлось бы дублировать хелперы. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+  </ItemGroup>
+
+</Project>

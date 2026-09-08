@@ -2,7 +2,7 @@ using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Notes;
 
-// Вертикаль заметок (волна 4C, шаг 2): Obsidian-совместимый vault — `[[wikilinks]]`,
+// Вертикаль заметок (Этап 5, волна 5): Obsidian-совместимый vault — `[[wikilinks]]`,
 // backlinks, граф, комментарии к документам, синк с Dify; AI-сводки и теги
 // (`NotesAiService`); двусторонняя синхронизация чекбоксов заметок и задач
 // (`NoteTaskSyncService`); авто-истечение заметок (`NoteExpiryService`).
@@ -11,35 +11,28 @@ namespace ClaudeHomeServer.Services.Notes;
 // отдельная задача на разрез.
 //
 // Известные границы (сознательные):
-// 1) `ClaudeHomeServer.Services.Tasks` — префикс-шов через `NoteTaskSyncService`
-//    (`TaskManager` + `CreateTaskRequest` + `UpdateTaskRequest`): мост чекбоксов
-//    заметок и карточек задач. Шов снимается порядком — Tasks уже вертикаль,
-//    направление одно: Notes → Tasks.
-// 2) `ClaudeHomeServer.Services.Knowledge` — префикс-шов через `NotesKnowledgeService`
-//    (`IKnowledgeSyncParticipant` + `KnowledgeService` + `KnowledgeSyncTarget`):
-//    синхронизация заметок с Dify-датасетом per-owner; тот же шов, что у
-//    `Knowledge` → `Memory`/`Dossiers` и у `Memory`/`Spend` → `Knowledge`.
-// 3) `ClaudeHomeServer.Services.Llm` — префикс-шов через `NotesAiService`
-//    (`ICheapTextRunner`) для тегов/сводок заметок. Префикс-шов по прецеденту
-//    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Tasks`/`Docs`.
-// 4) `ClaudeHomeServer.Hubs` — префикс-шов через `NoteTaskSyncService` и
-//    `NoteExpiryService` (`IHubContext<SessionHub>`): рассылка `notes_changed` и
-//    напоминания об истечении заметок. По прецеденту `Tasks`/`Git`/`Images`/
-//    `ProjectServices`/`Terminal`/`Watchdog`.
-// 5) Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»:
-//    - `ProjectManager` — `NoteTaskSyncService` (projectId для промоута чекбокса
-//      в задачу), `NoteExpiryService` (проекты для авто-истечения заметок),
-//      `NotesService` (пути к папкам заметок).
-//    - `UserStore` — `NotesKnowledgeService` (имя владельца → имя Dify-датасета
-//      `{username}:notes`).
-// 6) Точечный допуск к `ClaudeHomeServer.Protocol` — `NotesChangedMessage` в
-//    `NoteTaskSyncService.BroadcastNoteChangedAsync` (материал-аргумент `SendAsync`,
-//    поле state-машины). Префикс `ClaudeHomeServer.Protocol` снят (волна 3), оставлен
-//    точный тип по образцу швов у `Spend`/`Memory`/`Dossiers`/`Watchdog`/`Terminal`.
+// 1) `ClaudeHomeServer.Services.Tasks` — префикс-шов через `INoteTaskBridge`
+//    (Core) и `NoteTaskSyncService` (Notes): мост чекбоксов заметок и карточек
+//    задач. После Этапа 5 Notes → Tasks идёт через узкий Core-контракт
+//    `INoteTaskBridge` (`GetBySourceNote`/`Create`/`Update`/`SpawnNextOccurrence`),
+//    реализация `TaskBridge` живёт в Main (Services/Tasks/TaskBridge.cs).
+// 2) `ClaudeHomeServer.Services.Knowledge` — префикс-шов через `IKnowledgeIndex`
+//    (Core, Этап 5, волна 5) и `NotesKnowledgeService` (Notes): синхронизация
+//    заметок с Dify-датасетом per-owner.
+// 3) `ClaudeHomeServer.Services.Llm` — префикс-шов через `ICheapTextRunner`
+//    (Core) и `NotesAiService` (Notes) для тегов/сводок заметок.
+// 4) `ClaudeHomeServer.Hubs` — префикс-шов через `INotesHubNotifier` (Core,
+//    Этап 5, волна 5) и `NoteTaskSyncService`/`NoteExpiryService` (Notes):
+//    рассылка `notes_changed`. Реализация `NotesHubNotifier` живёт в Main
+//    (Services/Composition/NotesHubNotifier.cs).
+// 5) Точечные Core-интерфейсы `IProjectManager`/`IUserStore`/`IProjectEventLogService`
+//    (Этап 5, волна 5) — замена прямых ссылок на Main-типы. Реализации
+//    (`ProjectManager`/`UserStore`/`ProjectEventLogService` в Main) подписаны
+//    через стандартный паттерн forwarder в DI.
 //
-// Шов `Notes → Models.Note` (record `Note`/`NoteDetail`/`UpdateNoteRequest`/
-// `NoteSummary`/`NoteSemanticHit` остаётся в файле NotesKnowledgeService.cs —
-// рядом с владельцем домена) идёт через `ClaudeHomeServer.Models` (SharedAllowedPrefixes).
+// Регистрация шовных реализаций (`TaskBridge`/`NotesHubNotifier`) — в Main
+// (Program.cs), потому что эти типы сами живут в Main и недоступны из
+// Notes.csproj: обратной ссылки нет.
 public sealed class NotesSubsystem : IAppSubsystem
 {
     public string Key => "notes";
@@ -55,15 +48,5 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
         services.AddGatedHostedService<NoteExpiryService>(config);
-
-        // Этап 5, волна 5: два новых Core-интерфейса разрезают циклы Notes → Tasks/Hubs.
-        // Регистрация здесь, потому что NotesSubsystem — единственная точка композиции
-        // Notes-вертикали (Main), и после выноса Notes в отдельный .csproj именно она
-        // пробросит регистрации. Сами реализации (TaskBridge, NotesHubNotifier) сидят
-        // в Main как тонкие обёртки вокруг TaskManager / IHubContext<SessionHub>.
-        services.AddSingleton<Services.Tasks.TaskBridge>();
-        services.AddSingleton<Services.Composition.NotesHubNotifier>();
-        services.AddSingleton<INoteTaskBridge>(sp => sp.GetRequiredService<Services.Tasks.TaskBridge>());
-        services.AddSingleton<INotesHubNotifier>(sp => sp.GetRequiredService<Services.Composition.NotesHubNotifier>());
     }
 }

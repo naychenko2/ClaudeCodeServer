@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Identity;
 
 namespace ClaudeHomeServer.Services;
 
-public class UserStore : IForgejoAccountStore
+public class UserStore : IForgejoAccountStore, IUserStore
 {
     private readonly string _filePath;
     private readonly PasswordHasher<User> _hasher = new();

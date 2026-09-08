@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Notes;
 // и Services/Composition/NotesHubNotifier) транслируют Core-вызовы в TaskManager
 // и IHubContext соответственно.
 public sealed class NoteTaskSyncService(
-    NotesService notes, INoteTaskBridge tasks, ProjectManager projects, NotesKnowledgeService kb,
+    NotesService notes, INoteTaskBridge tasks, IProjectManager projects, NotesKnowledgeService kb,
     INotesHubNotifier notifier, ILogger<NoteTaskSyncService> log)
 {
     // Чекбоксы заметки + связанные задачи (для панели «Задачи из заметки»)

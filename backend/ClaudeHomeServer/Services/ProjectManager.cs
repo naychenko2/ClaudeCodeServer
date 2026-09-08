@@ -6,7 +6,7 @@ using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services;
 
-public class ProjectManager
+public class ProjectManager : IProjectManager
 {
     // Встроенная часть системного промпта — всегда добавляется, пользователь не редактирует
     public const string BuiltInSystemPrompt =

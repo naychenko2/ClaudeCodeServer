@@ -65,6 +65,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Notes.NotesSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1593,11 +1594,16 @@ public class SubsystemBoundaryTests
                     // через `ModelTiers.TryParse`. Точечный допуск.
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ExecutorStopClassifier",
-                    // ⚠ ИНВЕРСИЯ СЛОЁВ `Tasks → Controllers` через extension-метод
-                    // `TaskHubExtensions.BroadcastTaskChangedAsync` (см. комментарий выше;
-                    // TaskSchedulerService.cs:128). Прямой шов Tasks-вертикали на
-                    // Controllers-пространство имён. Разбор и разворот — этап 4.
-                    "ClaudeHomeServer.Controllers.TaskHubExtensions",
+                    // DailyBriefingService (Этап 5, волна C): фасад поперёк Tasks+Notes+Llm,
+                    // сидит в корне Services. Tasks зовёт его через
+                    // TaskSchedulerService.Зависимости от «спинки» — легитимные.
+                    "ClaudeHomeServer.Services.DailyBriefingService",
+                    // TaskHubExtensions (Этап 5, волна C): extension-метод
+                    // BroadcastTaskChangedAsync переехал из Controllers/TasksController в
+                    // Hubs/TaskHubExtensions. Tasks его зовёт через
+                    // `hub.BroadcastTaskChangedAsync(...)` (TaskSchedulerService).
+                    // Шов `Tasks → Hubs` по образцу других вертикалей (Llm, Notes).
+                    "ClaudeHomeServer.Hubs.TaskHubExtensions",
                 }),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
@@ -1779,13 +1785,13 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 9 = Main + Core + 7 вынесенных на Этапе 3 (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts);
-        // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(9,
-            "после Этапа 3 сторож должен видеть 9 прод-сборок: ClaudeHomeServer, " +
+        // 10 = Main + Core + 8 вынесенных на Этапе 3/5 (Video/Yandex/Reader/CodeGraph/
+        // Skills/Git/Tts/Notes); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(10,
+            "после Этапа 5 сторож должен видеть 10 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
-            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts");
+            "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");
@@ -1988,6 +1994,11 @@ public class SubsystemBoundaryTests
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
+        // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
+        // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
+        // ссылалась на шов без ProjectReference на Main.
+        "ClaudeHomeServer.Services.Notes",
     ];
 
     /// <summary>

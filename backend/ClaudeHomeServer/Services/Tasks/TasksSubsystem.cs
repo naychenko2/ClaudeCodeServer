@@ -74,6 +74,10 @@ public sealed class TasksSubsystem : IAppSubsystem
         services.AddSingleton<TaskAiService>();
         services.AddSingleton<BoardService>();
         services.AddSingleton<DailyBriefingService>();
+        // Шов IDailyBriefingRunner (Core) → DailyBriefingRunnerAdapter → DailyBriefingService.
+        // Адаптер обязан идти ПОСЛЕ DailyBriefingService — он резолвит его через конструктор.
+        services.AddSingleton<DailyBriefingRunnerAdapter>();
+        services.AddSingleton<IDailyBriefingRunner>(sp => sp.GetRequiredService<DailyBriefingRunnerAdapter>());
         services.AddGatedHostedService<TaskSchedulerService>(config);
     }
 }

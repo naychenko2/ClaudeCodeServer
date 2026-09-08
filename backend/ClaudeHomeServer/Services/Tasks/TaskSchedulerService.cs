@@ -1,4 +1,3 @@
-using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -14,7 +13,7 @@ public class TaskSchedulerService(
     UserStore users,
     IHubContext<SessionHub> hub,
     TaskExecutionService executor,
-    DailyBriefingService briefing,
+    IDailyBriefingRunner briefing,
     PersonaAutomationService automation,
     NotificationService notif,
     ILogger<TaskSchedulerService> log) : BackgroundService

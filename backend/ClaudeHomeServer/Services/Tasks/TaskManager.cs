@@ -11,7 +11,7 @@ public class TaskManager
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
     private readonly IProjectEventLogService? _events;
-    private readonly NotificationService? _notif;
+    private readonly ITaskNotificationDispatcher? _notif;
     private readonly PersonaManager? _personas;
 
     // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
@@ -19,7 +19,7 @@ public class TaskManager
     public event Action<TaskItem>? TaskCompleted;
 
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
-        NotificationService? notif = null, PersonaManager? personas = null)
+        ITaskNotificationDispatcher? notif = null, PersonaManager? personas = null)
     {
         _events = events;
         _notif = notif;

@@ -15,7 +15,7 @@ public class TaskSchedulerService(
     ITaskExecutor executor,
     IDailyBriefingRunner briefing,
     IPersonaAutomationRunner automation,
-    NotificationService notif,
+    ITaskNotificationDispatcher notif,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);

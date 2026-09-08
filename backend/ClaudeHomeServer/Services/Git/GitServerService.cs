@@ -211,10 +211,12 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
     }
 
     // Транслит кириллицы ОБЯЗАТЕЛЕН: «Стратсессия» без него давала пустой слаг → фолбэк
-    // «project», и разные проекты молча цеплялись к одному репозиторию (инцидент на проде 20.07)
+    // «project», и разные проекты молча цеплялись к одному репозиторию (инцидент на проде 20.07).
+    // XStyle.H обязателен: значения персистятся (имена репозиториев в Forgejo), смена стиля
+    // задним числом сломала бы существующие аккаунты.
     private static string SlugifyRepoName(string name)
     {
-        var slug = PersonaManager.Slugify(name);
+        var slug = Slugifier.Slugify(name, Slugifier.XStyle.H);
         return slug.Length > 0 ? slug : "project";
     }
 }

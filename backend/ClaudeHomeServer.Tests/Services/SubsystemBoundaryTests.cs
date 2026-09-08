@@ -1983,6 +1983,11 @@ public class SubsystemBoundaryTests
     private static readonly string[] CoreAllowedNamespaces =
     [
         "ClaudeHomeServer.Models",
+        // Этап 3 (уборка Git/Skills/CodeGraph): корневые stateless-примитивы спины —
+        // PathNormalizer/Slugifier/SafePath/ExecutableResolver/JsonFileStore/SsrfGuard/
+        // PermissionModeGuard/ModelTier/TeamProtocolMarkers. Вертикали берут их через
+        // цепочку namespace `ClaudeHomeServer.Services.*` (без using — прецедент Git).
+        "ClaudeHomeServer.Services",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Mcp",

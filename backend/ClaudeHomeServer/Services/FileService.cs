@@ -57,27 +57,17 @@ public class FileService(
         relativePath.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase) ||
         relativePath.StartsWith(".claude/worktrees/", StringComparison.OrdinalIgnoreCase);
 
-    // Защита от path traversal.
-    // ВАЖНО: второй аргумент — путь ОТНОСИТЕЛЬНО корня; ведущие разделители срезаются.
-    // Абсолютный путь сюда передавать нельзя: на Linux «/a/b» станет относительным «a/b»
-    // и приклеится к корню — вместо отказа получится путь внутри проекта, то есть проверка
-    // «ссылка наружу» молча исчезнет. На Windows подмена незаметна (Path.Combine отдаёт
-    // приоритет второму абсолютному пути), поэтому такое ловится только в CI на Linux.
-    // Есть абсолютный путь — сначала Path.GetRelativePath(root, full).
-    internal static string SafeJoin(string root, string relativePath)
-    {
-        var full = Path.GetFullPath(Path.Combine(root, relativePath.TrimStart('/', '\\')));
-        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        // Сравнение с разделителем на конце: иначе root "C:\Data\Proj" пропускает "C:\Data\Proj2\..."
-        if (!full.Equals(rootFull, StringComparison.OrdinalIgnoreCase) &&
-            !full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("Доступ за пределы проекта запрещён");
-        return full;
-    }
+    // Защита от path traversal — форвардер к Core-примитиву (Этап 3, уборка Git).
+    // Реализация и обоснование граничных случаев (`..`, абсолютный путь, символы диска)
+    // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Форвардеры оставлены:
+    // десятки вызывающих внутри Main, и смена имени сломала бы полпроекта; SafePath.Join
+    // остаётся прямой точкой для нового кода вроде `GitService.ValidateRel`.
+    internal static string SafeJoin(string root, string relativePath) =>
+        SafePath.Join(root, relativePath);
 
     // Публичная обёртка SafeJoin для использования вне сборки (WebDav и др.)
     public static string SafeJoinPublic(string root, string relativePath) =>
-        SafeJoin(root, relativePath);
+        SafePath.Join(root, relativePath);
 
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
     {

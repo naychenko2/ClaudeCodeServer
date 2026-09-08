@@ -75,13 +75,15 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
     public static bool IsGitRepo(string root) => Path.Exists(Path.Combine(root, ".git"));
 
-    // Конвенция проекта: все относительные пути — через SafeJoin (защита от traversal)
-    // до передачи в git. Git и сам отвергает пути вне репо, но валидируем единообразно.
-    // Возврат — с прямыми слэшами: git ждёт POSIX-разделители, и на Linux путь с
-    // обратными молча даёт пустой вывод (log --follow) вместо ошибки.
+    // Конвенция проекта: все относительные пути — через SafePath.Join (защита от
+    // traversal) до передачи в git. Git и сам отвергает пути вне репо, но валидируем
+    // единообразно через Core-примитив — иначе Git вертикали тянула бы FileService
+    // только ради статической проверки путей. Возврат — с прямыми слэшами: git ждёт
+    // POSIX-разделители, и на Linux путь с обратными молча даёт пустой вывод
+    // (log --follow) вместо ошибки.
     private static string ValidateRel(string root, string relPath)
     {
-        FileService.SafeJoinPublic(root, relPath);
+        SafePath.Join(root, relPath);
         return relPath.Replace('\\', '/');
     }
 

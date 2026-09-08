@@ -96,13 +96,11 @@ public class SubsystemBoundaryTests
         // вертикали (SsrfGuard/JsonFileStore/PermissionModeGuard/TeamProtocolMarkers
         // и Composition/Http/Mcp-узлы). Контроль на уровне сборки, не namespace:
         // см. `CoreAssemblyName` ниже и `IsCoreAssembly`.
-        // `ClaudeHomeServer.Protocol` — WS-контракт с фронтом. Объявлен спиной по
-        // решению архитектора (задача `8beee75e`, ADR-014 §«Решение по Protocol»):
-        // record-DTO дискриминируются по `type` в едином потоке `ServerMessage`,
-        // разрезание по папкам не убирает ни одной рантайм-зависимости, а точечный
-        // allow-list разрастается до ~70 записей на каждое новое WS-событие.
-        // Честная цена: дублирующие сообщения остаются зоной ревью.
-        "ClaudeHomeServer.Protocol",
+        // `ClaudeHomeServer.Protocol` — WS-контракт с фронтом. После Ф3б едет
+        // в `Core.dll` (задача `b6f0e1f4`, ADR-014 §«Решение по Protocol»),
+        // допуск идёт по имени сборки через `IsCoreAssembly` — namespace-запись
+        // здесь больше не нужна, иначе она бы тихо пропускала случайное
+        // появление типа `ClaudeHomeServer.Protocol.*` в Main.
     };
 
     /// <summary>Имя сборки «спинки» из общего кода: всё, что едет в
@@ -1936,6 +1934,11 @@ public class SubsystemBoundaryTests
     private static readonly string[] CoreAllowedNamespaces =
     [
         "ClaudeHomeServer.Models",
+        // Этап 5, ярус 0 (Ф3б): WS-контракт с фронтом едет в Core как спина
+        // (задача `b6f0e1f4`, ADR-014 §«Решение по Protocol») — record-DTO
+        // дискриминируются по `type` в едином потоке `ServerMessage`, отдельная
+        // сборка не нужна.
+        "ClaudeHomeServer.Protocol",
         // Этап 3 (уборка Git/Skills/CodeGraph): корневые stateless-примитивы спины —
         // PathNormalizer/Slugifier/SafePath/ExecutableResolver/JsonFileStore/SsrfGuard/
         // PermissionModeGuard/ModelTier/TeamProtocolMarkers. Вертикали берут их через

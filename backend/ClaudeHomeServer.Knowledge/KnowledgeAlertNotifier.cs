@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Knowledge;
 
@@ -21,8 +21,7 @@ public interface IKnowledgeAlertNotifier
 // SignalR), как это делает AlertPollingService. Без push: индексация — не пожар,
 // будить телефон незачем.
 public sealed class KnowledgeAlertNotifier(
-    NotificationService notifications,
-    NotificationStore store,
+    IKnowledgeNotificationDispatcher dispatcher,
     ILogger<KnowledgeAlertNotifier> log) : IKnowledgeAlertNotifier
 {
     // Подтип уведомления — он же ключ, по которому ищется отметка в сторе
@@ -32,8 +31,7 @@ public sealed class KnowledgeAlertNotifier(
     {
         try
         {
-            var last = await store.GetLastCreatedAtByTypeAsync(userId, NotifType);
-            return last is null ? null : new DateTimeOffset(last.Value, TimeSpan.Zero);
+            return await dispatcher.LastNotifiedAtAsync(userId, NotifType, ct);
         }
         catch (Exception ex)
         {
@@ -48,17 +46,11 @@ public sealed class KnowledgeAlertNotifier(
     {
         try
         {
-            await notifications.SendAsync(userId, new CreateNotificationRequest
-            {
-                Kind = "alert",
-                Type = NotifType,
-                Title = title,
-                Body = body,
-                Url = "#/knowledge",
-                // Тег схлопывает повторы в шторке браузера
-                Tag = "knowledge-index-error",
-                Source = "Знания",
-            }, sendPush: false);
+            await dispatcher.NotifyAsync(userId, title, body,
+                url: "#/knowledge",
+                tag: "knowledge-index-error",
+                source: "Знания",
+                ct: ct);
         }
         catch (Exception ex)
         {

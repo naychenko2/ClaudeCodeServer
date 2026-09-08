@@ -8,6 +8,8 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -195,7 +197,7 @@ public class KnowledgeSyncParticipantTests : IDisposable
     {
         var appSettings = new AppSettingsService(_config);
         var projects = new ProjectManager(_config, _users, appSettings);
-        var files = new FileService();
+        var files = new ProjectFileGateway(new FileService());
         var proxy = new Mock<IClientProxy>();
         proxy.Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -203,7 +205,8 @@ public class KnowledgeSyncParticipantTests : IDisposable
         clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
         var hub = new Mock<IHubContext<SessionHub>>();
         hub.Setup(h => h.Clients).Returns(clients.Object);
-        var svc = new ProjectKnowledgeSyncService(_knowledge, _wkStore, projects, files, hub.Object,
+        var svc = new ProjectKnowledgeSyncService(_knowledge, _wkStore, projects, files,
+            new RecordingHubNotifier(), new NullDifyMetrics(),
             NullLogger<ProjectKnowledgeSyncService>.Instance);
 
         var projectDir = Path.Combine(_tempDir, "proj");

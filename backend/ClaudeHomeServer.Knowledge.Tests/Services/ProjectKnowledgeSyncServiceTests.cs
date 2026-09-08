@@ -8,6 +8,8 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -67,8 +69,9 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
     private readonly WorkspaceKnowledgeStore _wkStore;
     private readonly ProjectManager _projects;
     private readonly PersonaManager _personas;
+    private readonly IPersonaDirectory _personaDir;
     private readonly KnowledgeService _knowledge;
-    private readonly FileService _files = new();
+    private readonly IProjectFileGateway _files = new ProjectFileGateway(new FileService());
     private readonly ProjectKnowledgeSyncService _sut;
     private readonly Project _project;
     private readonly string _ownerId;
@@ -94,6 +97,7 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
         var appSettings = new AppSettingsService(_config);
         _projects = new ProjectManager(_config, _users, appSettings);
         _personas = new PersonaManager(_config);
+        _personaDir = new PersonaDirectoryAdapter(_personas);
         _wkStore = new WorkspaceKnowledgeStore(_config);
         _dossierStore = new DossierStore(_config, null);
 
@@ -112,7 +116,8 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
         var hub = new Mock<IHubContext<SessionHub>>();
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
-        _sut = new ProjectKnowledgeSyncService(_knowledge, _wkStore, _projects, _files, hub.Object,
+        _sut = new ProjectKnowledgeSyncService(_knowledge, _wkStore, _projects, _files,
+            new RecordingHubNotifier(), new NullDifyMetrics(),
             NullLogger<ProjectKnowledgeSyncService>.Instance);
 
         _project = _projects.Create("proj", _projectDir, _ownerId, "tester");
@@ -302,7 +307,7 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(_knowledge, notesSvc, _users, _config,
             NullLogger<NotesKnowledgeService>.Instance);
         var teamMemory = new TeamMemoryService(_config);
-        var cascade = new UserKnowledgeCascade(_knowledge, _wkStore, _projects, _personas,
+        var cascade = new UserKnowledgeCascade(_knowledge, _wkStore, _projects, _personaDir,
             new IKnowledgeSyncParticipant[] { personaMemory, teamMemory, _dossierStore, notesKb },
             NullLogger<UserKnowledgeCascade>.Instance);
 

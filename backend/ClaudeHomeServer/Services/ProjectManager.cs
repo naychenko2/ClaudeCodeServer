@@ -476,7 +476,7 @@ public class ProjectManager : IProjectManager
 
     // Все проекты, чей RootPath указывает на ту же папку (датасет знаний общий per-RootPath):
     // каскад удаления и события синка знаний должны учитывать соседей по папке
-    public IReadOnlyList<Project> GetByRootPath(string rootPath)
+    public IReadOnlyCollection<Project> GetByRootPath(string rootPath)
     {
         var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
         return _projects.Values

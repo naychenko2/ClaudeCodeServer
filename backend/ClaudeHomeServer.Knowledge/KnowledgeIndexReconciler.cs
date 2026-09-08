@@ -130,7 +130,7 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
     // Срез для гейджа: суммы по типу датасета (префикс Label — notes/persona/team/dossiers/
     // project) и по лечимости. Именно суммы, а не по цели: Label содержит id персоны и путь
     // проекта — как тег это и PII, и кардинальность.
-    internal static IReadOnlyList<(string DatasetType, bool Healable, long Count)> AggregateByType(
+    public static IReadOnlyList<(string DatasetType, bool Healable, long Count)> AggregateByType(
         IReadOnlyList<ReconcileTargetStatus> counts)
     {
         var acc = new Dictionary<(string, bool), long>();

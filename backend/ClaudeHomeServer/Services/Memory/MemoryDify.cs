@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Memory;

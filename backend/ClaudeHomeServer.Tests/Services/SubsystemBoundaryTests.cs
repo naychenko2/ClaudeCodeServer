@@ -600,32 +600,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.NotificationService",
-                    "ClaudeHomeServer.Services.NotificationStore",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.FileService",
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
-                    "ClaudeHomeServer.Services.Memory.TeamMemoryService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierStore",
-                    "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
-                    "ClaudeHomeServer.Controllers.KnowledgeBaseSummary",
-                    "ClaudeHomeServer.Controllers.KnowledgeBaseDetail",
-                    "ClaudeHomeServer.Controllers.KnowledgeDocumentDto",
-                    // FileMutationKind (Services/FileService.cs) — IL-видимость
-                    // (задача `8beee75e`): `ProjectKnowledgeSyncService` материализует
-                    // enum в поле async-state-машины. Точечный допуск по образцу Git.
-                    "ClaudeHomeServer.Services.FileMutationKind",
-                    // Telemetry (бывший префикс, заменён точечным допуском):
-                    // `ProjectKnowledgeSyncService` логирует Dify-ошибки через
-                    // ServerMetrics.RecordDifySyncError + DifyErrorCategorizer.
-                    "ClaudeHomeServer.Telemetry.ServerMetrics",
-                    "ClaudeHomeServer.Telemetry.DifyErrorCategorizer",
-                }),
+                Array.Empty<string>()),
         },
         // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
         // `IAppSubsystem` (подаётся в Program.cs как обычные `AddSingleton`/
@@ -1979,6 +1954,10 @@ public class SubsystemBoundaryTests
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
         // ссылалась на шов без ProjectReference на Main.
         "ClaudeHomeServer.Services.Notes",
+        // Этап 5, волна 5 (Knowledge): узкий Core-шов IDifyMetrics (ProjectKnowledgeSyncService
+        // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
+        // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
+        "ClaudeHomeServer.Core.Telemetry",
     ];
 
     /// <summary>

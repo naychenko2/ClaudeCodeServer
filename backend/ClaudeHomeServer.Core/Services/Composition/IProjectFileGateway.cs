@@ -26,7 +26,17 @@ public interface IProjectFileGateway
     void CreateFile(string root, string relativePath, string content);
     void WriteFile(string root, string relativePath, string content);
     void WriteFileBytes(string root, string relativePath, byte[] content);
+
+    // Текстовое чтение — 1:1 с FileService.ReadFile. Используется
+    // ProjectKnowledgeSyncService для вычисления SHA-256 содержимого файла.
+    string ReadFile(string root, string relativePath);
+
     byte[] ReadFileBytes(string root, string relativePath);
     void Delete(string root, string relativePath);
     void Rename(string root, string oldRelative, string newRelative);
+
+    // Событие мутаций файлов. Адаптер в Main подписывается на FileService.OnMutated
+    // и ретранслирует через это событие. Используется ProjectKnowledgeSyncService
+    // для детектирования переноса/удаления файлов.
+    event Action<string, string, FileMutationKind, string?>? OnMutated;
 }

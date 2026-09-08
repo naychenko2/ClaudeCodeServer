@@ -11,4 +11,9 @@ public interface IUserStore
 {
     // Возвращает пользователя по id или null, если такого нет.
     User? GetById(string id);
+
+    // Возвращает всех пользователей. Используется KnowledgeBaseCatalogService
+    // для классификации датасета: отличить «без префикса = глобальная»
+    // от «чужая {otheruser}:…».
+    IReadOnlyList<User> GetAll();
 }

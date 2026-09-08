@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Composition;
+
 namespace ClaudeHomeServer.Services.Knowledge;
 
 // Каскадная уборка знаний при удалении пользователя: память персон (стор + Dify),
@@ -15,13 +17,13 @@ public sealed class UserKnowledgeCascade
 {
     private readonly KnowledgeService _knowledge;
     private readonly WorkspaceKnowledgeStore _wkStore;
-    private readonly ProjectManager _projects;
-    private readonly PersonaManager _personas;
+    private readonly IProjectManager _projects;
+    private readonly IPersonaDirectory _personas;
     private readonly IReadOnlyList<IKnowledgeSyncParticipant> _participants;
     private readonly ILogger<UserKnowledgeCascade> _logger;
 
     public UserKnowledgeCascade(KnowledgeService knowledge, WorkspaceKnowledgeStore wkStore,
-        ProjectManager projects, PersonaManager personas,
+        IProjectManager projects, IPersonaDirectory personas,
         IEnumerable<IKnowledgeSyncParticipant> participants,
         ILogger<UserKnowledgeCascade> logger)
     {

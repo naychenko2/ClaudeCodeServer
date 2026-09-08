@@ -24,4 +24,9 @@ public interface IProjectManager
     // Notes нужно очищать заметки ВСЕХ пользователей независимо от того, чей
     // сейчас ход.
     IReadOnlyCollection<Project> GetAll();
+
+    // Возвращает все проекты с указанным корневым путём (папка может быть
+    // общей для нескольких владельцев). Используется ProjectKnowledgeSyncService
+    // для BroadcastAsync — уведомить всех владельцев папки.
+    IReadOnlyCollection<Project> GetByRootPath(string rootPath);
 }

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Notes;
@@ -44,7 +44,7 @@ public sealed class DailyBriefingService
     private readonly ProjectEventLogService? _events;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly PushService _push;
-    private readonly NotificationService _notif;
+    private readonly ITaskNotificationDispatcher _notif;
     private readonly IConfiguration _config;
     private readonly ILogger<DailyBriefingService> _log;
 
@@ -58,7 +58,7 @@ public sealed class DailyBriefingService
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
         PersonaManager personas, AppSettingsService appSettings,
         Llm.ICheapTextRunner cheap, PushService push,
-        NotificationService notif,
+        ITaskNotificationDispatcher notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
         ProjectEventLogService? events = null)
     {

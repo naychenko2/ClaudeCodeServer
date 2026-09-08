@@ -2100,7 +2100,9 @@ export const api = {
   },
 };
 
-export type HiggsfieldStatus = { flagOn: boolean; connected: boolean; expiresAt: string | null };
+// enabled — рубильник записи реестра: у владельца без входа записи ещё нет, и это
+// не «выключено», а «можно войти» (сервер отдаёт true).
+export type HiggsfieldStatus = { enabled: boolean; connected: boolean; expiresAt: string | null };
 export type HiggsfieldLoginResult = { authorizeUrl: string; state: string; redirectUri: string };
 
 async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {

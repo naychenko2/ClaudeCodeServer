@@ -253,9 +253,14 @@ public class McpToolsetStabilityTests
             "McpServersOn — каскад реестра, к встроенной интеграции не относится");
         body.Should().NotContain("Mcp.McpDelivery.ShouldDeliver(",
             "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
-        // Флаг владельца и живой OAuth сохраняем
-        body.Should().Contain("FeatureFlagKeys.Higgsfield",
-            "фич-флаг higgsfield проверяется на каждый ход");
+        // Фич-флага в этой ветке нет с 2026-09-08 (снят): интеграция работает безусловно,
+        // единственный предохранитель — рубильник Enabled записи, который читает
+        // IsBuiltinDelivered. Возврат любой проверки флага (хоть FeatureFlagKeys.DesktopAgent,
+        // хоть литералом "higgsfield") обязан ронять тест: доставка идёт по записи
+        // реестра, а не по тумблеру фичи.
+        body.Should().NotContain("_flags",
+            "флаг higgsfield снят: доставка идёт по записи реестра, а не по тумблеру фичи");
+        // Живой OAuth сохраняем
         body.Should().Contain("EnsureFresh",
             "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
         // RO-гейт сохранён через IsBuiltinDelivered — требование точное: «readOnly» даёт
@@ -269,9 +274,9 @@ public class McpToolsetStabilityTests
     /// <summary>
     /// Записи встроенных интеграций (IntegrationKeys, сейчас — dify/fal-ai/glif/higgsfield)
     /// доставляются собственной веткой (TryAddHiggsfieldBuiltin и аналоги), а НЕ реестровым
-    /// циклом BuildExternalMcpProvider. Иначе фич-флаг higgsfield становится «второй точкой
-    /// истины»: higgsfield лежит в реестре и включён в проекте/персоне — выключение флага
-    /// сервер не снимет, он доедет реестровым путём.
+    /// циклом BuildExternalMcpProvider. Иначе у доставки становится две точки истины:
+    /// higgsfield лежит в реестре и включён в проекте/персоне — и доедет реестровым путём
+    /// мимо продуктовой формулы (рубильник Enabled + RO-гейт), да ещё дублем.
     /// </summary>
     [SkippableFact]
     public void Хиггсфилд_РеестровыйЦикл_ИсключаетВстроенныеИнтеграции()
@@ -283,17 +288,17 @@ public class McpToolsetStabilityTests
             "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         // Тело реестрового цикла обязано знать, что ключи из IntegrationKeys пропускаются —
-        // иначе путь «включено в проекте/персоне» доставляет higgsfield в обход фич-флага.
+        // иначе путь «включено в проекте/персоне» доставляет higgsfield мимо продуктовой формулы.
         body.Should().Contain("IntegrationKeys",
             "реестровый цикл BuildExternalMcpProvider обязан пропускать записи встроенных "
-            + "интеграций — их доставляет TryAddHiggsfieldBuiltin по фич-флагу и RO-гейту, "
+            + "интеграций — их доставляет TryAddHiggsfieldBuiltin по рубильнику Enabled и RO-гейту, "
             + "а каскад «проект/персона» к ним не применяется");
 
         // Гейт ОБЯЗАН сравнивать ключ без учёта регистра: McpRegistry грузит data/mcp-servers.json
         // через JsonFileStore.Load как есть, минуя нормализацию Create/CreateBuiltIn/Update,
         // и запись вроде «HIGGSFIELD» проскользнёт в реестр (ручная правка файла, восстановление
         // из бэкапа, миграция). Array.IndexOf сравнивает по Ordinal — запись поедет реестровым
-        // путём мимо фич-флага, и мы получим ровно ту поломку, которую чинили волной 2.
+        // путём мимо продуктовой формулы, и мы получим ровно ту поломку, которую чинили волной 2.
         body.Should().Contain("IntegrationKeys.Contains(",
             "гейт должен использовать Contains, а не Array.IndexOf — последний case-sensitive "
             + "и не ловит ключ, попавший в реестр мимо нормализации");

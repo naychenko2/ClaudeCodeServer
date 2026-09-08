@@ -44,7 +44,7 @@ const hintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
 };
 
-export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, onDelete, showHiggsfield }: {
+export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, onDelete }: {
   data: McpData;
   onEdit: (server: McpServer) => void;
   onAdd: () => void;
@@ -54,9 +54,6 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
   onCatalog?: () => void;
   onOpenAccess: () => void;
   onDelete: (server: McpServer) => void;
-  // Карточка Higgsfield живёт под фич-флагом: решение «показывать ли» принимает
-  // родитель по тому же правилу, что и каталог (флаг знает только он)
-  showHiggsfield?: boolean;
 }) {
   const { servers, builtin } = data;
   // Три известные группы разбираем явно, всё прочее — в «подключено вне AI Home»:
@@ -139,33 +136,34 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
       )}
 
       <div style={groupHeaderStyle}>Сервисы AI Home</div>
-      {serviceTiles.length === 0 && !showHiggsfield ? (
+      {/* Карточка Higgsfield показывается всегда: интеграция работает безусловно
+          (фич-флаг снят 2026-09-08), состояние входа она узнаёт сама */}
+      <HiggsfieldCard />
+      {serviceTiles.length > 0 ? (
+        <>
+          <div style={tileGridStyle}>
+            {serviceTiles.map(tile => (
+              <Tile
+                key={tile.key}
+                tile={tile}
+                title={SERVICE_TITLES[tile.key] ?? tile.key}
+                subtitle={tile.key}
+                badge={tile.group === 'integration' ? 'через интернет' : undefined}
+              />
+            ))}
+          </div>
+          <div style={hintStyle}>
+            Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
+            Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
+          </div>
+        </>
+      ) : (
+        // У нового владельца плиток ещё нет (статусы приезжают из первого хода в чате, а
+        // до этого раздел пуст), и без этой подсказки секция «Сервисы AI Home» выглядит
+        // как пустая панель рядом с карточкой Higgsfield.
         <div style={hintStyle}>
           Пока ничего не наблюдалось: статус серверов приезжает из первого же хода в чате.
         </div>
-      ) : (
-        <>
-          {showHiggsfield && <HiggsfieldCard />}
-          {serviceTiles.length > 0 && (
-            <div style={tileGridStyle}>
-              {serviceTiles.map(tile => (
-                <Tile
-                  key={tile.key}
-                  tile={tile}
-                  title={SERVICE_TITLES[tile.key] ?? tile.key}
-                  subtitle={tile.key}
-                  badge={tile.group === 'integration' ? 'через интернет' : undefined}
-                />
-              ))}
-            </div>
-          )}
-          {serviceTiles.length > 0 && (
-            <div style={hintStyle}>
-              Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
-              Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
-            </div>
-          )}
-        </>
       )}
 
       {memoryTiles.length > 0 && <PersonaMemorySection tiles={memoryTiles} />}

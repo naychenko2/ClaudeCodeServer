@@ -151,7 +151,9 @@ builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<
 // Этап 5, волна E: узкие Core-швы для выноса Notes (NotesKnowledgeService → UserStore
 // ради User.Username для имени Dify-датасета). Полный UserStore в Main, Notes видит
 // только IUserStore (см. Core/Services/IUserStore.cs).
-builder.Services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<UserStore>());
+// Ф5: явный класс-адаптер UserStoreAdapter (вместо фабрики-синонима) —
+// точка для подмены в тестах и формализация, что это узкая проекция, а не весь UserStore.
+builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,

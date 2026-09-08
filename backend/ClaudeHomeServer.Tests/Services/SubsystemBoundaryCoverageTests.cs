@@ -36,6 +36,7 @@ public class SubsystemBoundaryCoverageTests
         _ = typeof(ClaudeHomeServer.Services.Diagnostics.FileLog).Assembly;
         _ = typeof(ClaudeHomeServer.Services.WebSearch.PerplexitySearchService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
     }
 
     [Fact]

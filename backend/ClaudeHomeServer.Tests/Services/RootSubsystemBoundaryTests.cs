@@ -75,6 +75,7 @@ public class RootSubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Skills.SkillsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Git.GitSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tts.TtsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Personas.PersonaDraftService).Assembly;
     }
 
     /// <summary>Неймспейсы, на которые ЛЮБОЙ root-тип имеет право ссылаться

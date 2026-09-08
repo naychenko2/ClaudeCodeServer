@@ -4,10 +4,10 @@ using ClaudeHomeServer.Services.Http;
 namespace ClaudeHomeServer.Services.Git;
 
 // Подсистема Git: реестр `GitService`, поверх него HTTP-контроллеры (`GitServerService`),
-// `GitAiService` (локальный one-shot для сообщений коммита и имён stash), фоновый
-// авто-commit/push (`GitAutoCommitService`) и `CommitAttributionService` (детект коммита
-// по сдвигу HEAD — помечает чатам зафиксированные пути, чтобы атрибуция файлов чатам
-// не врала после коммита).
+// `GitAiService` (локальный one-shot для сообщений коммита и имён stash). Реакторы
+// `GitAutoCommitService`/`CommitAttributionService` живут в корне `Services.*` и
+// регистрируются в Program.cs (Этап 3, уборка Git) — это сознательная связь
+// «вертикаль → спинка» по прецеденту `PersonaMemoryAutolearnService`.
 //
 // Границы (сознательные):
 // - Источник истины — сам git: своих сторов подсистема не заводит.
@@ -38,15 +38,7 @@ public sealed class GitSubsystem : IAppSubsystem
         services.AddSingleton<IGitRefSnapshotStore>(sp => sp.GetRequiredService<GitService>());
         services.AddSingleton<GitServerService>();
 
-        // Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)
-        services.AddGatedHostedService<GitAutoCommitService>(config);
-
         services.AddSingleton<GitAiService>();
-
-        // Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути
-        // (Session.CommittedFilePaths), чтобы атрибуция файлов чатам не врала
-        // после коммита — см. CommitAttributionService.
-        services.AddSingleton<CommitAttributionService>();
 
         // Forgejo — локальный сервис: egress-прокси ему противопоказан.
         services.AddHttpClient("forgejo").WithoutEgressProxy();

@@ -45,34 +45,42 @@ public class GitSubsystemRegistrationTests
     }
 
     [Fact]
-    public void Register_RegistersAllGitServices()
+    public void Register_RegistersCoreGitServices()
     {
+        // После уборки Git (Этап 3): GitSubsystem.Register отвечает только за
+        // вертикальные сервисы — `GitService`/`GitServerService`/`GitAiService`
+        // плюс HTTP-клиент forgejo. Реакторы (`GitAutoCommitService`/
+        // `CommitAttributionService`) уехали в Program.cs как «общая композиция
+        // спины», и проверять их через `AddSubsystems(...)` теперь некорректно:
+        // сторож ниже (`Program_RegistersGitSubsystem_ServicesResolvable`) резолвит
+        // их из полного DI-графа, а здесь достаточно убедиться, что ядро Git
+        // подключается.
         var services = new ServiceCollection();
         var config = BuildConfig();
 
         services.AddSubsystems(config, new GitSubsystem());
 
-        // Сервисы из блока ~266-270 в Program.cs (до выноса в подсистему).
         services.Should().Contain(s => s.ServiceType == typeof(GitService));
         services.Should().Contain(s => s.ServiceType == typeof(GitServerService));
         services.Should().Contain(s => s.ServiceType == typeof(GitAiService));
-
-        // Сервис из блока ~456 в Program.cs (отдельная регистрация рядом с SessionManager).
-        services.Should().Contain(s => s.ServiceType == typeof(CommitAttributionService));
     }
 
     [Fact]
-    public void Register_GitAutoCommitService_HostedRegistered()
+    public void Register_DoesNotRegisterReactorServices()
     {
+        // Контракт-фикс: после уборки Git GitSubsystem не должна регистрировать
+        // сервисы из корня `Services.*`. Если кто-то снова добавит регистрацию
+        // реактора в подсистему — этот тест укажет на нарушение «вертикаль →
+        // спинка» и подскажет вернуть её в Program.cs.
         var services = new ServiceCollection();
         var config = BuildConfig();
 
-        services.AddLogging();
         services.AddSubsystems(config, new GitSubsystem());
 
-        // Подключён hosted-сервис через `AddGatedHostedService<GitAutoCommitService>(config)`.
-        // В тестах среда не Testing по умолчанию, гейт пропускает регистрацию.
-        services.Should().Contain(s => s.ImplementationType == typeof(GitAutoCommitService));
+        services.Should().NotContain(s => s.ServiceType == typeof(GitAutoCommitService));
+        services.Should().NotContain(s => s.ServiceType == typeof(CommitAttributionService));
+        services.Should().NotContain(s => s.ImplementationType == typeof(GitAutoCommitService));
+        services.Should().NotContain(s => s.ImplementationType == typeof(CommitAttributionService));
     }
 
     // Сторож факта подключения в Program.cs: поднимает полный стенд через

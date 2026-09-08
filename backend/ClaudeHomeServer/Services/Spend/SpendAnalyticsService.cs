@@ -63,9 +63,13 @@ public sealed record SpendBadgeDto(string SessionId, SpendTokensDto Total, int T
 // виджет «Домой», бейдж чата. Имена разрезов резолвятся по живым реестрам (проект/чат/задача/
 // персона/пользователь); удалённые сущности остаются строками с Name=null. Содержимое
 // сообщений здесь не существует в принципе — храним и отдаём только метрики и названия.
+//
+// Этап 5, шаг 3: расход берёт у Llm только один метод (`ResolveModelOrDefault`)
+// и идёт через узкий шов `IModelResolver` (Core). Раньше это была прямая ссылка
+// на `LlmProviderRegistry`, и вертикаль не собиралась без ProjectReference на Llm.
 public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessions,
     ProjectManager projects, TaskManager tasks, PersonaManager personas, UserStore users,
-    LlmProviderRegistry llmProviders)
+    IModelResolver llmProviders)
 {
     private const int CardLimit = 8;
     private const int TopTurnsLimit = 10;

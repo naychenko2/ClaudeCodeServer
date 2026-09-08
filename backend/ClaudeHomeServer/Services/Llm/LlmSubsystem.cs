@@ -205,6 +205,12 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Стор настроек фолбэк-оркестрации (ADR-007 §4).
         services.AddSingleton<FallbackSettingsStore>();
 
+        // Этап 5, шаг 4 (шов IPromptSectionProvider): Core-интерфейс под единственный
+        // метод `EffectivePromptSections`, который PromptSectionsContributor в Turn
+        // дёргает у SpecialtySettingsStore через прямую ссылку на Llm. Адаптер
+        // лежит тут, в Main, рядом со сторем — DI подтянет его по конструктору.
+        services.AddSingleton<IPromptSectionProvider, SpecialtyPromptSectionProvider>();
+
         // Пресеты автоподбора исполнителя фоновых действий.
         services.AddSingleton<LocalActionPresetService>();
 
@@ -232,6 +238,12 @@ public sealed class LlmSubsystem : IAppSubsystem
             new LlmProviderRegistry(
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<ILocalEndpointProbe>()));
+
+        // Этап 5, шаг 3 (шов IModelResolver): Core-интерфейс под единственный
+        // метод `ResolveModelOrDefault`, который Spend дёргает у LlmProviderRegistry.
+        // Адаптер лежит тут, в Main, рядом с LlmProviderRegistry — DI подтянет
+        // его по конструктору автоматически.
+        services.AddSingleton<IModelResolver, LlmModelResolverAdapter>();
 
         // Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory, без персиста.
         services.AddSingleton<ProviderHealthRegistry>();

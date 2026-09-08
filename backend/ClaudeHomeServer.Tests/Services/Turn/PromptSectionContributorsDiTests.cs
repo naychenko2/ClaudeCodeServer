@@ -277,6 +277,11 @@ public class PromptSectionContributorsDiTests
                 new LlmProviderRegistry(config));
             services.AddSingleton(promptBuilder);
             services.AddSingleton<SpecialtySettingsStore>(); // для PromptSectionsContributor
+            // Этап 5, шаг 4: контрибьютор идёт через Core-шов IPromptSectionProvider,
+            // не через прямую SpecialtySettingsStore. В тесте подключаем адаптер по тому
+            // же рецепту, что и в Main (`LlmSubsystem.Register`).
+            services.AddSingleton<IPromptSectionProvider>(sp =>
+                new SpecialtyPromptSectionProvider(sp.GetRequiredService<SpecialtySettingsStore>()));
             services.AddSingleton<DossierStore>(); // для PersonaRecallContributor
             services.AddSingleton<DossierRecallService>(); // для PersonaRecallContributor
             // CodeGraphService с зависимостями: нужен для CodeGraphPromptProvider → CodeGraphContributor

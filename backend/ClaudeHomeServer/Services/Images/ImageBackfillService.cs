@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Services;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Images;
 
@@ -33,7 +32,7 @@ public record ImageBackfilledMessage(string Kind, string EntityId)
 /// </summary>
 public sealed class ImageBackfillService(
     ImageBackfillStore store, ImageGenerationService images,
-    PersonaManager personas, IHubContext<SessionHub> hub, IHostApplicationLifetime lifetime,
+    PersonaManager personas, ISessionBroadcaster broadcaster, IHostApplicationLifetime lifetime,
     ILogger<ImageBackfillService> log)
 {
     // Не больше 2 генераций одновременно на инстанс: залп заявок упрётся в rate limit
@@ -280,12 +279,12 @@ public sealed class ImageBackfillService(
     {
         try
         {
-            var clients = hub.Clients.Group("user_" + request.OwnerId);
-            await clients.SendAsync("message",
-                new ImageBackfilledMessage(request.Kind, request.EntityId), ct);
+            var ownerId = request.OwnerId;
+            await broadcaster.ToOwner(ownerId,
+                new ImageBackfilledMessage(request.Kind, request.EntityId));
             if (request.Kind == ImageBackfillKinds.PersonaAvatar)
-                await clients.SendAsync("message",
-                    new PersonasChangedMessage("updated", request.EntityId), ct);
+                await broadcaster.ToOwner(ownerId,
+                    new PersonasChangedMessage("updated", request.EntityId));
         }
         catch (Exception ex)
         {

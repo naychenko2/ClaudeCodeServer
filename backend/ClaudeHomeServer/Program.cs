@@ -232,9 +232,11 @@ builder.Services.AddSingleton<ProjectPresetService>();
 // Документы AI: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MarkitdownService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocumentAiService>();
-// Подсистема Git (волна 1.5): GitService/GitServerService/GitAiService регистрируются
-// в `Services/Git/GitSubsystem.cs`. Реакторы GitAutoCommitService/CommitAttributionService
-// — общая композиция спины, см. блок рядом с FileWatcherService (Этап 3, уборка Git).
+// Подсистема Git: GitService/GitServerService/GitAiService регистрируются в
+// `ClaudeHomeServer.Git/Services/Git/GitSubsystem.cs` — вертикаль вынесена в отдельную
+// сборку (Этап 3, 2026-09-08), сюда её приносит ProjectReference Main→Git. Реакторы
+// GitAutoCommitService/CommitAttributionService — общая композиция спины, см. блок
+// рядом с FileWatcherService (Этап 3, уборка Git).
 builder.Services.AddSingleton<UnifiedSearchService>();
 // Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
 // Модельный слой (OneShotClaudeRunner / OllamaClient / LlamaServerClient / CloudCheapClient /

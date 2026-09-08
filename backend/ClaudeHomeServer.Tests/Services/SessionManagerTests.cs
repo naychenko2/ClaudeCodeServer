@@ -22,6 +22,7 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
+[Collection(TestCollections.SessionStaticResolvers)]
 public class SessionManagerTests : IDisposable
 {
     private const string TestUserId = "test-user-id";

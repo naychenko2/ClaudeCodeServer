@@ -27,6 +27,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Здесь же — дедупликация уведомлений о судьбе задачи (та же точка доставки): о факте завершения
 // приходит РОВНО одно уведомление, делегирование лишь меняет его лицо и ссылку.
+[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskExecutionServiceJoinTests : IDisposable
 {
     private readonly string _dir;

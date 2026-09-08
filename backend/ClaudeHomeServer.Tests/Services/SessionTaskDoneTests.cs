@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // TaskId → статус задачи и присутствие поля в JSON обеих точек отдачи списка чатов
 // (Session напрямую — проектный список/SignalR; HomeSessionDto — глобальный summary).
 // Платформонезависимый unit по модели, без DI.
+[Collection(TestCollections.SessionStaticResolvers)]
 public class SessionTaskDoneTests
 {
     // Те же настройки JSON, что в Program.cs для AddControllers (camelCase + строки-enum).

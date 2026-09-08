@@ -752,6 +752,12 @@ builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOpt
 builder.Services.Configure<TrayDeployOptions>(builder.Configuration.GetSection(TrayDeployOptions.Section));
 builder.Services.AddSingleton<ITrayGate, WindowsTrayGate>();
 builder.Services.AddSingleton<DeployLauncher>();
+// Питание машины из веб-морды (выключить/перезагрузить/усыпить). Как и выкатка, по умолчанию
+// выключено — см. PowerControlOptions.
+builder.Services.Configure<PowerControlOptions>(builder.Configuration.GetSection(PowerControlOptions.Section));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Power.IPowerActions,
+    ClaudeHomeServer.Services.Power.WindowsPowerActions>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Power.PowerControlService>();
 builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
 // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)

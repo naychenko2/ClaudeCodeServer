@@ -25,8 +25,8 @@ public interface IWatchdogEnvironment
 
 public sealed class WatchdogEnvironment(
     SessionManager sessions,
-    ProjectManager projects,
-    UserStore users,
+    IProjectManager projects,
+    IUserStore users,
     UserHomeResolver homeResolver) : IWatchdogEnvironment
 {
     // Событие пробрасываем явными аксессорами: поле-событие интерфейса иначе держало бы

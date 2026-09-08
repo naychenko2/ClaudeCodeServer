@@ -89,7 +89,7 @@ public sealed class TerminalService : IDisposable
 {
     private readonly ConcurrentDictionary<string, TerminalInstance> _terminals = new(); // key = terminalId
     private readonly IHubContext<TerminalHub> _hub;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly ILogger<TerminalService> _log;
     private readonly Execution.ILauncherFactory _launchers;
     private readonly CancellationTokenSource _shutdownCts = new();
@@ -102,7 +102,7 @@ public sealed class TerminalService : IDisposable
     private static bool HasPtyBridge(Execution.IProcessLauncher launcher) =>
         launcher.IsSandboxed || File.Exists(PtyBridgePath);
 
-    public TerminalService(IHubContext<TerminalHub> hub, ProjectManager projects, ILogger<TerminalService> log,
+    public TerminalService(IHubContext<TerminalHub> hub, IProjectManager projects, ILogger<TerminalService> log,
         Execution.ILauncherFactory launchers)
     {
         _hub = hub;

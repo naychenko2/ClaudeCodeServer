@@ -39,7 +39,7 @@ public sealed record DevicePairingResult(
 /// только истечением окна.
 /// </summary>
 public sealed class DevicePairingService(
-    DeviceRegistry registry, UserStore users, ILogger<DevicePairingService>? logger = null,
+    DeviceRegistry registry, IUserStore users, ILogger<DevicePairingService>? logger = null,
     IConfiguration? config = null, IHostEnvironment? env = null)
 {
     /// <summary>

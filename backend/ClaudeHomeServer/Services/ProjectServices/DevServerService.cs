@@ -101,7 +101,7 @@ public sealed class DevServerService : IDisposable
     // Процесс не наш: остановить его нельзя и логов у него нет — только проксируем порт.
     private readonly ConcurrentDictionary<string, (string ServiceId, int Port)> _externalPreview = new();
     private readonly DevServerPortMemory _portMemory;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly ISessionBroadcaster _broadcaster;
     private readonly ILogger<DevServerService> _log;
     private readonly Execution.ILauncherFactory _launchers;
@@ -117,7 +117,7 @@ public sealed class DevServerService : IDisposable
         @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public DevServerService(ProjectManager projects, ISessionBroadcaster broadcaster, ILogger<DevServerService> log,
+    public DevServerService(IProjectManager projects, ISessionBroadcaster broadcaster, ILogger<DevServerService> log,
         Execution.ILauncherFactory launchers, Execution.SandboxManager sandbox, DevServerPortMemory portMemory)
     {
         _portMemory = portMemory;

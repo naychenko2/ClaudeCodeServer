@@ -46,12 +46,12 @@ internal sealed class TeamPlanService
     private readonly TeamPlanningService? _planning;
     private readonly TeamCoordinator _coordinator;
     private readonly PersonaManager _personas;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly ILogger<TeamPlanService> _log;
 
     internal TeamPlanService(SessionManager sessions, ITeamHistoryStore history, ITeamRunState run,
         TeamPlanningService? planning, TeamCoordinator coordinator, PersonaManager personas,
-        ProjectManager projects, ILogger<TeamPlanService> log)
+        IProjectManager projects, ILogger<TeamPlanService> log)
     {
         _sessions = sessions;
         _history = history;

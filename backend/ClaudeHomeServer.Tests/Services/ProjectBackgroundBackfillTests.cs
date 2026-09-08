@@ -64,7 +64,7 @@ public class ProjectBackgroundBackfillTests : IDisposable
 
     private ProjectBackgroundBackfill Backfill(ICheapTextRunner cheap)
     {
-        var service = new ProjectBackgroundService(_projects, cheap,
+        var service = new ProjectBackgroundService(_projects, _projects, cheap,
             NullLogger<ProjectBackgroundService>.Instance);
         return new ProjectBackgroundBackfill(_projects, service, _users,
             NullLogger<ProjectBackgroundBackfill>.Instance)

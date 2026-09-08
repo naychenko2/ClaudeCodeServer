@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Spend;

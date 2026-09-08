@@ -152,7 +152,9 @@ builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<
 // Этап 5, волна E: узкие Core-швы для выноса Notes (NotesKnowledgeService → UserStore
 // ради User.Username для имени Dify-датасета). Полный UserStore в Main, Notes видит
 // только IUserStore (см. Core/Services/IUserStore.cs).
-builder.Services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<UserStore>());
+// Ф5: явный класс-адаптер UserStoreAdapter (вместо фабрики-синонима) —
+// точка для подмены в тестах и формализация, что это узкая проекция, а не весь UserStore.
+builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
@@ -167,7 +169,9 @@ builder.Services.AddSingleton<ProjectManager>();
 // Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
 // Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит
 // только GetById/GetByOwner/GetAll — этого хватает для NoteTaskSync/NoteExpiry/NotesService.
-builder.Services.AddSingleton<IProjectManager>(sp => sp.GetRequiredService<ProjectManager>());
+// Ф5: явный класс-адаптер ProjectManagerAdapter (вместо фабрики-синонима) —
+// точка для подмены в тестах и формализация, что это узкая проекция, а не весь ProjectManager.
+builder.Services.AddSingleton<IProjectManager, ProjectManagerAdapter>();
 // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.

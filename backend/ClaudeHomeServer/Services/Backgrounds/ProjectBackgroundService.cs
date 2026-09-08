@@ -33,7 +33,13 @@ public sealed record ProjectBackgroundView(string Kind, string? TileVersion, str
 /// экрана без фона не бывает ни в одном состоянии.
 /// </summary>
 public sealed class ProjectBackgroundService(
-    ProjectManager projects, ICheapTextRunner cheap, ILogger<ProjectBackgroundService> log)
+    // Шов для чтения состояния проекта (GetById). Мутации стора (TryBeginBackground,
+    // SetBackground*, Update) идут через полный ProjectManager — их нет в шве, и
+    // запись остаётся за Main. BackgroundsDir — внутренний путь стора, тоже на writer.
+    IProjectManager projects,
+    ProjectManager projectsWriter,
+    ICheapTextRunner cheap,
+    ILogger<ProjectBackgroundService> log)
 {
     // В модель уходят только имя и промпт проекта: место работает под учёткой владельца,
     // но модель может быть сторонним провайдером — фон не стоит расширения поверхности утечки
@@ -47,7 +53,7 @@ public sealed class ProjectBackgroundService(
     public async Task<BackgroundResult> GenerateAsync(Project project, CancellationToken ct = default,
         bool candidateOnly = false)
     {
-        if (!projects.TryBeginBackground(project.Id, candidatesOnly: candidateOnly))
+        if (!projectsWriter.TryBeginBackground(project.Id, candidatesOnly: candidateOnly))
             return Describe(projects.GetById(project.Id));
 
         string raw;
@@ -82,7 +88,7 @@ public sealed class ProjectBackgroundService(
         }
 
         // Ссылка появляется в сторе только после успешного переименования временного файла
-        var saved = projects.SetBackgroundGenerated(project.Id, fileName);
+        var saved = projectsWriter.SetBackgroundGenerated(project.Id, fileName);
 
         // Цвет: одна точка истины — Icon.Color. Автоматический (null) заполняем молча,
         // выбранный руками не трогаем — только предлагаем замену через ответ API
@@ -92,7 +98,7 @@ public sealed class ProjectBackgroundService(
         {
             if (saved.Icon.Color is null)
             {
-                projects.Update(project.Id, name: null, rootPath: null, color: suggested);
+                projectsWriter.Update(project.Id, name: null, rootPath: null, color: suggested);
                 colorApplied = true;
                 suggested = null;
             }
@@ -108,13 +114,13 @@ public sealed class ProjectBackgroundService(
     /// <summary>«Вернуть стандартный»: тайл удаляется, автопрогон проект больше не берёт.</summary>
     public BackgroundResult Reset(string projectId)
     {
-        projects.SetBackgroundStandard(projectId);
+        projectsWriter.SetBackgroundStandard(projectId);
         return new BackgroundResult(ProjectBackgroundKind.Standard, null, null, false, null);
     }
 
     private BackgroundResult Fail(string projectId, string reason)
     {
-        var project = projects.SetBackgroundFailed(projectId, reason);
+        var project = projectsWriter.SetBackgroundFailed(projectId, reason);
         return new BackgroundResult(project.Background?.Kind ?? ProjectBackgroundKind.Failed,
             project.Background?.TileFile, null, false, reason);
     }
@@ -125,7 +131,7 @@ public sealed class ProjectBackgroundService(
 
     private async Task<string> WriteTileAsync(string projectId, string svg, CancellationToken ct)
     {
-        var dir = Path.Combine(projects.BackgroundsDir, projectId);
+        var dir = Path.Combine(projectsWriter.BackgroundsDir, projectId);
         Directory.CreateDirectory(dir);
         // Имя иммутабельно (guid как cache-busting) — приём icon-{guid:N} из ProjectsController
         var name = $"tile-{Guid.NewGuid():N}.svg";

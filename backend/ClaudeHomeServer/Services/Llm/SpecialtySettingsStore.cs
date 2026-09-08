@@ -158,11 +158,11 @@ public sealed class SpecialtySettingsStore
     // Нужен ровно одному месту — миграции v4→v5: роли живут в UserStore, а вливать в
     // глобальный слой надо личные слои админов (ADR-012). Зависимость обязательная:
     // «мигрировать вслепую, если стор не передали» — молчаливая потеря настроек.
-    private readonly UserStore _users;
+    private readonly IUserStore _users;
     private readonly object _writeLock = new();
     private volatile SpecialtySettingsFile _file = new();
 
-    public SpecialtySettingsStore(IConfiguration config, UserStore users,
+    public SpecialtySettingsStore(IConfiguration config, IUserStore users,
         ILogger<SpecialtySettingsStore>? log = null)
     {
         _log = log;

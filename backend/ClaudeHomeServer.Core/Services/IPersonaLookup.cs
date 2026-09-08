@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
@@ -8,6 +8,11 @@ namespace ClaudeHomeServer.Services;
 // неактивные персоны; Spend интересуют ВСЕ, включая архивные, поэтому берём
 // именно `GetByIdInternal` — обращение напрямую к словарю реестра, минуя
 // проверки доступа. Полный PersonaManager не нужен.
+// НЕ дубль `IPersonaDirectory` (там `GetByOwner` + `Delete`): тот обслуживает
+// каскад жизненного цикла владельца (Knowledge чистит персоны при удалении
+// пользователя), этот — точечное чтение по id для отчётов трат. Склейка дала бы
+// читающему потребителю доступ к `Delete`, то есть расширила бы права ради
+// экономии одного файла. Разделение осознанное — проверено при выносе Spend.
 public interface IPersonaLookup
 {
     // Возвращает персону по id или null, если такой нет. Доступ не проверяется —

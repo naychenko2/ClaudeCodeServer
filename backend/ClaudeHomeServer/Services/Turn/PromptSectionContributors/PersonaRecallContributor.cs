@@ -25,7 +25,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     private readonly Dossiers.DossierRecallService? _dossierRecall;
     private readonly FeatureFlagService _flags;
     private readonly ChatHistoryService _history;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaRecallContributor> _log;
 
@@ -39,7 +39,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
         Dossiers.DossierRecallService? dossierRecall,
         FeatureFlagService flags,
         ChatHistoryService history,
-        ProjectManager projects,
+        IProjectManager projects,
         IConfiguration config,
         ILogger<PersonaRecallContributor> log)
     {

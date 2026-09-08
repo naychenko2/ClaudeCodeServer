@@ -102,7 +102,13 @@ cd backend; dotnet test --filter "Category!=Dns"   # чистый прогон �
 - Метаданные сессий персистятся в `data/sessions.json`, история чата —
   `data/sessions/{claudeSessionId}/history.json`; процессы claude in-memory, resume через
   `--resume <claude-session-id>`.
-- Path traversal защита: `FileService.SafeJoin` — все пути через неё.
+- Path traversal защита: примитив спины `SafePath.Join`
+  (`backend/ClaudeHomeServer.Core/Services/SafePath.cs`) — все пути через неё.
+  `FileService.SafeJoin`/`SafeJoinPublic` — тонкие форвардеры к нему. Из вертикали зови
+  Core-примитив напрямую: обращение через `FileService` — ссылка на чужую вертикаль,
+  и сторож границ её ловит. Второй аргумент — путь ОТНОСИТЕЛЬНО корня: абсолютный на
+  Linux станет относительным и приклеится к корню, то есть проверка «ссылка наружу»
+  молча исчезнет (на Windows подмена незаметна — ловится только в CI).
 - git diff/revert через `git` CLI; если не git-репо — возвращает null.
 
 ## Удаление чата уносит транскрипт claude CLI

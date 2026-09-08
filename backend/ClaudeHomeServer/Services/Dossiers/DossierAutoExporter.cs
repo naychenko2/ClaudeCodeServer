@@ -36,7 +36,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 public sealed class DossierAutoExporter : IHostedService
 {
     private readonly DossierStore _store;
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly SessionManager _sessions;
     private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
@@ -47,7 +47,7 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly ILogger<DossierAutoExporter>? _log;
     private readonly MemoryDifyDebouncer _debounce;
 
-    public DossierAutoExporter(DossierStore store, ProjectManager projects, SessionManager sessions,
+    public DossierAutoExporter(DossierStore store, IProjectManager projects, SessionManager sessions,
         IGitRefSnapshotStore git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
         FeatureFlagService flags, DossierCaptureState state, IConfiguration config,
         ILogger<DossierAutoExporter>? log = null)

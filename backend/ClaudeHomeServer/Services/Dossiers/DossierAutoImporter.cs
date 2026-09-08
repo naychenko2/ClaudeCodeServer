@@ -28,7 +28,7 @@ public sealed class DossierAutoImporter : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(60);
 
-    private readonly ProjectManager _projects;
+    private readonly IProjectManager _projects;
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
     private readonly IGitRefSnapshotStore _git;
@@ -37,7 +37,7 @@ public sealed class DossierAutoImporter : BackgroundService
     private readonly DossierImporter _importer;
     private readonly ILogger<DossierAutoImporter>? _log;
 
-    public DossierAutoImporter(ProjectManager projects, DossierStore store, DossierCaptureState state,
+    public DossierAutoImporter(IProjectManager projects, DossierStore store, DossierCaptureState state,
         IGitRefSnapshotStore git, InstanceSecretsProvider secrets, FeatureFlagService flags,
         ILoggerFactory? logFactory = null, ILogger<DossierAutoImporter>? log = null,
         DossierImporter? importer = null)

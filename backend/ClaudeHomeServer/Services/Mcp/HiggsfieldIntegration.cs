@@ -8,16 +8,14 @@ namespace ClaudeHomeServer.Services.Mcp;
 /// инжект в конфиг хода.
 ///
 /// Запись заводится <b>только</b> при явном действии человека (POST login) — не при
-/// проверке флага и не при просмотре настроек. <see cref="TryGetRecord"/> возвращает
-/// существующую запись или null без создания; <see cref="EnsureRecord"/> создаёт
-/// черновик для старта OAuth.
+/// просмотре настроек. <see cref="TryGetRecord"/> возвращает существующую запись или
+/// null без создания; <see cref="EnsureRecord"/> создаёт черновик для старта OAuth.
 /// </summary>
 public sealed class HiggsfieldIntegration(
     McpRegistry registry,
     McpSecretStore secrets,
     McpStatusStore statuses,
     McpOAuthService oauth,
-    Services.FeatureFlagService flags,
     ILogger<HiggsfieldIntegration> log)
 {
     public const string Key = "higgsfield";
@@ -97,10 +95,6 @@ public sealed class HiggsfieldIntegration(
         log.LogInformation("Higgsfield: пользователь вышел (ownerId={OwnerId})", ownerId);
         return true;
     }
-
-    /// <summary>Проверка флага <c>higgsfield</c> для владельца.</summary>
-    public bool IsEnabledForOwner(string ownerId) =>
-        flags.IsEnabled(ownerId, FeatureFlagKeys.Higgsfield);
 
     /// <summary>
     /// Синхронное получение живого access-токена для отображения состояния на фронте.

@@ -1,7 +1,12 @@
 namespace ClaudeHomeServer.Services.Knowledge;
 
-// Узкий контракт Dify-клиента для вертикалей Notes/Memory/Dossiers. Шесть
-// методов — те, что реально зовут потребители по факту разбора (Этап 5, волна 5):
+// Узкий контракт Dify-клиента. На него переведены Notes и Dossiers — они зовут ровно
+// это подмножество. Memory (PersonaMemoryService/TeamMemoryService) НА КОНТРАКТ НЕ
+// ПЕРЕВЕДЕНА: держит конкретный KnowledgeService ради RenameDatasetAsync, которого
+// здесь нет. Понадобится сузить и Memory — контракту нужен седьмой метод (уточнено
+// ревью 2026-09-08: прежняя формулировка «для Notes/Memory/Dossiers» вводила в
+// заблуждение).
+// Шесть методов — те, что реально зовут потребители по факту разбора (Этап 5, волна 5):
 //   - IsConfigured — гейт graceful degradation в NotesKnowledgeService;
 //   - CreateDatasetAsync — `{username}:notes` у Notes;
 //   - DeleteDocumentAsync — синк заметок и memory по одной записи;

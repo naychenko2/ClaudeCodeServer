@@ -65,7 +65,11 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
 
     // Markdown-блок с релевантными заметками для системного промпта хода (auto-recall).
     // Пустой список / все ниже порога → null (нечего подмешивать).
-    internal static string? BuildRecallBlock(IReadOnlyList<NoteSemanticHit> hits, double minScore, int topK)
+    // `public`, а не `internal`: метод зовёт спина — `NotesRecallContributor` в слое
+    // промпта хода. Это чистый форматтер (hits → строка), прятать нечего, а `internal`
+    // заставлял вертикаль раздавать `InternalsVisibleTo` на Main, то есть держать часть
+    // своего публичного контракта скрытой (находка ревью 2026-09-08).
+    public static string? BuildRecallBlock(IReadOnlyList<NoteSemanticHit> hits, double minScore, int topK)
     {
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
         if (top.Count == 0) return null;

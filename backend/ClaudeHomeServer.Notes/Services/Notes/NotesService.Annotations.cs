@@ -30,7 +30,10 @@ public sealed partial class NotesService
     // Документ: scope=personal → путь в личном vault; scope=projectId → путь от корня
     // проекта (любые .md). ^id пишем только туда, где живут заметки (vault и notes/):
     // в прочих файлах проекта чужой git-шум недопустим.
-    internal (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath)
+    // `private`: зовётся только внутри самого NotesService (аннотации). Был `internal`
+    // до выноса вертикали — снаружи не вызывался ни разу, проверено по репозиторию
+    // (ревью 2026-09-08). Лишняя видимость требовала InternalsVisibleTo без нужды.
+    private (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath)
     {
         var rel = NormalizeRel(relPath);
         if (!rel.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&

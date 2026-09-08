@@ -34,6 +34,10 @@ namespace ClaudeHomeServer.Services.Composition;
 //     (Clients.Client(connectionId).Call/Go/Cancel), другой канал (ADR-008);
 //   - TerminalService (Services/Terminal) — IHubContext<TerminalHub> +
 //     Groups.AddToGroupAsync, управление членством;
+//   - FileWatcherService (Services) — шлёт в ту же project-группу, но СВОИМ методом хаба
+//     («filesChanged», payload не ServerMessage): под контракт «один канал message» он не
+//     подходит. Имя группы берёт из SessionHubBroadcaster.ProjectGroup, поэтому префикс
+//     всё равно живёт в одном файле;
 //   - BroadcastTaskChangedAsync (TaskHubExtensions) — после миграции
 //     переезжает внутрь SessionHubBroadcaster под отдельным ToOwner-вызовом
 //     (формирует TaskChangedMessage сразу из TaskItem).

@@ -166,7 +166,9 @@ builder.Services.AddSingleton<ProjectManager>();
 // Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
 // Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит
 // только GetById/GetByOwner/GetAll — этого хватает для NoteTaskSync/NoteExpiry/NotesService.
-builder.Services.AddSingleton<IProjectManager>(sp => sp.GetRequiredService<ProjectManager>());
+// Ф5: явный класс-адаптер ProjectManagerAdapter (вместо фабрики-синонима) —
+// точка для подмены в тестах и формализация, что это узкая проекция, а не весь ProjectManager.
+builder.Services.AddSingleton<IProjectManager, ProjectManagerAdapter>();
 // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.

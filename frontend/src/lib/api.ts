@@ -40,6 +40,24 @@ export interface DeployState {
   status: DeployStatusFile | null;
 }
 
+// Ответ GET /api/admin/power/status: доступно ли управление питанием машины и не
+// запланировано ли уже действие (его видят все окна, а не только то, из которого нажали)
+export interface PowerPending {
+  action: PowerActionKind;
+  runAt: string;
+  secondsLeft: number;
+  requestedBy: string;
+}
+
+export type PowerActionKind = 'shutdown' | 'restart' | 'sleep';
+
+export interface PowerState {
+  enabled: boolean;
+  available: boolean;
+  delaySeconds: number;
+  pending: PowerPending | null;
+}
+
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
 // исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
 // Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
@@ -440,6 +458,17 @@ export const api = {
       }),
     youtubeAuthUrl: () => request<{ url: string }>('/video/youtube/auth-url'),
     youtubeDisconnect: () => request<{ ok: boolean }>('/video/youtube/disconnect', { method: 'POST' }),
+  },
+
+  power: {
+    // live: true — не подставлять ответ офлайн-кэша: важен сам факт, что сервер отвечает.
+    // Машину гасят удалённо, и «всё в порядке» из IndexedDB поверх уже погашенного продукта
+    // было бы ровно тем враньём, на котором подрывалась модалка выкатки.
+    status: () => request<PowerState>('/admin/power/status', { cache: 'no-store', live: true }),
+    schedule: (action: PowerActionKind) =>
+      request<{ action: PowerActionKind; runAt: string; secondsLeft: number }>(
+        '/admin/power', { method: 'POST', body: JSON.stringify({ action }) }),
+    cancel: () => request<{ cancelled: boolean }>('/admin/power/cancel', { method: 'POST' }),
   },
 
   deploy: {

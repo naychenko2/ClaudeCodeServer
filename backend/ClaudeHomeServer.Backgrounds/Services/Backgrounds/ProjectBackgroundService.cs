@@ -34,7 +34,7 @@ public sealed record ProjectBackgroundView(string Kind, string? TileVersion, str
 /// </summary>
 public sealed class ProjectBackgroundService(
     // Шов для чтения состояния проекта (GetById). Запись (TryBeginBackground,
-    // SetBackground*, Update, BackgroundsDir) идёт через IProjectBackgroundWriter
+    // SetBackground*, SetColor, BackgroundsDir) идёт через IProjectBackgroundWriter
     // (Core) — узкий форвардер к ProjectManager из Main, снимает зависимость
     // вертикали от полного ProjectManager и делает вынос в .csproj возможным.
     IProjectManager projects,
@@ -99,7 +99,7 @@ public sealed class ProjectBackgroundService(
         {
             if (saved.Icon.Color is null)
             {
-                projectsWriter.Update(project.Id, name: null, rootPath: null, color: suggested);
+                projectsWriter.SetColor(project.Id, suggested);
                 colorApplied = true;
                 suggested = null;
             }

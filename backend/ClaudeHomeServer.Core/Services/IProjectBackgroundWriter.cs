@@ -30,10 +30,11 @@ public interface IProjectBackgroundWriter
     // автопрогон проект больше не берёт.
     Project SetBackgroundFailed(string id, string reason);
 
-    // Точечная мутация цвета (Backgrounds использует только поле `color`,
-    // остальные аргументы null). Префикс не открываем — вертикаль получает
-    // только то, что ей реально нужно.
-    Project Update(string id, string? name, string? rootPath, string? color);
+    // Подобранный моделью акцентный цвет проекта. Имя и RootPath вертикали фона
+    // недоступны намеренно: RootPath — ключ датасета Dify (`EnsureRootFree`,
+    // «одна папка — один проект на владельца»), его смена из фоновой вертикали
+    // молча порвала бы связь проекта со знаниями, и ни один тест этого не поймает.
+    Project SetColor(string id, string color);
 
     // Каталог тайлов фона (`<DataDir>/project-backgrounds/{projectId}/`) —
     // InternalStorePath проектов, рядом с projects.json. Используется

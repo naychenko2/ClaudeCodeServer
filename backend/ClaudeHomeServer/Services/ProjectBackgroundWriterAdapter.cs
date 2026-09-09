@@ -33,8 +33,8 @@ public sealed class ProjectBackgroundWriterAdapter : IProjectBackgroundWriter
     public Project SetBackgroundFailed(string id, string reason) =>
         _projects.SetBackgroundFailed(id, reason);
 
-    public Project Update(string id, string? name, string? rootPath, string? color) =>
-        _projects.Update(id, name, rootPath, color: color);
+    public Project SetColor(string id, string color) =>
+        _projects.Update(id, name: null, rootPath: null, color: color);
 
     public string BackgroundsDir => _projects.BackgroundsDir;
 }

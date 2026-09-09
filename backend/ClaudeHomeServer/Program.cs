@@ -432,7 +432,14 @@ builder.Services.AddSingleton<SessionSummaryService>();
 // карта плана (место plan-map, «Визуальный разворот плана» часть B) —
 // DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<ChatTaskExtractionService>();
-// DailyBriefingService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
+// DailyBriefingService — DI в Main (Этап 5, вынос Tasks): вертикаль Tasks живёт в
+// отдельной сборке и больше не может регистрировать Main-типы. DailyBriefingService
+// остался кросс-вертикальным фасадом (Tasks+Notes+Llm) в корне Services. Шов
+// IDailyBriefingRunner (Core) → DailyBriefingRunnerAdapter → DailyBriefingService.
+// Адаптер обязан идти ПОСЛЕ DailyBriefingService — он резолвит его через конструктор.
+builder.Services.AddSingleton<DailyBriefingService>();
+builder.Services.AddSingleton<DailyBriefingRunnerAdapter>();
+builder.Services.AddSingleton<IDailyBriefingRunner>(sp => sp.GetRequiredService<DailyBriefingRunnerAdapter>());
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
 builder.Services.AddSingleton<AutomationStateStore>();
 builder.Services.AddSingleton<AutomationRootResolver>();
@@ -443,6 +450,12 @@ builder.Services.AddSingleton<ITriggerSource, NoteTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, GitCommitTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, TaskStatusTriggerSource>();
 builder.Services.AddSingleton<PersonaAutomationService>();
+// Шов IPersonaAutomationRunner (Core) → PersonaAutomationRunnerAdapter → PersonaAutomationService.
+// Регистрация адаптера вынесена в Main (Этап 5, вынос Tasks): вертикаль Tasks больше не
+// может регистрировать Main-типы. IPersonaAutomationRunner фабрика тоже здесь —
+// TasksSubsystem её больше не ставит.
+builder.Services.AddSingleton<PersonaAutomationRunnerAdapter>();
+builder.Services.AddSingleton<IPersonaAutomationRunner>(sp => sp.GetRequiredService<PersonaAutomationRunnerAdapter>());
 // Бэкапы: singleton + hosted-обёртка — снапшот дёргают и таймер, и админский API
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
@@ -550,11 +563,13 @@ builder.Services.AddSubsystems(builder.Configuration,
     // Changelog — «Что нового»: листовая подсистема, ни от кого не зависит, читает
     // git-вывод и `data/changelog/product.json` через `FileService`.
     new ClaudeHomeServer.Services.Changelog.ChangelogSubsystem(),
-    // Tasks — вертикаль задач с доской агентов (BoardService) и утренним брифингом
-    // (DailyBriefingService). Регистрируется после Changelog потому что зависит от
-    // `Services.Hubs` (IHubContext<SessionHub>) и `Services.Llm` (ICheapTextRunner
-    // через TaskAiService). TaskSchedulerService — gated hosted, его тип `AddGatedHostedService`
-    // активируется флагом (см. appsettings). Шов Tasks → Models.Session (три статических
+    // Tasks — вертикаль задач с доской агентов (BoardService). Утренний брифинг
+    // (DailyBriefingService) остался в корне Services как кросс-вертикальный фасад
+    // (Tasks+Notes+Llm) и регистрируется выше по тексту Program.cs.
+    // Регистрируется после Changelog потому что зависит от `Services.Hubs`
+    // (IHubContext<SessionHub>) и `Services.Llm` (ICheapTextRunner через TaskAiService).
+    // TaskSchedulerService — gated hosted, его тип `AddGatedHostedService` активируется
+    // флагом (см. appsettings). Шов Tasks → Models.Session (три статических
     // резолвера) описан в `Services/Tasks/TasksSubsystem.cs` (см. комментарий 6).
     new ClaudeHomeServer.Services.Tasks.TasksSubsystem(),
     // Notes — вертикаль заметок (Obsidian-совместимый vault, AI-сводки, синк с Dify,

@@ -14,8 +14,8 @@ namespace ClaudeHomeServer.Services.Spend;
 //
 // Этап 5, шаг 3: расход берёт у Llm только один метод (`ResolveModelOrDefault`)
 // и идёт через узкий шов `IModelResolver` (Core).
-public sealed class SpendMaintenanceService(SpendStore store, SessionManager sessions,
-    ChatHistoryService history, IModelResolver llm, ILogger<SpendMaintenanceService> log)
+public sealed class SpendMaintenanceService(SpendStore store, ISessionDirectory sessions,
+    IChatHistoryLoader history, IModelResolver llm, ILogger<SpendMaintenanceService> log)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)

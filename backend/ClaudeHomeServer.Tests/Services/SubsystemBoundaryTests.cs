@@ -373,11 +373,9 @@ public class SubsystemBoundaryTests
         // лежали точечные допуски на `ProjectManager` и `UserStore` — оба мёртвые
         // после выноса в .csproj: Backgrounds физически не может сослаться на
         // `ProjectManager` (нет ProjectReference на Main), запись идёт через
-        // Core-интерфейс, `IUserStore` уже в Core.
-        // Префикс-шов `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода
-        // модели, который генерирует JSON с фигурами (по образцу `Git`/`Deploy`).
-        // Шов `LocalActionCatalog.ProjectBackground` живёт в Core, отдельный допуск
-        // в allow-list не нужен.
+        // Core-интерфейс, `IUserStore` уже в Core. `ICheapTextRunner` (ход модели,
+        // генерирующий JSON фигур) и `LocalActionCatalog.ProjectBackground` — в Core,
+        // покрыты `IsCoreAssembly`, префикс `Services.Llm` в allow-list не нужен.
         new object[]
         {
             new VerticalBoundary(
@@ -387,28 +385,20 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Backgrounds",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 Array.Empty<string>()),
         },
-        // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
-        //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
-        // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
-        //    флаг `Icon.Glyph` в доменной модели проекта).
-        //
         // ProjectIcons — вертикаль значка проекта (ADR-009, Этап 5, волна C, шаг 2).
         // Чтение проекта через Core-шов `IProjectManager`, запись `Icon.Glyph` —
         // через Core-шов `IProjectIconMigrator`, снимок data перед необратимой
         // операцией — через Core-шов `IDataBackupService` (формализация прежней
         // полумеры `ProjectIconMigration.cs:78-84`, Этап 5 курс Андрея 2026-09-08
-        // делает шов обязательным). Префикс-шов `Services.Llm` — тот же, что у
-        // `Backgrounds`/`Git`/`Deploy`/`Docs`/`Changelog`. Префикс `Services.Hubs`
-        // и точечный `ProjectManager`/`Backup.*` из прежнего allow-list сняты:
+        // делает шов обязательным). Точечные `ProjectManager`/`Backup.*` сняты:
         // вертикаль физически не может сослаться на Main-типы после выноса в
         // .csproj, запись идёт через Core-интерфейсы, чтение через `IProjectManager`
-        // (Core).
+        // (Core). `ICheapTextRunner`/`LocalActionCatalog` (ходы подбора) — в Core,
+        // покрыты `IsCoreAssembly`, префикс `Services.Llm` в allow-list не нужен.
         new object[]
         {
             new VerticalBoundary(
@@ -418,7 +408,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectIcons",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 Array.Empty<string>()),

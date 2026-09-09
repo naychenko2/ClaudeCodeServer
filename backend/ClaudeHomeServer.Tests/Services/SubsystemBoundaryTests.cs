@@ -1051,29 +1051,14 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Turn",
                     })
                     .ToArray(),
-                new[]
-                {
-                    // Этап 5 (Turn): после выноса в отдельный .csproj ВСЕ вне-Core
-                    // зависимости закрыты швами (`IFeatureFlagGate`, `IPersonaResolver`,
-                    // `IPersonaPromptAssembler`, `IPersonaBindingsSource`,
-                    // `IChatHistoryLoader.LastWriteUtc`, `IPersonaRecallSource`,
-                    // `IAgentPromptSource`, `ITeamMechanicsBlockSource`) — Turn.dll
-                    // не имеет ProjectReference на Main.
-                    //
-                    // Сторож сканирует и тела методов (IL): здесь остаются ровно те
-                    // типы, которые Turn явно использует через статические вызовы и
-                    // async-state-машины. Перед заменой записи проверил каждый мутацией
-                    // (убрать → прогон SubsystemBoundaryTests → красный/зелёный); см.
-                    // отчёт задачи 924997b4, шаг «сужение allow-list».
-                    //
-                    // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
-                    // (статический каталог в `Services.Prompts`). Префикс Prompts
-                    // НЕ открываем: точечный допуск ровно на нужный тип.
-                    "ClaudeHomeServer.Services.Prompts.OnboardingPrompts",
-                    // `PersonaRecallContributor` материализует `SessionChangedPaths`
-                    // в async-state `<LastTurnChangedFilesAsync>d__21.MoveNext`.
-                    "ClaudeHomeServer.Services.SessionChangedPaths",
-                }),
+                // Точечных допусков НЕТ. После выноса в отдельный .csproj все вне-Core
+                // зависимости закрыты швами (`IFeatureFlagGate`, `IPersonaResolver`,
+                // `IPersonaPromptAssembler`, `IPersonaBindingsSource`, `IChatHistoryLoader`),
+                // а `OnboardingPrompts` и `SessionChangedPaths` ПЕРЕЕХАЛИ в Core —
+                // вертикаль берёт их оттуда. Допуски на эти два типа были заведены
+                // исполнителем как «живые», но мутация показала обратное: сторож
+                // остаётся зелёным без них. Сняты 2026-09-10.
+                Array.Empty<string>()),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).
         // Точечные: ModelTier (PantheonTemplate), Llm.Claude.SubagentRunPassport

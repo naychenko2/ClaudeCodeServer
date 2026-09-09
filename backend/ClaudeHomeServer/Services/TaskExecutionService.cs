@@ -821,6 +821,13 @@ public class TaskExecutionService
         None,   // не наш случай либо порог тишины ещё не вышел
         Nudge,  // напомнить самому исполнителю (один автоход)
         Alert,  // напоминание не помогло (или напоминать некому) — звать человека
+        // Волна 2 team-blocker-honest: по задаче висит открытая карточка блокера —
+        // исполнитель НЕ молчит, а ждёт ответа штаба/человека. Зовём человека с ДРУГИМ
+        // текстом («исполнитель ждёт ответа по блокеру N мин: ответь или сними»), чтобы
+        // координатор понимал причину тишины и не пытался «перезапустить» того, кто и так
+        // заблокирован. Nudge не отправляем: окликать того, кто уже ждёт ответа — лишний
+        // расход хода и спам в ленте исполнителя.
+        AlertWaitingForBlocker,
     }
 
     // Успешный ход задачу не закрывает: сделать это обязан сам исполнитель вызовом
@@ -831,8 +838,13 @@ public class TaskExecutionService
     //
     // Чистый предикат (без побочных эффектов): все три ветки проверяются юнит-тестами без
     // живого CLI. Порог передаётся параметром — тот же и для тишины после напоминания.
+    // hasOpenBlocker (волна 2 team-blocker-honest): есть ли по этой задаче открытая карточка
+    // блокера в чате-штабе (SourceSessionId → TeamEscalation c TaskId=task.Id и Kind=Blocker).
+    // Резолв идёт на стороне вызывающего — ClassifyStall остаётся чистой функцией, как и
+    // раньше. true переключает исход Alert/Nudge на AlertWaitingForBlocker (отдельный текст
+    // окрика + отдельная подпись плашки в CheckStalledExecutorAsync).
     internal static ExecutorStallAction ClassifyStall(TaskItem task, Session? session,
-        DateTime nowUtc, TimeSpan staleAfter)
+        DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false)
     {
         // Задача закрыта либо доклад по ней уже ушёл — страховать нечего
         if (task.Status == TaskItemStatus.Done || task.CompletionDelivered) return ExecutorStallAction.None;
@@ -849,9 +861,12 @@ public class TaskExecutionService
             or SessionStatus.Waiting)
             return ExecutorStallAction.None;
 
-        // Шаг 2: напоминание ушло, а задача так и не закрыта — зовём человека
+        // Шаг 2: напоминание ушло, а задача так и не закрыта — зовём человека.
+        // При открытой карточке блокера — «ждёт ответа», а не «молчащий после напоминания».
         if (task.ExecutorNudgedAt is { } nudgedAt)
-            return nowUtc - nudgedAt >= staleAfter ? ExecutorStallAction.Alert : ExecutorStallAction.None;
+            return nowUtc - nudgedAt >= staleAfter
+                ? (hasOpenBlocker ? ExecutorStallAction.AlertWaitingForBlocker : ExecutorStallAction.Alert)
+                : ExecutorStallAction.None;
 
         // Шаг 1: тишину считаем от последней активности чата-исполнителя.
         var lastActivity = session?.UpdatedAt ?? task.UpdatedAt;
@@ -862,9 +877,13 @@ public class TaskExecutionService
         // же тике после обновления такие ходы ушли бы во ВСЕ давно висящие задачи разом
         // (та же защита от лавины, что AutoStartWindow у автозапуска). Человеку при этом
         // сказать всё равно надо — уведомление уходит без окна.
-        return session is null || idle > NudgeWindow
-            ? ExecutorStallAction.Alert
-            : ExecutorStallAction.Nudge;
+        if (session is null || idle > NudgeWindow)
+            return hasOpenBlocker ? ExecutorStallAction.AlertWaitingForBlocker : ExecutorStallAction.Alert;
+        // При открытой карточке блокера Nudge пропускаем: исполнитель и так ждёт ответа —
+        // ещё один «закрой или эскалируй» отправит его эскалировать повторно, а не решит
+        // блокер. Идём сразу в Alert с другой формулировкой.
+        if (hasOpenBlocker) return ExecutorStallAction.AlertWaitingForBlocker;
+        return ExecutorStallAction.Nudge;
     }
 
     // Окно свежести оклика: чат молчит дольше — сразу к человеку, без платного автохода
@@ -878,16 +897,44 @@ public class TaskExecutionService
     public async Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc)
     {
         var session = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        switch (ClassifyStall(task, session, nowUtc, _staleAfter))
+        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба.
+        // Сейчас штабный реестр эскалаций живёт в TeamWaveService через ITeamHistoryStore,
+        // и его резолв делает подключаемый крючок (OpenBlockerLookup ниже). null — крючок не
+        // подключён (например, режим «Командная реализация» выключен): страховка работает
+        // как раньше, без новой ветки.
+        var hasOpenBlocker = false;
+        if (_openBlockerLookup is not null)
+        {
+            try { hasOpenBlocker = await _openBlockerLookup(task); }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Резолв открытого блокера по задаче {TaskId} не удался", task.Id);
+            }
+        }
+        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker))
         {
             case ExecutorStallAction.Nudge:
                 await NudgeExecutorAsync(task, session!, nowUtc);
                 break;
             case ExecutorStallAction.Alert:
-                await AlertStaleTaskAsync(task, nowUtc);
+                await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: false);
+                break;
+            case ExecutorStallAction.AlertWaitingForBlocker:
+                await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: true);
                 break;
         }
     }
+
+    // Крючок «открыт ли блокер по задаче»: ставится штабом (TeamWaveService) на старте режима,
+    // мимо него TaskExecutionService не знал бы про эскалации и не смог бы отличить
+    // «исполнитель молчит» от «исполнитель ждёт ответа по блокеру». Подпись (task) → Task<bool>:
+    // true, если в SourceSessionId задачи висит открытая карточка блокера с TaskId == task.Id.
+    internal Func<TaskItem, Task<bool>>? OpenBlockerLookup
+    {
+        get => _openBlockerLookup;
+        set => _openBlockerLookup = value;
+    }
+    private Func<TaskItem, Task<bool>>? _openBlockerLookup;
 
     // Оклик исполнителя: один автоход в его же чат — «закрой задачу или эскалируй».
     private async Task NudgeExecutorAsync(TaskItem task, Session session, DateTime nowUtc)
@@ -913,13 +960,15 @@ public class TaskExecutionService
 
     // Оклик не помог (или окликать было некого) — уведомление человеку. Пометку «исполнитель
     // встал» не ставим: она про терминальный отказ провайдера, а здесь работа просто брошена.
-    private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc)
+    // waitingForBlocker (волна 2 team-blocker-honest): по задаче открыта карточка блокера —
+    // исполнитель не «молчит», а ждёт ответа штаба/человека, и текст окрика другой.
+    private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc, bool waitingForBlocker)
     {
         var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
         await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
-        await NotifyAsync(updated, BuildStaleNotification(updated, persona));
+        await NotifyAsync(updated, BuildStaleNotification(updated, persona, waitingForBlocker));
 
         // Будим координатора, если он ждал этого исполнителя в цикле «до готово» (фаза waiting):
         // без пробуждения цикл повис бы в ожидании уже мёртвого исполнителя, и тумблер горел
@@ -931,11 +980,15 @@ public class TaskExecutionService
             try
             {
                 var minutes = _staleAfter.TotalMinutes;
-                var text = $"⚠️ Исполнитель задачи «{updated.Title}» молчит {minutes:0} мин: " +
-                           "перезапусти, переиграй или встань по блокеру.";
+                var text = waitingForBlocker
+                    ? $"⚠️ Исполнитель задачи «{updated.Title}» ждёт ответа по блокеру {minutes:0} мин: " +
+                      "ответь ему в чат или сними задачу."
+                    : $"⚠️ Исполнитель задачи «{updated.Title}» молчит {minutes:0} мин: " +
+                      "перезапусти, переиграй или встань по блокеру.";
                 await _sessions.SendOrEnqueueAsync(sourceId, text,
                     senderOrigin: "task-stall-alert", silent: true, suppressTasksExecute: true,
-                    staffNote: StaleAlertStaffNote, kind: SessionManager.PendingKind.Report);
+                    staffNote: waitingForBlocker ? StaleAlertWaitingForBlockerStaffNote : StaleAlertStaffNote,
+                    kind: SessionManager.PendingKind.Report);
             }
             catch (Exception ex)
             {
@@ -945,7 +998,8 @@ public class TaskExecutionService
         }
 
         _log.LogWarning("Задача {TaskId} «{Title}» осталась в работе после конца хода — " +
-            "напоминание исполнителю не помогло, зову человека", updated.Id, updated.Title);
+            "{Reason}, зову человека", updated.Id, updated.Title,
+            waitingForBlocker ? "исполнитель ждёт ответа по блокеру" : "напоминание исполнителю не помогло");
     }
 
     // Подпись плашки оклика: единственное, что человек видит от служебного промпта
@@ -954,6 +1008,11 @@ public class TaskExecutionService
     // Подпись плашки пробуждения координатора: то же поведение, что у DelegatorReactionStaffNote —
     // ход-реакция в ленте рисуется разделителем, а не пузырём с сырым служебным промптом.
     internal const string StaleAlertStaffNote = "Исполнитель молчит — задача ждёт решения";
+
+    // Волна 2 team-blocker-honest: исполнитель ждёт ответа по блокеру — текст другой,
+    // чтобы координатор понимал причину тишины и не предлагал «перезапустить» того, кто
+    // уже ждёт ответа по открытой карточке.
+    internal const string StaleAlertWaitingForBlockerStaffNote = "Исполнитель ждёт ответа по блокеру";
 
     // Промпт оклика: ровно два выхода — закрыть задачу либо эскалировать. Третьего («доделаю
     // как-нибудь потом») быть не должно, иначе оклик превращается в новый бесконечный ход.
@@ -965,9 +1024,14 @@ public class TaskExecutionService
         "Ничего другого сейчас не делай.";
 
     // Уведомление человеку: задача не закрыта и сама уже не закроется
-    internal static NotificationMessage BuildStaleNotification(TaskItem task, Persona? persona = null) => new(
-        Title: "Задача осталась в работе",
-        Body: $"{task.Title}: исполнитель закончил и не закрыл задачу — проверьте результат",
+    // waitingForBlocker (волна 2 team-blocker-honest): по задаче открыт блокер — формулировка
+    // другая, чтобы в списке уведомлений было видно, что это «ждёт», а не «молчит».
+    internal static NotificationMessage BuildStaleNotification(TaskItem task, Persona? persona = null,
+        bool waitingForBlocker = false) => new(
+        Title: waitingForBlocker ? "Исполнитель ждёт ответа по блокеру" : "Задача осталась в работе",
+        Body: waitingForBlocker
+            ? $"{task.Title}: исполнитель ждёт ответа по открытой карточке блокера — ответьте или снимите задачу"
+            : $"{task.Title}: исполнитель закончил и не закрыл задачу — проверьте результат",
         Url: TaskSchedulerService.TaskUrl(task),
         Kind: "claude",
         PersonaId: persona?.Id,

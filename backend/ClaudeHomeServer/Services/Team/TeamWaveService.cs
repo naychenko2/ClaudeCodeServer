@@ -120,6 +120,24 @@ public class TeamWaveService
         _tasks.TaskCompleted += OnTaskDone;
         // Провал хода исполнителя: одна перевыдача, второй провал — эскалация
         if (_exec is not null) _exec.TeamTaskFailed = OnTaskFailedAsync;
+        // Волна 2 team-blocker-honest: страховка молчания исполнителя должна отличать
+        // «молчит» от «ждёт ответа по блокеру» — для этого ей нужен признак открытой
+        // карточки блокера по задаче. Резолв идёт по тому же ITeamHistoryStore, через
+        // который штаб публикует/гасит карточки: единая точка правды, без нового шва.
+        if (_exec is not null) _exec.OpenBlockerLookup = t => HasOpenBlockerAsync(t);
+    }
+
+    // Синхронно-выглядящий предикат под sync-сигнатурой крючка: TaskExecutionService.ClassifyStall
+    // чистая функция, и её вызывающий дожидается результата в фоне (TaskSchedulerService тикает
+    // раз в 30 с, единичный дополнительный roundtrip к диску истории не критичен). Снимок
+    // открытых карточек по SourceSessionId задачи; блокер — единственный вид, что ищет
+    // сторож молчания (TaskFailed/PlanDeviation/CheckFailed не блокируют исполнителя).
+    private async Task<bool> HasOpenBlockerAsync(TaskItem task)
+    {
+        var sourceSessionId = task.SourceSessionId;
+        if (sourceSessionId is null) return false;
+        var open = await _history.GetOpenTeamEscalationsAsync(sourceSessionId);
+        return open.Any(e => e.Kind == TeamEscalationKind.Blocker && e.TaskId == task.Id);
     }
 
     // Под-задачи очередной волны: минимальный номер волны среди нерозданных, и только если
@@ -378,6 +396,16 @@ public class TeamWaveService
             Outcome: DefectOutcome.ClosedWithoutCheck));
         if (updated is null) return;
         if (updated.OwnerId is { } ownerId) await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", updated));
+        // Волна 1 team-blocker-honest: сняли под-задачу, на которую был открыт блокер —
+        // гасим карточку штаба по факту (стадия возвращается в работу).
+        if (updated.SourceSessionId is { } sourceSessionId)
+        {
+            var src = _sessions.GetById(sourceSessionId);
+            string? stabId = src?.TeamImplement != null ? sourceSessionId : src?.ParentSessionId;
+            if (stabId is not null)
+                await _sessions.TryResolveBlockerByFactAsync(stabId, taskId,
+                    "штаб снял подзадачу — блокер снят");
+        }
     }
 
     // --- Э4: автономный цикл волн ---

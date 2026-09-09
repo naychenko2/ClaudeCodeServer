@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -48,5 +49,10 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
         services.AddGatedHostedService<NoteExpiryService>(config);
+        // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
+        // «recall-notes» зарегистрирован в своей вертикали, Turn собирает
+        // IEnumerable<IPromptSectionContributor> и натравливает на шину (см.
+        // PromptSectionContributorsRegistration.RegisterAll).
+        services.AddPromptSectionContributor<NotesRecallContributor>();
     }
 }

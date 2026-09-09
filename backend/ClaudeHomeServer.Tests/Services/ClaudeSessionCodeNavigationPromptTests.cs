@@ -108,7 +108,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
                 if (!string.IsNullOrWhiteSpace(block))
                     e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-graph", block!));
                 e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-navigation",
-                    ClaudeHomeServer.Services.Prompts.CodeNavigationPrompts.SectionText));
+                    CodeNavigationPrompts.SectionText));
                 await next();
             }, "Test.CodeGraphProvider");
         }

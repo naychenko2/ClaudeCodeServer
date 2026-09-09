@@ -244,6 +244,11 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 // IKnowledgeSyncParticipant → DossierStore в блоке Knowledge ниже — участник
 // реконсайлера Dify, остаётся в Program.cs до выделения Knowledge (следующий шаг).
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Этап 5, шаг 6: форвардер IPersonaServerToolGate → PersonaBindingsService — узкая часть
+// контракта ServerToolEnabled (deny-only по Tool-привязке), нужная контрибьюторам
+// секций промпта из чужих вертикалей (CodeGraph → codegraph). Без шва вертикаль
+// CodeGraph тянула бы root Services напрямую — запрет архитектуры.
+builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredService<PersonaBindingsService>());
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();

@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -28,6 +29,10 @@ public sealed class CodeGraphSubsystem : IAppPhaseSubsystem
         services.AddSingleton<CodeGraphPromptProvider>();
         // Тонкие запросы к графу (find/neighbors/hubs) — за ними MCP-сервер codegraph
         services.AddSingleton<CodeGraphQueryService>();
+        // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции «code-graph»
+        // зарегистрирован в своей вертикали, Turn собирает IEnumerable<IPromptSectionContributor>
+        // и натравливает на шину (см. PromptSectionContributorsRegistration.RegisterAll).
+        services.AddPromptSectionContributor<CodeGraphContributor>();
     }
 
     public void ConfigureApp(WebApplication app)

@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;

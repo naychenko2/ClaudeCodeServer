@@ -12,8 +12,7 @@ namespace ClaudeHomeServer.Services.Turn;
 //
 // Per-owner изоляция — через PromptSessionContext.OwnerId, который контрибьютор сам
 // учитывает в IsEnabled/BuildAsync (например, PersonaMemoryService требует свой
-// ownerId и personaId, NotesKnowledgeService — ownerId). Шина общая, изоляция —
-// содержимым события, не отдельной шиной.
+// ownerId и personaId). Шина общая, изоляция — содержимым события, не отдельной шиной.
 public static class PromptSectionContributorsRegistration
 {
     public static void RegisterAll(
@@ -22,6 +21,15 @@ public static class PromptSectionContributorsRegistration
         ArgumentNullException.ThrowIfNull(bus);
         ArgumentNullException.ThrowIfNull(contributors);
 
+        // Этап 5, шаг 6 (инверсия контрибьюторов промпта): после инверсии контрибьюторы
+        // приходят из РАЗНЫХ подсистем, и порядок в `IEnumerable<>` от DI определяется
+        // порядком регистрации подсистем (`AddSubsystems`), а НЕ `Order`'ом контрибьютора.
+        // Здесь мы намеренно НЕ сортируем: единственная точка сортировки — шина
+        // (`TurnEventBus.ApplyAsync` упорядочивает подписчиков по Order перед прогоном,
+        // TurnEventBus.cs:128). Дублировать сортировку тут значило бы сделать сторож
+        // порядка декоративным: мутация одной точки маскировалась бы второй, и тест
+        // остался бы зелёным на сломанном коде. Порядок подписки роли не играет —
+        // Order каждого контрибьютора уходит в `bus.OnFilter` ниже.
         foreach (var c in contributors)
         {
             // Замыкаем контрибьютора: фильтр-обёртка вызывает его на каждом событии

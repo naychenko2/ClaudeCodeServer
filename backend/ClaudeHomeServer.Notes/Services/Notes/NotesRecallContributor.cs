@@ -1,8 +1,8 @@
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Turn;
 
-namespace ClaudeHomeServer.Services.Turn;
+namespace ClaudeHomeServer.Services.Notes;
 
 // Auto-recall заметок по тексту хода (F3, golden-фикстура 1): блок релевантных заметок
 // для системного промпта + айтемы манифеста «использовано сейчас». Реестр Dify
@@ -16,6 +16,12 @@ namespace ClaudeHomeServer.Services.Turn;
 // TopK/MinScore/TimeoutMs — из конфига, как в прежнем BuildRecallProvider; читаются
 // на каждый ход, чтобы правка конфига применялась без рестарта (как у других Func<…>
 // в LlmSessionContext).
+//
+// Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор переехал в вертикаль
+// Notes из Services/Turn — Turn больше не знает про этот кусок. Регистрируется в
+// `NotesSubsystem.Register` через DI как `IPromptSectionContributor`; Turn собирает
+// `IEnumerable<IPromptSectionContributor>` и натравливает на шину, порядок секций
+// задаётся `Order` (см. `TurnEventBus.ApplyAsync`).
 public sealed class NotesRecallContributor : IPromptSectionContributor
 {
     private readonly NotesKnowledgeService _notes;
@@ -52,7 +58,7 @@ public sealed class NotesRecallContributor : IPromptSectionContributor
 
         if (!_notes.Available || !_notes.HasIndex(sessionContext.OwnerId)) return null;
 
-        var query = KnowledgeService.TrimQuery(turnText);
+        var query = KnowledgeQueryUtilities.TrimQuery(turnText);
         if (query.Length == 0) return null;
 
         try

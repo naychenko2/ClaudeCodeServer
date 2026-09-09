@@ -76,10 +76,13 @@ public class ProjectIconMigrationTests : IDisposable
         prompt.Contains("\"words\"") ? WordsJson(names) : GlyphsJson(names);
 
     private ProjectIconMigration Migration(ICheapTextRunner cheap, IConfiguration? config = null) =>
-        // ProjectIconMigration принимает шов IProjectManager для чтения и
-        // полный ProjectManager для единственной мутации TrySetIconGlyphMigrated —
-        // в тесте это один и тот же объект (ProjectManager реализует IProjectManager).
-        new(_projects, _projects, new ProjectIconGlyphService(cheap, NullLogger<ProjectIconGlyphService>.Instance),
+        // Шов `IProjectIconMigrator` (Этап 5, волна C, шаг 2): в тесте ProjectManager
+        // через настоящий `ProjectIconMigratorAdapter`; `IDataBackupService` —
+        // настоящий `DataBackupServiceAdapter` (BackupCore.Snapshot в тестах
+        // гоняет настоящий бэкап стора, см. комментарий к тестам).
+        new(_projects, new ProjectIconMigratorAdapter(_projects),
+            new ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter(),
+            new ProjectIconGlyphService(cheap, NullLogger<ProjectIconGlyphService>.Instance),
             config ?? _config, NullLogger<ProjectIconMigration>.Instance);
 
     [Fact]

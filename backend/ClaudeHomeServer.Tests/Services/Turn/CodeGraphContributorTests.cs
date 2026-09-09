@@ -124,6 +124,9 @@ public class CodeGraphContributorTests
             knowledge, new SkillsService(), userStore, config,
             NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         services.AddSingleton(bindings);
+        // Этап 5, шаг 6: контрибьютор гейтит секцию через Core-шов IPersonaServerToolGate,
+        // а не через конкретный PersonaBindingsService. Форвардер — тот же, что в Program.cs.
+        services.AddSingleton<IPersonaServerToolGate>(bindings);
         var promptBuilder = new PersonaPromptBuilder(new LlmProviderRegistry(config));
         services.AddSingleton(promptBuilder);
         services.AddSingleton<SpecialtySettingsStore>();

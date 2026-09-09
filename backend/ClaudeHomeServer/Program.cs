@@ -3,7 +3,6 @@ using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
@@ -160,6 +159,25 @@ builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
     ClaudeHomeServer.Services.Execution.LauncherFactory>();
+// Узкий шов пула preview-портов песочницы для вертикали ProjectServices
+// (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
+// получает только диапазон, всё остальное в SandboxManager остаётся
+// инкапсулировано в Execution/Main.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ISandboxPortRange,
+    ClaudeHomeServer.Services.Execution.SandboxPortRangeAdapter>();
+// Шов записи фона/цвета проекта для вертикали Backgrounds (Этап 5, волна C,
+// шаг 2): ProjectBackgroundService в отдельной сборке пишет Background/Color
+// через IProjectBackgroundWriter, форвардер сидит рядом с ProjectManager.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectBackgroundWriter,
+    ClaudeHomeServer.Services.ProjectBackgroundWriterAdapter>();
+// Шов миграции значка для вертикали ProjectIcons (Этап 5, волна C, шаг 2).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectIconMigrator,
+    ClaudeHomeServer.Services.ProjectIconMigratorAdapter>();
+// Шов «снимок data перед необратимой операцией» для вертикали ProjectIcons
+// (Этап 5, волна C, шаг 2); формализует бывшую полумеру (комментарий
+// `ProjectIconMigration.cs:78-84`) — теперь обязательный шов.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
+    ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
@@ -193,6 +211,18 @@ builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
 // контракты живут в Core. Адаптер файлов идёт через FileService (а не пишет сам),
 // чтобы синк базы знаний продолжал видеть правки документов.
 builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
+// Швы для Modules и ProjectServices (Этап 5, волна C, шаг 1): вместо прямой
+// зависимости от JwtService — узкие контракты на проверку пользовательского
+// и preview-токенов. Auth уже без связи: у AdminByStore.cs JwtService упомянут
+// только в комментарии. Адаптер в `Services/JwtValidatorGateway` реализует оба
+// интерфейса и идёт через `JwtService` — разделение на стороне потребителя.
+builder.Services.AddSingleton<IUserTokenValidator, JwtValidatorGateway>();
+builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
+// Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
+// FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
+// `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
+// получает только `IsEnabled`, без каталога определений и записи.
+builder.Services.AddSingleton<IModuleFeatureFlagReader, FeatureFlagGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
@@ -214,6 +244,11 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 // IKnowledgeSyncParticipant → DossierStore в блоке Knowledge ниже — участник
 // реконсайлера Dify, остаётся в Program.cs до выделения Knowledge (следующий шаг).
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Этап 5, шаг 6: форвардер IPersonaServerToolGate → PersonaBindingsService — узкая часть
+// контракта ServerToolEnabled (deny-only по Tool-привязке), нужная контрибьюторам
+// секций промпта из чужих вертикалей (CodeGraph → codegraph). Без шва вертикаль
+// CodeGraph тянула бы root Services напрямую — запрет архитектуры.
+builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredService<PersonaBindingsService>());
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();
@@ -386,17 +421,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
 // гасятся внутри). Подключаются к шине фильтром prompt/assembling через
 // PromptSectionContributorsRegistration.RegisterAll в SessionManager.
 // Новый контрибьютор — одна строка в PromptSectionContributorsDi.AddPromptSectionContributors().
-// Гейт подсистемы Notes: контрибьютор `NotesRecallContributor` зависит от NotesKnowledgeService
-// (DI-резолв свалится на первом ходу), а весь авто-recall в этом случае бесполезен.
-// `AddPromptSectionContributors` живёт в Main (`PromptSectionContributorsDi.cs`) и не
-// в курсе про подсистемы — гейтим НА РЕГИСТРАЦИИ через предикат isEnabled, пока контрибьютор
-// не вынесен в отдельный вертикальный csproj. Пост-хок удаление дескрипторов сюда не годится:
-// интерфейсный форвардер `IPromptSectionContributor → sp.GetRequiredService<NotesRecallContributor>()`
-// регистрируется через ImplementationFactory, а не ImplementationType, и предикат по
-// ImplementationType его не находит — сирота ронял бы IEnumerable<IPromptSectionContributor>
-// на первом же резолве.
-builder.Services.AddPromptSectionContributors(
-    t => t != typeof(NotesRecallContributor) || SubsystemGate.IsEnabled(builder.Configuration, "notes"));
+// Здесь регистрируются только «чистые» контрибьюторы Turn; вертикальные (NotesRecallContributor,
+// CodeGraphContributor) регистрирует своя подсистема в `Register` (Этап 5, шаг 6 — инверсия).
+// Гейт отключаемой подсистемы получается СТРУКТУРНЫМ: при `Subsystems:Notes:Enabled=false`
+// `AddSubsystems` не зовёт `NotesSubsystem.Register`, и контрибьютор не регистрируется вовсе —
+// ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
+builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
@@ -511,6 +541,10 @@ builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configurat
 // Подсистема не заведена сознательно: единственная регистрация и два резолва при
 // shutdownTerminals (см. блок var app = builder.Build() ниже) — прецедент вертикали
 // без IAppSubsystem, как у Services.Watchdog.
+// Шов `ITerminalHubNotifier` (Этап 5, волна C, шаг 2): реализация лежит
+// рядом с TerminalHub (Hubs/), вертикаль Terminal зависит только от Core.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITerminalHubNotifier,
+    ClaudeHomeServer.Hubs.TerminalHubNotifier>();
 builder.Services.AddSingleton<TerminalService>();
 // Раздел «Сервисы проекта» (Preview/DevServer/ExternalPreview/...) — пилотная подсистема
 // волны 4A. Сам `ProjectServicesSubsystem.Register` подключает ВСЕ регистрации этой

@@ -86,6 +86,9 @@ public class CodeGraphContributorIsEnabledTests : IDisposable
             HasNotesMcp: false, HasMemoryMcp: false, HasWorkspaceMcp: false,
             WorkspaceSections: Array.Empty<string>());
 
+    // Этап 5, шаг 6: контрибьютор принимает Core-шов IPersonaServerToolGate, а не
+    // конкретный PersonaBindingsService. Семантика гейта та же (deny-only
+    // ServerToolEnabled) — сервис реализует шов явной имплементацией, форвард один в один.
     private CodeGraphContributor BuildSut(CodeGraphPromptProvider? provider) =>
         new(provider, _bindings, NullLogger<CodeGraphContributor>.Instance);
 

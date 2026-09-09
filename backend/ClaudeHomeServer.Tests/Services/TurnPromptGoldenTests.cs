@@ -492,7 +492,7 @@ public class TurnPromptGoldenTests : IDisposable
             {
                 e.Sections.Add(new PromptSection("code-graph", "graph-slice"));
                 e.Sections.Add(new PromptSection(
-                    "code-navigation", ClaudeHomeServer.Services.Prompts.CodeNavigationPrompts.SectionText));
+                    "code-navigation", CodeNavigationPrompts.SectionText));
             }
             await next();
         }, "Test.CodeGraph");

@@ -1,9 +1,11 @@
 using System.Reflection;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -104,6 +106,51 @@ public class NotesSubsystemGateTests
         var act = () => sp.GetServices<IKnowledgeSyncParticipant>().ToList();
         act.Should().NotThrow();
         act().Should().BeEmpty("при выключенной подсистеме форвардер не должен регистрироваться");
+    }
+
+    // Контрибьютор секции «recall-notes»: гейт СТРУКТУРНЫЙ, а не предикатный.
+    // `NotesRecallContributor` тянет `NotesKnowledgeService` и регистрируется внутри
+    // `NotesSubsystem.Register` (Этап 5, шаг 6 — инверсия контрибьюторов), а `AddSubsystems`
+    // при `Subsystems:Notes:Enabled=false` `Register` не зовёт вовсе. Поэтому ни предиката
+    // `isEnabled` в `AddPromptSectionContributors`, ни пост-хок удаления дескрипторов из
+    // Program.cs больше нет: гейт держит сама композиция подсистем.
+    //
+    // Тест ходит через настоящий `AddSubsystems` (не копию снипета): убери гейт там —
+    // и ветка enabled=false зарегистрирует контрибьютора, тест покраснеет.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void NotesRecallContributor_RegisteredOnlyWhenSubsystemEnabled(bool enabled)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Subsystems:Notes:Enabled"] = enabled ? "true" : "false",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSubsystems(config, new NotesSubsystem());
+
+        // Пара дескрипторов от AddPromptSectionContributor<T>: конкретный тип + форвардер
+        // интерфейса через ImplementationFactory. В этой коллекции кроме Notes подсистем нет,
+        // поэтому любой IPromptSectionContributor здесь — именно контрибьютор заметок.
+        services.Any(d => d.ServiceType == typeof(NotesRecallContributor)).Should().Be(enabled,
+            $"NotesRecallContributor регистрируется в NotesSubsystem.Register (Enabled={enabled})");
+        services.Any(d => d.ServiceType == typeof(IPromptSectionContributor)).Should().Be(enabled,
+            $"форвардер IPromptSectionContributor едет тем же вызовом (Enabled={enabled})");
+
+        if (!enabled)
+        {
+            // Ключевой инвариант: при выключенной подсистеме перечисление набора не только
+            // пусто, но и НЕ БРОСАЕТ — сироты-форвардера на неразрешимый NotesKnowledgeService
+            // в коллекции не остаётся (именно на этом валился пост-хок вариант удаления
+            // дескрипторов по ImplementationType).
+            using var sp = services.BuildServiceProvider();
+            var act = () => sp.GetServices<IPromptSectionContributor>().ToList();
+            act.Should().NotThrow();
+            act().Should().BeEmpty();
+        }
     }
 
     // Б1 (UnifiedSearchService) в динамике: реальная сборка с notes=null, kb=null не должна

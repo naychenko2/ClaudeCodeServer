@@ -1,5 +1,6 @@
 using System.Reflection;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Turn;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApplicationParts;
 using Microsoft.Extensions.Options;
@@ -58,6 +59,14 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
         services.AddGatedHostedService<NoteExpiryService>(config);
+        // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
+        // «recall-notes» зарегистрирован в своей вертикали, Turn собирает
+        // IEnumerable<IPromptSectionContributor> и натравливает на шину (см.
+        // PromptSectionContributorsRegistration.RegisterAll). Гейт подсистемы —
+        // структурный: при `Subsystems:Notes:Enabled=false` `AddSubsystems` не зовёт
+        // `Register`, и контрибьютор (он тянет `NotesKnowledgeService`) в
+        // `IEnumerable<IPromptSectionContributor>` не попадает вовсе.
+        services.AddPromptSectionContributor<NotesRecallContributor>();
 
         // Подключение MVC-ApplicationPart ТОЛЬКО при включённой подсистеме.
         // При `Enabled=false` `IConfigureOptions<MvcOptions>` не регистрируется,

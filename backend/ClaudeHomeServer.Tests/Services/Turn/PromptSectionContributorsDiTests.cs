@@ -33,10 +33,12 @@ namespace ClaudeHomeServer.Tests.Services.Turn;
 public class PromptSectionContributorsDiTests
 {
     // Тест 1: быстрый сторож DI — после вызова AddPromptSectionContributors() в контейнере
-    // ровно 7 регистраций IPromptSectionContributor с правильными типами. НЕ требует
-    // зависимостей контрибьюторов — резолва нет, только анализ ServiceDescriptor'ов.
+    // ровно 5 «чистых» регистраций IPromptSectionContributor (контрибьюторы, оставшиеся
+    // в Turn после инверсии). CodeGraphContributor и NotesRecallContributor уехали в свои
+    // вертикали — их регистрируют CodeGraphSubsystem/NotesSubsystem, а не Turn.
+    // НЕ требует зависимостей контрибьюторов — резолва нет, только ServiceDescriptor'ы.
     [Fact]
-    public void AddPromptSectionContributors_RegistersSevenConcreteContributors()
+    public void AddPromptSectionContributors_RegistersFiveCoreContributors()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -52,21 +54,20 @@ public class PromptSectionContributorsDiTests
                         && d.ServiceType != typeof(IPromptSectionContributor)
                         && d.ImplementationType is not null)
             .ToList();
-        concreteDescriptors.Should().HaveCount(7,
-            "AddPromptSectionContributors должен зарегистрировать ровно 7 конкретных контрибьюторов");
+        concreteDescriptors.Should().HaveCount(5,
+            "AddPromptSectionContributors должен зарегистрировать ровно 5 чистых контрибьюторов Turn");
 
-        // Эти 7 классов — единственный канонический список. Новый контрибьютор = новая
+        // Канонический список «чистых» контрибьюторов Turn. Новый контрибьютор = новая
         // строка в AddPromptSectionContributors() И здесь, иначе сторож не отличит «забыли
-        // добавить в Program.cs» от «добавили лишнего».
+        // добавить» от «добавили лишнего». Чужие (CodeGraph/Notes) сюда НЕ входят — их
+        // сторожит тест 2 (полный набор) и тесты их подсистем.
         var implTypes = concreteDescriptors.Select(d => d.ImplementationType!).ToHashSet();
         implTypes.Should().BeEquivalentTo(new[]
         {
             typeof(DossierTrailerContributor),
-            typeof(NotesRecallContributor),
             typeof(PersonaRecallContributor),
             typeof(PromptSectionsContributor),
             typeof(PersonaBindingsContributor),
-            typeof(CodeGraphContributor),
             typeof(PersonaLayerContributor),
         });
 
@@ -74,8 +75,8 @@ public class PromptSectionContributorsDiTests
         var interfaceDescriptors = services
             .Where(d => d.ServiceType == typeof(IPromptSectionContributor))
             .ToList();
-        interfaceDescriptors.Should().HaveCount(7,
-            "набор IPromptSectionContributor должен состоять из 7 элементов (по одному на каждого контрибьютора)");
+        interfaceDescriptors.Should().HaveCount(5,
+            "набор IPromptSectionContributor должен состоять из 5 элементов (по одному на чистого контрибьютора)");
 
         // Все регистрации — singleton (контрибьюторы без состояния, как и шина).
         concreteDescriptors.Should().OnlyContain(d => d.Lifetime == ServiceLifetime.Singleton);
@@ -83,25 +84,35 @@ public class PromptSectionContributorsDiTests
     }
 
     // Тест 2: реальный резолв IEnumerable<IPromptSectionContributor>, проверка Key и Order.
-    // Требует минимального набора зависимостей контрибьюторов (см. BuildSut).
+    // Требует минимального набора зависимостей всех 7 контрибьюторов (см. BuildSut).
+    //
+    // После инверсии DI отдаёт контрибьюторов в порядке РЕГИСТРАЦИИ подсистем, а не по
+    // Order. Канонический порядок задаёт САМ Order, а не порядок в IEnumerable — шина
+    // TurnEventBus.ApplyAsync сортирует по Order. Поэтому здесь сортируем по Order и
+    // фиксируем каноническую последовательность: это и есть сторож «порядок секций».
     [Fact]
-    public void ResolvedContributors_HaveUniqueKeysAndAscendingOrder()
+    public void ResolvedContributors_HaveUniqueKeysAndCanonicalOrder()
     {
         using var provider = BuildSut();
 
         var contributors = provider.GetServices<IPromptSectionContributor>().ToList();
 
-        contributors.Should().HaveCount(7);
+        contributors.Should().HaveCount(7,
+            "полный набор = 5 чистых Turn + CodeGraph + Notes");
 
         // Уникальность Key — две секции с одинаковым Key замазали бы друг друга в снапшоте.
         var keys = contributors.Select(c => c.Key).ToList();
         keys.Should().OnlyHaveUniqueItems("Key контрибьютора обязан быть уникальным");
 
-        // Упорядоченность Order — склейка секций идёт по возрастанию Order, поэтому фиксируем
-        // их последовательность как контракт (золотые эталоны промпта ожидают именно этот порядок).
+        // Order тоже обязан быть уникальным: при равных Order шина доупорядочивает по
+        // порядку подписки (ThenBy(Seq)), а он зависит от порядка регистрации подсистем —
+        // нестабильно между запусками. Канонический шаг 100 это исключает.
         var orders = contributors.Select(c => c.Order).ToList();
-        orders.Should().BeInAscendingOrder("контрибьюторы должны ехать по возрастанию Order");
-        orders.Should().Equal(new[] { 100, 200, 300, 400, 500, 600, 900 },
+        orders.Should().OnlyHaveUniqueItems("Order контрибьютора обязан быть уникальным");
+
+        // Сортируем по Order — ровно как шина (TurnEventBus.ApplyAsync: OrderBy(Order)).
+        var ordered = contributors.OrderBy(c => c.Order).Select(c => c.Order).ToList();
+        ordered.Should().Equal(new[] { 100, 200, 300, 400, 500, 600, 900 },
             "канонический порядок секций промпта (dossier-trailer → persona-layer)");
 
         // Парность: каждый Key обязан встретиться ровно один раз И с правильным Order.
@@ -114,6 +125,11 @@ public class PromptSectionContributorsDiTests
         keyToOrder.Should().ContainKey("persona-bindings").WhoseValue.Should().Be(500);
         keyToOrder.Should().ContainKey("code-graph").WhoseValue.Should().Be(600);
         keyToOrder.Should().ContainKey("persona-layer").WhoseValue.Should().Be(900);
+
+        // Инверсия: чужие контрибьюторы живут по своим вертикалям. Проверяем, что их типы
+        // приехали в полный набор ИЗ CodeGraph/Notes-сборок (а не из Turn).
+        contributors.Should().Contain(c => c.GetType() == typeof(CodeGraphContributor));
+        contributors.Should().Contain(c => c.GetType() == typeof(NotesRecallContributor));
     }
 
     // Тест 3: RegisterAll + ApplyAsync. Два мок-контрибьютора с разными Order — после
@@ -279,6 +295,10 @@ public class PromptSectionContributorsDiTests
                 knowledge, new SkillsService(), userStore, config,
                 NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
             services.AddSingleton(bindings);
+            // Этап 5, шаг 6: CodeGraphContributor гейтит секцию через Core-шов
+            // IPersonaServerToolGate, а не через конкретный PersonaBindingsService.
+            // Форвардер — тот же, что в Program.cs.
+            services.AddSingleton<IPersonaServerToolGate>(bindings);
             var promptBuilder = new PersonaPromptBuilder(
                 new LlmProviderRegistry(config));
             services.AddSingleton(promptBuilder);
@@ -306,8 +326,12 @@ public class PromptSectionContributorsDiTests
             services.AddSingleton<ILogger<CodeGraphContributor>>(NullLogger<CodeGraphContributor>.Instance);
             services.AddSingleton<ILogger<PersonaRecallContributor>>(NullLogger<PersonaRecallContributor>.Instance);
 
-            // Собственно регистрация контрибьюторов — та же, что в Program.cs.
+            // Собственно регистрация контрибьюторов — та же, что в Program.cs: 5 чистых
+            // из Turn + по одному из CodeGraph и Notes (их в проде регистрируют свои
+            // *Subsystem.Register; здесь — тот же extension-паттерн, что в подсистемах).
             services.AddPromptSectionContributors();
+            services.AddPromptSectionContributor<CodeGraphContributor>();
+            services.AddPromptSectionContributor<NotesRecallContributor>();
 
             return services.BuildServiceProvider();
         }

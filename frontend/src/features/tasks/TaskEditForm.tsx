@@ -26,11 +26,14 @@ import { personaLabel } from '../../lib/personas';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку. Статический
 // импорт здесь обнулял бы ленивую загрузку и в NoteView, и в FileViewer: сборщик тянет
 // модуль в основной чанк, если хоть один потребитель просит его статически.
-const NoteEditor = lazy(() => import('../notes/NoteEditor').then(m => ({ default: m.NoteEditor })));
+// Импорт через публичный index — прямой путь к внутреннему модулю ломает правило
+// «внешние импорты заметок только через features/notes/index.ts».
+const NoteEditor = lazy(() => import('../notes').then(m => ({ default: m.NoteEditor })));
 import { AttachPicker } from '../../components/chat/AttachPicker';
 import { Toggle, SegmentedControl, TextArea, WaitingIndicator } from '../../components/ui';
 import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
+import { useSubsystem } from '../../lib/subsystems';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 interface Props {
@@ -72,6 +75,9 @@ function reminderChipStyle(active: boolean): React.CSSProperties {
 }
 
 export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendingAi, onPendingConsumed }: Props) {
+  // Подсистема заметок выключена — markdown-редактор (CodeMirror из features/notes)
+  // не грузим. В полях описания/результата показывается обычный <textarea>.
+  const notesOn = useSubsystem('notes');
   const [title, setTitle] = useState(task.title);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [dueDate, setDueDate] = useState<string | null>(task.dueDate ?? null);
@@ -751,14 +757,24 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 <WaitingIndicator hint="Генерирую описание по названию задачи" />
               </div>
             ) : descEditing ? (
-              <Suspense fallback={<EditorFallback />}>
-                <NoteEditor
+              notesOn ? (
+                <Suspense fallback={<EditorFallback />}>
+                  <NoteEditor
+                    value={description}
+                    onChange={setDescription}
+                    placeholder="Описание задачи (markdown)…"
+                    minHeight={150}
+                  />
+                </Suspense>
+              ) : (
+                <TextArea
                   value={description}
                   onChange={setDescription}
                   placeholder="Описание задачи (markdown)…"
                   minHeight={150}
+                  autoFocus
                 />
-              </Suspense>
+              )
             ) : (
               <div style={{
                 background: C.bgWhite, border: `1px solid ${C.borderLight}`,
@@ -798,14 +814,23 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
           <div style={{ marginBottom: 22 }}>
             {resultEditing ? (
-              <Suspense fallback={<EditorFallback />}>
-                <NoteEditor
+              notesOn ? (
+                <Suspense fallback={<EditorFallback />}>
+                  <NoteEditor
+                    value={result}
+                    onChange={setResult}
+                    placeholder="Итог выполнения (markdown)…"
+                    minHeight={160}
+                  />
+                </Suspense>
+              ) : (
+                <TextArea
                   value={result}
                   onChange={setResult}
                   placeholder="Итог выполнения (markdown)…"
                   minHeight={160}
                 />
-              </Suspense>
+              )
             ) : (
               <div style={{
                 background: C.bgWhite, border: `1px solid ${C.borderLight}`,

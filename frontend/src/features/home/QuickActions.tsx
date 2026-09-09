@@ -8,7 +8,8 @@ import { openTaskInSection } from '../../lib/tasks';
 import { ensureNotesLoaded } from '../../lib/notes';
 import type { HubTab } from '../../components/HubTabs';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
-import { NewNoteDialog } from '../notes/NewNoteDialog';
+import { NewNoteDialog } from '../notes';
+import { useSubsystem } from '../../lib/subsystems';
 import { AddProjectDialog } from '../projects/dialogs/AddProjectDialog';
 import { WidgetCard } from './WidgetCard';
 import { openNote } from './NotesWidget';
@@ -52,6 +53,8 @@ export function QuickActions({ onHubTab, onOpenProject }: {
   const [newNoteOpen, setNewNoteOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
+  // Гейт кнопки «Новая заметка» по подсистеме
+  const notesOn = useSubsystem('notes');
 
   // Новый чат вне проекта: создаем и передаем готовому listener'у App (cc-open-chat) —
   // тот сам переключит раздел «Чаты» и откроет чат
@@ -95,11 +98,13 @@ export function QuickActions({ onHubTab, onOpenProject }: {
           label="Новая задача"
           onClick={() => setNewTaskOpen(true)}
         />
-        <ActionButton
-          icon={<NotebookPen size={15} strokeWidth={2} />}
-          label="Новая заметка"
-          onClick={openNewNote}
-        />
+        {notesOn && (
+          <ActionButton
+            icon={<NotebookPen size={15} strokeWidth={2} />}
+            label="Новая заметка"
+            onClick={openNewNote}
+          />
+        )}
         <ActionButton
           icon={<FolderPlus size={15} strokeWidth={2} />}
           label="Новый проект"

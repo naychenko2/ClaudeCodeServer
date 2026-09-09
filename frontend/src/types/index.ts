@@ -1906,6 +1906,12 @@ export interface Me {
   displayName?: string | null;
   role: string;
   featureFlags?: Record<string, boolean>;
+  // Эффективное состояние подсистем: ключ — из реестра на бэке (например 'notes'),
+  // значение — включена ли для этого пользователя. Заполняется App.tsx через
+  // setAllSubsystems в lib/subsystems. Отдельные вкрапления UI (виджеты, пункты
+  // меню, кнопки) гейтятся хуком useSubsystem('notes') и дают fail-closed false,
+  // пока стор пуст — это нормально, лишь бы поле пришло в me-ответе.
+  subsystems?: Record<string, boolean>;
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;

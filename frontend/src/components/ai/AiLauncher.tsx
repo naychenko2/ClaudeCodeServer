@@ -7,6 +7,7 @@ import { useAiAwaiting, ensureAiAwaitingLoaded, type AiAwaitingRec } from '../..
 import { getCachedProject, ensureProjectsLoaded } from '../../features/projects/useAllProjects';
 import type { Project } from '../../types';
 import { getFlag } from '../../lib/featureFlags';
+import { isSubsystemEnabled } from '../../lib/subsystems';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
@@ -179,7 +180,7 @@ export function AiLauncher() {
     // иначе статус из прежнего проекта «протёк» бы в новый
     const pid = nav?.screen === 'project' ? nav.project?.id : undefined;
     const git = gitRepo && pid && gitRepo.projectId === pid ? { isRepo: gitRepo.isRepo } : undefined;
-    return { nav, online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext(), git };
+    return { nav, online, flag: getFlag, subsystem: isSubsystemEnabled, caps: { semantic: semanticCaps }, chat: getChatContext(), git };
   };
 
   const [fabHover, setFabHover] = useState(false);

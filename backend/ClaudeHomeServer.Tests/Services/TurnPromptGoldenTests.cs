@@ -508,7 +508,7 @@ public class TurnPromptGoldenTests : IDisposable
         return new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: projectMcpProjectId is null
                 ? new TasksMcpContext("http://tasks.invalid", () => "tok", ProjectId: null)

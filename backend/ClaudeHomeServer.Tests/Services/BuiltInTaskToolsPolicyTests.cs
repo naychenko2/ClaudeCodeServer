@@ -34,7 +34,7 @@ public class BuiltInTaskToolsPolicyTests
         var context = new LlmSessionContext(
             RootPath: Path.GetTempPath(),
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: withTasksMcp
                 ? new TasksMcpContext("http://localhost:5000", () => "token", null)

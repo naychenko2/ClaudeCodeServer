@@ -26,6 +26,51 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
+// Предупреждение «план сверх остатка бюджета» (волна 4 team-blocker-honest): человек
+// видит остаток W/T в бюджете итерации, а не потолок — часть волн/задач итерации уже
+// потрачена, и потолок как «остаток» врёт. Сравниваем с остатком (max - used, не ниже 0),
+// а выход за остаток бэкенд лечит расширением потолка на дельту в RespondTeamPlanAsync
+// (ветка Run, та же WithTeamState-транзакция, что старт волны — TeamWaveService видит
+// новые лимиты ещё до старта первой волны). Скрывается целиком, когда план в пределах
+// остатка по обоим измерениям — без лишнего шума.
+function BudgetOverrunNote({ plan, budget }: { plan: TeamPlan; budget: TeamImplementBudget | null }) {
+  if (!budget) return null;
+  const waves = plan.waveCount;
+  const tasks = plan.subtasks.length;
+  const wavesLeft = Math.max(0, budget.maxWaves - budget.wavesUsed);
+  const tasksLeft = Math.max(0, budget.maxTasks - budget.tasksUsed);
+  const deltaWaves = Math.max(0, waves - wavesLeft);
+  const deltaTasks = Math.max(0, tasks - tasksLeft);
+  if (deltaWaves === 0 && deltaTasks === 0) return null;
+
+  // Дословно из задачи: «План на N волн и K задач, в бюджете итерации осталось W волн
+  // и T задач — при запуске потолки поднимутся до нужных». Куски — два независимых
+  // по волнам/задачам; выходит за оба — соединение через « и », единственный — одиночная
+  // формулировка. «Поднимется» относится к клику «Запустить», а не к «расширить»
+  // отдельной кнопкой.
+  const waveClause = deltaWaves > 0
+    ? `план на ${waves} ${plural(waves, 'волну', 'волны', 'волн')}, в бюджете итерации осталось ${wavesLeft} — при запуске потолок поднимется до ${waves}`
+    : null;
+  const taskClause = deltaTasks > 0
+    ? `${tasks} ${plural(tasks, 'под-задача', 'под-задачи', 'под-задач')}, в бюджете итерации осталось ${tasksLeft} — при запуске потолок поднимется до ${tasks}`
+    : null;
+  const headline = [waveClause, taskClause].filter(Boolean).join(' и ');
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,
+      padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.warning}`,
+      background: C.warningBg,
+    }}>
+      <AlertTriangle size={12} strokeWidth={2.2} color={C.warningText}
+        style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ fontSize: FS.xs, color: C.warningText, lineHeight: 1.45, fontWeight: 500 }}>
+        {headline}
+      </div>
+    </div>
+  );
+}
+
 // Подзаголовок карточки: «5 под-задач · 2 волны · 3 исполнителя».
 // Счётчики волн и исполнителей считает бэкенд (waveCount/executorCount).
 function planSummaryLine(plan: TeamPlan): string {
@@ -563,44 +608,10 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
     );
   }
 
-// Предупреждение «план сверх бюджета» (волна 4 team-blocker-honest): если волн или
-// задач в плане больше остатка MaxWaves/MaxTasks — карточка несёт строку с
-// честной цифрой, а «Запустить» сам расширит потолки на разницу (бэкенд,
-// TeamDecisionService.RespondTeamPlanAsync ветка Run). Скрывается целиком,
-// когда план в пределах бюджета — без неё не должно быть лишнего шума.
-function BudgetOverrunNote({ plan, budget }: { plan: TeamPlan; budget: TeamImplementBudget | null }) {
-  if (!budget) return null;
-  const waves = plan.waveCount;
-  const tasks = plan.subtasks.length;
-  const deltaWaves = Math.max(0, waves - budget.maxWaves);
-  const deltaTasks = Math.max(0, tasks - budget.maxTasks);
-  if (deltaWaves === 0 && deltaTasks === 0) return null;
-
-  // Куски текста — два независимых: «волны» и «задачи». Если оба выходят за
-  // потолок — оба показываем одной строкой через «и»; одна часть — одиночная
-  // формулировка. Текст дословно из задачи: «потолок будет поднят до N».
-  const waveClause = deltaWaves > 0
-    ? `план на ${waves} ${plural(waves, 'волну', 'волны', 'волн')}, бюджет итерации — ${budget.maxWaves} (потолок будет поднят до ${waves})`
-    : null;
-  const taskClause = deltaTasks > 0
-    ? `${tasks} ${plural(tasks, 'под-задача', 'под-задачи', 'под-задач')} при потолке ${budget.maxTasks} (потолок будет поднят до ${tasks})`
-    : null;
-  const headline = [waveClause, taskClause].filter(Boolean).join(' и ');
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,
-      padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.warning}`,
-      background: C.warningBg,
-    }}>
-      <AlertTriangle size={12} strokeWidth={2.2} color={C.warningText}
-        style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ fontSize: FS.xs, color: C.warningText, lineHeight: 1.45, fontWeight: 500 }}>
-        {headline}
-      </div>
-    </div>
-  );
-}
+// Предупреждение «план сверх остатка бюджета» (волна 4 team-blocker-honest) объявлено
+// на верхнем уровне модуля рядом с plural — иначе на каждом рендере TeamPlanView
+// пересоздавалась бы идентичность компонента, и React монтировал/размонтировал
+// поддерево. На статичной плашке безобидно, но это анти-паттерн.
 
   // === На подтверждении ===
   const canAct = online && !!ctx;

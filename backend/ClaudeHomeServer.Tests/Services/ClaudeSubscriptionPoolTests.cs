@@ -508,9 +508,10 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
-    public void ResolveWindowAlias_НиктоНеТянет1M_СрезаетВ200K()
+    public void ResolveWindowAlias_НиктоНеТянет1M_ВозвращаетNull()
     {
-        // Обе подписки без 1M → деградация в 200K (срез суффикса), а не падение хода
+        // Обе подписки без 1M → null = «окно 1M недоступно». Тихого среза в 200K больше нет:
+        // деградация для длинного чата — мина (контекст не влезет), отказ разбирает вызывающий.
         var dict = new Dictionary<string, string?>
         {
             ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
@@ -521,8 +522,8 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         };
         var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
 
-        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus");
-        pool.ResolveWindowAlias("sonnet[1m]").Should().Be("sonnet");
+        pool.ResolveWindowAlias("opus[1m]").Should().BeNull();
+        pool.ResolveWindowAlias("sonnet[1m]").Should().BeNull();
     }
 
     [Fact]
@@ -534,19 +535,19 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
-    public void ResolveWindowAlias_1MИсчерпаны_ДеградируетВ200K()
+    public void ResolveWindowAlias_1MИсчерпаны_ВозвращаетNull()
     {
         // Единственная 1M-подписка исчерпана, осталась живая 200K — живого 1M-кандидата нет,
-        // суффикс срезается (ход в 200K), а не падает на ждущей 200K с opus[1m]
+        // ResolveWindowAlias возвращает null («окно недоступно»), а не срезает в 200K.
         var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
         pool.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
 
-        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus");
+        pool.ResolveWindowAlias("opus[1m]").Should().BeNull();
     }
 
-    // Окно, объявляемое CLI, считается ПОСЛЕ резолва по способности пула: срезанный алиас
-    // обязан дать 200k. Объявить 1M там, где его нет, — хуже, чем не объявлять вовсе:
-    // CLI не сожмёт контекст вовремя и ход упадёт «Prompt is too long» вместо компакта.
+    // Окно, объявляемое CLI, считается ПОСЛЕ резолва по способности пула: когда живой 1M есть,
+    // суффикс остаётся и объявляем 1M. Когда живого 1M нет — ResolveWindowAlias отдаёт null,
+    // и вызывающий отказывает ход (TurnFailureText.Window1MUnavailable), а не объявляет 200K.
     [Fact]
     public void ОкноКонтекста_СчитаетсяПоМоделиПослеРезолваПула()
     {
@@ -555,8 +556,7 @@ public class ClaudeSubscriptionPoolTests : IDisposable
             .Should().Be(1_000_000);
 
         live1M.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
-        LlmProviderRegistry.ClaudeContextWindow(live1M.ResolveWindowAlias("opus[1m]"))
-            .Should().Be(200_000);
+        live1M.ResolveWindowAlias("opus[1m]").Should().BeNull("живого 1M-кандидата нет — сигнал недоступности, не срез");
     }
 
     [Theory]
@@ -949,5 +949,133 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         };
         var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
         new ClaudeSubscriptionPool(config).WeeklyThreshold.Should().Be(0.5);
+    }
+
+    // --- Реестр пар «подписка × модель» (недоступность модели на конкретной подписке) ---
+
+    [Fact]
+    public void MarkModelUnavailable_СтавитПометку_ИИсключаетПаруИзSupportsModel()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a", "b"));
+
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.IsModelUnavailable("a", "opus").Should().BeTrue();
+        pool.SupportsModel("a", "opus").Should().BeFalse("пара помечена — отсекается");
+        // Другая модель на той же подписке и та же модель на другой — живы
+        pool.SupportsModel("a", "sonnet").Should().BeTrue();
+        pool.SupportsModel("b", "opus").Should().BeTrue();
+    }
+
+    [Fact]
+    public void MarkModelUnavailable_МодельНормализуетсяБезУчётаРегистра()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a"));
+        pool.MarkModelUnavailable("a", "Opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.IsModelUnavailable("a", "opus").Should().BeTrue();
+        pool.SupportsModel("a", "OPUS").Should().BeFalse();
+    }
+
+    [Fact]
+    public void ClearModelUnavailable_РучнойСброс_СнимаетПометку()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a"));
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.ClearModelUnavailable("a", "opus");
+
+        pool.IsModelUnavailable("a", "opus").Should().BeFalse();
+        pool.SupportsModel("a", "opus").Should().BeTrue();
+    }
+
+    [Fact]
+    public void MarkModelUnavailable_NoAccess_TTLПоумолчаниюСутки()
+    {
+        // TTL no_access — 24 часа (свойство тарифа, само не меняется). Проверяем, что пометка
+        // жива через час, но способности истечь по конфигу — через DefaultNoAccessTtlHours.
+        var pool = new ClaudeSubscriptionPool(Config("a"));
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+        pool.IsModelUnavailable("a", "opus").Should().BeTrue();
+    }
+
+    [Fact]
+    public void MarkModelUnavailable_OutOfCredits_TTLИзКонфига_Истекает()
+    {
+        // TTL out_of_credits из конфига (часы). Ставим 0 часов → истёк сразу.
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:a:OAuthToken"] = "token-a",
+            [$"{ClaudeSubscriptionPool.Section}:OutOfCreditsTtlHours"] = "0",
+        };
+        var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelOutOfCredits);
+
+        pool.IsModelUnavailable("a", "opus").Should().BeFalse("TTL 0 часов — пометка истекла сразу");
+    }
+
+    [Fact]
+    public void MarkModelUnavailable_NoAccess_TTLИзКонфига_Истекает()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:a:OAuthToken"] = "token-a",
+            [$"{ClaudeSubscriptionPool.Section}:NoAccessTtlHours"] = "0",
+        };
+        var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.IsModelUnavailable("a", "opus").Should().BeFalse("TTL 0 часов — пометка истекла сразу");
+    }
+
+    [Fact]
+    public void Pick_НеОтдаётПодпискуСЖивойПометкойНаМодель()
+    {
+        // a и b тянут opus, но a помечена «opus недоступен» → Pick("opus") берёт b.
+        var config = Config("a", "b");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "a", 0.0);
+        RecordUtil(usage, "b", 0.5);
+        var pool = new ClaudeSubscriptionPool(config, usage);
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick("opus").Should().Be("b");
+    }
+
+    [Fact]
+    public void Pick_ВсеПомеченыНаМодель_FailOpenВозвращаетКого_тоИзПометок()
+    {
+        // Обе подписки помечены «opus недоступен» → живых кандидатов нет, Pick fail-open
+        // (пометка — наблюдение, а не запрет): возвращает одну из подписок, ход не падает
+        // на этапе выбора (упадёт на модели и перемаркирует, если всё ещё недоступна).
+        var config = Config("a", "b");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "a", 0.0);
+        RecordUtil(usage, "b", 0.5);
+        var pool = new ClaudeSubscriptionPool(config, usage);
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+        pool.MarkModelUnavailable("b", "opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.Pick("opus").Should().BeOneOf("a", "b");
+        // Без пина модели пометки не мешают: opus-пометка не трогает выбор без модели.
+        pool.Pick().Should().BeOneOf("a", "b");
+    }
+
+    [Theory]
+    [InlineData("rejected", null, "out_of_credits", true)]
+    [InlineData("rejected", null, "org_level_disabled", true)]
+    [InlineData("rejected", 0.96, "out_of_credits", false)]   // utilization есть — это окно
+    [InlineData("rejected", null, null, false)]               // причины нет — обычное rejected
+    [InlineData("allowed", null, "out_of_credits", false)]    // не rejected
+    public void IsModelUnavailableRejection_ПризнакРазличения(
+        string? status, double? utilization, string? overageDisabledReason, bool expected)
+    {
+        ClaudeSubscriptionPool.IsModelUnavailableRejection(status, utilization, overageDisabledReason)
+            .Should().Be(expected);
     }
 }

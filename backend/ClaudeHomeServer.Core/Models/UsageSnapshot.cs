@@ -16,7 +16,12 @@ public record UsageSnapshot(
     string? OverageStatus = null,
     string? OverageResetsAt = null,
     string SubscriptionKey = "claude",
-    string? Source = null);
+    string? Source = null,
+    // Почему перерасход выключен (out_of_credits | org_level_disabled). Долго терялось: RateLimitMessage
+    // его несёт, но UsageService.Record не принимал. Доведено до снимка для разбора инцидентов —
+    // rejected с этим полем и пустой utilization означает «отказ по кредитам модели», а не
+    // исчерпание окна подписки. null — поле отсутствовало (старые снимки) или не пришло.
+    string? OverageDisabledReason = null);
 
 // Информация о тарифе подписки (из ~/.claude/.credentials.json)
 public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string Label);

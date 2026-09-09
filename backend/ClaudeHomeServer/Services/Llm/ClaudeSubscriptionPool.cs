@@ -28,6 +28,12 @@ public class ClaudeSubscriptionPool
     // за трое суток до сброса — недельная утилизация растёт медленно.
     private const double DefaultWeeklyThreshold = 0.95;
 
+    // TTL пометки «пара (подписка × модель) недоступна» по причине. no_access — свойство
+    // тарифа, само не меняется (сутки); out_of_credits — кошелёк кредитов модели, могут
+    // пополнить в любой момент (час). Дефолты перекрываются конфигом, значения в часах.
+    private const double DefaultNoAccessTtlHours = 24;
+    private const double DefaultOutOfCreditsTtlHours = 1;
+
     // Без известного времени сброса помечаем на полчаса: пятичасовое окно всё равно
     // не сбросится быстрее, а редкие пробные чаты сами продлят пометку при новом rejected.
     private static readonly TimeSpan DefaultExhaustion = TimeSpan.FromMinutes(30);
@@ -55,6 +61,19 @@ public class ClaudeSubscriptionPool
     public static bool IsExhaustionWindow(string? limitType) =>
         limitType is not null && ExhaustionWindows.Contains(limitType);
 
+    /// <summary>Отказ по недоступной модели, а не исчерпание базового окна подписки?</summary>
+    /// Признак различения (зафиксирован в комментарии к false-бану ниже): rejected при
+    /// выключенном перерасходе (overageDisabledReason = out_of_credits | org_level_disabled)
+    /// И пустой utilization. Оба условия обязательны: голый utilization=null бывает и у
+    /// НАСТОЯЩЕГО rejected (CLI не всегда шлёт загрузку окна), а overageDisabledReason —
+    /// единственный однозначный маркер «отказ не про окно, а про кошелёк кредитов модели».
+    /// По такому событию MarkExhausted на ВСЮ подписку ложен: Sonnet/Opus на базовом лимите
+    /// работают, выпадать из ротации до сброса окна не должны.
+    public static bool IsModelUnavailableRejection(string? status, double? utilization, string? overageDisabledReason) =>
+        status == "rejected"
+        && utilization is null
+        && overageDisabledReason is "out_of_credits" or "org_level_disabled";
+
     private readonly IReadOnlyList<ClaudeSubscriptionConfig> _subscriptions;
     private readonly UsageService? _usage;
     // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
@@ -71,6 +90,16 @@ public class ClaudeSubscriptionPool
     // подписку из кандидатов Pick — пока в пуле есть живая, ход уходит на неё, а не бьётся о
     // мёртвую (инцидент 2026-08-13: половина ходов падала на протухшей подписке при живой второй).
     private readonly ConcurrentDictionary<string, byte> _authDead = new();
+
+    // Пометка «пара (подписка × модель) недоступна»: ключ подписки + модель → (дедлайн, причина).
+    // В отличие от _exhausted (вся подписка на лимите), режет ТОЛЬКО пару — Sonnet/Opus на той же
+    // подписке остаются кандидатами. In-memory, как _exhausted/_authDead (рестарт сервера снимает
+    // все пометки — восстановление не требуется: пара, которая всё ещё недоступна, перемаркируется
+    // первым же отказом). Ключ-строка из подписки и модели, модель нормализуется к нижнему регистру.
+    private readonly ConcurrentDictionary<string, (DateTime Until, FallbackErrorClass Reason)> _modelUnavailable = new();
+
+    private readonly double _noAccessTtlHours;
+    private readonly double _outOfCreditsTtlHours;
 
     public ClaudeSubscriptionPool(IConfiguration config, UsageService? usage = null)
     {
@@ -91,6 +120,8 @@ public class ClaudeSubscriptionPool
         _usage = usage;
         _softThreshold = config.GetValue($"{Section}:SoftThreshold", DefaultSoftThreshold);
         _weeklyThreshold = config.GetValue($"{Section}:WeeklyThreshold", DefaultWeeklyThreshold);
+        _noAccessTtlHours = config.GetValue($"{Section}:NoAccessTtlHours", DefaultNoAccessTtlHours);
+        _outOfCreditsTtlHours = config.GetValue($"{Section}:OutOfCreditsTtlHours", DefaultOutOfCreditsTtlHours);
 
         if (usage is not null)
             RestoreFromSnapshots(usage);
@@ -225,24 +256,25 @@ public class ClaudeSubscriptionPool
         var sub = _subscriptions.FirstOrDefault(s => s.Key == key);
         // Ключ вне пула — не наша забота (сторонний провайдер): считаем, что тянет.
         if (sub is null) return true;
+        // Живая пометка «пара недоступна» — поверх ручных флагов конфига (те остаются).
+        if (IsModelUnavailable(key, model)) return false;
         if (RequiresOpus(model) && !sub.SupportsOpus) return false;
         if (LlmProviderRegistry.IsClaudeTierWindowAlias(model) && !sub.Supports1M) return false;
         return true;
     }
 
-    /// <summary>Суффикс [1m] тир-алиаса остаётся, если в пуле есть живой кандидат с поддержкой</summary>
-    /// 1M-окна; иначе срезается в базовый алиас (деградация в 200K вместо падения хода на
-    /// аккаунте без доступа). Не-тир-алиасы (полные id, сторонние провайдеры, обычные модели)
-    /// не трогает — их суффикс разбирает сам CLI. Пул пуст (локальный Claude) — модель как есть
-    /// (default Supports1M=true). См. коммит 639136c4: срез был лекарством от рулетки «попали
-    /// на учётку без 1M-доступа → ход упал»; теперь подписка выбирается по способности (Pick),
-    /// а срез остаётся лишь страховкой, когда способных не осталось.
+    /// <summary>Резолв суффикса [1m] тир-алиаса по способности пула.</summary>
+    /// Живой 1M-кандидат есть → модель как есть; нет → null — сигнал «1M-окно недоступно».
+    /// Тихого среза в базовый алиас больше НЕТ: деградация в 200K для длинного чата — мина
+    /// (контекст 783K в 200K не влезет, человек получит непонятное переполнение вместо причины).
+    /// null разбирает вызывающий (FallbackLlmSessionAdapter → честный отказ с
+    /// TurnFailureText.Window1MUnavailable). Явный запуск в базовом алиасе (кнопка волны 2) —
+    /// это LlmProviderRegistry.StripClaudeWindowAlias, вызывается ТОЛЬКО по явному запросу.
+    /// Не-тир-алиасы (полные id, сторонние провайдеры) и пул пуст — модель как есть.
     public string? ResolveWindowAlias(string? model)
     {
         if (!LlmProviderRegistry.IsClaudeTierWindowAlias(model)) return model;
-        return HasLive1MCandidate(model)
-            ? model
-            : LlmProviderRegistry.StripClaudeWindowAlias(model);
+        return HasLive1MCandidate(model) ? model : null;
     }
 
     // Есть ли сейчас в пуле живой (не исчерпанный, не auth-dead) аккаунт, способный обслужить
@@ -376,4 +408,43 @@ public class ClaudeSubscriptionPool
     {
         if (!string.IsNullOrEmpty(key)) _authDead.TryRemove(key, out _);
     }
+
+    /// <summary>Пометить пару (подписка, модель) недоступной до истечения TTL причины.</summary>
+    /// Не трогает исчерпание подписки: пометка режет ТОЛЬКО пару (SupportsModel), Sonnet/Opus на
+    /// той же подписке остаются в ротации. Пустая модель — пары нет, пометка не ставится.
+    public void MarkModelUnavailable(string key, string? model, FallbackErrorClass reason)
+    {
+        if (string.IsNullOrEmpty(key) || string.IsNullOrWhiteSpace(model)) return;
+        _modelUnavailable[PairKey(key, model)] = (DateTime.UtcNow.Add(ModelTtl(reason)), reason);
+    }
+
+    /// <summary>Снять пометку пары вручную (кнопка «проверить заново», волна 2) или успешным</summary>
+    /// ходом этой модели на этой подписке (как Reset снимает исчерпание).
+    public void ClearModelUnavailable(string key, string? model)
+    {
+        if (string.IsNullOrEmpty(key) || string.IsNullOrWhiteSpace(model)) return;
+        _modelUnavailable.TryRemove(PairKey(key, model), out _);
+    }
+
+    /// <summary>Пара сейчас помечена недоступной (TTL ещё не истёк)?</summary>
+    public bool IsModelUnavailable(string key, string? model)
+    {
+        if (string.IsNullOrEmpty(key) || string.IsNullOrWhiteSpace(model)) return false;
+        if (!_modelUnavailable.TryGetValue(PairKey(key, model), out var mark)) return false;
+        if (DateTime.UtcNow >= mark.Until)
+        {
+            _modelUnavailable.TryRemove(PairKey(key, model), out _);
+            return false;
+        }
+        return true;
+    }
+
+    private static string PairKey(string key, string model) =>
+        key + "|" + model.ToLowerInvariant();
+
+    private TimeSpan ModelTtl(FallbackErrorClass reason) => reason switch
+    {
+        FallbackErrorClass.ModelOutOfCredits => TimeSpan.FromHours(_outOfCreditsTtlHours),
+        _ => TimeSpan.FromHours(_noAccessTtlHours),
+    };
 }

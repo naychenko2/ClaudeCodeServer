@@ -8193,7 +8193,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         acc.OnModelSwitched(m.Model, acc.LastStartedModel(), m.Reason, m.ErrorDetails);
                     break;
                 case RateLimitMessage m:
-                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
+                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn", overageDisabledReason: m.OverageDisabledReason);
                     _activity?.Touch(entry?.Info.Provider);
                     // P31: rate_limit_event от подписки — доказательство аутентификации (до лимитов
                     // запрос не дошёл бы). Снимаем auth-dead независимо от окна и исчерпания: иначе
@@ -8215,6 +8215,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         // без overage — окно выбрано (с overage ходы ещё проходят).
                         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
                         {
+                            // Отказ по НЕДОСТУПНОЙ модели (кредиты модели / нет доступа), а не
+                            // исчерпание базового окна подписки. Признак — IsModelUnavailableRejection
+                            // (rejected + пустая utilization + overageDisabledReason). Такое событие
+                            // подписку исчерпанной НЕ метит: Sonnet/Opus на ней работают, ложный бан
+                            // выводил бы её из ротации до сброса окна (инцидент 2026-09-09). Пометку
+                            // пары (подписка × модель) ставит адаптер в ResolveNextTarget — здесь
+                            // события несут окно, а не модель, и пара нам неизвестна.
+                            if (ClaudeSubscriptionPool.IsModelUnavailableRejection(m.Status, m.Utilization, m.OverageDisabledReason))
+                                return;
                             // M1: под фолбэк-оркестрацией ротацией владеет адаптер —
                             // помечать провайдер исчерпанным и переключать пул тут
                             // нельзя. Не только потому, что будет дубль provider_switched:

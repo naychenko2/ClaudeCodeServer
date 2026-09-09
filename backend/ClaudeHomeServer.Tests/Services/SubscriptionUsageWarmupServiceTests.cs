@@ -122,19 +122,21 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
     }
 
     [Fact]
-    public void RecordAndGuard_RejectedПричинаПерерасхода_ДоезжаетДоЛога()
+    public void RecordAndGuard_RejectedПоКредитамМодели_НеПомечаетИсчерпанной()
     {
-        // Инцидент 20–23.08.2026: без причины в логе видно только status=rejected, а
-        // «кончились кредиты» (out_of_credits) и «выключено организацией»
-        // (org_level_disabled) — разные причины с разными действиями
-        var (svc, pool, _, _) = MkService(subKeys: ["second"]);
+        // Инцидент 2026-09-09: rejected при пустой utilization и overageDisabledReason=
+        // out_of_credits — отказ по кредитам МОДЕЛИ, а не исчерпание базового окна подписки.
+        // Подписку исчерпанной не метим (Sonnet/Opus на ней работают), причина едет в лог
+        // и в снимок usage (overageDisabledReason), а не только в status=rejected.
+        var (svc, pool, usage, _) = MkService(subKeys: ["second"]);
         var msg = new RateLimitMessage("five_hour", DateTime.UtcNow.AddHours(2).ToString("o"),
             "rejected", null, false, OverageDisabledReason: "out_of_credits");
 
         var log = CaptureErr(() => svc.RecordAndGuard("second", msg));
 
-        pool.IsExhausted("second").Should().BeTrue();
+        pool.IsExhausted("second").Should().BeFalse("отказ по кредитам модели не исчерпание подписки");
         log.Should().Contain("out_of_credits");
+        usage.GetAll().Should().ContainSingle().Which.OverageDisabledReason.Should().Be("out_of_credits");
     }
 
     [Fact]

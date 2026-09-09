@@ -42,6 +42,17 @@ public enum FallbackErrorClass
     // задача dc641949 (инцидент 2026-09-07, чат 74f1c3d6: 5 попыток цепочки по 9 секунд
     // каждая на сломанном промпте).
     PromptOverflow,
+    // Модель недоступна на ЭТОЙ подписке (а не исчерпан лимит подписки). Два корня, оба
+    // лечатся сменой пары «подписка × модель»:
+    //   ModelNoAccess — подписка не имеет доступа к модели («issue with the selected model» /
+    //     «may not have access to it», обычно apiErrorStatus=404). Свойство тарифа, само не
+    //     меняется — TTL пометки пары длинный (сутки).
+    //   ModelOutOfCredits — у модели кончились usage credits («requires usage credits»).
+    //     Отдельный кошелёк кредитов модели, НЕ лимит подписки: Sonnet/Opus на той же
+    //     подписке работают. Приезжает как rate_limit_event status=rejected (см. ловушку
+    //     в Classify ниже) — кредиты могут пополнить в любой момент, TTL короткий (час).
+    ModelNoAccess,
+    ModelOutOfCredits,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -107,6 +118,16 @@ public static class TurnErrorClassifier
     {
         // Остановка пользователем — не ошибка доставки
         if (outcome.InterruptedByUser) return FallbackErrorClass.None;
+
+        // Модель недоступна на этой подписке — ДО ветки RateLimitRejected. Ловушка: отказ
+        // «нет кредитов» приезжает как rate_limit_event status=rejected (five_hour), и
+        // RateLimitRejected был бы поставлен ПЕРВЫМ — до всякого разбора текста. Тогда ход
+        // ложно классифицировался бы как RateLimit, подписка помечалась исчерпанной целиком,
+        // а человек видел «лимит подписки исчерпан» при живых Sonnet/Opus. Текст ошибки
+        // попытки (outcome.ErrorText) смотрим раньше: маркеры у обеих причин канонические
+        // и не пересекаются с «You've hit your session limit» (настоящим исчерпанием окна).
+        if (LooksModelOutOfCredits(outcome.ErrorText)) return FallbackErrorClass.ModelOutOfCredits;
+        if (LooksModelNoAccess(outcome.ErrorText)) return FallbackErrorClass.ModelNoAccess;
 
         // Мягкий лимит: rejected по окну исчерпания (five_hour/seven_day) — CLI
         // приостановил ход до сброса окна
@@ -217,6 +238,10 @@ public static class TurnErrorClassifier
         // Перерасход командной строки: не идёт в ProviderSwitchedMessage (фолбэк не
         // запускается), но имя полезно для лога/паспорта хода и для будущих подсказок.
         FallbackErrorClass.PromptOverflow => "prompt_overflow",
+        // Недоступность модели на подписке: две причины — фронт по ним даёт разные
+        // подсказки («нет доступа» — свойство тарифа; «нет кредитов» — пополнить кошелёк).
+        FallbackErrorClass.ModelNoAccess => "model_no_access",
+        FallbackErrorClass.ModelOutOfCredits => "model_out_of_credits",
         _ => null,
     };
 
@@ -286,6 +311,30 @@ public static class TurnErrorClassifier
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    // Модель недоступна на подписке: подписка не имеет доступа к модели. Формулировка
+    // каноническая (Claude CLI, «There's an issue with the selected model (…)»), обычно
+    // apiErrorStatus=404. Голое «no access»/«access denied» сюда НЕ входят — слишком обычны.
+    private static readonly string[] ModelNoAccessPhrases =
+    [
+        "issue with the selected model",
+        "may not have access to it",
+    ];
+
+    private static bool LooksModelNoAccess(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        foreach (var phrase in ModelNoAccessPhrases)
+            if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // У модели кончились usage credits — отдельный кошелёк кредитов, НЕ лимит подписки.
+    // Формулировка каноническая («requires usage credits. Switch to another model…»). Именно
+    // она в тексте, когда подписка жива, но кредиты на конкретную модель (Fable/Opus) иссякли.
+    private static bool LooksModelOutOfCredits(string? text) =>
+        text is not null
+        && text.Contains("requires usage credits", StringComparison.OrdinalIgnoreCase);
 
     // Маркеры лимита запросов в тексте ошибки при пустом статусе (прод-кейс: сторонние
     // провайдеры отдают в поле статуса «—», а HTTP 429 — только текстом). Формулировки без

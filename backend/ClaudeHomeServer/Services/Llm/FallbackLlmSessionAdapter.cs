@@ -553,6 +553,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 }
             }
 
+            // Окно 1M недоступно: суффикс [1m] тир-алиаса запрошен, но живых подписок с доступом
+            // нет. Тихого среза в 200K больше нет (ResolveWindowAlias вернул null) — честный отказ
+            // до старта попытки: контекст длинного чата (сотни тысяч токенов) в 200K не влезет, и
+            // человек получит причину, а не непонятное переполнение. Как LocalModelDown — без
+            // подмены и без кулдауна (состояние снято до попытки, помечать нечего).
+            if (currentModel is not null && _pool.ResolveWindowAlias(currentModel) is null)
+            {
+                LogWarn($"Окно 1M недоступно (session {Info.Id}): нет живой подписки с доступом к «{currentModel}» — ход не стартует, цепочку не идём.");
+                turnOutcome = "window_1m_unavailable";
+                await FailWindow1MUnavailableAsync(turn);
+                return;
+            }
+
             // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
             // недоступным (возвращал Unreachable/ProviderError в прошлых ходах либо исчерпал
             // квоту — UsageLimit), не тратим попытку на мёртвый/исчерпанный эндпоинт — стартуем
@@ -702,6 +715,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (!IsDeliveryFailure(end))
                 {
                     _health?.Clear(currentKey);
+                    // Успешный ход этой модели на этой подписке снимает пометку «пара недоступна»
+                    // немедленно (как Reset снимает исчерпание): TTL — верхняя граница «скорее
+                    // всего ещё недоступна», а прямой успех — факт «уже доступна».
+                    _pool.ClearModelUnavailable(currentKey, currentModel);
                     turnOutcome = "success";
                     await SettleAsync(turn);
                     return;
@@ -1144,6 +1161,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         else if (cls == FallbackErrorClass.AuthFailure && isNativeClaude)
         {
             _pool.MarkAuthDead(currentKey);
+        }
+        // Модель недоступна на ЭТОЙ подписке (нет доступа / кончились кредиты модели) — пометить
+        // ПАРУ (подписка × модель), а не всю подписку. Это не квота аккаунта: Sonnet/Opus на той же
+        // подписке работают, MarkExhausted увёл бы её из ротации целиком и показал бы ложное
+        // «лимит подписки исчерпан» (инцидент 2026-09-09, чат «Анализ документов ВФЛА»). Сторонний
+        // провайдер (isNativeClaude=false) пары в пуле не имеет — его здоровье ведёт реестр выше.
+        else if (cls is FallbackErrorClass.ModelNoAccess or FallbackErrorClass.ModelOutOfCredits
+                 && isNativeClaude)
+        {
+            _pool.MarkModelUnavailable(currentKey, model, cls);
         }
 
         // Уровень 1: ротация подписок пула (только нативные claude-модели; у сторонних пула нет —
@@ -1589,6 +1616,33 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
                 orig?.Usage, orig?.TotalCostUsd,
                 ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
+            await _downstream(m);
+    }
+
+    /// <summary>
+    /// Финал «окно 1M недоступно»: суффикс [1m] тир-алиаса запрошен, но живых подписок с
+    /// доступом к окну нет. По образцу FailLocalDownAsync/EgressDown: человек читает про окно,
+    /// а не про «сервис не отвечает» (иначе он пошёл бы менять модель — не поможет, окно 1M
+    /// есть не на всех подписках). Ход ещё не стартовал (pre-flight), подменять/кулдаунить нечего.
+    /// </summary>
+    private async Task FailWindow1MUnavailableAsync(FallbackTurn turn)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        await _downstream(new ErrorMessage(TurnFailureText.Window1MUnavailable, ExpectResultFollows: true));
+
+        var orig = held.OfType<ResultMessage>().FirstOrDefault();
+        await _downstream(orig is { Subtype: "error" }
+            ? orig
+            : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
+                orig?.Usage, orig?.TotalCostUsd));
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);
     }

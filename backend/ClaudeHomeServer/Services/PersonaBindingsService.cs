@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
@@ -17,7 +18,7 @@ public enum SectionSource { Off, Preset, Explicit }
 // индекс «[тип] Когда: {условие} → {способ подгрузки}» + выжимки привязок режима
 // «всегда» (Always). Плюс единая точка истины по Tool-рубильникам персоны
 // (EffectiveToolEnabled: binding приоритетнее Persona.Tools) и валидация привязок.
-public class PersonaBindingsService
+public class PersonaBindingsService : IPersonaServerToolGate
 {
     // Строк индекса в блоке — не больше (защита от раздувания промпта)
     public const int IndexLimit = 12;
@@ -165,11 +166,19 @@ public class PersonaBindingsService
     // Off-привязка (type: tool, target: <ключ>) — дефолт «всё включено» остаётся байт-в-байт.
     // Решение зависит ТОЛЬКО от персоны, поэтому детерминировано на сессию (состав tools/list
     // не смеет мерцать между ходами); правка персоны инвалидирует адаптер — InvalidatePersonaSessions.
+    //
+    // Этап 5, шаг 6: имплементирует Core-шов `IPersonaServerToolGate` — узкая часть
+    // контракта (только ServerToolEnabled), нужная контрибьюторам секций промпта из чужих
+    // вертикалей (CodeGraph → codegraph). Остальные методы класса остаются доступны по
+    // прямому типу в root Services.
     public bool ServerToolEnabled(string? ownerId, Persona? persona, string key)
     {
         if (persona is null) return true;
         return FindToolBinding(persona, key) is not { Mode: PersonaBindingMode.Off };
     }
+
+    bool IPersonaServerToolGate.IsServerToolEnabled(string? ownerId, Persona? persona, string toolKey)
+        => ServerToolEnabled(ownerId, persona, toolKey);
 
     // Активна ли Tool-привязка ключа у персоны (Mode != Off) — явный opt-in, в отличие от
     // ServerToolEnabled (deny-only, дефолт «включено» для чатов). Этим флагом файловый

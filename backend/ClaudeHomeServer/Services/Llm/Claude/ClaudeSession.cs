@@ -3161,7 +3161,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // которых в этом ходе нет.
             if (contributorSections.ContainsKey("code-navigation"))
                 Add("code-navigation", "Какой инструмент навигации по коду звать",
-                    Prompts.CodeNavigationPrompts.SectionText, group: "project");
+                    CodeNavigationPrompts.SectionText, group: "project");
 
             // Персональный слой (этап 2): контрибьютор PersonaLayerContributor добавляет секцию
             // Key="persona-layer" в filter.Sections. Combine находит её по ключу и клеит

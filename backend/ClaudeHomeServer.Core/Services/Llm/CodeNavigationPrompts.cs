@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services.Prompts;
+namespace ClaudeHomeServer.Services.Llm;
 
 // Сценарное правило выбора инструмента навигации по коду (ADR-011 шаг 3): три уровня —
 // codegraph (типы и связность), LSP (символ и позиция), Grep (текст) — не взаимозаменяемы.
@@ -23,6 +23,11 @@ namespace ClaudeHomeServer.Services.Prompts;
 // Текст промпта, не инструмент: состав tools/list и сигнатуру запуска CLI не меняет
 // (инвариант McpToolsetStabilityTests). Выкатывается вместе с LSP-1 (починка TS-LSP):
 // правило без рабочего TS-сервера научило бы модель звать заведомо сломанный инструмент.
+//
+// Этап 5, шаг 6: класс целиком переехал в Core (из `Services/Prompts/CodeNavigationPrompts.cs`),
+// чтобы контрибьютор CodeGraphContributor, живущий в вертикали CodeGraph, мог подключить
+// `SectionText` без зависимости на root Services. `Preset*` кирпичики читает
+// `SpecialtyPromptPresets` (Main, root) — Main ссылается на Core, путь открыт.
 public static class CodeNavigationPrompts
 {
     // Глобальная секция системного промпта хода (ключ "code-navigation"). Формулировка —

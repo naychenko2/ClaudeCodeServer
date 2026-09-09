@@ -1,4 +1,8 @@
-namespace ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Turn;
+
+namespace ClaudeHomeServer.Services.CodeGraph;
 
 // Slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A): хабы по
 // связности + правило навигации. Структурный slice + статичное правило «какой
@@ -9,23 +13,31 @@ namespace ClaudeHomeServer.Services.Turn;
 // IsEnabled: провайдер подключён, rootPath не пустой, у владельца tool:codegraph
 // не выключен Off-привязкой (прежний BuildCodeGraphProvider).
 //
-// Семантика гейта — серверная deny-only (PersonaBindingsService.ServerToolEnabled):
+// Семантика гейта — серверная deny-only (`IPersonaServerToolGate`):
 // если персоны у сессии нет — гейт не мешает (нет Off-привязки = включено); если
 // персона есть — её явная Off-привязка на «codegraph» отключает секцию. Эффективный
 // гейт EffectiveToolEnabled здесь неуместен: «codegraph» в ServerKeys, и Persona.Tools
 // о нём никогда не знал (включая дефолт «без ограничений») — переключение на
 // Effective сломало бы типичную персону с суженным Tools = [tasks, notes].
+//
+// Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор переехал в вертикаль
+// CodeGraph из Services/Turn — Turn больше не знает про этот кусок. Регистрируется
+// в `CodeGraphSubsystem.Register` через DI как `IPromptSectionContributor`; Turn
+// собирает `IEnumerable<IPromptSectionContributor>` и натравливает на шину, порядок
+// секций задаётся `Order` (см. `TurnEventBus.ApplyAsync`). Гейт идёт через Core-шов
+// `IPersonaServerToolGate` (узкая часть прежнего `PersonaBindingsService.ServerToolEnabled`),
+// чтобы не тянуть root Services в вертикаль.
 public sealed class CodeGraphContributor : IPromptSectionContributor
 {
-    private readonly CodeGraph.CodeGraphPromptProvider? _provider;
-    private readonly PersonaBindingsService _bindings;
+    private readonly CodeGraphPromptProvider? _provider;
+    private readonly IPersonaServerToolGate _toolGate;
     private readonly ILogger<CodeGraphContributor> _log;
 
-    public CodeGraphContributor(CodeGraph.CodeGraphPromptProvider? provider,
-        PersonaBindingsService bindings, ILogger<CodeGraphContributor> log)
+    public CodeGraphContributor(CodeGraphPromptProvider? provider,
+        IPersonaServerToolGate toolGate, ILogger<CodeGraphContributor> log)
     {
         _provider = provider;
-        _bindings = bindings;
+        _toolGate = toolGate;
         _log = log;
     }
 
@@ -37,7 +49,7 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         _provider is not null
         && !string.IsNullOrWhiteSpace(sessionContext.RootPath)
-        && _bindings.ServerToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");
+        && _toolGate.IsServerToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)
@@ -65,7 +77,7 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
             new(Key, codeGraphBlock ?? string.Empty),
             new PromptSection(
                 "code-navigation",
-                Prompts.CodeNavigationPrompts.SectionText),
+                CodeNavigationPrompts.SectionText),
         };
         return new PromptSectionContribution(sections);
     }

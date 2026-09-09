@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.ProjectServices;
@@ -35,7 +36,7 @@ public sealed record ExternalPreviewTarget(string BaseUrl, int Port, ExternalPre
 /// </summary>
 public sealed class ExternalPreviewRouter(
     IOptions<ExternalPreviewOptions> options,
-    JwtService jwt,
+    IPreviewTokenValidator previewTokens,
     ExternalPreviewStore store,
     IProjectManager projects,
     ProjectServiceDiscovery discovery,
@@ -110,7 +111,7 @@ public sealed class ExternalPreviewRouter(
         if (!Options.Enabled) return (null, ExternalPreviewDenial.Disabled);
         if (!Options.IsConfigured) return (null, ExternalPreviewDenial.NotConfigured);
 
-        var claims = jwt.ValidatePreviewToken(token);
+        var claims = previewTokens.ValidatePreviewToken(token);
         if (claims is null) return (null, ExternalPreviewDenial.BadToken);
 
         // Отзыв: подпись цела, но записи в реестре больше нет

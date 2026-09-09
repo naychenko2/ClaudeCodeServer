@@ -192,6 +192,13 @@ builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
 // контракты живут в Core. Адаптер файлов идёт через FileService (а не пишет сам),
 // чтобы синк базы знаний продолжал видеть правки документов.
 builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
+// Швы для Modules и ProjectServices (Этап 5, волна C, шаг 1): вместо прямой
+// зависимости от JwtService — узкие контракты на проверку пользовательского
+// и preview-токенов. Auth уже без связи: у AdminByStore.cs JwtService упомянут
+// только в комментарии. Адаптер в `Services/JwtValidatorGateway` реализует оба
+// интерфейса и идёт через `JwtService` — разделение на стороне потребителя.
+builder.Services.AddSingleton<IUserTokenValidator, JwtValidatorGateway>();
+builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).

@@ -165,6 +165,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFacto
 // инкапсулировано в Execution/Main.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ISandboxPortRange,
     ClaudeHomeServer.Services.Execution.SandboxPortRangeAdapter>();
+// Шов записи фона/цвета проекта для вертикали Backgrounds (Этап 5, волна C,
+// шаг 2): ProjectBackgroundService в отдельной сборке пишет Background/Color
+// через IProjectBackgroundWriter, форвардер сидит рядом с ProjectManager.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectBackgroundWriter,
+    ClaudeHomeServer.Services.ProjectBackgroundWriterAdapter>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();

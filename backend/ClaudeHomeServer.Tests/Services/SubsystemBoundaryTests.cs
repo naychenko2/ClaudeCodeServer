@@ -80,6 +80,8 @@ public class SubsystemBoundaryTests
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
         _ = typeof(ClaudeHomeServer.Services.Execution.ISandboxPortRange).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.IProjectBackgroundWriter).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -358,13 +360,19 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Backup.InstanceLock",
                 }),
         },
-        // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
-        // Допуски:
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода модели,
-        //    который генерирует JSON с фигурами (префикс-шов, как у `Git`/`Deploy`).
-        // 2) Допуски к корню Services — точные: `ProjectManager` (запись фона и флаг
-        //    `Background` в доменной модели проекта), `UserStore` (перечень владельцев
-        //    для массового прогона `RunAllAsync` в `ProjectBackgroundBackfill`).
+        // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008,
+        // Этап 5, волна C, шаг 2). Чтение проекта через Core-шов `IProjectManager`,
+        // запись (TryBeginBackground / SetBackground* / Update / BackgroundsDir) —
+        // через Core-шов `IProjectBackgroundWriter` (узкий форвардер к ProjectManager
+        // из Main, см. `Services/ProjectBackgroundWriterAdapter.cs`). Раньше здесь
+        // лежали точечные допуски на `ProjectManager` и `UserStore` — оба мёртвые
+        // после выноса в .csproj: Backgrounds физически не может сослаться на
+        // `ProjectManager` (нет ProjectReference на Main), запись идёт через
+        // Core-интерфейс, `IUserStore` уже в Core.
+        // Префикс-шов `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода
+        // модели, который генерирует JSON с фигурами (по образцу `Git`/`Deploy`).
+        // Шов `LocalActionCatalog.ProjectBackground` живёт в Core, отдельный допуск
+        // в allow-list не нужен.
         new object[]
         {
             new VerticalBoundary(
@@ -377,11 +385,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                }),
+                Array.Empty<string>()),
         },
         // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
         // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
@@ -1623,18 +1627,19 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 17 = Main + Core + 15 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // 18 = Main + Core + 16 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
         // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs/Modules
-        // — Этап 5, волны A и C; ProjectServices — Этап 5, волна C, шаг 2);
-        // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(17,
-            "сторож должен видеть 17 прод-сборок: ClaudeHomeServer, " +
+        // — Этап 5, волны A и C; ProjectServices — Этап 5, волна C, шаг 2;
+        // Backgrounds — Этап 5, волна C, шаг 2); при добавлении новых `.csproj`
+        // подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(18,
+            "сторож должен видеть 18 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
             "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
             "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules, " +
-            "ClaudeHomeServer.ProjectServices");
+            "ClaudeHomeServer.ProjectServices, ClaudeHomeServer.Backgrounds");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

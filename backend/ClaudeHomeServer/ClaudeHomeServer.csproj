@@ -70,15 +70,16 @@
 
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Notes/Personas/Spend/Knowledge/
-       Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks вынесены в собственные .csproj
-       и ссылаются только на Core. Здесь — обратная ссылка «Main → вертикаль» ради
-       регистрации подсистем в Program.cs: AddSubsystems(new VideoSubsystem(), ...).
-       Это не цикл: цепочка Main → Vertical → Core → (BCL). Core не ссылается ни
-       на Main, ни на вертикали. До этапа 3 всё это жило одной сборкой, и инвариант
-       «вертикаль зависит только от спинки» соблюдался логически; теперь он
-       держится физически — вертикаль не может «протянуть руку» в Main, потому
-       что ProjectReference в её .csproj нет. -->
+       Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
+       вынесены в собственные .csproj и ссылаются только на Core. Здесь — обратная
+       ссылка «Main → вертикаль» ради регистрации подсистем в Program.cs:
+       AddSubsystems(new VideoSubsystem(), ...). Это не цикл: цепочка
+       Main → Vertical → Core → (BCL). Core не ссылается ни на Main, ни на вертикали.
+       До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
+       от спинки» соблюдался логически; теперь он держится физически — вертикаль не
+       может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет. -->
   <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Video\ClaudeHomeServer.Video.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Yandex\ClaudeHomeServer.Yandex.csproj" />

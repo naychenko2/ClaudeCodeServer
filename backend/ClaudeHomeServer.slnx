@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="ClaudeHomeServer/ClaudeHomeServer.csproj" />
+  <Project Path="ClaudeHomeServer.Backgrounds/ClaudeHomeServer.Backgrounds.csproj" />
   <Project Path="ClaudeHomeServer.Changelog/ClaudeHomeServer.Changelog.csproj" />
   <Project Path="ClaudeHomeServer.Changelog.Tests/ClaudeHomeServer.Changelog.Tests.csproj" />
   <Project Path="ClaudeHomeServer.CodeGraph/ClaudeHomeServer.CodeGraph.csproj" />

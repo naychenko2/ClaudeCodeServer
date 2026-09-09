@@ -33,11 +33,12 @@ public sealed record ProjectBackgroundView(string Kind, string? TileVersion, str
 /// экрана без фона не бывает ни в одном состоянии.
 /// </summary>
 public sealed class ProjectBackgroundService(
-    // Шов для чтения состояния проекта (GetById). Мутации стора (TryBeginBackground,
-    // SetBackground*, Update) идут через полный ProjectManager — их нет в шве, и
-    // запись остаётся за Main. BackgroundsDir — внутренний путь стора, тоже на writer.
+    // Шов для чтения состояния проекта (GetById). Запись (TryBeginBackground,
+    // SetBackground*, Update, BackgroundsDir) идёт через IProjectBackgroundWriter
+    // (Core) — узкий форвардер к ProjectManager из Main, снимает зависимость
+    // вертикали от полного ProjectManager и делает вынос в .csproj возможным.
     IProjectManager projects,
-    ProjectManager projectsWriter,
+    IProjectBackgroundWriter projectsWriter,
     ICheapTextRunner cheap,
     ILogger<ProjectBackgroundService> log)
 {

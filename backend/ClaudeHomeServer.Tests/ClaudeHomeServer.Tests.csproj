@@ -64,6 +64,7 @@
       статический конструктор SubsystemBoundaryTests видел тип
       `ClaudeHomeServer.Services.Modules.ModuleRegistry` для force-загрузки сборки.
     -->
+    <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <!--
       ProjectServices — отдельная сборка (Этап 5, волна C). Нужен ProjectReference,

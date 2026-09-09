@@ -465,7 +465,7 @@ public class NotesController : ControllerBase
         {
             var note = _notes.Update(UserId, id, req);
             if (note is null) return NotFound();
-            await Broadcast("updated", id);
+            await Broadcast("updated", note.Id);
             return Ok(note);
         }
         catch (UnauthorizedAccessException) { return Forbid(); }

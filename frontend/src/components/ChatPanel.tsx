@@ -1662,9 +1662,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [respondTeamEscalation]);
   // Пока координатор ведёт ход-реакции по открытой карточке блокера — карточка
   // показывает «Координатор разбирается». Флаг — единая точка, чтобы UI не
-  // пересчитывал то же самое: нужно одновременно И идёт ход, И карточка открыта
-  // по стадии (openEscalations уже отфильтрован awaitingDecision/interview)
-  const coordinatorTurnActive = isWaiting && openEscalations.length > 0;
+  // пересчитывал то же самое: нужно одновременно И идёт ход, И открыта по стадии
+  // именно карточка-блокер (openEscalations уже отфильтрован awaitingDecision/interview,
+  // но в нём могут быть и productDecision/taskFailed/прочие — строку рисуем только у блокера,
+  // см. TeamEscalationView). Иначе на любом идущем ходе штаба при любой открытой
+  // карточке продуктовой развилки строка утверждала бы, что координатор разбирается
+  // с блокером, которого нет
+  const coordinatorTurnActive = isWaiting
+    && openEscalations.some(e => e.item.escalation.kind === 'blocker');
   const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
     ? { onRespond: handleRespondTeamEscalation, coordinatorTurnActive }
     : null, [teamImplementState, handleRespondTeamEscalation, coordinatorTurnActive]);

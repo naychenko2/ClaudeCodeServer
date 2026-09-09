@@ -1,4 +1,8 @@
+using System.Reflection;
 using ClaudeHomeServer.Services.Composition;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ApplicationParts;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -33,8 +37,19 @@ namespace ClaudeHomeServer.Services.Notes;
 // Регистрация шовных реализаций (`TaskBridge`/`NotesHubNotifier`) — в Main
 // (Program.cs), потому что эти типы сами живут в Main и недоступны из
 // Notes.csproj: обратной ссылки нет.
+//
+// Контроллер `NotesController` (Controllers/NotesController.cs) живёт В ЭТОЙ
+// сборке и подключается к Main через `ApplicationPart` — см. метод
+// `AddApplicationPart` ниже. Дефолт `Subsystems:Notes:Enabled = true`;
+// при `false` сборка не подключается к MVC и маршруты `/api/notes/*` отдают
+// 404 (роутер не находит action), а не 500 (DI-резолв упавшего контроллера).
 public sealed class NotesSubsystem : IAppSubsystem
 {
+    // Ключ секции в `appsettings`: тумблер отключения подсистемы. Путь
+    // стандартный — `Subsystems:<Key>:Enabled`. Читается в `Register` и
+    // `AddApplicationPart`; дефолт true (по умолчанию включено).
+    public const string EnabledConfigKey = "Subsystems:Notes:Enabled";
+
     public string Key => "notes";
 
     public string Title => "Заметки";
@@ -48,5 +63,38 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
         services.AddGatedHostedService<NoteExpiryService>(config);
+
+        // Подключение MVC-ApplicationPart ТОЛЬКО при включённой подсистеме.
+        // При `Enabled=false` `IConfigureOptions<MvcOptions>` не регистрируется,
+        // MVC строит свой `ApplicationPartManager` без этой сборки, и
+        // `NotesController` НЕ обнаруживается — запросы к `/api/notes/*` уходят
+        // в общий 404, а не 500 от DI-резолва. Никаких записей об исключениях.
+        //
+        // Почему `IConfigureOptions<MvcOptions>` + DI-резолв `ApplicationPartManager`,
+        // а не `IMvcBuilder.AddApplicationPart`:
+        // `IAppSubsystem.Register` не получает `IMvcBuilder` на руки (он создаётся
+        // и тут же потребляется в `AddControllers().AddJsonOptions(...)` в Program.cs).
+        // Configure-options — единственный шанс добавить part к моменту построения
+        // `ApplicationPartManager`, не дёргая обратную ссылку Main → вертикаль.
+        // `ApplicationPartManager` — синглтон в DI, регистрируется в `AddControllers()`
+        // раньше, чем сюда доходит наша `Register`; добавляем свой `AssemblyPart` в его
+        // `ApplicationParts`, и MVC при первом резолве `MvcOptions` уже видит обе сборки.
+        if (config.GetValue<bool>(EnabledConfigKey, true))
+        {
+            services.AddSingleton<IConfigureOptions<MvcOptions>>(
+                sp => new ConfigureMvcOptions(
+                    sp.GetRequiredService<ApplicationPartManager>(),
+                    typeof(NotesSubsystem).Assembly));
+        }
+    }
+
+    // `IConfigureOptions<MvcOptions>`-обёртка, которая к моменту построения `MvcOptions`
+    // дописывает нашу сборку в общий `ApplicationPartManager`. Сам `MvcOptions` не
+    // отдаёт `ApplicationPartManager` как публичное свойство — идём через DI-синглтон.
+    private sealed class ConfigureMvcOptions(
+        ApplicationPartManager partManager, Assembly assembly) : IConfigureOptions<MvcOptions>
+    {
+        public void Configure(MvcOptions options) =>
+            partManager.ApplicationParts.Add(new AssemblyPart(assembly));
     }
 }

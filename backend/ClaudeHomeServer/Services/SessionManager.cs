@@ -6123,6 +6123,35 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
+    // Синхронный собрат ListOpenEscalationsAsync (S6, фикс-волна). Нужен там, где
+    // async на запросном потоке недопустим (MVC-фильтр DenyOnDelegatedTurn → TeamBudgetService)
+    // или где мы хотим объединить чтение с мутацией в одной WithTeamState-транзакции
+    // (S4 — гонка возврата стадии). Реализация безопасна для синхронного вызова: у
+    // активного чата читает Accumulator напрямую (исторически тот же путь без явного
+    // lock), у неактивного — LoadAsync(...).GetAwaiter().GetResult() (метод фактически
+    // синхронен: Task.FromResult, см. ChatHistoryService.LoadAsync).
+    IReadOnlyList<TeamEscalation> ITeamHistoryStore.GetOpenTeamEscalationsSync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return [];
+        if (entry.Accumulator is { } acc)
+            return acc.GetAll().OfType<StoredTeamEscalationMessage>()
+                .Where(m => !m.Escalation.Resolved)
+                .Select(m => m.Escalation).ToList();
+        if (entry.Info.ClaudeSessionId is not string key) return [];
+        try
+        {
+            var stored = _history.LoadAsync(key).GetAwaiter().GetResult();
+            return stored.OfType<StoredTeamEscalationMessage>()
+                .Where(m => !m.Escalation.Resolved)
+                .Select(m => m.Escalation).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Чтение карточек остановки с диска ({SessionId}) не удалось", sessionId);
+            return [];
+        }
+    }
+
     // Публичный (волна Д): TeamDecisionService зовёт его вместо прямой работы с
     // entry.Accumulator. Счётчик и момент последнего оклика пишутся на карточку в истории —
     // переживают рестарт сервера, чтобы после перезапуска не начать оклик заново.
@@ -6155,8 +6184,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // чате (и пишет снимок), либо правит на диске у неактивного. Возвращает объект
     // карточки — координатору нужны её поля (Kind/Actions/TaskId/Wave/PersonaId).
     // null — карточки нет / не резолвилась.
+    // resolutionNote (M3, фикс-волна): подпись снятия штабом пишется в карточку ОДНИМ
+    // вызовом вместе с Resolved/ChosenActionId — раньше правка шла отдельным
+    // MutateCardAsync, а у активного чата MutateCardAsync ходил через диск и затирался
+    // ближайшим снимком Accumulator-а; теперь текст снятия живёт до перезагрузки.
     public async Task<TeamEscalation?> ResolveEscalationAsync(string sessionId, string escalationId,
-        string? actionId)
+        string? actionId, string? resolutionNote = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (entry.Accumulator is { } acc)
@@ -6164,6 +6197,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var escalation = acc.FindTeamEscalation(escalationId);
             var resolved = acc.OnTeamEscalationResolved(escalationId, actionId);
             if (!resolved) return null;
+            if (escalation is null) return null;
+            // Подпись снятия вписывается в тот же объект до снимка: снимок зальёт её на диск
+            // одним коммитом, отдельного MutateCardAsync с гонкой уже нет
+            if (resolutionNote is not null) escalation.ResolutionNote = resolutionNote;
             FireAndForget(acc.SaveSnapshotAsync(_history),
                 $"сохранение истории после решения по карточке остановки ({sessionId})");
             return escalation;
@@ -6172,7 +6209,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         StoredTeamEscalationMessage? card = null;
         var ok = await _teamHistory.MutateCardAsync<StoredTeamEscalationMessage>(sessionId,
             m => m.EscalationId == escalationId && !m.Escalation.Resolved,
-            m => { m.Escalation.Resolved = true; m.Escalation.ChosenActionId = actionId; card = m; });
+            m =>
+            {
+                m.Escalation.Resolved = true;
+                m.Escalation.ChosenActionId = actionId;
+                if (resolutionNote is not null) m.Escalation.ResolutionNote = resolutionNote;
+                card = m;
+            });
         if (!ok) return null;
         return card?.Escalation;
     }
@@ -6475,23 +6518,36 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // человека — иначе полоса «Практика ждёт вашего решения» продолжает висеть (прод 2026-09).
     // Проходим по всем открытым карточкам с этим TaskId (включая блокеры) и гасим через
     // ResolveEscalationAsync; у блокеров — резолюшн-нота «Ответ сообщением».
+    // Карточки, чьё решение по сути и есть текст (S5, фикс-волна). Их гасим текстовым
+    // ответом из «ждёт решения». Прочие решающие карточки (BudgetExhausted, WaveGate,
+    // Stopped) оставляем человеку: их кнопка делает серверное действие (поднять потолки,
+    // раздать волну, снять «Стоп»), которое текст заменить не может. У BudgetExhausted
+    // кнопка «Добавить бюджет» — единственный способ поднять потолки, и при погашенной
+    // карточке человек остался бы без неё (прод 2026-09 — зафиксировано Глебом).
+    private static bool ExtinguishedByMessage(TeamEscalationKind kind) =>
+        kind is TeamEscalationKind.Blocker
+                or TeamEscalationKind.TaskFailed
+                or TeamEscalationKind.PlanDeviation
+                or TeamEscalationKind.CheckFailed
+                or TeamEscalationKind.ProductDecision;
+
     private async Task ResumeTeamFromDecisionOnUserInput(string sessionId, SessionEntry entry)
     {
         if (entry.Info.TeamImplement is not { Stage: TeamImplementStage.AwaitingDecision }) return;
 
-        // Гасим открытые решающие карточки (всё, кроме информационных — добавочных волн)
-        // единой точкой. У блокеров reason «Ответ сообщением»; у прочих (Stop/Budget и др.) —
-        // тот же текст, по карточке видно.
+        // S5 (фикс-волна): гасим сообщением ТОЛЬКО карточки, чьё решение и есть текст.
+        // Не-гасимые (BudgetExhausted, WaveGate, Stopped) оставляем открытыми — иначе
+        // человек теряет серверные кнопки.
         var openCards = await ListOpenEscalationsAsync(sessionId);
-        foreach (var card in openCards.Where(c => !c.Kind.IsInformational()))
+        foreach (var card in openCards.Where(c => !c.Kind.IsInformational()
+                && ExtinguishedByMessage(c.Kind)))
         {
-            var resolved = await ResolveEscalationAsync(sessionId, card.Id, "message");
+            // M3 (фикс-волна): ResolutionNote пишется в карточку ОДНИМ вызовом вместе с
+            // Resolved/ChosenActionId — раньше отдельный MutateCardAsync у активного чата
+            // ходил через диск и затирался ближайшим снимком аккумулятора; теперь подпись
+            // «Ответ сообщением» переживает перечитывание истории
+            var resolved = await ResolveEscalationAsync(sessionId, card.Id, "message", "Ответ сообщением");
             if (resolved is null) continue;
-            // Пишем ResolutionNote в историю — Resolved/ChosenActionId уже поставлены,
-            // текст снятия идёт отдельной правкой
-            await ((ITeamHistoryStore)this).MutateCardAsync<StoredTeamEscalationMessage>(sessionId,
-                m => m.EscalationId == card.Id,
-                m => { m.Escalation.ResolutionNote = "Ответ сообщением"; });
             await BroadcastAsync(sessionId, new TeamEscalationMessage(card.Id,
                 card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
                 card.TaskId, card.Wave, Resolved: true, ChosenActionId: "message",

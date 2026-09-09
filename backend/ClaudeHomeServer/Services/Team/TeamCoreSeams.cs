@@ -147,6 +147,19 @@ internal interface ITeamHistoryStore
     Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId);
 
     /// <summary>
+    /// То же, что <see cref="GetOpenTeamEscalationsAsync"/>, но СИНХРОННЫЙ. Достройка
+    /// шва (фикс-волна): нужен TeamBudgetService.TryConsumeTeamImplementRun из
+    /// MVC-фильтра (S6 — никакого async на запросном потоке) и TeamDecisionService
+    /// для объединения чтения с мутацией в одной WithTeamState-транзакции (S4 —
+    /// иначе гонка с параллельным сигналом успевает поднять новую карточку и поставить
+    /// AwaitingDecision, которую мы затираем на Wave). Реализация обязана быть
+    /// безопасной для синхронного вызова: у активного чата читает Accumulator (исторически
+    /// без явного lock), у неактивного — LoadAsync(...).GetAwaiter().GetResult() (он
+    /// уже синхронен по построению, см. ChatHistoryService.LoadAsync).
+    /// </summary>
+    IReadOnlyList<TeamEscalation> GetOpenTeamEscalationsSync(string sessionId);
+
+    /// <summary>
     /// Пометка отправленного напоминания по карточке остановки: счётчик и момент
     /// последнего оклика пишутся на карточку в истории — переживают рестарт сервера,
     /// чтобы после перезапуска не начать оклик заново. false — карточка уже закрыта

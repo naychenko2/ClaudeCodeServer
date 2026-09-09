@@ -376,8 +376,12 @@ public sealed class TasksToolset(
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
                 // Волна 1 team-blocker-honest: если у задачи открыт блокер — гасим по факту,
-                // координатор сам снял причину правкой постановки
-                FireResolveBlockerByTask(updated.Id, updated.SourceSessionId,
+                // координатор сам снял причину правкой постановки.
+                // S2 (фикс-волна): сигнал засчитывается только если вызывающая сессия — сам
+                // штаб (caller == task.SourceSessionId). Иначе вызов из чата исполнителя
+                // погасил бы карточку текстом «штаб переписал задачу» — действие приписано,
+                // которого не было.
+                FireResolveBlockerByTask(updated, session.Id,
                     "штаб переписал задачу — блокер снят");
                 return Json(updated);
             }
@@ -426,8 +430,10 @@ public sealed class TasksToolset(
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
                 // Волна 1 team-blocker-honest: задача-блокер закрыта координатором — гасим
-                // блокер по факту, стадия возвращается в работу
-                FireResolveBlockerByTask(updated.Id, updated.SourceSessionId,
+                // блокер по факту, стадия возвращается в работу.
+                // S2 (фикс-волна): caller == SourceSessionId — иначе правка из чата исполнителя
+                // гасит карточку «штаб закрыл задачу», приписанного действия нет
+                FireResolveBlockerByTask(updated, session.Id,
                     "штаб закрыл задачу — блокер снят");
                 return Json(updated);
             }
@@ -469,8 +475,10 @@ public sealed class TasksToolset(
                 {
                     var executed = await executor.ExecuteAsync(task, auto: false);
                     // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
-                    // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу
-                    FireResolveBlockerByTask(task.Id, task.SourceSessionId,
+                    // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу.
+                    // S2 (фикс-волна): caller == SourceSessionId — иначе запуск из чата
+                    // исполнителя гасит карточку «штаб перезапустил исполнителя»
+                    FireResolveBlockerByTask(task, session.Id,
                         "штаб перезапустил исполнителя — блокер снят");
                     return Json(new
                     {
@@ -1298,18 +1306,40 @@ public sealed class TasksToolset(
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>
         new(name, description, schema);
 
+    // S2 (фикс-волна): гасим блокер ТОЛЬКО если caller (сессия-вызыватель) совпадает с
+    // sourceSessionId (чат, в котором задача создана = чат-штаба). Из чата исполнителя
+    // правка задачи карточку штаба не гасит — приписала бы координатору несуществующее
+    // решение («штаб переписал задачу», когда сам штаб ничего не делал). Чистая функция —
+    // отдельная от fire-and-forget обработки, чтобы тест проводки сигнала (S3) мог
+    // проверить правило caller/source без поднятия TasksToolset с девятью зависимостями.
+    internal static bool ShouldExtinguishBlocker(TaskItem task, string? callerSessionId) =>
+        task is not null
+            && !string.IsNullOrEmpty(callerSessionId)
+            && !string.IsNullOrEmpty(task.SourceSessionId)
+            && callerSessionId == task.SourceSessionId;
+
     // Волна 1 team-blocker-honest: погасить блокер-карточку штаба по задаче, если она висит.
     // Побочный эффект — fire-and-forget: ошибки в журнал, основной вызов не валится.
     // Чаще всего SourceSessionId — чат исполнителя; его parent и есть чат-штаба. Если сама
     // SourceSessionId в режиме — она и есть штаб (задача создана из штаба). Иначе —
     // обычная задача вне режима, блокера не висит, выходим.
-    private void FireResolveBlockerByTask(string taskId, string? sourceSessionId, string reason)
+    // S2 (фикс-волна): callerSessionId — сессия-вызыватель (хвост-маршрут MCP). Карточка
+    // гасится только если вызывающая сессия совпадает с SourceSessionId задачи — иначе
+    // tasks_update из чата исполнителя гасил бы карточку человека текстом «штаб
+    // переписал задачу», а реального действия штаба не было.
+    // internal: тесты S2 проверяют правило через ShouldExtinguishBlocker (выше),
+    // а не через этот метод — TasksToolset собирается из девяти DI-зависимостей,
+    // которые в тесте гонять нерационально.
+    internal void FireResolveBlockerByTask(TaskItem task, string callerSessionId, string reason)
     {
-        if (string.IsNullOrEmpty(taskId) || string.IsNullOrEmpty(sourceSessionId)) return;
+        if (task is null) return;
+        if (!ShouldExtinguishBlocker(task, callerSessionId)) return;
+        var sourceSessionId = task.SourceSessionId!;
         var src = sessions.GetById(sourceSessionId);
         if (src is null) return;
         string? stabId = src.TeamImplement != null ? sourceSessionId : src.ParentSessionId;
         if (stabId is null) return;
+        var taskId = task.Id;
         _ = Task.Run(async () =>
         {
             try { await sessions.TryResolveBlockerByFactAsync(stabId, taskId, reason); }

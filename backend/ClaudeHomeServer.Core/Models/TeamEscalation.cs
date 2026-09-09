@@ -116,7 +116,8 @@ public static class TeamEscalationActions
         [
             new("answer", "Ответить"),
             new("reassign", "Отдать другому"),
-            new("drop", "Снять задачу"),
+            // L1 (фикс-волна): источник правды — бэкенд. Кира снимет хардкод у себя
+            new("drop", "Снять задачу у исполнителя"),
         ],
         TeamEscalationKind.TaskFailed =>
         [
@@ -143,7 +144,8 @@ public static class TeamEscalationActions
         TeamEscalationKind.WaveStalled =>
         [
             new("restart", "Перезапустить"),
-            new("drop", "Снять"),
+            // L1 (фикс-волна): источник правды — бэкенд
+            new("drop", "Снять задачу у исполнителя"),
             new("finish", "Завершить"),
         ],
         TeamEscalationKind.WaveGate =>

@@ -6,13 +6,13 @@ using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using ClaudeHomeServer.Services.Mcp.Http;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -103,6 +103,44 @@ public class TeamBlockerResolveTests : IDisposable
             TestLauncherFactory.Instance, sandbox, teamPlanning: planning,
             broadcaster: _broadcaster);
     }
+
+    // Хелпер для тестов: достать словарь _sessions у SessionManager (нужен доступ к
+    // SessionEntry.Info — у публичного типа Session такого свойства нет).
+    private System.Collections.IDictionary MakeSessionEntryDict()
+    {
+        var entryField = typeof(SessionManager).GetField("_sessions",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        return (System.Collections.IDictionary)entryField.GetValue(_sessions)!;
+    }
+
+    // ClaudeSessionId у SessionEntry — через прямой reflection (SessionEntry приватный,
+    // dynamic не работает). Возвращает ключ истории для чата.
+    private string GetClaudeSessionId(string sessionId)
+    {
+        var dict = MakeSessionEntryDict();
+        var entry = dict[sessionId]!;
+        var infoField = entry.GetType().GetField("Info",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)!;
+        var info = infoField!.GetValue(entry);
+        // ClaudeSessionId у SessionInfo — это СВОЙСТВО (record), не поле
+        var claudeSidProp = info!.GetType().GetProperty("ClaudeSessionId",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)!;
+        return (string)claudeSidProp!.GetValue(info)!;
+    }
+
+    // И служба окончания хода штаба (TeamTurnCompletionService.HandleTeamTurnEndAsync —
+    // единственный способ прогнать ветку разрешения маркеров без шины turn/completed)
+    private ClaudeHomeServer.Services.Team.TeamTurnCompletionService TurnCompletion =>
+        (ClaudeHomeServer.Services.Team.TeamTurnCompletionService)
+            typeof(SessionManager).GetField("_teamTurnCompletion",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(_sessions)!;
+
+    // ChatHistoryService у ядра — нужен для прямого чтения истории в тестах M3
+    private ChatHistoryService History =>
+        (ChatHistoryService)typeof(SessionManager).GetField("_history",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+        .GetValue(_sessions)!;
 
     // Штаб с включённым режимом в Planning — для тестов триггера блокера достаточно одного
     // чата-штаба, без плана и волны
@@ -331,6 +369,283 @@ public class TeamBlockerResolveTests : IDisposable
         stripped.Should().NotContain("суть");
         stripped.Should().Contain("Текст.");
         stripped.Should().Contain("Хвост.");
+    }
+
+    // === Волна 1 team-blocker-honest: тесты S3 (проводка сигналов через настоящие точки входа) ===
+
+    // M1 (фикс-волна): бюджет ВСЕГДА проверяется в гейте запуска — даже в стадии
+    // AwaitingDecision. Раньше ветка `else if (Stage == AwaitingDecision) reason = null;`
+    // съедала следующий `else` с Budget.ExceededReason() и RunsUsed уходил за MaxRuns
+    // без отказа. Закрепляем: принудительно выставляем исчерпанный бюджет в стадии
+    // AwaitingDecision — гейт должен дать Exhausted с reason про бюджет, а не про
+    // «ждёт решения».
+    [Fact]
+    public async Task TryConsumeTeamImplementRun_БюджетИсчерпанВAwaitingDecision_Отбивает()
+    {
+        var (stab, _) = await MakeStabAsync("m1-budget-awaiting");
+        ((ITeamRunState)_sessions).WithTeamState(stab.Id, t =>
+        {
+            t.Stage = TeamImplementStage.AwaitingDecision;
+            t.Budget.MaxRuns = 3;
+            t.Budget.RunsUsed = 3; // уже на потолке
+            return true;
+        });
+
+        var (verdict, reason) = _sessions.TryConsumeTeamImplementRun(stab.Id, UserId);
+        ((SessionManager.TeamRunQuota)(int)verdict).Should()
+            .Be(SessionManager.TeamRunQuota.Exhausted,
+                "бюджет проверяется всегда — даже в стадии «ждёт решения»");
+        reason.Should().NotBeNull();
+        reason.Should().Contain("запуск", "текст отказа говорит про исчерпание запусков");
+    }
+
+    // M2 (фикс-волна): отказ гейта не должен двигать счётчики бюджета. Раньше
+    // RunsUsed/TasksUsed инкрементировались ДО проверки открытых карточек, и пять
+    // отказов подряд жгли пять единиц впустую. Закрепляем: после Stopped-отказа
+    // счётчики остаются как есть.
+    [Fact]
+    public async Task TryConsumeTeamImplementRun_ОтказНеДвигаетСчётчики_ВозвратКвотыНеНужен()
+    {
+        var (stab, _) = await MakeStabAsync("m2-no-burn");
+        ((ITeamRunState)_sessions).WithTeamState(stab.Id, t =>
+        {
+            t.Stopped = true;
+            t.Budget.RunsUsed = 5;
+            t.Budget.TasksUsed = 7;
+            return true;
+        });
+
+        // Отказ по «практика остановлена» — гейт НЕ должен списать счётчики.
+        // Гоняем пять отказов подряд: бюджет не должен «сгореть» впустую.
+        for (var i = 0; i < 5; i++)
+        {
+            var (verdict, _) = _sessions.TryConsumeTeamImplementRun(stab.Id, UserId);
+            ((SessionManager.TeamRunQuota)(int)verdict).Should()
+                .Be(SessionManager.TeamRunQuota.Exhausted);
+        }
+        var after = _sessions.GetById(stab.Id)!.TeamImplement!.Budget;
+        after.RunsUsed.Should().Be(5, "отказы по Stopped не списывают RunsUsed");
+        after.TasksUsed.Should().Be(7, "отказы по Stopped не списывают TasksUsed");
+    }
+
+    // M3 (фикс-волна, ветка resolvedByStaff): ResolutionNote, записанный в
+    // TryResolveBlockerByFactAsync, должен пережить перечитывание истории после F5
+    // (или рестарта). Раньше запись шла отдельным MutateCardAsync у активного чата,
+    // который ходил через диск и затирался ближайшим снимком Accumulator-а. Теперь
+    // Set+ChosenActionId+ResolutionNote идут одним вызовом ResolveEscalationAsync,
+    // и снимок консистентно заливает их на диск.
+    [Fact]
+    public async Task TryResolveBlockerByFact_ResolutionNoteПереживаетПеречитываниеИзИстории()
+    {
+        var (stab, _) = await MakeStabAsync("m3-staff");
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Блокер-задача", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        // Update нужен, чтобы SourceSessionId инициализировался текущей сессией
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        var blocker = await PublishBlockerAsync(stab, task.Id);
+        stab.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+
+        // Сигнал: прямая ветка resolvedByStaff (та, что ходят tasks_update/tasks_complete/
+        // tasks_run_executor через FireResolveBlockerByTask). Сейчас зовём единую точку.
+        var ok = await _sessions.TryResolveBlockerByFactAsync(
+            stab.Id, task.Id, "штаб переписал задачу — подпись должна остаться");
+        ok.Should().BeTrue();
+
+        // Сейчас карточка погашена и её нет в OpenEscalationsAsync — перечитываем
+        // непосредственно из истории.
+        var fromHistory = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        fromHistory.Should().BeEmpty("карточка погашена");
+
+        // Прямой путь: у активного чата карточки живут в Accumulator, не на диске —
+// ClaudeSessionId у только что созданного чата ещё null. Accumulator — публичное поле.
+        var dict = MakeSessionEntryDict();
+        var entry0 = dict[stab.Id]!;
+        var accField = entry0.GetType().GetField("Accumulator",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)!;
+        var acc = accField!.GetValue(entry0)!;
+        var storedAll = (System.Collections.Generic.List<StoredMessage>)acc.GetType()
+            .GetMethod("GetAll")!.Invoke(acc, null)!;
+        var entry = storedAll.OfType<StoredTeamEscalationMessage>()
+            .FirstOrDefault(m => m.EscalationId == blocker.Id);
+        entry.Should().NotBeNull("карточка осталась в истории с подписью");
+        entry!.Escalation.Resolved.Should().BeTrue();
+        entry.Escalation.ChosenActionId.Should().Be("resolvedByStaff");
+        entry.Escalation.ResolutionNote.Should().Be("штаб переписал задачу — подпись должна остаться");
+    }
+
+    // M3 (фикс-волна, ветка message): тот же контракт для пути «Ответ сообщением» —
+    // текст человека из «ждёт решения» тоже должен оставить ResolutionNote в истории.
+    // ResumeTeamFromDecisionOnUserInput приватный — идём через reflection, чтобы
+    // проверить проводку сигнала, а не только прямую точку гашения.
+    [Fact]
+    public async Task ОтветСообщением_ResolutionNoteТожеПереживаетПеречитываниеИзИстории()
+    {
+        var (stab, _) = await MakeStabAsync("m3-message");
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Блокер-msg", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        var blocker = await PublishBlockerAsync(stab.Id == null ? stab : stab, task.Id);
+        stab.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+
+        // Приватный метод SessionManager.ResumeTeamFromDecisionOnUserInput через reflection
+        var method = typeof(SessionManager).GetMethod("ResumeTeamFromDecisionOnUserInput",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var entryDict = MakeSessionEntryDict();
+        var sessionEntryObj = entryDict[stab.Id]!;
+        await (Task)method.Invoke(_sessions, new object[] { stab.Id, sessionEntryObj })!;
+
+        // Карточка блокера погашена, ResolutionNote == "Ответ сообщением"
+        var dict2 = MakeSessionEntryDict();
+        var entry2 = dict2[stab.Id]!;
+        var accField2 = entry2.GetType().GetField("Accumulator",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)!;
+        var acc2 = accField2!.GetValue(entry2)!;
+        var storedAll2 = (System.Collections.Generic.List<StoredMessage>)acc2.GetType()
+            .GetMethod("GetAll")!.Invoke(acc2, null)!;
+        var entry = storedAll2.OfType<StoredTeamEscalationMessage>()
+            .FirstOrDefault(m => m.EscalationId == blocker.Id);
+        entry.Should().NotBeNull();
+        entry!.Escalation.Resolved.Should().BeTrue();
+        entry.Escalation.ChosenActionId.Should().Be("message");
+        entry.Escalation.ResolutionNote.Should().Be("Ответ сообщением");
+    }
+
+    // S5 (фикс-волна): ответ сообщением гасит только карточки, чьё решение по сути
+    // есть текст (Blocker/TaskFailed/PlanDeviation/CheckFailed/ProductDecision). НЕ
+    // гасит BudgetExhausted/WaveGate/Stopped — их кнопка делает серверное действие
+    // (поднять потолки, раздать волну, снять Стоп), которого текст не заменит. Без
+    // этой проверки у человека терялась кнопка «Добавить бюджет» карточки BudgetExhausted.
+    [Fact]
+    public async Task ОтветСообщением_ГаситТолькоТекстовыеКарточки_BudgetExhaustedОстаётся()
+    {
+        var (stab, _) = await MakeStabAsync("s5-message-extinguish");
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Блокер-s5", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+
+        // Открываем две решающие карточки разом: текстовую (Blocker) и нетекстовую (BudgetExhausted)
+        await PublishBlockerAsync(stab, task.Id);
+        var budgetCard = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.BudgetExhausted,
+            Title = "Бюджет исчерпан",
+            Details = "запусков не осталось",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
+        };
+        await ((ITeamHistoryStore)_sessions).PublishTeamEscalationAsync(stab.Id, budgetCard);
+
+        // Сообщение из AwaitingDecision
+        var method = typeof(SessionManager).GetMethod("ResumeTeamFromDecisionOnUserInput",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var entryDict = MakeSessionEntryDict();
+        var sessionEntryObj = entryDict[stab.Id]!;
+        await (Task)method.Invoke(_sessions, new object[] { stab.Id, sessionEntryObj })!;
+
+        var open = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        // BudgetExhausted остаётся открытой — её кнопка «Добавить бюджет» единственный
+        // способ поднять потолки, поэтому сообщение её НЕ гасит
+        open.Should().Contain(c => c.Id == budgetCard.Id);
+        // Текстовые карточки (Blocker) по тексту человека гасятся
+        open.Should().NotContain(c => c.Kind == TeamEscalationKind.Blocker);
+    }
+
+    // M4 (фикс-волна): маркер <team:resolved> НЕ ДОЛЖЕН прерывать разбор других маркеров.
+    // В одном ходу координатор может снять блокер И попросить решение — карточка
+    // развилки должна тоже появиться. Раньше return под resolved глотал всё, что после
+    // него в turnText. Закрепляем: комбинации (resolved + escalate) и (resolved + work)
+    // оба обрабатываются, блокер-карточка гасится.
+    [Fact]
+    public async Task HandleTeamTurnEnd_ResolvedИEscalate_ОбаОбрабатываются()
+    {
+        var (stab, _) = await MakeStabAsync("m4-resolved-escalate");
+        // Реальная задача (taskId not null) — блокер-карточка погасится маркером resolved
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Блокер-m4", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        var blocker = await PublishBlockerAsync(stab, task.Id);
+        stab.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+
+        var coord = (ClaudeHomeServer.Services.Team.TeamTurnCompletionService)
+            typeof(SessionManager).GetField("_teamTurnCompletion",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(_sessions)!;
+        var text = "Снял блокер. <team:resolved>задача решена</team> Нужно решение по другой теме. " +
+                   "<escalate:deviation>тест отклонения</escalate>";
+        await coord.HandleTeamTurnEndAsync(stab.Id, text, failed: false);
+
+        // Карточка блокера должна быть погашена по resolved-маркеру
+        var openBlockers = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        openBlockers.Should().NotContain(c => c.Id == blocker.Id && c.Kind == TeamEscalationKind.Blocker,
+            "resolved-маркер должен погасить блокер до того, как escalate опубликует своё");
+        // И новая карточка эскалации появилась
+        var openAll = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        openAll.Should().Contain(c => c.Kind == TeamEscalationKind.PlanDeviation,
+            "и escalate-маркер отработал — карточка опубликована");
+    }
+
+    [Fact]
+    public async Task HandleTeamTurnEnd_ResolvedИWork_ОбаОбрабатываются()
+    {
+        var (stab, _) = await MakeStabAsync("m4-resolved-work");
+        // Реальная задача — блокер-карточка погасится маркером resolved
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Блокер-m4w", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        var blocker = await PublishBlockerAsync(stab, task.Id);
+        stab.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+
+        var coord = (ClaudeHomeServer.Services.Team.TeamTurnCompletionService)
+            typeof(SessionManager).GetField("_teamTurnCompletion",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(_sessions)!;
+        var text = "Снял блокер. <team:resolved>переписал задачу</team> А вот новая вводная: " +
+                   "<team:work>доделать форму поиска</team>";
+        // Plan-режим обязателен для StartTeamWorkAsync — иначе вызов уйдёт в тишину
+        await coord.HandleTeamTurnEndAsync(stab.Id, text, failed: false);
+
+        var openBlockers = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        openBlockers.Should().NotContain(c => c.Id == blocker.Id && c.Kind == TeamEscalationKind.Blocker,
+            "resolved-маркер снимает блокер ДО того, как team:work попытается стартовать");
+    }
+
+    // S2 (фикс-волна): сигнал «штаб переписал задачу» гасит блокер ТОЛЬКО когда
+    // вызывающая сессия сама — штаб (caller == task.SourceSessionId). Из чата исполнителя
+    // правка задачи не должна гасить карточку человека. Проверяем чистую функцию —
+    // отдельно от FireResolveBlockerByTask, чтобы не поднимать TasksToolset с его
+    // девятью DI-зависимостями только ради проверки контракта (TasksToolset вызывает
+    // этот helper из обоих мест: tasks_update/tasks_complete/tasks_run_executor).
+    [Fact]
+    public void ShouldExtinguishBlocker_CallerРавенSource_Гасит()
+    {
+        var task = new TaskItem
+        {
+            Id = "t1",
+            OwnerId = UserId,
+            SourceSessionId = "stab-1",
+            Title = "T",
+            Status = TaskItemStatus.InProgress,
+            Priority = TaskItemPriority.Medium,
+        };
+        TasksToolset.ShouldExtinguishBlocker(task, "stab-1").Should().BeTrue(
+            "штаб-сессия как caller гасит блокер по своей задаче");
+    }
+
+    [Fact]
+    public void ShouldExtinguishBlocker_CallerНеРавенSource_НеГасит()
+    {
+        var task = new TaskItem
+        {
+            Id = "t1",
+            OwnerId = UserId,
+            SourceSessionId = "stab-1",
+            Title = "T",
+            Status = TaskItemStatus.InProgress,
+            Priority = TaskItemPriority.Medium,
+        };
+        // caller = executor session — не должен гасить карточку штаба
+        TasksToolset.ShouldExtinguishBlocker(task, "executor-2").Should().BeFalse(
+            "правка задачи из чата исполнителя НЕ гасит блокер-карточку штаба");
+        TasksToolset.ShouldExtinguishBlocker(task, "").Should().BeFalse("пустой caller — защита");
     }
 
     // Заглушка планировщика: тесты не вызывают планирование, но SessionManager требует

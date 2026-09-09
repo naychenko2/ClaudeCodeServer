@@ -771,16 +771,13 @@ internal sealed class TeamDecisionService
 
         foreach (var card in blockers)
         {
-            var resolved = await _sessions.ResolveEscalationAsync(stabSessionId, card.Id, "resolvedByStaff");
+            // M3 (фикс-волна): ResolutionNote пишется в карточку ОДНИМ вызовом вместе с
+            // Resolved/ChosenActionId — раньше отдельный MutateCardAsync у активного чата
+            // ходил через диск и затирался ближайшим снимком аккумулятора, и подпись
+            // «Снят штабом: …» жила только в транзитном WS-сообщении — после F5 её не было.
+            var resolved = await _sessions.ResolveEscalationAsync(stabSessionId, card.Id,
+                "resolvedByStaff", reason);
             if (resolved is null) continue;
-            // Пробрасываем ResolutionNote отдельным путём: ResolveEscalationAsync правит Resolved
-            // и ChosenActionId в истории, но текстовой подписи снятия там нет. Записываем
-            // примечание прямо в историю — тем же MutateCardAsync, что хранит саму карточку.
-            await _history.MutateCardAsync<StoredTeamEscalationMessage>(stabSessionId,
-                m => m.EscalationId == card.Id,
-                m => { m.Escalation.ResolutionNote = reason; });
-            // Снимок истории после правки — через MutateCardAsync этого не происходит,
-            // история остаётся под локом: гарантия не нужна, поле и так в StoredTeamEscalationMessage.
             await _sessions.BroadcastAsync(stabSessionId, new TeamEscalationMessage(card.Id,
                 card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
                 card.TaskId, card.Wave, Resolved: true, ChosenActionId: "resolvedByStaff",
@@ -789,12 +786,20 @@ internal sealed class TeamDecisionService
 
         // Возврат стадии ТОЛЬКО если решающих открытых карточек больше нет.
         // Информационные карточки (WaveAdded) не считаются: практику они не останавливали.
-        var stillOpen = await GetOpenTeamEscalationsAsync(stabSessionId);
-        var hasDecisional = stillOpen.Any(e => !e.Kind.IsInformational());
-        if (hasDecisional) return true;
-
+        // S4 (фикс-волна): чтение открытых карточек и сдвиг стадии — ОДНОЙ транзакцией.
+        // Раньше две отдельные операции: между «прочитали список → hasDecisional=false» и
+        // «WithTeamState{ставим Wave}» параллельный сигнал успевал поднять новую карточку
+        // и перевести стадию в AwaitingDecision, которую мы тут же затирали на Wave — открытая
+        // карточка висела без полосы, человек не знал, что от него ждут решения. Перечитываем
+        // список под локом WithTeamState (sync-метод ITeamHistoryStore, см. S6): без него
+        // возврат стадии шёл по устаревшему снимку.
+        bool stageAdvanced = false;
         _run.WithTeamState(stabSessionId, t =>
         {
+            var stillOpen = _history.GetOpenTeamEscalationsSync(stabSessionId);
+            var hasDecisional = stillOpen.Any(e => !e.Kind.IsInformational());
+            if (hasDecisional) return true;
+            stageAdvanced = true;
             t.Stage = t.WaveNumber == 0
                 ? t.StageBeforeDecision ?? TeamImplementStage.Planning
                 : AllPlannedWavesClosed(t)
@@ -809,6 +814,7 @@ internal sealed class TeamDecisionService
             }
             return true;
         });
+        if (!stageAdvanced) return true;
         session.UpdatedAt = DateTime.UtcNow;
         _sessions.SaveSessions();
         await _sessions.BroadcastTeamImplementAsync(stabSessionId, session);

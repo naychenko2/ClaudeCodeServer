@@ -354,8 +354,9 @@ public class SubsystemBoundaryTests
         },
         // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
         // Допуски:
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода модели,
-        //    который генерирует JSON с фигурами (префикс-шов, как у `Git`/`Deploy`).
+        // 1) Префикс `ClaudeHomeServer.Services.Llm` — СНЯТ 2026-09-09 как мёртвый: `ICheapTextRunner` живёт
+        //    в Core (`Core/Services/Llm/`), вертикаль берёт его ОТТУДА, и префикс
+        //    на вертикаль `Llm` ничего не открывал. Мутация: без допуска сторож зелёный.
         // 2) Допуски к корню Services — точные: `ProjectManager` (запись фона и флаг
         //    `Background` в доменной модели проекта), `UserStore` (перечень владельцев
         //    для массового прогона `RunAllAsync` в `ProjectBackgroundBackfill`).
@@ -368,7 +369,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Backgrounds",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]
@@ -378,8 +378,9 @@ public class SubsystemBoundaryTests
                 }),
         },
         // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
-        //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
+        // 1) Префикс `ClaudeHomeServer.Services.Llm` — СНЯТ 2026-09-09 как мёртвый: `ICheapTextRunner` живёт
+        //    в Core (`Core/Services/Llm/`), вертикаль берёт его ОТТУДА, и префикс
+        //    на вертикаль `Llm` ничего не открывал. Мутация: без допуска сторож зелёный.
         // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
         //    флаг `Icon.Glyph` в доменной модели проекта).
         //
@@ -399,7 +400,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectIcons",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]
@@ -657,9 +657,9 @@ public class SubsystemBoundaryTests
         // 1) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify;
         //    `MemoryDify` держит `KnowledgeService` полем и материализует
         //    `DifyDocumentInfo` в async-state `DiffSyncAsync`.
-        // 2) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` в поле
-        //    `MemoryWriteResolver` (консолидация LLM-merge и autolearn). Префикс-шов,
-        //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`/`Dossiers`.
+        // 2) Префикс `ClaudeHomeServer.Services.Llm` — СНЯТ 2026-09-09 как мёртвый: `ICheapTextRunner` живёт
+        //    в Core (`Core/Services/Llm/`), вертикаль берёт его ОТТУДА, и префикс
+        //    на вертикаль `Llm` ничего не открывал. Мутация: без допуска сторож зелёный.
         // Точечные допуски к корню Services — «вертикаль → спинка», аналогично
         // `Dossiers`/`Knowledge`/`Git`. После переезда фасадов в `Services.Memory`
         // эти связи видны IL-скану (вызовы из тел методов фасадов, которые теперь
@@ -709,7 +709,6 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Memory",
                         "ClaudeHomeServer.Services.Knowledge",
-                        "ClaudeHomeServer.Services.Llm",
                         "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
@@ -1014,7 +1013,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Docs",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]
@@ -1391,7 +1389,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Changelog",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]

@@ -1021,13 +1021,16 @@ public class SubsystemBoundaryTests
                 }),
         },
         // Turn — шина событий хода + контрибьюторы секций системного промпта.
-        // Все внешние допуски точечные (префиксов-швов нет): CodeGraphPromptProvider
-        // (единственный тип, который читает CodeGraphContributor — открывать всю
-        // вертикаль CodeGraph ради него нельзя), root Services, Dossiers
+        // Все внешние допуски точечные (префиксов-швов нет): root Services, Dossiers
         // (PersonaRecallContributor тянет DossierRecallService/Request),
-        // Services.Llm (RecallItem в полях контрибьюторов, TurnRunPassport
-        // в TurnCompleted, SubagentRunPassport в SubagentRunCompleted),
-        // Protocol (StoredMessage/McpServerInfo/PromptSnapshotDraft в полях).
+        // Services.Llm (TurnRunPassport в TurnCompleted, SubagentRunPassport в
+        // SubagentRunCompleted), Protocol (StoredMessage/McpServerInfo/PromptSnapshotDraft).
+        //
+        // Этап 5, шаг 6 (инверсия контрибьюторов): CodeGraphContributor и
+        // NotesRecallContributor уехали в свои вертикали (CodeGraph/Notes), а
+        // PersonaRecallContributor перешёл на Core-форвард KnowledgeQueryUtilities —
+        // допуски на CodeGraphPromptProvider / NotesKnowledgeService / NoteSemanticHit /
+        // KnowledgeService сняты как мёртвые.
         new object[]
         {
             new VerticalBoundary(
@@ -1044,60 +1047,37 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.StoredMessage",
                     "ClaudeHomeServer.Protocol.McpServerInfo",
                     "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
-                    "ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider",
                     "ClaudeHomeServer.Services.PersonaBindingsService",
-                    "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
-                    "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.PersonaPromptBuilder",
                     "ClaudeHomeServer.Services.ProjectManager",
                     "ClaudeHomeServer.Services.Skills.SkillsService",
-                    "ClaudeHomeServer.Services.UserStore",
+                    // IL-видимость: PersonaLayerContributor.InstalledSkillNames() зовёт
+                    // `.Select(s => s.Name)` на IReadOnlyList<SkillInfo> — generic-аргумент
+                    // материализуется в лямбде <>c и в теле метода. Мутация подтвердила:
+                    // без допуска сторож краснеет именно на этом типе.
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
+                    // IL-видимость: PersonaRecallContributor.BuildAsync материализует
+                    // PersonaMemoryHit в generic-аргументе `recall.Hits.Select(h => …)`
+                    // внутри async-state-машины `<BuildAsync>d__19`. Мутация подтвердила.
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
-                    // PromptSectionsContributor ссылается на Llm.SpecialtySettingsStore
-                    // и его nested EffectivePromptSection (поле async-state-машины). В
-                    // корне Services этого типа больше нет — SpecialtySettingsStore
-                    // переехал в Llm (волна 4B, шаг 2), и Turn держит ссылку на новый
-                    // адрес (см. `ClaudeHomeServer.Services.Llm.SpecialtySettingsStore`
-                    // в allow-list Llm).
-                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore",
-                    // SpecialtySettingsStore+EffectivePromptSection переехал в Core
-                    // (`Core/Services/Llm/IPromptSectionProvider.cs`, этап 5, шаг 4)
-                    // — EffectivePromptSection теперь Core-DTO, допуск снят.
-                    // (Был: "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",)
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    // RecallItem переехал в Core (`Core/Services/Llm/RecallManifest.cs`,
-                    // этап 5, шаг 2). Turn берёт тип через Core-DTO, допуск снят.
-                    // (Был: "ClaudeHomeServer.Services.Llm.RecallItem",)
-                    // TurnRunPassport переехал в Core (`Core/Services/Llm/TurnRunPassport.cs`),
-                    // TurnEvents.TurnCompleted хранит ссылку как Core-DTO.
-                    // (Был: "ClaudeHomeServer.Services.Llm.TurnRunPassport",)
-                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`),
-                    // TurnEvents.SubagentRunCompleted — Core-DTO.
-                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
-                    // Этап 4, шаг 2г-2 — переезд промптов штаба: ClaudeSession
-                    // (DecidePermissionAsync) ссылается на `TeamImplementPrompts.MaxInterviewRounds`
-                    // и `InterviewRoundsExhausted` для гейта AskUserQuestion. До переезда
-                    // шёл через префикс `Services.Prompts` в SharedAllowedPrefixes, но
-                    // после переезда тип в `Services.Team` — точный допуск.
-                    "ClaudeHomeServer.Services.Team.TeamImplementPrompts",
+                    // Этап 5, шаг 6 (инверсия контрибьюторов): три допуска сняты как
+                    // мёртвые (мутация — прогон без них дал зелёный сторож): UserStore,
+                    // Llm.SpecialtySettingsStore (+EffectivePromptSection ранее уже снят),
+                    // Team.TeamImplementPrompts — комментарий на месте допуска описывал
+                    // использование в ClaudeSession (Services.Llm.Claude), а не в Turn;
+                    // допуск никогда не был нужен ИМЕННО Turn-контрибьюторам.
                     // Этап 4, шаг 2г-2 — PersonaLayerContributor (в Turn-boundary) вызывает
                     // TeamMechanicsPromptCatalog.BuildPromptBlock через return-тип; до переезда
                     // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
                     // точный допуск.
                     "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `Turn → Knowledge`: NotesRecallContributor (`<BuildAsync>d__13`)
-                    // и PersonaRecallContributor (`<BuildAsync>d__19`) материализуют
-                    // `KnowledgeService` в async-state. НЕ цикл (Knowledge на Turn
-                    // не смотрит), но новое межвертикальное ребро — фиксируем.
-                    "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
                     // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
                     // (статический каталог в `Services.Prompts`). Префикс Prompts
                     // НЕ открываем: точечный допуск ровно на нужный тип.
@@ -1858,6 +1838,12 @@ public class SubsystemBoundaryTests
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5, шаг 6 (инверсия контрибьюторов промпта): IPromptSectionContributor +
+        // PromptSection + PromptSectionContribution + PromptSessionContext +
+        // extension для DI — контракт шины TurnEventBus, реализации едут в чужих
+        // вертикалях (CodeGraph, Notes). Прецедент IKnowledgeSyncParticipant: тот же
+        // приём — контракт в Core, реализации по вертикалям, реестр через IEnumerable<>.
+        "ClaudeHomeServer.Services.Turn",
         // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
         // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes

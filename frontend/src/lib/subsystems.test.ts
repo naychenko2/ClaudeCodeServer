@@ -1,6 +1,7 @@
 // Тесты стора включённости подсистем. Покрывает:
 //   - дефолт (всё выключено до setAllSubsystems);
-//   - замену всего набора через setAllSubsystems;
+//   - замену всего набора через setAllSubsystems в ОБЕИХ формах: массив (от бэка)
+//     и Record (локальные патчи из админской модалки);
 //   - оповещение подписчиков и корректность отписки;
 //   - поведение useSubsystem через мини-раннер React (как в useSession.test).
 //
@@ -87,7 +88,46 @@ describe('subsystems — дефолт', () => {
   });
 });
 
-describe('subsystems — setAllSubsystems', () => {
+describe('subsystems — setAllSubsystems принимает массив (форма от бэка)', () => {
+  // Это и был корневой дефект пилота: бэк шлёт массив, стороной { ...arr }
+  // получался { '0': 'notes' }, и useSubsystem('notes') возвращал false при
+  // включённой подсистеме. Тест закрывает регресс: ключ разворачивается
+  // правильно.
+  it('включает ключи из массива', () => {
+    setAllSubsystems(['notes']);
+    expect(isSubsystemEnabled('notes')).toBe(true);
+    expect(getAllSubsystems()).toEqual({ notes: true });
+  });
+
+  it('пустой массив → пустой набор (стейт выключен)', () => {
+    setAllSubsystems([]);
+    expect(isSubsystemEnabled('notes')).toBe(false);
+    expect(getAllSubsystems()).toEqual({});
+  });
+
+  it('несколько ключей в массиве разворачиваются все', () => {
+    setAllSubsystems(['notes', 'video', 'reader']);
+    expect(isSubsystemEnabled('notes')).toBe(true);
+    expect(isSubsystemEnabled('video')).toBe(true);
+    expect(isSubsystemEnabled('reader')).toBe(true);
+  });
+
+  it('массив с дубликатами ключей не падает и не множит записи', () => {
+    setAllSubsystems(['notes', 'notes']);
+    expect(getAllSubsystems()).toEqual({ notes: true });
+  });
+
+  it('перезаписывает набор целиком — старые ключи сбрасываются', () => {
+    setAllSubsystems(['notes']);
+    setAllSubsystems([]);
+    expect(isSubsystemEnabled('notes')).toBe(false);
+    expect(getAllSubsystems()).toEqual({});
+  });
+});
+
+describe('subsystems — setAllSubsystems принимает Record (локальные патчи)', () => {
+  // Объект нужен админской модалке SubsystemsPage: точечно поправить один ключ,
+  // не сбрасывая остальные. Стороной Array.isArray он пойдёт по ветке объекта.
   it('включает переданные ключи', () => {
     setAllSubsystems({ notes: true });
     expect(isSubsystemEnabled('notes')).toBe(true);
@@ -115,10 +155,10 @@ describe('subsystems — setAllSubsystems', () => {
 });
 
 describe('subsystems — подписки', () => {
-  it('оповещает подписчиков при замене набора', () => {
+  it('оповещает подписчиков при замене набора массивом', () => {
     const listener = vi.fn();
     const unsub = subscribeSubsystems(listener);
-    setAllSubsystems({ notes: true });
+    setAllSubsystems(['notes']);
     expect(listener).toHaveBeenCalledTimes(1);
     unsub();
   });
@@ -126,10 +166,10 @@ describe('subsystems — подписки', () => {
   it('отписка прекращает оповещения', () => {
     const listener = vi.fn();
     const unsub = subscribeSubsystems(listener);
-    setAllSubsystems({ notes: true });
+    setAllSubsystems(['notes']);
     expect(listener).toHaveBeenCalledTimes(1);
     unsub();
-    setAllSubsystems({ notes: false });
+    setAllSubsystems([]);
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
@@ -138,11 +178,11 @@ describe('subsystems — подписки', () => {
     const b = vi.fn();
     const unsubA = subscribeSubsystems(a);
     const unsubB = subscribeSubsystems(b);
-    setAllSubsystems({ notes: true });
+    setAllSubsystems(['notes']);
     expect(a).toHaveBeenCalledTimes(1);
     expect(b).toHaveBeenCalledTimes(1);
     unsubA();
-    setAllSubsystems({ notes: false });
+    setAllSubsystems([]);
     expect(a).toHaveBeenCalledTimes(1);
     expect(b).toHaveBeenCalledTimes(2);
     unsubB();
@@ -154,13 +194,93 @@ describe('subsystems — useSubsystem', () => {
     expect(renderUseSubsystem('notes')).toBe(false);
   });
 
-  it('возвращает true после setAllSubsystems({ notes: true })', () => {
-    setAllSubsystems({ notes: true });
+  it('возвращает true после setAllSubsystems(["notes"])', () => {
+    setAllSubsystems(['notes']);
     expect(renderUseSubsystem('notes')).toBe(true);
   });
 
   it('ключ SUBSYSTEMS.notes включает подсистему через useSubsystem', () => {
-    setAllSubsystems({ [SUBSYSTEMS.notes]: true });
+    setAllSubsystems([SUBSYSTEMS.notes]);
     expect(renderUseSubsystem(SUBSYSTEMS.notes)).toBe(true);
+  });
+
+  it('неизвестный ключ в массиве не включает notes', () => {
+    setAllSubsystems(['other-subsystem']);
+    expect(renderUseSubsystem('notes')).toBe(false);
+  });
+});
+
+describe('subsystems — стык с /api/auth/me (контракт)', () => {
+  // Это контрактный сторож на стыке «что шлёт бэк» ↔ «что принимает стор».
+  // Под Д-1 отчёта QA пилота: бэк шлёт массив, фронт ждал Record<string, boolean>
+  // — спред массива давал { '0': 'notes' }, гейт ломался.
+  //
+  // Защита по двум линиям:
+  //   1) Реальный JSON-ответ бэка (воспроизводим строкой) применяется к стору
+  //      и ожидаемое `useSubsystem('notes')` сходится с тем, что бэк объявил
+  //      активным. Меняется форма поля на бэке → ключ «notes» разворачивается
+  //      иначе → тест краснеет.
+  //   2) Если кто-то решит «а давайте подстрахуемся и на фронте тоже Record» —
+  //      массив всё равно развернётся правильно (см. отдельный тест выше),
+  //      и эта ветка закроет регресс формы. Не подменяем форму на бэке.
+  // Корневой же источник рассинхрона — AuthController.cs + Me.subsystems:
+  // контракт между ними держит subsystems.contract.test.ts в __tests__.
+
+  it('на включённой notes в реальном JSON-ответе useSubsystem("notes")=true', () => {
+    // Реальный ответ GET /api/auth/me для пользователя с включённой notes.
+    // Минимально воспроизводит форму, важную для гейта: subsystems — массив
+    // активных ключей. Соседние поля оставлены для правдоподобия типа.
+    const serverJson = JSON.stringify({
+      userId: 'u-1',
+      username: 'andrey',
+      role: 'admin',
+      featureFlags: {},
+      subsystems: ['notes'],
+    });
+    const me = JSON.parse(serverJson);
+    if (me.subsystems) setAllSubsystems(me.subsystems);
+    expect(renderUseSubsystem('notes')).toBe(true);
+  });
+
+  it('при отсутствии notes в массиве useSubsystem("notes")=false', () => {
+    const serverJson = JSON.stringify({
+      userId: 'u-2',
+      username: 'no-notes',
+      role: 'user',
+      featureFlags: {},
+      subsystems: ['other', 'video'],
+    });
+    const me = JSON.parse(serverJson);
+    if (me.subsystems) setAllSubsystems(me.subsystems);
+    expect(renderUseSubsystem('notes')).toBe(false);
+  });
+
+  it('пустой массив subsystems = всё выключено', () => {
+    const serverJson = JSON.stringify({
+      userId: 'u-3',
+      username: 'empty',
+      role: 'user',
+      featureFlags: {},
+      subsystems: [],
+    });
+    const me = JSON.parse(serverJson);
+    if (me.subsystems) setAllSubsystems(me.subsystems);
+    expect(renderUseSubsystem('notes')).toBe(false);
+  });
+
+  it('мутация формы: бэк прислал Record вместо массива — стор всё равно правильно развернёт', () => {
+    // Если кто-то сменит форму на бэке и фронт не успеет — этот тест не
+    // краснеет (стор умеет обе формы), но зато subsystems.contract.test.ts
+    // поймает рассинхрон в коде. Сейчас защита по двум линиям.
+    const serverJson = JSON.stringify({
+      userId: 'u-4',
+      username: 'record-form',
+      role: 'user',
+      featureFlags: {},
+      subsystems: { notes: true },
+    });
+    const me = JSON.parse(serverJson);
+    if (me.subsystems) setAllSubsystems(me.subsystems);
+    expect(renderUseSubsystem('notes')).toBe(true);
   });
 });

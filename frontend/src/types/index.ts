@@ -1906,12 +1906,17 @@ export interface Me {
   displayName?: string | null;
   role: string;
   featureFlags?: Record<string, boolean>;
-  // Эффективное состояние подсистем: ключ — из реестра на бэке (например 'notes'),
-  // значение — включена ли для этого пользователя. Заполняется App.tsx через
-  // setAllSubsystems в lib/subsystems. Отдельные вкрапления UI (виджеты, пункты
-  // меню, кнопки) гейтятся хуком useSubsystem('notes') и дают fail-closed false,
-  // пока стор пуст — это нормально, лишь бы поле пришло в me-ответе.
-  subsystems?: Record<string, boolean>;
+  // Активные подсистемы: массив ключей реально зарегистрированных в процессе
+  // (отдаётся `SubsystemStateStore.ActiveKeys()` бэка). В список попадают
+  // подсистемы, прошедшие гейт `Subsystems:{Key}:Enabled=true` И зарегистрированные
+  // на старте; список короткий, детерминированный. Стороной `Record` бэк НЕ
+  // шлёт — `{ ...arr }` на фронте даёт числовые ключи '0','1'…, и гейт ломается.
+  // Заполняется App.tsx через `setAllSubsystems(me.subsystems)` в lib/subsystems;
+  // стор разворачивает массив в `Record<string, boolean>` внутри. Отдельные
+  // вкрапления UI (виджеты, пункты меню, кнопки) гейтятся хуком `useSubsystem('notes')`
+  // и дают fail-closed false, пока стор пуст — это нормально, лишь бы поле
+  // пришло в me-ответе. Контрактный сторож — subsystems.contract.test.ts.
+  subsystems?: string[];
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;

@@ -531,6 +531,10 @@ builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configurat
 // Подсистема не заведена сознательно: единственная регистрация и два резолва при
 // shutdownTerminals (см. блок var app = builder.Build() ниже) — прецедент вертикали
 // без IAppSubsystem, как у Services.Watchdog.
+// Шов `ITerminalHubNotifier` (Этап 5, волна C, шаг 2): реализация лежит
+// рядом с TerminalHub (Hubs/), вертикаль Terminal зависит только от Core.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITerminalHubNotifier,
+    ClaudeHomeServer.Hubs.TerminalHubNotifier>();
 builder.Services.AddSingleton<TerminalService>();
 // Раздел «Сервисы проекта» (Preview/DevServer/ExternalPreview/...) — пилотная подсистема
 // волны 4A. Сам `ProjectServicesSubsystem.Register` подключает ВСЕ регистрации этой

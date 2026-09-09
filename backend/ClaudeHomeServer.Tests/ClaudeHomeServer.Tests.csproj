@@ -67,6 +67,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
     <!--
       ProjectServices — отдельная сборка (Этап 5, волна C). Нужен ProjectReference,
       чтобы статический конструктор SubsystemBoundaryTests видел тип

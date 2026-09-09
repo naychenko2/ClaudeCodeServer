@@ -85,6 +85,8 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IProjectIconMigrator).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Composition.ITerminalHubNotifier).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1383,28 +1385,25 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.FileService",
                 }),
         },
-        // Terminal — вертикаль PTY-терминала (волна 4A, листовая: регистрация одна,
-        // подсистема не заведена). Допуски:
-        // 1) Префикс-шов `ClaudeHomeServer.Execution` — `IProcessLauncher`/`ILauncherFactory`
-        //    для запуска процессов терминалов (тот же шов, что у `ProjectServices`).
-        // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<TerminalHub>` для рассылки
-        //    вывода/статусов терминала (TerminalService:91).
-        // 3) Допуски к корню Services точечные:
-        //    - `ProjectManager` — общая инфраструктура (`TerminalService:92`).
-        //    - `OutputRingBuffer` — общий примитив реплея вывода (шапка `OutputRingBuffer.cs`).
-        // 4) Точечные допуски к `ClaudeHomeServer.Protocol`: `TerminalOutputMessage`/
-        //    `TerminalStatusMessage`/`TerminalRenamedMessage` — типы WS-событий терминала,
-        //    которые TerminalService шлёт в хаб (TerminalService.cs:272,297,396). Префикс
-        //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые зависимости.
-        //    ⚠ Эти три записи **инертны** с точки зрения сторожа: использование
-        //    идёт из ТЕЛ методов TerminalService (SendAsync с новым message-объектом
-        //    не переживает await — поля state-машины нет), а сторож читает только
-        //    публичные сигнатуры. Удаление всех трёх оставляет тест зелёным —
-        //    проверено ревью 4A. Оставлены как **обозначение шва**, чтобы будущая
-        //    правка TerminalService, вытащившая один из типов в публичную сигнатуру,
-        //    сразу упёрлась в сторож — по образцу шва `Deploy → Services.Backup`,
-        //    задокументированного в шапке (невидимо для рефлексии — обозначение шва,
-        //    не контролируемое сторожем).
+        // Terminal — вертикаль PTY-терминала (Этап 5, волна C, шаг 2; вертикаль без
+        // IAppSubsystem — регистрация одна, прецедент `Services.Watchdog`).
+        // Все прежние допуски сняты как мёртвые после выноса в отдельный .csproj —
+        // вертикаль физически не может сослаться на Main (нет ProjectReference):
+        // - `IHubContext<TerminalHub>` (префикс `ClaudeHomeServer.Hubs`) → Core-шов
+        //   `ITerminalHubNotifier` (три метода: SendToClient/SendToGroup/AddToGroup).
+        //   Прежде это было «названное исключение» Ф4 наравне с `DesktopCallRouter`;
+        //   курс Этапа 5 на вынос ВСЕХ вертикалей потребовал закрыть его швом.
+        //   Реализация `TerminalHubNotifier` осталась в `Hubs/` рядом с `TerminalHub`
+        //   (SignalR — транспорт, живёт в Main; тот же приём, что `ISessionBroadcaster`).
+        // - `ProjectManager` → Core-шов `IProjectManager` (только GetById, записей нет).
+        // - `OutputRingBuffer` — переехал в Core, ловится `IsCoreAssembly`.
+        // - `Services.Execution.ILauncherFactory`/`IProcessLauncher`/`ProcessSpec` — Core,
+        //   тот же assembly-фильтр; `ConPtyBridgeLocator` поднят в Core этим шагом
+        //   (чистая статика «папка + билд ОС», прецедент `ExecutableResolver`).
+        // - Три типа `Protocol.Terminal*Message` были ИНЕРТНЫ и в старой записи
+        //   (использование только из тел методов, сторож читает сигнатуры;
+        //   проверено ревью 4A) — сняты вместе с остальными: `Protocol` едет в
+        //   Core.dll и покрыт `IsCoreAssembly`.
         new object[]
         {
             new VerticalBoundary(
@@ -1414,18 +1413,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Terminal",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.OutputRingBuffer",
-                    "ClaudeHomeServer.Protocol.TerminalOutputMessage",
-                    "ClaudeHomeServer.Protocol.TerminalStatusMessage",
-                    "ClaudeHomeServer.Protocol.TerminalRenamedMessage",
-                }),
+                Array.Empty<string>()),
         },
         // Tasks — вертикаль задач с доской агентов (Этап 5, вынос вертикали в
         // отдельный csproj). После выноса физически не может ссылаться на Main
@@ -1628,19 +1618,19 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 19 = Main + Core + 17 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // 20 = Main + Core + 18 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
         // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs/Modules
-        // — Этап 5, волны A и C; ProjectServices/Backgrounds/ProjectIcons — Этап 5,
-        // волна C, шаг 2); при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(19,
-            "сторож должен видеть 19 прод-сборок: ClaudeHomeServer, " +
+        // — Этап 5, волны A и C; ProjectServices/Backgrounds/ProjectIcons/Terminal —
+        // Этап 5, волна C, шаг 2); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(20,
+            "сторож должен видеть 20 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
             "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
             "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules, " +
             "ClaudeHomeServer.ProjectServices, ClaudeHomeServer.Backgrounds, " +
-            "ClaudeHomeServer.ProjectIcons");
+            "ClaudeHomeServer.ProjectIcons, ClaudeHomeServer.Terminal");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

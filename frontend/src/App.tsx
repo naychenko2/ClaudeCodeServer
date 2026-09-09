@@ -454,10 +454,7 @@ export default function App() {
         // Стор подсистем — вход в раздел «Заметки» и панель проекта гейтятся
         // useSubsystem('notes') (см. HubTabs, WorkspacePage). До прихода me
         // стор пуст и useSubsystem возвращает false (fail-closed по умолчанию).
-        // me.subsystems добавлен в Me позже другой волной; здесь читаем поле через
-        // локальное приведение, чтобы не зависеть от готовности type-контракта.
-        const subsystems = (me as unknown as { subsystems?: Record<string, boolean> } | null)?.subsystems
-        if (subsystems) setAllSubsystems(subsystems)
+        if (me.subsystems) setAllSubsystems(me.subsystems)
         setCtxThresholdsFromServer(me?.contextThresholds)
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров

@@ -159,7 +159,8 @@ describe('subsystems — useSubsystem', () => {
     expect(renderUseSubsystem('notes')).toBe(true);
   });
 
-  it('возвращает SUBSYSTEMS.notes как единственный зарегистрированный ключ', () => {
-    expect(SUBSYSTEMS.notes).toBe('notes');
+  it('ключ SUBSYSTEMS.notes включает подсистему через useSubsystem', () => {
+    setAllSubsystems({ [SUBSYSTEMS.notes]: true });
+    expect(renderUseSubsystem(SUBSYSTEMS.notes)).toBe(true);
   });
 });

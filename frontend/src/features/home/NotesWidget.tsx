@@ -22,14 +22,19 @@ export function NotesWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
   const notesOn = useSubsystem('notes');
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [newOpen, setNewOpen] = useState(false);
-  if (!notesOn) return null;
 
+  // Хук вызываем всегда (Rules of Hooks): при выключенной подсистеме список
+  // не грузим — гейт внутри эффекта, а не перед ним.
   useEffect(() => {
+    if (!notesOn) return;
     api.notes.list().then(setNotes).catch(() => {});
-  }, []);
+  }, [notesOn]);
 
   // Стор заметок нужен диалогу (автодополнение папок) — подгружаем при открытии
   const openNew = () => { void ensureNotesLoaded(); setNewOpen(true); };
+
+  // Гейт по подсистеме — в разметке, а не в хуках: число хуков не зависит от флага.
+  if (!notesOn) return null;
 
   const recent = [...notes]
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))

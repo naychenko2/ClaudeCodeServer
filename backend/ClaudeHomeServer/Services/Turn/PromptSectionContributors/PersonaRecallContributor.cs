@@ -21,8 +21,10 @@ namespace ClaudeHomeServer.Services.Turn;
 // DI и читаем на каждый ход, как прежний BuildPersonaRecallProvider.
 public sealed class PersonaRecallContributor : IPromptSectionContributor
 {
-    private readonly PersonaMemoryService _personaMemory;
-    private readonly Dossiers.DossierRecallService? _dossierRecall;
+    // Узкие швы вместо вертикалей (Этап 5): память персоны — ровно BuildRecallAsync плюс
+    // признак «подключён ли канал паспортов», которым заменена прежняя вторая ссылка
+    // на Dossiers.DossierRecallService (её держали только ради проверки на null).
+    private readonly IPersonaRecallSource _recall;
     private readonly FeatureFlagService _flags;
     private readonly ChatHistoryService _history;
     private readonly IProjectManager _projects;
@@ -35,16 +37,14 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     private readonly object _anchorLock = new();
 
     public PersonaRecallContributor(
-        PersonaMemoryService personaMemory,
-        Dossiers.DossierRecallService? dossierRecall,
+        IPersonaRecallSource recall,
         FeatureFlagService flags,
         ChatHistoryService history,
         IProjectManager projects,
         IConfiguration config,
         ILogger<PersonaRecallContributor> log)
     {
-        _personaMemory = personaMemory;
-        _dossierRecall = dossierRecall;
+        _recall = recall;
         _flags = flags;
         _history = history;
         _projects = projects;
@@ -82,7 +82,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             // Контекст паспортов (ADR-004 §5): проект чата + якоря + текст хода. null —
             // вне проектного контекста (нет ProjectId у сессии) или выключен флаг.
             Dossiers.DossierRecallRequest? dossier = null;
-            if (_dossierRecall is not null && session.ProjectId is { } dossierProjectId
+            if (_recall.DossierRecallAvailable && session.ProjectId is { } dossierProjectId
                 && _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.ChangeDossiersRecall))
             {
                 var prevTurnFiles = await LastTurnChangedFilesAsync(session);
@@ -90,7 +90,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     dossierProjectId,
                     EffectiveRootOf(session),
                     session.TaskId,
-                    [.. Dossiers.DossierRecallService.ExtractPathsFromText(turnText), .. prevTurnFiles],
+                    [.. TextPathMentions.Extract(turnText), .. prevTurnFiles],
                     turnText);
             }
 
@@ -98,7 +98,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             // флагом, что и prompt-sections (единый dark launch). Выключен — досье остаётся
             // внутри recall-memory, как до фичи.
             var splitDossier = _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.SpecialtyPromptSections);
-            var recallTask = _personaMemory.BuildRecallAsync(
+            var recallTask = _recall.BuildRecallAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, query,
                 topK, minScore, dossier, splitDossier);
             var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));

@@ -318,7 +318,7 @@ public sealed class ProjectServiceDiscovery
             {
                 var name = Path.GetFileName(d);
                 if (name.StartsWith('.')) continue;
-                if (FileService.TreeExcludes.Contains(name)) continue;
+                if (TreeExcludes.Contains(name)) continue;
                 Walk(d, depth + 1);
             }
         }
@@ -357,7 +357,9 @@ public sealed class ProjectServiceDiscovery
             // выходит путь-химера ВНУТРИ проекта, то есть заодно молча теряется проверка
             // «ссылка наружу». На Windows этого не видно (Path.Combine отдаёт приоритет
             // второму абсолютному пути), поэтому ловилось только в CI на ubuntu.
-            return FileService.SafeJoinPublic(root, Path.GetRelativePath(rootFull, full));
+            // Защита пути через Core-примитив SafePath.Join: ссылка на FileService — это
+            // ссылка на чужую вертикаль, сторож границ её ловит.
+            return SafePath.Join(root, Path.GetRelativePath(rootFull, full));
         }
         catch (UnauthorizedAccessException) { return null; }   // за пределами проекта
         catch (ArgumentException) { return null; }             // недопустимые символы в пути
@@ -829,7 +831,7 @@ public sealed class ProjectServiceDiscovery
             {
                 var name = Path.GetFileName(d);
                 if (name.StartsWith('.')) continue;                 // .git, .vs, .claude…
-                if (FileService.TreeExcludes.Contains(name)) continue; // node_modules, bin, obj…
+                if (TreeExcludes.Contains(name)) continue; // node_modules, bin, obj…
                 Walk(d, depth + 1);
             }
         }

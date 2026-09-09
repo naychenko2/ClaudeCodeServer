@@ -49,6 +49,9 @@ public class ModuleGatewayMiddlewareTests
         // как singleton; в тесте собираем вручную поверх того же JwtService.
         services.AddSingleton<IUserTokenValidator>(sp => new JwtValidatorGateway(sp.GetRequiredService<JwtService>()));
         services.AddSingleton<FeatureFlagService>();
+        // Шов FeatureFlagService → IModuleFeatureFlagReader: в проде регистрируется
+        // в Program.cs как singleton; в тесте собираем вручную поверх того же сервиса.
+        services.AddSingleton<IModuleFeatureFlagReader>(sp => new FeatureFlagGateway(sp.GetRequiredService<FeatureFlagService>()));
         services.AddSingleton<ModuleTokenService>();
         return services.BuildServiceProvider();
     }

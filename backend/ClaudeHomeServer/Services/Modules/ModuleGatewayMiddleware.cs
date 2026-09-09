@@ -78,7 +78,9 @@ public static class ModuleGatewayMiddleware
         // пользовательского токена, без выдачи и без office/desktop/preview.
         var userTokens = ctx.RequestServices.GetRequiredService<IUserTokenValidator>();
         var tokens = ctx.RequestServices.GetRequiredService<ModuleTokenService>();
-        var flags = ctx.RequestServices.GetRequiredService<FeatureFlagService>();
+        // Шов FeatureFlagService → IModuleFeatureFlagReader: Modules получает только
+        // проверку одного ключа, без каталога определений и записи флагов.
+        var flags = ctx.RequestServices.GetRequiredService<IModuleFeatureFlagReader>();
 
         // (а) cc_token ядра (HMAC): браузерный путь → свежий модульный токен chan=gateway
         var userId = userTokens.ValidateUserToken(rawToken);

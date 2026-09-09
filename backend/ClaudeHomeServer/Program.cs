@@ -199,6 +199,11 @@ builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
 // интерфейса и идёт через `JwtService` — разделение на стороне потребителя.
 builder.Services.AddSingleton<IUserTokenValidator, JwtValidatorGateway>();
 builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
+// Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
+// FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
+// `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
+// получает только `IsEnabled`, без каталога определений и записи.
+builder.Services.AddSingleton<IModuleFeatureFlagReader, FeatureFlagGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).

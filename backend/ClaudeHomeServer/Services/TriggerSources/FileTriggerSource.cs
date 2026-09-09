@@ -139,7 +139,7 @@ public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<File
             catch { continue; }
             foreach (var s in subdirs)
             {
-                if (FileService.TreeExcludes.Contains(Path.GetFileName(s))) continue;
+                if (TreeExcludes.Contains(Path.GetFileName(s))) continue;
                 stack.Push(s);
             }
             foreach (var f in files)

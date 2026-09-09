@@ -37,14 +37,8 @@ public class FileService(
     // Служебная: исключена из дерева, ватчеров, дефолтного .gitignore и синка базы знаний.
     public const string AttachmentsDir = ".cc-attachments";
 
-    // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна).
-    // internal — переиспользуется FileWatcherService для фильтрации событий ФС.
-    internal static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".git", "node_modules", "bin", "obj", "dist", "dev-dist",
-        ".vs", ".idea", "publish", ".next", "target", ".cache",
-        AttachmentsDir,
-    };
+    // Список исключений дерева переехал в Core (TreeExcludes) — по соглашению проекта
+    // из вертикалей нельзя звать FileService ради статики. Здесь только потребитель.
 
     // Предохранитель от патологически больших деревьев
     private const int TreeMaxEntries = 20000;

@@ -45,8 +45,10 @@ public sealed class LaunchConfigService
 
     public LaunchConfigService(ILogger<LaunchConfigService> log) => _log = log;
 
+    // Защита пути через Core-примитив SafePath.Join: ссылка на FileService — это ссылка
+    // на чужую вертикаль, сторож границ её ловит. CLAUDE.md «Соглашения».
     private static string PathFor(Project project) =>
-        FileService.SafeJoinPublic(project.RootPath, ".claude/launch.json");
+        SafePath.Join(project.RootPath, ".claude/launch.json");
 
     /// <summary>Прочитать конфигурации. Файла нет / битый — пустой список.</summary>
     public async Task<List<LaunchConfigEntry>> ReadAsync(Project project)

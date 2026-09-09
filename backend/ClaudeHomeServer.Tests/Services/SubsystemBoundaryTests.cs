@@ -1062,15 +1062,13 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
-                    // IL-видимость: PersonaRecallContributor.BuildAsync материализует
-                    // PersonaMemoryHit в generic-аргументе `recall.Hits.Select(h => …)`
-                    // внутри async-state-машины `<BuildAsync>d__19`. Мутация подтвердила.
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    // DossierRecallRequest уехал в Core вместе с DossierRecallResult —
-                    // допуск снят (assembly-фильтр IsCoreAssembly).
+                    // Этап 5, узкие швы Turn: четыре допуска сняты как мёртвые —
+                    // PersonaRecallContributor ходит в память персоны через Core-шов
+                    // IPersonaRecallSource (Memory.PersonaMemoryService + PersonaMemoryHit +
+                    // PersonaMemoryService+PersonaRecallResult), а признак «подключён ли
+                    // канал паспортов» спрашивает у того же шва вместо собственной ссылки
+                    // на Dossiers.DossierRecallService. DossierRecallRequest уехал в Core
+                    // вместе с DossierRecallResult (assembly-фильтр IsCoreAssembly).
                     // Этап 5, шаг 6 (инверсия контрибьюторов): три допуска сняты как
                     // мёртвые (мутация — прогон без них дал зелёный сторож): UserStore,
                     // Llm.SpecialtySettingsStore (+EffectivePromptSection ранее уже снят),

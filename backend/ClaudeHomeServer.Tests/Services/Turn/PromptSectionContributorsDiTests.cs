@@ -310,6 +310,10 @@ public class PromptSectionContributorsDiTests
                 new SpecialtyPromptSectionProvider(sp.GetRequiredService<SpecialtySettingsStore>()));
             services.AddSingleton<DossierStore>(); // для PersonaRecallContributor
             services.AddSingleton<DossierRecallService>(); // для PersonaRecallContributor
+            // Этап 5, узкие швы Turn: контрибьютор идёт в память персоны через Core-шов
+            // IPersonaRecallSource, а не через PersonaMemoryService напрямую. Адаптер —
+            // тот же, что регистрирует Program.cs.
+            services.AddSingleton<IPersonaRecallSource, PersonaRecallSourceAdapter>();
             // CodeGraphService с зависимостями: нужен для CodeGraphPromptProvider → CodeGraphContributor
             services.AddSingleton<CodeGraphService>(sp =>
                 new CodeGraphService(

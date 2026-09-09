@@ -89,8 +89,8 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(_userStore);
-        var bindings = new PersonaBindingsService(_personas, projectManager, wkStore, notesKb,
-            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
+        var bindings = new PersonaBindingsService(_personas, projectManager, wkStore,
+            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _sessions = new SessionManager(projectManager, new ChatHistoryService(config), config,
@@ -99,8 +99,8 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
             broadcaster: broadcaster);
 
-        _sut = new TaskExecutionService(_tasks, _sessions, _personas, broadcaster, push, notesKb, notif,
-            NullLogger<TaskExecutionService>.Instance, config);
+        _sut = new TaskExecutionService(_tasks, _sessions, _personas, broadcaster, push, notif,
+            NullLogger<TaskExecutionService>.Instance, config, kb: notesKb);
         _broadcaster = broadcaster;
     }
 

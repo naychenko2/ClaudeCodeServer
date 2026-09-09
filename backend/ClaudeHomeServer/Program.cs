@@ -386,33 +386,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
 // гасятся внутри). Подключаются к шине фильтром prompt/assembling через
 // PromptSectionContributorsRegistration.RegisterAll в SessionManager.
 // Новый контрибьютор — одна строка в PromptSectionContributorsDi.AddPromptSectionContributors().
-builder.Services.AddPromptSectionContributors();
 // Гейт подсистемы Notes: контрибьютор `NotesRecallContributor` зависит от NotesKnowledgeService
 // (DI-резолв свалится на первом ходу), а весь авто-recall в этом случае бесполезен.
 // `AddPromptSectionContributors` живёт в Main (`PromptSectionContributorsDi.cs`) и не
-// в курсе про подсистемы — вырезаем регистрацию конкретного контрибьютора здесь,
-// пока контрибьютор не вынесен в отдельный вертикальный csproj. Удаляем ОБЕ регистрации
-// (как concrete, так и в наборе `IPromptSectionContributor`), иначе первая оставит
-// сироту, которую шина всё равно вытащит через `IEnumerable<IPromptSectionContributor>`.
-if (!SubsystemGate.IsEnabled(builder.Configuration, "notes"))
-{
-    // Удаляем регистрацию контрибьютора заметок: NotesKnowledgeService не попадёт
-    // в DI при выключенной подсистеме, и резолв NotesRecallContributor на первом
-    // же ходе свалился бы. Убираем ОБЕ регистрации (конкретный тип и запись в
-    // наборе IPromptSectionContributor) — иначе вторая оставит сироту, которую
-    // шина вытащит через IEnumerable<> и попытается сконструировать.
-    // Цикл с Remove вместо `RemoveAll<T>(predicate)`: в репо перегрузка с
-    // предикатом не доступна (нет PackageReference на Microsoft.Extensions.DependencyInjection.Abstractions),
-    // а `RemoveAll<T>()` без аргументов удаляет ВСЕ регистрации типа — это слишком грубо.
-    foreach (var descriptor in builder.Services
-        .Where(d => d.ServiceType == typeof(NotesRecallContributor) ||
-                    (d.ServiceType == typeof(IPromptSectionContributor) &&
-                     d.ImplementationType == typeof(NotesRecallContributor)))
-        .ToList())
-    {
-        builder.Services.Remove(descriptor);
-    }
-}
+// в курсе про подсистемы — гейтим НА РЕГИСТРАЦИИ через предикат isEnabled, пока контрибьютор
+// не вынесен в отдельный вертикальный csproj. Пост-хок удаление дескрипторов сюда не годится:
+// интерфейсный форвардер `IPromptSectionContributor → sp.GetRequiredService<NotesRecallContributor>()`
+// регистрируется через ImplementationFactory, а не ImplementationType, и предикат по
+// ImplementationType его не находит — сирота ронял бы IEnumerable<IPromptSectionContributor>
+// на первом же резолве.
+builder.Services.AddPromptSectionContributors(
+    t => t != typeof(NotesRecallContributor) || SubsystemGate.IsEnabled(builder.Configuration, "notes"));
 builder.Services.AddSingleton<SessionManager>();
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
@@ -744,8 +728,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.TeamMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
+// Гейт подсистемы Notes: NotesKnowledgeService не попадёт в DI при выключенной подсистеме
+// (NotesSubsystem.Register не вызывается) — безусловный форвардер уронил бы резолв ВСЕЙ
+// коллекции IKnowledgeSyncParticipant (а не только заметки), блокер ревью notes-optional Б2.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
+}
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 

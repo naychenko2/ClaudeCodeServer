@@ -110,7 +110,7 @@ public class PersonaBindingsService
     private readonly ProjectManager _projects;
     private readonly WorkspaceKnowledgeStore _wkStore;
     private readonly NotesService? _notes;
-    private readonly NotesKnowledgeService _notesKb;
+    private readonly NotesKnowledgeService? _notesKb;
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
     private readonly UserStore _users;
@@ -124,13 +124,17 @@ public class PersonaBindingsService
     private readonly ConcurrentDictionary<string, string> _datasetLabelCache = new();
 
     public PersonaBindingsService(PersonaManager personas, ProjectManager projects,
-        WorkspaceKnowledgeStore wkStore, NotesKnowledgeService notesKb,
+        WorkspaceKnowledgeStore wkStore,
         KnowledgeService knowledge, SkillsService skills,
         UserStore users, IConfiguration config, ILogger<PersonaBindingsService> log,
         // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца —
         // его записи попадают в каталог Tool-ключей как «mcp:<ключ>». Без него каталог
         // остаётся статическим, а mcp-привязки не проходят валидацию
-        Mcp.McpRegistry? mcpRegistry = null, NotesService? notes = null)
+        Mcp.McpRegistry? mcpRegistry = null, NotesService? notes = null,
+        // Подсистема Notes отключаемая (Subsystems:Notes:Enabled=false) — null, если она
+        // выключена. Датасет заметок пропадает из каталога целей знаний, а recall по
+        // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
+        NotesKnowledgeService? notesKb = null)
     {
         _personas = personas;
         _projects = projects;
@@ -593,7 +597,7 @@ public class PersonaBindingsService
             if (!string.IsNullOrWhiteSpace(p.RootPath)
                 && _wkStore.GetByPath(p.RootPath)?.DifyDatasetId is { Length: > 0 } ds)
                 list.Add((ds, p.Name, p.Id));
-        if (_notesKb.GetDatasetId(ownerId) is { Length: > 0 } notesDs)
+        if (_notesKb?.GetDatasetId(ownerId) is { Length: > 0 } notesDs)
             list.Add((notesDs, "Заметки", null));
         return list;
     }
@@ -918,9 +922,9 @@ public class PersonaBindingsService
 
     private async Task<string?> ExtractNotesAsync(string ownerId, PersonaBinding binding, string query)
     {
-        if (query.Length == 0) return null;
+        if (query.Length == 0 || _notesKb is not { } notesKb) return null;
         var topK = int.TryParse(_config["Persona:BindingsRecallTopK"], out var k) ? k : 4;
-        var hits = (await _notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8)))
+        var hits = (await notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8)))
             .Where(h => h.Source == binding.Target);
         // Пост-фильтр по папке источника: пути берём из сводок заметок
         if (!string.IsNullOrWhiteSpace(binding.Path))

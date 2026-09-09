@@ -11,7 +11,10 @@ namespace ClaudeHomeServer.Services;
 // MVP: чаты (транскрипты сессий) и файлы проектов пока НЕ индексируются — это следующий
 // шаг (требует отдельного Dify-пайплайна по образцу NotesKnowledgeService).
 public sealed class UnifiedSearchService(
-    NotesKnowledgeService kb, TaskManager tasks, ProjectManager projects, NotesService? notes = null)
+    TaskManager tasks, ProjectManager projects, NotesService? notes = null,
+    // Подсистема Notes отключаемая: null — семантический поиск заметок пропускается,
+    // остаётся ключевой фолбэк через notes (если тоже включена) и задачи.
+    NotesKnowledgeService? kb = null)
 {
     // allowedProjects — зона сессии-вызова (AllowedProjectIds плана wsp, ADR-012 волна 3.1):
     // при суженной зоне выдача ограничена её проектами — заметки по источнику (личный vault
@@ -29,7 +32,7 @@ public sealed class UnifiedSearchService(
 
         // --- Заметки ---
         var noteHitsAdded = false;
-        if (kb.Available)
+        if (kb is { Available: true })
         {
             try
             {

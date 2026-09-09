@@ -20,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, NotesKnowledgeService? notesKb = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -431,7 +431,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
         // не дожидаясь следующей несвязанной правки заметок
-        notesKb.QueueSync(UserId);
+        notesKb?.QueueSync(UserId);
 
         // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
         // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту

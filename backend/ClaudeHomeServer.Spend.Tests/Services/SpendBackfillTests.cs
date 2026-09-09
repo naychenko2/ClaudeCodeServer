@@ -82,8 +82,8 @@ public class SpendBackfillTests : IDisposable
         var notesSvc = new NotesService(_projectManager, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, _userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var bindings = new PersonaBindingsService(_personas, _projectManager, wkStore, notesKb,
-            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
+        var bindings = new PersonaBindingsService(_personas, _projectManager, wkStore,
+            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _sessions = new SessionManager(_projectManager, _history, config, adapters, falCost, usage,

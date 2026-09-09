@@ -275,9 +275,9 @@ public class PromptSectionContributorsDiTests
             var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
                 NullLogger<PersonaMemoryService>.Instance);
             services.AddSingleton(personaMemory);
-            var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesKb,
+            var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
                 knowledge, new SkillsService(), userStore, config,
-                NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
+                NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
             services.AddSingleton(bindings);
             var promptBuilder = new PersonaPromptBuilder(
                 new LlmProviderRegistry(config));

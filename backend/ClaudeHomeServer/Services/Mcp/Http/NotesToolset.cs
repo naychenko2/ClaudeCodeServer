@@ -26,14 +26,18 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// NotesToolsetParityTests (index.js заморожен).
 /// </summary>
 public sealed class NotesToolset(
-    NotesKnowledgeService kb,
-    NotesAiService ai,
-    NoteTaskSyncService noteTasks,
     PersonaManager personas,
     PersonaBindingsService bindings,
     SessionManager sessions,
     ISessionBroadcaster broadcaster,
-    NotesService? notes = null) : IMcpParameterizedToolset
+    NotesService? notes = null,
+    // Все четыре — синглтоны одной отключаемой вертикали (NotesSubsystem.Register),
+    // гейтятся ОДНИМ рубильником Subsystems:Notes:Enabled: либо все null, либо все не null.
+    // Раздельная опциональность нужна только затем, чтобы DI смог собрать тулсет при
+    // выключенной подсистеме — деградация ниже завязана на единственную проверку notes.
+    NotesKnowledgeService? kb = null,
+    NotesAiService? ai = null,
+    NoteTaskSyncService? noteTasks = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/notes/{sessionId}
     public const string ServerName = "notes";
@@ -49,7 +53,7 @@ public sealed class NotesToolset(
     public string Version => "1.0.0";
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
-        notes is null
+        notes is null || kb is null || ai is null || noteTasks is null
             ? []
             : TryResolve(context, out _, out _, out var annotations, out _)
                 ? annotations ? [.. CoreTools, .. AnnotationTools] : CoreTools
@@ -58,7 +62,12 @@ public sealed class NotesToolset(
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
-        if (notes is null) return Deny("Подсистема Notes отключена");
+        // Единый гейт: все четыре co-регистрируются одним рубильником (см. шапку класса) —
+        // при выключенной подсистеме notes==null гарантирует kb/ai/noteTasks==null и наоборот,
+        // но компилятору это неизвестно, поэтому narrowing делаем локальными переменными.
+        if (notes is not { } notesSvc || kb is not { } kbSvc
+            || ai is not { } aiSvc || noteTasks is not { } noteTasksSvc)
+            return Deny("Подсистема Notes отключена");
         if (!TryResolve(context, out var session, out var persona, out var annotations, out var routeError))
             return Deny(routeError);
 
@@ -74,7 +83,7 @@ public sealed class NotesToolset(
         switch (tool)
         {
             case "notes_list":
-                return Json(notes.GetSummaries(context.OwnerId, OptionalArg(arguments, "source"), null)
+                return Json(notesSvc.GetSummaries(context.OwnerId, OptionalArg(arguments, "source"), null)
                     .Select(Brief).ToList());
 
             case "notes_search":
@@ -83,7 +92,7 @@ public sealed class NotesToolset(
                 var q = StringArg(arguments, "query");
                 var status = StringArg(arguments, "status");
                 var query = status.Length > 0 ? $"status:{status} {q}".Trim() : q;
-                return Json(notes.GetSummaries(context.OwnerId, null, query.Length > 0 ? query : null)
+                return Json(notesSvc.GetSummaries(context.OwnerId, null, query.Length > 0 ? query : null)
                     .Select(n => n.Annotation is null ? Brief(n) : new
                     {
                         n.Id, n.Title, n.Source, n.SourceLabel, n.Tags, n.UpdatedAt,
@@ -93,7 +102,7 @@ public sealed class NotesToolset(
             }
 
             case "notes_read":
-                return notes.GetDetail(context.OwnerId, StringArg(arguments, "id")) is { } detail
+                return notesSvc.GetDetail(context.OwnerId, StringArg(arguments, "id")) is { } detail
                     ? Json(detail)
                     : Deny($"Заметка {StringArg(arguments, "id")} не найдена.");
 
@@ -102,7 +111,7 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 try
                 {
-                    var title = await ai.SuggestTitleAsync(context.OwnerId, id, ct);
+                    var title = await aiSvc.SuggestTitleAsync(context.OwnerId, id, ct);
                     return Json(new { title });
                 }
                 catch (KeyNotFoundException) { return Deny($"Заметка {id} не найдена."); }
@@ -124,7 +133,7 @@ public sealed class NotesToolset(
                     File: OptionalArg(arguments, "file"));
                 try
                 {
-                    var created = notes.Create(context.OwnerId, req);
+                    var created = notesSvc.Create(context.OwnerId, req);
                     await BroadcastAsync(context.OwnerId, "created", created.Id);
                     return Json(created);
                 }
@@ -142,7 +151,7 @@ public sealed class NotesToolset(
                     Content: arguments.ContainsKey("content") ? StringArg(arguments, "content") : null);
                 try
                 {
-                    var updated = notes.Update(context.OwnerId, id, req);
+                    var updated = notesSvc.Update(context.OwnerId, id, req);
                     if (updated is null) return Deny($"Заметка {id} не найдена.");
                     await BroadcastAsync(context.OwnerId, "updated", id);
                     return Json(updated);
@@ -152,17 +161,17 @@ public sealed class NotesToolset(
             }
 
             case "notes_backlinks":
-                return Json(notes.GetBacklinks(context.OwnerId, StringArg(arguments, "id")));
+                return Json(notesSvc.GetBacklinks(context.OwnerId, StringArg(arguments, "id")));
 
             case "notes_graph":
-                return Json(notes.GetGraph(context.OwnerId, includeAnnotations: false));
+                return Json(notesSvc.GetGraph(context.OwnerId, includeAnnotations: false));
 
             case "notes_delete":
             {
                 var id = StringArg(arguments, "id");
                 try
                 {
-                    if (!notes.Delete(context.OwnerId, id)) return Deny($"Заметка {id} не найдена.");
+                    if (!notesSvc.Delete(context.OwnerId, id)) return Deny($"Заметка {id} не найдена.");
                     await BroadcastAsync(context.OwnerId, "deleted", id);
                     return Text($"Заметка {id} удалена.");
                 }
@@ -184,7 +193,7 @@ public sealed class NotesToolset(
                     Tags: TagsArg(arguments));
                 try
                 {
-                    var created = notes.Annotate(context.OwnerId, req);
+                    var created = notesSvc.Annotate(context.OwnerId, req);
                     await BroadcastAsync(context.OwnerId, "created", created.Id);
                     return Json(created);
                 }
@@ -199,7 +208,7 @@ public sealed class NotesToolset(
                 var scope = OptionalArg(arguments, "scope") ?? projectId ?? "personal";
                 var path = StringArg(arguments, "path");
                 if (path.Length == 0) return Deny("Не указан путь документа.");
-                try { return Json(notes.GetDocAnnotations(context.OwnerId, scope, path)); }
+                try { return Json(notesSvc.GetDocAnnotations(context.OwnerId, scope, path)); }
                 catch (KeyNotFoundException) { return Deny("Область документа не найдена."); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к документу."); }
             }
@@ -209,7 +218,7 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 try
                 {
-                    var created = notes.Reply(context.OwnerId, id,
+                    var created = notesSvc.Reply(context.OwnerId, id,
                         new ReplyRequest(StringArg(arguments, "comment"), TagsArg(arguments)));
                     await BroadcastAsync(context.OwnerId, "created", created.Id);
                     return Json(created);
@@ -227,8 +236,8 @@ public sealed class NotesToolset(
                 {
                     return Json(new
                     {
-                        root = notes.GetDetail(context.OwnerId, id),
-                        replies = notes.GetReplies(context.OwnerId, id),
+                        root = notesSvc.GetDetail(context.OwnerId, id),
+                        replies = notesSvc.GetReplies(context.OwnerId, id),
                     });
                 }
                 catch (KeyNotFoundException) { return Deny($"Комментарий {id} не найден."); }
@@ -240,7 +249,7 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 try
                 {
-                    var updated = notes.SetAnnotationStatus(context.OwnerId, id, StringArg(arguments, "status"));
+                    var updated = notesSvc.SetAnnotationStatus(context.OwnerId, id, StringArg(arguments, "status"));
                     if (updated is null) return Deny($"Заметка {id} не найдена.");
                     await BroadcastAsync(context.OwnerId, "updated", id);
                     return Json(updated);
@@ -255,7 +264,7 @@ public sealed class NotesToolset(
                 var id = StringArg(arguments, "id");
                 try
                 {
-                    var moved = notes.Move(context.OwnerId, id,
+                    var moved = notesSvc.Move(context.OwnerId, id,
                         arguments.ContainsKey("folder") ? StringArg(arguments, "folder") : null,
                         OptionalArg(arguments, "targetSource"));
                     if (moved is null) return Deny($"Заметка {id} не найдена.");
@@ -269,7 +278,7 @@ public sealed class NotesToolset(
 
             case "notes_daily":
             {
-                var date = notes.GetOrCreateDaily(context.OwnerId, OptionalArg(arguments, "date"));
+                var date = notesSvc.GetOrCreateDaily(context.OwnerId, OptionalArg(arguments, "date"));
                 await BroadcastAsync(context.OwnerId, "updated", date.Id);
                 // Дописывание не поддержано эндпоинтом — делаем сами (как stdio): читаем
                 // текущий текст и PUT-им склейку
@@ -279,7 +288,7 @@ public sealed class NotesToolset(
                     var merged = date.Content.Length > 0
                         ? date.Content.TrimEnd() + "\n\n" + append
                         : append;
-                    var updated = notes.Update(context.OwnerId, date.Id, new UpdateNoteRequest(Content: merged));
+                    var updated = notesSvc.Update(context.OwnerId, date.Id, new UpdateNoteRequest(Content: merged));
                     if (updated is not null) return Json(updated);
                 }
                 return Json(date);
@@ -289,7 +298,7 @@ public sealed class NotesToolset(
             {
                 var name = StringArg(arguments, "name");
                 if (name.Length == 0) return Deny("Не задано имя");
-                return notes.ResolveByName(context.OwnerId, name, OptionalArg(arguments, "anchor")) is { } r
+                return notesSvc.ResolveByName(context.OwnerId, name, OptionalArg(arguments, "anchor")) is { } r
                     ? Json(new { note = r.Note, fragment = r.Fragment })
                     : Deny($"Заметка «{name}» не найдена.");
             }
@@ -305,7 +314,7 @@ public sealed class NotesToolset(
                     {
                         var text = StringArg(arguments, "text");
                         if (text.Length == 0) return Deny("Укажи line (номер строки) или text (текст чекбокса)");
-                        var rows = noteTasks.ListForNote(context.OwnerId, id);
+                        var rows = noteTasksSvc.ListForNote(context.OwnerId, id);
                         var needle = text.Trim();
                         var hits = rows.Where(r => r.Text == needle).ToList();
                         var matches = hits.Count > 0 ? hits : rows.Where(r => r.Text.Contains(needle)).ToList();
@@ -315,7 +324,7 @@ public sealed class NotesToolset(
                                 + string.Join(", ", matches.Select(m => m.Line)) + ")");
                         line = matches[0].Line;
                     }
-                    return Json(await noteTasks.PromoteAsync(context.OwnerId, id, line.Value));
+                    return Json(await noteTasksSvc.PromoteAsync(context.OwnerId, id, line.Value));
                 }
                 catch (KeyNotFoundException) { return Deny($"Заметка {id} не найдена."); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }
@@ -325,13 +334,13 @@ public sealed class NotesToolset(
             case "notes_semantic_search":
             {
                 var query = StringArg(arguments, "query");
-                if (!kb.Available)
+                if (!kbSvc.Available)
                     return Text("Семантический поиск не настроен (нет Dify) — используй notes_search.");
                 var topK = 8;
                 if (arguments["topK"] is JsonValue tv && tv.TryGetValue<int>(out var k)) topK = k;
                 try
                 {
-                    var results = await kb.SearchAsync(context.OwnerId, query, Math.Clamp(topK, 1, 20));
+                    var results = await kbSvc.SearchAsync(context.OwnerId, query, Math.Clamp(topK, 1, 20));
                     return Json(results);
                 }
                 catch (HttpRequestException ex) { return Deny($"Dify недоступен: {ex.Message}"); }
@@ -401,7 +410,7 @@ public sealed class NotesToolset(
     // (как Broadcast контроллера: панель «Заметки» обновляется и при MCP-записи)
     private async Task BroadcastAsync(string ownerId, string action, string? noteId)
     {
-        kb.QueueSync(ownerId);
+        kb?.QueueSync(ownerId);
         await broadcaster.ToOwner(ownerId, new NotesChangedMessage(action, noteId));
     }
 

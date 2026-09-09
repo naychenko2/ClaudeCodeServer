@@ -158,8 +158,8 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
         _personaManager = personas;
-        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _actionOverrides = new ClaudeHomeServer.Services.Llm.LocalActionOverridesStore(config);
@@ -1579,8 +1579,8 @@ public class SessionManagerTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 

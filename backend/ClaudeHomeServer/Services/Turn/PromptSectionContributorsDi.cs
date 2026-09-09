@@ -8,15 +8,30 @@ namespace ClaudeHomeServer.Services.Turn;
 // (см. PromptSectionContributorsRegistration.cs).
 public static class PromptSectionContributorsDi
 {
-    public static IServiceCollection AddPromptSectionContributors(this IServiceCollection services)
+    // isEnabled — точечный гейт по типу контрибьютора (напр. NotesRecallContributor зависит
+    // от NotesKnowledgeService и не должен регистрироваться при выключенной подсистеме Notes).
+    // null — все контрибьюторы включены (прежнее поведение, используется тестами и боевым
+    // путём для остальных подсистем). Гейт применяется НА РЕГИСТРАЦИИ, а не пост-хок удалением
+    // дескрипторов из IServiceCollection: удаление ловило только конкретный тип — интерфейсный
+    // форвардер `IPromptSectionContributor → sp.GetRequiredService<T>()` регистрируется через
+    // ImplementationFactory (не ImplementationType), и предикат по ImplementationType его не
+    // находил, оставляя сироту, которая валила IEnumerable<IPromptSectionContributor> на первом
+    // же резолве (найдено при написании теста гейта Subsystems:Notes:Enabled=false).
+    public static IServiceCollection AddPromptSectionContributors(
+        this IServiceCollection services, Func<Type, bool>? isEnabled = null)
     {
-        services.AddPromptSectionContributor<DossierTrailerContributor>();
-        services.AddPromptSectionContributor<NotesRecallContributor>();
-        services.AddPromptSectionContributor<PersonaRecallContributor>();
-        services.AddPromptSectionContributor<PromptSectionsContributor>();
-        services.AddPromptSectionContributor<PersonaBindingsContributor>();
-        services.AddPromptSectionContributor<CodeGraphContributor>();
-        services.AddPromptSectionContributor<PersonaLayerContributor>();
+        void Add<T>() where T : class, IPromptSectionContributor
+        {
+            if (isEnabled is null || isEnabled(typeof(T)))
+                services.AddPromptSectionContributor<T>();
+        }
+        Add<DossierTrailerContributor>();
+        Add<NotesRecallContributor>();
+        Add<PersonaRecallContributor>();
+        Add<PromptSectionsContributor>();
+        Add<PersonaBindingsContributor>();
+        Add<CodeGraphContributor>();
+        Add<PersonaLayerContributor>();
         return services;
     }
 

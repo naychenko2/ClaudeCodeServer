@@ -50,9 +50,9 @@ public class DefaultAssistantProvisionerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
             new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
-        _bindings = new PersonaBindingsService(_personas, projects, wkStore, notesKb,
+        _bindings = new PersonaBindingsService(_personas, projects, wkStore,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance, mcp, notes: notesSvc);
+            NullLogger<PersonaBindingsService>.Instance, mcp, notes: notesSvc, notesKb: notesKb);
         // Перехват broadcast-сообщений через TestSessionBroadcaster (заменяет мок IHubContext).
         _broadcaster = new TestSessionBroadcaster();
 

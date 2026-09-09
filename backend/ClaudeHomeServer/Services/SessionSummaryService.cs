@@ -19,10 +19,13 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 // Повторный вызов обновляет ту же заметку (Session.SummaryNoteId), а не плодит дубли.
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects,
-    NotesKnowledgeService kb, Llm.ICheapTextRunner cheap,
+    Llm.ICheapTextRunner cheap,
     ISessionBroadcaster broadcaster,
     NotificationService notif, IConfiguration config,
-    ILogger<SessionSummaryService> logger, NotesService? notes = null)
+    ILogger<SessionSummaryService> logger, NotesService? notes = null,
+    // Подсистема Notes отключаемая: null, если выключена (тогда notes тоже null,
+    // и SummarizeAsync кидает SummaryGenerationException раньше, чем дойдёт до kb).
+    NotesKnowledgeService? kb = null)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
     private const int TranscriptBudget = 30_000;
@@ -85,7 +88,7 @@ public class SessionSummaryService(
                 sessions.SetSummaryNoteId(sessionId, note.Id);
             }
 
-            kb.QueueSync(ownerId);
+            kb?.QueueSync(ownerId);
             await broadcaster.ToOwner(ownerId,
                 new NotesChangedMessage(isUpdate ? "updated" : "created", note.Id));
 

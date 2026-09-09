@@ -44,8 +44,8 @@ public class PersonaAgentFileSyncTests : IDisposable
         var notes = new NotesService(projects, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notes, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var bindings = new PersonaBindingsService(_personas, projects, wkStore, notesKb,
-            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notes);
+        var bindings = new PersonaBindingsService(_personas, projects, wkStore,
+            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notes, notesKb: notesKb);
         var generator = new PersonaAgentFileGenerator(new PersonaPromptBuilder(providers));
         _sut = new PersonaAgentFileSync(config, _personas, projects, providers, bindings, generator,
             users, appSettings, NullLogger<PersonaAgentFileSync>.Instance);
@@ -313,8 +313,8 @@ public class PersonaAgentFileSyncTests : IDisposable
         var notes = new NotesService(projects, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notes, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projects, wkStore, notesKb,
-            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notes);
+        var bindings = new PersonaBindingsService(personas, projects, wkStore,
+            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notes, notesKb: notesKb);
         var generator = new PersonaAgentFileGenerator(new PersonaPromptBuilder(providers));
         var sut = new PersonaAgentFileSync(config, personas, projects, providers, bindings, generator,
             users, appSettings, NullLogger<PersonaAgentFileSync>.Instance, assignments: assignments);

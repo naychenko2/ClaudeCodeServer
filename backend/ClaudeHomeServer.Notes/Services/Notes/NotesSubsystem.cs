@@ -45,11 +45,6 @@ namespace ClaudeHomeServer.Services.Notes;
 // 404 (роутер не находит action), а не 500 (DI-резолв упавшего контроллера).
 public sealed class NotesSubsystem : IAppSubsystem
 {
-    // Ключ секции в `appsettings`: тумблер отключения подсистемы. Путь
-    // стандартный — `Subsystems:<Key>:Enabled`. Читается в `Register` и
-    // `AddApplicationPart`; дефолт true (по умолчанию включено).
-    public const string EnabledConfigKey = "Subsystems:Notes:Enabled";
-
     public string Key => "notes";
 
     public string Title => "Заметки";
@@ -79,7 +74,11 @@ public sealed class NotesSubsystem : IAppSubsystem
         // `ApplicationPartManager` — синглтон в DI, регистрируется в `AddControllers()`
         // раньше, чем сюда доходит наша `Register`; добавляем свой `AssemblyPart` в его
         // `ApplicationParts`, и MVC при первом резолве `MvcOptions` уже видит обе сборки.
-        if (config.GetValue<bool>(EnabledConfigKey, true))
+        // Единая точка гейта — SubsystemGate.IsEnabled (Core), не второй инлайн-читатель
+        // конфига: технически Register() и так вызывается только при пройденном гейте
+        // (AddSubsystems), но дубль ключа "Subsystems:Notes:Enabled" тут был второй
+        // реализацией той же проверки (блокер ревью notes-optional Б5).
+        if (SubsystemGate.IsEnabled(config, Key))
         {
             services.AddSingleton<IConfigureOptions<MvcOptions>>(
                 sp => new ConfigureMvcOptions(

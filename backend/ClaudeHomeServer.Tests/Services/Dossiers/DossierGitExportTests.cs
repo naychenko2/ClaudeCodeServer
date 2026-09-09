@@ -144,8 +144,8 @@ public class DossierGitExportTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(_config);
-        var bindings = new PersonaBindingsService(personas, _projects, wkStore, notesKb,
-            knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
+        var bindings = new PersonaBindingsService(personas, _projects, wkStore,
+            knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         return new SessionManager(_projects, _history, _config, adapters, falCost, usage, appSettings,

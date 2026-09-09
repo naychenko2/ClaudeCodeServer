@@ -17,8 +17,12 @@ public class DevServerServiceTests
     public DevServerServiceTests()
     {
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
-        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+        var sandboxMgr = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+        // Шов `ISandboxPortRange` (Этап 5, волна C, шаг 2): DevServerService берёт
+        // только пул preview-портов, в тестах хватает адаптера вокруг настоящего
+        // `SandboxManager` (пустая конфигурация → дефолтные 42000..42019).
+        ClaudeHomeServer.Services.Execution.ISandboxPortRange sandbox = new ClaudeHomeServer.Services.Execution.SandboxPortRangeAdapter(sandboxMgr);
         // Память портов пишет в data рядом с DataPath; в тестах конфигурация пуста,
         // поэтому файл ложится во временный каталог сборки и никому не мешает
         var portMemory = new DevServerPortMemory(config,

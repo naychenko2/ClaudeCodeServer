@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Terminal;
@@ -88,7 +88,12 @@ internal sealed class TerminalInstance : IDisposable
 public sealed class TerminalService : IDisposable
 {
     private readonly ConcurrentDictionary<string, TerminalInstance> _terminals = new(); // key = terminalId
-    private readonly IHubContext<TerminalHub> _hub;
+    // Шов `ITerminalHubNotifier` (Core, Этап 5, волна C, шаг 2): раньше был
+    // `IHubContext<TerminalHub>` из Main, что делало вынос вертикали в .csproj
+    // невозможным (нет ProjectReference на Main). Теперь реализация
+    // `TerminalHubNotifier` остаётся в `Hubs/` рядом с `TerminalHub`,
+    // вертикаль зависит только от Core-интерфейса.
+    private readonly ITerminalHubNotifier _hub;
     private readonly IProjectManager _projects;
     private readonly ILogger<TerminalService> _log;
     private readonly Execution.ILauncherFactory _launchers;
@@ -102,7 +107,11 @@ public sealed class TerminalService : IDisposable
     private static bool HasPtyBridge(Execution.IProcessLauncher launcher) =>
         launcher.IsSandboxed || File.Exists(PtyBridgePath);
 
-    public TerminalService(IHubContext<TerminalHub> hub, IProjectManager projects, ILogger<TerminalService> log,
+    // Префикс имени группы терминала (шаг 5, волна C, шов `ITerminalHubNotifier`):
+    // формат знает только TerminalService, реализация шва имя не дописывает.
+    internal static string TerminalGroup(string terminalId) => "term_" + terminalId;
+
+    public TerminalService(ITerminalHubNotifier hub, IProjectManager projects, ILogger<TerminalService> log,
         Execution.ILauncherFactory launchers)
     {
         _hub = hub;
@@ -269,7 +278,7 @@ public sealed class TerminalService : IDisposable
         var buffered = instance.GetBufferedOutput();
         if (buffered.Length > 0)
         {
-            try { await _hub.Clients.Client(connId).SendAsync("message", new TerminalOutputMessage(buffered, false, terminalId)); }
+            try { await _hub.SendToClientAsync(connId, new TerminalOutputMessage(buffered, false, terminalId)); }
             catch { }
         }
         await GroupsAdd(connId, terminalId);
@@ -411,13 +420,13 @@ public sealed class TerminalService : IDisposable
 
     private async Task SendToTerminalGroup(string terminalId, object message)
     {
-        try { await _hub.Clients.Group("term_" + terminalId).SendAsync("message", message); }
+        try { await _hub.SendToGroupAsync(TerminalGroup(terminalId), message); }
         catch { }
     }
 
     private async Task GroupsAdd(string connId, string terminalId)
     {
-        try { await _hub.Groups.AddToGroupAsync(connId, "term_" + terminalId); }
+        try { await _hub.AddToGroupAsync(connId, TerminalGroup(terminalId)); }
         catch { }
     }
 

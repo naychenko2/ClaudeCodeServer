@@ -16,12 +16,11 @@ namespace ClaudeHomeServer.Services.ProjectIcons;
 // - `Services/Llm.ICheapTextRunner` — префикс-шов (как у `Git`/`Backgrounds`): оба
 //   хода подбора идут через дешёвую модель. Префикс, а не расширение
 //   `SharedAllowedPrefixes`, чтобы не открывать любой подсистеме весь `Services.Llm`.
-// - `BackupCore.Snapshot` / `BackupContext.FromConfiguration` в `ProjectIconMigration`
-//   — статические вызовы из тел методов; рефлексия стражей их НЕ видит
-//   (см. `SubsystemBoundaryTests`, «Известное ограничение»). Выделение мьютекса
-//   деплоя в отдельный примитив для `Deploy` помечено там же TODO — здесь аналогично:
-//   явный шов не нужен, пока инвариант держит сам статический вызов и сбой бэкапа
-//   останавливает миграцию (см. `ProjectIconMigration.RunAsync`).
+// - `IProjectIconMigrator` / `IDataBackupService` (Core, Этап 5, волна C, шаг 2) —
+//   швы для записи `Icon.Glyph` и снимка data перед необратимой операцией.
+//   Прежде прямые ссылки на `ProjectManager` и `BackupCore` помечались как
+//   полумера (`ProjectIconMigration.cs:78-84`); курс Андрея 2026-09-08 (вынос
+//   ВСЕХ вертикалей) делает швы обязательными — формализованы в Core.
 public sealed class ProjectIconsSubsystem : IAppSubsystem
 {
     public string Key => "project-icons";

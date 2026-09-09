@@ -105,7 +105,7 @@ public sealed class DevServerService : IDisposable
     private readonly ISessionBroadcaster _broadcaster;
     private readonly ILogger<DevServerService> _log;
     private readonly Execution.ILauncherFactory _launchers;
-    private readonly Execution.SandboxManager _sandbox;
+    private readonly Execution.ISandboxPortRange _sandbox;
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly Timer _cleanupTimer;
     private readonly Timer _logFlushTimer;
@@ -118,7 +118,7 @@ public sealed class DevServerService : IDisposable
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public DevServerService(IProjectManager projects, ISessionBroadcaster broadcaster, ILogger<DevServerService> log,
-        Execution.ILauncherFactory launchers, Execution.SandboxManager sandbox, DevServerPortMemory portMemory)
+        Execution.ILauncherFactory launchers, Execution.ISandboxPortRange sandbox, DevServerPortMemory portMemory)
     {
         _portMemory = portMemory;
         _projects = projects;
@@ -136,8 +136,8 @@ public sealed class DevServerService : IDisposable
     private int PickSandboxPort()
     {
         var used = _servers.Values.Where(s => s.Port > 0).Select(s => s.Port).ToHashSet();
-        var start = _sandbox.Options.PortRangeStart;
-        for (var p = start; p < start + _sandbox.Options.PortRangeSize; p++)
+        var start = _sandbox.PortRangeStart;
+        for (var p = start; p < start + _sandbox.PortRangeSize; p++)
             if (used.Add(p)) return p;
         throw new InvalidOperationException(
             "Исчерпан пул preview-портов песочницы — остановите неиспользуемые dev-серверы или увеличьте Sandbox:PortRangeSize");
@@ -173,7 +173,9 @@ public sealed class DevServerService : IDisposable
         {
             workingDir = string.IsNullOrWhiteSpace(cwd)
                 ? project.RootPath
-                : FileService.SafeJoinPublic(project.RootPath, cwd);
+                // Защита пути через Core-примитив SafePath.Join: ссылка на FileService
+                // — это ссылка на чужую вертикаль, сторож границ её ловит.
+                : SafePath.Join(project.RootPath, cwd);
         }
         catch (UnauthorizedAccessException)
         {

@@ -59,6 +59,22 @@
       RootSubsystemBoundaryTests и SubsystemBoundaryCoverageTests.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
+    <!--
+      Modules — отдельная сборка (Этап 5, волна C). Нужен ProjectReference, чтобы
+      статический конструктор SubsystemBoundaryTests видел тип
+      `ClaudeHomeServer.Services.Modules.ModuleRegistry` для force-загрузки сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
+    <!--
+      ProjectServices — отдельная сборка (Этап 5, волна C). Нужен ProjectReference,
+      чтобы статический конструктор SubsystemBoundaryTests видел тип
+      `ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem` для
+      force-загрузки сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>

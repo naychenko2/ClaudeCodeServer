@@ -8225,7 +8225,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                             // модель) помечает адаптер в ResolveNextTarget: здесь события несут
                             // окно, а не модель, и пара нам неизвестна. По полям телеметрии этот
                             // случай не распознаётся в принципе — разбор в HadRecentModelRejection.
-                            if (_subscriptionPool.HadRecentModelRejection(entry.Info.Provider))
+                            // Спрашиваем БЕЗ ключа подписки намеренно: entry.Info.Provider к этому
+                            // моменту уже переставлен тихой ротацией на соседний здоровый аккаунт,
+                            // и вопрос по нему промахнулся бы мимо пометки — как раз тот ложный бан,
+                            // ради которого подавление и заведено (та же гонка, что у FallbackTurnActive).
+                            if (_subscriptionPool.HadRecentModelRejection())
                                 return;
                             // M1: под фолбэк-оркестрацией ротацией владеет адаптер —
                             // помечать провайдер исчерпанным и переключать пул тут

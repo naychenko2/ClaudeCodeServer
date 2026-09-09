@@ -272,6 +272,102 @@ public class FallbackLlmSessionAdapterTests
         inner.Info.MessageCount.Should().Be(1);
     }
 
+    // --- Окно 1M недоступно (блокер ревью волны 3) ---
+
+    // Пул, где ни одна подписка не тянет 1M-окно: план 200K задан явно, чтобы тест не держался
+    // на дефолте Supports1M=true.
+    private static ClaudeSubscriptionPool BuildPoolWithout1M(params string[] keys)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var key in keys)
+        {
+            dict[$"ClaudeSubscriptions:{key}:OAuthToken"] = $"token-{key}";
+            dict[$"ClaudeSubscriptions:{key}:Supports1M"] = "false";
+        }
+        return new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Главный блокер: недоступность окна 1M — отказ ТЕКУЩЕЙ ПАРЫ, а не всего хода. Раньше
+    // pre-flight обрывал ход до первой попытки, не дав цепочке ни шанса, хотя в ней стоит
+    // модель стороннего провайдера с большим окном — она бы прошла.
+    [Fact]
+    public async Task Окно1MНедоступно_ХодИдётПоЦепочке_АНеПадает()
+    {
+        var pool = BuildPoolWithout1M("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // шаг 2 отвечает с первой попытки
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().ContainSingle("на заведомо неспособной паре попытку не тратим");
+        inner.Attempts[0].Should().Be(("deepseek", "deepseek-chat"), "старт сразу на шаге цепочки");
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
+        Downstream().OfType<ErrorMessage>().Should().BeEmpty("ход состоялся — красной карточки быть не должно");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().Contain("окно 1M");
+    }
+
+    // Обратная сторона: текст про 1M человек видит только тогда, когда подхватить ход было
+    // некому — цепочки нет вовсе (или в ней нет ни одного шага, способного взять окно).
+    [Fact]
+    public async Task Окно1MНедоступно_ЦепочкиНет_ЧестныйОтказСТекстомПро1M()
+    {
+        var pool = BuildPoolWithout1M("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]"]);
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().BeEmpty("ход не стартует: способной пары нет ни у одного шага");
+        Downstream().OfType<ErrorMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be(TurnFailureText.Window1MUnavailable);
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("error");
+    }
+
+    // Все шаги цепочки просят то же недоступное окно — подхватить некому, и отказ честный:
+    // «остальные модели цепочки тоже не подошли» из текста относится ровно к этому случаю.
+    [Fact]
+    public async Task Окно1MНедоступно_ВсеШагиЦепочкиПросят1M_ЧестныйОтказ()
+    {
+        var pool = BuildPoolWithout1M("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]", "sonnet[1m]"]);
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().BeEmpty();
+        Downstream().OfType<ErrorMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be(TurnFailureText.Window1MUnavailable);
+    }
+
+    // Блокер 2, вид со стороны хода: одна пометка «пара недоступна» на единственной 1M-подписке
+    // не имеет права закрывать окно всем. Ход обязан стартовать (и упасть уже по факту, если
+    // модель и правда недоступна), а не отказать до попытки текстом про 1M.
+    [Fact]
+    public async Task ПометкаПарыНа1M_ОкноНеЗакрыто_ХодСтартует()
+    {
+        var pool = BuildPool("acc-a");   // единственная подписка, план тянет 1M
+        pool.MarkModelUnavailable("acc-a", "opus[1m]", FallbackErrorClass.ModelNoAccess);
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]"]);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().ContainSingle("пометка режет пару в выборе кандидата, а не окно у инстанса");
+        Downstream().OfType<ErrorMessage>().Should().BeEmpty();
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
+        pool.IsModelUnavailable("acc-a", "opus[1m]").Should().BeFalse("успешный ход снял пометку пары");
+    }
+
     [Fact]
     public async Task НеизвестнаяОшибка_ФолбэкНеЗапускается()
     {
@@ -315,9 +411,8 @@ public class FallbackLlmSessionAdapterTests
 
         pool.IsExhausted("acc-a").Should().BeFalse("кончились кредиты МОДЕЛИ — это не лимит подписки");
         pool.IsModelUnavailable("acc-a", "fable").Should().BeTrue("помечена пара, а не подписка");
-        pool.HadRecentModelRejection("acc-a").Should()
+        pool.HadRecentModelRejection().Should()
             .BeTrue("поздний rate_limit_event этой же попытки не должен пометить подписку исчерпанной");
-        pool.HadRecentModelRejection("acc-b").Should().BeFalse("подавление адресное");
     }
 
     [Fact]
@@ -1459,10 +1554,12 @@ public class FallbackLlmSessionAdapterTests
     // соседних тестов направления «сторонний → нативный»: нативный шаг цепочки принадлежит
     // ПУЛУ ПОДПИСОК, а не текущему стороннему провайдеру. Отличие от них — модель шага: тир-алиас
     // с суффиксом окна, и закрепляется ровно это. «opus[1m]» не принимается за модель стороннего
-    // каталога (иначе ключом шага стал бы «glm»); суффикс доезжает до пары НЕИЗМЕНЁННЫМ —
-    // ResolveWindowAlias живёт ниже, в ClaudeSession.ResolveModelForCli и OneShotClaudeRunner,
-    // в адаптере его нет и быть не должно; маршрут идёт в живую подписку пула мимо стороннего
-    // шага. Развилку Supports1M здесь не видно (способная подписка одна) — её закрепляет
+    // каталога (иначе ключом шага стал бы «glm»); суффикс доезжает до пары НЕИЗМЕНЁННЫМ — резать
+    // его адаптер не вправе (тихая деградация длинного чата в 200K), он лишь сверяется со
+    // способностью пула (CanServeWindow1M) и при её отсутствии уводит ход на шаг цепочки;
+    // маршрут идёт в живую подписку пула мимо стороннего шага. Обе подписки здесь 1M-способны,
+    // поэтому сверка проходит молча. Развилку Supports1M тут не видно (способная подписка
+    // одна после исчерпания первой) — её закрепляет
     // соседний тест НативныйШагСОкном1M_УходитНаПодпискуС1M_АНеНаЛюбуюЖивую.
     [Fact]
     public async Task БоеваяЦепочкаРевьюера_НативныйШагСОкном1M_УходитНаЖивуюПодпискуПула()

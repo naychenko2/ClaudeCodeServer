@@ -492,25 +492,25 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
-    public void ResolveWindowAlias_ПустойПул_ОставляетСуффикс()
+    public void CanServeWindow1M_ПустойПул_Может()
     {
         // Локальный Claude (default Supports1M=true) — суффикс доезжает до --model
         var pool = new ClaudeSubscriptionPool(Config());
-        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus[1m]");
+        pool.CanServeWindow1M("opus[1m]").Should().BeTrue();
     }
 
     [Fact]
-    public void ResolveWindowAlias_ВсеПодпискиТянут1M_ОставляетСуффикс()
+    public void CanServeWindow1M_ВсеПодпискиТянут1M_Может()
     {
         var pool = new ClaudeSubscriptionPool(Config("a", "b"));
-        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus[1m]");
-        pool.ResolveWindowAlias("sonnet[1m]").Should().Be("sonnet[1m]");
+        pool.CanServeWindow1M("opus[1m]").Should().BeTrue();
+        pool.CanServeWindow1M("sonnet[1m]").Should().BeTrue();
     }
 
     [Fact]
-    public void ResolveWindowAlias_НиктоНеТянет1M_ВозвращаетNull()
+    public void CanServeWindow1M_НиктоНеТянет1M_НеМожет()
     {
-        // Обе подписки без 1M → null = «окно 1M недоступно». Тихого среза в 200K больше нет:
+        // Обе подписки без 1M → false = «окно 1M недоступно». Тихого среза в 200K больше нет:
         // деградация для длинного чата — мина (контекст не влезет), отказ разбирает вызывающий.
         var dict = new Dictionary<string, string?>
         {
@@ -522,55 +522,73 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         };
         var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
 
-        pool.ResolveWindowAlias("opus[1m]").Should().BeNull();
-        pool.ResolveWindowAlias("sonnet[1m]").Should().BeNull();
+        pool.CanServeWindow1M("opus[1m]").Should().BeFalse();
+        pool.CanServeWindow1M("sonnet[1m]").Should().BeFalse();
     }
 
     [Fact]
-    public void ResolveWindowAlias_СмешанныйПул_ОставляетПокаЕстьЖивой1M()
+    public void CanServeWindow1M_СмешанныйПул_МожетПокаЕстьЖивой1M()
     {
-        // Есть живая 1M-подписка "full" — суффикс сохраняется
+        // Есть живая 1M-подписка "full" — окно обслуживается
         var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
-        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus[1m]");
+        pool.CanServeWindow1M("opus[1m]").Should().BeTrue();
     }
 
     [Fact]
-    public void ResolveWindowAlias_1MИсчерпаны_ВозвращаетNull()
+    public void CanServeWindow1M_1MИсчерпаны_НеМожет()
     {
-        // Единственная 1M-подписка исчерпана, осталась живая 200K — живого 1M-кандидата нет,
-        // ResolveWindowAlias возвращает null («окно недоступно»), а не срезает в 200K.
+        // Единственная 1M-подписка исчерпана, осталась живая 200K — живого 1M-кандидата нет.
         var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
         pool.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
 
-        pool.ResolveWindowAlias("opus[1m]").Should().BeNull();
+        pool.CanServeWindow1M("opus[1m]").Should().BeFalse();
     }
 
-    // Окно, объявляемое CLI, считается ПОСЛЕ резолва по способности пула: когда живой 1M есть,
-    // суффикс остаётся и объявляем 1M. Когда живого 1M нет — ResolveWindowAlias отдаёт null,
-    // и вызывающий отказывает ход (TurnFailureText.Window1MUnavailable), а не объявляет 200K.
+    // Блокер ревью: пометка «пара недоступна» — состояние ПАРЫ, а не запрет окна для инстанса.
+    // Один отказ по opus[1m] на единственной 1M-подписке не имеет права рубить окно всем чатам
+    // на сутки TTL: пара выпадает из выбора кандидата (IsPairUsable), а окно остаётся живым —
+    // ход пойдёт по цепочке, другой подпиской или базовым окном, а не упрётся в отказ.
+    [Fact]
+    public void CanServeWindow1M_ПометкаПары_ОкноОстаётсяЖивым()
+    {
+        var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
+        pool.MarkModelUnavailable("full", "opus[1m]", FallbackErrorClass.ModelNoAccess);
+
+        pool.CanServeWindow1M("opus[1m]").Should().BeTrue("пометка режет пару, а не окно");
+        pool.IsPairUsable("full", "opus[1m]").Should().BeFalse("сама пара выбыла из кандидатов");
+        pool.SupportsModel("full", "opus[1m]").Should().BeTrue(
+            "план подписку тянет — иначе человеку показали бы «подписка не поддерживает модель»");
+    }
+
+    // Окно, объявляемое CLI, считается по модели, которая реально уедет в --model. Пока пул
+    // может обслужить 1M — это исходная модель с суффиксом; не может — суффикс срезает
+    // фоновый one-shot (OneShotClaudeRunner), а ход чата уходит по цепочке.
     [Fact]
     public void ОкноКонтекста_СчитаетсяПоМоделиПослеРезолваПула()
     {
         var live1M = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
-        LlmProviderRegistry.ClaudeContextWindow(live1M.ResolveWindowAlias("opus[1m]"))
-            .Should().Be(1_000_000);
+        live1M.CanServeWindow1M("opus[1m]").Should().BeTrue();
+        LlmProviderRegistry.ClaudeContextWindow("opus[1m]").Should().Be(1_000_000);
 
         live1M.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
-        live1M.ResolveWindowAlias("opus[1m]").Should().BeNull("живого 1M-кандидата нет — сигнал недоступности, не срез");
+        live1M.CanServeWindow1M("opus[1m]").Should().BeFalse("живого 1M-кандидата нет");
+        LlmProviderRegistry.ClaudeContextWindow(LlmProviderRegistry.StripClaudeWindowAlias("opus[1m]"))
+            .Should().Be(200_000);
     }
 
     [Theory]
-    // Не-тир-алиасы — суффикс не режем: полные id и сторонние провайдеры разбирает сам CLI
-    [InlineData("glm-5.2[1m]", "glm-5.2[1m]")]
-    [InlineData("claude-fable-5[1m]", "claude-fable-5[1m]")]
-    // Базовый алиас и обычные модели — без изменений (окна в них нет)
-    [InlineData("opus", "opus")]
-    [InlineData("deepseek-chat", "deepseek-chat")]
-    [InlineData(null, null)]
-    public void ResolveWindowAlias_НеТирАлиасы_НеТрогает(string? input, string? expected)
+    // Не-тир-алиасы — вопрос не к пулу: полные id и сторонние провайдеры разбирает сам CLI
+    [InlineData("glm-5.2[1m]")]
+    [InlineData("claude-fable-5[1m]")]
+    // Базовый алиас и обычные модели — окна в них нет
+    [InlineData("opus")]
+    [InlineData("deepseek-chat")]
+    [InlineData(null)]
+    public void CanServeWindow1M_НеТирАлиасы_ВопросНеКПулу(string? input)
     {
+        // Пул без единой 1M-подписки: для не-тир-алиасов ответ всё равно «может»
         var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim"));
-        pool.ResolveWindowAlias(input).Should().Be(expected);
+        pool.CanServeWindow1M(input).Should().BeTrue();
     }
 
     [Fact]
@@ -954,17 +972,20 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     // --- Реестр пар «подписка × модель» (недоступность модели на конкретной подписке) ---
 
     [Fact]
-    public void MarkModelUnavailable_СтавитПометку_ИИсключаетПаруИзSupportsModel()
+    public void MarkModelUnavailable_СтавитПометку_ИИсключаетПаруИзКандидатов()
     {
         var pool = new ClaudeSubscriptionPool(Config("a", "b"));
 
         pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
 
         pool.IsModelUnavailable("a", "opus").Should().BeTrue();
-        pool.SupportsModel("a", "opus").Should().BeFalse("пара помечена — отсекается");
+        pool.IsPairUsable("a", "opus").Should().BeFalse("пара помечена — из кандидатов отсекается");
+        // Но способность ПЛАНА пометка не подменяет: иначе человеку при ручном выборе
+        // показали бы «подписка не поддерживает модель», а это неправда.
+        pool.SupportsModel("a", "opus").Should().BeTrue("тариф модель тянет — врать нельзя");
         // Другая модель на той же подписке и та же модель на другой — живы
-        pool.SupportsModel("a", "sonnet").Should().BeTrue();
-        pool.SupportsModel("b", "opus").Should().BeTrue();
+        pool.IsPairUsable("a", "sonnet").Should().BeTrue();
+        pool.IsPairUsable("b", "opus").Should().BeTrue();
     }
 
     [Fact]
@@ -974,7 +995,7 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.MarkModelUnavailable("a", "Opus", FallbackErrorClass.ModelNoAccess);
 
         pool.IsModelUnavailable("a", "opus").Should().BeTrue();
-        pool.SupportsModel("a", "OPUS").Should().BeFalse();
+        pool.IsPairUsable("a", "OPUS").Should().BeFalse();
     }
 
     [Fact]
@@ -1081,8 +1102,22 @@ public class ClaudeSubscriptionPoolTests : IDisposable
 
         pool.MarkModelUnavailable("a", "fable", FallbackErrorClass.ModelOutOfCredits);
 
-        pool.HadRecentModelRejection("a").Should().BeTrue();
-        pool.HadRecentModelRejection("b").Should().BeFalse("подавление адресное — только та подписка, где был отказ");
+        pool.HadRecentModelRejection().Should().BeTrue();
+    }
+
+    // Гонка (блокер ревью): пометку ставит попытка на подписке «a», а поздний rate_limit_event
+    // приезжает уже после тихой ротации, когда Info.Provider чата — соседняя здоровая «b».
+    // Адресное подавление по ключу тут промахивалось бы, и MarkExhausted банил бы «b» — ровно
+    // тот ложный бан, ради которого подавление и заведено. Поэтому вопрос задаётся без ключа.
+    [Fact]
+    public void HadRecentModelRejection_ПослеТихойРотации_ПодавляетИДляСоседнейПодписки()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a", "b"));
+
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.HadRecentModelRejection().Should().BeTrue(
+            "событие про окно приезжает уже с ключом «b», но верить ему в этом окне нельзя");
     }
 
     [Fact]
@@ -1093,21 +1128,37 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         // Исчерпание подписки к подавлению отношения не имеет: MarkExhausted обязан работать
         pool.MarkExhausted("a", null);
 
-        pool.HadRecentModelRejection("a").Should().BeFalse();
+        pool.HadRecentModelRejection().Should().BeFalse();
     }
 
     [Fact]
     public void MarkModelUnavailable_МодельНеизвестна_ПарыНет_НоПодавлениеЕсть()
     {
         // Пустая модель бывает у хода без цепочки и без эффективной модели. Пары тогда нет
-        // (нечего помечать), но подписка известна — и поздний rate_limit_event про неё соврать
+        // (нечего помечать), но отказ по модели случился — и поздний rate_limit_event соврать
         // всё равно может, поэтому подавление взводится.
         var pool = new ClaudeSubscriptionPool(Config("a"));
 
         pool.MarkModelUnavailable("a", "", FallbackErrorClass.ModelNoAccess);
 
-        pool.HadRecentModelRejection("a").Should().BeTrue();
+        pool.HadRecentModelRejection().Should().BeTrue();
         pool.ModelUnavailableMarks("a").Should().BeEmpty();
+    }
+
+    // Ключ подписки приходит из конфига владельца и может содержать любой символ, в том числе
+    // разделитель, которым первая редакция склеивала ключ пары. Пара — кортеж, поэтому
+    // «a|b» × «opus» и «a» × «b|opus» остаются разными пометками.
+    [Fact]
+    public void ПометкаПары_РазделительВКлючеПодписки_НеСклеиваетПары()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a|b", "a"));
+
+        pool.MarkModelUnavailable("a|b", "opus", FallbackErrorClass.ModelNoAccess);
+
+        pool.IsModelUnavailable("a|b", "opus").Should().BeTrue();
+        pool.IsModelUnavailable("a", "b|opus").Should().BeFalse();
+        pool.ModelUnavailableMarks("a").Should().BeEmpty();
+        pool.ModelUnavailableMarks("a|b").Select(m => m.Model).Should().Equal("opus");
     }
 
     [Fact]

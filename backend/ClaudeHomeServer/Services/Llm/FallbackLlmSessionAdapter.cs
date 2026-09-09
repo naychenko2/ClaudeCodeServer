@@ -553,22 +553,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 }
             }
 
-            // Окно 1M недоступно: суффикс [1m] тир-алиаса запрошен, но живых подписок с доступом
-            // нет. Тихого среза в 200K больше нет (ResolveWindowAlias вернул null) — честный отказ
-            // до старта попытки: контекст длинного чата (сотни тысяч токенов) в 200K не влезет, и
-            // человек получит причину, а не непонятное переполнение. Как LocalModelDown — без
-            // подмены и без кулдауна (состояние снято до попытки, помечать нечего).
-            // Проверки «currentModel не null» здесь нет и быть не должно: переменная не nullable
-            // (шаг цепочки либо `_effectiveModel() ?? ""`), а лишний тест переводил её flow-state
-            // в «может быть null» и рождал CS8620/CS8604 ниже — на attempted.Add и AttemptTrace.
-            if (_pool.ResolveWindowAlias(currentModel) is null)
-            {
-                LogWarn($"Окно 1M недоступно (session {Info.Id}): нет живой подписки с доступом к «{currentModel}» — ход не стартует, цепочку не идём.");
-                turnOutcome = "window_1m_unavailable";
-                await FailWindow1MUnavailableAsync(turn);
-                return;
-            }
-
             // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
             // недоступным (возвращал Unreachable/ProviderError в прошлых ходах либо исчерпал
             // квоту — UsageLimit), не тратим попытку на мёртвый/исчерпанный эндпоинт — стартуем
@@ -643,6 +627,79 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LogInfo($"Стартовая подмена (кулдаун, {switchReason}): «{origModel}» × «{origProvider}» исключён → старт на «{currentKey}» / «{currentModel}»");
                     }
                 }
+            }
+
+            // (в) Стартовая пара просит окно 1M, а живой подписки с доступом к нему сейчас нет.
+            // Это отказ ТЕКУЩЕЙ ПАРЫ, а не хода: цепочка существует ровно для такого случая —
+            // в ней стоят модели сторонних провайдеров с большим окном, и они бы прошли. Раньше
+            // здесь ход обрывался до первой попытки (блокер ревью): цепочке не давалось ни шанса,
+            // а текст отказа утверждал непомещение разговора в 200K, ничего не зная о его размере.
+            // Логика та же, что у стартовой подмены по кулдауну выше: ищем первый шаг цепочки,
+            // который пул может обслужить (живой в приоритете, остывший — fail-open, кулдаун лишь
+            // наблюдение), и стартуем с него. Ни одного такого шага нет — только тогда честный
+            // отказ Window1MUnavailable, без подмены и без кулдауна (состояние снято до попытки).
+            // Проверки «currentModel не null» здесь нет и быть не должно: переменная не nullable
+            // (шаг цепочки либо `_effectiveModel() ?? ""`), а лишний тест переводил её flow-state
+            // в «может быть null» и рождал CS8620/CS8604 ниже — на attempted.Add и AttemptTrace.
+            if (!_pool.CanServeWindow1M(currentModel))
+            {
+                var winIdx = -1;
+                string? winKey = null;
+                var cooledWinIdx = -1;
+                string? cooledWinKey = null;
+                for (var i = chainIndex + 1; i < chain.Count; i++)
+                {
+                    var sm = chain[i];
+                    // Шаг с тем же тупиком (другой тир-алиас с окном 1M) пропускаем: пул не может
+                    // обслужить и его, попытка сгорела бы впустую.
+                    if (!_pool.CanServeWindow1M(sm)) continue;
+                    // Ключ найденного шага запоминаем сразу: ProviderKeyFor у нативной модели
+                    // разруливает ничью подписок через Pick (случайно), и второй вызов мог бы
+                    // отдать ДРУГУЮ подписку — проверили одну, поехали на другую.
+                    var k = ProviderKeyFor(sm);
+                    if (StepUnavailable(k))
+                    {
+                        if (cooledWinIdx < 0) { cooledWinIdx = i; cooledWinKey = k; }
+                        continue;
+                    }
+                    winIdx = i; winKey = k; break;
+                }
+                if (winIdx < 0 && cooledWinIdx >= 0) { winIdx = cooledWinIdx; winKey = cooledWinKey; }
+
+                // Перенос транскрипта ДО подмены (инвариант ADR-007 §4.1). Провал переноса здесь
+                // fail-CLOSED, в отличие от стартовой подмены по кулдауну: там «остаться на
+                // исходной паре» — рабочий вариант (эндпоинт мог подняться), а тут исходная пара
+                // заведомо не может, и запускать её значило бы сжечь попытку ради того же отказа.
+                var winRoot = winIdx >= 0 ? ResolveRootFor(winKey!) : null;
+                if (winIdx < 0 || !TryMigrateTranscript(winRoot))
+                {
+                    LogWarn($"Окно 1M недоступно (session {Info.Id}): нет живой подписки с доступом к «{currentModel}»"
+                        + (winIdx < 0
+                            ? " и ни один шаг цепочки не может его обслужить"
+                            : $", а транскрипт не перенесён в профиль шага «{winKey}»")
+                        + " — ход не стартует.");
+                    turnOutcome = "window_1m_unavailable";
+                    await FailWindow1MUnavailableAsync(turn);
+                    return;
+                }
+
+                var winModel = chain[winIdx];
+                chainIndex = winIdx;
+                currentModel = winModel;
+                currentKey = winKey!;
+                Info.Model = currentModel;
+                Info.Provider = currentKey;
+                _profileRoot = winRoot;
+                appliedModel = currentModel;
+                appliedProvider = currentKey;
+                anyProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
+                // substitutions не тратим — это выбор стартовой точки, а не подмена по ошибке
+                // (та же логика, что у стартовой подмены по кулдауну).
+                var winLabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
+                await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
+                    $"Старт на «{winLabel}»: окно 1M сейчас недоступно",
+                    Auto: true, Reason: TurnErrorClassifier.WireName(FallbackErrorClass.ModelNoAccess)));
+                LogInfo($"Стартовая подмена (окно 1M недоступно): «{origModel}» × «{origProvider}» → старт на «{currentKey}» / «{currentModel}»");
             }
 
             while (!_cts.IsCancellationRequested)
@@ -1190,7 +1247,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 && !attempted.Contains((model, switched))
                 && !_pool.IsExhausted(switched)
                 && !_pool.IsAuthDead(switched)
-                && _pool.SupportsModel(switched, modelForPool))
+                && _pool.IsPairUsable(switched, modelForPool))
                 return new FallbackTarget(switched, null, Label: null,
                     ProfileRoot: ResolveRootFor(switched), IsProviderSwitch: false);
 
@@ -1248,6 +1305,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // заявленное окно каталога (неточное) — только при ContextOverflow (Major 3).
                 var checkDeclared = cls == FallbackErrorClass.ContextOverflow;
                 if (!WouldFit(stepModel, contextEstimate, checkDeclared)) continue;
+                // Шаг просит окно 1M, которого пул сейчас не даёт ни на одной живой подписке —
+                // пропускаем ЖЁСТКО, как WouldFit: это уверенный отказ (CLI на таком аккаунте
+                // падает «no access»), а не наблюдение о живости, как кулдаун ниже.
+                if (!_pool.CanServeWindow1M(stepModel)) continue;
                 // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
                 // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open).
                 // Здоровье считает StepUnavailable: у нативного шага его ведёт пул подписок.
@@ -1314,7 +1375,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var current = Info.Provider;
         if (!string.IsNullOrEmpty(current) && !IsExternalProvider(current)
             && !_pool.IsExhausted(current) && !_pool.IsAuthDead(current)
-            && _pool.SupportsModel(current, model))
+            && _pool.IsPairUsable(current, model))
             return current;
         var picked = _pool.Pick(model);
         return string.IsNullOrWhiteSpace(picked) ? ClaudeSubscriptionPool.PrimaryKey : picked;
@@ -1408,12 +1469,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private IEnumerable<string> SubscriptionCandidates(string? model, string currentKey)
     {
         var pick = _pool.Pick(model);
-        if (pick != currentKey && !_pool.IsExhausted(pick) && !_pool.IsAuthDead(pick) && _pool.SupportsModel(pick, model))
+        if (pick != currentKey && !_pool.IsExhausted(pick) && !_pool.IsAuthDead(pick) && _pool.IsPairUsable(pick, model))
             yield return pick;
         foreach (var sub in _pool.All)
         {
             if (sub.Key == currentKey || sub.Key == pick) continue;
-            if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key) || !_pool.SupportsModel(sub.Key, model)) continue;
+            if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key) || !_pool.IsPairUsable(sub.Key, model)) continue;
             yield return sub.Key;
         }
     }

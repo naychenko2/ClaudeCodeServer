@@ -229,6 +229,12 @@ public sealed record LlmSessionContext(
     string RootPath,
     Func<ServerMessage, Task> OnMessage,
     string? RawSystemPrompt,
+    // Встроенная часть системного промпта (ProjectManager.BuiltInSystemPrompt) — контент
+    // продукта, который живёт в Main: вертикаль Llm его не знает и получает готовым текстом,
+    // чтобы собрать части промпта через спину (Core: SystemPromptComposer). Параметр
+    // ОБЯЗАТЕЛЬНЫЙ намеренно: дефолт молча ронял бы 5 КБ правил из промпта хода у любого
+    // забывшего его места, и компилятор этого бы не заметил.
+    string BuiltInSystemPrompt,
     Func<IReadOnlyList<PermissionRule>>? PermissionRules,
     TasksMcpContext? TasksMcp,
     NotesMcpContext? NotesMcp = null,

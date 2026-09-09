@@ -899,13 +899,15 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ModelTier[]",
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
-                    "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionSummaryService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
-                    "ClaudeHomeServer.Services.ProjectManager",
+                    // ProjectManager снят: сборку частей системного промпта
+                    // (GetSystemPromptParts + SystemPromptPart) забрала спина —
+                    // Core: Services/Llm/SystemPromptComposer, а встроенная часть
+                    // промпта приезжает в ClaudeSession текстом через LlmSessionContext.
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.Skills.SkillsService",
                     "ClaudeHomeServer.Services.UserStore",

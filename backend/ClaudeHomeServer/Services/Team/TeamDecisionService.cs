@@ -361,6 +361,20 @@ internal sealed class TeamDecisionService
                     // Э8: работа разрешена именно этой версии плана — по ней и только по ней
                     // стартуют волны (гард в TeamWaveService).
                     t.ApprovedPlanVersion = plan.Version;
+                    // M1 (волна 4 team-blocker-honest): план сверх остатка бюджета — клик
+                    // «Запустить» расширяет потолки ровно на недостающую разницу. Тот же
+                    // приём, что у кнопки «Добавить бюджет» в ветке addBudget, но ровно
+                    // на дельту, а не на полный fresh. Автоматическое расширение ТОЛЬКО
+                    // на подтверждении плана человеком: сюда ходит только SessionHub.
+                    // RespondTeamPlan → проверка владельца, агентский путь
+                    // (chats_send → PublishTeamPlanAsync) сюда не ведёт. Расширение
+                    // происходит ДО старта волны — гейт TeamWaveService.StartWaveCoreAsync
+                    // сразу видит новые потолки в Budget.ExceededReasonForWave и не
+                    // поднимает карточку «Бюджет исчерпан» на первой же волне.
+                    var deltaTasks = Math.Max(0, plan.Subtasks.Count - t.Budget.MaxTasks);
+                    var deltaWaves = Math.Max(0, plan.WaveCount - t.Budget.MaxWaves);
+                    t.Budget.MaxTasks += deltaTasks;
+                    t.Budget.MaxWaves += deltaWaves;
                 }
                 if (decision == TeamPlanDecision.Cancel) { t.PlanCardId = null; t.PlannedWaves = 0; }
                 return true;

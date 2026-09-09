@@ -9,9 +9,9 @@ namespace ClaudeHomeServer.Services.Turn;
 // Правило: в UI события НЕ ходят. Дорога к клиенту одна — ServerMessage/OnMessage;
 // шина второй не заводит.
 
-// Одна секция системного промпта хода: Key — ключ секции (recall-notes, persona-layer …),
-// Text — её текст. Порядок секций задаёт порядок склейки.
-public sealed record PromptSection(string Key, string Text);
+// Этап 5, шаг 6: record-тип PromptSection переехал в Core
+// (`Core/Services/Turn/IPromptSectionContributor.cs`) — контрибьюторы в чужих
+// вертикалях (CodeGraph, Notes, …) ссылаются на Core-DTO, импорт Turn не нужен.
 
 // prompt/assembling — Filter: цепочка подписчиков собирает секции системного промпта.
 // Класс, а не record: Sections — мутируемый вход/выход waterfall (подписчик добавляет свою

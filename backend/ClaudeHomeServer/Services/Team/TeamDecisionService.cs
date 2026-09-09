@@ -735,4 +735,85 @@ internal sealed class TeamDecisionService
     // вертикали знать незачем.
     private static bool AllPlannedWavesClosed(SessionTeamImplement team) =>
         team.PlannedWaves > 0 && team.ClosedWave >= team.PlannedWaves;
+
+    // === Волна 1 team-blocker-honest: единая точка снятия блокера по факту ===
+    // Доклад-блокер одновременно поднимает карточку человеку и будит координатора; координатор
+    // обычно снимает блокер сам (переписал постановку, ответил исполнителю, перезапустил его),
+    // и карточка должна гаснуть по факту этого действия — иначе стадия висит в
+    // AwaitingDecision, а гейт запуска не даёт координатору исполнить собственное решение.
+    // Сигналы: tasks_update/tasks_complete/tasks_run_executor задачи, на которую открыта
+    // карточка, снятие под-задачи, chats_send в дочерний чат задачи, и маркер <team:resolved>
+    // в ходе координатора. Карточка гасится тем же путём, что кнопка человека
+    // (ResolveEscalationAsync → OnTeamEscalationResolved); стадия возвращается по правилам
+    // default-ветки RespondTeamEscalationAsync (Wave со свежими отсечками / Idle при
+    // AllPlannedWavesClosed / StageBeforeDecision до первой волны), ТОЛЬКО если решающих
+    // открытых карточек больше нет. P23 (team:work / все волны закрыты) — частный случай
+    // той же логики. reason — короткий текст для ResolutionNote (карточка подпишется
+    // «Снят штабом: {reason}»).
+    public async Task<bool> TryResolveBlockerByFactAsync(string stabSessionId, string taskId,
+        string reason)
+    {
+        if (string.IsNullOrWhiteSpace(stabSessionId)) return false;
+        if (_sessions.GetById(stabSessionId) is not { } session) return false;
+        if (session.TeamImplement is not { } team) return false;
+
+        // Открытые карточки блокера по задаче: для неактивного чата живут на диске, для
+        // активного — в аккумуляторе. Гасим обе развилки и помогаем всем блокер-карточкам
+        // задачи сразу. Сторона гашения — ResolveEscalationAsync (единая точка, как у кнопки).
+        // P23 (taskId пустой): старый путь ловит блокеры без привязки к задаче (общий карточный
+        // блокер) — гасим ВСЕ открытые блокеры. Это оставляет логику «team:work снял предмет
+        // блокера» работающей для блокеров, которые создаются без TaskId (как в старых тестах).
+        var open = await GetOpenTeamEscalationsAsync(stabSessionId);
+        var blockers = string.IsNullOrEmpty(taskId)
+            ? open.Where(e => e.Kind == TeamEscalationKind.Blocker).ToList()
+            : open.Where(e => e.Kind == TeamEscalationKind.Blocker && e.TaskId == taskId).ToList();
+        if (blockers.Count == 0) return false;
+
+        foreach (var card in blockers)
+        {
+            var resolved = await _sessions.ResolveEscalationAsync(stabSessionId, card.Id, "resolvedByStaff");
+            if (resolved is null) continue;
+            // Пробрасываем ResolutionNote отдельным путём: ResolveEscalationAsync правит Resolved
+            // и ChosenActionId в истории, но текстовой подписи снятия там нет. Записываем
+            // примечание прямо в историю — тем же MutateCardAsync, что хранит саму карточку.
+            await _history.MutateCardAsync<StoredTeamEscalationMessage>(stabSessionId,
+                m => m.EscalationId == card.Id,
+                m => { m.Escalation.ResolutionNote = reason; });
+            // Снимок истории после правки — через MutateCardAsync этого не происходит,
+            // история остаётся под локом: гарантия не нужна, поле и так в StoredTeamEscalationMessage.
+            await _sessions.BroadcastAsync(stabSessionId, new TeamEscalationMessage(card.Id,
+                card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
+                card.TaskId, card.Wave, Resolved: true, ChosenActionId: "resolvedByStaff",
+                card.PersonaId, ResolutionNote: reason));
+        }
+
+        // Возврат стадии ТОЛЬКО если решающих открытых карточек больше нет.
+        // Информационные карточки (WaveAdded) не считаются: практику они не останавливали.
+        var stillOpen = await GetOpenTeamEscalationsAsync(stabSessionId);
+        var hasDecisional = stillOpen.Any(e => !e.Kind.IsInformational());
+        if (hasDecisional) return true;
+
+        _run.WithTeamState(stabSessionId, t =>
+        {
+            t.Stage = t.WaveNumber == 0
+                ? t.StageBeforeDecision ?? TeamImplementStage.Planning
+                : AllPlannedWavesClosed(t)
+                    ? TeamImplementStage.Idle
+                    : TeamImplementStage.Wave;
+            t.StageBeforeDecision = null;
+            if (t.Stage == TeamImplementStage.Wave && t.WaveNumber > 0
+                && t.ClosedWave < t.WaveNumber)
+            {
+                t.WaveStartedAt = DateTime.UtcNow;
+                t.WaveActivityAt = DateTime.UtcNow;
+            }
+            return true;
+        });
+        session.UpdatedAt = DateTime.UtcNow;
+        _sessions.SaveSessions();
+        await _sessions.BroadcastTeamImplementAsync(stabSessionId, session);
+        _log.LogInformation("Карточка блокера по задаче {TaskId} в чате-штабе {SessionId} погашена штабом: {Reason}",
+            taskId, stabSessionId, reason);
+        return true;
+    }
 }

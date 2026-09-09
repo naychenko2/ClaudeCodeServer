@@ -6346,73 +6346,41 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return TryAutoResolveTeamBlockerInternalAsync(sessionId, entry, turnText);
     }
 
+    // Owning-обёртка для вертикали и тулсетов: единая точка снятия блокера по факту
+    // (волна 1 team-blocker-honest). Тело в TeamDecisionService — там же, где и сам
+    // механизм гашения. Сигналы (tasks_update/tasks_complete/tasks_run_executor/chats_send/
+    // SubtaskDropHandler/<team:resolved>) идут через этот метод.
+    public Task<bool> TryResolveBlockerByFactAsync(string sessionId, string taskId, string reason) =>
+        _teamDecision.TryResolveBlockerByFactAsync(sessionId, taskId, reason);
+
     // Тело в ядре — здесь лезем в Accumulator/History, а вертикаль видит только результат.
-    private Task<bool> TryAutoResolveTeamBlockerInternalAsync(string sessionId, SessionEntry entry, string turnText)
+    private async Task<bool> TryAutoResolveTeamBlockerInternalAsync(string sessionId, SessionEntry entry, string turnText)
     {
-        if (entry.Info.TeamImplement is not { } team) return Task.FromResult(false);
-        if (team.Stage != TeamImplementStage.AwaitingDecision) return Task.FromResult(false);
+        if (entry.Info.TeamImplement is not { } team) return false;
+        if (team.Stage != TeamImplementStage.AwaitingDecision) return false;
 
         // Последняя открытая карточка блокера в истории чата (вехи остановки живут дольше хода).
         var openBlocker = entry.Accumulator?.GetAll()
             .OfType<StoredTeamEscalationMessage>()
             .Where(m => !m.Escalation.Resolved && m.Escalation.Kind == TeamEscalationKind.Blocker)
             .LastOrDefault();
-        if (openBlocker is null) return Task.FromResult(false);
+        if (openBlocker is null) return false;
 
         // Координатор снял блокер действием, а не молчанием: либо продолжает работу маркером
         // team:work, или итерация финиширована (все плановые волны закрыты). Иначе карточка
         // уместна — координатор реально ждёт решения человека, оставляем как есть.
         var hasWork = TeamProtocolMarkers.ParseWorkMarker(turnText) is not null;
         var allWavesClosed = AllPlannedWavesClosed(team);
-        if (!hasWork && !allWavesClosed) return Task.FromResult(false);
+        if (!hasWork && !allWavesClosed) return false;
 
-        // Гасим карточку тем же путём, что кнопка человека (RespondTeamEscalationAsync):
-        // помечаем Resolved, пишем снимок истории, рассылаем WS с resolved=true (иначе на F5
-        // карточка вновь подсветилась бы как ждущая ответа).
-        var card = openBlocker.Escalation;
-        if (entry.Accumulator is { } acc)
-        {
-            acc.OnTeamEscalationResolved(openBlocker.EscalationId, "answer");
-            FireAndForget(acc.SaveSnapshotAsync(_history),
-                $"сохранение истории после авто-гашения карточки блокера ({sessionId})");
-        }
-        // Broadcast и финальные правки состояния — асинхронно: маркер гашения уже взведён,
-        // и обновления идут тем же путём, что у RespondTeamEscalationAsync (волна Д).
-        return CompleteAutoResolveAsync(sessionId, entry, openBlocker.EscalationId, card, hasWork, allWavesClosed);
-    }
-
-    private async Task<bool> CompleteAutoResolveAsync(string sessionId, SessionEntry entry,
-        string escalationId, TeamEscalation card, bool hasWork, bool allWavesClosed)
-    {
-        await BroadcastAsync(sessionId, new TeamEscalationMessage(escalationId,
-            TeamEscalationKind.Blocker.ToWireToken(), card.Title, card.Details, card.Actions,
-            card.TaskId, card.Wave, Resolved: true, ChosenActionId: "answer", card.PersonaId));
-
-        // Стадию возвращаем так, чтобы практика поехала дальше без призрака ожидания:
-        // 1) team:work запускает перепланирование: при закрытых волнах это новая итерация (Idle
-        //    — StartTeamWorkAsync её сбросит), иначе Planning (RunTeamPlanningAsync в той же итерации).
-        // 2) без team:work, но с закрытыми волнами — финальная проверка (Checking); её в этом же
-        //    вызове HandleTeamTurnEndAsync доведёт до Idle (терминал), координатор итог уже подвёл.
-        // Возвращать StageBeforeDecision (там обычно Wave) нельзя — работы в старой волне больше нет.
-        WithTeamState(sessionId, t =>
-        {
-            t.Stage = hasWork
-                ? (allWavesClosed ? TeamImplementStage.Idle : TeamImplementStage.Planning)
-                : TeamImplementStage.Checking;
-            t.StageBeforeDecision = null;
-            t.WaveStartedAt = null;
-            t.WaveActivityAt = null;
-            return true;
-        });
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        await BroadcastTeamImplementAsync(sessionId, entry);
-        _log.LogInformation("Карточка блокера {CardId} чата-штаба {SessionId} погашена автоматически: " +
-            "координатор снял блокер сам ({Reason})", escalationId, sessionId,
-            hasWork ? "team:work" : "все волны плана закрыты");
+        // Сведение к общей точке (волна 1 team-blocker-honest): taskId берём из самой карточки.
+        // reason — какой именно путь снятия сработал, чтобы подпись «Снят штабом: …» была честной.
+        var reason = hasWork ? "координатор снял блокер маркером работы"
+            : "координатор подвёл итог — все волны плана закрыты";
+        await _teamDecision.TryResolveBlockerByFactAsync(sessionId, openBlocker.Escalation.TaskId ?? "", reason);
         return true;
     }
-﻿
+
     // Новая вводная разложена планировщиком и уходит в волну (Э5). Тело переехало в
     // TeamDecisionService (волна Г): подготовка состояния перед планированием —
     // собственное дело вертикали (гард по стадии, переключение Interview→Planning,
@@ -6503,11 +6471,32 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // чтобы бесконечно продлевать потолок идущей практике.
     // P23: если все плановые волны уже закрыты — возвращать в Wave некуда (вечная «волна N из
     // N»), идём в Idle: итерация завершена, режим ждёт новой вводной.
-    // Карточку в ленте не гасим: она остаётся историей, а повторное решение по ней приведёт
-    // практику в то же состояние (путь идемпотентен по стадии).
+    // Волна 1 team-blocker-honest: открытые решающие карточки гасятся тем же путём, что кнопка
+    // человека — иначе полоса «Практика ждёт вашего решения» продолжает висеть (прод 2026-09).
+    // Проходим по всем открытым карточкам с этим TaskId (включая блокеры) и гасим через
+    // ResolveEscalationAsync; у блокеров — резолюшн-нота «Ответ сообщением».
     private async Task ResumeTeamFromDecisionOnUserInput(string sessionId, SessionEntry entry)
     {
         if (entry.Info.TeamImplement is not { Stage: TeamImplementStage.AwaitingDecision }) return;
+
+        // Гасим открытые решающие карточки (всё, кроме информационных — добавочных волн)
+        // единой точкой. У блокеров reason «Ответ сообщением»; у прочих (Stop/Budget и др.) —
+        // тот же текст, по карточке видно.
+        var openCards = await ListOpenEscalationsAsync(sessionId);
+        foreach (var card in openCards.Where(c => !c.Kind.IsInformational()))
+        {
+            var resolved = await ResolveEscalationAsync(sessionId, card.Id, "message");
+            if (resolved is null) continue;
+            // Пишем ResolutionNote в историю — Resolved/ChosenActionId уже поставлены,
+            // текст снятия идёт отдельной правкой
+            await ((ITeamHistoryStore)this).MutateCardAsync<StoredTeamEscalationMessage>(sessionId,
+                m => m.EscalationId == card.Id,
+                m => { m.Escalation.ResolutionNote = "Ответ сообщением"; });
+            await BroadcastAsync(sessionId, new TeamEscalationMessage(card.Id,
+                card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
+                card.TaskId, card.Wave, Resolved: true, ChosenActionId: "message",
+                card.PersonaId, ResolutionNote: "Ответ сообщением"));
+        }
 
         WithTeamState(sessionId, t =>
         {

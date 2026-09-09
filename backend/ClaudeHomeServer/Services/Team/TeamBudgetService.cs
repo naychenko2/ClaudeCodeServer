@@ -83,12 +83,13 @@ internal sealed class TeamBudgetService
             // единственное согласование (карточка плана) обходилось целиком (Э7-фикс).
             if (t.Stopped)
                 reason = "практика остановлена человеком — новые запуски не идут, пока он не продолжит";
-            // M3: причина отказа обязана быть честной. Из «ждёт решения» ссылаться на
-            // неподтверждённый план — враньё: план как раз подтверждён, а ждём мы ответа
-            // человека по карточке остановки (кнопкой или обычным сообщением в чат).
+            // Волна 1 team-blocker-honest: «ждёт решения» отбивает запуск ТОЛЬКО если среди
+            // открытых карточек есть НЕ-блокер. Координатор обычно снимает блокер сам — и
+            // гейт обязан это уважать, иначе после блокера он не может перезапустить исполнителя.
+            // Проверка открытых карточек выходит за пределы SessionTeamImplement (список
+            // живёт в аккумуляторе/диске), делаем ниже уже после транзакции.
             else if (t.Stage == TeamImplementStage.AwaitingDecision)
-                reason = "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
-                         "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)";
+                reason = null; // пометка «проверь открытые карточки»
             else if (t.Stage != TeamImplementStage.Wave)
                 reason = "план ещё не подтверждён человеком — запуск исполнителей доступен только " +
                          "в стадии волны, единственное согласование — карточка плана";
@@ -103,6 +104,29 @@ internal sealed class TeamBudgetService
             }
             return true;
         });
+
+        // Проверка открытых карточек отдельно от WithTeamState: она читает чужое хранилище
+        // и не должна идти под локом SessionTeamImplement. Если в «ждёт решения» все
+        // открытые карточки — блокеры, координатор сам разбирается с ними (TryResolveBlockerByFactAsync
+        // уже отработал по факту: переписал задачу, ответил исполнителю, перезапустил его) —
+        // и запуск исполнителя не должен отбиваться текстом про «ждёт вашего решения».
+        // Если открытых карточек вообще нет — стадия «ждёт решения» осталась по инерции
+        // (TryResolveBlockerByFactAsync должен был вернуть её), и запуск всё равно разрешён.
+        if (reason is null && stab.TeamImplement?.Stage == TeamImplementStage.AwaitingDecision)
+        {
+            var openCards = _sessions.ListOpenEscalationsAsync(stabId).GetAwaiter().GetResult();
+            // Решающая НЕ-блокер карточка (Stopped, TaskFailed, PlanDeviation, CheckFailed,
+            // ProductDecision, BudgetExhausted, WaveStalled, WaveGate, NeedsClarification) —
+            // ждём человека. Блокер — координатор обычно снимает сам, и гейт обязан это уважать
+            var hasNonBlockerDecisional = openCards.Any(c =>
+                !c.Kind.IsInformational() && c.Kind != TeamEscalationKind.Blocker);
+            if (hasNonBlockerDecisional)
+                reason = "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
+                         "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)";
+            // Иначе — все блокеры (координатор разбирается сам) или открытых карточек
+            // нет вообще (стадия осталась по инерции). reason остаётся null → запуск разрешён.
+        }
+
         if (reason is not null)
         {
             // Исчерпанный бюджет — единственный отказ, о котором человек ещё НЕ знает:
@@ -192,6 +216,11 @@ internal sealed class TeamBudgetService
     // против отдельного потолка. Без этого бюджет обходится соседним инструментом: запуск
     // задач гейтит квота `TryConsumeTeamImplementRun`, а разбудить координатора можно было
     // бесплатно и бесконечно.
+    // Волна 1 team-blocker-honest: отказ ТОЛЬКО по «остановлено» и `WakeupsUsed >= MaxWakeups`.
+    // Раньше текст шёл через общий `Budget.ExceededReason()`, и исчерпание волн/задач глушило
+    // канал блокеров — координатор не получал блокер в последней волне (прод 2026-09-08,
+    // блокер Киры в волне 4/4). Канал пробуждений — для блокеров, остальные потолки
+    // проверяются в TryConsumeTeamImplementRun и в TryStartWave (для волн/задач — там).
     // TeamMode=false — чат не штаб: ограничение не наше дело, пропускаем как раньше.
     public (bool TeamMode, bool Allowed, string? Reason) TryConsumeTeamWakeup(string sessionId)
     {
@@ -201,9 +230,10 @@ internal sealed class TeamBudgetService
         string? reason = null;
         var allowed = _run.WithTeamState(sessionId, t =>
         {
-            reason = t.Stopped
-                ? "практика остановлена человеком — команда не будит координатора, пока он не продолжит"
-                : t.Budget.ExceededReason();
+            if (t.Stopped)
+                reason = "практика остановлена человеком — команда не будит координатора, пока он не продолжит";
+            else if (t.Budget.WakeupsUsed >= t.Budget.MaxWakeups)
+                reason = $"исчерпано срочных вызовов координатора: {t.Budget.WakeupsUsed} из {t.Budget.MaxWakeups}";
             if (reason is not null) return false;
             t.Budget.WakeupsUsed++;
             return true;

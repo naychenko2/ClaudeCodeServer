@@ -375,6 +375,10 @@ public sealed class TasksToolset(
                 // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
+                // Волна 1 team-blocker-honest: если у задачи открыт блокер — гасим по факту,
+                // координатор сам снял причину правкой постановки
+                FireResolveBlockerByTask(updated.Id, updated.SourceSessionId,
+                    "штаб переписал задачу — блокер снят");
                 return Json(updated);
             }
 
@@ -421,6 +425,10 @@ public sealed class TasksToolset(
                     await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
+                // Волна 1 team-blocker-honest: задача-блокер закрыта координатором — гасим
+                // блокер по факту, стадия возвращается в работу
+                FireResolveBlockerByTask(updated.Id, updated.SourceSessionId,
+                    "штаб закрыл задачу — блокер снят");
                 return Json(updated);
             }
 
@@ -460,6 +468,10 @@ public sealed class TasksToolset(
                 try
                 {
                     var executed = await executor.ExecuteAsync(task, auto: false);
+                    // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
+                    // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу
+                    FireResolveBlockerByTask(task.Id, task.SourceSessionId,
+                        "штаб перезапустил исполнителя — блокер снят");
                     return Json(new
                     {
                         id = executed.Id,
@@ -1285,4 +1297,23 @@ public sealed class TasksToolset(
 
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>
         new(name, description, schema);
+
+    // Волна 1 team-blocker-honest: погасить блокер-карточку штаба по задаче, если она висит.
+    // Побочный эффект — fire-and-forget: ошибки в журнал, основной вызов не валится.
+    // Чаще всего SourceSessionId — чат исполнителя; его parent и есть чат-штаба. Если сама
+    // SourceSessionId в режиме — она и есть штаб (задача создана из штаба). Иначе —
+    // обычная задача вне режима, блокера не висит, выходим.
+    private void FireResolveBlockerByTask(string taskId, string? sourceSessionId, string reason)
+    {
+        if (string.IsNullOrEmpty(taskId) || string.IsNullOrEmpty(sourceSessionId)) return;
+        var src = sessions.GetById(sourceSessionId);
+        if (src is null) return;
+        string? stabId = src.TeamImplement != null ? sourceSessionId : src.ParentSessionId;
+        if (stabId is null) return;
+        _ = Task.Run(async () =>
+        {
+            try { await sessions.TryResolveBlockerByFactAsync(stabId, taskId, reason); }
+            catch { /* побочный эффект — не валим основной вызов */ }
+        });
+    }
 }

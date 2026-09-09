@@ -1453,6 +1453,20 @@ public sealed partial class WorkspaceToolset(
                 // Состояние ПОСЛЕ отправки: доставленное сообщение вернуло чат из архива,
                 // busy/queued — ещё нет
                 var stillArchived = sessions.GetOwned(sid, context.OwnerId)?.IsArchived ?? false;
+                // Волна 1 team-blocker-honest: отправка сообщения в чат исполнителя по
+                // задаче-блокеру — координатор сам разбирается с блокером. Дочерний чат
+                // идентифицируется по TaskId (он выставляется при создании сессии из штаба).
+                // Гасим открытую блокер-карточку штаба, если она висит на этой задаче.
+                if (target is { TaskId: { } targetTaskId, ParentSessionId: { } parentId }
+                    && sessions.GetById(parentId)?.TeamImplement != null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try { await sessions.TryResolveBlockerByFactAsync(parentId, targetTaskId,
+                            "штаб ответил исполнителю — блокер снят"); }
+                        catch { /* побочный эффект — не валим основной вызов */ }
+                    });
+                }
                 return WithArchiveNote(sent, wasArchived, stillArchived);
             }
 

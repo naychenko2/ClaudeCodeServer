@@ -3,6 +3,7 @@ import {
   formatSubscriptionMeta, splitFallbackOptions, providerSwitchReasonLabel, modelSwitchHeadline,
   providerAvailabilityFromBalance, splitByAvailability, nearestReturn,
   providersPlural, fmtReturnTime, invalidateExhaustedVerdict,
+  modelUnavailableReason, unavailableModelName, fmtRecheckTime, modelUnavailableText,
 } from '../providerLimit';
 import type { ProviderBalanceInfo, ProviderFallbackOption } from '../../types';
 
@@ -76,6 +77,13 @@ describe('providerSwitchReasonLabel', () => {
     expect(providerSwitchReasonLabel('unreachable', 'сырой label')).toBe('Эндпоинт недоступен');
   });
 
+  // Отказ по модели ≠ исчерпанная квота подписки: сводить их к «Исчерпан лимит» —
+  // ровно то враньё, из-за которого человек трижды искал несуществующий лимит
+  it('отказы по модели не сводятся к лимиту', () => {
+    expect(providerSwitchReasonLabel('model_no_access', 'сырой label')).toBe('Нет доступа к модели');
+    expect(providerSwitchReasonLabel('model_out_of_credits', 'сырой label')).toBe('Нужны кредиты');
+  });
+
   it('нет reason или значение не опознано — фолбэк на сырой label маркера', () => {
     expect(providerSwitchReasonLabel(undefined, 'Автофолбэк: смена провайдера → «DeepSeek»'))
       .toBe('Автофолбэк: смена провайдера → «DeepSeek»');
@@ -98,6 +106,56 @@ describe('modelSwitchHeadline', () => {
       .toBe('Claude Opus был недоступен — ответ продолжен на GLM 5.2');
     expect(modelSwitchHeadline('none', 'Claude Opus', 'GLM 5.2'))
       .toBe('Claude Opus был недоступен — ответ продолжен на GLM 5.2');
+  });
+
+  // Случай прода: у Fable кончились usage credits, а маркер писал «исчерпал лимит»
+  // при живой подписке — человек шёл ждать сброса, которого не будет
+  it('отказ по модели: кредиты и доступ названы своими именами', () => {
+    expect(modelSwitchHeadline('model_out_of_credits', 'Fable 5.1', 'Opus 5'))
+      .toBe('Fable 5.1 остался без кредитов — ответ продолжен на Opus 5');
+    expect(modelSwitchHeadline('model_no_access', 'Fable 5.1', 'Opus 5'))
+      .toBe('Fable 5.1 недоступен на этой подписке — ответ продолжен на Opus 5');
+  });
+});
+
+describe('пометки «модель недоступна на подписке»', () => {
+  const NOW_MARK = Date.parse('2026-09-09T18:00:00Z');
+
+  it('причина по-человечески, незнакомое значение — нейтральное «недоступна»', () => {
+    expect(modelUnavailableReason('model_out_of_credits')).toBe('нет кредитов');
+    expect(modelUnavailableReason('model_no_access')).toBe('нет доступа на этом плане');
+    expect(modelUnavailableReason('rate_limit')).toBe('недоступна');
+    expect(modelUnavailableReason(undefined)).toBe('недоступна');
+  });
+
+  it('имя модели: каталог, суффикс окна, неизвестный id как есть', () => {
+    const catalog: Record<string, string> = { 'claude-fable-5-1': 'Fable 5.1', opus: 'Opus 5' };
+    const resolve = (v: string) => catalog[v] ?? v;
+    expect(unavailableModelName('claude-fable-5-1', resolve)).toBe('Fable 5.1');
+    // «opus[1m]» каталог не знает (суффикс проставляет CLI) — сводим к базовому алиасу
+    expect(unavailableModelName('opus[1m]', resolve)).toBe('Opus 5 (1M)');
+    // Незнаком и без суффикса, и с ним — показываем сырой id, а не пустоту
+    expect(unavailableModelName('mystery[1m]', resolve)).toBe('mystery[1m]');
+    expect(unavailableModelName('mystery', resolve)).toBe('mystery');
+  });
+
+  it('срок автопроверки: сегодня, завтра, дальше', () => {
+    expect(fmtRecheckTime('2026-09-09T18:40:00Z', NOW_MARK)).toMatch(/^в \d{2}:\d{2}$/);
+    expect(fmtRecheckTime('2026-09-10T11:10:00Z', NOW_MARK)).toMatch(/^завтра в \d{2}:\d{2}$/);
+    expect(fmtRecheckTime('2026-09-12T11:10:00Z', NOW_MARK)).toMatch(/^\d{1,2} .+ в \d{2}:\d{2}$/);
+    expect(fmtRecheckTime('не дата', NOW_MARK)).toBe('');
+  });
+
+  it('строка пометки целиком', () => {
+    expect(modelUnavailableText('Fable 5.1', 'model_out_of_credits', '2026-09-09T18:40:00Z', NOW_MARK))
+      .toMatch(/^Fable 5\.1 — нет кредитов, проверим снова в \d{2}:\d{2}$/);
+  });
+
+  it('срока нет или он не разобрался — без обещания «проверим снова»', () => {
+    expect(modelUnavailableText('Opus 5 (1M)', 'model_no_access', undefined, NOW_MARK))
+      .toBe('Opus 5 (1M) — нет доступа на этом плане');
+    expect(modelUnavailableText('Opus 5 (1M)', 'model_no_access', 'не дата', NOW_MARK))
+      .toBe('Opus 5 (1M) — нет доступа на этом плане');
   });
 });
 

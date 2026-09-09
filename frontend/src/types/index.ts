@@ -1398,6 +1398,20 @@ export interface SubscriptionUsage {
   // Эффективная утилизация недельного окна (0..1) — вторая ось вывода из ротации наравне
   // с utilization: аккаунт с 5ч 35% и 7д 99% пул уже не берёт (ClaudeSubscriptionPool.IsOverloaded)
   weeklyUtilization?: number;
+  // Живые пометки «модель недоступна на ЭТОЙ подписке» (пара подписка × модель). Истёкшие
+  // бэкенд не отдаёт; пустой список = пометок нет. Без них подписка выглядит полностью
+  // здоровой («В ротации», лимит не исчерпан), а ходы конкретной модели на неё не идут
+  unavailableModels?: ModelUnavailableMark[];
+}
+
+// Пометка «модель недоступна на подписке». reason — «model_no_access» (нет доступа по
+// тарифу) | «model_out_of_credits» (кончились usage credits модели); until — момент, до
+// которого пара не пробуется. model — нормализованный id (нижний регистр), в этом же виде
+// его ждёт эндпоинт досрочного сброса
+export interface ModelUnavailableMark {
+  model: string;
+  reason: string;
+  until: string;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

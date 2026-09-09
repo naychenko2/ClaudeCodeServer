@@ -361,20 +361,37 @@ internal sealed class TeamDecisionService
                     // Э8: работа разрешена именно этой версии плана — по ней и только по ней
                     // стартуют волны (гард в TeamWaveService).
                     t.ApprovedPlanVersion = plan.Version;
-                    // M1 (волна 4 team-blocker-honest): план сверх остатка бюджета — клик
-                    // «Запустить» расширяет потолки ровно на недостающую разницу. Тот же
-                    // приём, что у кнопки «Добавить бюджет» в ветке addBudget, но ровно
-                    // на дельту, а не на полный fresh. Автоматическое расширение ТОЛЬКО
-                    // на подтверждении плана человеком: сюда ходит только SessionHub.
-                    // RespondTeamPlan → проверка владельца, агентский путь
-                    // (chats_send → PublishTeamPlanAsync) сюда не ведёт. Расширение
-                    // происходит ДО старта волны — гейт TeamWaveService.StartWaveCoreAsync
-                    // сразу видит новые потолки в Budget.ExceededReasonForWave и не
-                    // поднимает карточку «Бюджет исчерпан» на первой же волне.
-                    var deltaTasks = Math.Max(0, plan.Subtasks.Count - t.Budget.MaxTasks);
-                    var deltaWaves = Math.Max(0, plan.WaveCount - t.Budget.MaxWaves);
+                    // M1 (фикс-волна 4 team-blocker-honest): план сверх остатка бюджета —
+                    // клик «Запустить» расширяет потолки ровно на недостающую разницу.
+                    // Считаем от ОСТАТКА, а не от потолка: до фикса дельты
+                    // считали `plan.Subtasks − MaxTasks`, игнорируя `TasksUsed`, и при
+                    // уже потраченных волнах расширение выходило нулевым — гейт
+                    // `ExceededReasonForWave` работал от остатка и поднимал карточку
+                    // «Бюджет исчерпан» на следующей волне (Глеб: «MaxWaves=2, WavesUsed=1,
+                    // план на 2 волны — потолки не сдвинулись, после волны 1 — карточка»).
+                    // Гейт и расчёт дельты ОБЯЗАНЫ ходить по одной арифметике: число
+                    // под-задач/волн, которые надо ещё вписать в остаток. Math.Max с
+                    // 0 — защита от отрицательного остатка в редких состояниях
+                    // (легаси-сессии без реинициализации счётчиков).
+                    // Автоматическое расширение ТОЛЬКО на подтверждении плана человеком:
+                    // сюда ходит только SessionHub.RespondTeamPlan с проверкой владельца,
+                    // агентский путь (chats_send → PublishTeamPlanAsync) сюда не ведёт.
+                    // Расширение происходит ДО старта волны — гейт
+                    // TeamWaveService.StartWaveCoreAsync сразу видит новые потолки в
+                    // Budget.ExceededReasonForWave и не поднимает карточку.
+                    // M2: тот же счётчик живёт у MaxRuns — RunsUsed растёт на каждую
+                    // под-задачу (TeamWaveService.StartWaveCoreAsync) и реизиссу
+                    // (DecideReissueAsync). План флагманского случая (9 волн / 27 задач)
+                    // при дефолте MaxRuns=20 упирался в третий счётчик на 6–7 волне.
+                    var remainingTasks = Math.Max(0, t.Budget.MaxTasks - t.Budget.TasksUsed);
+                    var remainingWaves = Math.Max(0, t.Budget.MaxWaves - t.Budget.WavesUsed);
+                    var remainingRuns = Math.Max(0, t.Budget.MaxRuns - t.Budget.RunsUsed);
+                    var deltaTasks = Math.Max(0, plan.Subtasks.Count - remainingTasks);
+                    var deltaWaves = Math.Max(0, plan.WaveCount - remainingWaves);
+                    var deltaRuns = Math.Max(0, plan.Subtasks.Count - remainingRuns);
                     t.Budget.MaxTasks += deltaTasks;
                     t.Budget.MaxWaves += deltaWaves;
+                    t.Budget.MaxRuns += deltaRuns;
                 }
                 if (decision == TeamPlanDecision.Cancel) { t.PlanCardId = null; t.PlannedWaves = 0; }
                 return true;

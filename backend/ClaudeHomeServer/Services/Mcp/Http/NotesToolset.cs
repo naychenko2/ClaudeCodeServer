@@ -26,14 +26,14 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// NotesToolsetParityTests (index.js заморожен).
 /// </summary>
 public sealed class NotesToolset(
-    NotesService notes,
     NotesKnowledgeService kb,
     NotesAiService ai,
     NoteTaskSyncService noteTasks,
     PersonaManager personas,
     PersonaBindingsService bindings,
     SessionManager sessions,
-    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    NotesService? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/notes/{sessionId}
     public const string ServerName = "notes";
@@ -49,13 +49,16 @@ public sealed class NotesToolset(
     public string Version => "1.0.0";
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
-        TryResolve(context, out _, out _, out var annotations, out _)
-            ? annotations ? [.. CoreTools, .. AnnotationTools] : CoreTools
-            : [];
+        notes is null
+            ? []
+            : TryResolve(context, out _, out _, out var annotations, out _)
+                ? annotations ? [.. CoreTools, .. AnnotationTools] : CoreTools
+                : [];
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
+        if (notes is null) return Deny("Подсистема Notes отключена");
         if (!TryResolve(context, out var session, out var persona, out var annotations, out var routeError))
             return Deny(routeError);
 

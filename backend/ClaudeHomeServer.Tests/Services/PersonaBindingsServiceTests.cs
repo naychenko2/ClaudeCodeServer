@@ -50,9 +50,9 @@ public class PersonaBindingsServiceTests : IDisposable
 
         _mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
             new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
-        _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
+        _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesKb,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance, _mcp);
+            NullLogger<PersonaBindingsService>.Instance, _mcp, notes: notesSvc);
     }
 
     public void Dispose()

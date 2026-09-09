@@ -36,7 +36,7 @@ public sealed class DailyBriefingService
     private const string Header = "## Утренний бриф";
 
     private readonly TaskManager _tasks;
-    private readonly NotesService _notes;
+    private readonly NotesService? _notes;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
@@ -55,12 +55,12 @@ public sealed class DailyBriefingService
     private readonly Lock _stateLock = new();
 
     public DailyBriefingService(
-        TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
+        TaskManager tasks, ProjectManager projects, UserStore users,
         PersonaManager personas, AppSettingsService appSettings,
         Llm.ICheapTextRunner cheap, PushService push,
         ITaskNotificationDispatcher notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
-        ProjectEventLogService? events = null)
+        ProjectEventLogService? events = null, NotesService? notes = null)
     {
         _tasks = tasks;
         _notes = notes;
@@ -132,6 +132,8 @@ public sealed class DailyBriefingService
 
     private async Task<NoteDetail> BuildAndWriteAsync(string userId, TimeZoneInfo tz, string day, CancellationToken ct)
     {
+        if (_notes is null)
+            throw new InvalidOperationException("Подсистема Notes отключена — бриф не может быть записан в заметку");
         var brief = await BuildBriefAsync(userId, tz, day, ct);
         var daily = _notes.GetOrCreateDaily(userId, day);
         var content = UpsertSection(daily.Content, Header, brief);
@@ -155,7 +157,7 @@ public sealed class DailyBriefingService
         var today = open.Where(t => t.DueDate == day).ToList();
 
         // Заметки, изменённые сегодня (кроме самого дневника — он и так меняется)
-        var changedNotes = _notes.GetSummaries(userId, null, null)
+        var changedNotes = (_notes?.GetSummaries(userId, null, null) ?? [])
             .Where(s => s.UpdatedAt.StartsWith(day, StringComparison.Ordinal))
             .Take(15).ToList();
 

@@ -88,8 +88,8 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(_userStore);
-        var bindings = new PersonaBindingsService(_personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(_personas, projectManager, wkStore, notesKb,
+            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _sessions = new SessionManager(projectManager, new ChatHistoryService(config), config,

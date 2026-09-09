@@ -18,11 +18,11 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 // (проектная сессия → notes/Сессии проекта, чат вне проекта → личный vault).
 // Повторный вызов обновляет ту же заметку (Session.SummaryNoteId), а не плодит дубли.
 public class SessionSummaryService(
-    SessionManager sessions, ProjectManager projects, NotesService notes,
+    SessionManager sessions, ProjectManager projects,
     NotesKnowledgeService kb, Llm.ICheapTextRunner cheap,
     ISessionBroadcaster broadcaster,
     NotificationService notif, IConfiguration config,
-    ILogger<SessionSummaryService> logger)
+    ILogger<SessionSummaryService> logger, NotesService? notes = null)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
     private const int TranscriptBudget = 30_000;
@@ -65,6 +65,8 @@ public class SessionSummaryService(
                 throw new SummaryGenerationException("Модель вернула пустой конспект");
 
             // Существующая заметка-итог обновляется (заголовок не трогаем — пользователь мог переименовать)
+            if (notes is null)
+                throw new SummaryGenerationException("Подсистема Notes отключена — сохранение итога недоступно");
             NoteDetail note;
             var isUpdate = session.SummaryNoteId is not null
                 && notes.GetDetail(ownerId, session.SummaryNoteId) is not null;

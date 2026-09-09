@@ -198,8 +198,8 @@ public class ChatDigestServiceTests : IDisposable
     {
         var runner = new GatedRunner("Сводка.");
         var (mgr, projects, notes) = BuildManager();
-        var sut = new ChatDigestService(mgr, projects, notes, runner,
-            NullLogger<ChatDigestService>.Instance);
+        var sut = new ChatDigestService(mgr, projects, runner,
+            NullLogger<ChatDigestService>.Instance, notes: notes);
         var chatA = NewProjectChat(mgr, projects, withHistory: true);
         var chatB = NewProjectChat(mgr, projects, withHistory: true);
 
@@ -303,22 +303,22 @@ public class ChatDigestServiceTests : IDisposable
     private (ChatDigestService Sut, Session Chat) BuildSut(ICheapTextRunner runner, bool withHistory = true)
     {
         var (mgr, projects, notes) = BuildManager();
-        return (new ChatDigestService(mgr, projects, notes, runner,
-            NullLogger<ChatDigestService>.Instance), NewProjectChat(mgr, projects, withHistory));
+        return (new ChatDigestService(mgr, projects, runner,
+            NullLogger<ChatDigestService>.Instance, notes: notes), NewProjectChat(mgr, projects, withHistory));
     }
 
     private (ChatDigestService Sut, Session Chat) BuildSut()
     {
         var (mgr, projects, notes) = BuildManager();
-        return (new ChatDigestService(mgr, projects, notes, new CountingRunner("x"),
-            NullLogger<ChatDigestService>.Instance), NewProjectChat(mgr, projects));
+        return (new ChatDigestService(mgr, projects, new CountingRunner("x"),
+            NullLogger<ChatDigestService>.Instance, notes: notes), NewProjectChat(mgr, projects));
     }
 
     private (ChatDigestService Sut, Session Chat, NotesService Notes) BuildSutWithNotes()
     {
         var (mgr, projects, notes) = BuildManager();
-        return (new ChatDigestService(mgr, projects, notes, new CountingRunner("x"),
-            NullLogger<ChatDigestService>.Instance), NewProjectChat(mgr, projects), notes);
+        return (new ChatDigestService(mgr, projects, new CountingRunner("x"),
+            NullLogger<ChatDigestService>.Instance, notes: notes), NewProjectChat(mgr, projects), notes);
     }
 
     private (SessionManager Manager, ProjectManager Projects, NotesService Notes) BuildManager()
@@ -358,8 +358,8 @@ public class ChatDigestServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesKb,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 

@@ -58,7 +58,6 @@ public sealed partial class WorkspaceToolset(
     SessionManager sessions,
     PersonaManager personas,
     FileService files,
-    NotesService notes,
     DocumentAiService docAi,
     KnowledgeService knowledge,
     WorkspaceKnowledgeStore workspaceStore,
@@ -73,7 +72,8 @@ public sealed partial class WorkspaceToolset(
     TaskManager tasks,
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
-    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    NotesService? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -781,8 +781,9 @@ public sealed partial class WorkspaceToolset(
                     files.Rename(root, oldPath, newPath);
                     // Комментарии к переименованному документу следуют за новым путём —
                     // привязка не сиротеет (как REST-эндпоинт rename)
-                    try { notes.RewriteAnnotationTargets(context.OwnerId, p.Id, oldPath, p.Id, newPath, prefix: true); }
-                    catch { /* перепись привязок — best-effort, rename уже состоялся */ }
+                    if (notes is not null)
+                        try { notes.RewriteAnnotationTargets(context.OwnerId, p.Id, oldPath, p.Id, newPath, prefix: true); }
+                        catch { /* перепись привязок — best-effort, rename уже состоялся */ }
                 }
                 catch (FileNotFoundException) { return Deny($"Файл не найден: {oldPath}"); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }

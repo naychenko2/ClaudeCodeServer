@@ -430,6 +430,26 @@ export function teamEscalationNeedsComment(kind: TeamEscalationKind): boolean {
   return kind === 'blocker' || kind === 'productDecision';
 }
 
+// Предикат «полоса ждёт эту карточку»: открытая карточка И стадия режима её ждёт.
+// needClarification ждёт стадии interview (Э8: тупик в волне — координатор спрашивает
+// человека, дальше возобновит интервью), все остальные виды — awaitingDecision. Без
+// стадии (режим выключен / ещё не пришла) показывать нечего: открытая карточка без
+// стадии висит в истории, но команда ею не управляет, и полоса «ждём вашего решения»
+// была бы ложью.
+//
+// Информационные (waveAdded) уже отсеяны внутри (они не требуют решения) — отдельная
+// ветка для них не нужна. Под тестом: см. __tests__/teamImplement.test.ts
+export function isEscalationAwaitingStage(
+  esc: { resolved: boolean; kind: TeamEscalationKind },
+  stage: TeamImplementStage | null | undefined,
+): boolean {
+  if (esc.resolved) return false;
+  if (teamEscalationInformational(esc.kind)) return false;
+  if (stage == null) return false;
+  if (esc.kind === 'needsClarification') return stage === 'interview';
+  return stage === 'awaitingDecision';
+}
+
 // === Индикатор паузы планирования ===
 // Между концом интервью и карточкой плана лента молчит минутами (потолок планировщика
 // 300с), и тишина читается как «всё встало» (прод 2026-08-04). На время стадии planning

@@ -1267,15 +1267,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   } : null, [teamImplementState, handleRespondTeamPlan]);
 
   // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
-  // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются
-  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
-    respondTeamEscalation(escalationId, actionId, comment).catch(err => {
-      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
-    });
-  }, [respondTeamEscalation]);
-  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
-    ? { onRespond: handleRespondTeamEscalation }
-    : null, [teamImplementState, handleRespondTeamEscalation]);
+  // Подробности — рядом с местом создания teamEscalationCtx ниже (он зависит
+  // от openEscalations/isWaiting, и переносить handleRespondTeamEscalation сюда
+  // было бы циклом зависимостей)
 
   // Откат файла — стабильный колбэк для карточек file_changed в ленте. Действие бьёт
   // по git checkout HEAD и стирает ЛЮБЫЕ несохранённые правки файла (не только модели),
@@ -1641,12 +1635,39 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // Открытые карточки остановки (есть неотвеченная team_escalation): закреплённая полоса
   // над композером показывает самую свежую (последнюю по индексу — чем ниже, тем позже),
-  // остальные — счётчиком. Без открытых карточек полоса не рисуется. Карточки-плана и
-  // вопрос человеку НЕ считаются открытыми остановками: у них своя логика видимости
-  const openEscalations = useMemo(() => findOpenEscalations(items), [items]);
+  // остальные — счётчиком. Полоса видна, только если И открытая карточка, И стадия
+  // режима её ждёт (awaitingDecision для большинства видов, interview для needsClarification):
+  // без стадии полоса висела бы и когда решение уже принято, или когда координатор просто
+  // пишет в чат (прод-инцидент 2026-09 с двумя случайно снятыми задачами). Префильтр —
+  // единая точка в lib/teamImplement.isEscalationAwaitingStage, чтобы и тест, и симулятор,
+// и UI смотрели в одно условие. Без teamImplementState полоса не рисуется: режима нет —
+// «ждать вашего решения» нечего
+  const openEscalations = useMemo(
+    () => findOpenEscalations(items, teamImplementState?.stage ?? null),
+    [items, teamImplementState?.stage],
+  );
   const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
   // jumpToEscalation объявлен ниже — после renderedItems, от которого зависит
   // (порядок определения в JS важен — иначе ReferenceError)
+
+  // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
+  // Стоит ЗДЕСЬ, потому что teamEscalationCtx зависит от openEscalations (флаг
+  // coordinatorTurnActive) — перенеси выше и будет цикл: ctx использует openEscalations,
+  // topEscalation зависит от openEscalations. Контекст живёт, пока включён режим —
+  // в выключенном чате карточки только читаются
+  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
+    respondTeamEscalation(escalationId, actionId, comment).catch((err: unknown) => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
+    });
+  }, [respondTeamEscalation]);
+  // Пока координатор ведёт ход-реакции по открытой карточке блокера — карточка
+  // показывает «Координатор разбирается». Флаг — единая точка, чтобы UI не
+  // пересчитывал то же самое: нужно одновременно И идёт ход, И карточка открыта
+  // по стадии (openEscalations уже отфильтрован awaitingDecision/interview)
+  const coordinatorTurnActive = isWaiting && openEscalations.length > 0;
+  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
+    ? { onRespond: handleRespondTeamEscalation, coordinatorTurnActive }
+    : null, [teamImplementState, handleRespondTeamEscalation, coordinatorTurnActive]);
 
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
     setClickedOfferIndices(prev => new Set(prev).add(offerIndex));

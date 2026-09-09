@@ -87,9 +87,20 @@ public class TurnErrorClassifierTests
     [Theory]
     [InlineData("There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it.")]
     [InlineData("There's an issue with the selected model (opus[1m])")]
-    [InlineData("you may not have access to it")]
+    // Хвост фразы принимается и без головы, но только рядом со словом «model»
+    [InlineData("The model is unknown or you may not have access to it")]
     public void НетДоступаКМодели_КлассModelNoAccess(string text)
         => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Фраза «may not have access to it» сама по себе НЕ специфична: её возвращают в своих
+    // ошибках чужие инструменты и MCP-серверы (так выглядел инцидент P31). Принять такую
+    // ошибку за отказ по модели — значит пометить живую пару и увести ход с правильной
+    // подписки, поэтому без соседства со словом «model» класс не ставится.
+    [Theory]
+    [InlineData("Repository is private — you may not have access to it")]
+    [InlineData("mcp__github: resource not found, you may not have access to it")]
+    public void ФразаПроДоступБезКонтекстаМодели_НеModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().NotBe(FallbackErrorClass.ModelNoAccess);
 
     // 404 с текстом «нет доступа» — тоже ModelNoAccess (до белого списка статусов, иначе None).
     [Fact]

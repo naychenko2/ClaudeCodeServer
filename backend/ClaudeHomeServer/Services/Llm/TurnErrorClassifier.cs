@@ -313,20 +313,21 @@ public static class TurnErrorClassifier
     }
 
     // Модель недоступна на подписке: подписка не имеет доступа к модели. Формулировка
-    // каноническая (Claude CLI, «There's an issue with the selected model (…)»), обычно
-    // apiErrorStatus=404. Голое «no access»/«access denied» сюда НЕ входят — слишком обычны.
-    private static readonly string[] ModelNoAccessPhrases =
-    [
-        "issue with the selected model",
-        "may not have access to it",
-    ];
-
+    // каноническая (Claude CLI, «There's an issue with the selected model (…) or you may not
+    // have access to it»), обычно apiErrorStatus=404. Голое «no access»/«access denied» сюда
+    // НЕ входит — слишком обычно.
+    //
+    // Хвост «may not have access to it» принимается ТОЛЬКО рядом со словом «model»: сама по
+    // себе фраза не специфична — её возвращают в своих ошибках чужие инструменты и MCP-серверы
+    // (ровно так выглядел инцидент P31), а принять такую ошибку за отказ по модели значит
+    // пометить живую пару и увести ход с правильной подписки. У канонического текста CLI это
+    // соседство есть всегда, так что покрытие не теряется.
     private static bool LooksModelNoAccess(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
-        foreach (var phrase in ModelNoAccessPhrases)
-            if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
+        if (text.Contains("issue with the selected model", StringComparison.OrdinalIgnoreCase)) return true;
+        return text.Contains("may not have access to it", StringComparison.OrdinalIgnoreCase)
+            && text.Contains("model", StringComparison.OrdinalIgnoreCase);
     }
 
     // У модели кончились usage credits — отдельный кошелёк кредитов, НЕ лимит подписки.

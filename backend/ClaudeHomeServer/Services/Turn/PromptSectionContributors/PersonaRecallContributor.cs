@@ -90,7 +90,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     dossierProjectId,
                     EffectiveRootOf(session),
                     session.TaskId,
-                    [.. Dossiers.DossierRecallService.ExtractPathsFromText(turnText), .. prevTurnFiles],
+                    [.. TextPathMentions.Extract(turnText), .. prevTurnFiles],
                     turnText);
             }
 

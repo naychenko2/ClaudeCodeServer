@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Dossiers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -296,10 +297,12 @@ public class DossierRecallTests : IDisposable
         line.Should().NotContain("решение", "decisions — последний по ценности, в два пункта не влезли");
     }
 
+    // Разбор путей уехал в спину (`TextPathMentions.Extract`, Этап 5 — узкие швы Turn);
+    // проверка осталась здесь: якорями пользуется именно recall паспортов.
     [Fact]
     public void ExtractPathsFromText_ПутиСРазделителемИРасширением()
     {
-        var paths = DossierRecallService.ExtractPathsFromText(
+        var paths = TextPathMentions.Extract(
             "Правлю backend/ClaudeHomeServer/Services/Foo.cs и mcp\\memory-server\\index.js:42, а ещё index.ts");
 
         paths.Should().Contain(new[] { "backend/ClaudeHomeServer/Services/Foo.cs", "mcp/memory-server/index.js" });

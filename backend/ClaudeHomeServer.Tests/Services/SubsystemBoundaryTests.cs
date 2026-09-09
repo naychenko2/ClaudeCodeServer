@@ -724,8 +724,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallResult",
+                    // DossierRecallRequest/DossierRecallResult допусков больше не требуют:
+                    // пара DTO уехала в Core (Этап 5, узкие швы Turn) и проходит по
+                    // assembly-фильтру IsCoreAssembly.
                     // AutolearnGate.CheckContent / LastTurnLength — public-метод
                     // с параметром IReadOnlyList<StoredMessage>.
                     "ClaudeHomeServer.Protocol.StoredMessage",
@@ -1068,7 +1069,8 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
                     "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
+                    // DossierRecallRequest уехал в Core вместе с DossierRecallResult —
+                    // допуск снят (assembly-фильтр IsCoreAssembly).
                     // Этап 5, шаг 6 (инверсия контрибьюторов): три допуска сняты как
                     // мёртвые (мутация — прогон без них дал зелёный сторож): UserStore,
                     // Llm.SpecialtySettingsStore (+EffectivePromptSection ранее уже снят),
@@ -1804,6 +1806,13 @@ public class SubsystemBoundaryTests
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5, узкие швы Turn: DossierRecallRequest/DossierRecallResult — контрактные
+        // DTO пассивного recall паспортов. Запрос собирает Turn (контрибьютор промпта),
+        // исполняет Memory (PersonaMemoryService.BuildRecallAsync), владеет Dossiers.
+        // Держать форму данных внутри вертикали значило бы ссылку на Dossiers у двух
+        // посторонних слоёв ради типа, а не ради поведения. Поведение (DossierRecallService)
+        // осталось в вертикали и в Core НЕ едет.
+        "ClaudeHomeServer.Services.Dossiers",
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): IPromptSectionContributor +
         // PromptSection + PromptSectionContribution + PromptSessionContext +
         // extension для DI — контракт шины TurnEventBus, реализации едут в чужих
@@ -1849,6 +1858,10 @@ public class SubsystemBoundaryTests
         // (тоже Core) мог ссылаться на слот без обратной ссылки на Main. Парсер
         // `ModelTiers` остаётся в Main — он завязан на IConfiguration/JSON-стор.
         "ClaudeHomeServer.Services.ModelTier",
+        // Этап 5, узкие швы Turn: разбор путей, упомянутых в тексте хода (был
+        // `DossierRecallService.ExtractPathsFromText`, звал его только контрибьютор
+        // промпта). Stateless-регексп по образцу Slugifier.
+        "ClaudeHomeServer.Services.TextPathMentions",
     ];
 
     /// <summary>

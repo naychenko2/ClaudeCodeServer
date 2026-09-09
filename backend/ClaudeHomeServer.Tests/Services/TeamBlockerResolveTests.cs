@@ -232,13 +232,15 @@ public class TeamBlockerResolveTests : IDisposable
         stab.TeamImplement!.Stage.Should().NotBe(TeamImplementStage.AwaitingDecision);
     }
 
-    // L3 (фикс-волна): TryAutoResolveTeamBlockerInternalAsync возвращал true безусловно после
-    // await _teamDecision.TryResolveBlockerByFactAsync(...). Вызывающий в
-    // TeamTurnCompletionService:181-186 при false пропускает перечитывание team-состояния,
-    // а при true — перечитывает. Регрессия L3: даже когда гасили НЕ блокер (например, блокер
-    // без TaskId, и TryResolveBlockerByFactAsync вернул false, потому что открытых карточек
-    // уже не было), метод рапортовал true → team-состояние перечитывалось зря. Сейчас
-    // возвращается реальный результат гашения.
+    // Smoke L3: без открытой блокер-карточки TryAutoResolveTeamBlockerInternalAsync
+    // выходит раньше — на `SessionManager.cs:6410` `if (openBlocker is null) return false;`.
+    // Эта строка в фикс-коммите 02e375aa не менялась; и старый, и новый код возвращают
+    // false. Тест НЕ покрывает фикс строки `:6427` (возврат реального результата гашения):
+    // сценарий «карточка блокера в аккумуляторе есть, но _teamDecision.TryResolveBlockerByFactAsync
+    // возвращает false» стабильным юнит-тестом не воспроизводится — подменить _teamDecision
+    // без правок продакшн-кода нельзя (метод не virtual, нет ITeamDecisionService, Moq и
+    // Castle DynamicProxy перехватывают только virtual). Сценарий практически достижим
+    // только гонкой, и для неё тест-страж не нужен.
     [Fact]
     public async Task TryAutoResolveTeamBlocker_НетОткрытогоБлокера_ВозвращаетFalse()
     {
@@ -250,16 +252,17 @@ public class TeamBlockerResolveTests : IDisposable
             return true;
         });
 
-        // Никаких открытых блокер-карточек нет → метод должен честно вернуть false.
+        // Никаких открытых блокер-карточек нет → метод должен вернуть false.
         var result = await _sessions.TryAutoResolveTeamBlockerAsync(stab.Id,
             "координатор шлёт <team:work>…</team>");
-        result.Should().BeFalse(
-            "без открытой блокер-карточки гасить нечего, и старый код возвращал true ошибочно");
+        result.Should().BeFalse("без открытой блокер-карточки гасить нечего");
     }
 
-    // L3 (фикс-волна): контр-кейс — после успешного гашения блокера второй вызов должен
-    // вернуть false (открытых блокеров больше нет). Старый код и здесь возвращал true —
-    // регрессия блокировала корректный вход в TeamTurnCompletionService.
+    // Smoke L3 (контр-кейс): после успешного гашения блокера второй вызов выходит на ту
+    // же `SessionManager.cs:6410` — открытых блокеров больше нет. И старый, и новый код
+    // возвращают false здесь. Тест фикс строки `:6427` так же не покрывает, как и первый
+    // (см. комментарий выше). Оставляем как сторожа того, что повторный ход не навешивает
+    // лишний `team:resolved`.
     [Fact]
     public async Task TryAutoResolveTeamBlocker_ПовторныйВызовПослеГашения_ВозвращаетFalse()
     {
@@ -279,8 +282,7 @@ public class TeamBlockerResolveTests : IDisposable
         // Второй вызов: открытых блокеров больше нет
         var second = await _sessions.TryAutoResolveTeamBlockerAsync(stab.Id,
             "<team:work>продолжаем</team>");
-        second.Should().BeFalse(
-            "повторного гашения не требуется — открытых блокеров нет, и старый код возвращал true ошибочно");
+        second.Should().BeFalse("открытых блокеров больше нет — повторного гашения не требуется");
     }
 
     [Fact]
@@ -360,16 +362,17 @@ public class TeamBlockerResolveTests : IDisposable
         reason.Should().NotBeNull();
     }
 
-    // S6 (фикс-волна): TryConsumeTeamImplementRun — sync-метод на запросном потоке
-    // (MVC-фильтр DenyOnDelegatedTurn). Раньше читал открытые карточки через
-    // _sessions.ListOpenEscalationsAsync(stabId).GetAwaiter().GetResult() — sync-over-async
-    // на запросном потоке, и у неактивного чата это лезло на диск. Сейчас идёт через
-    // _history.GetOpenTeamEscalationsSync(stabId) — синхронный шов, как в
-    // TeamDecisionService:799. Проверяем: вызов не уходит в deadlock при AwaitingDecision
-    // с открытым блокером (sync-read через тот же шов отрабатывает штатно) и выдаёт
-    // честный Allowed.
+    // S6 (фикс-волна): гейт запуска в стадии AwaitingDecision с ЕДИНСТВЕННОЙ открытой
+    // карточкой-блокером отбивать не должен — координатор сам снимает блокер (см. контракт
+    // выше «TryConsumeTeamImplementRun_ОтказПоAwaitingDecisionТолькоЕслиЕстьНеблокер»).
+    // Раньше кейс прикрывался тем же тестом, что и не-блокер; в ревью `d9d95d53` Глеб
+    // попросил отдельный кейс ради читаемости. Сторож sync-over-async (deadlock на
+    // запросном потоке в xunit): в xunit нет SynchronizationContext — deadlock'а не будет
+    // ни с прежним .GetAwaiter().GetResult(), ни с нынешним sync-швом
+    // _history.GetOpenTeamEscalationsSync; покрывать тут нечего. Полезное в тесте —
+    // ассерт «открытый блокер → Allowed».
     [Fact]
-    public async Task TryConsumeTeamImplementRun_ОткрытыйБлокер_ЧестныйAllowed_БезSyncOverAsync()
+    public async Task TryConsumeTeamImplementRun_ОткрытыйБлокер_ЧестныйAllowed()
     {
         var (stab, _) = await MakeStabAsync("sync-over-async-blocker");
         var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
@@ -379,11 +382,8 @@ public class TeamBlockerResolveTests : IDisposable
         await PublishBlockerAsync(stab, task.Id);
         stab.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
 
-        // Метод возвращает кортеж СИНХРОННО — вызывающий (DenyOnDelegatedTurn) не
-        // делает await. Если внутри опять появится .GetAwaiter().GetResult() на
-        // запросном потоке с диском, упадёт deadlock'ом или таймаутом.
         var (verdict, reason) = _sessions.TryConsumeTeamImplementRun(stab.Id, UserId);
-        ((SessionManager.TeamRunQuota)(int)verdict).Should().Be(SessionManager.TeamRunQuota.Allowed,
+        verdict.Should().Be(SessionManager.TeamRunQuota.Allowed,
             "блокер — единственная открытая карточка, координатор сам разбирается, запуск разрешён");
         reason.Should().BeNull();
     }
@@ -406,7 +406,11 @@ public class TeamBlockerResolveTests : IDisposable
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entryDict = (System.Collections.IDictionary)entryField.GetValue(_sessions)!;
         var sessionEntry = entryDict[stab.Id]!;
-        await (Task)method.Invoke(_sessions, new object[] { stab.Id, sessionEntry })!;
+        var resumeResult = method.Invoke(_sessions, [stab.Id, sessionEntry]);
+        if (resumeResult is not Task resumeTask)
+            throw new InvalidOperationException(
+                $"ResumeTeamFromDecisionOnUserInput вернул {resumeResult?.GetType().Name ?? "null"}, ожидался Task");
+        await resumeTask;
 
         var open = await _sessions.ListOpenEscalationsAsync(stab.Id);
         open.Should().BeEmpty("ответ сообщением гасит открытую карточку блокера");
@@ -563,7 +567,7 @@ public class TeamBlockerResolveTests : IDisposable
         var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
             Title: "Блокер-msg", Description: "", Assignee: TaskItemAssignee.Claude), null);
         _tasks.Update(task.Id, new UpdateTaskRequest());
-        var blocker = await PublishBlockerAsync(stab.Id == null ? stab : stab, task.Id);
+        var blocker = await PublishBlockerAsync(stab, task.Id);
         stab.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
 
         // Приватный метод SessionManager.ResumeTeamFromDecisionOnUserInput через reflection
@@ -571,7 +575,11 @@ public class TeamBlockerResolveTests : IDisposable
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entryDict = MakeSessionEntryDict();
         var sessionEntryObj = entryDict[stab.Id]!;
-        await (Task)method.Invoke(_sessions, new object[] { stab.Id, sessionEntryObj })!;
+        var resumeResult = method.Invoke(_sessions, [stab.Id, sessionEntryObj]);
+        if (resumeResult is not Task resumeTask)
+            throw new InvalidOperationException(
+                $"ResumeTeamFromDecisionOnUserInput вернул {resumeResult?.GetType().Name ?? "null"}, ожидался Task");
+        await resumeTask;
 
         // Карточка блокера погашена, ResolutionNote == "Ответ сообщением"
         var dict2 = MakeSessionEntryDict();
@@ -618,7 +626,11 @@ public class TeamBlockerResolveTests : IDisposable
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entryDict = MakeSessionEntryDict();
         var sessionEntryObj = entryDict[stab.Id]!;
-        await (Task)method.Invoke(_sessions, new object[] { stab.Id, sessionEntryObj })!;
+        var resumeResult = method.Invoke(_sessions, [stab.Id, sessionEntryObj]);
+        if (resumeResult is not Task resumeTask)
+            throw new InvalidOperationException(
+                $"ResumeTeamFromDecisionOnUserInput вернул {resumeResult?.GetType().Name ?? "null"}, ожидался Task");
+        await resumeTask;
 
         var open = await _sessions.ListOpenEscalationsAsync(stab.Id);
         // BudgetExhausted остаётся открытой — её кнопка «Добавить бюджет» единственный

@@ -6416,12 +6416,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var allWavesClosed = AllPlannedWavesClosed(team);
         if (!hasWork && !allWavesClosed) return false;
 
-        // Сведение к общей точке (волна 1 team-blocker-honest): taskId берём из самой карточки.
+        // Сведение к общей точке (волна 1 team-blocker-honest): taskId берём из самой карточки
+        // (к этому моменту карточка в аккумуляторе заведомо есть — иначе мы бы вышли на :6410).
         // reason — какой именно путь снятия сработал, чтобы подпись «Снят штабом: …» была честной.
-        // Возвращаем РЕАЛЬНЫЙ результат гашения: false, если карточка без TaskId (тогда
-        // TryResolveBlockerByFactAsync гасит все открытые блокеры, но вызывающий в
-        // TeamTurnCompletionService перечитывает состояние как «практика разблокирована»,
-        // а стадия при этом могла и не смениться).
+        // Возвращаем РЕАЛЬНЫЙ результат гашения: вызывающий в TeamTurnCompletionService при
+        // false пропускает перечитывание team-состояния, а при true — перечитывает. Раньше
+        // тут стоял безусловный `return Task.FromResult(true)`, который заставлял перечитывать
+        // состояние зря, когда гасить было нечего (старый код успевал вернуть true до того,
+        // как _teamDecision успевал сказать false).
         var reason = hasWork ? "координатор снял блокер маркером работы"
             : "координатор подвёл итог — все волны плана закрыты";
         return await _teamDecision.TryResolveBlockerByFactAsync(sessionId, openBlocker.Escalation.TaskId ?? "", reason);

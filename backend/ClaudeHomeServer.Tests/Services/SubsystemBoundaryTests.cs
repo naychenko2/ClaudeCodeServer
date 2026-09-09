@@ -72,6 +72,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Modules.ModuleRegistry).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
     }
@@ -1253,13 +1254,17 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
-        // Modules — YARP-реверс-прокси для внешних модулей. Префикс-шов
-        // Yarp.ReverseProxy целиком (third-party, по прецеденту AngleSharp у Reader —
-        // открываем префиксом; ModuleProxyConfigProvider ссылается на Configuration/
-        // Forwarder/Transforms, ModuleGatewayMiddleware — на Forwarder). Точечные:
-        // FeatureFlagService/JwtService (ModuleGatewayMiddleware знает владельца),
-        // Services.Llm.LocalAction (ModuleRegistry регистрирует LLM-действия
-        // модулей, тип едет в поле).
+        // Modules — YARP-реверс-прокси для внешних модулей (Этап 5, волна C, шаг 2).
+        // Префикс-шов Yarp.ReverseProxy целиком (third-party, по прецеденту AngleSharp
+        // у Reader — открываем префиксом; ModuleProxyConfigProvider ссылается на
+        // Configuration/Forwarder/Transforms, ModuleGatewayMiddleware — на Forwarder).
+        // Все Main-зависимости сняты волной C швов (`b7eb7ca7`, `dd48831b`):
+        // `FeatureFlagService`/`JwtService`/`UserStore` → Core-швы
+        // `IModuleFeatureFlagReader`/`IUserTokenValidator`/`IUserStore`;
+        // `Services.Llm.LocalAction`/`LocalActionCatalog`/`CheapProfile`/
+        // `Services.ModelTier` — в Core (assembly-фильтр, ловятся раньше namespace-чека).
+        // `AllowedExactNamespaces` пуст: ни одного «соседа по корню Services» в коде
+        // не осталось, швы держат все общие зависимости.
         new object[]
         {
             new VerticalBoundary(
@@ -1272,27 +1277,7 @@ public class SubsystemBoundaryTests
                         "Yarp.ReverseProxy",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.JwtService",
-                    "ClaudeHomeServer.Services.Llm.LocalAction",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `ModuleGatewayMiddleware.cs:84` (`<Invoke>d__2`) резолвит
-                    // `UserStore` через `sp.GetRequiredService<UserStore>()` —
-                    // generic-аргумент виден IL-сканом как `Modules → UserStore`.
-                    // Точечный допуск по образцу `Llm → SessionSummaryService`.
-                    "ClaudeHomeServer.Services.UserStore",
-                    // `ModuleRegistry` (`<>c__DisplayClass7_0`) материализует
-                    // `ModelTier` в generic-аргументе. Точечный допуск.
-                    "ClaudeHomeServer.Services.ModelTier",
-                    // `ModuleRegistry` ссылается на `LocalActionCatalog` и
-                    // `CheapProfile` статические классы из `Services.Llm` —
-                    // аналогично `Llm.LocalAction` (уже в списке), но шире.
-                    // Префикс `Services.Llm` НЕ открываем: точечные допуски.
-                    "ClaudeHomeServer.Services.Llm.LocalActionCatalog",
-                    "ClaudeHomeServer.Services.Llm.CheapProfile",
-                }),
+                Array.Empty<string>()),
         },
         // Personas — черновик персоны по промпту (PersonaDraftService, 1 файл).
         // Полностью изолирован: Stateless-сервис по тексту промпта.
@@ -1644,16 +1629,16 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 15 = Main + Core + 13 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
-        // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs — Этап 5, волна A);
-        // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(15,
-            "сторож должен видеть 15 прод-сборок: ClaudeHomeServer, " +
+        // 16 = Main + Core + 14 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs/Modules
+        // — Этап 5, волны A и C); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(16,
+            "сторож должен видеть 16 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
             "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
-            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs");
+            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

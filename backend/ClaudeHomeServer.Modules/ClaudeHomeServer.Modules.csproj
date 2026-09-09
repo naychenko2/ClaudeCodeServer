@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Библиотека под Web SDK (по образцу Tts/Notes/Tasks): типов ASP.NET
+         (IServiceCollection, IConfiguration, ILogger, IHostedService) много, и без
+         Web SDK FrameworkReference Microsoft.AspNetCore.App их не подтягивает.
+         OutputType=Library и без Program.cs — обычный режим библиотеки, Main не
+         требуется. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- InternalsVisibleTo на тестовую сборку Main (для уже существующих тестов
+         до возможного переноса в собственную *.Modules.Tests) и на будущую
+         отдельную сборку тестов вертикали. Формат скопирован с Tts как образец. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Modules.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Yarp.ReverseProxy — реверс-прокси внешних модулей (ModuleProxyConfigProvider).
+         Main его уже подключает (см. ClaudeHomeServer.csproj). -->
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+    <!-- JWT: System.IdentityModel.Tokens.Jwt + Microsoft.IdentityModel.Tokens
+         (ModuleTokenService делает RS256 host-token для модулей). -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -86,7 +86,7 @@ public class LlmSessionAdapterFactoryTests
                 new WorkspaceKnowledgeStore(config), providers, pool);
             var session = new Session { Model = "opus[1m]", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
-                RawSystemPrompt: null, PermissionRules: null, TasksMcp: null);
+                RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null, TasksMcp: null);
 
             var adapter = factory.Create(session, context);
 
@@ -120,7 +120,7 @@ public class LlmSessionAdapterFactoryTests
                 new WorkspaceKnowledgeStore(config), providers, pool);
             var session = new Session { Model = "glm-5.2", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
-                RawSystemPrompt: null, PermissionRules: null, TasksMcp: null);
+                RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null, TasksMcp: null);
 
             factory.Create(session, context);
 

@@ -1477,6 +1477,12 @@ public class SubsystemBoundaryTests
         // и с ними, но был ШИРЕ реальной поверхности зависимостей Tasks после выноса —
         // иначе вертикаль могла бы прикинуться «спиной» в обход швов. Та же ловушка,
         // что поймана на Notes после её выноса.
+        // Сюда же — снятый префикс `ClaudeHomeServer.Services.Llm`: он стоял ради
+        // `ICheapTextRunner` и `LocalActionCatalog`, но оба типа давно переехали в
+        // Core (`Core/Services/Llm/`), и Tasks берёт их ОТТУДА. Мутация подтверждает:
+        // без допуска сторож зелёный. ТАКОЙ ЖЕ мёртвый допуск остался ещё у пяти
+        // вертикалей (Backgrounds, ProjectIcons, Memory, Docs, Changelog) — снимается
+        // отдельной уборкой, чтобы не смешивать её с выносом Tasks.
         new object[]
         {
             new VerticalBoundary(
@@ -1486,7 +1492,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Tasks",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 Array.Empty<string>()),

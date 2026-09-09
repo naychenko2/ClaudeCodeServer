@@ -84,4 +84,77 @@ describe('TeamEscalationView', () => {
       actions: [{ id: 'runNext', label: 'Запустить' }],
     }))).toContain('Запустить');
   });
+
+  // Волна 3: карточка погашена — chosenActionId и/или resolutionNote определяют,
+  // какой текст показать. До правки все три варианта показывали «Решение: <label>»
+  // (или пустой фолбэк), и в ленте результат «снято штабом» ничем не отличался от
+  // «ответил кнопкой». Теперь каждое исчисление имеет свой текст и сохраняет
+  // смысл «кто и чем закрыл карточку»
+  describe('погашенная карточка показывает исход правильно', () => {
+    it('chosenActionId="resolvedByStaff" с resolutionNote — подпись «Снят штабом: <note>»', () => {
+      const html = render(card({
+        kind: 'blocker', title: 'Исполнитель застрял', details: '',
+        resolved: true, chosenActionId: 'resolvedByStaff',
+        resolutionNote: 'доступ к реестру ограничен — обошёл через ручной ввод',
+      }));
+      expect(html).toContain('Снят штабом: доступ к реестру ограничен — обошёл через ручной ввод');
+      expect(html).not.toContain('Решение:');
+      // Никаких кнопок на погашенной карточке
+      expect(html).not.toContain('<button');
+    });
+
+    it('chosenActionId="resolvedByStaff" без resolutionNote — короткая форма без тела', () => {
+      // Поле опциональное: старый бэкенд и ненулевой chosenActionId без подробностей
+      // рисуем «Снят штабом», без двоеточия и без «undefined»
+      const html = render(card({
+        kind: 'blocker', title: 'Блокер №2', details: '',
+        resolved: true, chosenActionId: 'resolvedByStaff',
+        resolutionNote: null,
+      }));
+      expect(html).toContain('Снят штабом');
+      expect(html).not.toContain('Снят штабом:');
+      expect(html).not.toContain('undefined');
+      expect(html).not.toContain('Решение:');
+    });
+
+    it('chosenActionId="message" — человек ответил обычным сообщением', () => {
+      // chosenActionId === 'message' теперь читается как «Ответ сообщением» —
+      // раньше попадало в общую ветку и показывало «Решение: <label>» с пустой подписью,
+      // что для человека выглядело как «ничего не произошло»
+      const html = render(card({
+        kind: 'blocker', title: 'Исполнитель застрял', details: '',
+        actions: [{ id: 'answer', label: 'Ответить' }],
+        resolved: true, chosenActionId: 'message',
+      }));
+      expect(html).toContain('Ответ сообщением');
+      expect(html).not.toContain('Решение:');
+    });
+
+    it('прочие chosenActionId — старая ветка «Решение: <label>»', () => {
+      // chosenActionId="skip" у taskFailed (пропустить), решили по кнопке — текст
+      // подписи кнопки должен отображаться как раньше. Это даёт совместимость
+      // с уже сохранённой историей
+      const html = render(card({
+        kind: 'taskFailed', title: 'Задача провалилась', details: '',
+        actions: [
+          { id: 'retry', label: 'Перезапустить задачу' },
+          { id: 'skip', label: 'Пропустить и продолжить' },
+        ],
+        resolved: true, chosenActionId: 'skip',
+      }));
+      expect(html).toContain('Решение: Пропустить и продолжить');
+    });
+
+    it('chosenActionId="drop" с подписью штаба — единая ветка «Снят штабом» (обратная совместимость)', () => {
+      // chosenActionId="drop" идёт через старую ветку (как «skip»): карточка показывает
+      // подпись нажатой кнопки. Это «Снять задачу у исполнителя» — на погашенной карточке
+      // напоминает человек о действии без подробностей
+      const html = render(card({
+        kind: 'blocker', title: 'Исполнитель «Катя» уперлась в типизацию',
+        details: '', actions: [{ id: 'drop', label: 'Снять задачу у исполнителя' }],
+        resolved: true, chosenActionId: 'drop',
+      }));
+      expect(html).toContain('Решение: Снять задачу у исполнителя');
+    });
+  });
 });

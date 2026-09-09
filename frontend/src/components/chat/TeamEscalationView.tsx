@@ -12,6 +12,7 @@ import { VoiceMicButton } from './VoiceMicButton';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Button } from '../ui/Button';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { TeamEscalationContext } from './contexts';
 
 // Иконка триггера: проблемы — треугольник, вопрос человеку — «?», зависание — часы,
@@ -117,6 +118,11 @@ export function TeamEscalationView({ item, online }: {
 }) {
   const ctx = useContext(TeamEscalationContext);
   const [replying, setReplying] = useState<TeamEscalationAction | null>(null);
+  // Карточка «Снять задачу» (drop) необратима: клик открывает ConfirmDialog, и
+  // пока он открыт, кнопка не реагирует на повторные клики. dropAction — отдельный
+  // стейт, чтобы не путать с replying (поле ответа) и не ломать параллельный сценарий,
+  // когда человек одновременно и отвечает, и передумывает снимать задачу
+  const [dropAction, setDropAction] = useState<TeamEscalationAction | null>(null);
   // В не-персон-чате стор персон мог быть не загружен — резолвим автора карточки (Э8)
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -149,8 +155,21 @@ export function TeamEscalationView({ item, online }: {
   };
 
   // === Решено: карточка гаснет, но остаётся в ленте с отметкой выбранного действия ===
+  // chosenActionId === "resolvedByStaff" → снято штабом (resolutionNote — пояснение);
+  // "message" → человек ответил в чат обычным сообщением; остальное — подпись нажатой
+  // кнопки (как раньше). Три ветки вместо одной: раньше единая «Решение: <label>»
+  // для снятого штабом и для сообщения звучала одинаково, а исход — разный
   if (esc.resolved) {
-    const chosen = esc.actions.find(a => a.id === esc.chosenActionId)?.label;
+    let outcome: string;
+    if (esc.chosenActionId === 'resolvedByStaff') {
+      const note = (esc.resolutionNote ?? '').trim();
+      outcome = note ? `Снят штабом: ${note}` : 'Снят штабом';
+    } else if (esc.chosenActionId === 'message') {
+      outcome = 'Ответ сообщением';
+    } else {
+      const chosen = esc.actions.find(a => a.id === esc.chosenActionId)?.label;
+      outcome = chosen ? `Решение: ${chosen}` : 'Ответ отправлен координатору';
+    }
     return (
       <div style={{
         border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.textMuted}`,
@@ -179,13 +198,19 @@ export function TeamEscalationView({ item, online }: {
               {esc.title}
             </div>
             <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, marginTop: 2 }}>
-              {chosen ? `Решение: ${chosen}` : 'Ответ отправлен координатору'}
+              {outcome}
             </div>
           </div>
         </div>
       </div>
     );
   }
+
+  // Пока координатор ведёт ход-реакции по карточке блокера — карточка показывает
+  // «Координатор разбирается». Флаг приходит из TeamEscalationChatContext (ChatPanel
+  // уже рассчитал его через isWaiting && открытая по стадии), здесь просто рисуем.
+  // Спокойный тон ниже полосы с тоном карточки — те же токены, тот же ритм
+  const coordinatorHint = ctx?.coordinatorTurnActive === true;
 
   // === Ждёт решения ===
   return (
@@ -226,6 +251,20 @@ export function TeamEscalationView({ item, online }: {
 
       {esc.details && <Details text={esc.details} />}
 
+      {/* Полоска «Координатор разбирается»: рисуется только поверх открытой и живой карточки.
+          Это сразу за details, чтобы было видно до кнопок — флаг не навязывает паузу,
+          он информирует о ходе, который уже идёт. Тон — спокойный (muted), чтобы не
+          двоить предупреждение «это ждёт решения», которое уже несёт borderLeft */}
+      {coordinatorHint && (
+        <div style={{
+          fontSize: FS.sm, color: C.textMuted,
+          padding: '6px 10px', borderRadius: R.md,
+          background: C.bgSelected,
+        }}>
+          Координатор разбирается
+        </div>
+      )}
+
       {!online ? (
         <div style={{ fontSize: FS.sm, color: C.textMuted }}>Недоступно офлайн</div>
       ) : replying ? (
@@ -244,14 +283,20 @@ export function TeamEscalationView({ item, online }: {
                   variant={actionVariant(i, informational)}
                   disabled={!canAct}
                   onClick={() => {
-                    // «Ответить» у блокера не решает вопрос сам — раскрываем поле,
-                    // остальные кнопки уходят координатору сразу
+                    // «Ответить» у блокера не решает вопрос сам — раскрываем поле
                     if (a.id === 'answer') setReplying(a);
+                    // «Снять задачу» необратимо: открываем подтверждение. Другие
+                    // кнопки уходят координатору сразу, как раньше
+                    else if (a.id === 'drop') setDropAction(a);
                     else respond(a.id);
                   }}
                   style={i === 0 && !informational ? { flex: 1, minWidth: 130 } : undefined}
                 >
-                  {a.label}
+                  {/* Снять задачу — единственный id, чью подпись меняем на бэк-нейтральную.
+                      Метка приходит с бэкенда — сейчас у нас в этом месте label автора,
+                      но для drop она будет «Снять задачу» либо ещё короче. Подменяем
+                      здесь, чтобы не зависеть от конкретного label на разных стадиях */}
+                  {a.id === 'drop' ? 'Снять задачу у исполнителя' : a.label}
                 </Button>
               ))}
             </div>
@@ -265,6 +310,22 @@ export function TeamEscalationView({ item, online }: {
             />
           )}
         </>
+      )}
+
+      {/* Подтверждение для drop: одна точка — ConfirmDialog, не самодельный div (требование
+          гайда дизайн-системы). Текст последствия дословно из постановки: после подтверждения
+          задача исполнителя закрывается необратимо, исполнитель получит отбой. Снимаем
+          dialog через onCancel, потому что сам onConfirm тоже ходит в ctx.onRespond и
+          карточка погаснет сразу после ответа сервера — закрывать dialog уже нечего */}
+      {dropAction && (
+        <ConfirmDialog
+          title="Снять задачу у исполнителя?"
+          subtitle={`Задача «${esc.title}» будет закрыта как снятая, исполнитель получит отбой`}
+          confirmLabel="Снять задачу"
+          confirmVariant="danger"
+          onConfirm={() => { respond(dropAction.id); setDropAction(null); }}
+          onCancel={() => setDropAction(null)}
+        />
       )}
     </div>
   );

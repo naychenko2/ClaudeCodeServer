@@ -854,6 +854,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           // Автор (Э8) фиксируется в момент публикации — если переиздание вдруг придёт без
           // него, не даём авторству карточки «мигать» на пустое
           personaId: msg.personaId ?? prevCard?.escalation.personaId,
+          // Примечание от штаба (chosenActionId="resolvedByStaff"): одно переиздание
+          // может его принести, следующее — нет; как с автором, держим последнее
+          // известное, чтобы при пересборке при рестарте не терять уже показанное
+          resolutionNote: msg.resolutionNote ?? prevCard?.escalation.resolutionNote,
         },
       };
       if (idx < 0) return withItems([...prev.items, card]);

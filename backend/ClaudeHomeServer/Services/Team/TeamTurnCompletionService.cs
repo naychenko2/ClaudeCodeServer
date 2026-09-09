@@ -185,6 +185,25 @@ internal sealed class TeamTurnCompletionService
             team = teamAfterResolve;
         }
 
+        // Волна 1 team-blocker-honest: явный маркер снятия блокера `<team:resolved>суть</team>`
+        // — координатор говорит, что снял блокер действием, без всякого team:work и финала
+        // итерации. На каждое TaskId из `TaskId` открытых блокеров зовём TryResolveBlockerByFactAsync
+        // и сразу возвращаемся: ход уже принёс решение, ставить следующий бессмысленно.
+        if (TeamProtocolMarkers.ParseResolvedMarker(turnText) is { } resolvedNote)
+        {
+            if (team.Stage == TeamImplementStage.AwaitingDecision)
+            {
+                var openBlockers = (await _history.GetOpenTeamEscalationsAsync(sessionId))
+                    .Where(c => c.Kind == TeamEscalationKind.Blocker && c.TaskId is not null)
+                    .Select(c => c.TaskId!)
+                    .Distinct()
+                    .ToList();
+                foreach (var taskId in openBlockers)
+                    await _sessions.TryResolveBlockerByFactAsync(sessionId, taskId, resolvedNote);
+            }
+            return;
+        }
+
         if (TeamProtocolMarkers.ParseEscalationMarker(turnText) is { } marker)
         {
             // Тупик в волне (Э8) — не «жду решения», а возврат в интервью: волны на паузе,
@@ -386,7 +405,7 @@ internal sealed class TeamTurnCompletionService
         }
 
         var result = await _sessions.ReportUpAsync(sessionId, TeamImplementPrompts.BlockerReportText(text), ownerId,
-            withTurn: true, reactionPrompt: TeamImplementPrompts.BlockerReactionTurn(chat?.Name));
+            withTurn: true, reactionPrompt: TeamImplementPrompts.BlockerReactionTurn(chat?.Name, chat?.Id));
         if (result is not (ReportUpResult.Delivered or ReportUpResult.Queued))
         {
             // Пробуждение списано выше (wake.Allowed), а доклад не дошёл (TooDeep/NoParent/

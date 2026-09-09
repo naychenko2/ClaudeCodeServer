@@ -1056,7 +1056,10 @@ export type ServerMessage = { sessionId: string } & (
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
   // personaId — автор карточки (Э8, координатор на момент публикации)
-  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
+  // resolutionNote — примечание от штаба (chosenActionId="resolvedByStaff"), показывает,
+  // чем координатор закрыл карточку. Поле опциональное — старый бэкенд его не шлёт,
+  // и фронт рисует карточку с фолбэком («Снят штабом» без подробностей)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null; resolutionNote?: string | null }
   // Жизненный цикл вызова планировщика (не путать с team_implement — тот про стадию режима).
   // Транзитное: в историю не пишется, после рестарта не восстанавливается — карточка плана
   // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
@@ -1753,6 +1756,11 @@ export interface TeamEscalation {
   // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица.
   // null — персоны у штаба нет, шапка деградирует до обезличенного варианта
   personaId?: string | null;
+  // Примечание от штаба при chosenActionId="resolvedByStaff": чем координатор закрыл
+  // карточку. Поле опциональное — старый бэкенд и пустое примечание дают фронт без него;
+  // рисуем «Снят штабом» без тела вместо «Снят штабом: undefined». chosenActionId="message"
+  // означает «человек ответил сообщением» — это уже отдельная ветка без resolutionNote
+  resolutionNote?: string | null;
 }
 
 // Элементы чата

@@ -1,5 +1,8 @@
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Team;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Composition;
 
@@ -29,5 +32,34 @@ public sealed class PersonaRecallSourceAdapter(PersonaMemoryService memory) : IP
             [.. recall.Hits.Select(h => new PersonaRecallEntry(h.Id, h.Text))],
             [.. recall.TeamHits.Select(e => new PersonaRecallEntry(e.Id, e.Text))],
             recall.DossierHits);
+    }
+}
+
+public sealed class AgentPromptSourceAdapter(SkillsService skills) : IAgentPromptSource
+{
+    public string? GetAgentSystemPrompt(string projectRootPath, string agentFileName) =>
+        skills.GetAgentSystemPrompt(projectRootPath, agentFileName);
+}
+
+public sealed class TeamMechanicsBlockAdapter(SkillsService skills) : ITeamMechanicsBlockSource
+{
+    public string? BuildBlock() => TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
+
+    // Перенесено из PersonaLayerContributor без изменений, включая гашение исключений:
+    // сорванное чтение каталогов умений оставляет пустое множество, и блок всё равно
+    // собирается — из механик, которым скилл не нужен (RequiredSkill == null).
+    private IReadOnlySet<string> InstalledSkillNames()
+    {
+        try
+        {
+            return skills.GetGlobalSkills().Select(s => s.Name)
+                .Concat(skills.GetGlobalWorkflows().Select(s => s.Name))
+                .Concat(skills.GetPluginSkills().Select(s => s.Name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
     }
 }

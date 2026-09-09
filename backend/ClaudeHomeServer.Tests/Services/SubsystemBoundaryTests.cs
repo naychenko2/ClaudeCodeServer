@@ -1054,12 +1054,11 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.PersonaPromptBuilder",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Skills.SkillsService",
-                    // IL-видимость: PersonaLayerContributor.InstalledSkillNames() зовёт
-                    // `.Select(s => s.Name)` на IReadOnlyList<SkillInfo> — generic-аргумент
-                    // материализуется в лямбде <>c и в теле метода. Мутация подтвердила:
-                    // без допуска сторож краснеет именно на этом типе.
-                    "ClaudeHomeServer.Services.Skills.SkillInfo",
+                    // Этап 5, узкие швы Turn: допуски Skills.SkillsService и
+                    // Skills.SkillInfo сняты как мёртвые — PersonaLayerContributor
+                    // ходит за промптом .md-агента через шов IAgentPromptSource, а имена
+                    // установленных умений вместе с фильтром каталога механик уехали
+                    // за шов ITeamMechanicsBlockSource (оба — Core, реализации в Main).
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FeatureFlagService",
                     // Этап 5, узкие швы Turn: четыре допуска сняты как мёртвые —
@@ -1075,11 +1074,9 @@ public class SubsystemBoundaryTests
                     // Team.TeamImplementPrompts — комментарий на месте допуска описывал
                     // использование в ClaudeSession (Services.Llm.Claude), а не в Turn;
                     // допуск никогда не был нужен ИМЕННО Turn-контрибьюторам.
-                    // Этап 4, шаг 2г-2 — PersonaLayerContributor (в Turn-boundary) вызывает
-                    // TeamMechanicsPromptCatalog.BuildPromptBlock через return-тип; до переезда
-                    // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
-                    // точный допуск.
-                    "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
+                    // Этап 4, шаг 2г-2 — PersonaLayerContributor вызывал
+                    // TeamMechanicsPromptCatalog.BuildPromptBlock напрямую. Этап 5, узкие
+                    // швы Turn: вызов уехал в адаптер ITeamMechanicsBlockSource, допуск снят.
                     // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
                     // (статический каталог в `Services.Prompts`). Префикс Prompts
                     // НЕ открываем: точечный допуск ровно на нужный тип.

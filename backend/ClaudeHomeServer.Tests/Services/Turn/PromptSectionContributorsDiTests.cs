@@ -322,7 +322,12 @@ public class PromptSectionContributorsDiTests
                     new GraphPersistence(Path.Combine(tempDir, "data"), NullLogger<GraphPersistence>.Instance),
                     sp.GetRequiredService<IConfiguration>()));
             services.AddSingleton<CodeGraphPromptProvider>(); // для CodeGraphContributor
-            services.AddSingleton<SkillsService>(); // для PersonaLayerContributor
+            services.AddSingleton<SkillsService>(); // для адаптеров швов слоя персоны
+            // Этап 5, узкие швы Turn: слой персоны идёт к умениям и к каталогу командных
+            // механик через Core-швы, а не через SkillsService/TeamMechanicsPromptCatalog
+            // напрямую. Адаптеры — те же, что в Program.cs.
+            services.AddSingleton<IAgentPromptSource, AgentPromptSourceAdapter>();
+            services.AddSingleton<ITeamMechanicsBlockSource, TeamMechanicsBlockAdapter>();
 
             // Логгеры для контрибьюторов с ILogger в конструкторе
             services.AddSingleton<ILogger<NotesRecallContributor>>(NullLogger<NotesRecallContributor>.Instance);

@@ -792,6 +792,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ITaskLookup,
 // знает обе стороны шва, и это единственное место, которому это позволено.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.IPersonaRecallSource,
     ClaudeHomeServer.Services.Composition.PersonaRecallSourceAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IAgentPromptSource,
+    ClaudeHomeServer.Services.Composition.AgentPromptSourceAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITeamMechanicsBlockSource,
+    ClaudeHomeServer.Services.Composition.TeamMechanicsBlockAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)

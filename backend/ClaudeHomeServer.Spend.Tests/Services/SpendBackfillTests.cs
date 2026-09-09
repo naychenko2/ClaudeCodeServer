@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //    не задваивает уже записанную часть: детерминированные Id + дедуп SpendStore.Record;
 // 2) own в topTurns обзора считается от ТЕКУЩЕГО пользователя, а не от фильтра среза;
 // 3) WindowClamped в Turns учитывает фильтр среза, а не любые daily-строки периода.
+[Collection(TestCollections.SessionStaticResolvers)]
 public class SpendBackfillTests : IDisposable
 {
     private readonly string _dir;

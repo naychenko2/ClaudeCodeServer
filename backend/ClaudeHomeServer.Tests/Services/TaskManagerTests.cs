@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
+[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskManagerTests : IDisposable
 {
     private readonly string _dir;

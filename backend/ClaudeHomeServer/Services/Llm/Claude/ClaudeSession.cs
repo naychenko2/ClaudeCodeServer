@@ -5679,8 +5679,16 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
                 _launcher.Kill(_currentProcess, _currentTurnId);
                 using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                // Гонка состояния процесса между `Kill` и `WaitForExitAsync`:
+                // - `OperationCanceledException` — вышел 10-секундный бюджет ожидания;
+                // - `NullReferenceException` — процесс успел освободить внутренние структуры
+                // BCL между HasExited и самим ожиданием (гонка внутри Process.WaitForExitAsync).
+                // Оба случая — пятый и шестой кейсы того же класса «гонка состояния процесса»,
+                // ради которого сделан внешний фильтр (5686-5692); ловим точечно, чтобы NRE
+                // из любой другой строки блока по-прежнему всплывал как логический баг.
                 try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
                 catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+                catch (NullReferenceException) { }      // процесс уже освобождён — идём дальше
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException

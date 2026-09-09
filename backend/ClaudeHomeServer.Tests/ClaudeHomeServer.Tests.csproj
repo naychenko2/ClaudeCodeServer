@@ -65,6 +65,13 @@
       `ClaudeHomeServer.Services.Modules.ModuleRegistry` для force-загрузки сборки.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
+    <!--
+      ProjectServices — отдельная сборка (Этап 5, волна C). Нужен ProjectReference,
+      чтобы статический конструктор SubsystemBoundaryTests видел тип
+      `ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem` для
+      force-загрузки сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>

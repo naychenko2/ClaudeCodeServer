@@ -73,8 +73,13 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Modules.ModuleRegistry).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
+        // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
+        // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
+        // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
+        _ = typeof(ClaudeHomeServer.Services.Execution.ISandboxPortRange).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1320,21 +1325,22 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.GroupChatRouter",
                 }),
         },
-        // ProjectServices — вертикаль раздела «Сервисы проекта» (волна 4A). Допуски:
-        // 1) Префикс-шов `ClaudeHomeServer.Execution` — `IProcessLauncher`/`ILauncherFactory`/
-        //    `SandboxManager` для запуска процессов дев-серверов/терминалов (тот же шов,
-        //    что у `Git`/`Deploy`/`Backgrounds`/`Spend`/`Dossiers`).
-        // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для рассылки
-        //    вывода и статусов дев-серверов подписчикам группы (DevServerService:121).
-        // 3) Префикс-шов `Yarp.ReverseProxy` — `ExternalPreviewProxy` ссылается на
-        //    `Yarp.ReverseProxy.Forwarder.HttpTransformer` (статический вызов из тела
-        //    метода, IL-скан ловит).
-        // 4) Допуски к корню Services точечные:
-        //    - `ProjectManager` — общая инфраструктура (`DevServerService`, `ExternalPreviewRouter`).
-        //    - `JwtService` — формирование токена внешней ссылки (`ExternalPreviewRouter:38`).
-        //    - `OutputRingBuffer` — общий примитив реплея вывода, общий с Terminal (шапка
-        //      `OutputRingBuffer.cs:5-10` явно фиксирует общее использование).
-        //    Префикс на корень Services не открываем (default-deny).
+        // ProjectServices — вертикаль раздела «Сервисы проекта» (Этап 5, волна C, шаг 2).
+        // Волна C швов + Этап 5 выноса сняли все Main-зависимости кроме Yarp:
+        // - `ProjectManager` → Core-шов `IProjectManager` (чтение через GetById;
+        //   записей нет — `ProjectServices` нигде не меняет проект).
+        // - `JwtService` → Core-шов `IPreviewTokenValidator` (валидация превью-токена,
+        //   шаг 1 волны C).
+        // - `FileService.SafeJoin` → Core-примитив `SafePath.Join` (шаг 1б волны C).
+        // - `FileService.TreeExcludes` → Core-примитив `TreeExcludes` (шаг 1б волны C).
+        // - `OutputRingBuffer` — перенесён в Core (`IsCoreAssembly`), отдельный допуск не нужен.
+        // - `Services.Execution.ILauncherFactory`/`IProcessLauncher`/`ISandboxPortRange`/
+        //   `ProcessSpec` — Core (тот же assembly-фильтр).
+        // - `IHubContext<SessionHub>` → Core-шов `ISessionBroadcaster` (Этап 5, Ф4).
+        // - `SandboxManager.Options.PortRangeStart/Size` → Core-шов `ISandboxPortRange`
+        //   (этот шаг).
+        // Остался только Yarp.ReverseProxy (third-party) — префикс по прецеденту AngleSharp
+        // у Reader.
         new object[]
         {
             new VerticalBoundary(
@@ -1344,22 +1350,10 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectServices",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Hubs",
                         "Yarp.ReverseProxy",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.JwtService",
-                    "ClaudeHomeServer.Services.OutputRingBuffer",
-                    // FileService (IL-видимость, задача `8beee75e`): `DevServerService`/
-                    // `LaunchConfigService`/`ProjectServiceDiscovery`/`DevServerService.<StartAsync>d__17`
-                    // зовут `FileService.SafeJoin(...)` static-метод из тел методов.
-                    // Точечный допуск по образцу `Tasks → FileService` (вертикаль → спинка).
-                    "ClaudeHomeServer.Services.FileService",
-                }),
+                Array.Empty<string>()),
         },
         // Changelog — «Что нового» (волна 4A, шаг 2): продуктовая история по коммитам всех
         // проектов + фоновый прогрев кеша. Внешние зависимости:
@@ -1629,16 +1623,18 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 16 = Main + Core + 14 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // 17 = Main + Core + 15 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
         // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs/Modules
-        // — Этап 5, волны A и C); при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(16,
-            "сторож должен видеть 16 прод-сборок: ClaudeHomeServer, " +
+        // — Этап 5, волны A и C; ProjectServices — Этап 5, волна C, шаг 2);
+        // при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(17,
+            "сторож должен видеть 17 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
             "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
-            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules");
+            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules, " +
+            "ClaudeHomeServer.ProjectServices");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

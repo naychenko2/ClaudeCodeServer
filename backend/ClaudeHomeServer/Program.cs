@@ -159,6 +159,12 @@ builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
     ClaudeHomeServer.Services.Execution.LauncherFactory>();
+// Узкий шов пула preview-портов песочницы для вертикали ProjectServices
+// (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
+// получает только диапазон, всё остальное в SandboxManager остаётся
+// инкапсулировано в Execution/Main.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ISandboxPortRange,
+    ClaudeHomeServer.Services.Execution.SandboxPortRangeAdapter>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();

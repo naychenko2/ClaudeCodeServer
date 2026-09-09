@@ -5,7 +5,6 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -2576,13 +2575,18 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     // Карточек «Бюджет исчерпан» в Session-канале broadcaster-а по конкретному чату.
-    // Используется в тестах волны 4 для проверки инварианта «Run расширяет без карточки»
+    // Используется в тестах волны 4 для проверки инварианта «Run расширяет без карточки».
+    // S1 (фикс-волна 4 team-blocker-honest): фильтрует именно по sessionId — без фильтра
+    // ловились бы карточки соседних штабов из общего snapshot-а broadcaster-а (TestSessionBroadcaster
+    // делит один Session-канал на ВСЕ чаты), а подсчёт не соответствовал бы имени параметра.
     private int CountBudgetExhaustedCards(string sessionId)
     {
         var n = 0;
-        foreach (var (_, message) in _broadcaster.Session)
+        foreach (var (sid, message) in _broadcaster.Session)
         {
-            if (message is Protocol.TeamEscalationMessage t && t.Kind == "budgetExhausted")
+            if (sid == sessionId
+                && message is Protocol.TeamEscalationMessage t
+                && t.Kind == "budgetExhausted")
                 n++;
         }
         return n;
@@ -2605,33 +2609,167 @@ public class TeamWaveServiceTests : IDisposable
         after.Budget.MaxWaves.Should().Be(maxWavesBefore, "волны не выходили за потолок — не трогаем");
     }
 
-    // Агентский путь не расширяет: добавочный план при авто-волнах авто-стартует без
-    // клика человека и не должен двигать потолки. Используем прямой вызов сервиса, минуя
-    // SessionHub.RespondTeamPlan (там проверка владельца не пускает агента) — путь,
-    // по которому ходит RunTeamPlanningAsync / PublishTeamPlanAsync.
+    // M3 (фикс-волна 4 team-blocker-honest): агентский путь публикации плана
+    // (PublishTeamPlanAsync ветка additional=true) НЕ ДВИГАЕТ потолки. Расширение —
+    // прерогатива человека (SessionHub.RespondTeamPlan → RespondTeamPlanAsync), там
+    // проверка владельца не пускает агента. Структурно это закрыто уже сейчас
+    // (других вызывающих RespondTeamPlanAsync нет), но это «доказательство через
+    // чтение кода», а не сторож — регрессия «кто-то добавит Max* += deltaXxx в
+    // ветку additional» прошла бы молча. Прямой контракт: после публикации
+    // добавочного плана все три Max остаются прежними. Доказательство мутацией:
+    // добавить в PublishTeamPlanAsync additional-ветку строчку
+    // `t.Budget.MaxTasks = 100;` → тест обязан покраснеть (см. отчёт фикс-волны).
     [Fact]
-    public async Task АвтоСтартДобавочногоПлана_НеРасширяетБюджет()
+    public async Task АвтоСтартДобавочногоПлана_НеРасширяетПотолки()
     {
-        var (session, plan) = await MakeRunningStabAsync("budget-agent-path");
+        var (session, _, _) = await MakeStabWithTeamAsync("budget-agent-path");
         var team = Team(session.Id);
-        // Сжимаем потолок до гарантированного превышения
+        // Сжимаем потолки до минимума — любая попытка расширения перешагнула бы за них
         team.Budget.MaxWaves = 1;
         team.Budget.MaxTasks = 1;
-        var maxTasksBefore = team.Budget.MaxTasks;
+        team.Budget.MaxRuns = 1;
         var maxWavesBefore = team.Budget.MaxWaves;
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxRunsBefore = team.Budget.MaxRuns;
 
-        // Имитируем агентский путь: публикуемый план при авто-волнах стартует сразу
-        // без RespondTeamPlanAsync (TeamPlanService.PublishTeamPlanAsync ветка
-        // additional → starter(...) напрямую). Проверяем, что без вызова Run
-        // бюджет не изменился.
-        Team(session.Id).Budget.MaxTasks.Should().Be(maxTasksBefore);
-        Team(session.Id).Budget.MaxWaves.Should().Be(maxWavesBefore);
+        // Второй план: реальный планировщик строит 2 под-задачи в 2 волнах.
+        // additional=true ветка PublishTeamPlanAsync — гард: PlanCardId не null +
+        // AutoWaves=true, без Replanning, fromHuman=true. Состояние удовлетворено.
+        var (p2, r2) = await _sessions.CreateTeamPlanAsync(session.Id, "followup", UserId);
+        r2.Should().BeNull("планировщик-заглушка отдаёт валидный JSON");
+        p2!.WaveCount.Should().Be(2, "планировщик выдаёт 2 волны");
+        p2.Subtasks.Count.Should().Be(2, "планировщик выдаёт 2 под-задачи");
 
-        // Дополнительная проверка: даже если бы авто-старт вызвал Run через хаб,
-        // проверка владельца не пустила бы — поэтому агентский код физически не может
-        // дёрнуть RespondTeamPlanAsync. Грабим этот инвариант прямым контрактом:
-        // Run через _sessions вызывается ТОЛЬКО из SessionHub, и тот проверяет OwnsSession.
-        plan.Should().NotBeNull();
+        // Расширение здесь запрещено: дополнительная волна при авто-старте зовётся
+        // мимо RespondTeamPlanAsync, и единственное место в вертикали Team, где
+        // пишется в Max* по плану, — M1/M2 fix в TeamDecisionService.RespondTeamPlanAsync.
+        var after = Team(session.Id);
+        after.Budget.MaxTasks.Should().Be(maxTasksBefore,
+            "агентский путь (добавочный план) не должен расширять MaxTasks");
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore,
+            "агентский путь не должен расширять MaxWaves");
+        after.Budget.MaxRuns.Should().Be(maxRunsBefore,
+            "агентский путь не должен расширять MaxRuns");
+    }
+
+    // Сценарий Глеба из задачи (M1): MaxWaves=2, WavesUsed=1, MaxTasks=2, TasksUsed=1,
+    // план на 2 волны / 2 задачи. До фикса дельты считали от Max (delta = 0),
+    // и после клика «Запустить» потолки не сдвигались; волна 1 раздавалась, TasksUsed
+    // доходил до MaxTasks на закрытии первой задачи, и карточка «Бюджет израсходован»
+    // поднималась посреди второй волны — ровно та остановка, которую волна обещала
+    // предсказать. С фиксом дельты считаются от ОСТАТКА: расширение идёт на
+    // `Subtasks − (MaxTasks − TasksUsed)` = 1 по задачам и столько же по волнам,
+    // и обе волны помещаются в бюджет без карточки.
+    [Fact]
+    public async Task RespondTeamPlan_RunПриЧастичноИзрасходованномБюджете_РасширяетДоПланаБезКарточки()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-partial-use");
+        // План на 2 волны / 2 под-задачи (как у Глеба)
+        plan.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+
+        // Состояние «уже потрачено»: MaxWaves=2, WavesUsed=1 (волна 1 уже была)
+        // — имитируем, что одна волна прошла, RunsUsed и TasksUsed по одной под-задаче
+        var team = Team(session.Id);
+        team.Budget.MaxWaves = 2;
+        team.Budget.MaxTasks = 2;
+        team.Budget.WavesUsed = 1;
+        team.Budget.TasksUsed = 1;
+        team.Budget.RunsUsed = 1;
+        var maxWavesBefore = team.Budget.MaxWaves;
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxRunsBefore = team.Budget.MaxRuns;
+        var budgetExhaustedBefore = CountBudgetExhaustedCards(session.Id);
+
+        // Клик «Запустить» — расширение идёт от остатка, не от Max
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        // Остаток по задачам = 2 − 1 = 1; план на 2; дельта = 1 → MaxTasks = 3
+        after.Budget.MaxTasks.Should().Be(maxTasksBefore + 1,
+            "остаток MaxTasks-TasksUsed=1 < plan.Subtasks=2 → дельта 1");
+        // Остаток по волнам = 2 − 1 = 1; план на 2; дельта = 1 → MaxWaves = 3
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore + 1,
+            "остаток MaxWaves-WavesUsed=1 < plan.WaveCount=2 → дельта 1");
+        // Остаток по запускам = 20 (дефолт) − 1 = 19; план на 2; дельта = 0 → MaxRuns не сдвинулся
+        after.Budget.MaxRuns.Should().Be(maxRunsBefore,
+            "план в 2 под-задачи при 19 свободных запусках — дельта по MaxRuns нулевая");
+
+        // Волна 1 стартует. До фикса в этой точке поднималась бы карточка
+        // «Бюджет израсходован»: TasksUsed=1 → +1 = 2 = MaxTasks; волна 2 не помещалась бы.
+        // С фиксом карточек НЕ появилось.
+        var budgetExhaustedAfter = CountBudgetExhaustedCards(session.Id);
+        budgetExhaustedAfter.Should().Be(budgetExhaustedBefore,
+            "расширение на РЕАЛЬНЫЙ остаток — без карточки «Бюджет израсходован» на волне 1");
+    }
+
+    // M2 (фикс-волна 4 team-blocker-honest): план, где под-задач больше остатка
+    // MaxRuns, после клика «Запустить» расширяет MaxRuns на дельту — без карточки
+    // исчерпания. Флагманский случай: план на 9 волн ≈ 18–27 под-задач при дефолте
+    // MaxRuns=20 — без M2 запуск вставал на 6–7 волне.
+    [Fact]
+    public async Task RespondTeamPlan_RunПриПревышенииMaxRuns_РасширяетMaxRunsНаДельтуБезКарточки()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-runs");
+        plan.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+
+        // Состояние: RunsUsed чуть ниже, чем помещается план+5, чтобы быть уверенным,
+        // что без M2 старт волны упёрся бы именно в MaxRuns (а не в MaxTasks/Waves).
+        // Subtasks=2, RunsUsed=19 (дефолтный MaxRuns=20): после волны RunsUsed=21>20 → exhausted.
+        var team = Team(session.Id);
+        team.Budget.RunsUsed = 19;
+        team.Budget.TasksUsed = 0;
+        team.Budget.WavesUsed = 0;
+        // Чтобы MaxTasks/MaxWaves не упирались: дадим запас
+        team.Budget.MaxTasks = 100;
+        team.Budget.MaxWaves = 100;
+        var maxRunsBefore = team.Budget.MaxRuns;
+        var budgetExhaustedBefore = CountBudgetExhaustedCards(session.Id);
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        // Остаток по запускам = 20 − 19 = 1; план на 2 под-задачи; дельта = 1 → MaxRuns = 21
+        after.Budget.MaxRuns.Should().Be(maxRunsBefore + 1,
+            "MaxRuns расширен на дельту 1 — иначе запуск встанет на следующей волне");
+        // MaxTasks/MaxWaves не сдвинулись — дельты нулевые (запас 100)
+        after.Budget.MaxTasks.Should().Be(100, "нет дельты — потолок задач не трогается");
+        after.Budget.MaxWaves.Should().Be(100, "нет дельты — потолок волн не трогается");
+        after.Stage.Should().Be(TeamImplementStage.Wave, "волна стартует — MaxRuns расширен");
+
+        // С M2 карточки нет; без M2 на первой же волне превышение RunsUsed > MaxRuns
+        // подняло бы «Бюджет израсходован».
+        var budgetExhaustedAfter = CountBudgetExhaustedCards(session.Id);
+        budgetExhaustedAfter.Should().Be(budgetExhaustedBefore,
+            "расширение MaxRuns на Run — без карточки «Бюджет исчерпан» на волне");
+    }
+
+    // Базовый сценарий M3: делает то же, что MakeRunningStabAsync (создаёт штаб
+    // с уже опубликованным планом при AutoWaves=true), но возвращает ещё и персоны —
+    // нужно для второй итерации планировщика в АвтоСтартДобавочногоПлана.
+    private async Task<(Session Session, Persona Backend, Persona Frontend)> MakeStabWithTeamAsync(string name)
+    {
+        var (session, backend, frontend) = await MakeStabAsync(name);
+        await _sessions.SetTeamImplementAutoAsync(session.Id, true, UserId);
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт задач в CSV","subtasks":[
+              {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
+               "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
+               "files":["backend/Controllers/TasksController.cs"],"wave":1,"doneCriteria":"отдаёт CSV"},
+              {"title":"Кнопка «Экспорт»","goal":"Кнопка в тулбаре",
+               "executorPersonaId":"{{frontend.Id}}","executorRationale":"UI — её зона",
+               "files":["frontend/src/components/Toolbar.tsx"],"wave":2,"doneCriteria":"файл скачивается"}]}
+            """;
+        var (plan, reason) = await _sessions.CreateTeamPlanAsync(session.Id, "Экспорт задач в CSV", UserId);
+        reason.Should().BeNull();
+        plan!.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+        // Держим штаб «занятым»: та же причина, что у MakeRunningStabAsync —
+        // авто-сводки координатору не уходят в реальный CLI на CI.
+        var running = _sessions.GetById(session.Id)!;
+        running.Status = SessionStatus.Working;
+        return (running, backend, frontend);
     }
 
     // Планировщик-заглушка: отдаёт заранее заданный JSON-план вместо вызова модели

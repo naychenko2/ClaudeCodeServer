@@ -5423,6 +5423,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return entry.Info;
     }
 
+    /// <summary>Явно перевести чат с окна 1M на базовое (200K): срезать суффикс [1m] у модели.</summary>
+    /// Единственный путь, которым суффикс окна снимается по воле человека — кнопка «продолжить в
+    /// стандартном окне» под карточкой отказа Window1MUnavailable. Автоматического среза больше
+    /// нет нигде в ходе чата (он был тихой миной для длинных разговоров), поэтому решение
+    /// «мне хватит 200K» принимает пользователь, а сервер только исполняет.
+    ///
+    /// Модель берём ЭФФЕКТИВНУЮ (Info.Model может быть пуста — тогда модель приходит от слота
+    /// назначения места), а закрепляем в чате базовый алиас явно: иначе назначение места на
+    /// следующем ходу вернуло бы окно 1M и человек снова упёрся бы в ту же карточку.
+    /// Не тир-алиас с окном — снимать нечего, отказ (InvalidOperationException → 400).
+    public async Task<Session?> DropWindow1MAsync(string sessionId, string ownerId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        var usageKey = UsageKeyFor(entry.Info.TaskExecution, entry.Info.TaskId, entry.Info.PersonaId);
+        var effective = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
+        if (!LlmProviderRegistry.IsClaudeTierWindowAlias(effective))
+            throw new InvalidOperationException("У чата не выбрано окно 1M — переключать нечего");
+        return await UpdateAsync(sessionId, ownerId,
+            name: null, model: LlmProviderRegistry.StripClaudeWindowAlias(effective), effort: null);
+    }
+
     // Ответ на карточку, которой уже нет, — протухший: конец хода (result/error/exited) снял её
     // сам. Гонка живая: ватчдог обрывает зависший ход, а клик пользователя долетает мгновением
     // позже — раньше такой ответ безусловно ставил Working на мёртвом процессе, и чат залипал

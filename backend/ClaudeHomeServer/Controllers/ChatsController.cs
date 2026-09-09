@@ -212,6 +212,24 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // «Продолжить в стандартном окне 200 тысяч токенов» — кнопка под карточкой отказа
+    // Window1MUnavailable. Серверный путь к StripClaudeWindowAlias: сам по себе срез окна в ходе
+    // чата запрещён (тихая деградация длинного разговора в 200K — мина), поэтому снять суффикс
+    // может только явное решение человека, и приходит оно сюда. Возвращает обновлённый чат:
+    // фронт по нему перерисовывает выбранную модель, отдельного сигнала не нужно.
+    [HttpPost("{id}/window-1m/drop")]
+    public async Task<IActionResult> DropWindow1M(string id)
+    {
+        if (OwnedChat(id) is null) return NotFound();
+        try
+        {
+            var updated = await sessions.DropWindow1MAsync(id, UserId);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     // Ручная группировка чатов (drag-and-drop в списке): вложить чат в родительский либо
     // вынести в корень (parentId == null). Один эндпоинт на оба списка — GetOwned внутри
     // SetParent резолвит и проектную сессию (как /loop), поэтому дубля в SessionsController нет.

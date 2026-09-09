@@ -76,6 +76,10 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
+        // Turn — отдельная сборка (Этап 5, вынос Turn): форс-загрузка нужна, чтобы
+        // сторож видел типы Turn (IPromptSectionContributor и пр.) и проверял их
+        // границы по сборке Turn.dll.
+        _ = typeof(ClaudeHomeServer.Services.Turn.IPromptSectionContributor).Assembly;
         // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
@@ -1049,36 +1053,19 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Protocol.StoredMessage",
-                    "ClaudeHomeServer.Protocol.McpServerInfo",
-                    "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
-                    "ClaudeHomeServer.Services.PersonaBindingsService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.PersonaPromptBuilder",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    // Этап 5, узкие швы Turn: допуски Skills.SkillsService и
-                    // Skills.SkillInfo сняты как мёртвые — PersonaLayerContributor
-                    // ходит за промптом .md-агента через шов IAgentPromptSource, а имена
-                    // установленных умений вместе с фильтром каталога механик уехали
-                    // за шов ITeamMechanicsBlockSource (оба — Core, реализации в Main).
-                    "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    // Этап 5, узкие швы Turn: четыре допуска сняты как мёртвые —
-                    // PersonaRecallContributor ходит в память персоны через Core-шов
-                    // IPersonaRecallSource (Memory.PersonaMemoryService + PersonaMemoryHit +
-                    // PersonaMemoryService+PersonaRecallResult), а признак «подключён ли
-                    // канал паспортов» спрашивает у того же шва вместо собственной ссылки
-                    // на Dossiers.DossierRecallService. DossierRecallRequest уехал в Core
-                    // вместе с DossierRecallResult (assembly-фильтр IsCoreAssembly).
-                    // Этап 5, шаг 6 (инверсия контрибьюторов): три допуска сняты как
-                    // мёртвые (мутация — прогон без них дал зелёный сторож): UserStore,
-                    // Llm.SpecialtySettingsStore (+EffectivePromptSection ранее уже снят),
-                    // Team.TeamImplementPrompts — комментарий на месте допуска описывал
-                    // использование в ClaudeSession (Services.Llm.Claude), а не в Turn;
-                    // допуск никогда не был нужен ИМЕННО Turn-контрибьюторам.
-                    // Этап 4, шаг 2г-2 — PersonaLayerContributor вызывал
-                    // TeamMechanicsPromptCatalog.BuildPromptBlock напрямую. Этап 5, узкие
-                    // швы Turn: вызов уехал в адаптер ITeamMechanicsBlockSource, допуск снят.
+                    // Этап 5 (Turn): после выноса в отдельный .csproj ВСЕ вне-Core
+                    // зависимости закрыты швами (`IFeatureFlagGate`, `IPersonaResolver`,
+                    // `IPersonaPromptAssembler`, `IPersonaBindingsSource`,
+                    // `IChatHistoryLoader.LastWriteUtc`, `IPersonaRecallSource`,
+                    // `IAgentPromptSource`, `ITeamMechanicsBlockSource`) — Turn.dll
+                    // не имеет ProjectReference на Main.
+                    //
+                    // Сторож сканирует и тела методов (IL): здесь остаются ровно те
+                    // типы, которые Turn явно использует через статические вызовы и
+                    // async-state-машины. Перед заменой записи проверил каждый мутацией
+                    // (убрать → прогон SubsystemBoundaryTests → красный/зелёный); см.
+                    // отчёт задачи 924997b4, шаг «сужение allow-list».
+                    //
                     // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
                     // (статический каталог в `Services.Prompts`). Префикс Prompts
                     // НЕ открываем: точечный допуск ровно на нужный тип.
@@ -1803,6 +1790,12 @@ public class SubsystemBoundaryTests
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5 (Turn): OnboardingPrompts переехал в Core, потому что Turn
+        // (PersonaLayerContributor) ссылается на него в слое персоны. Сам класс
+        // — stateless-промпт-материал (как Slugifier/PathNormalizer), но целиком
+        // под `Prompts/OnboardingPrompts.cs` — не один файл-примитив. Чтобы
+        // не раздувать CoreAllowedRootTypes, разрешаем namespace.
+        "ClaudeHomeServer.Services.Prompts",
         // Этап 5, узкие швы Turn: DossierRecallRequest/DossierRecallResult — контрактные
         // DTO пассивного recall паспортов. Запрос собирает Turn (контрибьютор промпта),
         // исполняет Memory (PersonaMemoryService.BuildRecallAsync), владеет Dossiers.

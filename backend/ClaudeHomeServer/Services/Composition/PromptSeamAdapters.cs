@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Skills;
@@ -62,4 +63,33 @@ public sealed class TeamMechanicsBlockAdapter(SkillsService skills) : ITeamMecha
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
     }
+}
+
+// Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core. Тонкие обёртки
+// 1:1, форвардят в фасад корневого сервиса (FeatureFlagService, PersonaManager,
+// PersonaPromptBuilder, PersonaBindingsService) — контрибьюторы промпта ссылаются
+// только на шов, иначе Turn тащил бы Main ради 4 типов.
+
+public sealed class FeatureFlagGateAdapter(FeatureFlagService flags) : IFeatureFlagGate
+{
+    public bool IsEnabled(string userId, string key) => flags.IsEnabled(userId, key);
+}
+
+public sealed class PersonaResolverAdapter(PersonaManager personas) : IPersonaResolver
+{
+    public Persona? Get(string id, string userId) => personas.Get(id, userId);
+}
+
+public sealed class PersonaPromptAssemblerAdapter(PersonaPromptBuilder builder) : IPersonaPromptAssembler
+{
+    public string Build(Persona persona, string? model, bool switched = false, bool greeted = false,
+        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null) =>
+        builder.Build(persona, model, switched, greeted, teamMechanicsBlock, voiceMode, voiceStyle);
+}
+
+public sealed class PersonaBindingsSourceAdapter(PersonaBindingsService bindings) : IPersonaBindingsSource
+{
+    public Task<string?> BuildTurnBlockAsync(string ownerId, string personaId, string turnText,
+        IReadOnlyList<string> mountedSections) =>
+        bindings.BuildTurnBlockAsync(ownerId, personaId, turnText, mountedSections);
 }

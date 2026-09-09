@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check, ArrowRight, FileText, Network } from 'lucide-react';
-import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
+import type { ChatItem, Persona, TeamImplementBudget, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import { relPath, basename } from '../../lib/paths';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -563,6 +563,45 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
     );
   }
 
+// Предупреждение «план сверх бюджета» (волна 4 team-blocker-honest): если волн или
+// задач в плане больше остатка MaxWaves/MaxTasks — карточка несёт строку с
+// честной цифрой, а «Запустить» сам расширит потолки на разницу (бэкенд,
+// TeamDecisionService.RespondTeamPlanAsync ветка Run). Скрывается целиком,
+// когда план в пределах бюджета — без неё не должно быть лишнего шума.
+function BudgetOverrunNote({ plan, budget }: { plan: TeamPlan; budget: TeamImplementBudget | null }) {
+  if (!budget) return null;
+  const waves = plan.waveCount;
+  const tasks = plan.subtasks.length;
+  const deltaWaves = Math.max(0, waves - budget.maxWaves);
+  const deltaTasks = Math.max(0, tasks - budget.maxTasks);
+  if (deltaWaves === 0 && deltaTasks === 0) return null;
+
+  // Куски текста — два независимых: «волны» и «задачи». Если оба выходят за
+  // потолок — оба показываем одной строкой через «и»; одна часть — одиночная
+  // формулировка. Текст дословно из задачи: «потолок будет поднят до N».
+  const waveClause = deltaWaves > 0
+    ? `план на ${waves} ${plural(waves, 'волну', 'волны', 'волн')}, бюджет итерации — ${budget.maxWaves} (потолок будет поднят до ${waves})`
+    : null;
+  const taskClause = deltaTasks > 0
+    ? `${tasks} ${plural(tasks, 'под-задача', 'под-задачи', 'под-задач')} при потолке ${budget.maxTasks} (потолок будет поднят до ${tasks})`
+    : null;
+  const headline = [waveClause, taskClause].filter(Boolean).join(' и ');
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,
+      padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.warning}`,
+      background: C.warningBg,
+    }}>
+      <AlertTriangle size={12} strokeWidth={2.2} color={C.warningText}
+        style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ fontSize: FS.xs, color: C.warningText, lineHeight: 1.45, fontWeight: 500 }}>
+        {headline}
+      </div>
+    </div>
+  );
+}
+
   // === На подтверждении ===
   const canAct = online && !!ctx;
   const respond = (decision: 'run' | 'cancel') => ctx?.onRespond(item.planId, decision);
@@ -712,6 +751,11 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
               Отменить
             </Button>
           </div>
+          {/* Предупреждение «план сверх бюджета» (волна 4 team-blocker-honest): если
+              план выходит за остаток MaxWaves/MaxTasks — строка видна ДО клика, а
+              само расширение на разницу делает бэкенд на Run. Бюджет может быть
+              ещё не подгружен (read-only режим) — в этом случае блок молчит. */}
+          <BudgetOverrunNote plan={plan} budget={ctx?.budget ?? null} />
           {ctx?.autoWaves && (
             <div style={{
               display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,

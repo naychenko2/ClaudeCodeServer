@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { Persona, Task, TeamPlanDecision } from '../../types';
+import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
@@ -56,6 +56,10 @@ export interface TeamPlanChatContext {
   planCardId: string | null;
   // Явно выбранный состав исполнителей; пустой — вся команда проекта
   executorPersonaIds: string[];
+  // Бюджет итерации на момент подтверждения — нужен карточке, чтобы показать
+  // строку «план сверх бюджета» до клика «Запустить» (само расширение — на бэкенде
+  // при Run). null допустим только в read-only режиме, когда состояние ещё не подгрузилось
+  budget: TeamImplementBudget | null;
   // feedback — правка плана (decision 'edit'): сервер сам гасит карточку и пересобирает план
   onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string, feedback?: string) => void;
 }

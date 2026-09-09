@@ -1263,6 +1263,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     waveNumber: teamImplementState.waveNumber,
     planCardId: teamImplementState.planCardId ?? null,
     executorPersonaIds: teamImplementState.executorPersonaIds,
+    // budget нужен карточке плана для предупреждения «план сверх бюджета»
+    // до клика «Запустить» (волна 4 team-blocker-honest)
+    budget: teamImplementState.budget,
     onRespond: handleRespondTeamPlan,
   } : null, [teamImplementState, handleRespondTeamPlan]);
 

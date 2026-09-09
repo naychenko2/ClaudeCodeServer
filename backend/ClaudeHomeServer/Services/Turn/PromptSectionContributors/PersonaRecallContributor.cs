@@ -72,7 +72,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.30;
         var timeoutMs = int.TryParse(_config["Persona:RecallTimeoutMs"], out var t) ? t : 2500;
 
-        var query = KnowledgeService.TrimQuery(turnText);
+        var query = KnowledgeQueryUtilities.TrimQuery(turnText);
         if (query.Length == 0) return null;
 
         try

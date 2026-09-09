@@ -8,6 +8,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -137,6 +138,74 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         login.Should().Contain("CLAUDE_CONFIG_DIR")
             .And.Contain($"sub-second")
             .And.Contain("claude login");
+    }
+
+    // Пометка «модель недоступна на этой подписке» обязана быть видна наружу и сниматься
+    // досрочно. Без выдачи человек не понимает, почему модель не выбирается: подписка
+    // «В ротации», лимит не исчерпан, а ходы на неё не идут. Без сброса он ждёт истечения
+    // TTL (сутки у no_access), хотя доступ могли включить минуту назад.
+    [Fact]
+    public async Task ModelAvailability_ПометкаВидна_ИСнимаетсяЭндпоинтомСброса()
+    {
+        using var withPool = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-one",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-2:OAuthToken"] = "token-two",
+                });
+            });
+        });
+        var client = await AuthenticateAsync(withPool);
+        var pool = withPool.Services.GetRequiredService<ClaudeSubscriptionPool>();
+        pool.MarkModelUnavailable("claude-2", "fable", FallbackErrorClass.ModelOutOfCredits);
+
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+
+        var mark = usage.GetProperty("subscriptions").GetProperty("claude-2")
+            .GetProperty("unavailableModels").EnumerateArray().Should().ContainSingle().Subject;
+        mark.GetProperty("model").GetString().Should().Be("fable");
+        mark.GetProperty("reason").GetString().Should().Be("model_out_of_credits");
+        mark.GetProperty("until").GetDateTime().ToUniversalTime()
+            .Should().BeAfter(DateTime.UtcNow, "пометка живая — по этому сроку UI пишет, когда проверит снова");
+        // Пометка адресная: соседняя подписка её не наследует
+        usage.GetProperty("subscriptions").GetProperty("claude")
+            .GetProperty("unavailableModels").EnumerateArray().Should().BeEmpty();
+
+        var clear = await client.PostAsJsonAsync(
+            "/api/usage/subscriptions/claude-2/model-availability/clear", new { model = "fable" });
+        clear.EnsureSuccessStatusCode();
+
+        pool.IsModelUnavailable("claude-2", "fable").Should().BeFalse("сброс вернул пару в ротацию");
+        var after = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+        after.GetProperty("subscriptions").GetProperty("claude-2")
+            .GetProperty("unavailableModels").EnumerateArray().Should().BeEmpty();
+    }
+
+    // Опечатка в ключе подписки не должна выглядеть как успешный сброс: человек ждал бы от
+    // пары работы, которой не будет (пометка на самом деле осталась висеть на другом ключе).
+    [Fact]
+    public async Task ModelAvailability_НеизвестнаяПодписка_404()
+    {
+        using var withPool = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-one",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-2:OAuthToken"] = "token-two",
+                });
+            });
+        });
+        var client = await AuthenticateAsync(withPool);
+
+        var response = await client.PostAsJsonAsync(
+            "/api/usage/subscriptions/claude-42/model-availability/clear", new { model = "fable" });
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
     }
 
     // WithWebHostBuilder возвращает базовый WebApplicationFactory<Program> — расширение

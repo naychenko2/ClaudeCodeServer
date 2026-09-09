@@ -237,17 +237,13 @@ public sealed class SubscriptionUsageWarmupService(
 
         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
         {
-            // Отказ по недоступной модели (кредиты модели / нет доступа), а не исчерпание окна.
-            // Признак — rejected + пустая utilization + overageDisabledReason. Пробный ход идёт
-            // haiku, но сам rejected по кредитам ничего о базовом окне не говорит: подписку
-            // исчерпанной НЕ метим (Sonnet/Opus на ней работают). Ложный бан выводил бы её из
-            // ротации до сброса окна (инцидент 2026-09-09, чат «Анализ документов ВФЛА»).
-            if (ClaudeSubscriptionPool.IsModelUnavailableRejection(m.Status, m.Utilization, m.OverageDisabledReason))
-            {
-                Console.Error.WriteLine($"[SubscriptionWarmup] '{key}': rejected по кредитам/доступу модели "
-                    + $"(overageDisabledReason={m.OverageDisabledReason}) — подписка НЕ помечается исчерпанной");
-                return;
-            }
+            // Отказ по НЕДОСТУПНОЙ МОДЕЛИ здесь невозможен, и подавления MarkExhausted тут нет
+            // намеренно: пробный ход идёт PingModel (haiku), у неё нет ни отдельного кошелька
+            // usage credits, ни проблем с доступом по тарифу. Значит rejected — настоящее
+            // исчерпание окна, даже когда в событии стоит overageDisabledReason (это лишь
+            // причина ВЫКЛЮЧЕННОГО перерасхода: кредиты перерасхода кончились либо он запрещён
+            // организацией). Этот MarkExhausted — ещё и страховка: если подавление в обработчике
+            // хода скрыло настоящее исчерпание, идл-пинг вернёт подписку в верное состояние.
             var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
                 ? (DateTime?)dt.ToUniversalTime() : null;
             pool.MarkExhausted(key, resetsAt);

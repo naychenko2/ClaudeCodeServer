@@ -289,6 +289,37 @@ public class FallbackLlmSessionAdapterTests
         pool.IsExhausted("acc-a").Should().BeFalse("не лимитный класс — подписка не помечается");
     }
 
+    // Признак «отказ по модели, а не исчерпание окна» — ТОЛЬКО текст ошибки хода (доводка
+    // волны 1а). По полям rate_limit_event он не распознаётся: overageDisabledReason приходит
+    // и на настоящем исчерпании окна у аккаунта с выключенным перерасходом, и признак по нему
+    // глушил бы MarkExhausted всегда. Здесь — сцепка целиком: «requires usage credits» →
+    // ModelOutOfCredits → помечена ПАРА (подписка × модель) + взведено подавление, а сама
+    // подписка исчерпанной НЕ помечена (её Sonnet/Opus остаются в ротации).
+    [Fact]
+    public async Task ОтказПоКредитамМодели_ПомеченаПара_ПодпискаЖива_ПодавлениеВзведено()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, model: "fable");
+        inner.Scripts.Enqueue(() =>
+        {
+            // Формулировка CLI: она же приезжает вместе с rate_limit_event status=rejected,
+            // из-за которого волна 1 ложно ставила RateLimit до разбора текста.
+            inner.Emit(new ErrorMessage("Fable requires usage credits. Switch to another model.",
+                ExpectResultFollows: true));
+            inner.Emit(ApiError("429"));
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        pool.IsExhausted("acc-a").Should().BeFalse("кончились кредиты МОДЕЛИ — это не лимит подписки");
+        pool.IsModelUnavailable("acc-a", "fable").Should().BeTrue("помечена пара, а не подписка");
+        pool.HadRecentModelRejection("acc-a").Should()
+            .BeTrue("поздний rate_limit_event этой же попытки не должен пометить подписку исчерпанной");
+        pool.HadRecentModelRejection("acc-b").Should().BeFalse("подавление адресное");
+    }
+
     [Fact]
     public async Task ОбрывПотока_ПослеПервогоТокена_ПерезапускНаДругойПодписке()
     {

@@ -1066,16 +1066,79 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.Pick().Should().BeOneOf("a", "b");
     }
 
-    [Theory]
-    [InlineData("rejected", null, "out_of_credits", true)]
-    [InlineData("rejected", null, "org_level_disabled", true)]
-    [InlineData("rejected", 0.96, "out_of_credits", false)]   // utilization есть — это окно
-    [InlineData("rejected", null, null, false)]               // причины нет — обычное rejected
-    [InlineData("allowed", null, "out_of_credits", false)]    // не rejected
-    public void IsModelUnavailableRejection_ПризнакРазличения(
-        string? status, double? utilization, string? overageDisabledReason, bool expected)
+    // Признак «отказ по модели, а не исчерпание окна» — только класс отказа ЭТОГО хода.
+    // Волна 1 пробовала распознать его по полям rate_limit_event (rejected + пустая
+    // utilization + overageDisabledReason) — признак оказался ложным: overageDisabledReason
+    // приходит и на НАСТОЯЩЕМ исчерпании окна у аккаунта с выключенным перерасходом (248
+    // таких строк за 2026-09-09 от идл-пинга, а он ходит haiku — кошелька кредитов у неё нет).
+    // Такой признак заблокировал бы MarkExhausted вообще всегда, и исчерпанные подписки
+    // остались бы в ротации. Поэтому подавление ставится ТОЛЬКО отсюда — из пометки пары,
+    // которую делает адаптер по разобранному тексту ошибки.
+    [Fact]
+    public void HadRecentModelRejection_ПослеПометкиПары_ПодавлениеВзведено()
     {
-        ClaudeSubscriptionPool.IsModelUnavailableRejection(status, utilization, overageDisabledReason)
-            .Should().Be(expected);
+        var pool = new ClaudeSubscriptionPool(Config("a", "b"));
+
+        pool.MarkModelUnavailable("a", "fable", FallbackErrorClass.ModelOutOfCredits);
+
+        pool.HadRecentModelRejection("a").Should().BeTrue();
+        pool.HadRecentModelRejection("b").Should().BeFalse("подавление адресное — только та подписка, где был отказ");
+    }
+
+    [Fact]
+    public void HadRecentModelRejection_БезОтказаПоМодели_НеПодавляет()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a"));
+
+        // Исчерпание подписки к подавлению отношения не имеет: MarkExhausted обязан работать
+        pool.MarkExhausted("a", null);
+
+        pool.HadRecentModelRejection("a").Should().BeFalse();
+    }
+
+    [Fact]
+    public void MarkModelUnavailable_МодельНеизвестна_ПарыНет_НоПодавлениеЕсть()
+    {
+        // Пустая модель бывает у хода без цепочки и без эффективной модели. Пары тогда нет
+        // (нечего помечать), но подписка известна — и поздний rate_limit_event про неё соврать
+        // всё равно может, поэтому подавление взводится.
+        var pool = new ClaudeSubscriptionPool(Config("a"));
+
+        pool.MarkModelUnavailable("a", "", FallbackErrorClass.ModelNoAccess);
+
+        pool.HadRecentModelRejection("a").Should().BeTrue();
+        pool.ModelUnavailableMarks("a").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ModelUnavailableMarks_ОтдаётЖивыеПометкиСПричинойИСроком()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a", "b"));
+        pool.MarkModelUnavailable("a", "Fable", FallbackErrorClass.ModelOutOfCredits);
+        pool.MarkModelUnavailable("a", "opus", FallbackErrorClass.ModelNoAccess);
+
+        var marks = pool.ModelUnavailableMarks("a");
+
+        marks.Select(m => m.Model).Should().Equal("fable", "opus");
+        marks.Single(m => m.Model == "fable").Reason.Should().Be("model_out_of_credits");
+        marks.Single(m => m.Model == "opus").Reason.Should().Be("model_no_access");
+        marks.Single(m => m.Model == "fable").Until.Should().BeAfter(DateTime.UtcNow);
+        pool.ModelUnavailableMarks("b").Should().BeEmpty("пометки чужой подписки не протекают");
+    }
+
+    [Fact]
+    public void ModelUnavailableMarks_ИстёкшуюПометкуНеОтдаёт()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:a:OAuthToken"] = "token-a",
+            [$"{ClaudeSubscriptionPool.Section}:OutOfCreditsTtlHours"] = "0",
+        };
+        var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+
+        pool.MarkModelUnavailable("a", "fable", FallbackErrorClass.ModelOutOfCredits);
+
+        pool.ModelUnavailableMarks("a").Should().BeEmpty("TTL 0 часов — пометка истекла сразу");
     }
 }

@@ -558,7 +558,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             // до старта попытки: контекст длинного чата (сотни тысяч токенов) в 200K не влезет, и
             // человек получит причину, а не непонятное переполнение. Как LocalModelDown — без
             // подмены и без кулдауна (состояние снято до попытки, помечать нечего).
-            if (currentModel is not null && _pool.ResolveWindowAlias(currentModel) is null)
+            // Проверки «currentModel не null» здесь нет и быть не должно: переменная не nullable
+            // (шаг цепочки либо `_effectiveModel() ?? ""`), а лишний тест переводил её flow-state
+            // в «может быть null» и рождал CS8620/CS8604 ниже — на attempted.Add и AttemptTrace.
+            if (_pool.ResolveWindowAlias(currentModel) is null)
             {
                 LogWarn($"Окно 1M недоступно (session {Info.Id}): нет живой подписки с доступом к «{currentModel}» — ход не стартует, цепочку не идём.");
                 turnOutcome = "window_1m_unavailable";

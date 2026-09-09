@@ -60,7 +60,10 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     LoginCommand: oauthUsage.LoginCommandFor(key),
                     SupportsOpus: sub.SupportsOpus,
                     Supports1M: sub.Supports1M,
-                    WeeklyUtilization: subscriptionPool.WeeklyUtilization(key));
+                    WeeklyUtilization: subscriptionPool.WeeklyUtilization(key),
+                    // Живые пометки «модель недоступна на этой подписке»: без них модель молча
+                    // не выбирается при полностью здоровой на вид подписке.
+                    UnavailableModels: subscriptionPool.ModelUnavailableMarks(key));
             }
             // Фактическая цель роутинга (куда ушёл бы новый чат) — детерминированный выбор,
             // чтобы бейдж не мигал между равными аккаунтами при обновлении экрана
@@ -71,6 +74,30 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
 
         return Ok(new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo, pollStatuses));
     }
+
+    // Снять пометку «модель недоступна на этой подписке» досрочно — кнопка «Проверить сейчас».
+    // Третий путь возврата пары в ротацию рядом с двумя автоматическими (истечение TTL и успешный
+    // ход этой модели на этой подписке): пометка ставится по одному отказу, а причина могла уйти
+    // за минуту (пополнили кредиты, включили доступ) — ждать сутки TTL человеку незачем.
+    // Только админ: пометки глобальные для инстанса, как и вся ротация подписок.
+    // Модель — в теле, а не в пути: в именах моделей встречаются точки и суффикс окна «[1m]»,
+    // сегмент маршрута с ними приходится экранировать на каждом вызывающем.
+    [HttpPost("subscriptions/{key}/model-availability/clear")]
+    [Authorize(Roles = "admin")]
+    public IActionResult ClearModelAvailability(string key, [FromBody] ClearModelAvailabilityRequest body)
+    {
+        if (subscriptionPool is null) return NotFound(new { error = "Пул подписок не настроен" });
+        if (string.IsNullOrWhiteSpace(body.Model)) return BadRequest(new { error = "Не указана модель" });
+        // Неизвестный ключ — 404, а не молчаливый успех: иначе опечатка в ключе выглядит как
+        // «сбросили», и человек ждёт от пары работы, которой не будет.
+        if (!subscriptionPool.All.Any(s => s.Key == key))
+            return NotFound(new { error = $"Подписка «{key}» не найдена" });
+
+        subscriptionPool.ClearModelUnavailable(key, body.Model);
+        return Ok(new { unavailableModels = subscriptionPool.ModelUnavailableMarks(key) });
+    }
+
+    public record ClearModelAvailabilityRequest(string? Model);
 
     // Блок локальной модели: настройки Ollama + маршрут каждого фонового действия (локаль/claude)
     private OllamaUsageInfo BuildOllamaInfo()

@@ -248,7 +248,7 @@ public class FileWatcherService : IDisposable
             }
             foreach (var d in dirs)
             {
-                if (FileService.TreeExcludes.Contains(Path.GetFileName(d))) continue;
+                if (TreeExcludes.Contains(Path.GetFileName(d))) continue;
                 if (snap.Count >= SnapshotMaxEntries) return snap;
                 snap[Path.GetRelativePath(root, d).Replace('\\', '/')] = -1;
                 stack.Push(d);
@@ -292,7 +292,7 @@ public class FileWatcherService : IDisposable
     private static bool IsExcluded(string rel)
     {
         foreach (var seg in rel.Split('/'))
-            if (FileService.TreeExcludes.Contains(seg)) return true;
+            if (TreeExcludes.Contains(seg)) return true;
         return false;
     }
 

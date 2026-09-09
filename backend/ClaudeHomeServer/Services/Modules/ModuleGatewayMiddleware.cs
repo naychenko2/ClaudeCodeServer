@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Http.Features;
 
 namespace ClaudeHomeServer.Services.Modules;
@@ -73,12 +74,16 @@ public static class ModuleGatewayMiddleware
         //      gateway (MODULE_API_TOKEN): passthrough как есть, без re-mint (токен уже валиден
         //      и у модуля, и у ядра). Иначе → 401 на границе ядра.
         var rawToken = ExtractCcToken(ctx.Request);
-        var jwt = ctx.RequestServices.GetRequiredService<JwtService>();
+        // Шов JwtService → IUserTokenValidator: Modules получает только проверку
+        // пользовательского токена, без выдачи и без office/desktop/preview.
+        var userTokens = ctx.RequestServices.GetRequiredService<IUserTokenValidator>();
         var tokens = ctx.RequestServices.GetRequiredService<ModuleTokenService>();
-        var flags = ctx.RequestServices.GetRequiredService<FeatureFlagService>();
+        // Шов FeatureFlagService → IModuleFeatureFlagReader: Modules получает только
+        // проверку одного ключа, без каталога определений и записи флагов.
+        var flags = ctx.RequestServices.GetRequiredService<IModuleFeatureFlagReader>();
 
         // (а) cc_token ядра (HMAC): браузерный путь → свежий модульный токен chan=gateway
-        var userId = jwt.ValidateUserToken(rawToken);
+        var userId = userTokens.ValidateUserToken(rawToken);
         var user = userId is null
             ? null
             : ctx.RequestServices.GetRequiredService<IUserStore>().GetById(userId);

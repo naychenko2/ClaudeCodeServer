@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Modules;
 
@@ -54,7 +55,9 @@ public static class HostChannelMiddleware
 
         // Гейт видимости module-{id} (§10.2 v1.5) — на host-канале всегда, включая обмен:
         // скрытому модулю токен не выдаётся и вызовы не обслуживаются.
-        var flags = ctx.RequestServices.GetRequiredService<FeatureFlagService>();
+        // Шов FeatureFlagService → IModuleFeatureFlagReader: Modules получает только
+        // проверку одного ключа, без каталога определений и записи флагов.
+        var flags = ctx.RequestServices.GetRequiredService<IModuleFeatureFlagReader>();
         if (!flags.IsEnabled(validated.UserId, module.FeatureFlagKey))
         {
             ctx.Response.StatusCode = StatusCodes.Status403Forbidden;

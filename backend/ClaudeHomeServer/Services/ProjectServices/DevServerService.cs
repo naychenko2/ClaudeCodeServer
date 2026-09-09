@@ -173,7 +173,9 @@ public sealed class DevServerService : IDisposable
         {
             workingDir = string.IsNullOrWhiteSpace(cwd)
                 ? project.RootPath
-                : FileService.SafeJoinPublic(project.RootPath, cwd);
+                // Защита пути через Core-примитив SafePath.Join: ссылка на FileService
+                // — это ссылка на чужую вертикаль, сторож границ её ловит.
+                : SafePath.Join(project.RootPath, cwd);
         }
         catch (UnauthorizedAccessException)
         {

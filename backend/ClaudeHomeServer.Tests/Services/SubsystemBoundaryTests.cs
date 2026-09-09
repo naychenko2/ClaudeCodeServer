@@ -82,6 +82,9 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Execution.ISandboxPortRange).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IProjectBackgroundWriter).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.IProjectIconMigrator).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -393,13 +396,17 @@ public class SubsystemBoundaryTests
         // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
         //    флаг `Icon.Glyph` в доменной модели проекта).
         //
-        // === Шов к Backup.{BackupCore, BackupContext, BackupResult} (IL-видимость).
-        // `ProjectIconMigration.cs:73` зовёт `BackupCore.Snapshot(BackupContext.FromConfiguration(config), log)`
-        // и получает `BackupResult`. Попытка вынести примитив «снимок data перед
-        // необратимой операцией» в Core блокируется направлением ссылок (`Main → Core`,
-        // Core не видит Main/Backup), а обёртка в root Services нарушает root-сторож.
-        // Допуск ОСТАВЛЕН с явной фиксацией причины — полумера лучше протащенной
-        // зависимости (отчёт шага 5, задача `57b5e9bc`).
+        // ProjectIcons — вертикаль значка проекта (ADR-009, Этап 5, волна C, шаг 2).
+        // Чтение проекта через Core-шов `IProjectManager`, запись `Icon.Glyph` —
+        // через Core-шов `IProjectIconMigrator`, снимок data перед необратимой
+        // операцией — через Core-шов `IDataBackupService` (формализация прежней
+        // полумеры `ProjectIconMigration.cs:78-84`, Этап 5 курс Андрея 2026-09-08
+        // делает шов обязательным). Префикс-шов `Services.Llm` — тот же, что у
+        // `Backgrounds`/`Git`/`Deploy`/`Docs`/`Changelog`. Префикс `Services.Hubs`
+        // и точечный `ProjectManager`/`Backup.*` из прежнего allow-list сняты:
+        // вертикаль физически не может сослаться на Main-типы после выноса в
+        // .csproj, запись идёт через Core-интерфейсы, чтение через `IProjectManager`
+        // (Core).
         new object[]
         {
             new VerticalBoundary(
@@ -412,13 +419,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Backup.BackupResult",
-                    "ClaudeHomeServer.Services.Backup.BackupContext",
-                    "ClaudeHomeServer.Services.Backup.BackupCore",
-                }),
+                Array.Empty<string>()),
         },
         // Spend — аналитика расхода токенов (Spend Analytics v2, Этап 5).
         // Allow-list пустой поверх общей спинки: после выноса Spend в отдельный .csproj
@@ -1627,19 +1628,19 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 18 = Main + Core + 16 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // 19 = Main + Core + 17 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
         // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs/Modules
-        // — Этап 5, волны A и C; ProjectServices — Этап 5, волна C, шаг 2;
-        // Backgrounds — Этап 5, волна C, шаг 2); при добавлении новых `.csproj`
-        // подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(18,
-            "сторож должен видеть 18 прод-сборок: ClaudeHomeServer, " +
+        // — Этап 5, волны A и C; ProjectServices/Backgrounds/ProjectIcons — Этап 5,
+        // волна C, шаг 2); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(19,
+            "сторож должен видеть 19 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
             "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
             "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules, " +
-            "ClaudeHomeServer.ProjectServices, ClaudeHomeServer.Backgrounds");
+            "ClaudeHomeServer.ProjectServices, ClaudeHomeServer.Backgrounds, " +
+            "ClaudeHomeServer.ProjectIcons");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");

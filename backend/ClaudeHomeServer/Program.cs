@@ -170,6 +170,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ISandboxPortRa
 // через IProjectBackgroundWriter, форвардер сидит рядом с ProjectManager.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectBackgroundWriter,
     ClaudeHomeServer.Services.ProjectBackgroundWriterAdapter>();
+// Шов миграции значка для вертикали ProjectIcons (Этап 5, волна C, шаг 2).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectIconMigrator,
+    ClaudeHomeServer.Services.ProjectIconMigratorAdapter>();
+// Шов «снимок data перед необратимой операцией» для вертикали ProjectIcons
+// (Этап 5, волна C, шаг 2); формализует бывшую полумеру (комментарий
+// `ProjectIconMigration.cs:78-84`) — теперь обязательный шов.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
+    ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();

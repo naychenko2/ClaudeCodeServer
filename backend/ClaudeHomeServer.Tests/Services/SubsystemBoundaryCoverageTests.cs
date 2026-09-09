@@ -43,6 +43,7 @@ public class SubsystemBoundaryCoverageTests
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
     }
 
     [Fact]

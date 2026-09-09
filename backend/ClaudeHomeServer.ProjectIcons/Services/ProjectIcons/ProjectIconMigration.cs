@@ -1,5 +1,4 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Backup;
 
 namespace ClaudeHomeServer.Services.ProjectIcons;
 
@@ -27,11 +26,15 @@ public sealed record IconMigrationSummary(int Migrated, int Failed)
 /// </summary>
 public sealed class ProjectIconMigration(
     IProjectManager projects,
-    // Мутация (TrySetIconGlyphMigrated) — единственная запись в сторе значков,
-    // её нет в шве IProjectManager (см. задачу Ф5.1, раздел «что не делать»).
-    // Прямая ссылка держится отдельно: ProjectIconMigration использует и шов
-    // для чтения, и полный ProjectManager для записи.
-    ProjectManager projectsWriter,
+    // Шов `IProjectIconMigrator` (Core): мутация `Icon.Glyph` через узкий интерфейс
+    // к ProjectManager. Прежде прямая ссылка на ProjectManager держалась отдельно
+    // (комментарий Ф5.1 «что не делать»), теперь шов закрывает её ради выноса.
+    IProjectIconMigrator projectsWriter,
+    // Шов `IDataBackupService` (Core): снимок data через узкий интерфейс к
+    // BackupCore. Прежде прямая ссылка на Backup помечалась как полумера
+    // (`ProjectIconMigration.cs:78-84`) из-за направления `Main → Core`; курс
+    // Андрея 2026-09-08 (вынос ВСЕХ вертикалей) делает шов обязательным.
+    IDataBackupService backup,
     ProjectIconGlyphService glyphs,
     IConfiguration config,
     ILogger<ProjectIconMigration> log)
@@ -75,18 +78,16 @@ public sealed class ProjectIconMigration(
 
             // Порядок обязателен (ADR-009 §10): замена необратима, прогон не начинается,
             // пока не снят свежий бэкап штатным механизмом.
-            // Шов `ProjectIcons → Backup.{BackupCore, BackupContext, BackupResult}`
-            // (IL-видимость, задача `8beee75e`) ОСТАВЛЕН допуском: попытка выноса
-            // примитива «снимок data перед необратимой операцией» в Core блокируется
-            // направлением ссылок (`Main → Core`, Core не видит Main/Backup), а обёртка
-            // в root-Services нарушает root-сторож (`Services.*` в root не должны
-            // зависеть от подсистемной вертикали). Полумера лучше протащенной
-            // зависимости (см. отчёт шага 5).
-            var backup = BackupCore.Snapshot(BackupContext.FromConfiguration(config), log);
-            if (!backup.Ok)
+            // Шов `IDataBackupService` (Core, Этап 5, волна C, шаг 2): снимок data через
+            // узкий интерфейс к BackupCore. Прежде прямая ссылка на Backup помечалась
+            // как полумера (`ProjectIconMigration.cs:78-84`) из-за направления
+            // `Main → Core`; курс Андрея 2026-09-08 (вынос ВСЕХ вертикалей) делает шов
+            // обязательным. Полумера закрыта — формализация в виде Core-интерфейса.
+            var backupResult = backup.Snapshot(config, log);
+            if (!backupResult.Ok)
             {
                 log.LogError("Миграция значков НЕ стартовала: бэкап каталога data не снялся ({Error}). " +
-                             "Проекты остаются как есть, растровые иконки не тронуты", backup.Error);
+                             "Проекты остаются как есть, растровые иконки не тронуты", backupResult.Error);
                 return IconMigrationSummary.Empty;
             }
 

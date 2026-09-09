@@ -6418,10 +6418,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         // Сведение к общей точке (волна 1 team-blocker-honest): taskId берём из самой карточки.
         // reason — какой именно путь снятия сработал, чтобы подпись «Снят штабом: …» была честной.
+        // Возвращаем РЕАЛЬНЫЙ результат гашения: false, если карточка без TaskId (тогда
+        // TryResolveBlockerByFactAsync гасит все открытые блокеры, но вызывающий в
+        // TeamTurnCompletionService перечитывает состояние как «практика разблокирована»,
+        // а стадия при этом могла и не смениться).
         var reason = hasWork ? "координатор снял блокер маркером работы"
             : "координатор подвёл итог — все волны плана закрыты";
-        await _teamDecision.TryResolveBlockerByFactAsync(sessionId, openBlocker.Escalation.TaskId ?? "", reason);
-        return true;
+        return await _teamDecision.TryResolveBlockerByFactAsync(sessionId, openBlocker.Escalation.TaskId ?? "", reason);
     }
 
     // Новая вводная разложена планировщиком и уходит в волну (Э5). Тело переехало в

@@ -115,7 +115,12 @@ internal sealed class TeamBudgetService
         // (TryResolveBlockerByFactAsync должен был вернуть её), и запуск всё равно разрешён.
         if (reason is null && stab.TeamImplement?.Stage == TeamImplementStage.AwaitingDecision)
         {
-            var openCards = _sessions.ListOpenEscalationsAsync(stabId).GetAwaiter().GetResult();
+            // Sync-over-async был здесь: гейт вызывается из MVC-фильтра DenyOnDelegatedTurn
+            // на запросном потоке, у неактивного чата читался диск через .GetAwaiter().GetResult().
+            // Синхронный шов GetOpenTeamEscalationsSync — тот же путь, что у TryResolveBlockerByFactAsync
+            // в TeamDecisionService:799, и он безопасен с точки зрения потоков (читает только
+            // персистентное состояние).
+            var openCards = _history.GetOpenTeamEscalationsSync(stabId);
             // Решающая НЕ-блокер карточка (Stopped, TaskFailed, PlanDeviation, CheckFailed,
             // ProductDecision, BudgetExhausted, WaveStalled, WaveGate, NeedsClarification) —
             // ждём человека. Блокер — координатор обычно снимает сам, и гейт обязан это уважать

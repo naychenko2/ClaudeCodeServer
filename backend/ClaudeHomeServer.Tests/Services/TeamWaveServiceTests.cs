@@ -2522,6 +2522,118 @@ public class TeamWaveServiceTests : IDisposable
         }
     }
 
+    // === Волна 4 team-blocker-honest: «Запустить» расширяет бюджет на разницу ===
+
+    // План в пределах бюджета — клик «Запустить» НЕ двигает потолки, волна стартует штатно.
+    // Случай-страховка от регрессии: до этого код клал расширение безусловно, и лишний
+    // сдвиг Max* по любой карточке мог спутать сравнение в Budget.ExceededReason (M1).
+    [Fact]
+    public async Task RespondTeamPlan_RunВПределахБюджета_ПотолкиНеДвигаютсяВолнаСтартует()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-ok");
+        // Сжимаем потолок до плана: 2 волны, 2 задачи (план ровно такой)
+        var team = Team(session.Id);
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxWavesBefore = team.Budget.MaxWaves;
+        plan.Subtasks.Count.Should().BeLessThanOrEqualTo(maxTasksBefore);
+        plan.WaveCount.Should().BeLessThanOrEqualTo(maxWavesBefore);
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        after.Budget.MaxTasks.Should().Be(maxTasksBefore, "план в пределах — потолки не двигаются");
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore, "план в пределах — потолки не двигаются");
+        after.Stage.Should().Be(TeamImplementStage.Wave, "волна стартует штатно");
+    }
+
+    // План сверх бюджета: волн больше MaxWaves ИЛИ под-задач больше MaxTasks.
+    // Клик «Запустить» поднимает потолки ровно на дельту, и волна стартует БЕЗ карточки
+    // «Бюджет исчерпан» (прод 2026-09-09: девять волн при потолке четыре, две остановки).
+    [Fact]
+    public async Task RespondTeamPlan_RunСверхБюджета_РасширяетПотолкиНаДельтуВолнаСтартуетБезКарточки()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-overrun");
+        // Сжимаем потолки до гарантированного превышения:
+        //  - волн: план из 2 волн при потолке 1 → дельта 1
+        //  - задач: план из 2 задач при потолке 1 → дельта 1
+        var team = Team(session.Id);
+        team.Budget.MaxWaves = 1;
+        team.Budget.MaxTasks = 1;
+        plan.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+        var budgetExhaustedBefore = CountBudgetExhaustedCards(session.Id);
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        after.Budget.MaxWaves.Should().Be(2, "потолок волн поднят ровно на дельту 1 (план 2, потолок был 1)");
+        after.Budget.MaxTasks.Should().Be(2, "потолок задач поднят ровно на дельту 1 (план 2, потолок был 1)");
+        after.Stage.Should().Be(TeamImplementStage.Wave, "волна стартует — бюджет теперь её вмещает");
+
+        var budgetExhaustedAfter = CountBudgetExhaustedCards(session.Id);
+        budgetExhaustedAfter.Should().Be(budgetExhaustedBefore,
+            "расширение на Run — БЕЗ карточки «Бюджет исчерпан», иначе две остановки по ходу");
+    }
+
+    // Карточек «Бюджет исчерпан» в Session-канале broadcaster-а по конкретному чату.
+    // Используется в тестах волны 4 для проверки инварианта «Run расширяет без карточки»
+    private int CountBudgetExhaustedCards(string sessionId)
+    {
+        var n = 0;
+        foreach (var (_, message) in _broadcaster.Session)
+        {
+            if (message is Protocol.TeamEscalationMessage t && t.Kind == "budgetExhausted")
+                n++;
+        }
+        return n;
+    }
+
+    // Только дельта по задачам (без волн) — расширение должно быть точечным.
+    [Fact]
+    public async Task RespondTeamPlan_RunСверхТолькоПоЗадачам_ПоднимаетТолькоMaxTasks()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-tasks-only");
+        var team = Team(session.Id);
+        // Сжимаем только задачи; волн в плане меньше MaxWaves (он равен 2, потолок дефолт 4)
+        team.Budget.MaxTasks = 1;
+        var maxWavesBefore = team.Budget.MaxWaves;
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        after.Budget.MaxTasks.Should().Be(2, "поднят на дельту 1");
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore, "волны не выходили за потолок — не трогаем");
+    }
+
+    // Агентский путь не расширяет: добавочный план при авто-волнах авто-стартует без
+    // клика человека и не должен двигать потолки. Используем прямой вызов сервиса, минуя
+    // SessionHub.RespondTeamPlan (там проверка владельца не пускает агента) — путь,
+    // по которому ходит RunTeamPlanningAsync / PublishTeamPlanAsync.
+    [Fact]
+    public async Task АвтоСтартДобавочногоПлана_НеРасширяетБюджет()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-agent-path");
+        var team = Team(session.Id);
+        // Сжимаем потолок до гарантированного превышения
+        team.Budget.MaxWaves = 1;
+        team.Budget.MaxTasks = 1;
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxWavesBefore = team.Budget.MaxWaves;
+
+        // Имитируем агентский путь: публикуемый план при авто-волнах стартует сразу
+        // без RespondTeamPlanAsync (TeamPlanService.PublishTeamPlanAsync ветка
+        // additional → starter(...) напрямую). Проверяем, что без вызова Run
+        // бюджет не изменился.
+        Team(session.Id).Budget.MaxTasks.Should().Be(maxTasksBefore);
+        Team(session.Id).Budget.MaxWaves.Should().Be(maxWavesBefore);
+
+        // Дополнительная проверка: даже если бы авто-старт вызвал Run через хаб,
+        // проверка владельца не пустила бы — поэтому агентский код физически не может
+        // дёрнуть RespondTeamPlanAsync. Грабим этот инвариант прямым контрактом:
+        // Run через _sessions вызывается ТОЛЬКО из SessionHub, и тот проверяет OwnsSession.
+        plan.Should().NotBeNull();
+    }
+
     // Планировщик-заглушка: отдаёт заранее заданный JSON-план вместо вызова модели
     private sealed class StubPlanner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {

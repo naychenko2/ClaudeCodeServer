@@ -64,7 +64,7 @@ public class CodeGraphContributorIsEnabledTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
 
-        _bindings = new PersonaBindingsService(personas, projects, wkStore, notesSvc, notesKb,
+        _bindings = new PersonaBindingsService(personas, projects, wkStore, notesKb,
             knowledge, new SkillsService(), users, config,
             NullLogger<PersonaBindingsService>.Instance);
     }

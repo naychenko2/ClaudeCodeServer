@@ -184,6 +184,37 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
             .GetProperty("unavailableModels").EnumerateArray().Should().BeEmpty();
     }
 
+    // Пометки — админское состояние ротации: снимает их только админ, значит и видеть их
+    // должен он же. Не-админу отдаём пустой список (уровень доступа тот же, что у сброса).
+    [Fact]
+    public async Task ModelAvailability_НеАдмин_ПометокНеВидит()
+    {
+        using var withPool = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-one",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-2:OAuthToken"] = "token-two",
+                });
+            });
+        });
+        var pool = withPool.Services.GetRequiredService<ClaudeSubscriptionPool>();
+        pool.MarkModelUnavailable("claude-2", "fable", FallbackErrorClass.ModelOutOfCredits);
+        var user = await AuthenticateAsync(withPool,
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        var usage = await user.GetFromJsonAsync<JsonElement>("/api/usage");
+
+        usage.GetProperty("subscriptions").GetProperty("claude-2")
+            .GetProperty("unavailableModels").EnumerateArray().Should().BeEmpty();
+        // Сброс не-админу тоже закрыт — уровни доступа сходятся
+        var clear = await user.PostAsJsonAsync(
+            "/api/usage/subscriptions/claude-2/model-availability/clear", new { model = "fable" });
+        clear.StatusCode.Should().Be(System.Net.HttpStatusCode.Forbidden);
+    }
+
     // Опечатка в ключе подписки не должна выглядеть как успешный сброс: человек ждал бы от
     // пары работы, которой не будет (пометка на самом деле осталась висеть на другом ключе).
     [Fact]
@@ -210,13 +241,14 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // WithWebHostBuilder возвращает базовый WebApplicationFactory<Program> — расширение
     // CreateAuthenticatedClient из TestWebApplicationFactory ему недоступно, логинимся вручную.
-    private static async Task<HttpClient> AuthenticateAsync(WebApplicationFactory<Program> factory)
+    private static async Task<HttpClient> AuthenticateAsync(WebApplicationFactory<Program> factory,
+        string? username = null, string? password = null)
     {
         var client = factory.CreateClient();
         var response = await client.PostAsJsonAsync("/api/auth/login", new
         {
-            username = TestWebApplicationFactory.TestUsername,
-            password = TestWebApplicationFactory.TestPassword,
+            username = username ?? TestWebApplicationFactory.TestUsername,
+            password = password ?? TestWebApplicationFactory.TestPassword,
         });
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();

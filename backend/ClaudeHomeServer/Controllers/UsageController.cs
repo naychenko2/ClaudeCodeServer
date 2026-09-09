@@ -48,6 +48,10 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             // Чужие снапшоты per-subscription стора не попадают: ключи сторонних провайдеров
             // (уходят в блок Providers) и сироты после переименования аккаунта отсекаются.
             var named = new Dictionary<string, SubscriptionUsage>();
+            // Пометки «модель недоступна на подписке» — админское состояние ротации: снимает их
+            // только админ (ClearModelAvailability ниже), значит и видеть их должен он же.
+            // Не-админу отдаём пустой список: карточка просто не рисует блок.
+            var isAdmin = User.IsInRole("admin");
             foreach (var sub in subscriptionPool.All)
             {
                 var key = sub.Key;
@@ -63,7 +67,7 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     WeeklyUtilization: subscriptionPool.WeeklyUtilization(key),
                     // Живые пометки «модель недоступна на этой подписке»: без них модель молча
                     // не выбирается при полностью здоровой на вид подписке.
-                    UnavailableModels: subscriptionPool.ModelUnavailableMarks(key));
+                    UnavailableModels: isAdmin ? subscriptionPool.ModelUnavailableMarks(key) : []);
             }
             // Фактическая цель роутинга (куда ушёл бы новый чат) — детерминированный выбор,
             // чтобы бейдж не мигал между равными аккаунтами при обновлении экрана

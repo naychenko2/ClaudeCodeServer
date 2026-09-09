@@ -23,6 +23,24 @@
     <!-- Интеграционные тесты ConPTY: Skip.IfNot(IsWindows) — на Linux CI честный skip -->
     <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- InternalsVisibleTo на ClaudeHomeServer.Spend.Tests (Этап 5, вынос Spend):
+         Spend.Tests использует internal TestLauncherFactory / FakeHostEnvironment /
+         TestSessionBroadcaster (хелперы тестов), а Spend внутри Main вызывает
+         internal SpendController.ClampPeriod/MaxPeriodDays. Без двойного допуска
+         тесты Spend не соберутся в отдельной сборке. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Tasks — отдельная сборка (Этап 5, вынос Tasks): Tests её вертикали
+         живут в ClaudeHomeServer.Tasks.Tests; эта сборка нужна только чтобы
+         статический конструктор `SubsystemBoundaryTests`/`SubsystemBoundaryCoverageTests`
+         форс-загрузил Tasks через typeof(TaskManager).Assembly. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tasks.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
     <!-- Core — спинка (этап 3, Этап 5). Тесты ссылаются на Core-DTO

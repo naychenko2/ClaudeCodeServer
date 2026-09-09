@@ -12,7 +12,7 @@ using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services;
 
-public class SessionManager : IDisposable, ITeamNotifier,
+public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake
 {
     private class SessionEntry

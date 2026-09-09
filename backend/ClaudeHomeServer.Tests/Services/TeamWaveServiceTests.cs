@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // ждёт, пока закроются задачи предыдущей.
 // TaskExecutionService в тестах не передаём — запуск claude.exe здесь не гоняется, проверяем
 // раздачу: карточки задач, состояние режима и счётчики бюджета.
+[Collection(TestCollections.SessionStaticResolvers)]
 public class TeamWaveServiceTests : IDisposable
 {
     private readonly string _dir;

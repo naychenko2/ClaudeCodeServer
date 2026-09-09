@@ -290,7 +290,7 @@ public class TaskExecutionService
             await NotifyAsync(updated, new NotificationMessage(
                 Title: "Взял задачу в работу",
                 Body: updated.Title,
-                Url: TaskSchedulerService.TaskUrl(updated),
+                Url: TaskUrl.Of(updated),
                 Kind: "claude",
                 PersonaId: persona?.Id,
                 ProjectId: updated.ProjectId,
@@ -742,7 +742,7 @@ public class TaskExecutionService
     internal static NotificationMessage BuildExecutorStoppedNotification(TaskItem task, Persona? persona = null) => new(
         Title: "Исполнитель остановился",
         Body: $"{task.Title}: {ExecutorStopText(task.ExecutorStopReason)}. Работа не идёт, задача ждёт вас",
-        Url: TaskSchedulerService.TaskUrl(task),
+        Url: TaskUrl.Of(task),
         Kind: "claude",
         PersonaId: persona?.Id,
         ProjectId: task.ProjectId,
@@ -968,7 +968,7 @@ public class TaskExecutionService
     internal static NotificationMessage BuildStaleNotification(TaskItem task, Persona? persona = null) => new(
         Title: "Задача осталась в работе",
         Body: $"{task.Title}: исполнитель закончил и не закрыл задачу — проверьте результат",
-        Url: TaskSchedulerService.TaskUrl(task),
+        Url: TaskUrl.Of(task),
         Kind: "claude",
         PersonaId: persona?.Id,
         ProjectId: task.ProjectId,
@@ -996,7 +996,7 @@ public class TaskExecutionService
         return new NotificationMessage(
             Title: title,
             Body: body,
-            Url: TaskSchedulerService.TaskUrl(updated),
+            Url: TaskUrl.Of(updated),
             Kind: ok ? "success" : "claude",
             PersonaId: persona?.Id,
             ProjectId: updated.ProjectId,
@@ -1043,7 +1043,7 @@ public class TaskExecutionService
         Title: ok ? "Делегированная задача выполнена" : "Делегированная задача не выполнена",
         Body: task.Title,
         Url: sourceSession is null || !ok
-            ? TaskSchedulerService.TaskUrl(task)
+            ? TaskUrl.Of(task)
             : string.IsNullOrEmpty(sourceSession.ProjectId)
                 ? $"/chats/{sourceSession.Id}"
                 : $"/project/{sourceSession.ProjectId}/chat/{sourceSession.Id}",
@@ -1313,7 +1313,7 @@ public class TaskExecutionService
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(
         Title: "Ждёт ответа по задаче",
         Body: task.Title,
-        Url: TaskSchedulerService.TaskUrl(task),
+        Url: TaskUrl.Of(task),
         Kind: "claude",
         PersonaId: persona?.Id,
         ProjectId: task.ProjectId,

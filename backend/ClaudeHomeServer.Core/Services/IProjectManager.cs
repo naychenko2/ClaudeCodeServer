@@ -13,7 +13,10 @@ namespace ClaudeHomeServer.Services;
 // разрешён в CoreAllowedNamespaces сторожа CoreDll_СодержитТолькоРазрешённыеНеймспейсы.
 public interface IProjectManager
 {
-    // Возвращает проект по id или null, если у пользователя нет такого.
+    // Возвращает проект по ГЛОБАЛЬНОМУ id или null, если такого проекта нет.
+    // Владельца НЕ фильтрует (семантика перенесена 1:1 из ProjectManager.GetById):
+    // проверка ownership — на вызывающей стороне. Если id приходит из пользовательского
+    // ввода, сравни project.OwnerId с владельцем контекста, иначе отдашь чужой проект.
     Project? GetById(string id);
 
     // Возвращает все проекты указанного владельца (для SourcesFor).

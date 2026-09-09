@@ -12,14 +12,17 @@ public class TaskManager
     private readonly Lock _saveLock = new();
     private readonly IProjectEventLogService? _events;
     private readonly ITaskNotificationDispatcher? _notif;
-    private readonly PersonaManager? _personas;
+    // Узкий шов чтения персоны по id (Core): Tasks нужно только имя для лога
+    // проактивного уведомления о спавне следующего экземпляра регулярной задачи.
+    // Полный PersonaManager ради одного `GetByIdInternal` — overkill.
+    private readonly IPersonaLookup? _personas;
 
     // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
 
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
-        ITaskNotificationDispatcher? notif = null, PersonaManager? personas = null)
+        ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null)
     {
         _events = events;
         _notif = notif;
@@ -363,11 +366,11 @@ public class TaskManager
         if (!string.IsNullOrEmpty(task.PersonaId) && !string.IsNullOrEmpty(task.OwnerId))
         {
             var label = _personas?.GetByIdInternal(task.PersonaId) is { } p
-                ? PersonaManager.PersonaLabel(p) : null;
+                ? PersonaLabel.Of(p) : null;
             _ = _notif?.SendExecutionEventAsync(task.OwnerId, "",
                 label is not null ? $"{label} подготовил следующую задачу" : "Создан следующий экземпляр задачи",
                 task.Title, task.ProjectId, task.Id,
-                "task_spawned", "Спавн регулярной", TaskSchedulerService.TaskUrl(task));
+                "task_spawned", "Спавн регулярной", TaskUrl.Of(task));
         }
         return task;
     }

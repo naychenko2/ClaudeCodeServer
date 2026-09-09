@@ -7,7 +7,6 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -22,6 +21,7 @@ namespace ClaudeHomeServer.Tests.Services;
 //    не задваивает уже записанную часть: детерминированные Id + дедуп SpendStore.Record;
 // 2) own в topTurns обзора считается от ТЕКУЩЕГО пользователя, а не от фильтра среза;
 // 3) WindowClamped в Turns учитывает фильтр среза, а не любые daily-строки периода.
+[Collection(TestCollections.SessionStaticResolvers)]
 public class SpendBackfillTests : IDisposable
 {
     private readonly string _dir;
@@ -30,6 +30,7 @@ public class SpendBackfillTests : IDisposable
     private readonly ProjectManager _projectManager;
     private readonly PersonaManager _personas;
     private readonly TaskManager _tasks;
+    private readonly ITaskLookup _taskLookup;
     private readonly ChatHistoryService _history;
     private readonly SessionManager _sessions;
     private readonly ClaudeHomeServer.Services.Llm.LlmProviderRegistry _llmProviders;
@@ -55,6 +56,7 @@ public class SpendBackfillTests : IDisposable
         _projectManager = new ProjectManager(config, _userStore, appSettings);
         _personas = new PersonaManager(config);
         _tasks = new TaskManager(config, personas: _personas);
+        _taskLookup = new TaskLookupAdapter(_tasks);
         _history = new ChatHistoryService(config);
 
         var broadcaster = new TestSessionBroadcaster();
@@ -96,7 +98,11 @@ public class SpendBackfillTests : IDisposable
     }
 
     private SpendMaintenanceService NewMaintenance(SpendStore store) =>
-        new(store, _sessions, _history, _llmResolver, NullLogger<SpendMaintenanceService>.Instance);
+        new(store,
+            new SessionDirectoryAdapter(_sessions),
+            new ChatHistoryLoaderAdapter(_history),
+            _llmResolver,
+            NullLogger<SpendMaintenanceService>.Instance);
 
     private static List<StoredMessage> Turns(int count) =>
         [.. Enumerable.Range(0, count).Select(StoredMessage (i) =>
@@ -149,7 +155,11 @@ public class SpendBackfillTests : IDisposable
         var now = DateTime.UtcNow;
         store.Record(new SpendRecord { OwnerId = "admin-1", Timestamp = now, InputTokens = 100 });
         store.Record(new SpendRecord { OwnerId = "user-2", Timestamp = now, InputTokens = 50 });
-        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore, _llmResolver);
+        var analytics = new SpendAnalyticsService(store,
+            new SessionDirectoryAdapter(_sessions),
+            _projectManager, _taskLookup,
+            new PersonaLookupAdapter(_personas),
+            _userStore, _llmResolver);
         var today = DateOnly.FromDateTime(now);
 
         // Админ в scope=all: фильтр без владельца — его собственные ходы обязаны быть own
@@ -176,7 +186,11 @@ public class SpendBackfillTests : IDisposable
         store.Record(new SpendRecord { OwnerId = "u1", Timestamp = now, InputTokens = 10 });
         store.Record(new SpendRecord { OwnerId = "u2", Timestamp = now, InputTokens = 20 });
         store.RollupOlderThan(store.WindowStart);
-        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore, _llmResolver);
+        var analytics = new SpendAnalyticsService(store,
+            new SessionDirectoryAdapter(_sessions),
+            _projectManager, _taskLookup,
+            new PersonaLookupAdapter(_personas),
+            _userStore, _llmResolver);
         var from = DateOnly.FromDateTime(old);
         var to = DateOnly.FromDateTime(now);
 

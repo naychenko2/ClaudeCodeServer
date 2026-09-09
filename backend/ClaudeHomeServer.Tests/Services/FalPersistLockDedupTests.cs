@@ -40,6 +40,7 @@ internal sealed class YieldingChatHistoryService : ChatHistoryService
 // клик применился ровно один раз» под РЕАЛЬНОЙ конкуренцией (yield между Load/Save
 // создаёт окно гонки; без него Task.WhenAll над синхронными операциями выполнит их
 // инлайн и не увидит проблемы).
+[Collection(TestCollections.SessionStaticResolvers)]
 public class FalPersistLockDedupTests : IDisposable
 {
     private readonly string _dir;

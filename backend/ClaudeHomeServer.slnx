@@ -19,6 +19,10 @@
   <Project Path="ClaudeHomeServer.Reader.Tests/ClaudeHomeServer.Reader.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Skills/ClaudeHomeServer.Skills.csproj" />
   <Project Path="ClaudeHomeServer.Skills.Tests/ClaudeHomeServer.Skills.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Spend/ClaudeHomeServer.Spend.csproj" />
+  <Project Path="ClaudeHomeServer.Spend.Tests/ClaudeHomeServer.Spend.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Tasks/ClaudeHomeServer.Tasks.csproj" />
+  <Project Path="ClaudeHomeServer.Tasks.Tests/ClaudeHomeServer.Tasks.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tts/ClaudeHomeServer.Tts.csproj" />
   <Project Path="ClaudeHomeServer.Tts.Tests/ClaudeHomeServer.Tts.Tests.csproj" />

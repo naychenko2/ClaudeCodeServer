@@ -64,8 +64,15 @@ export const TeamPlanContext = createContext<TeamPlanChatContext | null>(null);
 // Обвязка карточки остановки «Командной реализации» (Э4): решение уходит в хаб
 // (кнопка + необязательный комментарий), карточка гаснет. Контекстом, как у плана —
 // карточка лежит глубоко в ленте. null — режим выключен: карточка только для чтения.
+//
+// coordinatorTurnActive — пока идёт ход-реакции координатора при открытой карточке
+// блокера, карточка показывает «Координатор разбирается». ChatPanel считает флаг
+// один раз (isWaiting && открытая карточка) и кладёт в контекст; карточка просто
+// читает. Это НЕ новое событие и не запрос — данные уже в сторе (этап 2.5:
+// убираем догадки, что делает штаб, теперь видно)
 export interface TeamEscalationChatContext {
   onRespond: (escalationId: string, actionId?: string, comment?: string) => void;
+  coordinatorTurnActive?: boolean;
 }
 export const TeamEscalationContext = createContext<TeamEscalationChatContext | null>(null);
 

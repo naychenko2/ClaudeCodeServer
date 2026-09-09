@@ -68,8 +68,9 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- === Модульность (Этап 3) ===
-       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git вынесены в собственные .csproj
+  <!-- === Модульность (Этап 3+, Этап 5)
+       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Notes/Personas/Spend/Knowledge/
+       Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks вынесены в собственные .csproj
        и ссылаются только на Core. Здесь — обратная ссылка «Main → вертикаль» ради
        регистрации подсистем в Program.cs: AddSubsystems(new VideoSubsystem(), ...).
        Это не цикл: цепочка Main → Vertical → Core → (BCL). Core не ссылается ни
@@ -92,6 +93,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.WebSearch\ClaudeHomeServer.WebSearch.csproj" />
   </ItemGroup>

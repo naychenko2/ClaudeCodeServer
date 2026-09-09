@@ -2,7 +2,6 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
@@ -115,7 +114,7 @@ public class TaskExecutionServiceTests
         n.Body.Should().Be("Задача");
         n.Kind.Should().Be("success");
         n.PersonaId.Should().BeNull();
-        n.Url.Should().Be(TaskSchedulerService.TaskUrl(task));
+        n.Url.Should().Be(TaskUrl.Of(task));
     }
 
     [Fact]
@@ -168,7 +167,7 @@ public class TaskExecutionServiceTests
         var n = TaskExecutionService.BuildDelegatorNotification(task, ok: false, delegator, source);
 
         n.Title.Should().Be("Делегированная задача не выполнена");
-        n.Url.Should().Be(TaskSchedulerService.TaskUrl(task));
+        n.Url.Should().Be(TaskUrl.Of(task));
     }
 
     [Fact]

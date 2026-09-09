@@ -130,9 +130,9 @@ public class TaskSchedulerServiceTests
     public void TaskUrl_ПроектнаяИЛичная_РазныеДиплинки()
     {
         var personal = new TaskItem { Title = "t" };
-        TaskSchedulerService.TaskUrl(personal).Should().Be($"/calendar/task/{personal.Id}");
+        TaskUrl.Of(personal).Should().Be($"/calendar/task/{personal.Id}");
 
         var project = new TaskItem { Title = "t", ProjectId = "p1" };
-        TaskSchedulerService.TaskUrl(project).Should().Be($"/project/p1/task/{project.Id}");
+        TaskUrl.Of(project).Should().Be($"/project/p1/task/{project.Id}");
     }
 }

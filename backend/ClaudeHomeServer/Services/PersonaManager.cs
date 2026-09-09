@@ -11,7 +11,11 @@ namespace ClaudeHomeServer.Services;
 
 // CRUD персон с изоляцией per-owner. Хранилище — data/personas.json
 // (образец: ProjectManager + JsonFileStore). Все запросы фильтруются по OwnerId.
-public class PersonaManager
+// Реализует IPersonaLookup (Core) для выноса Tasks (Этап 5): TaskManager/Spend читают
+// персону по id через узкий шов, минуя проверки доступа и без зависимости на полный
+// менеджер. `GetByIdInternal` уже был здесь — оформлен как реализация шва без правок
+// логики.
+public class PersonaManager : IPersonaLookup
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -335,9 +339,13 @@ public class PersonaManager
         return persona;
     }
 
-    // Подпись персоны для логов: «Роль (Имя)» либо просто имя
-    internal static string PersonaLabel(Persona p) =>
-        string.IsNullOrEmpty(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+    // Подпись персоны для логов: «Роль (Имя)» либо просто имя.
+    // Утилита форматирования переехала в Core как `PersonaLabel.Of` (Этап 5, вынос Tasks):
+    // несколько вертикалей (Tasks/Spend/DailyBriefing/Team/Memory) подписывали персону
+    // в логах и уведомлениях и ради этого тащили `PersonaManager` целиком. Здесь —
+    // тонкий форвардер для совместимости с прежними вызывающими, вычищается в следующих
+    // волнах (за рамками данной задачи).
+    internal static string PersonaLabel(Persona p) => global::ClaudeHomeServer.Services.PersonaLabel.Of(p);
 
     // --- Подключаемая команда «Пантеон OmO» (built-in-подход, как у самих OmO) ---
 

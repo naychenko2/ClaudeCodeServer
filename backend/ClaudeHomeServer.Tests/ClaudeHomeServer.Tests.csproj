@@ -33,6 +33,13 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Tasks — отдельная сборка (Этап 5, вынос Tasks): Tests её вертикали
+         живут в ClaudeHomeServer.Tasks.Tests; эта сборка нужна только чтобы
+         статический конструктор `SubsystemBoundaryTests`/`SubsystemBoundaryCoverageTests`
+         форс-загрузил Tasks через typeof(TaskManager).Assembly. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tasks.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />

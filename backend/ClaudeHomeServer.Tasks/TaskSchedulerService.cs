@@ -1,7 +1,6 @@
-﻿using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
@@ -121,7 +120,7 @@ public class TaskSchedulerService(
         await SendNotificationAsync(updated, new NotificationMessage(
             Title: "Напоминание о задаче",
             Body: $"{updated.Title} — срок {dueText}",
-            Url: TaskUrl(updated),
+            Url: TaskUrl.Of(updated),
             Kind: "reminder"));
         // Синхронизируем сторы клиентов (ReminderSentAt изменился)
         await broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
@@ -135,9 +134,5 @@ public class TaskSchedulerService(
         await notif.SendNotificationMessageAsync(task.OwnerId!, message, sendPush: true);
     }
 
-    // Hash-диплинк на задачу: проектная → детали в проекте, личная → модалка в календаре
-    internal static string TaskUrl(TaskItem task) =>
-        task.ProjectId is null
-            ? $"/calendar/task/{task.Id}"
-            : $"/project/{task.ProjectId}/task/{task.Id}";
+    // Hash-диплинк на задачу вынесен в Core (`Services/TaskUrl.Of`) — Этап 5, вынос Tasks.
 }

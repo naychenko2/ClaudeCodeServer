@@ -73,6 +73,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1442,69 +1443,46 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Protocol.TerminalRenamedMessage",
                 }),
         },
-        // Tasks — вертикаль задач с доской агентов (BoardService) и утренним брифингом
-        // (DailyBriefingService, волна 4C, шаг 1).
-        // Префикс-швы:
+        // Tasks — вертикаль задач с доской агентов (Этап 5, вынос вертикали в
+        // отдельный csproj). После выноса физически не может ссылаться на Main
+        // (нет ProjectReference), и весь прежний список допусков закрыт контрактами
+        // из Core, которые проходят более ранний чек `IsCoreAssembly`:
+        //  - `SessionManager` → `ISessionDirectory` (3 метода по факту вызовов);
+        //  - `PersonaManager` → `IPersonaLookup` (1 метод);
+        //  - `NotificationService` → `ITaskNotificationDispatcher` (2 метода);
+        //  - `TaskExecutionService` → `ITaskExecutor` (2 метода);
+        //  - `PersonaAutomationService` → `IPersonaAutomationRunner` (1 метод);
+        //  - `IProjectEventLogService` — уже в Core с волны 1 Skills;
+        //  - `IHubContext<SessionHub>` → `ISessionBroadcaster` (волна 4C, Ф4);
+        //  - `IUserStore`/`IProjectManager`/`IConfiguration` — Core-примитивы;
+        //  - `Protocol.NotificationMessage` — в Core, ловится IsCoreAssembly;
+        //  - `ModelTiers`/`ModelTier`/`ExecutorStopClassifier` — переехали в Core
+        //    в этой же волне (`Models`-слой и `Services`-слой примитивов спины).
+        // Префиксы-швы (после выноса):
         // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для `TaskAiService`
-        //    (генерация описания/подзадач/классификация/нормализация/дедуп) и
-        //    `DailyBriefingService` (утренний брифинг) — префикс-шов, как у
-        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`.
-        // 2) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для `TaskSchedulerService`
-        //    (`BroadcastTaskChangedAsync`/напоминания) и `DailyBriefingService`
-        //    (событие `task_reminder` в ленту).
-        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»
-        // (по аналогии с `Dossiers`/`Git`/`Spend`/`Knowledge`):
-        // 1) `SessionManager` — `TaskSchedulerService` цикл «до готово» вызывает
-        //    `TaskExecutionService` для автозапуска исполнителя; `BoardService` берёт
-        //    живые сессии по id; `DailyBriefingService` использует для поиска чатов
-        //    владельца. `SessionManager` остаётся backbone-типом корня.
-        // 2) `ProjectManager` — `TaskAiService` берёт контекст проекта (CLAUDE.md);
-        //    `DailyBriefingService` перебирает проекты владельца для git-активности;
-        //    `TaskManager.LogTask` пишет события в проектный лог
-        //    (TaskManager.cs:~LogTask, опциональный параметр ctor).
-        // 3) `UserStore` — перебор пользователей в `TaskSchedulerService.TickAsync` и
-        //    `DailyBriefingService.GenerateAsync`/`GitActivityAsync`.
-        // 4) `NotificationService` — `SendNotificationMessageAsync` в TaskSchedulerService
-        //    и DailyBriefingService.NotifyAsync (напоминания + «доброе утро»).
-        // 5) `AppSettingsService` — гейт `DailyBriefingEnabled` (DailyBriefingService.MaybeRunScheduledAsync).
-        // 7) `ProjectEventLogService` — запись событий задач в проектный лог
-        //    (`TaskManager.LogTask`) + чтение событий за сутки (`DailyBriefingService`).
-        // 8) `PersonaManager` — `BoardService` берёт персоны для подписи колонки;
-        //    `DailyBriefingService` находит персона-секретаря; `TaskManager` —
-        //    опциональная зависимость для лога.
-        // 9) `PushService` — `DailyBriefingService.GenerateAsync` шлёт web-push по расписанию.
-        // 10) `NotesService` — `DailyBriefingService.BuildAndWriteAsync` пишет в дневник
-        //     (`GetOrCreateDaily`/`Update`). Пока остаётся в корне (следующий шаг
-        //     волны 4C).
-        // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage` материализуется
-        // как параметр public-метода `TaskSchedulerService.SendNotificationAsync`
-        // (см. `PushService`/`NotificationService`). Остальные Protocol-ссылки идут
-        // через тела методов и async-state-машины; префикс `ClaudeHomeServer.Protocol`
-        // снят (волна 3), чтобы сторож ловил новые зависимости.
+        //    (генерация описания/подзадач/классификация/нормализация/дедуп через
+        //    `LocalActionCatalog.TaskAi/TaskClassify/...`). Префикс-шов, как у
+        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Spend`.
+        // 2) `ClaudeHomeServer.Hubs` — больше не нужен: фактических ссылок на
+        //    `IHubContext<SessionHub>` в Tasks нет (комментарий прежний, наследие Ф4;
+        //    чистый — `ISessionBroadcaster` (Core) дёргается из TasksScheduler через
+        //    `IHubContext` теперь неявно через Core-шов).
         // Зафиксированные швы (IL-скан видит declaring-типы):
-        // - `Tasks.TaskManager` ставит три резолвера на `Models.Session`
+        // - `Tasks.TaskManager` ставит три статических резолвера на `Models.Session`
         //   (`Session.TaskSourceSessionResolver`/`TaskDelegationDepthResolver`/
-        //   `TaskDoneResolver`) в конструкторе TaskManager.cs:32-36. Связь Tasks →
+        //   `TaskDoneResolver`) в конструкторе TaskManager.cs. Связь Tasks →
         //   Models видна через `ClaudeHomeServer.Models` (SharedAllowedPrefixes);
-        //   мутация статической модели зафиксирована в `TasksSubsystem.Register`.
-        // - `Services.TaskExecutionService` (корень, остаётся до этапа 4) зовёт
-        //   `Services.Tasks.TaskSchedulerService.TaskUrl(...)` статически из 6 мест
-        //   тел методов — Tasks-тип виден IL-скану из корневого типа.
-        //   Когда `TaskExecutionService` переедет, шов сам разорвётся.
-        // - `Services.PersonaAutomationService` (корень, остаётся в корне до этапа 4)
-        //   зовёт `Services.Tasks.TaskDueCalculator.ResolveTimeZone(...)` в теле
-        //   метода (`PersonaAutomationService.cs:531`). Аналогичный шов
-        //   root → Tasks-тип через статику; разорвётся при переезде Persona.
-        // - `Services.Tasks.TaskManager` зовёт `Services.ModelTiers.TryParse(...)` в
-        //   теле метода (`TaskManager.cs:112,250`) — root-тип `ModelTiers`
-        //   (AppSettingsService.cs:15). Шов Tasks → корень через статику.
-        // - `Services.Tasks.TaskManager` зовёт `Services.ExecutorStopClassifier.IsTerminal(...)`
-        //   в теле метода (`TaskManager.cs:429`) — root-тип `ExecutorStopClassifier`
-        //   (ExecutorStopClassifier.cs:16). Шов Tasks → корень через статику.
-        // - Прежний шов `Services.Tasks.TaskSchedulerService → Hubs.TaskHubExtensions`
-        //   снят в Этап 5, Ф4 (extension-метод BroadcastTaskChangedAsync удалён
-        //   вместе с файлом Hubs/TaskHubExtensions.cs; TaskSchedulerService переведён
-        //   на ISessionBroadcaster.Core).
+        //   мутация статической модели — фиксированное исключение.
+        // Мёртвые допуски сняты ревью (2026-09-09): формально сторож оставался зелёным
+        // и с ними, но был ШИРЕ реальной поверхности зависимостей Tasks после выноса —
+        // иначе вертикаль могла бы прикинуться «спиной» в обход швов. Та же ловушка,
+        // что поймана на Notes после её выноса.
+        // Сюда же — снятый префикс `ClaudeHomeServer.Services.Llm`: он стоял ради
+        // `ICheapTextRunner` и `LocalActionCatalog`, но оба типа давно переехали в
+        // Core (`Core/Services/Llm/`), и Tasks берёт их ОТТУДА. Мутация подтверждает:
+        // без допуска сторож зелёный. ТАКОЙ ЖЕ мёртвый допуск остался ещё у пяти
+        // вертикалей (Backgrounds, ProjectIcons, Memory, Docs, Changelog) — снимается
+        // отдельной уборкой, чтобы не смешивать её с выносом Tasks.
         new object[]
         {
             new VerticalBoundary(
@@ -1514,69 +1492,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Tasks",
-                        "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    // Корневые «спинки» (см. комментарий выше 1–10).
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                    // Волна 1 Tasks (2026-09-08) сняла три допуска —
-                    // NotificationService, TaskExecutionService, PersonaAutomationService:
-                    // вертикаль ходит к ним через швы ITaskNotificationDispatcher,
-                    // ITaskExecutor, IPersonaAutomationRunner. Мёртвость каждого
-                    // проверена мутацией: сторож остаётся зелёным без них.
-                    // DailyBriefingService ниже — допуск ЖИВОЙ (мутация роняет тест):
-                    // TasksSubsystem регистрирует его конкретным типом.
-                    "ClaudeHomeServer.Services.AppSettingsService",
-                    "ClaudeHomeServer.Services.ProjectEventLogService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.PushService",
-                    // Notes — вертикаль (волна 4C, шаг 2): `DailyBriefingService.BuildAndWriteAsync`
-                    // пишет в дневниковую заметку (`GetOrCreateDaily`/`Update`).
-                    "ClaudeHomeServer.Services.Notes.NotesService",
-                    // ⚠ TaskSchedulerService (Tasks) держит в ctor
-                    // `TaskExecutionService executor` (полный жизненный цикл хода:
-                    // автозапуск Claude-исполнителя + страховка незакрытой задачи)
-                    // и `PersonaAutomationService automation` (collaborator проактивности).
-                    // Оба остаются в корне до этапа 4 (расщепление SessionManager).
-                    // Когда `TaskExecutionService`/`PersonaAutomationService` уедут —
-                    // эти точечные допуски уйдут вместе с ними.
-                    // ⚠ Шов `Tasks → Models.Session`: три статических резолвера в
-                    // TaskManager.cs:32-36. Контракт: мутация проходит до первого
-                    // использования (TaskManager — singleton, инстанс строится при
-                    // первом резолве из контроллеров/hosted-сервисов; Backbone
-                    // SessionManager — тоже singleton, формирует сессии после этого).
-                    // Префикс `ClaudeHomeServer.Models` уже открыт через SharedAllowedPrefixes,
-                    // но сам факт мутации статической модели чужой вертикали фиксируем
-                    // отдельным комментарием, чтобы ревью и расширение сторожа до IL видели
-                    // волюнтаристский шов. Future-proof: свести к интерфейсу
-                    // `ITaskFacts { string? SourceSession(string taskId); bool Done(string taskId); ... }`
-                    // и инжектить в Session — отдельная задача (этап 4).
-                    // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage`
-                    // в публичной сигнатуре `TaskSchedulerService.SendNotificationAsync`.
-                    "ClaudeHomeServer.Protocol.NotificationMessage",
-                    // ⚠ Шов `Tasks → Models`-слой через `ModelTiers`/`ExecutorStopClassifier`
-                    // (root-статика, см. комментарий выше). Пока объявляем как точечные
-                    // имена; возможный путь — отдельный мини-шейп вроде `ITaskModelTierPolicy`.
-                    "ClaudeHomeServer.Services.ModelTiers",
-                    // ⚠ IL-видимость (задача `8beee75e`): `ModelTier` enum
-                    // материализуется в поле async-state-машины `TaskManager`
-                    // через `ModelTiers.TryParse`. Точечный допуск.
-                    "ClaudeHomeServer.Services.ModelTier",
-                    "ClaudeHomeServer.Services.ExecutorStopClassifier",
-                    // DailyBriefingService (Этап 5, волна C): фасад поперёк Tasks+Notes+Llm,
-                    // сидит в корне Services. Tasks зовёт его через
-                    // TaskSchedulerService.Зависимости от «спинки» — легитимные.
-                    "ClaudeHomeServer.Services.DailyBriefingService",
-                    // TaskHubExtensions удалён (Этап 5, Ф4): все потребители
-                    // (TaskSchedulerService, TasksController, Mcp-тулсеты) переехали
-                    // на ISessionBroadcaster. Шов `Tasks → Hubs` через шов-интерфейс
-                    // Core (см. ISessionBroadcaster), а не через extension-метод.
-                }),
+                Array.Empty<string>()),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
         // (`[[wikilinks]]`/backlinks/граф/комментарии), AI-сводки, синк с Dify,

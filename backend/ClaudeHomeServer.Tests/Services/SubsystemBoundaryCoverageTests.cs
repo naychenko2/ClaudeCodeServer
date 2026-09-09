@@ -40,6 +40,7 @@ public class SubsystemBoundaryCoverageTests
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
     }
 
     [Fact]

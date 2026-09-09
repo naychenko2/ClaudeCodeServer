@@ -429,7 +429,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var items = await _notifStore.GetListAsync(task.OwnerId!);
         items.Should().ContainSingle("уведомление о провале тоже одно");
         items[0].Title.Should().Be("Делегированная задача не выполнена");
-        items[0].Url.Should().Be(TaskSchedulerService.TaskUrl(_tasks.GetById(task.Id)!),
+        items[0].Url.Should().Be(TaskUrl.Of(_tasks.GetById(task.Id)!),
             "доклада в исходном чате нет — разбираться идём в карточку задачи");
     }
 

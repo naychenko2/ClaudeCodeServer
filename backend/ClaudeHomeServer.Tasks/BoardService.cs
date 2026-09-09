@@ -4,18 +4,17 @@ namespace ClaudeHomeServer.Services.Tasks;
 
 // Диспетчерская доска агентов: агрегирует задачи с исполнителем Claude/персона
 // и их живые сессии, классифицирует по колонкам (очередь/работает/ждёт/готово).
-// Данные — только чтение из существующих TaskManager + SessionManager.
+// Данные — только чтение из существующих TaskManager + ISessionDirectory
+// (Core-шов для выноса вертикали, см. ISessionDirectory.cs).
 public class BoardService
 {
     private readonly TaskManager _tasks;
-    private readonly SessionManager _sessions;
-    private readonly PersonaManager _personas;
+    private readonly ISessionDirectory _sessions;
 
-    public BoardService(TaskManager tasks, SessionManager sessions, PersonaManager personas)
+    public BoardService(TaskManager tasks, ISessionDirectory sessions)
     {
         _tasks = tasks;
         _sessions = sessions;
-        _personas = personas;
     }
 
     /// <summary>

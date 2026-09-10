@@ -1666,6 +1666,11 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Mcp",
+        // Этап 5, волна 5б (Llm): LoopbackProxyBypass — env-утилита спины, переехала из
+        // Services/Mcp/Http вертикали. Никаких чужих using (только BCL), один call-site
+        // (ClaudeSession), и лежит по теме, а не по слою. namespace сохранён ради
+        // call-site и обоих тестов.
+        "ClaudeHomeServer.Services.Mcp.Http",
         // Этап 3, волна 1 (Skills): ICheapTextRunner/OneShotResult/OneShotUsage/
         // LlmTimeoutException переехали в Core, чтобы вертикали (Skills, Git, Notes, Tasks)
         // могли зависеть от шва без ProjectReference на Main.

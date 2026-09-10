@@ -23,8 +23,9 @@ public class SessionSummaryService(
     ISessionBroadcaster broadcaster,
     NotificationService notif, IConfiguration config,
     ILogger<SessionSummaryService> logger, NotesService? notes = null,
-    // Подсистема Notes отключаемая: null, если выключена (тогда notes тоже null,
-    // и SummarizeAsync кидает SummaryGenerationException раньше, чем дойдёт до kb).
+    // Подсистема Notes отключаемая: null, если выключена. Проверка notes is null стоит
+    // ПЕРВОЙ в SummarizeAsync (после inFlight), чтобы при выключенной подсистеме не
+    // платить за LLM-конспект, который некуда сохранить; kb тоже null и зовётся через `?.`.
     NotesKnowledgeService? kb = null)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
@@ -47,6 +48,12 @@ public class SessionSummaryService(
             throw new SummaryInProgressException();
         try
         {
+            // Подсистема Notes отключена — конспект сохранять некуда. Проверка стоит
+            // ДО платного cheap.RunAsync: иначе пользователь платит за LLM-конспект,
+            // который гарантированно будет выброшен (эталон — DailyBriefingService).
+            if (notes is null)
+                throw new SummaryGenerationException("Подсистема Notes отключена — сохранение итога недоступно");
+
             var history = await sessions.GetHistoryAsync(sessionId);
             var transcript = BuildTranscript(history, TranscriptBudget);
             if (string.IsNullOrWhiteSpace(transcript))
@@ -68,8 +75,6 @@ public class SessionSummaryService(
                 throw new SummaryGenerationException("Модель вернула пустой конспект");
 
             // Существующая заметка-итог обновляется (заголовок не трогаем — пользователь мог переименовать)
-            if (notes is null)
-                throw new SummaryGenerationException("Подсистема Notes отключена — сохранение итога недоступно");
             NoteDetail note;
             var isUpdate = session.SummaryNoteId is not null
                 && notes.GetDetail(ownerId, session.SummaryNoteId) is not null;

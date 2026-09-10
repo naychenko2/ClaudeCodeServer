@@ -108,7 +108,9 @@ internal sealed class TeamStateService
 
     // Считает MaxWavesAfter/MaxTasksAfter в Budget: 0 — плана нет (плашка скрывается).
     // Вызывается на каждом broadcast'е, чтобы дельта всегда была свежей — потолок могли
-    // расширить через addBudget, а план с тех пор не менялся.
+    // расширить через addBudget, а план с тех пор не менялся. Формула — PlanShortfall
+    // (M1 фикс-волны 4 team-blocker-honest): единая точка с автоматическим расширением
+    // в TeamDecisionService, без неё две ветки расходились (дефект c156193b).
     private async Task FillAfterBudgetAsync(string sessionId, SessionTeamImplement ti)
     {
         ti.Budget.MaxWavesAfter = 0;
@@ -118,10 +120,10 @@ internal sealed class TeamStateService
         if (plan is null) return;
         var plannedWaves = plan.Subtasks.Count == 0 ? 0 : plan.Subtasks.Max(s => s.Wave);
         var plannedTasks = plan.Subtasks.Count;
-        var wavesLeft = Math.Max(0, ti.Budget.MaxWaves - ti.Budget.WavesUsed);
-        var tasksLeft = Math.Max(0, ti.Budget.MaxTasks - ti.Budget.TasksUsed);
-        ti.Budget.MaxWavesAfter = ti.Budget.MaxWaves + Math.Max(0, plannedWaves - wavesLeft);
-        ti.Budget.MaxTasksAfter = ti.Budget.MaxTasks + Math.Max(0, plannedTasks - tasksLeft);
+        ti.Budget.MaxWavesAfter = ti.Budget.MaxWaves
+            + TeamImplementBudget.PlanShortfall(ti.Budget.MaxWaves, ti.Budget.WavesUsed, plannedWaves);
+        ti.Budget.MaxTasksAfter = ti.Budget.MaxTasks
+            + TeamImplementBudget.PlanShortfall(ti.Budget.MaxTasks, ti.Budget.TasksUsed, plannedTasks);
     }
 
     // Бюджет итерации из дефолтов плана с optional override из конфига TeamImplement:Max*

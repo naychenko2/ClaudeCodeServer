@@ -383,12 +383,15 @@ internal sealed class TeamDecisionService
                     // под-задачу (TeamWaveService.StartWaveCoreAsync) и реизиссу
                     // (DecideReissueAsync). План флагманского случая (9 волн / 27 задач)
                     // при дефолте MaxRuns=20 упирался в третий счётчик на 6–7 волне.
-                    var remainingTasks = Math.Max(0, t.Budget.MaxTasks - t.Budget.TasksUsed);
-                    var remainingWaves = Math.Max(0, t.Budget.MaxWaves - t.Budget.WavesUsed);
-                    var remainingRuns = Math.Max(0, t.Budget.MaxRuns - t.Budget.RunsUsed);
-                    var deltaTasks = Math.Max(0, plan.Subtasks.Count - remainingTasks);
-                    var deltaWaves = Math.Max(0, plan.WaveCount - remainingWaves);
-                    var deltaRuns = Math.Max(0, plan.Subtasks.Count - remainingRuns);
+                    // Формула PlanShortfall — единая точка с TeamStateService.FillAfterBudgetAsync
+                    // (M1 фикс-волны 4 team-blocker-honest): раньше формула жила в двух местах
+                    // и разъезжалась тихо, как разъехалась в дефекте c156193b.
+                    var deltaTasks = TeamImplementBudget.PlanShortfall(
+                        t.Budget.MaxTasks, t.Budget.TasksUsed, plan.Subtasks.Count);
+                    var deltaWaves = TeamImplementBudget.PlanShortfall(
+                        t.Budget.MaxWaves, t.Budget.WavesUsed, plan.WaveCount);
+                    var deltaRuns = TeamImplementBudget.PlanShortfall(
+                        t.Budget.MaxRuns, t.Budget.RunsUsed, plan.Subtasks.Count);
                     t.Budget.MaxTasks += deltaTasks;
                     t.Budget.MaxWaves += deltaWaves;
                     t.Budget.MaxRuns += deltaRuns;

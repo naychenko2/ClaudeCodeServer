@@ -35,6 +35,8 @@ export function formatSubscriptionMeta(option: ProviderFallbackOption): string {
 // сведены к одной формулировке «Исчерпан лимит» — обе означают исчерпанную квоту, различие
 // не для пользователя. provider_error — это в первую очередь 529/500 перегруженного
 // эндпоинта, а не выключенный провайдер: формулировка согласована с текстом маркера.
+// model_no_access и model_out_of_credits — отказы ПО МОДЕЛИ, а не по квоте подписки: сводить
+// их к «Исчерпан лимит» нельзя, лечатся они по-разному (сменить подписку / пополнить кредиты).
 const REASON_LABEL: Record<string, string> = {
   rate_limit: 'Исчерпан лимит',
   usage_limit: 'Исчерпан лимит',
@@ -42,6 +44,8 @@ const REASON_LABEL: Record<string, string> = {
   unreachable: 'Эндпоинт недоступен',
   context_overflow: 'Контекст не поместился',
   auth_failure: 'Ошибка авторизации',
+  model_no_access: 'Нет доступа к модели',
+  model_out_of_credits: 'Нужны кредиты',
 };
 
 export function providerSwitchReasonLabel(reason: string | undefined, fallback: string | undefined): string | undefined {
@@ -59,11 +63,68 @@ const SWITCH_CAUSE: Record<string, string> = {
   unreachable: 'не отвечал',
   context_overflow: 'не вместил контекст',
   auth_failure: 'не пустил по авторизации',
+  model_no_access: 'недоступен на этой подписке',
+  model_out_of_credits: 'остался без кредитов',
 };
 
 export function modelSwitchHeadline(reason: string | undefined, previousLabel: string, modelLabel: string): string {
   const cause = (reason && SWITCH_CAUSE[reason]) ?? 'был недоступен';
   return `${previousLabel} ${cause} — ответ продолжен на ${modelLabel}`;
+}
+
+// === Пометки «модель недоступна на подписке» (GET /api/usage → unavailableModels) ===
+// Отдельные формулировки, а не SWITCH_CAUSE: там мужской род под склейку «{модель}
+// {причина}», здесь строка идёт после тире и описывает состояние пары, а не действие.
+
+const MODEL_UNAVAILABLE_REASON: Record<string, string> = {
+  model_no_access: 'нет доступа на этом плане',
+  model_out_of_credits: 'нет кредитов',
+};
+
+export function modelUnavailableReason(reason: string | undefined): string {
+  return (reason && MODEL_UNAVAILABLE_REASON[reason]) ?? 'недоступна';
+}
+
+// Имя модели для пометки: id приходит нормализованным (нижний регистр, суффикс окна
+// «opus[1m]»), а каталог знает такой id не всегда — суффикс проставляет CLI. Неизвестный
+// id с суффиксом сводим к базовому алиасу и дописываем окно: «Opus 5 (1M)» вместо
+// «opus[1m]». Резолвер передаётся параметром — функция остаётся чистой (тест без каталога).
+export function unavailableModelName(model: string, resolve: (value: string) => string): string {
+  const direct = resolve(model);
+  if (direct !== model) return direct;
+  const m = /^(.+)\[1m\]$/i.exec(model);
+  if (!m) return model;
+  const base = resolve(m[1]);
+  return base === m[1] ? model : `${base} (1M)`;
+}
+
+// Момент следующей автопроверки пары: сегодня — «в 21:40», завтра — «завтра в 14:10»,
+// дальше — «12 сент. в 14:10». Не fmtReturnTime: у пометок TTL до суток, поэтому «завтра» —
+// самый частый случай, и голая дата вместо него читается хуже. Дата не разобралась — пусто.
+export function fmtRecheckTime(until: string, now: number = Date.now()): string {
+  const dt = new Date(until);
+  if (isNaN(dt.getTime())) return '';
+  const hhmm = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const today = new Date(now);
+  if (dt.toDateString() === today.toDateString()) return `в ${hhmm}`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (dt.toDateString() === tomorrow.toDateString()) return `завтра в ${hhmm}`;
+  return `${dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} в ${hhmm}`;
+}
+
+// Строка пометки целиком: «Fable 5.1 — нет кредитов, проверим снова в 21:40».
+// Срок не разобрался — обещание автопроверки не дописываем: время неизвестно, и «проверим
+// снова» без него превращается в пустой звук.
+export function modelUnavailableText(
+  name: string,
+  reason: string | undefined,
+  until: string | undefined,
+  now: number = Date.now(),
+): string {
+  const head = `${name} — ${modelUnavailableReason(reason)}`;
+  const when = until ? fmtRecheckTime(until, now) : '';
+  return when ? `${head}, проверим снова ${when}` : head;
 }
 
 // === Доступность провайдеров для карточки ===

@@ -4,10 +4,10 @@
 // состояния: загрузка/ошибка/недоступно/готово. Поверхность — percent-окна и здоровье
 // FreeLLM; count-окна, тренд, кабинет, тариф и подписка-специфика — в раскрытии.
 import { useEffect, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { Check, ChevronRight, Copy, ExternalLink, RotateCw } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Dot, IconButton } from '../../components/ui';
+import { Button, Dot, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { fmtReset } from '../../lib/rateLimit';
 import { QuotaWindow, CountSegments, type QuotaWindowView } from './QuotaWindow';
@@ -20,6 +20,14 @@ export interface FreshnessSpec {
   dot: string;        // цвет точки: success/warning/textMuted
   text: string;       // «3 мин назад» / «на 14:20» / «по ходам · 2 ч назад»
   textTone?: string;  // цвет подписи (по умолчанию textMuted; при stale — warningText)
+}
+
+// Строка блока «Модели недоступны»: готовый человеческий текст пометки + сырой id модели
+// (его ждёт эндпоинт досрочного сброса). Текст собирает QuotasTab — карточка остаётся
+// разметкой без знания о причинах и сроках.
+export interface UnavailableModelRow {
+  model: string;
+  text: string;
 }
 
 export interface HealthSpec {
@@ -53,6 +61,13 @@ export interface ProviderCardData {
   health?: HealthSpec | null;        // здоровье FreeLLM (провайдеры)
   hasExhausted: boolean;             // исчерпано ли окно → янтарный бордер
   exhaustedResetAt?: string | null;  // когда отпустит исчерпанное окно (провайдеры, ISO)
+  // Пометки «модель недоступна на этой подписке» — на поверхности, а не в раскрытии:
+  // сама карточка при этом выглядит здоровой (в ротации, лимит не исчерпан), и без
+  // строки человек не понимает, почему модель молча не выбирается. Пусто — блока нет
+  unavailableModels?: UnavailableModelRow[];
+  // Досрочный сброс пометки (админ); undefined — кнопки нет. Промис — чтобы кнопка
+  // держала «загрузку» до фактического ответа сервера
+  onRecheckModel?: (model: string) => Promise<void>;
   // === раскрытие ===
   expandable: boolean;
   countWindows?: QuotaWindowView[];  // count-окна сегментами (провайдеры)
@@ -319,6 +334,11 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
         <div style={{ marginTop: 6, fontSize: FS.xs, color: C.textMuted }}>{data.hint}</div>
       )}
 
+      {/* Модели, недоступные на этой подписке (пометки пула) */}
+      {!!data.unavailableModels?.length && (
+        <UnavailableModels rows={data.unavailableModels} onRecheck={data.onRecheckModel} />
+      )}
+
       {/* Раскрытие: count-окна/тренд/кабинет (провайдеры) + тариф/порог/свежесть/команда (подписки) */}
       {open && clickable && (
         <div style={{ marginTop: 10, borderTop: `1px dashed ${C.dashed}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -373,6 +393,46 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
           сброс {fmtReset(data.exhaustedResetAt ?? undefined)}
         </div>
       )}
+    </div>
+  );
+}
+
+// Блок «Модели недоступны»: живые пометки пары «подписка × модель». Тон нейтральный
+// (пунктирный разделитель, приглушённый текст), без янтаря и красного: это не поломка
+// подписки, а свойство пары — остальные модели на ней работают.
+function UnavailableModels({ rows, onRecheck }: {
+  rows: UnavailableModelRow[];
+  onRecheck?: (model: string) => Promise<void>;
+}) {
+  // Кнопка живёт внутри кликабельной карточки: без stopPropagation каждое «Проверить
+  // сейчас» заодно сворачивало бы её раскрытие. Проверки идут независимо друг от друга
+  // (список занятых моделей, а не один флаг на блок): пометок у подписки бывает две, и
+  // общий флаг превращал бы клик по второй строке в молчаливый no-op при живой кнопке.
+  const [busy, setBusy] = useState<readonly string[]>([]);
+  const recheck = (e: MouseEvent, model: string) => {
+    e.stopPropagation();
+    if (!onRecheck || busy.includes(model)) return;
+    setBusy(b => [...b, model]);
+    onRecheck(model).finally(() => setBusy(b => b.filter(m => m !== model)));
+  };
+  return (
+    <div style={{ marginTop: SP.sm, borderTop: `1px dashed ${C.dashed}`, paddingTop: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+      <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.textSecondary }}>Модели недоступны</span>
+      {rows.map(r => (
+        // flexWrap: на 360 CSS-пикселях строка пометки и кнопка в один ряд не помещаются —
+        // кнопка уезжает на вторую строку вместо того, чтобы сжимать текст до многоточия
+        <div key={r.model} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{ flex: '1 1 140px', minWidth: 0, fontSize: FS.xs, color: C.textMuted }}>{r.text}</span>
+          {onRecheck && (
+            <Button size="xs" variant="ghost" loading={busy.includes(r.model)}
+              onClick={e => recheck(e, r.model)}
+              style={{ flexShrink: 0 }}
+              title="Снять пометку и попробовать модель на этой подписке прямо сейчас">
+              Проверить сейчас
+            </Button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

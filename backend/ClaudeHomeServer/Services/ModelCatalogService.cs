@@ -286,9 +286,10 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
             {
                 var value = m.TryGetProperty("value", out var v) ? v.GetString() : null;
                 if (string.IsNullOrWhiteSpace(value)) continue;
-                // Тир-алиас с окном (opus[1m]) и базовый алиас (opus) — две разные позиции: окно
-                // резолвится в рантайме по способности пула (ClaudeSubscriptionPool.ResolveWindowAlias),
-                // поэтому каталог отдаёт обе; дедуп ловит лишь точные коллизии value.
+                // Тир-алиас с окном (opus[1m]) и базовый алиас (opus) — две разные позиции:
+                // способность пула обслужить окно проверяется в рантайме
+                // (ClaudeSubscriptionPool.CanServeWindow1M), поэтому каталог отдаёт обе;
+                // дедуп ловит лишь точные коллизии value.
                 if (!seen.Add(value)) continue;
                 var displayName = m.TryGetProperty("displayName", out var d) ? d.GetString() : null;
                 var description = m.TryGetProperty("description", out var ds) ? ds.GetString() : null;

@@ -185,6 +185,9 @@ builder.Services.AddSingleton<AppSettingsService>();
 // ITierModelResolver — Core-шов для слота модели в AppSettings (волна 1 выноса Llm).
 // Реализация AppSettingsTierModelAdapter живёт в Composition, делегирует в AppSettingsService.
 builder.Services.AddSingleton<ITierModelResolver, AppSettingsTierModelAdapter>();
+// IModelCatalog — Core-шов для каталога моделей (волна 1 выноса Llm). Реализация
+// ModelCatalogAdapter мапит nested ModelInfo (Main) в ModelCatalogEntry (Core).
+builder.Services.AddSingleton<IModelCatalog, ModelCatalogAdapter>();
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();

@@ -30,7 +30,7 @@ public enum ActionPreset { Recommended, FreeOnly, LocalFirst, Balanced, Tiers, T
 
 public sealed class LocalActionPresetService(
     LocalActionOverridesStore store, LocalActionRouter router, ILocalLlmClient ollama,
-    ModelCatalogService models, IConfiguration config,
+    IModelCatalog models, IConfiguration config,
     ILogger<LocalActionPresetService> log)
 {
     // Исполнитель на каждый профиль сложности (Recommended). Дефолт — слоты тиров инстанса
@@ -52,13 +52,13 @@ public sealed class LocalActionPresetService(
 
     // Прямые (бесплатные) модели всех OpenAI-совместимых источников (openrouter-direct, freellmapi-direct, …)
     // — Value уже с префиксом direct:. Их наличие определяет доступность пресетов с бесплатной облачной моделью.
-    private async Task<IReadOnlyList<ModelCatalogService.ModelInfo>> DirectModelsAsync(CancellationToken ct) =>
+    private async Task<IReadOnlyList<ModelCatalogEntry>> DirectModelsAsync(CancellationToken ct) =>
         (await models.GetModelsAsync(ct))
             .Where(m => m.Provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
     // Ключ источника прямой модели: provider заканчивается на "-direct".
-    private static string SourceKeyOf(ModelCatalogService.ModelInfo m) =>
+    private static string SourceKeyOf(ModelCatalogEntry m) =>
         m.Provider[..^"-direct".Length];
 
     // Есть ли из чего собрать бесплатный облачный маршрут (нужно FreeOnly и «сильным» в LocalFirst).
@@ -134,7 +134,7 @@ public sealed class LocalActionPresetService(
     // Бесплатная облачная модель под профиль: для каждого источника сперва первая подходящая
     // модель из его курируемого списка (окно ≥ NumCtx профиля), затем — наибольшее окно среди
     // всех direct-моделей. Value уже несёт префикс direct: — возвращаем как есть.
-    private string? PickFree(IReadOnlyList<ModelCatalogService.ModelInfo> direct, CheapProfile profile)
+    private string? PickFree(IReadOnlyList<ModelCatalogEntry> direct, CheapProfile profile)
     {
         if (direct.Count == 0) return null;
         var minCtx = router.ProfileSpec(profile).NumCtx;

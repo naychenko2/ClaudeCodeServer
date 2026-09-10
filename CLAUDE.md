@@ -585,11 +585,11 @@ lifecycle-каскады. Контуры Dev/Prod на одном Dify разв�
 **Перед правками в персонах (промпт, память, групповые чаты, пантеон OmO, аватары, MCP
 personas/memory) — прочитай [docs/architecture/personas.md](docs/architecture/personas.md).**
 
-## Десктопный агент (Services/Desktop, за флагом `desktop-agent`)
+## Десктопный агент (ClaudeHomeServer.Desktop, за флагом `desktop-agent`)
 
 Руки песочницы на машине пользователя: MCP-сервер `desktop` плюс WPF-клиент, за флагом `desktop-agent`.
 
-Инварианты и подробности — [backend/ClaudeHomeServer/Services/Desktop/CLAUDE.md](backend/ClaudeHomeServer/Services/Desktop/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+Инварианты и подробности — [backend/ClaudeHomeServer.Desktop/CLAUDE.md](backend/ClaudeHomeServer.Desktop/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Механики OmO в чатах
 

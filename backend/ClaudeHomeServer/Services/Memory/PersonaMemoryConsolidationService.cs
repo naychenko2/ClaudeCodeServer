@@ -17,7 +17,8 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     private static readonly TimeSpan PendingTick = TimeSpan.FromMinutes(5);
 
     private readonly PersonaMemoryService _memory;
-    private readonly PersonaManager _personas;
+    private readonly IPersonaResolver _personas;
+    private readonly IPersonaLookup _personaLookup;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryConsolidationService> _log;
@@ -25,12 +26,14 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     // Заявки «пора консолидировать» (personaId → ownerId) — ставит autolearn при переполнении
     private readonly ConcurrentDictionary<string, string> _pending = new();
 
-    public PersonaMemoryConsolidationService(PersonaMemoryService memory, PersonaManager personas,
+    public PersonaMemoryConsolidationService(PersonaMemoryService memory, IPersonaResolver personas,
+        IPersonaLookup personaLookup,
         Llm.ICheapTextRunner cheap, IConfiguration config,
         ILogger<PersonaMemoryConsolidationService> log)
     {
         _memory = memory;
         _personas = personas;
+        _personaLookup = personaLookup;
         _cheap = cheap;
         _config = config;
         _log = log;
@@ -71,7 +74,7 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
                 if (DateTime.UtcNow - lastFullPass >= Interval)
                 {
                     lastFullPass = DateTime.UtcNow;
-                    foreach (var persona in _personas.GetAllInternal())
+                    foreach (var persona in _personaLookup.GetAllInternal())
                         await ConsolidateSafeAsync(persona, ct);
                 }
             }

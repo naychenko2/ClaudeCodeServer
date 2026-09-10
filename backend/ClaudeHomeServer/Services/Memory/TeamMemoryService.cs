@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
 
@@ -38,6 +39,7 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
 
     // Опциональные зависимости семантического слоя (nullable-паттерн: в юнит-тестах Волны 1 не заданы)
     private readonly KnowledgeService? _knowledge;
+    private readonly IDifyMetrics _metrics;
     private readonly IUserStore? _users;
     private readonly IProjectManager? _projects;
     // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
@@ -66,11 +68,15 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
     private const double DedupBoost = 0.1;
 
     public TeamMemoryService(IConfiguration config, ILogger<TeamMemoryService>? log = null,
-        KnowledgeService? knowledge = null, IUserStore? users = null, IProjectManager? projects = null,
+        KnowledgeService? knowledge = null, IDifyMetrics? metrics = null, IUserStore? users = null, IProjectManager? projects = null,
         Memory.MemoryWriteResolver? resolver = null, Llm.ICheapTextRunner? cheap = null)
     {
         _log = log;
         _knowledge = knowledge;
+        // Метрика Dify-синка — обязательная зависимость: без неё прогресс синка
+        // теряется молча (коммит ревью 2026-08). В юнит-тестах без Dify DI даёт null —
+        // подменяем no-op реализацией, чтобы сигнатура DiffSyncAsync не раздваивалась.
+        _metrics = metrics ?? new Core.Telemetry.EmptyDifyMetrics();
         _users = users;
         _projects = projects;
         _resolver = resolver;
@@ -792,7 +798,7 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
             var changed = await MemoryDify.DiffSyncAsync(_knowledge!, state.DatasetId!, items, docsSnapshot,
                 (id, doc) => { lock (_kLock) state.Docs[id] = doc; },
                 id => { lock (_kLock) state.Docs.Remove(id); },
-                _log);
+                _log, _metrics);
 
             if (changed > 0) lock (_kLock) SaveKnowledge();
             return changed;
@@ -857,6 +863,11 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
     // не должны переживать остановку и запускать синк по мёртвому приложению
     public void Dispose() => _debounce.Dispose();
 }
+
+// Noop-метрика для TeamMemoryService, когда IDifyMetrics не задан DI (юнит-тесты без Dify).
+// Сигнатура DiffSyncAsync не раздваивается: метрика нужна для прогресса синка на проде,
+// в тестах синк не идёт (Available == false), вызов метода — тихий no-op.
+// Используем общее EmptyDifyMetrics из Core.Telemetry (Этап 5, шов IDifyMetrics).
 
 // Операция консолидации памяти команды (P4): merge — схлопнуть несколько записей одного типа
 // в одну сводную (Ids → новая запись Text/Type/Salience); drop — удалить запись Id.

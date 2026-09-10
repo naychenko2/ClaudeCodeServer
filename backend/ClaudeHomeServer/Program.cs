@@ -770,6 +770,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionMess
     ClaudeHomeServer.Services.Composition.SessionMessageObserver>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaDirectory,
     ClaudeHomeServer.Services.Composition.PersonaDirectoryAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaEvents,
+    ClaudeHomeServer.Services.Composition.PersonaEventsImpl>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IKnowledgeNotificationDispatcher,
     ClaudeHomeServer.Services.Composition.Notifications.KnowledgeNotificationDispatcher>();
 builder.Services.AddSingleton<ClaudeHomeServer.Core.Telemetry.IDifyMetrics,

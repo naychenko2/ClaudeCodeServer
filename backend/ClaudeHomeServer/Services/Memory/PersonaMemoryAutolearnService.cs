@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Memory;
 
@@ -14,27 +15,30 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     private const int TranscriptBudget = 8_000;
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
-    private readonly SessionManager _sessions;
-    private readonly PersonaManager _personas;
+    private readonly ISessionDirectory _sessions;
+    private readonly ISessionMessageObserver _sessionObserver;
+    private readonly IPersonaLookup _personas;
     private readonly PersonaMemoryService _memory;
     private readonly PersonaMemoryConsolidationService _consolidation;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryAutolearnService> _log;
-    private readonly ProjectEventLogService? _events;
+    private readonly IProjectEventLogService? _events;
     // Гейт содержательности хода (Memory-диета): порог длины реплик последнего хода — короче
     // не стоит прогона LLM. Дефолт 400 — середина заданного диапазона 300-500 символов.
     private readonly int _minTurnChars;
     // Счётчик пропусков autolearn с момента старта процесса — в лог, чтобы видеть эффект гейта
     private int _skipped;
 
-    public PersonaMemoryAutolearnService(SessionManager sessions, PersonaManager personas,
+    public PersonaMemoryAutolearnService(ISessionDirectory sessions, ISessionMessageObserver sessionObserver,
+        IPersonaLookup personas,
         PersonaMemoryService memory, PersonaMemoryConsolidationService consolidation,
         Llm.ICheapTextRunner cheap,
         IConfiguration config, ILogger<PersonaMemoryAutolearnService> log,
-        ProjectEventLogService? events = null)
+        IProjectEventLogService? events = null)
     {
         _sessions = sessions;
+        _sessionObserver = sessionObserver;
         _personas = personas;
         _memory = memory;
         _consolidation = consolidation;
@@ -47,13 +51,13 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
 
     public Task StartAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage += OnSessionMessageAsync;
+        _sessionObserver.Attach(OnSessionMessageAsync);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage -= OnSessionMessageAsync;
+        _sessionObserver.Detach(OnSessionMessageAsync);
         return Task.CompletedTask;
     }
 
@@ -136,7 +140,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
                 // Проектная персона, узнав факты, попадает в активность-ленту проекта
                 if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
                     _events?.Append(persona.ProjectId, persona.OwnerId, ProjectEventTypes.MemoryLearned,
-                        persona.Id, $"{PersonaManager.PersonaLabel(persona)}: узнал {saved} факт(ов)", sessionId);
+                        persona.Id, $"{PersonaLabel.Of(persona)}: узнал {saved} факт(ов)", sessionId);
             }
 
             // Потолок памяти (P0/P3): механическое вытеснение хвоста — сразу, НЕ за флагом

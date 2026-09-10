@@ -2,6 +2,7 @@ using System.Diagnostics.Metrics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Knowledge;
@@ -29,6 +30,15 @@ namespace ClaudeHomeServer.Tests.Telemetry;
 /// </summary>
 public class DifyIndexErrorMetricTests : IDisposable
 {
+    // Тестовая IDifyMetrics — форвардит вызовы в ServerMetrics.RecordDifySyncError,
+    // чтобы CaptureReasonsAsync (слушает общий Meter) видел события от MemoryDify.
+    // Сейчас MemoryDify больше не зовёт ServerMetrics напрямую (Этап 5, шов IDifyMetrics).
+    private sealed class CapturingDifyMetrics : IDifyMetrics
+    {
+        public void RecordSyncError(string reason) =>
+            ServerMetrics.RecordDifySyncError(reason);
+    }
+
     // Фейковый Dify: индексация документа, чьё имя содержит FailFor, отвечает кодом FailWith
     // (по умолчанию 429); остальные — 200 с новым doc-id. DELETE всегда 204.
     private sealed class FlakyDifyHandler : HttpMessageHandler
@@ -65,6 +75,10 @@ public class DifyIndexErrorMetricTests : IDisposable
     private readonly string _tempDir;
     private readonly FlakyDifyHandler _dify = new();
     private readonly KnowledgeService _knowledge;
+    // CaptureReasonsAsync слушает метрику через общий Meter; тесты используют
+    // собственную реализацию IDifyMetrics вместо реальной ServerMetrics, чтобы
+    // не зависеть от глобального состояния и не плодить побочные эффекты.
+    private readonly IDifyMetrics _metrics = new CapturingDifyMetrics();
 
     public DifyIndexErrorMetricTests()
     {
@@ -135,9 +149,8 @@ public class DifyIndexErrorMetricTests : IDisposable
                 _knowledge, "ds-1", items, new Dictionary<string, MemoryDocRef>(),
                 (id, doc) => docs[id] = doc,
                 id => docs.Remove(id),
-                NullLogger.Instance);
+                NullLogger.Instance, _metrics);
         });
-
         // 1. Отказ индексации виден в метрике — и классифицирован, а не свален в other
         reasons.Should().Contain("429", "отказ индексации обязан попадать в ccs.dify.sync.errors");
 
@@ -169,7 +182,7 @@ public class DifyIndexErrorMetricTests : IDisposable
         {
             await MemoryDify.DiffSyncAsync(
                 _knowledge, "ds-1", items, new Dictionary<string, MemoryDocRef>(),
-                (id, doc) => { }, id => { }, NullLogger.Instance);
+                (id, doc) => { }, id => { }, NullLogger.Instance, _metrics);
         });
 
         // NotContain("other") здесь не проверяем: слушатель общий на процесс, и параллельные
@@ -193,7 +206,7 @@ public class DifyIndexErrorMetricTests : IDisposable
                 _knowledge, "ds-1", items, new Dictionary<string, MemoryDocRef>(),
                 (id, doc) => docs[id] = doc,
                 id => docs.Remove(id),
-                NullLogger.Instance);
+                NullLogger.Instance, _metrics);
         });
 
         // Тесты идут параллельно и общий Meter слышен всем, поэтому утверждаем не

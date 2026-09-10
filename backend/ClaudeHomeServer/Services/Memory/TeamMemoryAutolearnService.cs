@@ -18,7 +18,8 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private const int TranscriptBudget = 8_000;
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
-    private readonly SessionManager _sessions;
+    private readonly ISessionDirectory _sessions;
+    private readonly ISessionMessageObserver _sessionObserver;
     private readonly IProjectManager _projects;
     private readonly TeamMemoryService _memory;
     private readonly TeamMemoryConsolidationService _consolidation;
@@ -26,7 +27,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly IConfiguration _config;
     private readonly ILogger<TeamMemoryAutolearnService> _log;
     private readonly ISessionBroadcaster _broadcaster;
-    private readonly ProjectEventLogService? _events;
+    private readonly IProjectEventLogService? _events;
 
     // Длина транскрипта на момент последнего извлечения по сессии — гасит повторную работу на
     // каждый ResultMessage (в групповом чате/совещании каждый ход спикера = отдельный Result).
@@ -35,13 +36,15 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly int _minTurnChars;
     private int _skipped;
 
-    public TeamMemoryAutolearnService(SessionManager sessions, IProjectManager projects,
+    public TeamMemoryAutolearnService(ISessionDirectory sessions, ISessionMessageObserver sessionObserver,
+        IProjectManager projects,
         TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
         Llm.ICheapTextRunner cheap,
         IConfiguration config, ILogger<TeamMemoryAutolearnService> log, ISessionBroadcaster broadcaster,
-        ProjectEventLogService? events = null)
+        IProjectEventLogService? events = null)
     {
         _sessions = sessions;
+        _sessionObserver = sessionObserver;
         _projects = projects;
         _memory = memory;
         _consolidation = consolidation;
@@ -55,13 +58,13 @@ public sealed class TeamMemoryAutolearnService : IHostedService
 
     public Task StartAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage += OnSessionMessageAsync;
+        _sessionObserver.Attach(OnSessionMessageAsync);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage -= OnSessionMessageAsync;
+        _sessionObserver.Detach(OnSessionMessageAsync);
         return Task.CompletedTask;
     }
 

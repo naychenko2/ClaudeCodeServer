@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Core.Telemetry;
-using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Memory;
 
@@ -25,6 +24,10 @@ public readonly record struct MemorySyncItem(
 // Общее ядро синхронизации памяти с Dify: хеш содержимого, дебаунс-планировщик и дифф-синк-петля.
 // Специфика (имя датасета, снапшоты под своим локом, один файл-стор у персоны vs два у команды)
 // остаётся тонкой связкой в самом сервисе.
+//
+// Метрика ошибок синка — IDifyMetrics (Core), реализация в Main (DifyMetricsAdapter →
+// ServerMetrics). Прямой вызов ServerMetrics в Memory запрещён: Telemetry живёт в Main,
+// ссылка привела бы к циклу Memory → Main. Шов пробрасывается через параметр DiffSyncAsync.
 public static class MemoryDify
 {
     // SHA-256 hex от строки-источника (Type/Text/Tags) — ключ инвалидации документа Dify
@@ -39,7 +42,7 @@ public static class MemoryDify
         IReadOnlyList<MemorySyncItem> items,
         IReadOnlyDictionary<string, MemoryDocRef> docsSnapshot,
         Action<string, MemoryDocRef> setDoc, Action<string> removeDoc,
-        ILogger? log)
+        ILogger? log, IDifyMetrics metrics)
     {
         var alive = new HashSet<string>(items.Select(i => i.Id));
         var changed = 0;
@@ -53,7 +56,7 @@ public static class MemoryDify
                 try { await knowledge.DeleteDocumentAsync(datasetId, doc.DocId); }
                 catch (Exception ex) {
                     log?.LogWarning(ex, "memory-dify: удаление старого документа записи {Entry}", it.Id);
-                    ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                    metrics.RecordSyncError(DifyErrorCategorizer.Categorize(ex));
                 }
 
             // Индексация — главный источник отказов Dify (429 при потоке записей, таймаут
@@ -66,7 +69,7 @@ public static class MemoryDify
             catch (Exception ex)
             {
                 log?.LogWarning(ex, "memory-dify: индексация записи {Entry}", it.Id);
-                ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                metrics.RecordSyncError(DifyErrorCategorizer.Categorize(ex));
                 continue;
             }
 
@@ -79,7 +82,7 @@ public static class MemoryDify
             try { await knowledge.DeleteDocumentAsync(datasetId, docsSnapshot[stale].DocId); }
             catch (Exception ex) {
                 log?.LogWarning(ex, "memory-dify: удаление документа исчезнувшей записи {Entry}", stale);
-                ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                metrics.RecordSyncError(DifyErrorCategorizer.Categorize(ex));
             }
             removeDoc(stale);
             changed++;

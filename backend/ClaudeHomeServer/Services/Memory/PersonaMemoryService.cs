@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
 
@@ -31,7 +33,11 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     };
 
     private readonly KnowledgeService _knowledge;
-    private readonly PersonaManager _personas;
+    private readonly IPersonaResolver _personas;
+    private readonly IPersonaLookup _personaLookup;
+    private readonly IPersonaDirectory _personaDirectory;
+    private readonly IPersonaEvents _personaEvents;
+    private readonly IDifyMetrics _metrics;
     private readonly IUserStore _users;
     private readonly TeamMemoryService? _teamMemory;
     // Заметки — для выноса записи памяти в общий vault (③-3.3); null в юнит-тестах
@@ -58,13 +64,19 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
 
-    public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, IUserStore users,
+    public PersonaMemoryService(KnowledgeService knowledge, IPersonaResolver personas,
+        IPersonaLookup personaLookup, IPersonaDirectory personaDirectory,
+        IPersonaEvents personaEvents, IDifyMetrics metrics, IUserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
         TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null,
         Dossiers.DossierRecallService? dossierRecall = null, NotesService? notes = null)
     {
         _knowledge = knowledge;
         _personas = personas;
+        _personaLookup = personaLookup;
+        _personaDirectory = personaDirectory;
+        _personaEvents = personaEvents;
+        _metrics = metrics;
         _users = users;
         _teamMemory = teamMemory;
         _dossierRecall = dossierRecall;
@@ -91,7 +103,12 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         _conflictThreshold = ReadDouble(config, "Memory:ConflictThreshold", 0.6);
         _store = JsonFileStore.Load<Dictionary<string, MemState>>(_storePath, JsonOpts) ?? new();
         // Смена handle: best-effort освежить имя Dify-датасета «{user}:persona:{handle}»
-        _personas.OnPersonaHandleChanged += (persona, oldHandle) => { _ = RenameDatasetSafeAsync(persona); };
+        // Параметр `oldHandle` именованный — иначе `_` параметра перекрывает discard
+        // `_ =` в блоке, и компилятор пытается присвоить Task в string.
+        _personaEvents.AttachOnHandleChanged((persona, oldHandle) =>
+        {
+            _ = RenameDatasetSafeAsync(persona);
+        });
     }
 
     // Переименование датасета памяти под новый handle; сбой — лог (retrieve работает по id,
@@ -623,7 +640,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         var entry = List(ownerId, personaId, null).FirstOrDefault(e => e.Id == entryId);
         if (entry is null) return null;
         var title = TitleFromText(entry.Text, "Из памяти персоны");
-        var body = entry.Text.Trim() + $"\n\n— _из памяти персоны «{PersonaManager.PersonaLabel(persona)}»_";
+        var body = entry.Text.Trim() + $"\n\n— _из памяти персоны «{PersonaLabel.Of(persona)}»_";
         var note = _notes.Create(ownerId, new CreateNoteRequest(Title: title, Content: body));
         return (note.Id, note.Title);
     }
@@ -779,7 +796,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
             var changed = await MemoryDify.DiffSyncAsync(_knowledge, state.DatasetId!, items, docsSnapshot,
                 (id, doc) => { lock (_saveLock) state.Docs[id] = doc; },
                 id => { lock (_saveLock) state.Docs.Remove(id); },
-                _logger);
+                _logger, _metrics);
 
             if (changed > 0) Save();
             return changed;
@@ -816,7 +833,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         var targets = new List<Knowledge.KnowledgeSyncTarget>();
         foreach (var (personaId, datasetId) in snapshot)
         {
-            var persona = _personas.GetByIdInternal(personaId);
+            var persona = _personaLookup.GetByIdInternal(personaId);
             if (persona is null) continue;   // память осиротела — реконсайлеру тут делать нечего
             var ownerId = persona.OwnerId;
             targets.Add(new Knowledge.KnowledgeSyncTarget(
@@ -893,7 +910,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // это ответственность UserKnowledgeCascade (там же, где удаляется профиль).
     public async Task DeleteAllAsync(string userId)
     {
-        var personas = _personas.GetByOwner(userId).ToList();
+        var personas = _personaDirectory.GetByOwner(userId).ToList();
         foreach (var persona in personas)
             await DeletePersonaAsync(persona.Id);
     }
